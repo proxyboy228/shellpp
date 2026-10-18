@@ -1,89 +1,89 @@
-# Дизайн-система
+# Design system
 
-> Собственный визуальный стиль приложения. Все цвета задаются токенами.
-> В коде компонентов нет «сырых» hex-значений, только переменные из файла токенов.
+> The application's own visual style. All colors are defined by tokens.
+> Component code contains no "raw" hex values, only variables from the tokens file.
 
-## 1. Принципы
-- Основа — тёплый нейтральный графит без синего оттенка. Акцент один:
-  **jade**, бирюзово-зелёный.
-- Акцент используется только для главного действия на экране, фокуса,
-  выделения и активного состояния. Для декора он не используется.
-- Опасные действия обозначаются только цветом `danger`, никогда акцентом.
-- Контраст обычного текста не ниже 4.5:1 (WCAG AA), крупного текста и иконок
-  не ниже 3:1. `text-muted` разрешён только для плейсхолдеров и второстепенных
-  подписей.
-- Тема интерфейса: Auto (как в системе), Light или Dark.
+## 1. Principles
+- The base is a warm neutral graphite with no blue tint. There is a single accent:
+  **jade**, a turquoise green.
+- The accent is used only for the primary action on the screen, focus,
+  selection and the active state. It is not used for decoration.
+- Dangerous actions are indicated only by the `danger` color, never by the accent.
+- Contrast of regular text is at least 4.5:1 (WCAG AA), of large text and icons
+  at least 3:1. `text-muted` is allowed only for placeholders and secondary
+  captions.
+- Interface theme: Auto (follows the system), Light or Dark.
 
 ---
 
-## 2. Токены интерфейса
+## 2. Interface tokens
 
-### 2.1 Поверхности
-| Токен | Назначение | Тёмная | Светлая |
+### 2.1 Surfaces
+| Token | Purpose | Dark | Light |
 |---|---|---|---|
-| `--bg-base` | фон окна, верхняя панель с вкладками | `#121211` | `#F2F1EC` |
-| `--bg-sidebar` | боковая панель | `#171716` | `#ECEBE5` |
-| `--bg-surface` | основная область контента | `#1B1B19` | `#F8F7F3` |
-| `--bg-raised` | карточки, блоки правой панели | `#242422` | `#FFFFFF` |
-| `--bg-raised-hover` | наведение на карточку или строку | `#2C2C29` | `#F0EFEA` |
-| `--bg-input` | поля ввода внутри блоков | `#1E1E1C` | `#F6F5F1` |
-| `--bg-overlay` | меню, выпадающие списки, модальные окна | `#2A2A27` | `#FFFFFF` |
-| `--scrim` | затемнение под модальным окном | `rgba(0,0,0,0.55)` | `rgba(28,28,26,0.35)` |
+| `--bg-base` | window background, top bar with tabs | `#121211` | `#F2F1EC` |
+| `--bg-sidebar` | sidebar | `#171716` | `#ECEBE5` |
+| `--bg-surface` | main content area | `#1B1B19` | `#F8F7F3` |
+| `--bg-raised` | cards, details panel blocks | `#242422` | `#FFFFFF` |
+| `--bg-raised-hover` | hover over a card or row | `#2C2C29` | `#F0EFEA` |
+| `--bg-input` | input fields inside blocks | `#1E1E1C` | `#F6F5F1` |
+| `--bg-overlay` | menus, dropdowns, modal windows | `#2A2A27` | `#FFFFFF` |
+| `--scrim` | dimming under a modal window | `rgba(0,0,0,0.55)` | `rgba(28,28,26,0.35)` |
 
-### 2.2 Границы
-| Токен | Назначение | Тёмная | Светлая |
+### 2.2 Borders
+| Token | Purpose | Dark | Light |
 |---|---|---|---|
-| `--border-subtle` | разделители, рамки карточек | `#2F2F2C` | `#E2E0D9` |
-| `--border-strong` | рамки полей, разделители в меню | `#3E3E3A` | `#CBC8BF` |
+| `--border-subtle` | dividers, card borders | `#2F2F2C` | `#E2E0D9` |
+| `--border-strong` | field borders, menu dividers | `#3E3E3A` | `#CBC8BF` |
 
-### 2.3 Текст
-| Токен | Назначение | Тёмная | Светлая |
+### 2.3 Text
+| Token | Purpose | Dark | Light |
 |---|---|---|---|
-| `--text-primary` | основной текст | `#EDEDE8` | `#1C1C1A` |
-| `--text-secondary` | подзаголовки карточек, подписи, колонки таблиц | `#A6A59E` | `#5A5953` |
-| `--text-muted` | плейсхолдеры, второстепенные подписи | `#76756F` | `#8C8A83` |
-| `--text-disabled` | неактивные элементы | `#55554F` | `#B3B1A9` |
+| `--text-primary` | primary text | `#EDEDE8` | `#1C1C1A` |
+| `--text-secondary` | card subtitles, captions, table columns | `#A6A59E` | `#5A5953` |
+| `--text-muted` | placeholders, secondary captions | `#76756F` | `#8C8A83` |
+| `--text-disabled` | inactive elements | `#55554F` | `#B3B1A9` |
 
-### 2.4 Акцент
-| Токен | Назначение | Тёмная | Светлая |
+### 2.4 Accent
+| Token | Purpose | Dark | Light |
 |---|---|---|---|
-| `--accent` | главная кнопка (Connect, Run, Continue), выделение карточки, включённый переключатель | `#2EC4A6` | `#13866F` |
-| `--accent-hover` | наведение | `#4FD3B9` | `#0F7562` |
-| `--accent-pressed` | нажатие | `#23A68C` | `#0B6152` |
-| `--accent-subtle` | фон активного пункта навигации, выбранной строки, чипов-тегов | `rgba(46,196,166,0.14)` | `rgba(19,134,111,0.10)` |
-| `--accent-text` | ссылки и текстовые кнопки («Add targets», «Share this host») | `#5AD6BE` | `#0F7562` |
-| `--text-on-accent` | текст на кнопке с фоном `--accent` | `#08201B` | `#FFFFFF` |
-| `--focus-ring` | обводка фокуса: 2 px, отступ 2 px | `#2EC4A6` | `#13866F` |
+| `--accent` | primary button (Connect, Run, Continue), card selection, enabled toggle | `#2EC4A6` | `#13866F` |
+| `--accent-hover` | hover | `#4FD3B9` | `#0F7562` |
+| `--accent-pressed` | press | `#23A68C` | `#0B6152` |
+| `--accent-subtle` | background of the active navigation item, the selected row, tag chips | `rgba(46,196,166,0.14)` | `rgba(19,134,111,0.10)` |
+| `--accent-text` | links and text buttons ("Add targets", "Share this host") | `#5AD6BE` | `#0F7562` |
+| `--text-on-accent` | text on a button with an `--accent` background | `#08201B` | `#FFFFFF` |
+| `--focus-ring` | focus outline: 2 px, 2 px offset | `#2EC4A6` | `#13866F` |
 
-### 2.5 Семантические цвета
-| Токен | Назначение | Тёмная | Светлая |
+### 2.5 Semantic colors
+| Token | Purpose | Dark | Light |
 |---|---|---|---|
-| `--danger` | Delete, Remove, Close в меню, ошибки | `#F0645C` | `#C0392F` |
-| `--danger-hover` | наведение на опасное действие | `#F57E77` | `#A33027` |
-| `--danger-subtle` | фон блокирующих предупреждений (смена ключа хоста) | `rgba(240,100,92,0.14)` | `rgba(192,57,47,0.10)` |
-| `--warning` | предупреждения, «подключается» | `#E3B04B` | `#9A6B0C` |
-| `--warning-subtle` | фон предупреждений | `rgba(227,176,75,0.14)` | `rgba(154,107,12,0.10)` |
-| `--success` | «подключено», «правило запущено» | `#7CC46F` | `#3B8233` |
-| `--info` | информационные подсказки | `#7AA9DB` | `#2E6AA6` |
+| `--danger` | Delete, Remove, Close in menus, errors | `#F0645C` | `#C0392F` |
+| `--danger-hover` | hover over a dangerous action | `#F57E77` | `#A33027` |
+| `--danger-subtle` | background of blocking warnings (host key change) | `rgba(240,100,92,0.14)` | `rgba(192,57,47,0.10)` |
+| `--warning` | warnings, "connecting" | `#E3B04B` | `#9A6B0C` |
+| `--warning-subtle` | warning background | `rgba(227,176,75,0.14)` | `rgba(154,107,12,0.10)` |
+| `--success` | "connected", "rule running" | `#7CC46F` | `#3B8233` |
+| `--info` | informational hints | `#7AA9DB` | `#2E6AA6` |
 
-### 2.6 Тени
-| Токен | Тёмная | Светлая |
+### 2.6 Shadows
+| Token | Dark | Light |
 |---|---|---|
-| `--shadow-overlay` (меню, поповеры) | `0 8px 24px rgba(0,0,0,0.50)` | `0 8px 24px rgba(28,28,26,0.14)` |
-| `--shadow-modal` (модальные окна) | `0 16px 48px rgba(0,0,0,0.60)` | `0 16px 48px rgba(28,28,26,0.18)` |
+| `--shadow-overlay` (menus, popovers) | `0 8px 24px rgba(0,0,0,0.50)` | `0 8px 24px rgba(28,28,26,0.14)` |
+| `--shadow-modal` (modal windows) | `0 16px 48px rgba(0,0,0,0.60)` | `0 16px 48px rgba(28,28,26,0.18)` |
 
 ---
 
-## 3. Цвета объектов
+## 3. Object colors
 
-### 3.1 Метки хостов и групп
-- Пользователь выбирает цвет плитки хоста или группы из 8 цветов. Цвета
-  одинаковые в обеих темах.
-- Иконка на плитке всегда белая (`#FFFFFF`), контраст с каждым цветом не ниже 3:1.
+### 3.1 Host and group labels
+- The user picks the color of a host or group tile from 8 colors. The colors
+  are the same in both themes.
+- The icon on the tile is always white (`#FFFFFF`), with contrast against each color of at least 3:1.
 
-| Токен | Цвет |
+| Token | Color |
 |---|---|
-| `--tag-graphite` | `#5B5A55` (по умолчанию для хостов и групп) |
+| `--tag-graphite` | `#5B5A55` (default for hosts and groups) |
 | `--tag-jade` | `#1E8A75` |
 | `--tag-amber` | `#A87420` |
 | `--tag-coral` | `#B8503F` |
@@ -92,29 +92,29 @@
 | `--tag-ocean` | `#3A6890` |
 | `--tag-rose` | `#A84B70` |
 
-- Иконки ОС монохромные белые на плитке хоста. Фирменные цвета
-  дистрибутивов не используются.
-- Группа отличается от хоста иконкой папки, а не цветом.
+- OS icons are monochrome white on the host tile. Distribution brand colors
+  are not used.
+- A group is distinguished from a host by a folder icon, not by color.
 
-### 3.2 Бейджи типов форвардинга
-Белая буква на плитке:
+### 3.2 Port forwarding type badges
+White letter on a tile:
 - L (Local): `--tag-jade`;
 - R (Remote): `--tag-plum`;
 - D (Dynamic): `--tag-amber`.
 
-### 3.3 Индикаторы состояния
-Точка 8 px:
-- подключено / запущено: `--success`;
-- подключается: `--warning`;
-- ошибка / обрыв: `--danger`;
-- не активно: `--text-muted`.
+### 3.3 Status indicators
+8 px dot:
+- connected / running: `--success`;
+- connecting: `--warning`;
+- error / connection drop: `--danger`;
+- inactive: `--text-muted`.
 
 ---
 
-## 4. Темы терминала по умолчанию
+## 4. Default terminal themes
 
-### 4.1 Graphite (тёмная, по умолчанию)
-| Роль | Цвет | Роль | Цвет |
+### 4.1 Graphite (dark, default)
+| Role | Color | Role | Color |
 |---|---|---|---|
 | background | `#121211` | foreground | `#DCDCD5` |
 | cursor | `#2EC4A6` | selection | `rgba(46,196,166,0.30)` |
@@ -127,8 +127,8 @@
 | cyan | `#4FC9B4` | bright cyan | `#74DCC9` |
 | white | `#CFCFC8` | bright white | `#F5F5F0` |
 
-### 4.2 Paper (светлая)
-| Роль | Цвет | Роль | Цвет |
+### 4.2 Paper (light)
+| Role | Color | Role | Color |
 |---|---|---|---|
 | background | `#FAF9F6` | foreground | `#2A2A27` |
 | cursor | `#13866F` | selection | `rgba(19,134,111,0.20)` |
@@ -141,62 +141,62 @@
 | cyan | `#157A6A` | bright cyan | `#1F927F` |
 | white | `#8A8982` | bright white | `#B9B7AF` |
 
-### 4.3 Подсветка ключевых слов (цвета по умолчанию)
-| Категория | Тёмная | Светлая |
+### 4.3 Keyword highlighting (default colors)
+| Category | Dark | Light |
 |---|---|---|
 | Error | `--danger` | `--danger` |
 | Warning | `--warning` | `--warning` |
 | OK | `--success` | `--success` |
 | Info | `--info` | `--info` |
 | Debug | `#A38FD9` | `#6B55B0` |
-| IP и MAC | `#D883A6` | `#A84B70` |
+| IP and MAC | `#D883A6` | `#A84B70` |
 
 ---
 
-## 5. Типографика
-- Интерфейс: системный шрифт (Segoe UI Variable на Windows, SF Pro на macOS,
-  системный sans в Linux). Запасной вариант — встроенный Inter (OFL).
-- Размеры интерфейса:
-  - 12 px: подзаголовки карточек, подписи;
-  - 13 px: плотные списки и таблицы;
-  - 14 px: основной текст;
-  - 16 px: заголовки разделов («Groups», «Hosts», «Keys»);
-  - 20 px: заголовки модальных окон.
-- Начертания: 400, 500, 600.
-- Терминал, поля скриптов и ключей: встроенный JetBrains Mono (OFL),
-  14 px по умолчанию, межстрочный интервал 1.2.
-- Цифры в таблицах (размеры, даты, время): `font-variant-numeric: tabular-nums`.
+## 5. Typography
+- Interface: system font (Segoe UI Variable on Windows, SF Pro on macOS,
+  system sans on Linux). Fallback: bundled Inter (OFL).
+- Interface sizes:
+  - 12 px: card subtitles, captions;
+  - 13 px: dense lists and tables;
+  - 14 px: body text;
+  - 16 px: section headings ("Groups", "Hosts", "Keys");
+  - 20 px: modal window titles.
+- Font weights: 400, 500, 600.
+- Terminal, script and key fields: bundled JetBrains Mono (OFL),
+  14 px by default, line height 1.2.
+- Numbers in tables (sizes, dates, times): `font-variant-numeric: tabular-nums`.
 
 ---
 
-## 6. Форма и отступы
-- Сетка 4 px. Отступы: 4, 8, 12, 16, 24, 32.
-- Радиусы:
-  - кнопки, поля, чипы: 6 px;
-  - плитки иконок: 8 px;
-  - карточки и блоки панели: 10 px;
-  - меню и модальные окна: 12 px.
-- Высоты:
-  - верхняя панель: 44 px;
-  - кнопки и поля: 36 px;
-  - строки таблиц: 44 px;
-  - карточки хостов: 64 px.
-- Ширины:
-  - боковая панель: 220 px;
-  - правая панель: 380 px, ширину можно менять перетаскиванием от 320 до 560 px.
-- Состояния:
+## 6. Shape and spacing
+- 4 px grid. Spacing: 4, 8, 12, 16, 24, 32.
+- Radii:
+  - buttons, fields, chips: 6 px;
+  - icon tiles: 8 px;
+  - cards and panel blocks: 10 px;
+  - menus and modal windows: 12 px.
+- Heights:
+  - top bar: 44 px;
+  - buttons and fields: 36 px;
+  - table rows: 44 px;
+  - host cards: 64 px.
+- Widths:
+  - sidebar: 220 px;
+  - details panel: 380 px, the width can be changed by dragging from 320 to 560 px.
+- States:
   - hover: `--bg-raised-hover`;
-  - pressed: на один шаг темнее hover;
-  - disabled: прозрачность 0.45, без реакции на наведение;
-  - фокус с клавиатуры: `--focus-ring`.
-- Анимации: 120–180 мс, ease-out. При `prefers-reduced-motion` отключаются.
+  - pressed: one step darker than hover;
+  - disabled: opacity 0.45, no reaction to hover;
+  - keyboard focus: `--focus-ring`.
+- Animations: 120–180 ms, ease-out. Disabled under `prefers-reduced-motion`.
 
 ---
 
-## 7. Реализация
-- Токены лежат в `apps/desktop/src/theme/tokens.css`: CSS-переменные
-  на `:root` (тёмная тема) и `[data-theme="light"]` (светлая).
-- Темы терминала хранятся как JSON в `apps/desktop/src/theme/terminal/`,
-  в формате, который поддерживает импорт и экспорт цветовых схем (см. SPEC.md).
-- Автотест проверяет контраст всех пар «текст / фон» из этого документа
-  по порогам из раздела 1.
+## 7. Implementation
+- Tokens live in `apps/desktop/src/theme/tokens.css`: CSS variables
+  on `:root` (dark theme) and `[data-theme="light"]` (light).
+- Terminal themes are stored as JSON in `apps/desktop/src/theme/terminal/`,
+  in a format that supports importing and exporting color schemes (see SPEC.md).
+- An automated test checks the contrast of all "text / background" pairs from this document
+  against the thresholds from section 1.

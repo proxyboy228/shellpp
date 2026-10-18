@@ -1,211 +1,211 @@
-# Проект: self-hosted SSH-клиент (рабочее название: Shell++)
+# Project: self-hosted SSH client (working title: Shell++)
 
-## Состав документации
-- `SPEC.md` (этот файл): цели, принципы, стек, функциональность, порядок работы.
-- `docs/ui-behavior-spec.md`: поведение интерфейса, экран за экраном.
-- `docs/design-system.md`: палитра, типографика, токены, темы терминала.
+## Documentation contents
+- `SPEC.md` (this file): goals, principles, stack, functionality, work order.
+- `docs/ui-behavior-spec.md`: interface behavior, screen by screen.
+- `docs/design-system.md`: palette, typography, tokens, terminal themes.
 
-## Цель
-Кроссплатформенный SSH-клиент с функциональностью уровня коммерческих клиентов
-(хосты, ключи, сниппеты, SFTP, port forwarding, синхронизация между устройствами),
-но с другой моделью владения данными. Мотивация: в коммерческом клиенте мои
-локальные данные стали недоступны, когда истекла чужая командная подписка.
-Здесь такое должно быть невозможно by design.
+## Goal
+A cross-platform SSH client with functionality on par with commercial clients
+(hosts, keys, snippets, SFTP, port forwarding, sync between devices),
+but with a different data ownership model. Motivation: in a commercial client my
+local data became inaccessible when someone else's team subscription expired.
+Here this must be impossible by design.
 
-## Clean room: обязательные правила
-- Не использовать код, ресурсы, бинарники, декомпиляцию, сетевой протокол или
-  формат хранения Termius. Не искать и не открывать их исходники или дампы.
-- Не использовать название, логотип, иконки, фирменные цвета, иллюстрации
-  и тексты интерфейса Termius.
-- Единственный источник требований к интерфейсу: `docs/ui-behavior-spec.md`
-  и `docs/design-system.md`. Не запрашивай и не используй скриншоты оригинала.
-  Если описания не хватает, задай вопрос, а не додумывай по своим
-  представлениям об оригинале.
-- Зависимости только с permissive-лицензиями (MIT / Apache-2.0 / BSD / ISC /
-  MPL-2.0, для шрифтов OFL). Перед добавлением зависимости проверяй лицензию
-  и записывай её в THIRD_PARTY_NOTICES.
+## Clean room: mandatory rules
+- Do not use Termius code, resources, binaries, decompilation, network protocol, or
+  storage format. Do not search for or open their sources or dumps.
+- Do not use the Termius name, logo, icons, brand colors, illustrations,
+  or interface text.
+- The only source of interface requirements: `docs/ui-behavior-spec.md`
+  and `docs/design-system.md`. Do not request or use screenshots of the original.
+  If a description is not sufficient, ask a question instead of filling in the gaps
+  based on your own ideas about the original.
+- Dependencies with permissive licenses only (MIT / Apache-2.0 / BSD / ISC /
+  MPL-2.0, OFL for fonts). Before adding a dependency, check its license
+  and record it in THIRD_PARTY_NOTICES.
 
-## Принципы (не обсуждаются)
-1. Local-first. Приложение полностью работает офлайн, без аккаунта и сервера.
-   Синхронизация опциональна.
-2. Никаких проверок лицензии и подписки, триалов, тарифов, телеметрии,
-   phone-home и удалённого отключения функций.
-3. Данные пользователя всегда читаемы локально. Если отозван доступ к общему
-   vault, удалён аккаунт, выполнен выход или сервер недоступен, локальная копия
-   остаётся доступной и экспортируемой. Отзыв доступа прекращает только БУДУЩУЮ
-   синхронизацию и никогда не стирает и не блокирует уже полученные данные
-   удалённо.
-4. Экспорт в открытые форматы в любой момент: JSON (документированная схема,
-   открытый или зашифрованный), ~/.ssh/config, ключи в формате OpenSSH,
-   known_hosts. Формат хранения описан в docs/.
-5. Zero-knowledge sync. Сервер хранит только зашифрованные блобы и метаданные
-   синхронизации. Ключи шифрования не покидают клиент в открытом виде.
+## Principles (non-negotiable)
+1. Local-first. The application works fully offline, without an account or server.
+   Sync is optional.
+2. No license or subscription checks, trials, pricing tiers, telemetry,
+   phone-home, or remote disabling of features.
+3. User data is always readable locally. If access to a shared
+   vault is revoked, the account is deleted, the user signs out, or the server is unavailable, the local copy
+   remains accessible and exportable. Revoking access stops only FUTURE
+   sync and never remotely erases or locks data that has already been
+   received.
+4. Export to open formats at any time: JSON (documented schema,
+   plaintext or encrypted), ~/.ssh/config, keys in OpenSSH format,
+   known_hosts. The storage format is described in docs/.
+5. Zero-knowledge sync. The server stores only encrypted blobs and sync
+   metadata. Encryption keys never leave the client in plaintext.
 
-## Стек по умолчанию
-Если видишь причину что-то заменить, предложи это ДО начала работы.
-- Desktop: Tauri 2 (ядро на Rust) + React + TypeScript + Vite.
-- Терминал: xterm.js (addons: fit, search, webgl, web-links, unicode11).
-- SSH/SFTP: russh + russh-sftp, работа с ключами через ssh-key.
-- Локальное хранилище: SQLite. Секреты шифруются на уровне записей.
-  Ключ хранится в OS keychain (crate keyring). Разблокировка мастер-паролем,
-  опционально биометрией.
-- Криптография: Argon2id (KDF), XChaCha20-Poly1305 (данные), X25519
-  (обёртка ключей общих vault). Только проверенные крейты (RustCrypto, dalek).
-  Никакой самописной криптографии.
-- Иконки интерфейса: Lucide (ISC).
-- Сервер синхронизации: Rust (axum) + PostgreSQL, SQLite для маленьких
-  инсталляций. Docker-образ, docker-compose.yml, конфигурация через env.
-- Монорепо:
-  - apps/desktop: Tauri-приложение
-  - crates/core: модель данных, шифрование, sync-клиент (переиспользуется на мобильных)
-  - crates/ssh: SSH, SFTP, форвардинг, агент
-  - server/: сервер синхронизации
-  - docs/: спецификации, архитектура, формат данных, протокол sync, threat model
-- Мобильные приложения (iOS/Android) делаются позже через Tauri 2 mobile.
-  Архитектура ядра не должна этому мешать.
+## Default stack
+If you see a reason to replace something, propose it BEFORE starting work.
+- Desktop: Tauri 2 (Rust core) + React + TypeScript + Vite.
+- Terminal: xterm.js (addons: fit, search, webgl, web-links, unicode11).
+- SSH/SFTP: russh + russh-sftp, key handling via ssh-key.
+- Local storage: SQLite. Secrets are encrypted at the record level.
+  The key is stored in the OS keychain (crate keyring). Unlocking with the master password,
+  optionally with biometrics.
+- Cryptography: Argon2id (KDF), XChaCha20-Poly1305 (data), X25519
+  (wrapping of shared vault keys). Only vetted crates (RustCrypto, dalek).
+  No homemade cryptography.
+- Interface icons: Lucide (ISC).
+- Sync server: Rust (axum) + PostgreSQL, SQLite for small
+  installations. Docker image, docker-compose.yml, configuration via env.
+- Monorepo:
+  - apps/desktop: Tauri application
+  - crates/core: data model, encryption, sync client (reused on mobile)
+  - crates/ssh: SSH, SFTP, port forwarding, agent
+  - server/: sync server
+  - docs/: specifications, architecture, data format, sync protocol, threat model
+- Mobile apps (iOS/Android) are built later via Tauri 2 mobile.
+  The core architecture must not get in the way of this.
 
-## Функциональность
-Детали интерфейса для каждого пункта описаны в `docs/ui-behavior-spec.md`.
+## Functionality
+Interface details for each item are described in `docs/ui-behavior-spec.md`.
 
-### Хосты
-- Поля хоста: label, address, port, identity, группа, теги, заметки, цвет,
-  startup snippet, переменные окружения, keepalive, кодировка, тема терминала,
-  цепочка jump hosts (ProxyJump), proxy (HTTP/SOCKS), agent forwarding,
-  дополнительные протоколы (Telnet, позже Mosh).
-- Вложенные группы с наследованием настроек (username, identity, port, jump host).
-- Identity: username + пароль и/или ключ, переиспользуется между хостами.
-- Поиск и фильтр по тегам, quick connect по строке `user@host:port`,
-  поиск по хостам и вкладкам (Ctrl+K).
+### Hosts
+- Host fields: label, address, port, identity, group, tags, notes, color,
+  startup snippet, environment variables, keepalive, encoding, terminal theme,
+  jump host chain (ProxyJump), proxy (HTTP/SOCKS), agent forwarding,
+  additional protocols (Telnet, later Mosh).
+- Nested groups with settings inheritance (username, identity, port, jump host).
+- Identity: username + password and/or key, reused across hosts.
+- Search and filter by tags, quick connect from a `user@host:port` string,
+  search across hosts and tabs (Ctrl+K).
 
 ### Keychain
-- Генерация ключей Ed25519, ECDSA и RSA.
-- Импорт ключей в форматах OpenSSH, PEM и PuTTY .ppk, поддержка passphrase.
-- Сертификаты и FIDO2-ключи.
-- Выгрузка публичного ключа на сервер (аналог ssh-copy-id).
-- Работа с системным ssh-agent / Pageant и встроенный агент.
-- Known hosts: TOFU с показом fingerprint при первом подключении, блокирующее
-  предупреждение при смене ключа хоста, управление списком, импорт и экспорт.
+- Generation of Ed25519, ECDSA, and RSA keys.
+- Import of keys in OpenSSH, PEM, and PuTTY .ppk formats, passphrase support.
+- Certificates and FIDO2 keys.
+- Uploading the public key to a server (similar to ssh-copy-id).
+- Working with the system ssh-agent / Pageant, and a built-in agent.
+- Known hosts: TOFU with the fingerprint shown on first connection, a blocking
+  warning when the host key changes, list management, import and export.
 
-### Терминал
-- Вкладки, горизонтальные и вертикальные сплиты, переименование вкладок,
-  авто-переподключение при обрыве, workspaces (сохранённые наборы вкладок).
-- Цветовые темы (импорт схем iTerm2 и Windows Terminal), шрифт, размер,
-  стиль курсора.
-- Поиск по выводу, copy-on-select (опция), подтверждение многострочной вставки.
-- Подсветка ключевых слов в выводе, включая пользовательские правила.
-- Broadcast ввода в несколько сессий.
-- История команд и запись сессии в лог (опции, см. раздел «Безопасность»).
-- Локальный терминал и serial-подключения.
+### Terminal
+- Tabs, horizontal and vertical splits, tab renaming,
+  auto-reconnect on connection drop, workspaces (saved sets of tabs).
+- Color themes (import of iTerm2 and Windows Terminal schemes), font, size,
+  cursor style.
+- Search in output, copy-on-select (option), confirmation of multi-line paste.
+- Keyword highlighting in output, including user-defined rules.
+- Broadcast of input to multiple sessions.
+- Command history and session logging (options, see the "Security" section).
+- Local terminal and serial connections.
 
-### Сниппеты
-- Переменные `{{var}}`: при запуске появляется форма для ввода значений.
-- Пакеты (папки) и теги.
-- Запуск в текущей сессии или сразу на нескольких целевых хостах.
+### Snippets
+- Variables `{{var}}`: on run, a form appears for entering the values.
+- Packages (folders) and tags.
+- Run in the current session or on several target hosts at once.
 
 ### Port forwarding
-- Local, Remote и Dynamic (SOCKS5).
-- Сохранённые правила, мастер создания, автозапуск при подключении,
-  индикатор статуса.
+- Local, Remote, and Dynamic (SOCKS5).
+- Saved rules, wizard, autostart on connection,
+  status indicator.
 
 ### SFTP
-- Двухпанельный менеджер: local ↔ remote и remote ↔ remote.
-- Drag & drop, очередь передач с прогрессом, паузой и отменой.
-- chmod, переименование, удаление, создание папок, скрытые файлы.
-- Открытие файла во внешнем редакторе с автозагрузкой изменений обратно.
+- Dual-pane manager: local ↔ remote and remote ↔ remote.
+- Drag & drop, transfer queue with progress, pause, and cancel.
+- chmod, rename, delete, folder creation, hidden files.
+- Opening a file in an external editor with automatic upload of changes back.
 
-### Импорт
-- ~/.ssh/config, включая Include, Host *, Match (хотя бы базово) и ProxyJump.
-- Сессии PuTTY из реестра Windows, CSV, собственный JSON, known_hosts.
-- Импорт идемпотентный: повторный запуск не создаёт дубликатов.
+### Import
+- ~/.ssh/config, including Include, Host *, Match (at least basic) and ProxyJump.
+- PuTTY sessions from the Windows registry, CSV, native JSON, known_hosts.
+- Import is idempotent: running it again does not create duplicates.
 
-### Синхронизация и командный доступ
-- Аккаунт на self-hosted сервере, URL сервера задаёт пользователь.
-  Поддерживается несколько устройств.
-- Цепочка ключей: мастер-пароль → Argon2id → KEK. Vault key генерируется
-  случайно и хранится обёрнутым KEK. Каждая запись шифруется отдельно.
-- Протокол:
-  - pull/push изменений по курсору (серверный sequence number);
-  - у записи есть UUIDv7, revision и tombstone для удалений;
-  - конфликты решаются по last-writer-wins на уровне записи, проигравшая
-    версия сохраняется для ручного разрешения в UI.
-- Пользователь выбирает, какие типы данных синхронизировать. История команд
-  и журнал подключений по умолчанию не синхронизируются.
-- Общие vault для команды:
-  - у пользователя пара ключей X25519;
-  - vault key оборачивается публичным ключом каждого участника;
-  - роли owner, editor и viewer;
-  - при удалении участника vault key ротируется для оставшихся;
-  - локальная копия удалённого участника НЕ стирается удалённо (принцип 3).
-- Recovery key при регистрации. В UI честное предупреждение: без пароля
-  и recovery key данные восстановить невозможно.
-- Сервер:
-  - регистрация открытая или только по инвайтам (настраивается);
+### Sync and team access
+- Account on a self-hosted server; the server URL is set by the user.
+  Multiple devices are supported.
+- Key chain: master password → Argon2id → KEK. The vault key is generated
+  randomly and stored wrapped with the KEK. Each record is encrypted separately.
+- Protocol:
+  - pull/push of changes by cursor (server-side sequence number);
+  - a record has a UUIDv7, a revision, and a tombstone for deletions;
+  - conflicts are resolved by last-writer-wins at the record level; the losing
+    version is kept for manual resolution in the UI.
+- The user chooses which data types to sync. Command history
+  and the connection log are not synced by default.
+- Shared vaults for a team:
+  - the user has an X25519 key pair;
+  - the vault key is wrapped with each member's public key;
+  - roles owner, editor, and viewer;
+  - when a member is removed, the vault key is rotated for the remaining members;
+  - the local copy of a removed member is NOT erased remotely (principle 3).
+- Recovery key at registration. An honest warning in the UI: without the password
+  and the recovery key, the data cannot be recovered.
+- Server:
+  - registration is open or invite-only (configurable);
   - TOTP 2FA;
   - admin CLI;
   - health endpoint, rate limiting;
-  - TLS через reverse proxy (пример конфигурации Caddy);
-  - инструкция по бэкапу БД.
+  - TLS via reverse proxy (example Caddy configuration);
+  - DB backup instructions.
 
 ## UI/UX
-- Структура экранов, навигация, сценарии, горячие клавиши и реакции на действия
-  берутся из `docs/ui-behavior-spec.md`.
-- Внешний вид (цвета, шрифты, радиусы, отступы) берётся из `docs/design-system.md`.
-- Пометка **[решение]** в UI-спецификации означает выбор по умолчанию.
-  Если он мешает архитектуре или противоречит другому месту спецификации,
-  скажи об этом до реализации.
-- Приёмка: для каждого экрана и сценария из UI-спецификации есть e2e-тест
-  (WebdriverIO + tauri-driver), проверяющий описанное поведение. Экран считается
-  готовым, когда его тесты проходят.
+- Screen structure, navigation, scenarios, keyboard shortcuts, and responses to actions
+  are taken from `docs/ui-behavior-spec.md`.
+- Appearance (colors, fonts, radii, spacing) is taken from `docs/design-system.md`.
+- The **[decision]** mark in the UI specification means the default choice.
+  If it gets in the way of the architecture or contradicts another place in the specification,
+  say so before implementation.
+- Acceptance: for each screen and scenario in the UI specification there is an e2e test
+  (WebdriverIO + tauri-driver) that verifies the described behavior. A screen is considered
+  done when its tests pass.
 
-## Безопасность
-- Секреты никогда не попадают в логи, в открытый текст на диске или в URL.
-- Автоблокировка по неактивности. Буфер обмена очищается после копирования
-  пароля или ключа.
-- Строгий CSP в Tauri и минимальный набор разрешённых команд.
-- Threat model в docs/security.md.
-- Обязательные требования из `docs/ui-behavior-spec.md`:
-  - 4.2: история не записывает ввод при запросе пароля, вычищает служебные
-    последовательности и не предлагает похожие на секреты строки как сниппеты;
-  - 7.3: приватный ключ скрыт по умолчанию и показывается только явной кнопкой;
-  - 8.4: форвардинг по умолчанию слушает только 127.0.0.1;
-  - 10.2: смена ключа хоста блокирует подключение до явного подтверждения;
-  - 12.4: импорт истории с сервера и запись вывода сессий по умолчанию выключены.
+## Security
+- Secrets never end up in logs, in plaintext on disk, or in URLs.
+- Auto-lock on inactivity. The clipboard is cleared after copying
+  a password or key.
+- Strict CSP in Tauri and a minimal set of allowed commands.
+- Threat model in docs/security.md.
+- Mandatory requirements from `docs/ui-behavior-spec.md`:
+  - 4.2: history does not record input during a password prompt, strips control
+    sequences, and does not suggest secret-like strings as snippets;
+  - 7.3: the private key is hidden by default and shown only via an explicit button;
+  - 8.4: port forwarding listens only on 127.0.0.1 by default;
+  - 10.2: a host key change blocks the connection until explicit confirmation;
+  - 12.4: importing history from the server and recording session output are off by default.
 
-## Качество
-- Unit-тесты для crates/core: шифрование, merge при синхронизации,
-  парсер ssh_config, фильтр секретов в истории.
-- Интеграционные тесты SSH/SFTP/форвардинга против OpenSSH в Docker.
-- E2E-тест синхронизации: два клиента + сервер.
-- E2E-тесты интерфейса по UI-спецификации.
-- Автотест контраста цветовых токенов.
-- CI на GitHub Actions: clippy, eslint, тесты, сборка под Windows, macOS и Linux.
-- Код, комментарии, коммиты и документация на английском.
+## Quality
+- Unit tests for crates/core: encryption, merge during sync,
+  ssh_config parser, secret filter in history.
+- Integration tests of SSH/SFTP/port forwarding against OpenSSH in Docker.
+- Sync E2E test: two clients + server.
+- Interface E2E tests based on the UI specification.
+- Automated contrast test for color tokens.
+- CI on GitHub Actions: clippy, eslint, tests, builds for Windows, macOS, and Linux.
+- Code, comments, commits, and documentation in English.
 
-## Порядок работы
-Работай строго по этапам. После каждого этапа: тесты зелёные, коммит,
-краткий отчёт (что сделано, что осталось, какие есть риски). Дальше жди
-моего подтверждения.
+## Work order
+Work strictly stage by stage. After each stage: tests are green, commit,
+brief report (what was done, what remains, what risks there are). Then wait
+for my confirmation.
 
-0. Дизайн-документы в docs/: архитектура, схема данных, формат хранения,
-   протокол синхронизации, threat model. Плюс файл токенов и базовые
-   компоненты по design-system.md. Покажи до написания основного кода.
-1. Скелет монорепо, Tauri-приложение, каркас главного окна (UI-спека,
-   раздел 1), зашифрованное хранилище, мастер-пароль, экран Hosts и панель
-   хоста (разделы 2–3).
-2. SSH-терминал: аутентификация по паролю и ключу, known hosts и TOFU,
-   вкладки, сплиты, темы, боковая панель терминала, страница новой вкладки
-   (разделы 4, 6, 10).
-3. Keychain, импорт ~/.ssh/config, экспорт в JSON и ssh config (раздел 7).
-4. SFTP (раздел 5).
-5. Port forwarding, jump hosts, proxy, сниппеты (разделы 8, 9).
-6. Logs, настройки, горячие клавиши (разделы 11, 12).
-7. Сервер синхронизации и sync-клиент, несколько устройств.
-8. Общие vault, роли, приглашения, шаринг хостов и сниппетов.
-9. Полировка: workspaces, broadcast, отключаемое автообновление из моего
-   собственного источника.
-10. Поздние этапы: мобильные приложения, совместная сессия (multiplayer),
-    импорт из облачных провайдеров, autocomplete, генерация сниппетов через
-    подключаемую LLM.
+0. Design documents in docs/: architecture, data schema, storage format,
+   sync protocol, threat model. Plus a tokens file and base
+   components per design-system.md. Show them before writing the main code.
+1. Monorepo skeleton, Tauri application, main window shell (UI spec,
+   section 1), encrypted storage, master password, Hosts screen and host
+   panel (sections 2–3).
+2. SSH terminal: password and key authentication, known hosts and TOFU,
+   tabs, splits, themes, terminal sidebar, new tab page
+   (sections 4, 6, 10).
+3. Keychain, ~/.ssh/config import, export to JSON and ssh config (section 7).
+4. SFTP (section 5).
+5. Port forwarding, jump hosts, proxy, snippets (sections 8, 9).
+6. Logs, settings, keyboard shortcuts (sections 11, 12).
+7. Sync server and sync client, multiple devices.
+8. Shared vaults, roles, invitations, sharing of hosts and snippets.
+9. Polish: workspaces, broadcast, auto-update that can be turned off, from my
+   own source.
+10. Later stages: mobile apps, shared session (multiplayer),
+    import from cloud providers, autocomplete, snippet generation via
+    a pluggable LLM.
 
-Если что-то в спецификации противоречиво или технически неудачно, скажи
-об этом до реализации, а не молча.
+If something in the specification is contradictory or technically unsound, say
+so before implementation, rather than silently.

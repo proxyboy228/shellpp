@@ -1,211 +1,211 @@
-# Поведенческая спецификация UI
+# UI Behavior Specification
 
-> Документ описывает **структуру и поведение** интерфейса: что где находится,
-> что происходит при каждом действии. Визуальный стиль (цвета, иконки, шрифты,
-> радиусы, тени) описан отдельно в `docs/design-system.md`.
+> This document describes the **structure and behavior** of the interface: what is located where,
+> and what happens on each action. The visual style (colors, icons, fonts,
+> radii, shadows) is described separately in `docs/design-system.md`.
 >
-> Пометки:
-> - **[решение]**: поведение не подтверждено, выбрано нами, можно менять;
-> - **[уточнить]**: ждёт ответа, до ответа реализовать как [решение].
+> Marks:
+> - **[decision]**: behavior is not confirmed, chosen by us, can be changed;
+> - **[clarify]**: awaiting an answer; until answered, implement as [decision].
 
-## 0. Платформы
-- Windows (основная для ручного тестирования), macOS, Linux. Позже iOS и Android.
-- Горячие клавиши указаны для Windows/Linux. На macOS Ctrl заменяется на Cmd
-  там, где это принято на платформе.
+## 0. Platforms
+- Windows (primary for manual testing), macOS, Linux. Later iOS and Android.
+- Keyboard shortcuts are given for Windows/Linux. On macOS, Ctrl is replaced with Cmd
+  where this is the platform convention.
 
 ---
 
-## 1. Главное окно
+## 1. Main window
 
-### 1.1 Верхняя панель (заголовок окна)
-- Собственный заголовок окна (frameless). На Windows/Linux кнопки
-  свернуть / развернуть / закрыть справа, на macOS системные кнопки слева. [решение для macOS]
-- Слева направо:
-  1. Кнопка меню приложения.
-  2. Постоянная вкладка **Vaults**: рабочая область управления данными.
-     Рядом стрелка-переключатель текущего vault (личный, командные).
-  3. Постоянная вкладка **SFTP**.
-  4. Вкладки открытых сессий: иконка ОС хоста + имя хоста.
-     - У активной вкладки (и у любой при наведении) на месте иконки ОС
-       появляется кнопка закрытия.
-     - Активная вкладка подсвечена акцентным цветом темы терминала этого хоста. [решение]
-     - Справа на вкладке значок типа сессии: терминал или SFTP. [решение]
-  5. Кнопка «+»: новая вкладка со стартовой страницей (см. раздел 6).
-- Справа:
-  - кнопка обновления (видна, только когда обновление доступно);
-  - центр уведомлений;
-  - кнопка показа и скрытия боковой панели терминала (только когда активна
-    вкладка сессии, см. 4.2);
-  - кнопки окна.
+### 1.1 Top bar (window title bar)
+- Custom window title bar (frameless). On Windows/Linux, the minimize /
+  maximize / close buttons are on the right; on macOS, the system buttons are on the left. [decision for macOS]
+- From left to right:
+  1. App menu button.
+  2. Persistent **Vaults** tab: the data management workspace.
+     Next to it is an arrow switcher for the current vault (personal, team).
+  3. Persistent **SFTP** tab.
+  4. Open session tabs: host OS icon + host name.
+     - On the active tab (and on any tab on hover), a close button
+       appears in place of the OS icon.
+     - The active tab is highlighted with the accent color of this host's terminal theme. [decision]
+     - On the right side of the tab, a session type icon: terminal or SFTP. [decision]
+  5. "+" button: a new tab with the start page (see section 6).
+- On the right:
+  - update button (visible only when an update is available);
+  - notification center;
+  - button to show and hide the terminal sidebar (only when a session
+    tab is active, see 4.2);
+  - window buttons.
 
-### 1.2 Боковая панель (внутри вкладки Vaults)
-- Разделы сверху вниз: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
+### 1.2 Sidebar (inside the Vaults tab)
+- Sections from top to bottom: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
   **Known Hosts**, **Logs**.
-- Активный раздел подсвечен. Каждый раздел открывает свой экран в основной области.
+- The active section is highlighted. Each section opens its own screen in the main area.
 
-### 1.3 Правая панель деталей
-- Выдвижная панель справа. Открывается при выборе объекта или при создании нового.
-- В шапке: заголовок («детали хоста» / «новый хост»), меню «…» с дополнительными
-  действиями (состав зависит от объекта, для хоста см. 3.3), кнопка свернуть панель.
-- Основная область сужается, панель её не перекрывает. [решение]
+### 1.3 Details panel
+- A slide-out panel on the right. Opens when an object is selected or when a new one is created.
+- In the header: a title ("host details" / "new host"), a "…" menu with additional
+  actions (the set depends on the object; for a host see 3.3), a button to collapse the panel.
+- The main area narrows; the panel does not overlap it. [decision]
 
-### 1.4 Меню приложения (кнопка с тремя полосками)
+### 1.4 App menu (the button with three bars)
 1. Vaults (Ctrl+1).
 2. SFTP (Ctrl+2).
 3. Settings (Ctrl+,).
-4. — разделитель —
+4. — separator —
 5. New Local Terminal.
 6. New Serial Connection.
-7. Edit ▸: отменить, повторить, вырезать, копировать, вставить, выделить всё. [решение]
-8. View ▸: масштаб интерфейса, полноэкранный режим, показать или скрыть
-   боковую панель. [решение]
-9. Window ▸: новое окно, следующая и предыдущая вкладка, закрыть вкладку. [решение]
-10. Help ▸: документация, сообщить о проблеме (ссылка на issues), проверить
-    обновления, о программе. [решение]
-11. — разделитель —
+7. Edit ▸: undo, redo, cut, copy, paste, select all. [decision]
+8. View ▸: interface zoom, full-screen mode, show or hide
+   the sidebar. [decision]
+9. Window ▸: new window, next and previous tab, close tab. [decision]
+10. Help ▸: documentation, report an issue (link to issues), check for
+    updates, about. [decision]
+11. — separator —
 12. Exit.
 
-Дополнительно:
-- Клавиши в подсказках пишутся символами (`Ctrl+,`), а не словами на языке
-  системы. [решение]
-- На macOS вместо этого меню используется системная строка меню с теми же
-  пунктами. [решение]
+Additionally:
+- Keys in hints are written as symbols (`Ctrl+,`), not as words in the system
+  language. [decision]
+- On macOS, the system menu bar with the same items is used instead of this
+  menu. [decision]
 
 ---
 
-## 2. Экран Hosts
+## 2. Hosts screen
 
-### 2.1 Поиск и быстрое подключение
-- Строка поиска вверху основной области, на всю ширину. Плейсхолдер подсказывает,
-  что можно искать хост или ввести `ssh user@hostname`.
-- Ввод фильтрует группы и хосты в реальном времени: по имени, адресу,
-  тегам и имени пользователя. [решение по набору полей]
-- Если строка распознаётся как адрес подключения (`host`, `user@host`,
-  `user@host:port`, `ssh user@host -p port`), в правой части строки активируется
-  кнопка Connect. Enter или клик подключает без сохранения хоста.
-- Пока строка не является адресом, кнопка Connect неактивна.
-- После успешного быстрого подключения ненавязчиво предлагается сохранить хост. [решение]
+### 2.1 Search and quick connect
+- Search bar at the top of the main area, full width. The placeholder hints
+  that you can search for a host or enter `ssh user@hostname`.
+- Typing filters groups and hosts in real time: by name, address,
+  tags and username. [decision on the set of fields]
+- If the string is recognized as a connection address (`host`, `user@host`,
+  `user@host:port`, `ssh user@host -p port`), the Connect button on the right side of the bar
+  becomes enabled. Enter or a click connects without saving the host.
+- While the string is not an address, the Connect button is disabled.
+- After a successful quick connect, an unobtrusive offer to save the host is shown. [decision]
 
-### 2.2 Панель действий
-Слева:
-- Split-кнопка **New host**. Основная часть создаёт хост, стрелка открывает меню:
-  1. **New Group**: создать группу в текущем расположении.
-  2. **Import**: диалог импорта (форматы перечислены в SPEC.md, раздел «Импорт»).
-  3. Интеграции с облаками (AWS, DigitalOcean, Azure): подключение аккаунта
-     провайдера и импорт его серверов как хостов. **Отдельный поздний этап**,
-     в MVP пункты скрыты.
-- **Terminal**: открыть локальный терминал в новой вкладке. Оболочка по умолчанию
-  задаётся в настройках (на Windows PowerShell / cmd / WSL). [решение]
-- **Serial**: подключение по последовательному порту, открывается отдельной
-  вкладкой в верхней панели.
+### 2.2 Action bar
+On the left:
+- **New host** split button. The main part creates a host; the arrow opens a menu:
+  1. **New Group**: create a group in the current location.
+  2. **Import**: import dialog (formats are listed in SPEC.md, section "Import").
+  3. Cloud integrations (AWS, DigitalOcean, Azure): connecting a provider
+     account and importing its servers as hosts. **A separate later stage**;
+     in the MVP these items are hidden.
+- **Terminal**: open a local terminal in a new tab. The default shell
+  is set in the settings (on Windows, PowerShell / cmd / WSL). [decision]
+- **Serial**: serial port connection, opens as a separate
+  tab in the top bar.
 
-Справа:
-- Переключатель вида: плитки / список.
-- Фильтр по тегам.
-- Ещё одна кнопка. [уточнить назначение]
-- Аватары участников текущего vault и кнопка «+». Клик открывает выпадающее меню:
-  пункт «Пригласить участников», ниже список текущих участников (аватар + email).
+On the right:
+- View toggle: tiles / list.
+- Tag filter.
+- One more button. [clarify purpose]
+- Avatars of the current vault's members and a "+" button. A click opens a dropdown menu:
+  an "Invite members" item, below it a list of current members (avatar + email).
 
-### 2.3 Содержимое экрана
-- Два раздела: сверху **Groups**, под ним **Hosts**.
-- Группы работают как папки: клик открывает группу, внутри видны её подгруппы
-  и хосты. Над содержимым путь (хлебные крошки) с возвратом на любой уровень. [решение]
-- Карточка группы: иконка, название, количество хостов (включая вложенные группы). [решение]
-- Карточка хоста:
-  - иконка ОС. Дистрибутив определяется при первом успешном подключении
-    (см. 12.4, блок «Определение ОС»). До этого показывается нейтральная иконка.
-    Иконки ОС берутся из набора с подходящей лицензией, с учётом
-    trademark-политик дистрибутивов;
-  - заголовок: label, а если он пустой, то адрес;
-  - подзаголовок вторичным цветом, через запятую: протокол(ы), имя пользователя,
-    затем группа или теги;
-  - длинный текст обрезается многоточием.
-- Сетка адаптивная: число колонок зависит от ширины основной области.
-- Выбранная карточка визуально выделена.
-- Поддерживается множественное выделение: Ctrl+клик добавляет или убирает
-  карточку, Shift+клик выделяет диапазон. Действия контекстного меню, которые
-  применимы к нескольким хостам (Connect, Add to Workspace, Move to, Copy to,
-  Remove), выполняются для всех выделенных. [решение по клавишам и составу]
-- Карточки можно перетаскивать: внутри списка меняется порядок, при броске
-  на карточку группы хост переносится в эту группу. [решение по деталям]
-- Промо-баннеры не нужны. Вместо них пустое состояние с подсказками. [решение]
-- Пустое состояние (нет хостов): короткое пояснение и кнопки «Создать хост»
-  и «Импортировать из ~/.ssh/config». [решение]
+### 2.3 Screen content
+- Two sections: **Groups** on top, **Hosts** below it.
+- Groups work like folders: a click opens a group, inside which its subgroups
+  and hosts are visible. Above the content is a path (breadcrumbs) with return to any level. [decision]
+- Group card: icon, name, number of hosts (including nested groups). [decision]
+- Host card:
+  - OS icon. The distribution is detected on the first successful connection
+    (see 12.4, block "OS detection"). Until then, a neutral icon is shown.
+    OS icons are taken from a set with a suitable license, taking into account
+    the trademark policies of the distributions;
+  - title: the label, or the address if the label is empty;
+  - subtitle in the secondary color, comma-separated: protocol(s), username,
+    then the group or tags;
+  - long text is truncated with an ellipsis.
+- The grid is adaptive: the number of columns depends on the width of the main area.
+- The selected card is visually highlighted.
+- Multiple selection is supported: Ctrl+click adds or removes
+  a card, Shift+click selects a range. Context menu actions that
+  apply to multiple hosts (Connect, Add to Workspace, Move to, Copy to,
+  Remove) are performed for all selected ones. [decision on keys and set]
+- Cards can be dragged: within the list the order changes; when dropped
+  onto a group card, the host is moved into that group. [decision on details]
+- Promo banners are not needed. Instead, an empty state with hints. [decision]
+- Empty state (no hosts): a short explanation and the buttons "Create host"
+  and "Import from ~/.ssh/config". [decision]
 
-### 2.4 Действия с карточкой хоста
-- Одинарный клик: выделить карточку и показать детали в правой панели.
-- Двойной клик: подключиться (новая вкладка сессии).
-- Enter на выделенной карточке: быстрое подключение.
-- E на выделенной карточке: редактирование (детали с фокусом в первом поле).
-- Стрелки клавиатуры перемещают выделение по сетке. [решение]
-- Правый клик открывает контекстное меню (порядок важен):
-  1. **Quick Connect** (Enter): подключиться по основному протоколу.
-  2. **Connect ▸**: подменю:
-     - через SSH (сессия терминала);
-     - через SFTP (хост открывается в SFTP-менеджере);
-     - разделитель;
-     - подсказка «в новом окне»: если при выборе любого варианта держать Alt,
-       сессия открывается в новом окне приложения. Alt + двойной клик по
-       карточке работает так же. [решение для двойного клика]
-  3. **Add to Workspace ▸**: добавить в сохранённое рабочее пространство
-     (подробно в разделе «Терминал»).
+### 2.4 Host card actions
+- Single click: select the card and show details in the details panel.
+- Double click: connect (new session tab).
+- Enter on a selected card: quick connect.
+- E on a selected card: edit (details with focus in the first field).
+- Keyboard arrows move the selection across the grid. [decision]
+- Right-click opens the context menu (order matters):
+  1. **Quick Connect** (Enter): connect via the primary protocol.
+  2. **Connect ▸**: submenu:
+     - via SSH (terminal session);
+     - via SFTP (the host opens in the SFTP manager);
+     - separator;
+     - "in a new window" hint: if Alt is held while choosing any option,
+       the session opens in a new app window. Alt + double click on
+       a card works the same way. [decision for double click]
+  3. **Add to Workspace ▸**: add to a saved workspace
+     (details in the "Terminal" section).
   4. **Edit Host Details** (E).
-  5. **Collaborate**: поделиться хостом с участниками команды.
-  6. **Move to ▸**: перенести в другой vault или группу.
-  7. **Copy to ▸**: скопировать в другой vault.
-  8. **Duplicate**: копия хоста, к имени добавляется суффикс « Copy».
-  9. **Copy Link**: ссылка на хост в собственной URL-схеме приложения
-     (`shellpp://host/<id>`). Значок (i) поясняет, кто сможет открыть ссылку.
-  10. **Remove**: удаление с подтверждением и возможностью отменить
-      действие (undo) несколько секунд. [решение]
+  5. **Collaborate**: share the host with team members.
+  6. **Move to ▸**: move to another vault or group.
+  7. **Copy to ▸**: copy to another vault.
+  8. **Duplicate**: a copy of the host; the suffix " Copy" is appended to the name.
+  9. **Copy Link**: a link to the host in the app's own URL scheme
+     (`shellpp://host/<id>`). An (i) icon explains who will be able to open the link.
+  10. **Remove**: deletion with confirmation and the ability to undo
+      the action for a few seconds. [decision]
 
 ---
 
-## 3. Панель хоста: просмотр, создание, редактирование
-Одна и та же форма для создания и редактирования, открывается в правой панели.
+## 3. Host panel: view, create, edit
+The same form is used for creating and editing; it opens in the details panel.
 
-### 3.1 Блоки сверху вниз
-1. **Vault**: выпадающий список, где хранится хост (личный или командный vault).
-2. **Address**: иконка ОС + поле «IP или hostname». При создании фокус сразу здесь.
+### 3.1 Blocks from top to bottom
+1. **Vault**: a dropdown for where the host is stored (personal or team vault).
+2. **Address**: OS icon + "IP or hostname" field. On creation, focus is placed here immediately.
 3. **General**:
    - Label;
-   - Parent Group: выбор группы с поиском и созданием новой на лету; [решение]
-   - Tags: теги показаны чипами с кнопкой удаления, ввод с автодополнением
-     и созданием новых тегов на лету;
-   - Backspace: что отправляет клавиша Backspace (по умолчанию / варианты). [решение: Default, `^?` (DEL), `^H`]
-4. **Share this host**: открывает диалог шаринга. Неактивна, пока хост не создан.
+   - Parent Group: group selection with search and creation of a new group on the fly; [decision]
+   - Tags: tags are shown as chips with a delete button; input with autocomplete
+     and creation of new tags on the fly;
+   - Backspace: what the Backspace key sends (default / options). [decision: Default, `^?` (DEL), `^H`]
+4. **Share this host**: opens the sharing dialog. Disabled until the host is created.
 5. **SSH**:
-   - порт: поле в одной строке с названием протокола, плейсхолдер 22;
+   - port: a field on the same line as the protocol name, placeholder 22;
    - Credentials:
-     - подсказка над полями, если такой же логин с паролем или ключом используется
-       ещё в N хостах: предложение одной ссылкой объединить их в identity.
-       После создания identity все эти хосты ссылаются на неё, и смена пароля
-       в одном месте применяется ко всем;
+     - a hint above the fields if the same login with a password or key is also used
+       in N other hosts: a one-link offer to merge them into an identity.
+       After the identity is created, all these hosts reference it, and changing the password
+       in one place applies to all of them;
      - username;
-     - password: маскирован, есть кнопка показать/скрыть;
-     - привязанный ключ показан отдельным полем с именем ключа из Keychain,
-       его можно отвязать;
-     - кнопка «+» для привязки identity, ключа, сертификата или FIDO2-ключа.
-       Уже привязанный тип из списка вариантов пропадает;
-   - «Show more» раскрывает дополнительные настройки, по одному полю на строку:
-     - Agent Forwarding: вкл/выкл, по умолчанию выключен;
-     - Startup snippet: сниппет, который выполняется сразу после входа;
-     - Host Chaining: цепочка промежуточных хостов (jump hosts);
-     - Proxy: HTTP или SOCKS-прокси для подключения;
-     - Environment Variables: переменные окружения для сессии;
-     - Charset: кодировка, по умолчанию UTF-8;
-     - Mosh: вкл/выкл, по умолчанию выключен;
-     - тема терминала для этого хоста: миниатюра-превью + название, клик
-       открывает выбор темы. Набор тем собственный, по умолчанию тёмная тема.
-6. **Add Telnet**: добавить к тому же хосту второй протокол со своими настройками.
-7. Кнопка **Connect** закреплена внизу панели. Неактивна, пока не заполнен адрес.
+     - password: masked, with a show/hide button;
+     - a linked key is shown as a separate field with the key name from Keychain;
+       it can be unlinked;
+     - a "+" button to link an identity, key, certificate or FIDO2 key.
+       A type that is already linked disappears from the list of options;
+   - "Show more" expands additional settings, one field per line:
+     - Agent Forwarding: on/off, off by default;
+     - Startup snippet: a snippet that runs right after login;
+     - Host Chaining: a chain of intermediate hosts (jump hosts);
+     - Proxy: HTTP or SOCKS proxy for the connection;
+     - Environment Variables: environment variables for the session;
+     - Charset: encoding, UTF-8 by default;
+     - Mosh: on/off, off by default;
+     - terminal theme for this host: a preview thumbnail + name; clicking it
+       opens theme selection. The theme set is our own; dark theme by default.
+6. **Add Telnet**: add a second protocol with its own settings to the same host.
+7. The **Connect** button is pinned to the bottom of the panel. Disabled until the address is filled in.
 
-### 3.2 Поведение
-- Изменения сохраняются автоматически, отдельной кнопки сохранения нет.
-- Новый хост появляется в списке, как только введён адрес. [решение]
-- Если адрес пустой, а панель закрывают, черновик отбрасывается без вопросов. [решение]
+### 3.2 Behavior
+- Changes are saved automatically; there is no separate save button.
+- A new host appears in the list as soon as the address is entered. [decision]
+- If the address is empty and the panel is closed, the draft is discarded without prompting. [decision]
 
-### 3.3 Меню «…» в шапке панели хоста
+### 3.3 "…" menu in the host panel header
 1. Connect.
 2. Add Telnet.
 3. Duplicate.
@@ -213,456 +213,456 @@
 
 ---
 
-## 4. Сессия терминала
+## 4. Terminal session
 
-### 4.1 Окно сессии
-- Терминал занимает всю область под верхней панелью. Боковой панели Vaults
-  и рамок нет, только небольшой внутренний отступ.
-- Применяется тема терминала из настроек хоста или тема по умолчанию.
-- После подключения выводится только то, что присылает сервер (MOTD и т. п.),
-  без собственных баннеров приложения.
-- Фокус ввода сразу в терминале.
+### 4.1 Session window
+- The terminal occupies the entire area below the top bar. There is no Vaults sidebar
+  and no borders, only a small inner padding.
+- The terminal theme from the host settings, or the default theme, is applied.
+- After connecting, only what the server sends (MOTD, etc.) is displayed,
+  without the application's own banners.
+- Input focus is in the terminal immediately.
 
-### 4.2 Боковая панель терминала
-- Открывается и скрывается кнопкой в верхней панели (см. 1.1). Панель справа,
-  терминал сужается, а не перекрывается.
-- Вверху ряд иконок-вкладок: Tools, Snippets, History, Appearance.
+### 4.2 Terminal sidebar
+- Opened and hidden with a button in the top bar (see 1.1). The sidebar is on the right;
+  the terminal narrows rather than being overlapped.
+- At the top there is a row of icon tabs: Tools, Snippets, History, Appearance.
 
-**Вкладка Tools:**
-- поиск по выводу терминала (Ctrl+Shift+F) с кнопками «предыдущее» и
-  «следующее совпадение». Совпадения подсвечиваются в терминале;
-- Autocomplete: выпадающий список режимов, по умолчанию выключен.
-  Подсказки команд строятся по локальной истории этого хоста. **Поздний этап**,
-  в интерфейсе помечен как beta. [решение по источнику подсказок]
+**Tools tab:**
+- search in terminal output (Ctrl+Shift+F) with "previous" and
+  "next match" buttons. Matches are highlighted in the terminal;
+- Autocomplete: a dropdown of modes, off by default.
+  Command suggestions are built from the local history of this host. **Later stage**,
+  marked as beta in the UI. [decision on the suggestion source]
 
-**Вкладка Snippets** [решение]:
-- список сниппетов с поиском;
-- клик вставляет сниппет в терминал без выполнения;
-- кнопка «выполнить» вставляет сниппет и сразу отправляет Enter.
+**Snippets tab** [decision]:
+- list of snippets with search;
+- clicking inserts the snippet into the terminal without executing it;
+- the "run" button inserts the snippet and immediately sends Enter.
 
-**Вкладка History:**
-- поиск по истории;
-- список введённых команд, новые сверху. Клик вставляет команду в терминал
-  без выполнения; [решение]
-- карточка-подсказка: три самые частые команды с предложением сохранить их
-  как сниппеты. Команды можно отредактировать перед сохранением, есть кнопки
-  «Закрыть» и «Сохранить». Закрытая подсказка больше не показывается для этого
-  хоста; [решение]
-- **Обязательные требования безопасности:**
-  - не записывать в историю ввод, сделанный при выключенном эхо: запросы
-    пароля от `su`, `sudo`, `passwd`, запрос passphrase ключа и т. п.
-    Признаки: сервер не возвращает эхо введённых символов, последняя строка
-    вывода похожа на запрос пароля (`password:`, `passphrase`);
-  - вырезать управляющие последовательности bracketed paste (`ESC[200~`,
-    `ESC[201~`) и прочие escape-коды. В истории хранится только чистый текст
-    команды;
-  - история хранится зашифрованной, как и остальные данные. Синхронизация
-    истории между устройствами по умолчанию выключена;
-  - запись истории можно отключить для отдельного хоста. Любую запись можно
-    удалить, всю историю хоста можно очистить;
-  - подсказка «сохранить как сниппеты» никогда не предлагает записи, похожие
-    на секреты.
+**History tab:**
+- history search;
+- list of entered commands, newest first. Clicking inserts the command into the terminal
+  without executing it; [decision]
+- a hint card: the three most frequent commands with an offer to save them
+  as snippets. Commands can be edited before saving; there are "Close"
+  and "Save" buttons. A dismissed hint is no longer shown for this
+  host; [decision]
+- **Mandatory security requirements:**
+  - do not record in history input entered while echo is off: password prompts
+    from `su`, `sudo`, `passwd`, key passphrase prompts, etc.
+    Indicators: the server does not echo the typed characters, the last line
+    of output looks like a password prompt (`password:`, `passphrase`);
+  - strip bracketed paste control sequences (`ESC[200~`,
+    `ESC[201~`) and other escape codes. History stores only the clean text of the
+    command;
+  - history is stored encrypted, like the rest of the data. History sync
+    between devices is off by default;
+  - history recording can be disabled for an individual host. Any entry can be
+    deleted, and the entire history of a host can be cleared;
+  - the "save as snippets" hint never suggests entries that look
+    like secrets.
 
-**Вкладка Appearance:**
-  - строка Font со стрелкой ведёт к настройкам шрифта: семейство, размер,
-    межстрочный интервал; [решение]
-  - список Themes: у каждой темы миниатюра-превью в её цветах и название.
-    Текущая тема подсвечена. Клик сразу применяет тему к сессии и сохраняет её
-    в настройках хоста; [решение]
-  - счётчиков популярности тем нет, потому что для них нужна телеметрия.
-    Темы, добавленные в последнем обновлении, помечены «new»; [решение]
-  - набор тем: собственные тёмная и светлая по умолчанию плюс популярные
-    открытые цветовые схемы с совместимыми лицензиями. Лицензию каждой схемы
-    проверить и указать в THIRD_PARTY_NOTICES.
+**Appearance tab:**
+  - the Font row with an arrow leads to font settings: family, size,
+    line spacing; [decision]
+  - Themes list: each theme has a preview thumbnail in its colors and a name.
+    The current theme is highlighted. Clicking immediately applies the theme to the session and saves it
+    in the host settings; [decision]
+  - there are no theme popularity counters, because they would require telemetry.
+    Themes added in the latest update are marked "new"; [decision]
+  - theme set: our own dark and light defaults plus popular
+    open color schemes with compatible licenses. Check the license of each scheme
+    and list it in THIRD_PARTY_NOTICES.
 
-### 4.3 Мышь в терминале
-- Правый клик вставляет текст из буфера обмена. Многострочная вставка
-  требует подтверждения (см. SPEC.md).
-- Если включён copy-on-select, выделение мышью сразу копирует текст. [решение]
+### 4.3 Mouse in the terminal
+- Right-click pastes text from the clipboard. Multi-line paste
+  requires confirmation (see SPEC.md).
+- If copy-on-select is enabled, selecting with the mouse copies the text immediately. [decision]
 
-### 4.4 Контекстное меню вкладки сессии
-1. Duplicate: новая сессия к тому же хосту в новой вкладке.
-2. Duplicate in a new window: то же, но в новом окне приложения.
-3. Start multiplayer: совместная работа в сессии в реальном времени.
-   **Поздний этап.** Работает через self-hosted сервер, с E2E-шифрованием,
-   по приглашению. Приглашённый видит вывод и может вводить команды только
-   с разрешения владельца сессии. [решение]
-4. Rename: переименовать вкладку. Сам хост не переименовывается.
-5. Split horizontally: разделить вкладку. [решение: есть и Split vertically]
+### 4.4 Session tab context menu
+1. Duplicate: a new session to the same host in a new tab.
+2. Duplicate in a new window: the same, but in a new application window.
+3. Start multiplayer: real-time collaboration in a session.
+   **Later stage.** Works via a self-hosted server, with E2E encryption,
+   by invitation. The invitee sees the output and can enter commands only
+   with the session owner's permission. [decision]
+4. Rename: rename the tab. The host itself is not renamed.
+5. Split horizontally: split the tab. [decision: Split vertically is also available]
 6. Close.
 
 ### 4.5 Workspaces
-- Workspace: сохранённый набор вкладок и сплитов с привязанными хостами.
-  Открытие workspace восстанавливает вкладки и раскладку и подключается
-  к хостам.
-- Добавить хост: контекстное меню хоста → Add to Workspace ▸ → список
-  существующих workspaces и пункт New Workspace (создать и сразу добавить хост).
-  [решение по списку существующих]
-- Сохранить текущий набор вкладок как workspace можно кнопкой на странице
-  новой вкладки (см. раздел 6).
-- Workspaces показаны отдельным блоком на странице новой вкладки и находятся
-  поиском Ctrl+K. [решение]
+- Workspace: a saved set of tabs and splits with linked hosts.
+  Opening a workspace restores the tabs and layout and connects
+  to the hosts.
+- Add a host: host context menu → Add to Workspace ▸ → a list of
+  existing workspaces and a New Workspace item (create it and immediately add the host).
+  [decision on the list of existing ones]
+- The current set of tabs can be saved as a workspace with a button on the
+  new tab page (see section 6).
+- Workspaces are shown as a separate block on the new tab page and can be found
+  via Ctrl+K search. [decision]
 
-### 4.6 Завершение сессии и обрыв соединения
-- **Штатное завершение** (`exit`, `logout`, сервер закрыл канал с кодом 0):
-  вкладка закрывается сама. Активной становится соседняя вкладка: слева,
-  а если её нет, то справа. Если вкладок сессий не осталось, открывается Vaults.
-- **Неожиданный обрыв** (сеть, таймаут keepalive, ненулевой код выхода) [решение]:
-  - вкладка не закрывается, вывод сохраняется;
-  - поверх терминала сообщение о причине и кнопки «Переподключиться»
-    и «Закрыть»;
-  - автоматическое переподключение с нарастающей паузой включается
-    в настройках.
+### 4.6 Session termination and connection drop
+- **Normal termination** (`exit`, `logout`, the server closed the channel with code 0):
+  the tab closes by itself. The neighboring tab becomes active: the one on the left,
+  or, if there is none, the one on the right. If no session tabs remain, Vaults opens.
+- **Unexpected drop** (network, keepalive timeout, non-zero exit code) [decision]:
+  - the tab does not close, and the output is preserved;
+  - a message with the reason and "Reconnect"
+    and "Close" buttons is shown over the terminal;
+  - automatic reconnection with increasing delay is enabled
+    in the settings.
 
-### 4.7 Сплиты [решение]
-- Вкладку можно разделить на панели по горизонтали и вертикали: через меню
-  вкладки или горячими клавишами (настраиваются).
-- Границу между панелями можно перетаскивать. Активная панель выделена.
-  Фокус переключается кликом или Ctrl+Alt+стрелки (см. 12.5).
-- В каждой панели своя сессия, к тому же или к другому хосту.
+### 4.7 Splits [decision]
+- A tab can be split into panes horizontally and vertically: via the tab
+  menu or with keyboard shortcuts (configurable).
+- The border between panes can be dragged. The active pane is highlighted.
+  Focus is switched by clicking or with Ctrl+Alt+arrows (see 12.5).
+- Each pane has its own session, to the same host or to a different one.
 
 ---
 
-## 5. SFTP-менеджер (вкладка SFTP)
+## 5. SFTP manager (SFTP tab)
 
-### 5.1 Раскладка
-- Две панели равной ширины. Каждая панель — независимый источник файлов:
-  локальный компьютер или удалённый хост.
-- По умолчанию слева локальная файловая система, справа пустая панель.
+### 5.1 Layout
+- Two panels of equal width. Each panel is an independent file source:
+  the local computer or a remote host.
+- By default, the left panel shows the local file system and the right panel is empty.
 
-### 5.2 Пустая панель
-- По центру: иконка папки, заголовок с призывом подключиться к хосту,
-  одна строка пояснения и кнопка выбора хоста.
-- Кнопка открывает список сохранённых хостов с поиском. [решение]
+### 5.2 Empty panel
+- In the center: a folder icon, a heading prompting the user to connect to a host,
+  one line of explanation and a host selection button.
+- The button opens a list of saved hosts with search. [decision]
 
-### 5.3 Панель с файлами
-- Шапка:
-  - иконка и название источника (Local или имя хоста). Клик позволяет
-    сменить источник; [решение]
-  - справа Filter: фильтр по имени в текущей папке;
-  - меню Actions (см. 5.5).
-- Навигация: кнопки назад и вперёд, путь в виде хлебных крошек. На Windows путь
-  начинается с буквы диска, и клик по букве открывает выбор диска. [решение]
-  Клик по любому сегменту пути переходит в эту папку.
-- Таблица с колонками Name, Date Modified, Size, Kind:
-  - сортировка кликом по заголовку колонки, у активной колонки стрелка
-    направления сортировки;
-  - ширина колонок меняется перетаскиванием. [решение]
-- Первая строка «..» переходит на уровень вверх.
-- Для папок размер не показывается (прочерк), тип «folder».
-- Строка файла:
-  - иконка и имя;
-  - под именем мелким шрифтом права доступа в формате `-rw-r--r--`
-    (только в удалённой панели); [решение]
-  - размер в человекочитаемых единицах: байты, КБ, МБ, ГБ;
-  - Kind: расширение файла или «file», если расширения нет.
-- Выделенная строка подсвечена. Множественное выделение через Ctrl/Shift. [решение]
-- Даты отображаются в формате системной локали.
-- Двойной клик по папке открывает её. Двойной клик по файлу выполняет
-  действие Open (см. 5.4). [решение]
-- Перетаскивание файлов между панелями копирует их через очередь передач
-  (см. SPEC.md, раздел SFTP).
+### 5.3 Panel with files
+- Header:
+  - the source icon and name (Local or the host name). Clicking it lets you
+    change the source; [decision]
+  - on the right, Filter: a filter by name in the current folder;
+  - the Actions menu (see 5.5).
+- Navigation: back and forward buttons, the path as breadcrumbs. On Windows the path
+  starts with the drive letter, and clicking the letter opens drive selection. [decision]
+  Clicking any path segment navigates to that folder.
+- A table with the columns Name, Date Modified, Size, Kind:
+  - sorting by clicking a column header; the active column shows an arrow
+    indicating the sort direction;
+  - column widths are changed by dragging. [decision]
+- The first row ".." goes up one level.
+- For folders, the size is not shown (a dash), and the type is "folder".
+- File row:
+  - icon and name;
+  - below the name, in a small font, the access permissions in the `-rw-r--r--` format
+    (only in the remote panel); [decision]
+  - size in human-readable units: bytes, KB, MB, GB;
+  - Kind: the file extension, or "file" if there is no extension.
+- The selected row is highlighted. Multiple selection via Ctrl/Shift. [decision]
+- Dates are displayed in the system locale format.
+- Double-clicking a folder opens it. Double-clicking a file performs
+  the Open action (see 5.4). [decision]
+- Dragging files between panels copies them through the transfer queue
+  (see SPEC.md, SFTP section).
 
-### 5.4 Контекстное меню файла (правый клик)
-1. Open: открыть в программе, назначенной в системе для этого типа файла.
-   Удалённый файл скачивается во временную папку, изменения отслеживаются
-   и загружаются обратно на сервер, о каждой загрузке приходит уведомление. [решение]
-2. Open with…: то же, но с выбором программы.
-3. Copy to target directory: скопировать выделенное в текущую папку
-   противоположной панели.
+### 5.4 File context menu (right-click)
+1. Open: open in the program the system assigns to this file type.
+   A remote file is downloaded to a temporary folder, changes are tracked
+   and uploaded back to the server, and a notification is shown for each upload. [decision]
+2. Open with…: the same, but with a choice of program.
+3. Copy to target directory: copy the selection to the current folder
+   of the opposite panel.
 4. Rename.
-5. Delete: выделено цветом опасного действия, выполняется после подтверждения.
+5. Delete: shown in the danger-action color, performed after confirmation.
 6. Refresh.
 7. New Folder.
-8. Edit Permissions: диалог прав доступа (см. ниже).
+8. Edit Permissions: access permissions dialog (see below).
 
-Диалог Edit Permissions [решение]:
-- чекбоксы rwx для владельца, группы и остальных;
-- синхронизированное поле с восьмеричным значением;
-- для папок есть опция «применить рекурсивно».
+Edit Permissions dialog [decision]:
+- rwx checkboxes for the owner, group and others;
+- a synchronized field with the octal value;
+- for folders there is an "apply recursively" option.
 
-### 5.5 Меню Actions в шапке панели
-Те же пункты, что в контекстном меню (действуют на выделенное), плюс:
-- Show Hidden Files: переключатель показа скрытых файлов;
+### 5.5 Actions menu in the panel header
+The same items as in the context menu (they act on the selection), plus:
+- Show Hidden Files: a toggle for showing hidden files;
 - Select All;
-- Close: закрыть подключение в этой панели (цвет опасного действия).
-  Панель возвращается в пустое состояние из 5.2.
+- Close: close the connection in this panel (danger-action color).
+  The panel returns to the empty state from 5.2.
 
-Пункты, которым нужно выделение, без него неактивны. [решение]
-В локальной панели на Windows пункт Edit Permissions скрыт. [решение]
-
----
-
-## 6. Страница новой вкладки
-- Открывается кнопкой «+» в верхней панели.
-- Пока хост не выбран, вкладка называется «New Tab». После выбора сессия
-  открывается в этой же вкладке. [решение]
-- Сверху по центру поле поиска по хостам и открытым вкладкам с подсказкой
-  клавиши Ctrl+K, фокус сразу в нём. Ctrl+K из любого места приложения
-  открывает тот же поиск. [решение по глобальному Ctrl+K]
-- Ниже блок Recent connections:
-  - строка: иконка ОС, имя хоста (или адрес), справа путь «vault / группа»;
-  - клик подключает в этой вкладке;
-  - стрелки и Enter работают так же, как клик. [решение]
-- В шапке блока две кнопки:
-  - Create a workspace: сохранить открытые сейчас вкладки как workspace;
-  - Restore: восстановить вкладки предыдущего запуска приложения. Неактивна,
-    если восстанавливать нечего. [решение по смыслу]
-- При вводе в поиск список заменяется результатами: сначала открытые вкладки,
-  потом хосты. [решение]
+Items that require a selection are disabled without one. [decision]
+In the local panel on Windows, the Edit Permissions item is hidden. [decision]
 
 ---
 
-## 7. Экран Keychain
+## 6. New tab page
+- Opened with the "+" button in the top bar.
+- Until a host is selected, the tab is named "New Tab". After selection, the session
+  opens in the same tab. [decision]
+- At the top center, a search field for hosts and open tabs with a hint for the
+  Ctrl+K key; focus is placed in it immediately. Ctrl+K from anywhere in the app
+  opens the same search. [decision on the global Ctrl+K]
+- Below it, the Recent connections block:
+  - row: OS icon, host name (or address), and on the right the path "vault / group";
+  - clicking connects in this tab;
+  - arrow keys and Enter work the same as a click. [decision]
+- The block header has two buttons:
+  - Create a workspace: save the currently open tabs as a workspace;
+  - Restore: restore the tabs from the previous app launch. Disabled
+    if there is nothing to restore. [decision based on meaning]
+- When typing in the search, the list is replaced with results: open tabs first,
+  then hosts. [decision]
 
-### 7.1 Панель действий
-Слева:
-- Split-кнопка **New key**. Основная часть открывает в правой панели форму
-  добавления существующего ключа: вставить текст, выбрать файл или перетащить
-  файл в форму. [решение по drag & drop] Стрелка открывает меню:
-  1. **Generate key**: генерация новой пары. Параметры: тип (Ed25519
-     по умолчанию, ECDSA, RSA с выбором длины), label, необязательная
-     passphrase. [решение по параметрам]
-  2. **New Identity**: создать identity.
-- **Certificate**: добавить SSH-сертификат.
-- **FIDO2**: добавить аппаратный ключ (`sk-ssh-ed25519`, `sk-ecdsa`). [решение по типам]
+---
 
-Справа: поиск, переключатель плитки/список, меню сортировки (по имени,
-по дате создания, по дате изменения). Та же иконка сортировки используется
-на экране Hosts. [решение]
+## 7. Keychain screen
 
-### 7.2 Содержимое
-- Раздел **Keys**, под ним **Identities**. Сетка карточек такая же, как
-  на экране Hosts.
-- Карточка ключа: иконка, label, подзаголовок «Type» + тип (ED25519, RSA,
-  ECDSA, …). Если ключ не удалось разобрать, тип «unknown» и значок
-  предупреждения, а причина показана в панели. [решение по предупреждению]
-- Карточка identity: иконка, имя, подзаголовок со способом аутентификации
-  (пароль, ключ или оба). Если ничего не задано, так и написано: нет способа
-  аутентификации.
-- Одинаковые ключи (совпадает fingerprint) находятся автоматически. Появляется
-  подсказка объединить их в один ключ, ссылки из хостов переносятся. [решение]
-- Пустое состояние: кнопки «Сгенерировать», «Импортировать» и
-  «Импортировать из ~/.ssh». [решение]
+### 7.1 Action bar
+On the left:
+- **New key** split button. The main part opens, in the details panel, a form
+  for adding an existing key: paste text, choose a file, or drag a
+  file into the form. [decision on drag & drop] The arrow opens a menu:
+  1. **Generate key**: generate a new pair. Parameters: type (Ed25519
+     by default, ECDSA, RSA with a choice of length), label, optional
+     passphrase. [decision on parameters]
+  2. **New Identity**: create an identity.
+- **Certificate**: add an SSH certificate.
+- **FIDO2**: add a hardware key (`sk-ssh-ed25519`, `sk-ecdsa`). [decision on types]
 
-### 7.3 Панель ключа (создание и редактирование)
-Блоки сверху вниз:
+On the right: search, a tile/list toggle, a sort menu (by name,
+by creation date, by modification date). The same sort icon is used
+on the Hosts screen. [decision]
+
+### 7.2 Content
+- The **Keys** section, with **Identities** below it. The card grid is the same as
+  on the Hosts screen.
+- Key card: icon, label, subtitle "Type" + type (ED25519, RSA,
+  ECDSA, …). If the key could not be parsed, the type is "unknown" with a warning
+  icon, and the reason is shown in the panel. [decision on the warning]
+- Identity card: icon, name, subtitle with the authentication method
+  (password, key or both). If nothing is set, it says exactly that: no authentication
+  method.
+- Identical keys (matching fingerprint) are detected automatically. A hint
+  appears offering to merge them into one key; references from hosts are carried over. [decision]
+- Empty state: buttons "Generate", "Import" and
+  "Import from ~/.ssh". [decision]
+
+### 7.3 Key panel (creation and editing)
+Blocks from top to bottom:
 1. Vault.
-2. Label, обязательное поле.
-3. Private key, обязательное поле, многострочное, моноширинный шрифт.
-4. Public key, многострочное.
-5. Certificate, многострочное.
-6. Key export: значок «?» с пояснением и кнопка **Export to host**.
-   Пользователь выбирает один или несколько хостов, и публичный ключ
-   дописывается в `~/.ssh/authorized_keys` без дублей (аналог `ssh-copy-id`).
+2. Label, a required field.
+3. Private key, a required field, multi-line, monospace font.
+4. Public key, multi-line.
+5. Certificate, multi-line.
+6. Key export: a "?" icon with an explanation and an **Export to host** button.
+   The user selects one or more hosts, and the public key
+   is appended to `~/.ssh/authorized_keys` without duplicates (equivalent to `ssh-copy-id`).
 
-Меню «…» в шапке: Duplicate, скопировать публичный ключ, экспортировать
-в файл, Remove. [решение]
+The "…" menu in the header: Duplicate, copy public key, export
+to file, Remove. [decision]
 
-**Обязательные требования безопасности:**
-- Содержимое приватного ключа по умолчанию **скрыто**. Вместо текста показаны
-  тип, fingerprint и пометка, что ключ скрыт.
-- Показать ключ можно только явной кнопкой. Когда пользователь уходит
-  из панели, ключ снова скрывается.
-- Копирование приватного ключа делается отдельной кнопкой. Буфер обмена
-  очищается через 30 секунд. [решение по таймауту]
-- Если поле Public key пустое, публичный ключ вычисляется из приватного
-  автоматически.
-- Для каждого ключа показан fingerprint SHA256.
-- Ключ без passphrase помечается ненавязчивой подсказкой «не защищён
-  passphrase». При экспорте в файл предлагается задать passphrase.
-- Passphrase зашифрованного ключа запрашивается при импорте. Пользователь
-  выбирает: сохранить её в зашифрованном хранилище или вводить при каждом
-  подключении.
+**Mandatory security requirements:**
+- The private key contents are **hidden** by default. Instead of the text, the
+  type, fingerprint and a note that the key is hidden are shown.
+- The key can be shown only with an explicit button. When the user leaves
+  the panel, the key is hidden again.
+- Copying the private key is done with a separate button. The clipboard
+  is cleared after 30 seconds. [decision on the timeout]
+- If the Public key field is empty, the public key is derived from the private key
+  automatically.
+- The SHA256 fingerprint is shown for each key.
+- A key without a passphrase is marked with an unobtrusive hint "not protected
+  by a passphrase". When exporting to a file, the user is offered to set a passphrase.
+- The passphrase of an encrypted key is requested on import. The user
+  chooses: save it in the encrypted storage or enter it on every
+  connection.
 
-### 7.4 Панель identity [решение]
-- Поля: label, username, password, привязанный ключ или сертификат.
-- Внизу список хостов, которые используют эту identity. Клик открывает хост.
+### 7.4 Identity panel [decision]
+- Fields: label, username, password, linked key or certificate.
+- At the bottom, a list of hosts that use this identity. Clicking one opens the host.
 
 ---
 
-## 8. Экран Port Forwarding
+## 8. Port Forwarding screen
 
-### 8.1 Панель действий
-- Split-кнопка **New forwarding**: основная часть запускает мастер создания
-  (8.3). Стрелка открывает меню: сразу создать Local, Remote или Dynamic
-  без мастера. [решение]
-- Справа: поиск, переключатель плитки/список, сортировка.
+### 8.1 Action bar
+- **New forwarding** split button: the main part launches the wizard
+  (8.3). The arrow opens a menu: create Local, Remote or Dynamic directly
+  without the wizard. [decision]
+- On the right: search, tile/list toggle, sorting.
 
-### 8.2 Содержимое
-- Раздел со списком правил в виде сетки карточек.
-- Карточка правила:
-  - квадратный бейдж с буквой типа: L, R или D;
+### 8.2 Content
+- A section with the list of rules as a grid of cards.
+- Rule card:
+  - a square badge with the type letter: L, R or D;
   - label;
-  - подзаголовок одной строкой, например `127.0.0.1:8080 → db:5432 через <хост>`; [решение]
-  - индикатор состояния: запущено / остановлено / ошибка. [решение]
-- Одинарный клик показывает детали в правой панели. Двойной клик запускает
-  или останавливает правило. [решение]
-- Правый клик [решение]: Start/Stop, Edit, Duplicate, Move to, Copy to, Remove.
+  - a one-line subtitle, for example `127.0.0.1:8080 → db:5432 via <host>`; [decision]
+  - a status indicator: running / stopped / error. [decision]
+- A single click shows details in the details panel. A double click starts
+  or stops the rule. [decision]
+- Right-click [decision]: Start/Stop, Edit, Duplicate, Move to, Copy to, Remove.
 
-### 8.3 Мастер создания
-**Шаг 1: выбор типа**
+### 8.3 Wizard
+**Step 1: choosing the type**
 - Vault.
-- Сегментированный переключатель Local / Remote / Dynamic.
-- Под ним схема направления трафика для выбранного типа. Схема собственная,
-  участники: этот компьютер, межсетевой экран, SSH-хост, целевой сервис или
-  интернет. Ниже 1–2 предложения пояснения своими словами:
-  - Local: порт, доступный на удалённой стороне, становится доступен на этом
-    компьютере, как будто он локальный;
-  - Remote: на удалённой машине открывается порт, и подключения к нему
-    перенаправляются на этот компьютер;
-  - Dynamic: приложение работает как локальный SOCKS-прокси, и все соединения
-    через него идут через выбранный SSH-хост.
-- Кнопки **Continue** (следующий шаг) и **Skip wizard** (сразу полная форма, 8.4).
+- Local / Remote / Dynamic segmented toggle.
+- Below it, a traffic direction diagram for the selected type. The diagram is our own;
+  participants: this computer, firewall, SSH host, target service or
+  the internet. Below that, 1–2 sentences of explanation in our own words:
+  - Local: a port reachable on the remote side becomes reachable on this
+    computer as if it were local;
+  - Remote: a port is opened on the remote machine, and connections to it
+    are forwarded to this computer;
+  - Dynamic: the application acts as a local SOCKS proxy, and all connections
+    through it go via the selected SSH host.
+- **Continue** (next step) and **Skip wizard** (straight to the full form, 8.4) buttons.
 
-**Следующие шаги** [решение]: один вопрос на экран, назад можно вернуться
-на любом шаге.
+**Next steps** [decision]: one question per screen; you can go back
+at any step.
 - Local:
-  1. через какой хост;
-  2. локальный адрес и порт (адрес по умолчанию 127.0.0.1);
-  3. адрес и порт назначения (как их видит SSH-хост);
-  4. label и итог.
+  1. via which host;
+  2. local address and port (default address 127.0.0.1);
+  3. destination address and port (as the SSH host sees them);
+  4. label and summary.
 - Remote:
-  1. хост;
-  2. адрес и порт на удалённой стороне. По умолчанию 127.0.0.1, при выборе
-     0.0.0.0 показывается предупреждение и подсказка про `GatewayPorts`;
-  3. адрес и порт на этом компьютере;
-  4. label и итог.
+  1. host;
+  2. address and port on the remote side. Default 127.0.0.1; when
+     0.0.0.0 is selected, a warning and a hint about `GatewayPorts` are shown;
+  3. address and port on this computer;
+  4. label and summary.
 - Dynamic:
-  1. хост;
-  2. локальный адрес и порт SOCKS (по умолчанию 127.0.0.1:1080);
-  3. label и итог.
-- Последний шаг показывает правило одной строкой и кнопки «Создать» и
-  «Создать и запустить».
+  1. host;
+  2. local SOCKS address and port (default 127.0.0.1:1080);
+  3. label and summary.
+- The last step shows the rule in one line and the "Create" and
+  "Create and start" buttons.
 
-### 8.4 Полная форма (Skip wizard и редактирование) [решение]
-- Все поля из мастера на одном экране.
-- Дополнительно: запускать правило автоматически при подключении к хосту,
-  запускать при старте приложения.
-- Если локальный порт занят, понятная ошибка с номером порта и предложением
-  выбрать другой.
-- Bind-адрес по умолчанию всегда 127.0.0.1. Открытие порта на все интерфейсы
-  (0.0.0.0) требует явного выбора и сопровождается предупреждением.
+### 8.4 Full form (Skip wizard and editing) [decision]
+- All wizard fields on one screen.
+- Additionally: start the rule automatically when connecting to the host,
+  start on application launch.
+- If the local port is busy, a clear error with the port number and a suggestion
+  to choose another one.
+- The default bind address is always 127.0.0.1. Opening the port on all interfaces
+  (0.0.0.0) requires an explicit choice and is accompanied by a warning.
 
 ---
 
-## 9. Экран Snippets
+## 9. Snippets screen
 
-### 9.1 Панель действий
-Слева:
-- Split-кнопка **New snippet**. Основная часть создаёт сниппет, стрелка
-  открывает меню с пунктом **New snippet package**. Package — папка для
-  группировки сниппетов.
-- **Shell History**: экран истории команд по всем хостам с поиском, фильтром
-  по хосту и действием «сохранить как сниппет». Действуют все правила
-  безопасности истории из 4.2. [решение по фильтру]
+### 9.1 Action bar
+On the left:
+- **New snippet** split button. The main part creates a snippet; the arrow
+  opens a menu with the **New snippet package** item. A package is a folder for
+  grouping snippets.
+- **Shell History**: a command history screen across all hosts with search, filtering
+  by host and a "save as snippet" action. All history security rules
+  from 4.2 apply. [decision on the filter]
 
-Справа: поиск, переключатель плитки/список, сортировка.
+On the right: search, tile/list toggle, sorting.
 
-### 9.2 Содержимое
-- Сверху пакеты (как группы на экране Hosts), ниже раздел Snippets. [решение по пакетам]
-- Карточка сниппета: иконка, label, а если он пустой, то первая строка скрипта.
-  У нового несохранённого сниппета плейсхолдер с призывом задать label
-  или скрипт.
-- Клики и контекстное меню такие же, как у хостов. Двойной клик запускает
-  сниппет на его целевых хостах. [решение]
+### 9.2 Content
+- Packages at the top (like groups on the Hosts screen), the Snippets section below. [decision on packages]
+- Snippet card: icon, label, and if the label is empty, the first line of the script.
+  A new unsaved snippet has a placeholder prompting to set a label
+  or a script.
+- Clicks and the context menu are the same as for hosts. A double click runs
+  the snippet on its target hosts. [decision]
 
-### 9.3 Панель сниппета (создание и редактирование)
-Блоки сверху вниз:
+### 9.3 Snippet panel (creation and editing)
+Blocks from top to bottom:
 1. Vault.
-2. Подсказка про генерацию скрипта по описанию. Показывается один раз,
-   закрывается кнопкой «понятно».
-3. Основные поля:
-   - **Action description**: label сниппета. Справа в поле кнопка
-     генерации скрипта по описанию;
-   - **Package**: выбор пакета;
-   - **Script**: обязательное, многострочное поле, моноширинный шрифт,
-     подсветка shell-синтаксиса. Переменные `{{name}}` подсвечиваются
-     и при запуске запрашиваются формой. [решение по подсветке]
-4. **Share this snippet**: неактивна, пока сниппет не сохранён.
+2. A hint about generating a script from a description. Shown once,
+   dismissed with the "got it" button.
+3. Main fields:
+   - **Action description**: the snippet label. On the right inside the field, a button
+     for generating a script from the description;
+   - **Package**: package selection;
+   - **Script**: required, multi-line field, monospace font,
+     shell syntax highlighting. `{{name}}` variables are highlighted
+     and requested via a form at run time. [decision on highlighting]
+4. **Share this snippet**: disabled until the snippet is saved.
 5. **Targets for execution**:
-   - короткое пояснение;
-   - список целевых хостов (иконка, адрес или label, протокол);
-   - ссылка «Add targets» открывает выбор хостов с поиском
-     и множественным выбором.
-6. Кнопка **Run** закреплена внизу. Неактивна, пока нет скрипта и хотя бы
-   одной цели.
+   - a short explanation;
+   - a list of target hosts (icon, address or label, protocol);
+   - the "Add targets" link opens host selection with search
+     and multiple selection.
+6. The **Run** button is pinned at the bottom. Disabled until there is a script and at least
+   one target.
 
-### 9.4 Запуск на нескольких хостах [решение]
-- До 4 целей: новая вкладка, разделённая на панели, по одной сессии на хост.
-  Скрипт выполняется в каждой.
-- Больше 4 целей: вкладка с таблицей результатов. Для каждого хоста видны
-  статус (ожидает, выполняется, успех, ошибка), код выхода и вывод,
-  который раскрывается по клику.
-- Перед запуском на 2+ хостах показывается подтверждение со списком хостов.
+### 9.4 Running on multiple hosts [decision]
+- Up to 4 targets: a new tab split into panes, one session per host.
+  The script runs in each.
+- More than 4 targets: a tab with a results table. For each host, the
+  status (waiting, running, success, error), exit code and output,
+  which expands on click, are shown.
+- Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
-### 9.5 Генерация скрипта по описанию [решение, поздний этап]
-- По умолчанию выключена. Включается в настройках с указанием провайдера:
-  собственный API-ключ к LLM или локальная модель.
-- Описание отправляется провайдеру только по явному нажатию кнопки
-  генерации. Пользователю явно показано, куда уйдёт текст.
-- Сгенерированный скрипт только вставляется в поле Script. Автоматически
-  он никогда не выполняется.
-
----
-
-## 10. Экран Known Hosts
-
-### 10.1 Список
-- Панель действий: кнопка **Import** импортирует файл known_hosts в формате
-  OpenSSH (по умолчанию предлагается `~/.ssh/known_hosts`). Справа поиск,
-  переключатель вида, сортировка.
-- Сетка карточек: иконка отпечатка и адрес в формате OpenSSH. Для порта 22
-  это `host`, для остальных `[host]:port`.
-- Клик открывает правую панель [решение]: адрес, порт, тип ключа, fingerprint
-  SHA256 с кнопкой копирования, дата добавления, сохранённые хосты с этим
-  адресом, кнопка Remove.
-- Правый клик [решение]: скопировать fingerprint, Remove.
-- Экспорт в формат known_hosts. [решение]
-
-### 10.2 Первое подключение и смена ключа [решение]
-- Первое подключение (TOFU) открывает диалог: адрес, тип ключа, fingerprint.
-  Кнопки: «Принять и сохранить» (по умолчанию), «Подключиться один раз»,
-  «Отмена».
-- Если ключ хоста изменился:
-  - подключение блокируется, показано предупреждение цветом опасности;
-  - видны старый и новый fingerprint и пояснение о возможной атаке;
-  - продолжить можно только явной кнопкой «Заменить сохранённый ключ»;
-  - флажков вроде «больше не спрашивать» нет.
+### 9.5 Script generation from a description [decision, later stage]
+- Off by default. Enabled in settings by specifying a provider:
+  your own API key for an LLM or a local model.
+- The description is sent to the provider only on an explicit press of the
+  generate button. The user is explicitly shown where the text will go.
+- The generated script is only inserted into the Script field. It is never
+  executed automatically.
 
 ---
 
-## 11. Экран Logs
-Журнал подключений в виде таблицы.
+## 10. Known Hosts screen
 
-### 11.1 Колонки
-- **Date** с переключателем порядка сортировки:
-  - дата начала сессии;
-  - ниже время начала и конца. Если сессия закончилась на следующий день,
-    добавляется «(+1d)»;
-  - у активной сессии вместо времени конца «сейчас». [решение]
-- **User**: аватар и аккаунт (в командном vault видно, кто подключался),
-  ниже имя устройства. IP-адрес клиента не собирается и не показывается. [решение]
-- **Host**: иконка ОС, имя хоста, ниже протокол и пользователь.
-- **Saved**: кнопка-закладка. Сохранённые записи не удаляются автоочисткой.
-  Клик по заголовку колонки показывает только сохранённые. [решение]
+### 10.1 List
+- Action bar: the **Import** button imports a known_hosts file in OpenSSH
+  format (`~/.ssh/known_hosts` is suggested by default). On the right: search,
+  view toggle, sorting.
+- Grid of cards: fingerprint icon and address in OpenSSH format. For port 22
+  it is `host`, for others `[host]:port`.
+- A click opens the details panel [decision]: address, port, key type, SHA256
+  fingerprint with a copy button, date added, saved hosts with this
+  address, Remove button.
+- Right-click [decision]: copy fingerprint, Remove.
+- Export to the known_hosts format. [decision]
 
-### 11.2 Действия [решение]
-- Клик по строке: если для хоста включена запись вывода сессий, открывается
-  лог сессии только для чтения, с поиском и экспортом в .txt. Если запись
-  выключена, показываются детали подключения.
-- Журнал хранится локально. Синхронизация журнала включается отдельно (см. 12.2).
+### 10.2 First connection and key change [decision]
+- The first connection (TOFU) opens a dialog: address, key type, fingerprint.
+  Buttons: "Accept and save" (default), "Connect once",
+  "Cancel".
+- If the host key has changed:
+  - the connection is blocked, a warning is shown in the danger color;
+  - the old and new fingerprints and an explanation about a possible attack are shown;
+  - continuing is possible only via the explicit "Replace saved key" button;
+  - there are no checkboxes like "don't ask again".
 
 ---
 
-## 12. Настройки
+## 11. Logs screen
+Connection log in the form of a table.
 
-### 12.1 Окно настроек
-- Открывается по Ctrl+, или из меню приложения. Модальное окно поверх
-  приложения, закрывается крестиком или Esc. [решение по Esc]
-- Слева навигация, справа содержимое раздела. Прокрутка у них независимая.
-- Изменения применяются сразу, кнопки «Сохранить» нет. [решение]
-- Разделы навигации сверху вниз:
+### 11.1 Columns
+- **Date** with a sort order toggle:
+  - session start date;
+  - below it, start and end time. If the session ended on the next day,
+    "(+1d)" is appended;
+  - for an active session, "now" is shown instead of the end time. [decision]
+- **User**: avatar and account (in a team vault you can see who connected),
+  device name below it. The client IP address is not collected or shown. [decision]
+- **Host**: OS icon, host name, protocol and user below it.
+- **Saved**: bookmark button. Saved entries are not removed by auto-cleanup.
+  Clicking the column header shows only saved entries. [decision]
+
+### 11.2 Actions [decision]
+- Clicking a row: if session output recording is enabled for the host, the
+  session log opens read-only, with search and export to .txt. If recording
+  is disabled, connection details are shown.
+- The log is stored locally. Log sync is enabled separately (see 12.2).
+
+---
+
+## 12. Settings
+
+### 12.1 Settings window
+- Opens with Ctrl+, or from the application menu. A modal window on top of the
+  application, closed with the X button or Esc. [decision on Esc]
+- Navigation on the left, section content on the right. They scroll independently.
+- Changes apply immediately; there is no "Save" button. [decision]
+- Navigation sections from top to bottom:
   1. Account & Sync;
   2. SSH ID;
   3. Team;
@@ -670,143 +670,143 @@
   5. SFTP;
   6. Logs;
   7. Shortcuts;
-  8. Theme: выпадающий список прямо в навигации (Auto / Light / Dark);
-  9. внешние ссылки со значком внешнего окна: Documentation, Report a Bug,
-     Changelog (ведут в репозиторий проекта);
-  10. внизу версия приложения.
+  8. Theme: a dropdown right in the navigation (Auto / Light / Dark);
+  9. external links with an external-window icon: Documentation, Report a Bug,
+     Changelog (they lead to the project repository);
+  10. the application version at the bottom.
 
 ### 12.2 Account & Sync
-Приложение работает без аккаунта. Без подключённого сервера здесь только
-кнопка «Подключить сервер синхронизации» и экспорт данных.
+The application works without an account. With no server connected, this section has only
+the "Connect sync server" button and data export.
 
-С подключённым сервером:
-- адрес сервера; email аккаунта с отметкой «подтверждён / не подтверждён»;
-  смена email;
-- двухфакторная аутентификация (TOTP) на сервере: переключатель;
-- **Log out**: выход с этого устройства. Пользователь выбирает, оставить
-  локальную копию или удалить её с устройства. По умолчанию копия остаётся
-  (принцип 3 в SPEC.md);
-- смена мастер-пароля (с перешифровкой ключей);
-- показ и перевыпуск recovery key;
-- удаление аккаунта на сервере. Локальная копия при этом остаётся.
+With a connected server:
+- server address; account email marked "verified / not verified";
+  email change;
+- two-factor authentication (TOTP) on the server: toggle;
+- **Log out**: sign out on this device. The user chooses whether to keep
+  the local copy or delete it from the device. By default the copy is kept
+  (principle 3 in SPEC.md);
+- master password change (with key re-encryption);
+- viewing and reissuing the recovery key;
+- deleting the account on the server. The local copy is kept in that case.
 
-Блок **Synchronization**:
-- переключатели, что синхронизировать:
-  - хосты и группы (по умолчанию вкл);
-  - ключи и identities (по умолчанию вкл);
-  - сниппеты (по умолчанию вкл);
-  - правила форвардинга (по умолчанию вкл);
-  - история команд (по умолчанию **выкл**);
-  - журнал подключений (по умолчанию **выкл**);
-- время последней синхронизации и ошибки, если они есть;
-- кнопка «Синхронизировать сейчас».
+**Synchronization** block:
+- toggles for what to sync:
+  - hosts and groups (on by default);
+  - keys and identities (on by default);
+  - snippets (on by default);
+  - forwarding rules (on by default);
+  - command history (**off** by default);
+  - connection log (**off** by default);
+- time of the last sync and errors, if any;
+- "Sync now" button.
 
-Также:
-- кнопка экспорта всех данных (JSON открытый или зашифрованный, ssh config).
-  Доступна всегда;
-- никаких триалов, тарифов и кнопок покупки.
+Also:
+- a button to export all data (plain or encrypted JSON, ssh config).
+  Always available;
+- no trials, pricing plans or purchase buttons.
 
-### 12.3 SSH ID и Team [решение]
-- **SSH ID**: личный ключ пользователя, привязанный к аккаунту на сервере.
-  Когда коллега делится хостом, ты подключаешься своим ключом, и секреты
-  владельца не передаются. Здесь можно показать и скопировать публичный ключ
-  и выгрузить его на хосты.
-- **Team**: участники vault, приглашение по email или ссылке, роли owner /
-  editor / viewer, удаление участника с ротацией ключа vault (см. SPEC.md).
+### 12.3 SSH ID and Team [decision]
+- **SSH ID**: the user's personal key tied to the account on the server.
+  When a colleague shares a host, you connect with your own key, and the owner's
+  secrets are not transferred. Here you can view and copy the public key
+  and upload it to hosts.
+- **Team**: vault members, invitation by email or link, owner /
+  editor / viewer roles, removing a member with vault key rotation (see SPEC.md).
 
 ### 12.4 Terminal
 
-**Блок «Терминал»:**
-- Autocomplete (beta): выпадающий список, по умолчанию выключен. Поздний этап.
-- Autoreconnect: переключатель, по умолчанию включён (см. 4.6).
-- Import shell history: подтягивать историю из `~/.bash_history` и
-  `~/.zsh_history` сервера в панель History. По умолчанию **выключено**,
-  потому что такие файлы часто содержат секреты. При импорте действуют те же
-  фильтры, что в 4.2. [решение]
-- Copy on select: переключатель. Правый клик вставляет текст всегда (см. 4.3). [решение]
-- Bell sound: по умолчанию выключен.
-- Bright colors for bold text: переключатель.
-- Terminal emulation type: значение TERM, по умолчанию `xterm-256color`.
-  Варианты: `xterm`, `xterm-256color`, `vt100`, `linux`.
+**"Terminal" block:**
+- Autocomplete (beta): dropdown, off by default. Later stage.
+- Autoreconnect: toggle, on by default (see 4.6).
+- Import shell history: pull history from the server's `~/.bash_history` and
+  `~/.zsh_history` into the History panel. **Off** by default,
+  because such files often contain secrets. On import, the same
+  filters as in 4.2 apply. [decision]
+- Copy on select: toggle. Right-click always pastes text (see 4.3). [decision]
+- Bell sound: off by default.
+- Bright colors for bold text: toggle.
+- Terminal emulation type: the TERM value, `xterm-256color` by default.
+  Options: `xterm`, `xterm-256color`, `vt100`, `linux`.
 
-**Блок шрифта:**
-- выбор шрифта: поиск по установленным моноширинным шрифтам и встроенным
-  открытым шрифтам;
-- размер текста: кнопки −/+ и поле с числом, по умолчанию 14.
+**Font block:**
+- font selection: search across installed monospace fonts and bundled
+  open-source fonts;
+- text size: −/+ buttons and a number field, 14 by default.
 
-**Блок «Тема терминала»:** тема по умолчанию для новых хостов. Выбор такой же,
-как в 4.2.
+**"Terminal theme" block:** the default theme for new hosts. The selection is the same
+as in 4.2.
 
-**Блок «Подсветка ключевых слов»:**
-- общий переключатель, по умолчанию включён;
-- категории с выбором цвета: Error, Warning, OK, Info, Debug, IP- и MAC-адреса;
-- собственные правила: regex + цвет + вкл/выкл; [решение]
-- подсветка меняет только отображение, не данные. В полноэкранных программах
-  (alternate screen: vim, htop) отключается. [решение]
+**"Keyword highlighting" block:**
+- global toggle, on by default;
+- categories with color selection: Error, Warning, OK, Info, Debug, IP and MAC addresses;
+- custom rules: regex + color + on/off; [decision]
+- highlighting changes only the display, not the data. In full-screen programs
+  (alternate screen: vim, htop) it is disabled. [decision]
 
-**Блок «Определение ОС»:**
-- пояснение: при первом подключении к хосту выполняется короткий скрипт,
-  который определяет ОС для иконки. Скрипт запускается, только если сервер
-  сам не сообщил ОС;
-- переключатель, по умолчанию включён;
-- «Скрипт определения ОС»: просмотр и редактирование скрипта, кнопка
-  «Сбросить к стандартному»;
-- скрипт выполняется в отдельном exec-канале, не в интерактивной сессии,
-  и не попадает в историю. [решение]
+**"OS detection" block:**
+- explanation: on the first connection to a host, a short script runs
+  that detects the OS for the icon. The script runs only if the server
+  did not report the OS itself;
+- toggle, on by default;
+- "OS detection script": viewing and editing the script, a
+  "Reset to default" button;
+- the script runs in a separate exec channel, not in the interactive session,
+  and does not end up in history. [decision]
 
-**Блок «Оболочка локального терминала»:** выпадающий список найденных
-оболочек плюс свой путь.
-- Windows: PowerShell, PowerShell 7, cmd, дистрибутивы WSL, Git Bash.
-- macOS и Linux: оболочки из `/etc/shells`.
+**"Local terminal shell" block:** a dropdown of detected
+shells plus a custom path.
+- Windows: PowerShell, PowerShell 7, cmd, WSL distributions, Git Bash.
+- macOS and Linux: shells from `/etc/shells`.
 
-**Блок «Keepalive»:**
-- пояснение: как часто (в секундах) отправлять SSH keepalive, 0 означает
-  «выключено»;
-- поле Interval, по умолчанию 30, чтобы обрывы обнаруживались вовремя. [решение]
+**"Keepalive" block:**
+- explanation: how often (in seconds) to send SSH keepalive; 0 means
+  "off";
+- Interval field, 30 by default, so that connection drops are detected in time. [decision]
 
 ### 12.5 Shortcuts
-- Сверху выбор набора клавиш: PC или Mac. [решение по наборам]
-- Таблица Shortcut | Action:
-  - клик по сочетанию включает запись нового сочетания;
-  - конфликты подсвечиваются;
-  - любое действие можно сделать «не назначено».
+- At the top, key set selection: PC or Mac. [decision on key sets]
+- Shortcut | Action table:
+  - clicking a shortcut starts recording a new shortcut;
+  - conflicts are highlighted;
+  - any action can be set to "unassigned".
 
-Набор по умолчанию для Windows/Linux:
+Default set for Windows/Linux:
 
-| Сочетание | Действие |
+| Shortcut | Action |
 |---|---|
-| Ctrl+1…9 | перейти на вкладку N (1 = Vaults, 2 = SFTP) |
-| Ctrl+Alt+стрелки | фокус между панелями сплита |
-| Ctrl+Shift+C | копировать из терминала |
-| Ctrl+Shift+V | вставить в терминал |
-| Ctrl+Shift+A | выделить всё в терминале |
-| не назначено | открыть экран Hosts |
-| Ctrl+L | новый локальный терминал |
-| Ctrl+Alt+S | новое serial-подключение |
-| Ctrl+Shift+W | закрыть вкладку |
-| Alt+→ | следующая вкладка |
-| Alt+← | предыдущая вкладка |
-| Ctrl+P | открыть Port Forwarding |
-| Ctrl+K | поиск по хостам и вкладкам [решение] |
-| Ctrl+Shift+F | поиск в терминале |
-| Ctrl+, | настройки |
+| Ctrl+1…9 | go to tab N (1 = Vaults, 2 = SFTP) |
+| Ctrl+Alt+arrows | focus between split panes |
+| Ctrl+Shift+C | copy from the terminal |
+| Ctrl+Shift+V | paste into the terminal |
+| Ctrl+Shift+A | select all in the terminal |
+| unassigned | open the Hosts screen |
+| Ctrl+L | new local terminal |
+| Ctrl+Alt+S | new serial connection |
+| Ctrl+Shift+W | close tab |
+| Alt+→ | next tab |
+| Alt+← | previous tab |
+| Ctrl+P | open Port Forwarding |
+| Ctrl+K | search hosts and tabs [decision] |
+| Ctrl+Shift+F | search in the terminal |
+| Ctrl+, | settings |
 
-**Важно** [решение]: сочетания без Shift (Ctrl+L, Ctrl+P, Ctrl+K) совпадают
-с клавишами shell: `Ctrl+L` очищает экран, `Ctrl+P` вызывает предыдущую
-команду, `Ctrl+K` удаляет до конца строки. Когда фокус в терминале, такие
-сочетания уходят в shell, а не в приложение. Действия приложения из терминала
-доступны через сочетания с Ctrl+Shift.
+**Important** [decision]: shortcuts without Shift (Ctrl+L, Ctrl+P, Ctrl+K) coincide
+with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous
+command, `Ctrl+K` deletes to the end of the line. When focus is in the terminal, such
+shortcuts go to the shell, not to the application. Application actions from the terminal
+are available via Ctrl+Shift shortcuts.
 
-### 12.6 SFTP и Logs [решение, страницы не просмотрены]
+### 12.6 SFTP and Logs [decision, pages not reviewed]
 - **SFTP:**
-  - показывать скрытые файлы по умолчанию;
-  - подтверждение удаления;
-  - действие при совпадении имён: спрашивать, заменять, пропускать или
-    переименовывать;
-  - число параллельных передач;
-  - программа по умолчанию для Open with.
+  - show hidden files by default;
+  - delete confirmation;
+  - action on name conflicts: ask, replace, skip or
+    rename;
+  - number of parallel transfers;
+  - default program for Open with.
 - **Logs:**
-  - срок хранения журнала подключений (N дней);
-  - запись вывода сессий. По умолчанию выключена, с предупреждением,
-    что в выводе бывают секреты;
-  - очистка журнала.
+  - connection log retention period (N days);
+  - session output recording. Off by default, with a warning
+    that output can contain secrets;
+  - clearing the log.
