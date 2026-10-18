@@ -1,0 +1,258 @@
+/*
+ * Shell++ design tokens.
+ *
+ * Source of truth: docs/design-system.md. Every value here matches that
+ * document; tokens.test.ts compares them, and contrast.test.ts checks the
+ * contrast pairs listed in its section 7.3.
+ *
+ * Themes:
+ *   - Dark: the default (`:root`) and `[data-theme="dark"]`.
+ *   - Light: `[data-theme="light"]`.
+ *   - Auto: the `data-theme` attribute is absent. The system preference
+ *     decides; the `prefers-color-scheme: light` block below repeats the
+ *     light values for `:root:not([data-theme])`.
+ *
+ * Raw color values are allowed only in apps/desktop/src/theme/. Components
+ * use these variables.
+ */
+
+/* Theme-independent tokens. */
+:root {
+  /* Spacing: 4 px grid. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Radii. */
+  --radius-control: 6px; /* buttons, fields, chips */
+  --radius-tile: 8px; /* icon tiles */
+  --radius-card: 10px; /* cards, details panel blocks */
+  --radius-overlay: 12px; /* menus, modal windows */
+
+  /* Heights. */
+  --height-top-bar: 44px;
+  --height-control: 36px; /* buttons, fields */
+  --height-row: 44px; /* table rows */
+  --height-host-card: 64px;
+
+  /* Widths. */
+  --width-sidebar: 220px;
+  --width-details: 380px;
+  --width-details-min: 320px;
+  --width-details-max: 560px;
+
+  /* Indicators and states. */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --size-status-dot: 8px;
+  --size-tab-indicator: 2px;
+  --opacity-disabled: 0.45;
+
+  /* Typography. Inter and JetBrains Mono are not bundled in stage 0;
+     the stacks fall back to installed fonts. */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, Menlo,
+    "DejaVu Sans Mono", monospace;
+  --font-size-caption: 12px; /* card subtitles, captions */
+  --font-size-dense: 13px; /* dense lists and tables */
+  --font-size-body: 14px;
+  --font-size-heading: 16px; /* section headings */
+  --font-size-title: 20px; /* modal window titles */
+  --font-size-mono: 14px; /* terminal, script and key fields */
+  --line-height-mono: 1.2;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* Motion. */
+  --duration-fast: 120ms; /* hover, press, toggles */
+  --duration-normal: 180ms; /* menus, panels, modal windows */
+  --easing-standard: ease-out;
+
+  /* Host and group tile colors: the same in both themes. */
+  --tag-graphite: #5B5A55;
+  --tag-jade: #1D8571;
+  --tag-amber: #9D6C1E;
+  --tag-coral: #B8503F;
+  --tag-plum: #85549A;
+  --tag-moss: #5A7F35;
+  --tag-ocean: #3A6890;
+  --tag-rose: #A84B70;
+  --text-on-tag: #FFFFFF; /* icons on tiles, letters on badges */
+}
+
+/* Dark theme: the default and the explicit choice. */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces. */
+  --bg-base: #121211;
+  --bg-sidebar: #171716;
+  --bg-surface: #1B1B19;
+  --bg-raised: #242422;
+  --bg-raised-hover: #2C2C29;
+  --bg-pressed: #343431;
+  --bg-input: #1E1E1C;
+  --bg-overlay: #2A2A27;
+  --bg-overlay-hover: #333330;
+  --scrim: rgba(0, 0, 0, 0.55);
+
+  /* Borders. */
+  --border-subtle: #2F2F2C;
+  --border-strong: #3E3E3A;
+
+  /* Text. */
+  --text-primary: #EDEDE8;
+  --text-secondary: #A6A59E;
+  --text-muted: #76756F;
+  --text-disabled: #55554F;
+
+  /* Accent. */
+  --accent: #2EC4A6;
+  --accent-hover: #4FD3B9;
+  --accent-pressed: #23A68C;
+  --accent-subtle: rgba(46, 196, 166, 0.14);
+  --accent-text: #5AD6BE;
+  --text-on-accent: #08201B;
+  --focus-ring: #2EC4A6;
+
+  /* Semantic colors. */
+  --danger: #F0665E;
+  --danger-hover: #F57E77;
+  --danger-pressed: #ED4A41;
+  --danger-subtle: rgba(240, 102, 94, 0.14);
+  --text-on-danger: #08201B;
+  --warning: #E3B04B;
+  --warning-subtle: rgba(227, 176, 75, 0.14);
+  --success: #7CC46F;
+  --success-subtle: rgba(124, 196, 111, 0.14);
+  --info: #7AA9DB;
+  --info-subtle: rgba(122, 169, 219, 0.14);
+
+  /* Shadows. */
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+/* Light theme: the explicit choice. Keep in sync with the Auto block below. */
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces. */
+  --bg-base: #F2F1EC;
+  --bg-sidebar: #ECEBE5;
+  --bg-surface: #F8F7F3;
+  --bg-raised: #FFFFFF;
+  --bg-raised-hover: #F0EFEA;
+  --bg-pressed: #EDECE6;
+  --bg-input: #F6F5F1;
+  --bg-overlay: #FFFFFF;
+  --bg-overlay-hover: #F0EFEA;
+  --scrim: rgba(28, 28, 26, 0.35);
+
+  /* Borders. */
+  --border-subtle: #E2E0D9;
+  --border-strong: #CBC8BF;
+
+  /* Text. */
+  --text-primary: #1C1C1A;
+  --text-secondary: #5A5953;
+  --text-muted: #88867F;
+  --text-disabled: #B3B1A9;
+
+  /* Accent. */
+  --accent: #13856E;
+  --accent-hover: #0F7461;
+  --accent-pressed: #0B6051;
+  --accent-subtle: rgba(19, 133, 110, 0.1);
+  --accent-text: #0F7461;
+  --text-on-accent: #FFFFFF;
+  --focus-ring: #13856E;
+
+  /* Semantic colors. */
+  --danger: #C0392F;
+  --danger-hover: #A33027;
+  --danger-pressed: #852720;
+  --danger-subtle: rgba(192, 57, 47, 0.1);
+  --text-on-danger: #FFFFFF;
+  --warning: #8D620B;
+  --warning-subtle: rgba(141, 98, 11, 0.1);
+  --success: #36782F;
+  --success-subtle: rgba(54, 120, 47, 0.1);
+  --info: #2E6AA6;
+  --info-subtle: rgba(46, 106, 166, 0.1);
+
+  /* Shadows. */
+  --shadow-overlay: 0 8px 24px rgba(28, 28, 26, 0.14);
+  --shadow-modal: 0 16px 48px rgba(28, 28, 26, 0.18);
+}
+
+/* Auto: no data-theme attribute and a light system theme.
+   The values repeat [data-theme="light"]; tokens.test.ts checks that they match. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+
+    /* Surfaces. */
+    --bg-base: #F2F1EC;
+    --bg-sidebar: #ECEBE5;
+    --bg-surface: #F8F7F3;
+    --bg-raised: #FFFFFF;
+    --bg-raised-hover: #F0EFEA;
+    --bg-pressed: #EDECE6;
+    --bg-input: #F6F5F1;
+    --bg-overlay: #FFFFFF;
+    --bg-overlay-hover: #F0EFEA;
+    --scrim: rgba(28, 28, 26, 0.35);
+
+    /* Borders. */
+    --border-subtle: #E2E0D9;
+    --border-strong: #CBC8BF;
+
+    /* Text. */
+    --text-primary: #1C1C1A;
+    --text-secondary: #5A5953;
+    --text-muted: #88867F;
+    --text-disabled: #B3B1A9;
+
+    /* Accent. */
+    --accent: #13856E;
+    --accent-hover: #0F7461;
+    --accent-pressed: #0B6051;
+    --accent-subtle: rgba(19, 133, 110, 0.1);
+    --accent-text: #0F7461;
+    --text-on-accent: #FFFFFF;
+    --focus-ring: #13856E;
+
+    /* Semantic colors. */
+    --danger: #C0392F;
+    --danger-hover: #A33027;
+    --danger-pressed: #852720;
+    --danger-subtle: rgba(192, 57, 47, 0.1);
+    --text-on-danger: #FFFFFF;
+    --warning: #8D620B;
+    --warning-subtle: rgba(141, 98, 11, 0.1);
+    --success: #36782F;
+    --success-subtle: rgba(54, 120, 47, 0.1);
+    --info: #2E6AA6;
+    --info-subtle: rgba(46, 106, 166, 0.1);
+
+    /* Shadows. */
+    --shadow-overlay: 0 8px 24px rgba(28, 28, 26, 0.14);
+    --shadow-modal: 0 16px 48px rgba(28, 28, 26, 0.18);
+  }
+}
+
+/* Animations are disabled under reduced motion. Components must not wait
+   for `transitionend` or `animationend`. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-normal: 0ms;
+  }
+}

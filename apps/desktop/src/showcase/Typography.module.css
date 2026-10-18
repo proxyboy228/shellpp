@@ -1,0 +1,107 @@
+/* Typography samples. Colors and sizes come from tokens.css only. */
+
+.family {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.uiSample {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-heading);
+}
+
+.monoSample {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+}
+
+.caption {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+.token {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sizeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  min-width: 0;
+}
+
+.meta {
+  display: flex;
+  flex: 0 0 calc(var(--space-6) * 7);
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sizeRow > .uiSample,
+.sizeRow > .monoSample {
+  flex: 1 1 calc(var(--space-6) * 8);
+  min-width: 0;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-dense);
+}
+
+.table th {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+}
+
+.table td {
+  height: var(--height-row);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  box-sizing: border-box;
+}
+
+.table .numeric {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.codeBlock {
+  margin: 0;
+  overflow-x: auto;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+}

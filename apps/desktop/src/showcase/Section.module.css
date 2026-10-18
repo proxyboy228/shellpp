@@ -1,0 +1,76 @@
+/* Showcase layout blocks. Colors and sizes come from tokens.css only. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-block: var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+  scroll-margin-top: calc(var(--height-top-bar) + var(--space-6));
+}
+
+.section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-mono);
+}
+
+.specimenTitle {
+  margin: 0;
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-mono);
+}
+
+.description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+}
+
+.specimen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  scroll-margin-top: calc(var(--height-top-bar) + var(--space-6));
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+}
+
+.rowLabel {
+  flex: 0 0 calc(var(--space-6) * 5);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+.rowItems {
+  display: flex;
+  flex: 1 1 calc(var(--space-6) * 8);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}

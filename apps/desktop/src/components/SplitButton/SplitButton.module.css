@@ -1,0 +1,167 @@
+/* SplitButton: design-system §2, §6. Colors and sizes come from tokens.css only. */
+
+.root {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  vertical-align: middle;
+}
+
+/* The two parts share one shape: square inner corners. */
+.root .main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.root .toggle {
+  padding: 0 var(--space-2);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Keep a focus ring above the neighbouring part. */
+.root .main:focus-visible,
+.root .toggle:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+/* Divider between the parts. */
+.root[data-variant='primary'] .toggle {
+  box-shadow: inset 1px 0 0 var(--accent-pressed);
+}
+
+.root[data-variant='secondary'] .toggle {
+  border-left-width: 0;
+}
+
+.chevron {
+  transition: transform var(--duration-fast) var(--easing-standard);
+}
+
+.toggle[aria-expanded='true'] .chevron {
+  transform: rotate(180deg);
+}
+
+/* The popover list. It is removed on close, so nothing waits for animationend. */
+.menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  min-width: 100%;
+  padding: var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-overlay);
+  background-color: var(--bg-overlay);
+  box-shadow: var(--shadow-overlay);
+  animation: menu-in var(--duration-normal) var(--easing-standard);
+}
+
+.menu:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.alignEnd {
+  right: 0;
+  left: auto;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -1));
+  }
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: 100%;
+  height: calc(var(--height-control) - var(--space-1));
+  margin: 0;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-control);
+  background-color: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    color var(--duration-fast) var(--easing-standard);
+}
+
+.item:hover:not([aria-disabled='true']),
+.item:focus:not([aria-disabled='true']) {
+  outline: none;
+  background-color: var(--bg-overlay-hover);
+}
+
+.item:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.itemIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* No icon-size token: icons follow the body text size, on the 4 px grid. */
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.itemIcon > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.itemLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Dangerous item: plain --danger at rest, --danger-hover on state surfaces. */
+.danger,
+.danger .itemIcon {
+  color: var(--danger);
+}
+
+.danger:hover:not([aria-disabled='true']),
+.danger:focus:not([aria-disabled='true']),
+.danger:hover:not([aria-disabled='true']) .itemIcon,
+.danger:focus:not([aria-disabled='true']) .itemIcon {
+  color: var(--danger-hover);
+}
+
+/* Inactive menu items keep full opacity and use --text-disabled (design-system §6). */
+.item[aria-disabled='true'],
+.item[aria-disabled='true'] .itemIcon {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron,
+  .item {
+    transition: none;
+  }
+
+  .menu {
+    animation: none;
+  }
+}

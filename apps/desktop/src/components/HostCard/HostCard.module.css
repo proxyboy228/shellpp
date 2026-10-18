@@ -1,0 +1,134 @@
+/* Host and group card (docs/design-system.md, 3.1 and 6). */
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--height-host-card);
+  min-width: 0;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  box-sizing: border-box;
+  cursor: default;
+  user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--easing-standard),
+    border-color var(--duration-fast) var(--easing-standard),
+    box-shadow var(--duration-fast) var(--easing-standard);
+}
+
+.card:not(.disabled):hover {
+  background: var(--bg-raised-hover);
+}
+
+.card:not(.disabled):active {
+  background: var(--bg-pressed);
+}
+
+.card:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Selection uses the accent (design-system 2.4). */
+.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Disabled: the whole component at 0.45 opacity, no hover reaction. */
+.disabled {
+  opacity: var(--opacity-disabled);
+}
+
+/* Square tile: the card height minus its vertical padding. */
+.tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--height-host-card) - 2 * var(--space-3));
+  height: calc(var(--height-host-card) - 2 * var(--space-3));
+  border-radius: var(--radius-tile);
+  color: var(--text-on-tag);
+}
+
+.icon {
+  display: block;
+}
+
+.tagGraphite {
+  background: var(--tag-graphite);
+}
+
+.tagJade {
+  background: var(--tag-jade);
+}
+
+.tagAmber {
+  background: var(--tag-amber);
+}
+
+.tagCoral {
+  background: var(--tag-coral);
+}
+
+.tagPlum {
+  background: var(--tag-plum);
+}
+
+.tagMoss {
+  background: var(--tag-moss);
+}
+
+.tagOcean {
+  background: var(--tag-ocean);
+}
+
+.tagRose {
+  background: var(--tag-rose);
+}
+
+.text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title,
+.subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+}
+
+.trailing {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+}

@@ -1,0 +1,95 @@
+/* Color swatches. Colors and sizes come from tokens.css only. */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+}
+
+.groupNote {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-6) * 6), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.swatch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+}
+
+.sample {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--space-6) + var(--space-4));
+  margin-bottom: var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  box-sizing: border-box;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Translucent tokens are drawn over the sample surface, as in the interface. */
+.fillLayer {
+  position: absolute;
+  inset: 0;
+}
+
+.ring {
+  margin: var(--focus-ring-offset) var(--focus-ring-offset) var(--space-3);
+  overflow: visible;
+  outline: var(--focus-ring-width) solid;
+  outline-offset: var(--focus-ring-offset);
+}
+
+.shadow {
+  margin: var(--space-2) var(--space-2) var(--space-5);
+  overflow: visible;
+  border-color: transparent;
+  background: var(--bg-overlay);
+}
+
+.name {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
+.value {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
+.purpose {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}

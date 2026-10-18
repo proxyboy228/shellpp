@@ -1,0 +1,33 @@
+/* Status dot (docs/design-system.md, 3.3). */
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: var(--size-status-dot);
+  height: var(--size-status-dot);
+  border-radius: 50%;
+  vertical-align: middle;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.connected {
+  background: var(--success);
+}
+
+.connecting {
+  background: var(--warning);
+}
+
+.error {
+  background: var(--danger);
+}
+
+.inactive {
+  background: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot {
+    transition: none;
+  }
+}

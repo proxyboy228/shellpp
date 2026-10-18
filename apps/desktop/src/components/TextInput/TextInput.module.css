@@ -1,0 +1,131 @@
+/* TextInput: design-system §2, §5, §6. Colors and sizes come from tokens.css only. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  font-family: var(--font-ui);
+}
+
+.label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.box {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--height-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--bg-input);
+  transition: border-color var(--duration-fast) var(--easing-standard);
+}
+
+/* Keyboard focus: the ring goes around the whole field, including the slots. */
+.box:has(.input:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+@supports not selector(:has(*)) {
+  .box:focus-within {
+    outline: var(--focus-ring-width) solid var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
+  }
+}
+
+.input {
+  flex: 1;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0 var(--space-3);
+  border: 0;
+  background-color: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+}
+
+.input:focus {
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+}
+
+.leading {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* No icon-size token: icons follow the body text size, on the 4 px grid. */
+  width: var(--space-4);
+  height: var(--space-4);
+  padding-left: var(--space-3);
+  color: var(--text-secondary);
+}
+
+.leading > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.leading + .input {
+  padding-left: var(--space-2);
+}
+
+.trailing {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-1);
+}
+
+.description,
+.error {
+  margin: 0;
+  font-size: var(--font-size-caption);
+}
+
+.description {
+  color: var(--text-secondary);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.root[data-invalid] .box {
+  border-color: var(--danger);
+}
+
+/* Disabled: the whole component is dimmed and does not react to hover. */
+.root[data-disabled] {
+  opacity: var(--opacity-disabled);
+}
+
+.root[data-disabled] .input {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .box {
+    transition: none;
+  }
+}

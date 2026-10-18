@@ -1,0 +1,132 @@
+/* Component demos. Colors and sizes come from tokens.css only. */
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.matrix {
+  border-collapse: collapse;
+}
+
+.matrix th,
+.matrix td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.matrix thead th {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.matrix tbody th {
+  padding-left: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+}
+
+.matrix code {
+  font-family: var(--font-mono);
+}
+
+.narrow {
+  width: calc(var(--space-6) * 10);
+  max-width: 100%;
+}
+
+.inlineGroup {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-6) * 8)), 1fr));
+  align-items: start;
+  gap: var(--space-5) var(--space-4);
+}
+
+.statusText {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-dense);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-6) * 8)), 1fr));
+  gap: var(--space-3);
+}
+
+.menus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.popoverAnchor {
+  position: relative;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+}
+
+.modalText {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.modalText + .modalText {
+  margin-top: var(--space-3);
+}
+
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.themePanels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--width-details)), 1fr));
+  gap: var(--space-4);
+}
+
+/* An inner data-theme element repaints its own surface with that theme's tokens. */
+.themePanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+}
+
+.panelRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
