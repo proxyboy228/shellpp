@@ -1,9 +1,14 @@
-# Project: self-hosted SSH client (working title: Shell++)
+# Project: Shell++, a self-hosted SSH client
 
 ## Documentation contents
 - `SPEC.md` (this file): goals, principles, stack, functionality, work order.
 - `docs/ui-behavior-spec.md`: interface behavior, screen by screen.
 - `docs/design-system.md`: palette, typography, tokens, terminal themes.
+- `docs/decisions.md`: design decisions accepted before stage 0.
+- `docs/architecture.md`, `docs/data-model.md`, `docs/storage-format.md`,
+  `docs/sync-protocol.md`, `docs/security.md`: stage 0 design documents
+  (architecture, data schema, storage format, sync protocol, threat model). [decision]
+- `docs/ru/`: Russian versions of the specifications.
 
 ## Goal
 A cross-platform SSH client with functionality on par with commercial clients
@@ -22,8 +27,17 @@ Here this must be impossible by design.
   If a description is not sufficient, ask a question instead of filling in the gaps
   based on your own ideas about the original.
 - Dependencies with permissive licenses only (MIT / Apache-2.0 / BSD / ISC /
-  MPL-2.0, OFL for fonts). Before adding a dependency, check its license
-  and record it in THIRD_PARTY_NOTICES.
+  MPL-2.0, OFL for fonts; also Zlib / BSL-1.0 / Unicode-3.0 / CC0-1.0 /
+  Unlicense / 0BSD / CDLA-Permissive-2.0 and public domain, for example SQLite).
+  Before adding a dependency, check its license and record it in
+  THIRD_PARTY_NOTICES.md. [decision]
+- System components that are not shipped (WebView2, WebKitGTK, GTK, glibc)
+  are platform dependencies. LGPL libraries bundled inside an AppImage are
+  listed in THIRD_PARTY_NOTICES.md. GPL and AGPL code is never shipped in the
+  client. [decision]
+- Development-only dependencies that are never shipped (build, lint, and test
+  tools) may also use BlueOak-1.0.0 and CC-BY-4.0. CI checks licenses with
+  cargo-deny and license-checker. [decision]
 
 ## Principles (non-negotiable)
 1. Local-first. The application works fully offline, without an account or server.
@@ -46,12 +60,21 @@ If you see a reason to replace something, propose it BEFORE starting work.
 - Desktop: Tauri 2 (Rust core) + React + TypeScript + Vite.
 - Terminal: xterm.js (addons: fit, search, webgl, web-links, unicode11).
 - SSH/SFTP: russh + russh-sftp, key handling via ssh-key.
-- Local storage: SQLite. Secrets are encrypted at the record level.
-  The key is stored in the OS keychain (crate keyring). Unlocking with the master password,
-  optionally with biometrics.
-- Cryptography: Argon2id (KDF), XChaCha20-Poly1305 (data), X25519
-  (wrapping of shared vault keys). Only vetted crates (RustCrypto, dalek).
-  No homemade cryptography.
+- Local storage: SQLite. The entire payload of every record is encrypted;
+  only the record id, coarse type, vault id, revision, key epoch, and sync
+  service fields stay in the clear. Search and sorting run in memory after
+  unlock. [decision]
+- Unlocking with the master password, optionally with biometrics. By default
+  nothing is stored in the OS keychain: only the "biometrics / remember on this
+  device" option (off by default, with a warning) stores a device key there
+  (crate keyring) that wraps the vault key a second time. Without an OS keychain
+  this option is unavailable; there is no fallback to a file. [decision]
+- Cryptography: Argon2id (KDF), HKDF (key separation), XChaCha20-Poly1305
+  (data), X25519 in HPKE (RFC 9180) Auth mode (wrapping of shared vault keys).
+  Only vetted crates (RustCrypto, dalek); russh uses the ring backend as an
+  explicit exception. The `rsa` crate (advisory RUSTSEC-2023-0071) is a
+  documented exception: signing happens locally, and upstream is tracked.
+  No homemade cryptography. [decision]
 - Interface icons: Lucide (ISC).
 - Sync server: Rust (axum) + PostgreSQL, SQLite for small
   installations. Docker image, docker-compose.yml, configuration via env.
@@ -59,8 +82,10 @@ If you see a reason to replace something, propose it BEFORE starting work.
   - apps/desktop: Tauri application
   - crates/core: data model, encryption, sync client (reused on mobile)
   - crates/ssh: SSH, SFTP, port forwarding, agent
+  - crates/term-local: local PTY and serial connections (desktop only) [decision]
   - server/: sync server
-  - docs/: specifications, architecture, data format, sync protocol, threat model
+  - docs/: specifications, architecture, data schema, storage format, sync protocol,
+    threat model, decisions [decision]
 - Mobile apps (iOS/Android) are built later via Tauri 2 mobile.
   The core architecture must not get in the way of this.
 
@@ -115,34 +140,93 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
 
 ### Import
 - ~/.ssh/config, including Include, Host *, Match (at least basic) and ProxyJump.
-- PuTTY sessions from the Windows registry, CSV, native JSON, known_hosts.
-- Import is idempotent: running it again does not create duplicates.
+  Keys referenced by IdentityFile are imported into the Keychain. [decision]
+- PuTTY sessions from the Windows registry, CSV (columns: label, address, port,
+  username, group, tags), native JSON, known_hosts. Hashed known_hosts entries
+  are kept as they are; `@revoked` entries become revoked keys, and
+  `@cert-authority` entries are skipped and counted. [decision]
+- Import is idempotent: running it again does not create duplicates. The key
+  is the source key (source type plus Host alias, PuTTY session name, or UUID),
+  or (address, port, username) when there is none; existing records are never
+  overwritten. [decision]
 
 ### Sync and team access
 - Account on a self-hosted server; the server URL is set by the user.
   Multiple devices are supported.
-- Key chain: master password → Argon2id → KEK. The vault key is generated
-  randomly and stored wrapped with the KEK. Each record is encrypted separately.
+- Key chain: master password → Argon2id (a random salt bound to the account
+  email, versioned parameters) → master key → HKDF → two independent keys:
+  the KEK and the auth key. The vault key is generated randomly and stored
+  wrapped with the KEK. Each record is encrypted separately. Only the auth key
+  goes to the server, which stores a hash of it; a pre-login endpoint returns
+  the random salt and the KDF parameters (a deterministic fake salt for an
+  unknown email). A password change rewraps the vault key, atomically
+  replaces the auth key and the salt, and revokes the tokens of the other
+  devices. [decision]
 - Protocol:
-  - pull/push of changes by cursor (server-side sequence number);
+  - pull/push of changes by cursor (server-side sequence number), one cursor
+    per vault; [decision]
   - a record has a UUIDv7, a revision, and a tombstone for deletions;
-  - conflicts are resolved by last-writer-wins at the record level; the losing
-    version is kept for manual resolution in the UI.
+    tombstones are kept for 90 days, and a device with an older cursor does
+    a full resync; [decision]
+  - the AEAD associated data binds the vault id, record id, type, revision,
+    and key epoch, so substituted or reordered blobs are detected; rollback
+    and deletion by the server are not detected; [decision]
+  - a push carries `base_revision`; on a mismatch the server rejects it and
+    returns the current version; [decision]
+  - conflicts are resolved by last-writer-wins at the record level: the winner
+    is chosen by a hybrid logical clock inside the record, ties are broken by
+    device id, and delete versus edit follows the same rule. The losing
+    version is kept as a separate conflict record in the same vault, visible
+    on all devices, for manual resolution in the UI. [decision]
 - The user chooses which data types to sync. Command history
-  and the connection log are not synced by default.
+  and the connection log are not synced by default. The choice is per device,
+  applies to both push and pull, and turning a type off does not delete it
+  from the server. Known hosts, workspaces, custom themes, and highlighting
+  rules sync in the personal vault (on by default); app settings stay local;
+  team vaults always sync in full. [decision]
+- The connection log is always written to the personal vault. A team vault
+  shows only the entries of members who turned on publishing; this is an
+  append-only type that viewers can also write. [decision]
+- Signing in to an existing account from a device with local data
+  re-encrypts the local records under the account's key and merges them with
+  deduplication, as an import does. [decision]
 - Shared vaults for a team:
-  - the user has an X25519 key pair;
-  - the vault key is wrapped with each member's public key;
-  - roles owner, editor, and viewer;
-  - when a member is removed, the vault key is rotated for the remaining members;
-  - the local copy of a removed member is NOT erased remotely (principle 3).
-- Recovery key at registration. An honest warning in the UI: without the password
-  and the recovery key, the data cannot be recovered.
+  - the vault is the only unit of sharing: sharing a host or snippet moves or
+    copies it into a team vault, where it is re-encrypted and gets a new
+    record id; [decision]
+  - the user has an X25519 key pair whose private part is synced inside the
+    personal vault, and a separate Ed25519 SSH ID whose public part is
+    published to the server. A host in a team vault may have no credentials:
+    each member binds their own SSH ID or identity to it, and the binding is
+    stored in the member's personal vault; [decision]
+  - the vault key is wrapped with each member's public key (HPKE, Auth mode);
+    members' keys are pinned on first use, and their fingerprints are shown
+    for comparison outside the server; [decision]
+  - invitations take two steps: the link carries only a one-time id, the owner
+    confirms the new member by fingerprint, and only then does the owner's
+    client wrap the vault key; [decision]
+  - roles owner, editor, and viewer; the server enforces them on push, and
+    records are not signed in the MVP. Every member, viewers included,
+    receives the vault's secrets. A vault can have several owners; deleting
+    the account of a vault's only owner is blocked until ownership is
+    transferred; [decision]
+  - when a member is removed, the vault key is rotated for the remaining members:
+    a new key epoch starts, and the owner's client re-encrypts the records in
+    the background; [decision]
+  - the local copy of a removed member is NOT erased remotely (principle 3);
+    it stays as a read-only local archive that can be exported or copied to
+    the personal vault. [decision]
+- Recovery key: 256 random bits, created together with the first master
+  password, also without an account. It wraps the personal vault key and
+  yields a recovery auth key that allows setting a new password. An honest
+  warning in the UI: without the password and the recovery key, the data
+  cannot be recovered. [decision]
 - Server:
   - registration is open or invite-only (configurable);
-  - TOTP 2FA;
+  - TOTP 2FA (reset only with the admin CLI); [decision]
   - admin CLI;
   - health endpoint, rate limiting;
+  - SMTP is optional: without it, invitations work only through links; [decision]
   - TLS via reverse proxy (example Caddy configuration);
   - DB backup instructions.
 
@@ -150,15 +234,25 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
 - Screen structure, navigation, scenarios, keyboard shortcuts, and responses to actions
   are taken from `docs/ui-behavior-spec.md`.
 - Appearance (colors, fonts, radii, spacing) is taken from `docs/design-system.md`.
-- The **[decision]** mark in the UI specification means the default choice.
+- The **[decision]** mark in the UI specification and in this file means the default
+  choice (the decisions behind the marks in this file are recorded in `docs/decisions.md`).
   If it gets in the way of the architecture or contradicts another place in the specification,
   say so before implementation.
 - Acceptance: for each screen and scenario in the UI specification there is an e2e test
   (WebdriverIO + tauri-driver) that verifies the described behavior. A screen is considered
-  done when its tests pass.
+  done when its tests pass on Linux and Windows. On macOS, where tauri-driver is not
+  available, acceptance is the build, unit and Rust integration tests, and a manual
+  checklist. In e2e builds, native dialogs, the clipboard, and launching external programs
+  are replaced by mocks behind a cargo feature that never reaches release builds. [decision]
 
 ## Security
-- Secrets never end up in logs, in plaintext on disk, or in URLs.
+- Secrets never end up in logs, in plaintext on disk, or in URLs. The allowed
+  exceptions are explicit user actions (plaintext export, .txt log export, SFTP
+  temporary files), which show a warning; temporary files are deleted when the
+  file is closed and when the app exits. [decision]
+- The master password is required from the first launch, even without an
+  account, and later becomes the account password. It can be changed in local
+  mode too. [decision]
 - Auto-lock on inactivity. The clipboard is cleared after copying
   a password or key.
 - Strict CSP in Tauri and a minimal set of allowed commands.
@@ -169,43 +263,66 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   - 7.3: the private key is hidden by default and shown only via an explicit button;
   - 8.4: port forwarding listens only on 127.0.0.1 by default;
   - 10.2: a host key change blocks the connection until explicit confirmation;
-  - 12.4: importing history from the server and recording session output are off by default.
+  - 12.4 and 12.6: importing history from the server (12.4) and recording session
+    output (12.6) are off by default.
 
 ## Quality
 - Unit tests for crates/core: encryption, merge during sync,
   ssh_config parser, secret filter in history.
-- Integration tests of SSH/SFTP/port forwarding against OpenSSH in Docker.
+- Integration tests of SSH/SFTP/port forwarding against OpenSSH in Docker,
+  in the Linux CI job; Windows e2e tests use a test SSH/SFTP server built on
+  russh and kept in the repository. [decision]
 - Sync E2E test: two clients + server.
-- Interface E2E tests based on the UI specification.
+- Interface E2E tests based on the UI specification; they find elements by
+  data-testid, not by text. [decision]
 - Automated contrast test for color tokens.
 - CI on GitHub Actions: clippy, eslint, tests, builds for Windows, macOS, and Linux.
-- Code, comments, commits, and documentation in English.
+- Code, comments, commits, and documentation in English. The English
+  specifications are canonical; their Russian versions in docs/ru/ are updated
+  in the same commit. The interface is in English, with all strings in an i18n
+  catalog (en). Stage reports are in Russian. [decision]
 
 ## Work order
 Work strictly stage by stage. After each stage: tests are green, commit,
 brief report (what was done, what remains, what risks there are). Then wait
 for my confirmation.
 
+Elements of future stages are hidden behind a stage flag, not shown disabled.
+Their e2e tests are written in the stage that implements them, and every stage
+report lists what is still hidden. [decision]
+
 0. Design documents in docs/: architecture, data schema, storage format,
-   sync protocol, threat model. Plus a tokens file and base
-   components per design-system.md. Show them before writing the main code.
+   sync protocol, threat model (`docs/architecture.md`, `docs/data-model.md`,
+   `docs/storage-format.md`, `docs/sync-protocol.md`, `docs/security.md`).
+   Plus a tokens file and base components per design-system.md, in
+   `apps/desktop` as a frontend-only package (pnpm, Vite, React, TypeScript)
+   without `src-tauri`, with a showcase page. Tests for this stage: the contrast
+   test and Vitest render tests, `tsc` and eslint, in one Linux CI job.
+   Show them before writing the main code. [decision]
 1. Monorepo skeleton, Tauri application, main window shell (UI spec,
    section 1), encrypted storage, master password, Hosts screen and host
    panel (sections 2–3).
 2. SSH terminal: password and key authentication, known hosts and TOFU,
    tabs, splits, themes, terminal sidebar, new tab page
-   (sections 4, 6, 10).
-3. Keychain, ~/.ssh/config import, export to JSON and ssh config (section 7).
+   (sections 4, 6, 10). Also: local terminal, system ssh-agent / Pageant,
+   agent forwarding, OS detection with the default script, and a short path
+   for adding a key in the host panel; autoreconnect, keepalive, and TERM are
+   stored without a settings screen. [decision]
+3. Keychain, import (the dialog with all formats from the "Import" section),
+   the built-in agent, export to JSON and ssh config (section 7). [decision]
 4. SFTP (section 5).
 5. Port forwarding, jump hosts, proxy, snippets (sections 8, 9).
-6. Logs, settings, keyboard shortcuts (sections 11, 12).
+6. Logs, settings, keyboard shortcuts, keyword highlighting (sections 11, 12). [decision]
 7. Sync server and sync client, multiple devices.
 8. Shared vaults, roles, invitations, sharing of hosts and snippets.
-9. Polish: workspaces, broadcast, auto-update that can be turned off, from my
-   own source.
+9. Polish: workspaces, broadcast, Telnet and serial connections, auto-update
+   that can be turned off, from my own source (the automatic check is off by
+   default, a manual check is always available, and the source can be
+   overridden in Settings → Updates). [decision]
 10. Later stages: mobile apps, shared session (multiplayer),
     import from cloud providers, autocomplete, snippet generation via
-    a pluggable LLM.
+    a pluggable LLM, Mosh (a separate stage; its toggle stays hidden until
+    then). [decision]
 
 If something in the specification is contradictory or technically unsound, say
 so before implementation, rather than silently.

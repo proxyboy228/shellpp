@@ -5,51 +5,75 @@
 > radii, shadows) is described separately in `docs/design-system.md`.
 >
 > Marks:
+>
 > - **[decision]**: behavior is not confirmed, chosen by us, can be changed;
 > - **[clarify]**: awaiting an answer; until answered, implement as [decision].
+>
+> The decisions taken before stage 0 are recorded in `docs/decisions.md`. Behavior that they
+> added or changed is marked [decision] in this document.
 
 ## 0. Platforms
+
 - Windows (primary for manual testing), macOS, Linux. Later iOS and Android.
 - Keyboard shortcuts are given for Windows/Linux. On macOS, Ctrl is replaced with Cmd
-  where this is the platform convention.
+  where this is the platform convention; the Mac key set is described in 12.5. [decision]
+- Elements of features that belong to later stages (see SPEC.md, "Work order") are hidden
+  behind a stage flag rather than shown disabled. [decision]
+- The interface is in English. Interface strings in this document define the meaning; the final
+  texts live in the i18n catalog (`en`). e2e tests find elements by `data-testid`, not by
+  text. [decision]
 
 ---
 
 ## 1. Main window
 
 ### 1.1 Top bar (window title bar)
+
 - Custom window title bar (frameless). On Windows/Linux, the minimize /
   maximize / close buttons are on the right; on macOS, the system buttons are on the left. [decision for macOS]
 - From left to right:
   1. App menu button.
   2. Persistent **Vaults** tab: the data management workspace.
      Next to it is an arrow switcher for the current vault (personal, team).
-  3. Persistent **SFTP** tab.
+  3. Persistent **SFTP** tab: the SFTP manager for manual work (section 5). [decision]
   4. Open session tabs: host OS icon + host name.
      - On the active tab (and on any tab on hover), a close button
        appears in place of the OS icon.
-     - The active tab is highlighted with the accent color of this host's terminal theme. [decision]
-     - On the right side of the tab, a session type icon: terminal or SFTP. [decision]
+     - The active tab is marked with an `--accent` bar. The colors of the host's terminal
+       theme are not used for it. [decision]
+     - On the right side of the tab, a session type icon: terminal or SFTP. An SFTP session
+       tab is opened by "Connect via SFTP" (see 5.1). [decision]
   5. "+" button: a new tab with the start page (see section 6).
 - On the right:
-  - update button (visible only when an update is available);
-  - notification center;
+  - update button (visible only when a check has found an update, see 12.7);
+  - notification center (see 1.5);
   - button to show and hide the terminal sidebar (only when a session
     tab is active, see 4.2);
   - window buttons.
 
 ### 1.2 Sidebar (inside the Vaults tab)
+
 - Sections from top to bottom: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
   **Known Hosts**, **Logs**.
 - The active section is highlighted. Each section opens its own screen in the main area.
 
 ### 1.3 Details panel
+
 - A slide-out panel on the right. Opens when an object is selected or when a new one is created.
 - In the header: a title ("host details" / "new host"), a "…" menu with additional
   actions (the set depends on the object; for a host see 3.3), a button to collapse the panel.
 - The main area narrows; the panel does not overlap it. [decision]
+- Saving rule for every object panel (hosts, groups, keys, identities, forwarding rules,
+  snippets) [decision]:
+  - a new object is created once all its required fields are filled in with valid values.
+    Until then it is a draft, and closing the panel discards the draft without prompting;
+  - after that, changes are saved automatically; there is no save button;
+  - an invalid value is highlighted, with the reason under the field, and is not saved. The
+    last valid value stays in effect;
+  - wizards with an explicit "Create" button (8.3) are the only exception.
 
 ### 1.4 App menu (the button with three bars)
+
 1. Vaults (Ctrl+1).
 2. SFTP (Ctrl+2).
 3. Settings (Ctrl+,).
@@ -61,21 +85,38 @@
    the sidebar. [decision]
 9. Window ▸: new window, next and previous tab, close tab. [decision]
 10. Help ▸: documentation, report an issue (link to issues), check for
-    updates, about. [decision]
-11. — separator —
-12. Exit.
+    updates, about. [decision] "Check for updates" is always available, even when the
+    automatic check is off (see 12.7). [decision]
+11. Lock: lock the app now (see 13.3). [decision]
+12. — separator —
+13. Exit. While sessions, port forwards or file transfers are active, Exit asks for
+    confirmation (see 4.6). [decision]
 
 Additionally:
+
 - Keys in hints are written as symbols (`Ctrl+,`), not as words in the system
   language. [decision]
 - On macOS, the system menu bar with the same items is used instead of this
   menu. [decision]
+- All windows are equal: each window has its own tabs, and changes to data and settings
+  appear in all windows at once. Moving tabs between windows is not in the MVP. [decision]
+
+### 1.5 Notification center [decision]
+
+- The notification center button in the top bar (1.1) opens the list of notifications,
+  newest first. A counter on the button shows the number of unread notifications.
+- A new notification appears as a toast for 5 seconds and stays in the list. Opening the
+  list marks all notifications as read.
+- Example source: uploads of files opened from SFTP (5.4).
+- Notifications are kept in memory only and disappear when the app exits. System (OS)
+  notifications are not used.
 
 ---
 
 ## 2. Hosts screen
 
 ### 2.1 Search and quick connect
+
 - Search bar at the top of the main area, full width. The placeholder hints
   that you can search for a host or enter `ssh user@hostname`.
 - Typing filters groups and hosts in real time: by name, address,
@@ -83,14 +124,24 @@ Additionally:
 - If the string is recognized as a connection address (`host`, `user@host`,
   `user@host:port`, `ssh user@host -p port`), the Connect button on the right side of the bar
   becomes enabled. Enter or a click connects without saving the host.
+- A single word (the `host` form) counts as an address only if it contains a dot or a colon,
+  is an IP address, or is `localhost`. Any other single word is only a search query. [decision]
+- If the text exactly matches the label or the address of a saved host, Enter and the Connect
+  button connect to that saved host with its settings. [decision]
+- If the string has no username and the host does not set one, the username is asked for
+  while connecting (see 4.8). [decision]
 - While the string is not an address, the Connect button is disabled.
 - After a successful quick connect, an unobtrusive offer to save the host is shown. [decision]
 
 ### 2.2 Action bar
+
 On the left:
+
 - **New host** split button. The main part creates a host; the arrow opens a menu:
-  1. **New Group**: create a group in the current location.
-  2. **Import**: import dialog (formats are listed in SPEC.md, section "Import").
+  1. **New Group**: create a group in the current location. The group panel opens
+     (see 3.4). [decision]
+  2. **Import**: the import dialog (see 2.5); formats are listed in SPEC.md, section
+     "Import".
   3. Cloud integrations (AWS, DigitalOcean, Azure): connecting a provider
      account and importing its servers as hosts. **A separate later stage**;
      in the MVP these items are hidden.
@@ -100,17 +151,23 @@ On the left:
   tab in the top bar.
 
 On the right:
+
 - View toggle: tiles / list.
 - Tag filter.
-- One more button. [clarify purpose]
+- Sort menu: Manual, by name, by creation date, by modification date. Manual is the default
+  on Hosts, and only in this mode does dragging change the order of cards (see 2.3). The icon
+  is the same as on the other screens (see 7.1). [decision]
 - Avatars of the current vault's members and a "+" button. A click opens a dropdown menu:
   an "Invite members" item, below it a list of current members (avatar + email).
+  "Invite members" opens the invitation dialog (see 12.3). [decision]
 
 ### 2.3 Screen content
+
 - Two sections: **Groups** on top, **Hosts** below it.
 - Groups work like folders: a click opens a group, inside which its subgroups
   and hosts are visible. Above the content is a path (breadcrumbs) with return to any level. [decision]
 - Group card: icon, name, number of hosts (including nested groups). [decision]
+  Right-click opens the group menu (see 3.4). [decision]
 - Host card:
   - OS icon. The distribution is detected on the first successful connection
     (see 12.4, block "OS detection"). Until then, a neutral icon is shown.
@@ -122,17 +179,23 @@ On the right:
   - long text is truncated with an ellipsis.
 - The grid is adaptive: the number of columns depends on the width of the main area.
 - The selected card is visually highlighted.
+- A card of an object with an unresolved sync conflict shows a conflict badge
+  (see 13.6). [decision]
 - Multiple selection is supported: Ctrl+click adds or removes
   a card, Shift+click selects a range. Context menu actions that
   apply to multiple hosts (Connect, Add to Workspace, Move to, Copy to,
   Remove) are performed for all selected ones. [decision on keys and set]
-- Cards can be dragged: within the list the order changes; when dropped
-  onto a group card, the host is moved into that group. [decision on details]
+- Cards can be dragged [decision on details]:
+  - in the Manual sort mode (see 2.2), dragging within the list changes the order. In the
+    other sort modes the order does not change; [decision]
+  - when dropped onto a group card, the host is moved into that group, in any sort mode.
 - Promo banners are not needed. Instead, an empty state with hints. [decision]
 - Empty state (no hosts): a short explanation and the buttons "Create host"
-  and "Import from ~/.ssh/config". [decision]
+  and "Import from ~/.ssh/config". The second one opens the import dialog (2.5) with the
+  `~/.ssh/config` source selected. [decision]
 
 ### 2.4 Host card actions
+
 - Single click: select the card and show details in the details panel.
 - Double click: connect (new session tab).
 - Enter on a selected card: quick connect.
@@ -142,7 +205,8 @@ On the right:
   1. **Quick Connect** (Enter): connect via the primary protocol.
   2. **Connect ▸**: submenu:
      - via SSH (terminal session);
-     - via SFTP (the host opens in the SFTP manager);
+     - via SFTP: opens a new SFTP session tab with the host in the right panel
+       (see 5.1); [decision]
      - separator;
      - "in a new window" hint: if Alt is held while choosing any option,
        the session opens in a new app window. Alt + double click on
@@ -150,21 +214,63 @@ On the right:
   3. **Add to Workspace ▸**: add to a saved workspace
      (details in the "Terminal" section).
   4. **Edit Host Details** (E).
-  5. **Collaborate**: share the host with team members.
-  6. **Move to ▸**: move to another vault or group.
-  7. **Copy to ▸**: copy to another vault.
+  5. **Collaborate**: opens the "Move or copy to a vault" dialog (see 2.6) with a team vault
+     as the target. The unit of sharing is a whole vault, not a single host. [decision]
+  6. **Move to ▸**: move to another vault or group. Moving to another vault goes through
+     the dialog in 2.6. [decision]
+  7. **Copy to ▸**: copy to another vault, through the dialog in 2.6. [decision]
   8. **Duplicate**: a copy of the host; the suffix " Copy" is appended to the name.
   9. **Copy Link**: a link to the host in the app's own URL scheme
      (`shellpp://host/<id>`). An (i) icon explains who will be able to open the link.
   10. **Remove**: deletion with confirmation and the ability to undo
       the action for a few seconds. [decision]
 
+### 2.5 Import dialog [decision]
+
+- Opened from New host ▸ Import (2.2), from the Hosts empty state (2.3) and from the Import
+  button on Known Hosts (10.1). A modal dialog with steps:
+  1. **Source**: `~/.ssh/config`, PuTTY sessions (shown only on Windows), CSV, native JSON,
+     known_hosts.
+  2. **File**: a path field filled with the source's default path (for example
+     `~/.ssh/config` or `~/.ssh/known_hosts`) and a button to choose another file.
+     PuTTY sessions are read from the Windows registry, so this step is skipped for them.
+  3. **Preview**: the records found, each with the status "new", "already exists" or
+     "error" (with the reason). Only "new" records are imported.
+  4. **Summary**: "added N, skipped M, errors K".
+- CSV columns: `label`, `address`, `port`, `username`, `group`, `tags`.
+- Import is idempotent. A record is matched by its source key: the source type plus the
+  Host alias, the PuTTY session name, or the record's UUID. A record without a source key is
+  matched by (address, port, username). Existing records are never overwritten, even if they
+  were changed after the previous import.
+- `~/.ssh/config`: keys referenced by `IdentityFile` are imported into the Keychain. An
+  encrypted key asks for its passphrase (as in 7.3).
+- known_hosts: hashed entries and markers are handled as described in 10.1.
+
+### 2.6 Move or copy to a vault [decision]
+
+- Opened by Collaborate, Move to ▸ and Copy to ▸ when the target is another vault (2.4, 8.2),
+  Share this host (3.1) and Share this snippet (9.3).
+- Fields: the target vault and the operation (Move or Copy).
+- The object is re-encrypted with the target vault's key and becomes a new record with a new
+  id. Links to the old record made with Copy Link (2.4) stop working.
+- Linked objects (identity, key, startup snippet, jump hosts) are listed, with one choice for
+  all of them:
+  - **Unlink** (default): the linked objects stay where they are, and the moved or copied
+    object no longer references them;
+  - **Copy together**: the linked objects are copied to the target vault. A warning says that
+    every member of the target vault, viewers included, will be able to read their secrets.
+- A host in a team vault may have no credentials. Each member attaches their own SSH ID or
+  identity to it in the host panel. This binding is stored in the member's personal vault and
+  is not visible to other members (see 12.3).
+
 ---
 
 ## 3. Host panel: view, create, edit
+
 The same form is used for creating and editing; it opens in the details panel.
 
 ### 3.1 Blocks from top to bottom
+
 1. **Vault**: a dropdown for where the host is stored (personal or team vault).
 2. **Address**: OS icon + "IP or hostname" field. On creation, focus is placed here immediately.
 3. **General**:
@@ -172,8 +278,12 @@ The same form is used for creating and editing; it opens in the details panel.
    - Parent Group: group selection with search and creation of a new group on the fly; [decision]
    - Tags: tags are shown as chips with a delete button; input with autocomplete
      and creation of new tags on the fly;
+   - Color: one of the 8 tile colors (`docs/design-system.md`, 3.1), graphite by
+     default; [decision]
+   - Notes: a multi-line free text field; [decision]
    - Backspace: what the Backspace key sends (default / options). [decision: Default, `^?` (DEL), `^H`]
-4. **Share this host**: opens the sharing dialog. Disabled until the host is created.
+4. **Share this host**: opens the "Move or copy to a vault" dialog (see 2.6). Disabled until
+   the host is created. [decision]
 5. **SSH**:
    - port: a field on the same line as the protocol name, placeholder 22;
    - Credentials:
@@ -186,7 +296,15 @@ The same form is used for creating and editing; it opens in the details panel.
      - a linked key is shown as a separate field with the key name from Keychain;
        it can be unlinked;
      - a "+" button to link an identity, key, certificate or FIDO2 key.
-       A type that is already linked disappears from the list of options;
+       A type that is already linked disappears from the list of options.
+       For a key, the list offers the existing keys and a short way to add a new one:
+       paste the key text or choose a file. An encrypted key asks for its passphrase
+       (as in 7.3), and the key is saved to the Keychain; [decision]
+     - values inherited from the parent group (username, identity or key, port, Host
+       Chaining) are shown as a placeholder "from group X". A value entered in the host
+       overrides the inherited one (see 3.4); [decision]
+     - in a team vault, a host may have no credentials: each member attaches their own
+       SSH ID or identity (see 2.6). [decision]
    - "Show more" expands additional settings, one field per line:
      - Agent Forwarding: on/off, off by default;
      - Startup snippet: a snippet that runs right after login;
@@ -194,6 +312,11 @@ The same form is used for creating and editing; it opens in the details panel.
      - Proxy: HTTP or SOCKS proxy for the connection;
      - Environment Variables: environment variables for the session;
      - Charset: encoding, UTF-8 by default;
+     - Keepalive: interval in seconds; empty means the global value (see 12.4); [decision]
+     - Record history: As in settings / On / Off, "As in settings" by default
+       (see 4.2, 12.4); [decision]
+     - Record output: As in settings / On / Off, "As in settings" by default
+       (see 11.2, 12.6); [decision]
      - Mosh: on/off, off by default;
      - terminal theme for this host: a preview thumbnail + name; clicking it
        opens theme selection. The theme set is our own; dark theme by default.
@@ -201,34 +324,60 @@ The same form is used for creating and editing; it opens in the details panel.
 7. The **Connect** button is pinned to the bottom of the panel. Disabled until the address is filled in.
 
 ### 3.2 Behavior
+
+- The saving rule from 1.3 applies. The only required field of a host is the address. [decision]
 - Changes are saved automatically; there is no separate save button.
-- A new host appears in the list as soon as the address is entered. [decision]
+- A new host appears in the list as soon as a valid address is entered. [decision]
 - If the address is empty and the panel is closed, the draft is discarded without prompting. [decision]
 
 ### 3.3 "…" menu in the host panel header
+
 1. Connect.
 2. Add Telnet.
 3. Duplicate.
 4. Remove.
+
+### 3.4 Group panel [decision]
+
+- Opens in the details panel when a group is created (New Group, 2.2) or edited (Edit in the
+  group menu). The saving rule from 1.3 applies; the only required field is Name.
+- Blocks from top to bottom:
+  1. **Vault**.
+  2. **Name**: required.
+  3. **Parent Group**: group selection with search; empty means the top level.
+  4. **Color**: one of the 8 tile colors (`docs/design-system.md`, 3.1), graphite by default.
+  5. **SSH**: username, identity or key, port, Host Chaining.
+- Inheritance: the values of the SSH block apply to the hosts and subgroups inside the group.
+  A host or subgroup without its own value uses the value of the nearest parent group that
+  sets one. In host and group forms, an inherited value is shown as a placeholder
+  "from group X", where X is the group the value comes from.
+- Group menu (right-click on a group card, and the "…" menu in the panel header): Open, Edit,
+  Move to, Remove.
+- Removing a group asks for confirmation. If the group is not empty, the dialog says that its
+  subgroups and hosts will move one level up; the group is removed after that.
 
 ---
 
 ## 4. Terminal session
 
 ### 4.1 Session window
+
 - The terminal occupies the entire area below the top bar. There is no Vaults sidebar
   and no borders, only a small inner padding.
 - The terminal theme from the host settings, or the default theme, is applied.
+- While the session connects, the tab shows the connection screen (see 4.8). [decision]
 - After connecting, only what the server sends (MOTD, etc.) is displayed,
   without the application's own banners.
 - Input focus is in the terminal immediately.
 
 ### 4.2 Terminal sidebar
+
 - Opened and hidden with a button in the top bar (see 1.1). The sidebar is on the right;
   the terminal narrows rather than being overlapped.
 - At the top there is a row of icon tabs: Tools, Snippets, History, Appearance.
 
 **Tools tab:**
+
 - search in terminal output (Ctrl+Shift+F) with "previous" and
   "next match" buttons. Matches are highlighted in the terminal;
 - Autocomplete: a dropdown of modes, off by default.
@@ -236,11 +385,13 @@ The same form is used for creating and editing; it opens in the details panel.
   marked as beta in the UI. [decision on the suggestion source]
 
 **Snippets tab** [decision]:
+
 - list of snippets with search;
 - clicking inserts the snippet into the terminal without executing it;
 - the "run" button inserts the snippet and immediately sends Enter.
 
 **History tab:**
+
 - history search;
 - list of entered commands, newest first. Clicking inserts the command into the terminal
   without executing it; [decision]
@@ -249,38 +400,54 @@ The same form is used for creating and editing; it opens in the details panel.
   and "Save" buttons. A dismissed hint is no longer shown for this
   host; [decision]
 - **Mandatory security requirements:**
-  - do not record in history input entered while echo is off: password prompts
-    from `su`, `sudo`, `passwd`, key passphrase prompts, etc.
-    Indicators: the server does not echo the typed characters, the last line
-    of output looks like a password prompt (`password:`, `passphrase`);
+  - a command is the logical line in the terminal buffer at the moment Enter is pressed,
+    without the prompt. The prompt ends at the cursor position where the first character of
+    the command was typed; [decision]
+  - nothing is recorded in history [decision]:
+    - in the alternate screen (full-screen programs such as vim or htop);
+    - while the server does not echo the typed characters;
+    - after a line of output that looks like a prompt for a password, passphrase, PIN or
+      one-time code (`password:`, `passphrase`, `PIN`, `OTP`), for example from `su`,
+      `sudo`, `passwd` or a key passphrase prompt;
+  - detecting commands and prompts this way is a heuristic with known limits. Prompt
+    marking with OSC 133 is not in the MVP; [decision]
   - strip bracketed paste control sequences (`ESC[200~`,
     `ESC[201~`) and other escape codes. History stores only the clean text of the
     command;
+  - commands that look like secrets are not stored at all. A command looks like a secret
+    if it contains `-p<value>` (a value right after `-p`), `--password`, `*PASSWORD=`,
+    `TOKEN=`, `SECRET`, `API_KEY`, `user:pass@`, `Authorization:` or `Bearer`, a known token
+    prefix, or a high-entropy string of 20 or more characters. The same filter applies when
+    shell history is imported (see 12.4); [decision]
   - history is stored encrypted, like the rest of the data. History sync
     between devices is off by default;
-  - history recording can be disabled for an individual host. Any entry can be
-    deleted, and the entire history of a host can be cleared;
+  - history recording is set globally (see 12.4) and can be overridden for an individual
+    host (Record history, see 3.1). Any entry can be deleted, and the entire history of a
+    host can be cleared; [decision on the global setting]
   - the "save as snippets" hint never suggests entries that look
     like secrets.
 
 **Appearance tab:**
-  - the Font row with an arrow leads to font settings: family, size,
-    line spacing; [decision]
-  - Themes list: each theme has a preview thumbnail in its colors and a name.
-    The current theme is highlighted. Clicking immediately applies the theme to the session and saves it
-    in the host settings; [decision]
-  - there are no theme popularity counters, because they would require telemetry.
-    Themes added in the latest update are marked "new"; [decision]
-  - theme set: our own dark and light defaults plus popular
-    open color schemes with compatible licenses. Check the license of each scheme
-    and list it in THIRD_PARTY_NOTICES.
+
+- the Font row with an arrow leads to font settings: family, size,
+  line spacing; [decision]
+- Themes list: each theme has a preview thumbnail in its colors and a name.
+  The current theme is highlighted. Clicking immediately applies the theme to the session and saves it
+  in the host settings. Imported themes (see 12.4) are in the same list; [decision]
+- there are no theme popularity counters, because they would require telemetry.
+  Themes added in the latest update are marked "new"; [decision]
+- theme set: our own dark and light defaults plus popular
+  open color schemes with compatible licenses. Check the license of each scheme
+  and list it in THIRD_PARTY_NOTICES.
 
 ### 4.3 Mouse in the terminal
+
 - Right-click pastes text from the clipboard. Multi-line paste
   requires confirmation (see SPEC.md).
 - If copy-on-select is enabled, selecting with the mouse copies the text immediately. [decision]
 
 ### 4.4 Session tab context menu
+
 1. Duplicate: a new session to the same host in a new tab.
 2. Duplicate in a new window: the same, but in a new application window.
 3. Start multiplayer: real-time collaboration in a session.
@@ -288,10 +455,14 @@ The same form is used for creating and editing; it opens in the details panel.
    by invitation. The invitee sees the output and can enter commands only
    with the session owner's permission. [decision]
 4. Rename: rename the tab. The host itself is not renamed.
-5. Split horizontally: split the tab. [decision: Split vertically is also available]
-6. Close.
+5. Split horizontally: a new pane below the current one (Ctrl+Shift+E, see 4.7). [decision]
+6. Split vertically: a new pane to the right of the current one (Ctrl+Shift+D,
+   see 4.7). [decision]
+7. Broadcast input: shown only on a tab with splits (see 4.7). [decision]
+8. Close.
 
 ### 4.5 Workspaces
+
 - Workspace: a saved set of tabs and splits with linked hosts.
   Opening a workspace restores the tabs and layout and connects
   to the hosts.
@@ -304,38 +475,96 @@ The same form is used for creating and editing; it opens in the details panel.
   via Ctrl+K search. [decision]
 
 ### 4.6 Session termination and connection drop
+
 - **Normal termination** (`exit`, `logout`, the server closed the channel with code 0):
-  the tab closes by itself. The neighboring tab becomes active: the one on the left,
-  or, if there is none, the one on the right. If no session tabs remain, Vaults opens.
-- **Unexpected drop** (network, keepalive timeout, non-zero exit code) [decision]:
+  the tab closes by itself.
+- **Non-zero exit code** [decision]: the session has ended, not dropped. The tab does not
+  close, the output is preserved, and the message "Session ended with code N" with the
+  "Reconnect" and "Close" buttons is shown over the terminal. Automatic reconnection does
+  not start.
+- **Unexpected drop**: only a transport error, such as a network failure, a keepalive
+  timeout, or a connection closed without an exit code [decision]:
   - the tab does not close, and the output is preserved;
   - a message with the reason and "Reconnect"
     and "Close" buttons is shown over the terminal;
-  - automatic reconnection with increasing delay is enabled
-    in the settings.
+  - if Autoreconnect is on (see 12.4, on by default), reconnection attempts start
+    automatically with delays of 1, 2, 4, 8, 16 and 32 seconds, and then every
+    60 seconds. The message shows a countdown to the next attempt and a "Cancel" button
+    that stops the automatic attempts; [decision]
+  - while the app is locked, reconnection waits for unlock (see 13.3). [decision]
+- **Next active tab** [decision]: when the active session tab closes for any reason
+  (normal termination, "Close", the tab's close button, Ctrl+Shift+W), the neighboring
+  session tab becomes active: the one on the left, or, if there is none, the one on the
+  right. The persistent Vaults and SFTP tabs do not count as neighbors. If no session tabs
+  remain, Vaults opens.
+- **Exit confirmation** [decision]: Exit (1.4) and closing a window while sessions, port
+  forwards or file transfers are active ask for confirmation first.
 
 ### 4.7 Splits [decision]
-- A tab can be split into panes horizontally and vertically: via the tab
-  menu or with keyboard shortcuts (configurable).
+
+- A tab can be split into panes horizontally (a new pane below, Ctrl+Shift+E) and
+  vertically (a new pane to the right, Ctrl+Shift+D): via the tab menu (4.4) or with
+  keyboard shortcuts (configurable, see 12.5). [decision on the shortcuts]
+- A new pane shows host selection as on the new tab page (section 6): a search field and
+  Recent connections. Choosing a host connects in that pane. [decision]
 - The border between panes can be dragged. The active pane is highlighted.
   Focus is switched by clicking or with Ctrl+Alt+arrows (see 12.5).
 - Each pane has its own session, to the same host or to a different one.
+- **Broadcast input** [decision]: turned on and off with the "Broadcast input" item in the
+  tab menu (4.4). While it is on, keyboard input in the active pane is also sent to all
+  other panes of the tab, and these receiving panes are marked with a border.
+
+### 4.8 Connecting and authentication [decision]
+
+- **Connection screen.** While a session connects, the tab (or the split pane) shows a
+  screen instead of the terminal: the host name and address, the current step (for example
+  connecting, checking the host key, authenticating, opening the session) and a "Cancel"
+  button. The status indicator shows "connecting" (`docs/design-system.md`, 3.3). "Cancel"
+  stops the attempt, and the screen switches to the failure state described below.
+- **Host key.** At the host key step, the dialogs from 10.2 appear when needed.
+- **Prompts.** When a value is needed, a form appears on the connection screen:
+  - username: when neither the address, the host, its group nor its identity sets one
+    (for example, a quick connect to a bare `host`, see 2.1);
+  - password;
+  - key passphrase: when the key is encrypted and its passphrase is not saved (see 7.3);
+  - keyboard-interactive: the server's questions are shown one at a time, with the
+    server's name and instruction text above them. An answer is masked when the server
+    marks the question as not echoed. One-time codes (2FA) are asked this way.
+- Each form has "Continue" (Enter) and "Cancel" buttons. The password and passphrase forms
+  have a "Save" checkbox, off by default. When it is checked, the value is saved in the
+  encrypted storage for this host or key. For a quick connect without a saved host, the
+  checkbox is not shown.
+- When a prompt is needed outside a terminal tab (an SFTP panel, a forwarding rule, a
+  snippet run with a results table), the same form opens as a modal dialog.
+- A wrong password or passphrase shows an error in the same form, and the user can try
+  again until the server closes the connection.
+- **Failure.** If the connection cannot be established (the address is not found, the
+  connection is refused or times out, authentication fails, the host key is rejected),
+  the screen shows the reason with "Retry" and "Close" buttons. Automatic reconnection
+  (4.6) does not apply to the first connection attempt.
 
 ---
 
 ## 5. SFTP manager (SFTP tab)
 
 ### 5.1 Layout
+
 - Two panels of equal width. Each panel is an independent file source:
   the local computer or a remote host.
 - By default, the left panel shows the local file system and the right panel is empty.
+- **SFTP session tabs** [decision]: "Connect via SFTP" (2.4) opens a new session tab with
+  the same dual-pane manager: Local on the left, the host on the right. The persistent SFTP
+  tab (1.1) stays for manual work and is not changed.
+- Every SFTP tab has the transfer queue panel at the bottom (see 5.6). [decision]
 
 ### 5.2 Empty panel
+
 - In the center: a folder icon, a heading prompting the user to connect to a host,
   one line of explanation and a host selection button.
 - The button opens a list of saved hosts with search. [decision]
 
 ### 5.3 Panel with files
+
 - Header:
   - the source icon and name (Local or the host name). Clicking it lets you
     change the source; [decision]
@@ -361,29 +590,37 @@ The same form is used for creating and editing; it opens in the details panel.
 - Double-clicking a folder opens it. Double-clicking a file performs
   the Open action (see 5.4). [decision]
 - Dragging files between panels copies them through the transfer queue
-  (see SPEC.md, SFTP section).
+  (see 5.6). Name conflicts are handled as described in 5.7. [decision]
 
 ### 5.4 File context menu (right-click)
-1. Open: open in the program the system assigns to this file type.
+
+1. Open: open in the program set in "Program for Open" (see 12.6) or, if it is empty, in
+   the program the system assigns to this file type. [decision]
    A remote file is downloaded to a temporary folder, changes are tracked
-   and uploaded back to the server, and a notification is shown for each upload. [decision]
+   and uploaded back to the server, and a notification is shown for each upload (see 1.5). [decision]
+   The temporary copy is not encrypted, so Open shows a warning about it. The copy is
+   deleted when the file is closed and when the app exits. [decision]
 2. Open with…: the same, but with a choice of program.
 3. Copy to target directory: copy the selection to the current folder
    of the opposite panel.
 4. Rename.
-5. Delete: shown in the danger-action color, performed after confirmation.
+5. Delete: shown in the danger-action color, performed after confirmation
+   (the confirmation can be turned off, see 12.6). [decision]
 6. Refresh.
 7. New Folder.
 8. Edit Permissions: access permissions dialog (see below).
 
 Edit Permissions dialog [decision]:
+
 - rwx checkboxes for the owner, group and others;
 - a synchronized field with the octal value;
 - for folders there is an "apply recursively" option.
 
 ### 5.5 Actions menu in the panel header
+
 The same items as in the context menu (they act on the selection), plus:
-- Show Hidden Files: a toggle for showing hidden files;
+
+- Show Hidden Files: a toggle for showing hidden files (off by default, see 12.6); [decision]
 - Select All;
 - Close: close the connection in this panel (danger-action color).
   The panel returns to the empty state from 5.2.
@@ -391,15 +628,42 @@ The same items as in the context menu (they act on the selection), plus:
 Items that require a selection are disabled without one. [decision]
 In the local panel on Windows, the Edit Permissions item is hidden. [decision]
 
+### 5.6 Transfer queue [decision]
+
+- A collapsible panel at the bottom of an SFTP tab. It appears when the first transfer is
+  added. When collapsed, it shows only a header with the number of active transfers.
+- One row per transfer: file or folder name, direction (upload, download, or remote to
+  remote), progress, speed.
+- Row buttons: "Pause" and "Resume" for an active transfer, "Cancel", and "Retry" for a
+  failed one.
+- At most N transfers run at the same time (see 12.6, 3 by default); the rest wait in the
+  queue.
+- Finished transfers stay in the list until they are removed with a "Clear finished" button.
+
+### 5.7 Name conflict dialog [decision]
+
+- Shown when a copied file has the same name as a file in the target folder and the action
+  on name conflicts is "Ask" (see 12.6, the default).
+- Shows the file name and, for both files, the size and the modification date.
+- Buttons:
+  - Replace: overwrite the file in the target folder;
+  - Skip: do not copy this file;
+  - Rename: keep both; the copied file gets a free name with a number, for example
+    `report (1).txt`.
+- The "Apply to all" checkbox applies the choice to the remaining conflicts of the same
+  operation.
+
 ---
 
 ## 6. New tab page
+
 - Opened with the "+" button in the top bar.
 - Until a host is selected, the tab is named "New Tab". After selection, the session
   opens in the same tab. [decision]
 - At the top center, a search field for hosts and open tabs with a hint for the
   Ctrl+K key; focus is placed in it immediately. Ctrl+K from anywhere in the app
-  opens the same search. [decision on the global Ctrl+K]
+  opens the same search; when the terminal has focus, Ctrl+Shift+K does (see 12.5).
+  [decision on the global Ctrl+K and on Ctrl+Shift+K]
 - Below it, the Recent connections block:
   - row: OS icon, host name (or address), and on the right the path "vault / group";
   - clicking connects in this tab;
@@ -416,7 +680,9 @@ In the local panel on Windows, the Edit Permissions item is hidden. [decision]
 ## 7. Keychain screen
 
 ### 7.1 Action bar
+
 On the left:
+
 - **New key** split button. The main part opens, in the details panel, a form
   for adding an existing key: paste text, choose a file, or drag a
   file into the form. [decision on drag & drop] The arrow opens a menu:
@@ -432,6 +698,7 @@ by creation date, by modification date). The same sort icon is used
 on the Hosts screen. [decision]
 
 ### 7.2 Content
+
 - The **Keys** section, with **Identities** below it. The card grid is the same as
   on the Hosts screen.
 - Key card: icon, label, subtitle "Type" + type (ED25519, RSA,
@@ -446,7 +713,9 @@ on the Hosts screen. [decision]
   "Import from ~/.ssh". [decision]
 
 ### 7.3 Key panel (creation and editing)
+
 Blocks from top to bottom:
+
 1. Vault.
 2. Label, a required field.
 3. Private key, a required field, multi-line, monospace font.
@@ -459,7 +728,11 @@ Blocks from top to bottom:
 The "…" menu in the header: Duplicate, copy public key, export
 to file, Remove. [decision]
 
+The saving rule from 1.3 applies: the key is created once Label and Private key are
+valid. [decision]
+
 **Mandatory security requirements:**
+
 - The private key contents are **hidden** by default. Instead of the text, the
   type, fingerprint and a note that the key is hidden are shown.
 - The key can be shown only with an explicit button. When the user leaves
@@ -473,9 +746,10 @@ to file, Remove. [decision]
   by a passphrase". When exporting to a file, the user is offered to set a passphrase.
 - The passphrase of an encrypted key is requested on import. The user
   chooses: save it in the encrypted storage or enter it on every
-  connection.
+  connection (the prompt is described in 4.8).
 
 ### 7.4 Identity panel [decision]
+
 - Fields: label, username, password, linked key or certificate.
 - At the bottom, a list of hosts that use this identity. Clicking one opens the host.
 
@@ -484,12 +758,14 @@ to file, Remove. [decision]
 ## 8. Port Forwarding screen
 
 ### 8.1 Action bar
+
 - **New forwarding** split button: the main part launches the wizard
   (8.3). The arrow opens a menu: create Local, Remote or Dynamic directly
   without the wizard. [decision]
 - On the right: search, tile/list toggle, sorting.
 
 ### 8.2 Content
+
 - A section with the list of rules as a grid of cards.
 - Rule card:
   - a square badge with the type letter: L, R or D;
@@ -499,9 +775,12 @@ to file, Remove. [decision]
 - A single click shows details in the details panel. A double click starts
   or stops the rule. [decision]
 - Right-click [decision]: Start/Stop, Edit, Duplicate, Move to, Copy to, Remove.
+  Move to and Copy to another vault go through the dialog in 2.6. [decision]
 
 ### 8.3 Wizard
+
 **Step 1: choosing the type**
+
 - Vault.
 - Local / Remote / Dynamic segmented toggle.
 - Below it, a traffic direction diagram for the selected type. The diagram is our own;
@@ -517,6 +796,7 @@ to file, Remove. [decision]
 
 **Next steps** [decision]: one question per screen; you can go back
 at any step.
+
 - Local:
   1. via which host;
   2. local address and port (default address 127.0.0.1);
@@ -536,9 +816,11 @@ at any step.
   "Create and start" buttons.
 
 ### 8.4 Full form (Skip wizard and editing) [decision]
+
 - All wizard fields on one screen.
 - Additionally: start the rule automatically when connecting to the host,
-  start on application launch.
+  start on application launch. While the app is locked, autostart waits for
+  unlock (see 13.3). [decision]
 - If the local port is busy, a clear error with the port number and a suggestion
   to choose another one.
 - The default bind address is always 127.0.0.1. Opening the port on all interfaces
@@ -549,7 +831,9 @@ at any step.
 ## 9. Snippets screen
 
 ### 9.1 Action bar
+
 On the left:
+
 - **New snippet** split button. The main part creates a snippet; the arrow
   opens a menu with the **New snippet package** item. A package is a folder for
   grouping snippets.
@@ -560,15 +844,18 @@ On the left:
 On the right: search, tile/list toggle, sorting.
 
 ### 9.2 Content
+
 - Packages at the top (like groups on the Hosts screen), the Snippets section below. [decision on packages]
 - Snippet card: icon, label, and if the label is empty, the first line of the script.
-  A new unsaved snippet has a placeholder prompting to set a label
-  or a script.
+  While a new snippet is a draft (see 1.3), its card shows a placeholder prompting to set
+  a label or a script. The snippet is created once the script is filled in. [decision]
 - Clicks and the context menu are the same as for hosts. A double click runs
   the snippet on its target hosts. [decision]
 
 ### 9.3 Snippet panel (creation and editing)
+
 Blocks from top to bottom:
+
 1. Vault.
 2. A hint about generating a script from a description. Shown once,
    dismissed with the "got it" button.
@@ -576,10 +863,13 @@ Blocks from top to bottom:
    - **Action description**: the snippet label. On the right inside the field, a button
      for generating a script from the description;
    - **Package**: package selection;
+   - **Tags**: chips with autocomplete and creation of new tags on the fly, as in the host
+     panel (3.1); [decision]
    - **Script**: required, multi-line field, monospace font,
      shell syntax highlighting. `{{name}}` variables are highlighted
      and requested via a form at run time. [decision on highlighting]
-4. **Share this snippet**: disabled until the snippet is saved.
+4. **Share this snippet**: opens the "Move or copy to a vault" dialog (see 2.6). Disabled
+   until the snippet is saved. [decision]
 5. **Targets for execution**:
    - a short explanation;
    - a list of target hosts (icon, address or label, protocol);
@@ -589,6 +879,7 @@ Blocks from top to bottom:
    one target.
 
 ### 9.4 Running on multiple hosts [decision]
+
 - Up to 4 targets: a new tab split into panes, one session per host.
   The script runs in each.
 - More than 4 targets: a tab with a results table. For each host, the
@@ -597,6 +888,7 @@ Blocks from top to bottom:
 - Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
 ### 9.5 Script generation from a description [decision, later stage]
+
 - Off by default. Enabled in settings by specifying a provider:
   your own API key for an LLM or a local model.
 - The description is sent to the provider only on an explicit press of the
@@ -609,18 +901,28 @@ Blocks from top to bottom:
 ## 10. Known Hosts screen
 
 ### 10.1 List
-- Action bar: the **Import** button imports a known_hosts file in OpenSSH
-  format (`~/.ssh/known_hosts` is suggested by default). On the right: search,
-  view toggle, sorting.
+
+- Action bar: the **Import** button opens the import dialog (2.5) with the known_hosts
+  source; `~/.ssh/known_hosts` is suggested by default. On the right: search,
+  view toggle, sorting. [decision]
 - Grid of cards: fingerprint icon and address in OpenSSH format. For port 22
   it is `host`, for others `[host]:port`.
+- Hashed entries (`|1|…`) are stored as they are, because their address cannot be
+  recovered. Their card shows "Hashed entry" and the key type instead of the address. On
+  connect, the address is hashed (HMAC) and compared with these entries. [decision]
+- `@revoked` entries are imported as revoked keys and marked with a "revoked" badge.
+  `@cert-authority` entries are skipped, and the import summary shows how many were
+  skipped. [decision]
 - A click opens the details panel [decision]: address, port, key type, SHA256
   fingerprint with a copy button, date added, saved hosts with this
   address, Remove button.
 - Right-click [decision]: copy fingerprint, Remove.
-- Export to the known_hosts format. [decision]
+- Export to the known_hosts format. Hashed entries are exported as they are. [decision]
+- Connections check host keys only against this list. The system `~/.ssh/known_hosts` is
+  not read when connecting; it can only be imported. [decision]
 
 ### 10.2 First connection and key change [decision]
+
 - The first connection (TOFU) opens a dialog: address, key type, fingerprint.
   Buttons: "Accept and save" (default), "Connect once",
   "Cancel".
@@ -629,122 +931,190 @@ Blocks from top to bottom:
   - the old and new fingerprints and an explanation about a possible attack are shown;
   - continuing is possible only via the explicit "Replace saved key" button;
   - there are no checkboxes like "don't ask again".
+- If the host key is in the list as revoked (10.1), the connection is blocked with a warning
+  in the danger color. There is no button to continue. [decision]
 
 ---
 
 ## 11. Logs screen
+
 Connection log in the form of a table.
 
 ### 11.1 Columns
+
 - **Date** with a sort order toggle:
   - session start date;
   - below it, start and end time. If the session ended on the next day,
     "(+1d)" is appended;
   - for an active session, "now" is shown instead of the end time. [decision]
-- **User**: avatar and account (in a team vault you can see who connected),
-  device name below it. The client IP address is not collected or shown. [decision]
+- **User**: avatar and account, device name below it. The client IP address is not
+  collected or shown. [decision]
+  - In a team vault, the log shows only the entries of members who turned on publishing
+    for that vault (see 12.3). [decision]
+  - Until shared vaults are implemented (stage 8), the column shows the current
+    device. [decision]
 - **Host**: OS icon, host name, protocol and user below it.
 - **Saved**: bookmark button. Saved entries are not removed by auto-cleanup.
   Clicking the column header shows only saved entries. [decision]
 
 ### 11.2 Actions [decision]
-- Clicking a row: if session output recording is enabled for the host, the
-  session log opens read-only, with search and export to .txt. If recording
-  is disabled, connection details are shown.
-- The log is stored locally. Log sync is enabled separately (see 12.2).
+
+- Clicking a row: if the session output was recorded (the global setting in 12.6 or the
+  host's Record output override in 3.1), the recording opens read-only, with search and
+  export to .txt. If it was not recorded, connection details are shown.
+- Export to .txt writes unencrypted text, so a warning is shown first.
+- Recordings are stored encrypted and are never synced.
+- The log is always written to the personal vault and stored encrypted. Syncing it between
+  devices is turned on separately (see 12.2).
 
 ---
 
 ## 12. Settings
 
 ### 12.1 Settings window
+
 - Opens with Ctrl+, or from the application menu. A modal window on top of the
   application, closed with the X button or Esc. [decision on Esc]
 - Navigation on the left, section content on the right. They scroll independently.
 - Changes apply immediately; there is no "Save" button. [decision]
 - Navigation sections from top to bottom:
   1. Account & Sync;
-  2. SSH ID;
-  3. Team;
-  4. Terminal;
-  5. SFTP;
-  6. Logs;
-  7. Shortcuts;
-  8. Theme: a dropdown right in the navigation (Auto / Light / Dark);
-  9. external links with an external-window icon: Documentation, Report a Bug,
-     Changelog (they lead to the project repository);
-  10. the application version at the bottom.
+  2. Security (see 13.4); [decision]
+  3. SSH ID;
+  4. Team;
+  5. Terminal;
+  6. SFTP;
+  7. Logs;
+  8. Shortcuts;
+  9. Updates (see 12.7); [decision]
+  10. Theme: a dropdown right in the navigation (Auto / Light / Dark);
+  11. external links with an external-window icon: Documentation, Report a Bug,
+      Changelog (they lead to the project repository);
+  12. the application version at the bottom.
 
 ### 12.2 Account & Sync
+
 The application works without an account. With no server connected, this section has only
-the "Connect sync server" button and data export.
+the "Connect sync server" button (it opens the wizard, see 13.5) and data export. [decision]
 
 With a connected server:
+
 - server address; account email marked "verified / not verified";
-  email change;
+  email change. The mark is hidden when the server has no email (SMTP) set up; [decision]
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
   (principle 3 in SPEC.md);
-- master password change (with key re-encryption);
-- viewing and reissuing the recovery key;
+- master password change and the recovery key are in Settings → Security (see 13.4),
+  because they exist without a server too; [decision]
 - deleting the account on the server. The local copy is kept in that case.
+  If the account is the only owner of a team vault, deletion is blocked until ownership is
+  transferred to another member (see 12.3). [decision]
 
 **Synchronization** block:
+
+- the toggles are set for this device and apply both to sending and to receiving changes.
+  Turning a toggle off stops syncing that type but does not delete data from the
+  server; [decision]
+- the toggles apply to the personal vault. Team vaults always sync in full; [decision]
 - toggles for what to sync:
   - hosts and groups (on by default);
   - keys and identities (on by default);
   - snippets (on by default);
   - forwarding rules (on by default);
+  - known hosts (on by default); [decision]
+  - workspaces (on by default); [decision]
+  - custom terminal themes (on by default); [decision]
+  - keyword highlighting rules (on by default); [decision]
   - command history (**off** by default);
   - connection log (**off** by default);
+- app settings are not synced; they stay on each device. Session output recordings are
+  never synced (see 11.2); [decision]
 - time of the last sync and errors, if any;
+- a "Conflicts: N" row, shown while there are unresolved conflicts. A click opens the list
+  of conflicts (see 13.6); [decision]
 - "Sync now" button.
 
 Also:
+
 - a button to export all data (plain or encrypted JSON, ssh config).
-  Always available;
+  Always available. A plain JSON export contains secrets in unencrypted form, so a warning
+  is shown first; [decision]
 - no trials, pricing plans or purchase buttons.
 
 ### 12.3 SSH ID and Team [decision]
-- **SSH ID**: the user's personal key tied to the account on the server.
-  When a colleague shares a host, you connect with your own key, and the owner's
-  secrets are not transferred. Here you can view and copy the public key
-  and upload it to hosts.
-- **Team**: vault members, invitation by email or link, owner /
-  editor / viewer roles, removing a member with vault key rotation (see SPEC.md).
+
+- **SSH ID**: the user's personal Ed25519 key, stored in the personal Keychain. Only its
+  public part is published to the server. When a host in a team vault has no credentials,
+  each member connects with their own SSH ID or identity (see 2.6), so no shared password or
+  key is needed. Here you can view and copy the public key and upload it to hosts.
+- **Team**:
+  - vault members with the owner / editor / viewer roles. A vault can have several owners;
+  - next to each member, the fingerprint of their key, for comparison outside the server
+    (for example, in person or by phone). The key is pinned on first use;
+  - invitation in two steps:
+    1. the owner creates an invitation link. The link carries only a one-time id, never a
+       key. If the server has email (SMTP) set up, the invitation can also be sent by
+       email; otherwise only the link is available;
+    2. after the invitee accepts, the owner compares the invitee's key fingerprint and
+       confirms. Only then does the invitee get access to the vault;
+  - the invitation dialog says plainly that every member, viewers included, receives all
+    secrets of the vault (passwords and keys of its hosts);
+  - removing a member creates a new vault key, and the owner's app re-encrypts the vault's
+    records in the background (see SPEC.md). The dialog suggests changing the passwords and
+    keys of the vault's hosts, because the removed member has seen them;
+  - a removed member keeps the vault as a read-only local archive with "Export" and "Copy
+    to personal vault" actions (principle 3 in SPEC.md);
+  - "Publish my connection log": a toggle for each team vault, off by default. When it is
+    on, your log entries for this vault's hosts are visible to its members (see 11.1).
+    Viewers can publish too.
 
 ### 12.4 Terminal
 
 **"Terminal" block:**
+
 - Autocomplete (beta): dropdown, off by default. Later stage.
 - Autoreconnect: toggle, on by default (see 4.6).
+- Record command history: toggle, on by default. A host can override it (see 3.1). [decision]
 - Import shell history: pull history from the server's `~/.bash_history` and
   `~/.zsh_history` into the History panel. **Off** by default,
   because such files often contain secrets. On import, the same
-  filters as in 4.2 apply. [decision]
+  filters as in 4.2 apply, and commands that look like secrets are skipped. [decision]
 - Copy on select: toggle. Right-click always pastes text (see 4.3). [decision]
 - Bell sound: off by default.
 - Bright colors for bold text: toggle.
+- Cursor style: block / bar / underline, block by default; Blinking: toggle, off by
+  default. [decision]
 - Terminal emulation type: the TERM value, `xterm-256color` by default.
   Options: `xterm`, `xterm-256color`, `vt100`, `linux`.
 
 **Font block:**
+
 - font selection: search across installed monospace fonts and bundled
   open-source fonts;
 - text size: −/+ buttons and a number field, 14 by default.
 
-**"Terminal theme" block:** the default theme for new hosts. The selection is the same
-as in 4.2.
+**"Terminal theme" block:**
+
+- the default theme for new hosts. The selection is the same as in 4.2;
+- "Import theme…": imports `.itermcolors` files and Windows Terminal color schemes. They
+  are converted to the app's own theme format (`docs/design-system.md`, §7) and appear in
+  the theme lists (4.2). Imported themes are stored as records and synced
+  (see 12.2). [decision]
 
 **"Keyword highlighting" block:**
+
 - global toggle, on by default;
-- categories with color selection: Error, Warning, OK, Info, Debug, IP and MAC addresses;
+- categories with color selection: Error, Warning, OK, Info, Debug, IP and MAC addresses.
+  Each category has a default color for dark and for light backgrounds; which one is used
+  depends on the brightness of the terminal theme's background, not on the interface
+  theme. Colors are stored as hex values; [decision]
 - custom rules: regex + color + on/off; [decision]
 - highlighting changes only the display, not the data. In full-screen programs
   (alternate screen: vim, htop) it is disabled. [decision]
 
 **"OS detection" block:**
+
 - explanation: on the first connection to a host, a short script runs
   that detects the OS for the icon. The script runs only if the server
   did not report the OS itself;
@@ -756,16 +1126,21 @@ as in 4.2.
 
 **"Local terminal shell" block:** a dropdown of detected
 shells plus a custom path.
+
 - Windows: PowerShell, PowerShell 7, cmd, WSL distributions, Git Bash.
 - macOS and Linux: shells from `/etc/shells`.
 
 **"Keepalive" block:**
+
 - explanation: how often (in seconds) to send SSH keepalive; 0 means
   "off";
 - Interval field, 30 by default, so that connection drops are detected in time. [decision]
+- A host can override the interval (see 3.1). [decision]
 
 ### 12.5 Shortcuts
-- At the top, key set selection: PC or Mac. [decision on key sets]
+
+- At the top, key set selection: PC or Mac. The default is Mac on macOS and PC on Windows
+  and Linux. [decision on key sets]
 - Shortcut | Action table:
   - clicking a shortcut starts recording a new shortcut;
   - conflicts are highlighted;
@@ -777,17 +1152,19 @@ Default set for Windows/Linux:
 |---|---|
 | Ctrl+1…9 | go to tab N (1 = Vaults, 2 = SFTP) |
 | Ctrl+Alt+arrows | focus between split panes |
+| Ctrl+Shift+D | split vertically: new pane to the right [decision] |
+| Ctrl+Shift+E | split horizontally: new pane below [decision] |
 | Ctrl+Shift+C | copy from the terminal |
 | Ctrl+Shift+V | paste into the terminal |
 | Ctrl+Shift+A | select all in the terminal |
 | unassigned | open the Hosts screen |
-| Ctrl+L | new local terminal |
+| Ctrl+L, Ctrl+Shift+L | new local terminal [decision on Ctrl+Shift+L] |
 | Ctrl+Alt+S | new serial connection |
 | Ctrl+Shift+W | close tab |
 | Alt+→ | next tab |
 | Alt+← | previous tab |
-| Ctrl+P | open Port Forwarding |
-| Ctrl+K | search hosts and tabs [decision] |
+| Ctrl+P, Ctrl+Shift+P | open Port Forwarding [decision on Ctrl+Shift+P] |
+| Ctrl+K, Ctrl+Shift+K | search hosts and tabs [decision] |
 | Ctrl+Shift+F | search in the terminal |
 | Ctrl+, | settings |
 
@@ -795,18 +1172,178 @@ Default set for Windows/Linux:
 with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous
 command, `Ctrl+K` deletes to the end of the line. When focus is in the terminal, such
 shortcuts go to the shell, not to the application. Application actions from the terminal
-are available via Ctrl+Shift shortcuts.
+are available via Ctrl+Shift shortcuts: Ctrl+Shift+L, Ctrl+Shift+P and Ctrl+Shift+K work
+everywhere.
 
-### 12.6 SFTP and Logs [decision, pages not reviewed]
+**Terminal focus** [decision]:
+
+- When focus is in the terminal, the app captures only: Ctrl+1…9, `Ctrl+,`, all Ctrl+Shift
+  shortcuts, Ctrl+Alt+arrows, Alt+← and Alt+→. Every other combination goes to the shell,
+  for example Ctrl+L or Ctrl+Alt+S.
+- Alt+← and Alt+→ move by words in readline; while they are assigned to tabs, the shell does
+  not get them. They can be reassigned in this table.
+- No shortcut fires while AltGr is active. On Windows, Ctrl+Alt equals AltGr on many
+  keyboard layouts, so the key types its character instead.
+
+**Mac set** [decision]:
+
+- App actions use Cmd instead of Ctrl (for example Cmd+1…9, `Cmd+,`, Cmd+K).
+- Ctrl+letter always goes to the shell.
+- Option types characters and is not used for app shortcuts.
+- The full Mac table is added to this section before stage 6.
+
+### 12.6 SFTP and Logs [decision]
+
 - **SFTP:**
-  - show hidden files by default;
-  - delete confirmation;
-  - action on name conflicts: ask, replace, skip or
+  - show hidden files: off by default;
+  - delete confirmation: on by default;
+  - action on name conflicts: ask (default, see 5.7), replace, skip or
     rename;
-  - number of parallel transfers;
-  - default program for Open with.
+  - number of parallel transfers: 3 by default (see 5.6);
+  - program for Open: empty by default, which means the program the system assigns to
+    the file type (see 5.4). "Open with…" always asks for a program.
 - **Logs:**
-  - connection log retention period (N days);
-  - session output recording. Off by default, with a warning
-    that output can contain secrets;
+  - connection log retention period: 90 days by default. Saved entries are kept
+    (see 11.1);
+  - session output recording: a global toggle, off by default, with a warning
+    that output can contain secrets. A host can override it (see 3.1). Recordings are
+    stored encrypted and are never synced;
   - clearing the log.
+
+### 12.7 Updates [decision]
+
+- Automatic update check: toggle, off by default. When it is on, the app checks the
+  update source at launch.
+- The explanation under the toggle says that a check is a plain request for the update
+  manifest, without any identifiers.
+- Update source: a URL field, the project repository's releases by default, with a
+  "Reset to default" button.
+- "Check now" button: the same action as Help ▸ Check for updates (1.4).
+- When an update is found, the update button appears in the top bar (1.1). An update whose
+  signature does not match the project's signing key is not installed.
+
+---
+
+## 13. Lock and account [decision]
+
+The master password is required from the first launch, even without an account and a
+server. The same password later becomes the password of the sync account. The key
+hierarchy is described in `docs/security.md`.
+
+### 13.1 First run
+
+- On the first launch, before any other screen, the app asks to create a master password:
+  - "Password" and "Confirm password" fields, masked, with show/hide buttons;
+  - "Continue" is enabled when both fields are filled in and match.
+- The screen always shows a warning, not a dismissible hint: without the master password
+  and the recovery key, the data cannot be recovered by anyone, including the server
+  administrator.
+- Next step, the recovery key:
+  - the key is shown as text in a monospace font, with a "Copy" button. The clipboard is
+    cleared after 30 seconds, as for private keys (see 7.3);
+  - the "I saved the recovery key" checkbox is required: "Finish" is disabled until it
+    is checked.
+- After "Finish", the Vaults tab opens with the empty Hosts screen (see 2.3).
+
+### 13.2 Unlock screen
+
+- Shown at every launch and after locking (see 13.3). It covers the whole content of the
+  window, including the tabs and any open dialogs; only the window buttons stay available.
+- Contents: the app name, the "Master password" field with focus in it, the "Unlock"
+  button (Enter) and a "Use recovery key" link.
+- A wrong password shows an error under the field; the field is cleared and keeps focus.
+- With "Remember on this device" on (see 13.4), the app unlocks at launch without asking
+  for the password. Lock and auto-lock still ask for the password.
+- **Use recovery key**: the user enters the recovery key, then a new master password and its
+  confirmation, and the app unlocks. With a sync server, recovery normally goes through the
+  server: the new password also becomes the account password, and other devices are signed
+  out, as after a password change (see 13.4).
+  - With a sync server, the dialog also shows the account email, pre-filled and editable. If
+    the server does not accept the key, the dialog says that the email may have changed on
+    another device, as well as that the key may be wrong.
+  - When the server cannot be reached or does not accept the recovery, the dialog offers to
+    recover only the data on this device: the new password unlocks the local copy, and this
+    device is signed out of the account until the user signs in with the account password
+    or recovers through the server.
+
+### 13.3 Lock and auto-lock
+
+- The app locks:
+  - with the Lock item in the app menu (see 1.4);
+  - automatically after the auto-lock interval without user input (see 13.4). Only keyboard
+    and mouse input in the app's windows counts; terminal output does not.
+- Locking applies to all windows at once.
+- On lock:
+  - the unlock screen (13.2) covers every window: terminal output, panels and dialogs are
+    hidden;
+  - established sessions, port forwards and running file transfers keep running;
+  - the vault keys and decrypted secrets are wiped from memory;
+  - everything that needs secrets waits for unlock: automatic reconnection (see 4.6) and
+    the autostart of forwarding rules (see 8.4).
+- After unlock, every window returns to the state it had before the lock.
+
+### 13.4 Security settings
+
+Settings → Security (see 12.1):
+
+- **Auto-lock**: a dropdown of intervals (1, 5, 15, 30 or 60 minutes), 15 minutes by default.
+  The "Never" option turns auto-lock off.
+- **Change master password**: the current password, the new password and its confirmation.
+  - Works without a server too. The change takes effect immediately.
+  - With a sync server, the change needs a connection to the server. Before confirming, a
+    warning says that other devices will be signed out and will ask for the new password.
+- **Recovery key**: "Show" and "Reissue", both after entering the master password.
+  "Reissue" creates a new key and shows it as in 13.1, with the required "I saved it"
+  checkbox; the old key stops working.
+- **Remember on this device**: toggle, off by default. When it is on, a device key is stored
+  in the OS keychain, and the app unlocks at launch without the password (see 13.2).
+  - Turning it on shows a warning: any program running under this OS user will be able to
+    unlock the data.
+  - Hidden when the OS has no keychain (for example, Linux without Secret Service) and in
+    unsigned macOS builds.
+  - Biometric unlock is a later stage and is hidden until then.
+
+### 13.5 Connect sync server wizard
+
+- Opened with "Connect sync server" (see 12.2). A modal dialog with steps; every step has a
+  "Back" button:
+  1. **Server**: the server URL. The app checks that the server responds and shows an error
+     if it does not.
+  2. **Sign in or register**:
+     - Sign in: the email and the account's master password;
+     - Register: the email and the current master password, entered again to confirm. If
+       the server allows registration only by invitation, an "Invite code" field is shown
+       and is required.
+  3. **TOTP**:
+     - sign in: a one-time code, if TOTP is enabled for the account;
+     - register: an offer to enable TOTP now (a QR code, the secret as text, and a code to
+       confirm). It can be skipped and enabled later (see 12.2).
+  4. **Recovery key** (registration only): the recovery key that now also protects the
+     account is shown with the required "I saved it" checkbox, as in 13.1. If the data on
+     this device was connected to another account before, registration creates a new
+     recovery key, and this step shows the new one.
+- The master password never leaves the device; the server receives only a key derived
+  from it.
+- Signing in to an existing account on a device that already has local data merges the
+  data: the local records are re-encrypted with the account's keys and merged with the
+  account's data, with deduplication as in import (see 2.5). From then on, this device uses
+  the account's master password. The wizard says this before the merge.
+- When the wizard finishes, sync starts, and Account & Sync (12.2) shows the connected
+  server.
+
+### 13.6 Sync conflicts
+
+- When sync keeps a losing version of an object, the object's card shows a conflict badge
+  in every list (hosts, groups, keys, identities, forwarding rules, snippets, known hosts),
+  and Account & Sync (12.2) shows "Conflicts: N".
+- A click on the badge, or on a conflict in the list opened from "Conflicts: N", opens the
+  comparison dialog:
+  - the two versions side by side: on the left, the current version; on the right, the
+    other version. Each shows the device and the time of the change, and fields that
+    differ are highlighted;
+  - passwords stay masked and private keys stay hidden (see 7.3);
+  - if one version is a deletion, its side says "Deleted";
+  - the "Keep this" button keeps the current version; the "Keep other" button replaces it
+    with the other version.
+- Closing the dialog without a choice leaves the conflict unresolved. After a choice, the
+  other version is deleted, and the badge disappears on all devices after the next sync.
