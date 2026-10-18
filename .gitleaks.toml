@@ -1,0 +1,6 @@
+# gitleaks configuration: default rule set plus project-specific allowlists.
+# Keep allowlist entries narrow and explain each one in the PR that adds it.
+title = "gitleaks config"
+
+[extend]
+useDefault = true

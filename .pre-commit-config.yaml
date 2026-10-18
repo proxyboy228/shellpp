@@ -1,0 +1,8 @@
+# Local hooks. Setup: see CONTRIBUTING.md ("Secret scanning").
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      # Builds gitleaks from source via pre-commit (Go toolchain is bootstrapped).
+      # If gitleaks is already on your PATH, you can use `gitleaks-system` instead.
+      - id: gitleaks
