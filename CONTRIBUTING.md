@@ -115,14 +115,22 @@ owned by your employer without permission.
 ### Dependencies
 
 Any new dependency (Rust crate, npm package, font, icon set or other
-third-party asset) must use a permissive license:
+third-party asset) that ships with the application or the server must use a
+permissive license:
 
 - MIT
 - Apache-2.0
 - BSD (2-clause or 3-clause)
 - ISC
 - MPL-2.0
+- Zlib, BSL-1.0, Unicode-3.0, CC0-1.0, Unlicense, 0BSD, CDLA-Permissive-2.0
+- public domain (for example SQLite)
 - OFL-1.1 (fonts only)
+
+Development-only dependencies that never ship (build, lint and test tools)
+may additionally use BlueOak-1.0.0 and CC-BY-4.0. GPL and AGPL code must not
+be shipped in the client. See `docs/decisions.md` (decision 4) for the
+background and for crate-specific rules, for example the `fips` feature ban.
 
 Add the dependency to `THIRD_PARTY_NOTICES.md` in the same pull request that
 introduces it, including its name, version, license and source URL.

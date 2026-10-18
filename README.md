@@ -14,7 +14,7 @@ Shell++ is a self-hosted, local-first SSH client. Desktop platforms (Windows, ma
 
 ## Status
 
-Shell++ is in early development. Only the specifications exist so far; there is no code yet.
+Shell++ is in early development. The specifications, the stage-0 design documents and the design tokens with base UI components exist; there is no application yet.
 
 - The application is not usable yet, and there is nothing to install.
 - Expect breaking changes to the specifications, data formats and interfaces.
@@ -27,6 +27,15 @@ Shell++ is in early development. Only the specifications exist so far; there is 
 
 The specifications were originally written in Russian. The Russian originals are in [docs/ru/](docs/ru/):
 [SPEC.md](docs/ru/SPEC.md), [ui-behavior-spec.md](docs/ru/ui-behavior-spec.md), [design-system.md](docs/ru/design-system.md).
+
+## Design documents
+
+- [docs/decisions.md](docs/decisions.md): decisions taken before stage 0.
+- [docs/architecture.md](docs/architecture.md): components, process model and dependency policy.
+- [docs/data-model.md](docs/data-model.md): entities, fields and sync behavior.
+- [docs/storage-format.md](docs/storage-format.md): on-disk format, encryption envelope and export formats.
+- [docs/sync-protocol.md](docs/sync-protocol.md): the end-to-end encrypted sync protocol.
+- [docs/security.md](docs/security.md): threat model and security controls.
 
 ## Planned stack
 
