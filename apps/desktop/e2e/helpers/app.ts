@@ -289,6 +289,20 @@ export async function restartAndUnlock(password: string): Promise<void> {
   }
 }
 
+/** Waits until the app has exited (no window handles, or the session is gone). */
+export async function waitForAppExit(timeout = 15_000): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      try {
+        return (await browser.getWindowHandles()).length === 0;
+      } catch {
+        return true; // the session is gone with the app
+      }
+    },
+    { timeout, timeoutMsg: 'the app did not exit' },
+  );
+}
+
 /** True when this window shows the unlock screen. */
 export async function isLockedScreen(): Promise<boolean> {
   return exists('unlock-screen');

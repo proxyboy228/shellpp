@@ -1,18 +1,28 @@
 // UI 2.4 Host card actions: click selects and opens details, E edits (focus
-// in Address), arrow keys move the selection, the context menu (Edit Host
-// Details, Move to, Duplicate, Copy Link with info, Remove with undo).
-// Connect actions belong to stage 2 and later (hidden).
+// in Address), arrow keys move the selection, the context menu (Quick
+// Connect, Connect > via SSH with the "new window" hint, Edit Host Details,
+// Move to, Duplicate, Copy Link with info, Remove with undo). Stage 2: double
+// click and Enter connect (new tab), Alt + double click opens the session in
+// a new window, Connect acts on every selected host. Via SFTP (stage 4), Add
+// to Workspace (stage 9), Collaborate and Copy to (stage 8) are hidden.
+// Connections go to the test SSH server only (hosts in the "servers" group).
 
 import { Key } from 'webdriverio';
 import {
+  activateVaults,
   cardText,
   clipboardText,
   closePanel,
+  closeWindowConfirmed,
+  connectHost,
   createGroup,
   createHost,
+  createSshHost,
   ctrlClick,
   el,
   expectAbsent,
+  expectPresent,
+  hostKey,
   goToRoot,
   groupCard,
   hostCard,
@@ -24,22 +34,43 @@ import {
   openFolder,
   openHost,
   openHostMenu,
+  openSubmenu,
   pressEscape,
+  runCommand,
   selectedHostIds,
   startFresh,
+  tabIds,
+  tabTitle,
+  textAt,
+  tid,
   valueOf,
   waitFor,
   waitForAbsent,
+  waitForBoot,
   waitForHostIds,
+  waitForLockState,
+  waitForNewTab,
+  waitForNewWindow,
+  waitForSelectedTab,
+  waitForShell,
+  waitForStablePosition,
+  waitForTabClosed,
+  waitForTabCount,
   waitForToast,
 } from '../helpers/index.ts';
+import { startSshd, stopAllSshd, type Sshd, type SshdUser } from '../support/sshd.ts';
 
-const MENU_ITEMS = ['host-menu-edit', 'host-menu-move-to', 'host-menu-duplicate', 'host-menu-copy-link', 'host-menu-remove'];
+const MENU_ITEMS = [
+  'host-menu-quick-connect',
+  'host-menu-connect',
+  'host-menu-edit',
+  'host-menu-move-to',
+  'host-menu-duplicate',
+  'host-menu-copy-link',
+  'host-menu-remove',
+];
 
 const HIDDEN_ITEMS = [
-  'host-menu-quick-connect', // stage 2
-  'host-menu-connect', // stage 2
-  'host-menu-connect-ssh', // stage 2
   'host-menu-connect-sftp', // stage 4
   'host-menu-add-to-workspace', // stage 9
   'host-menu-collaborate', // stage 8
@@ -68,12 +99,6 @@ describe('UI 2.4 Host card actions', () => {
     await waitFor('host-panel', `[data-record-id="${alpha}"]`);
   });
 
-  it('treats a double click like a single click in stage 1 (connect is stage 2)', async () => {
-    await hostCard(bravo).doubleClick();
-    await waitFor('host-panel', `[data-record-id="${bravo}"]`);
-    expect(await selectedHostIds()).toEqual([bravo]);
-  });
-
   it('opens the details with the focus in Address on E', async () => {
     await hostCard(alpha).click();
     await waitFor('host-panel', `[data-record-id="${alpha}"]`);
@@ -99,11 +124,25 @@ describe('UI 2.4 Host card actions', () => {
     await closePanel('host-panel');
   });
 
-  it('lists the stage-1 context menu entries in order', async () => {
+  it('lists the context menu entries in order, with the Connect submenu', async () => {
     await openHostMenu(alpha);
     expect(await menuItemIds('host-context-menu')).toEqual(MENU_ITEMS);
+    // The shortcut hint (WebDriver getText is empty while the menu fades in).
+    await browser.waitUntil(async () => (await textAt(tid('host-menu-quick-connect'))).includes('Enter'), {
+      timeout: 5_000,
+      timeoutMsg: 'Quick Connect does not show the Enter hint',
+    });
+    await openSubmenu('host-menu-connect');
+    await browser.waitUntil(async () => (await menuItemIds('host-menu-connect-menu')).includes('host-menu-connect-ssh'), {
+      timeout: 5_000,
+      timeoutMsg: 'the Connect submenu does not list "via SSH"',
+    });
+    await expectPresent(['host-menu-connect-ssh', 'host-menu-connect-alt-hint']);
     await expectAbsent(HIDDEN_ITEMS);
     await pressEscape();
+    if ((await browser.execute(() => document.querySelector('[data-testid="host-context-menu"]') !== null)) === true) {
+      await pressEscape();
+    }
     await waitForAbsent('host-context-menu');
   });
 
@@ -206,5 +245,121 @@ describe('UI 2.4 Host card actions', () => {
       return !ids.includes(bravo) && !ids.includes(charlie);
     });
     expect(await hostIds()).toContain(alpha);
+  });
+
+  describe('connect actions', () => {
+    let sshd: Sshd;
+    let user: SshdUser;
+    let servers: string;
+    let srv1: string;
+    let srv2: string;
+    let srv3: string;
+
+    /** Waits for the shell in the active tab, checks its title and ends it with `exit`. */
+    async function finishSession(tab: string, title: string): Promise<void> {
+      await waitForSelectedTab(tab);
+      await waitForShell(user.name);
+      expect(await tabTitle(tab)).toBe(title);
+      await runCommand('exit');
+      await waitForTabClosed(tab);
+    }
+
+    before(async () => {
+      sshd = await startSshd();
+      user = sshd.users[0];
+      servers = await createGroup({ name: 'servers' });
+      srv1 = await createSshHost(sshd, user, { label: 'srv-1', groupId: servers });
+      srv2 = await createSshHost(sshd, user, { label: 'srv-2', groupId: servers });
+      srv3 = await createSshHost(sshd, user, { label: 'srv-3', groupId: servers });
+      await openFolder(servers);
+      await waitForHostIds([srv1, srv2, srv3], true);
+    });
+
+    after(async () => {
+      await stopAllSshd();
+    });
+
+    it('connects in a new session tab on a double click, wherever the card is', async () => {
+      // A plain double click on a card that is not selected: its first click
+      // opens the details panel, which narrows the grid (UI 1.3); the third
+      // card of a row then moves, and the connection must still start.
+      await expectAbsent(['host-panel']);
+      const card = await hostCard(srv3);
+      await waitForStablePosition(card);
+      const before = await tabIds();
+      await card.doubleClick();
+      const tab = await waitForNewTab(before);
+      await hostKey('accept');
+      await finishSession(tab, 'srv-3');
+    });
+
+    it('connects the selected card on a double click', async () => {
+      const tab = await connectHost(srv1);
+      await finishSession(tab as string, 'srv-1');
+    });
+
+    it('connects the selected card on Enter', async () => {
+      await activateVaults();
+      await hostCard(srv1).click();
+      await waitFor('host-panel', `[data-record-id="${srv1}"]`);
+      await pressEscape();
+      await waitForAbsent('host-panel');
+      expect(await selectedHostIds()).toEqual([srv1]);
+      const before = await tabIds();
+      await browser.keys(Key.Enter);
+      await finishSession(await waitForNewTab(before), 'srv-1');
+    });
+
+    it('connects with Quick Connect and with Connect > via SSH', async () => {
+      await activateVaults();
+      await openHostMenu(srv2);
+      let before = await tabIds();
+      await el('host-menu-quick-connect').click();
+      await finishSession(await waitForNewTab(before), 'srv-2');
+
+      await activateVaults();
+      await openHostMenu(srv2);
+      before = await tabIds();
+      await menuPath('host-menu-connect', 'host-menu-connect-ssh');
+      await finishSession(await waitForNewTab(before), 'srv-2');
+    });
+
+    it('opens the session in a new window on Alt + double click', async () => {
+      await activateVaults();
+      const main = await browser.getWindowHandle();
+      const handles = await browser.getWindowHandles();
+      expect(await connectHost(srv1, { alt: true })).toBeNull();
+      const second = await waitForNewWindow(handles);
+      await browser.switchToWindow(second);
+      await waitForBoot();
+      await waitForLockState('unlocked');
+      const [tab] = await waitForTabCount(1);
+      await waitForSelectedTab(tab);
+      await waitForShell(user.name);
+      expect(await tabTitle(tab)).toBe('srv-1');
+      await closeWindowConfirmed(main);
+      expect(await tabIds()).toEqual([]);
+    });
+
+    it('connects every selected host with Connect, one tab each', async () => {
+      await activateVaults();
+      await hostCard(srv1).click();
+      await ctrlClick(hostCard(srv2));
+      await browser.waitUntil(async () => (await selectedHostIds()).length === 2, {
+        timeout: 5_000,
+        timeoutMsg: 'the two hosts were not selected',
+      });
+      await openHostMenu(srv2);
+      const before = await tabIds();
+      await menuPath('host-menu-connect', 'host-menu-connect-ssh');
+      const after = await waitForTabCount(before.length + 2);
+      const opened = after.filter((id) => !before.includes(id));
+      const titles = await Promise.all(opened.map((id) => tabTitle(id)));
+      expect([...titles].sort()).toEqual(['srv-1', 'srv-2']);
+      for (const [index, tab] of opened.entries()) {
+        await el('titlebar-session-tab', `[data-tab-id="${tab}"]`).click();
+        await finishSession(tab, titles[index]);
+      }
+    });
   });
 });

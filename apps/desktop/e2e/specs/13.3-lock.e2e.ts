@@ -1,8 +1,12 @@
 // UI 13.3 Lock and auto-lock: Lock from the app menu locks every window,
 // every window returns to its state after unlock, auto-lock after the
-// interval without input (mock clock), input resets the timer, Never.
+// interval without input (mock clock), input resets the timer, Never. Stage
+// 2: a lock covers the terminals and the session tabs; sessions keep running
+// while locked (output that arrives meanwhile is in the terminal after
+// unlock; docs/security.md 8, stage 2 plan decision 18).
 
 import {
+  activateTab,
   advanceClock,
   appMenu,
   breadcrumbIds,
@@ -11,23 +15,32 @@ import {
   expectAbsent,
   createGroup,
   createHost,
+  createSshHost,
   el,
   goToRoot,
   hostCard,
   lockState,
+  marker,
   openFolder,
   openHost,
   openSettings,
+  openSshSession,
+  runCommand,
   search,
   selectedHostIds,
+  sessionTab,
   setAutoLock,
   startFresh,
   unlock,
   waitFor,
   waitForBoot,
   waitForLockState,
+  waitForShell,
+  waitForTabClosed,
+  waitForTerminalText,
   type Session,
 } from '../helpers/index.ts';
+import { startSshd, stopAllSshd } from '../support/sshd.ts';
 
 /** Activity is reported at most every 30 s (stage plan, src/app/activity.ts). */
 const ACTIVITY_THROTTLE_MS = 30_000;
@@ -61,6 +74,10 @@ describe('UI 13.3 Lock and auto-lock', () => {
     rootHost = await createHost({ address: 'lock-root.example.com', label: 'Lock root' });
     groupId = await createGroup({ name: 'lock-group' });
     nestedHost = await createHost({ address: 'lock-nested.example.com', label: 'Lock nested', groupId });
+  });
+
+  after(async () => {
+    await stopAllSshd();
   });
 
   it('locks every window at once from the app menu', async () => {
@@ -150,5 +167,33 @@ describe('UI 13.3 Lock and auto-lock', () => {
     await advanceClock(86_400);
     await browser.pause(1_500);
     expect(await lockState()).toBe('unlocked');
+  });
+
+  it('covers the terminal while locked and keeps the session running', async () => {
+    const sshd = await startSshd();
+    const user = sshd.users[0];
+    const serverHost = await createSshHost(sshd, user, { label: 'Lock server' });
+    const tab = await openSshSession(serverHost, user.name);
+    const later = marker('after-lock');
+    // The shell prints the marker 3 s from now, while the app is locked.
+    await runCommand(`later 3 ${later}`);
+    await appMenu('app-menu-lock');
+    await waitForLockState('locked');
+    await waitFor('unlock-screen');
+    await expect(el('terminal-host')).not.toBeDisplayed();
+    await expectAbsent(['titlebar-session-tab', 'titlebar-new-tab', 'titlebar-terminal-sidebar-toggle']);
+    await browser.pause(4_000);
+    expect(await lockState()).toBe('locked');
+
+    await unlock(session.password);
+    await sessionTab(tab).waitForExist({ timeout: 10_000 });
+    await activateTab(tab);
+    await expect(el('terminal-host')).toBeDisplayed();
+    // Printed while locked: there right away (once in the echoed command,
+    // once as the output).
+    await waitForTerminalText(new RegExp(`${later}[^]*${later}`), { timeout: 3_000 });
+    await waitForShell(user.name);
+    await runCommand('exit');
+    await waitForTabClosed(tab);
   });
 });

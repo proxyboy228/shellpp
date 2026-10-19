@@ -3,8 +3,9 @@
 //
 //   pnpm --filter @shellpp/desktop e2e [-- <wdio options>]
 //
-// 1. Finds the e2e binary (scripts/e2e-build.mjs); builds it when it is
-//    missing or when --rebuild is given (--no-build fails instead).
+// 1. Finds the e2e binaries (scripts/e2e-build.mjs): the app and the test
+//    SSH server `shellpp-test-sshd`; builds the missing ones, or both with
+//    --rebuild (--no-build fails instead).
 // 2. Starts WebdriverIO with Node >= 22.19 (WebdriverIO 10 and edgedriver
 //    require it). When this script runs on an older Node, it looks for a
 //    newer one: SHELLPP_E2E_NODE, then nvm (nvm-windows: NVM_HOME,
@@ -18,7 +19,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildE2eApp, DESKTOP_DIR, e2eAppPath } from './e2e-build.mjs';
+import { buildE2eApp, buildE2eSshd, DESKTOP_DIR, e2eAppPath, e2eSshdPath } from './e2e-build.mjs';
 
 const MIN_NODE = [22, 19, 0];
 
@@ -105,6 +106,20 @@ function main() {
   const noBuild = args.includes('--no-build');
   const wdioArgs = args.filter((arg) => arg !== '--rebuild' && arg !== '--no-build');
 
+  // The test SSH server first: it builds in seconds and fails fast.
+  const sshd = e2eSshdPath();
+  if (rebuild || !fs.existsSync(sshd)) {
+    if (noBuild) {
+      throw new Error(`The test SSH server binary is missing: ${sshd} (run "pnpm --filter @shellpp/desktop e2e:build").`);
+    }
+    if (process.env.SHELLPP_E2E_SSHD && !rebuild) {
+      throw new Error(`SHELLPP_E2E_SSHD points to a missing file: ${sshd}`);
+    }
+    buildE2eSshd();
+  } else {
+    console.log(`[e2e] reusing ${sshd} (pass --rebuild to rebuild)`);
+  }
+
   const app = e2eAppPath();
   if (rebuild || !fs.existsSync(app)) {
     if (noBuild) {
@@ -129,7 +144,7 @@ function main() {
   }
   const result = spawnSync(node, [wdio, 'run', config, ...wdioArgs], {
     cwd: DESKTOP_DIR,
-    env: { ...process.env, SHELLPP_E2E_APP: app },
+    env: { ...process.env, SHELLPP_E2E_APP: app, SHELLPP_E2E_SSHD: sshd },
     stdio: 'inherit',
   });
   if (result.error) {

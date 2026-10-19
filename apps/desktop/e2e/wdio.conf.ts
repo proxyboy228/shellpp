@@ -3,16 +3,18 @@
 //
 // Run it through `pnpm --filter @shellpp/desktop e2e` (scripts/e2e-run.mjs),
 // which builds or reuses the debug binary with the `e2e-mocks` feature and
-// starts WebdriverIO with Node >= 22.19. Every spec file runs in its own
-// worker: `beforeSession` creates a fresh temporary SHELLPP_DATA_DIR and starts
-// tauri-driver with it, `afterSession` stops the driver and deletes the
+// the test SSH server, and starts WebdriverIO with Node >= 22.19. Every spec
+// file runs in its own worker: `beforeSession` creates a fresh temporary
+// SHELLPP_DATA_DIR and starts tauri-driver with it, `afterSession` stops the
+// test SSH servers the spec left running, stops the driver and deletes the
 // directory. A spec restarts the app with `browser.reloadSession()` (same
 // driver, same data directory).
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { applicationPath, E2E_DIR, logDir } from './support/paths.ts';
+import { applicationPath, E2E_DIR, logDir, sshdPath } from './support/paths.ts';
 import { ensureDriverPaths, startDriver, stopDriver } from './support/session.ts';
+import { removeGeneratedKeys, stopAllSshd } from './support/sshd.ts';
 
 const DRIVER_PORT = Number(process.env.SHELLPP_E2E_DRIVER_PORT ?? 4444);
 const NATIVE_PORT = Number(process.env.SHELLPP_E2E_NATIVE_PORT ?? 4445);
@@ -73,6 +75,17 @@ export const config: WebdriverIO.Config = {
     // the workers inherit the paths through the environment.
     const drivers = await ensureDriverPaths();
     console.log(`[e2e] app: ${APPLICATION}`);
+    const sshd = sshdPath();
+    if (fs.existsSync(sshd)) {
+      console.log(`[e2e] test SSH server: ${sshd}`);
+    } else {
+      // Stage-1 specs run without it; the SSH specs fail in startSshd() with
+      // the same hint.
+      console.warn(
+        `[e2e] The test SSH server binary is missing: ${sshd}. ` +
+          'Build it with "pnpm --filter @shellpp/desktop e2e:build -- --sshd-only" or set SHELLPP_E2E_SSHD.',
+      );
+    }
     console.log(`[e2e] tauri-driver: ${drivers.tauriDriver}`);
     console.log(`[e2e] native driver: ${drivers.nativeDriver ?? '(from PATH)'}`);
   },
@@ -82,6 +95,9 @@ export const config: WebdriverIO.Config = {
   },
 
   afterSession: async () => {
+    // Test servers a spec left running (its `after` hook normally stops them).
+    await stopAllSshd();
+    await removeGeneratedKeys();
     await stopDriver();
   },
 };

@@ -3,7 +3,10 @@
 // apps/desktop/src/stage.ts whose stage is greater than BUILD_STAGE
 // (docs/architecture.md, section 6.2). The stage report includes the output.
 //
-//   node scripts/hidden-features.mjs [--json]
+//   node scripts/hidden-features.mjs [--json] [--visible]
+//
+// --visible also lists the features that became visible with this stage
+// (stage == BUILD_STAGE), which the stage report names as well.
 //
 // The parser expects one `'feature-id': <stage | LATER>,` entry per line, as
 // stage.ts documents; `// UI ...` comment lines name the UI area of the
@@ -47,7 +50,10 @@ export function parseStageFile(source = fs.readFileSync(STAGE_FILE, 'utf8')) {
   return { buildStage, later, features };
 }
 
-/** Features with stage > BUILD_STAGE, sorted by stage then id. */
+/**
+ * Features with stage > BUILD_STAGE (hidden), sorted by stage then id, and
+ * the features that became visible with this stage (stage == BUILD_STAGE).
+ */
 export function hiddenFeatures() {
   const { buildStage, features } = parseStageFile();
   return {
@@ -55,13 +61,14 @@ export function hiddenFeatures() {
     hidden: features
       .filter((entry) => entry.stage > buildStage)
       .sort((a, b) => a.stage - b.stage || a.feature.localeCompare(b.feature)),
+    visibleNow: features.filter((entry) => entry.stage === buildStage).sort((a, b) => a.feature.localeCompare(b.feature)),
   };
 }
 
 function main(argv) {
-  const { buildStage, hidden } = hiddenFeatures();
+  const { buildStage, hidden, visibleNow } = hiddenFeatures();
   if (argv.includes('--json')) {
-    console.log(JSON.stringify({ buildStage, hidden }, null, 2));
+    console.log(JSON.stringify({ buildStage, hidden, visibleNow }, null, 2));
     return;
   }
   console.log(`Hidden in stage ${buildStage} (${hidden.length} features):`);
@@ -70,6 +77,16 @@ function main(argv) {
   console.log('|---|---|---|');
   for (const entry of hidden) {
     console.log(`| \`${entry.feature}\` | ${entry.later ? 'LATER' : entry.stage} | ${entry.area} |`);
+  }
+  if (argv.includes('--visible')) {
+    console.log('');
+    console.log(`Visible from stage ${buildStage} on (${visibleNow.length} features):`);
+    console.log('');
+    console.log('| Feature | Area |');
+    console.log('|---|---|');
+    for (const entry of visibleNow) {
+      console.log(`| \`${entry.feature}\` | ${entry.area} |`);
+    }
   }
 }
 

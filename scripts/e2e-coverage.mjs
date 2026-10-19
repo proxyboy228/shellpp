@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Lists the UI behavior spec sections of the current stage that have no e2e
-// spec file (docs/architecture.md, section 9.4; stage plan, section 8.1).
+// spec file (docs/architecture.md, section 9.4; stage 1 and stage 2 plans,
+// section 8).
 //
 //   node scripts/e2e-coverage.mjs [--json] [--all] [--warn-only]
 //
@@ -11,8 +12,13 @@
 //   (apps/desktop/src/stage.ts) must have a spec. --all lists every section.
 // - A spec covers a section when its file name starts with "<n.m>-" in
 //   apps/desktop/e2e/specs (for example `13.1-first-run.e2e.ts`).
-// Exit code 1 when a section of the current stage has no spec (unless
-// --warn-only).
+// - Stage scope items without a UI section of their own (SCOPE_ITEMS, for
+//   example the local terminal of stage 2) must be covered by a spec whose
+//   file name or text matches the item.
+// - RUST_ONLY lists the stage items that only Rust tests cover (no UI or no
+//   test environment for them); the stage report includes the list.
+// Exit code 1 when a section or scope item of the current stage has no spec
+// (unless --warn-only).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,6 +59,30 @@ const SECTION_STAGES = {
   '13.5': 7, // connect sync server wizard
   '13.6': 7, // sync conflicts
 };
+
+/**
+ * Stage scope items (docs/architecture.md 6.1) that have no UI section of
+ * their own. `file` matches spec file names, `text` matches spec contents.
+ */
+const SCOPE_ITEMS = [
+  { id: 'local-terminal', title: 'Local terminal', stage: 2, file: /local-terminal/ },
+  { id: 'os-detection', title: 'OS detection (banner and exec script, UI 12.4 block)', stage: 2, text: /bannerComment|exec:\s*\{\s*stdout/ },
+  { id: 'host-key-tofu', title: 'Known hosts and TOFU', stage: 2, file: /^10\.2-/ },
+  { id: 'autoreconnect', title: 'Autoreconnect (UI 12.4 default, no settings screen)', stage: 2, text: /session-dropped-countdown/ },
+  { id: 'quick-connect', title: 'Quick connect (UI 2.1)', stage: 2, text: /hosts-search-connect/ },
+  { id: 'key-path', title: 'Short "+ -> Key" path (UI 3.1)', stage: 2, text: /host-panel-credentials-menu-key|linkPastedKey/ },
+];
+
+/** Stage items covered by Rust tests only (stage 2 plan, section 8.2). */
+const RUST_ONLY = [
+  { stage: 2, item: 'System ssh-agent / Windows OpenSSH agent / Pageant and agent forwarding', tests: 'crates/ssh/tests (agent), tests/sshd agent-keys' },
+  { stage: 2, item: 'Keepalive interval and keepalive timeouts', tests: 'crates/ssh/tests' },
+  { stage: 2, item: 'No SHA-1 key exchange or signature algorithms', tests: 'crates/ssh/tests' },
+  { stage: 2, item: 'Charset conversion (host charset) of output and input', tests: 'apps/desktop/src-tauri/tests' },
+  { stage: 2, item: 'Every history secret detector rule (security.md 10.2, S1-S11)', tests: 'crates/core/tests/history.rs' },
+  { stage: 2, item: 'Wildcard and IPv6 known host matching', tests: 'crates/core/tests/known_hosts_store.rs, crates/core/src/known_hosts' },
+  { stage: 2, item: 'Reconnect attempts waiting for unlock', tests: 'apps/desktop/src-tauri/tests' },
+];
 
 function buildStage() {
   const source = fs.readFileSync(STAGE_FILE, 'utf8');
@@ -112,6 +142,14 @@ export function specFiles() {
   }
 }
 
+function specText(name) {
+  try {
+    return fs.readFileSync(path.join(SPECS_DIR, name), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 export function coverage() {
   const stage = buildStage();
   const specs = specFiles();
@@ -122,15 +160,41 @@ export function coverage() {
   });
   const known = new Set(rows.map((row) => row.section));
   const unmatched = specs.filter((name) => !known.has(name.split('-')[0]));
-  return { buildStage: stage, rows, unmatched };
+  const texts = new Map(specs.map((name) => [name, specText(name)]));
+  const scope = SCOPE_ITEMS.map((item) => ({
+    id: item.id,
+    title: item.title,
+    stage: item.stage,
+    required: item.stage <= stage,
+    specs: specs.filter(
+      (name) => (item.file !== undefined && item.file.test(name)) || (item.text !== undefined && item.text.test(texts.get(name) ?? '')),
+    ),
+  }));
+  const rustOnly = RUST_ONLY.filter((entry) => entry.stage <= stage);
+  return { buildStage: stage, rows, unmatched, scope, rustOnly };
 }
 
 export function main(argv = process.argv.slice(2)) {
   const args = new Set(argv);
   const result = coverage();
   const missing = result.rows.filter((row) => row.required && row.specs.length === 0);
+  const missingScope = result.scope.filter((item) => item.required && item.specs.length === 0);
   if (args.has('--json')) {
-    console.log(JSON.stringify({ buildStage: result.buildStage, missing, rows: result.rows, unmatched: result.unmatched }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          buildStage: result.buildStage,
+          missing,
+          missingScope,
+          rows: result.rows,
+          scope: result.scope,
+          rustOnly: result.rustOnly,
+          unmatched: result.unmatched,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
     const shown = args.has('--all') ? result.rows : result.rows.filter((row) => row.required);
     console.log(`UI sections for stage <= ${result.buildStage}${args.has('--all') ? ' (all sections listed)' : ''}:`);
@@ -141,11 +205,36 @@ export function main(argv = process.argv.slice(2)) {
       const spec = row.specs.length > 0 ? row.specs.join(', ') : row.required ? 'MISSING' : '-';
       console.log(`| ${row.section} | ${row.title} | ${row.stage ?? '?'} | ${spec} |`);
     }
+    const scopeShown = args.has('--all') ? result.scope : result.scope.filter((item) => item.required);
+    if (scopeShown.length > 0) {
+      console.log('');
+      console.log('Stage scope items without a UI section of their own:');
+      console.log('');
+      console.log('| Item | Stage | Specs |');
+      console.log('|---|---|---|');
+      for (const item of scopeShown) {
+        const spec = item.specs.length > 0 ? item.specs.join(', ') : item.required ? 'MISSING' : '-';
+        console.log(`| ${item.title} | ${item.stage} | ${spec} |`);
+      }
+    }
+    if (result.rustOnly.length > 0) {
+      console.log('');
+      console.log('Covered by Rust tests only:');
+      console.log('');
+      console.log('| Item | Stage | Tests |');
+      console.log('|---|---|---|');
+      for (const entry of result.rustOnly) {
+        console.log(`| ${entry.item} | ${entry.stage} | ${entry.tests} |`);
+      }
+    }
     console.log('');
     if (missing.length === 0) {
       console.log(`Every UI section of stage <= ${result.buildStage} has a spec.`);
     } else {
       console.log(`Sections without a spec: ${missing.map((row) => row.section).join(', ')}`);
+    }
+    if (missingScope.length > 0) {
+      console.log(`Scope items without a spec: ${missingScope.map((item) => item.id).join(', ')}`);
     }
     if (result.unmatched.length > 0) {
       console.log(`Spec files that match no UI section: ${result.unmatched.join(', ')}`);
@@ -155,7 +244,7 @@ export function main(argv = process.argv.slice(2)) {
       console.log(`Sections without a stage in SECTION_STAGES: ${unknown.map((row) => row.section).join(', ')}`);
     }
   }
-  if (missing.length > 0 && !args.has('--warn-only')) {
+  if ((missing.length > 0 || missingScope.length > 0) && !args.has('--warn-only')) {
     process.exitCode = 1;
   }
 }

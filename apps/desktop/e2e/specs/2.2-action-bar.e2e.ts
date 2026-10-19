@@ -1,7 +1,8 @@
 // UI 2.2 Action bar: New host split button with New Group (in the current
-// folder), view toggle tiles/list (persisted), tag filter (multi-select, AND,
-// chips) and the sort menu (persisted). Import, cloud integrations, Terminal,
-// Serial and vault members belong to later stages.
+// folder), Terminal (a local terminal in a new tab, stage 2), view toggle
+// tiles/list (persisted), tag filter (multi-select, AND, chips) and the sort
+// menu (persisted). Import, cloud integrations, Serial and vault members
+// belong to later stages.
 
 import {
   breadcrumbIds,
@@ -14,21 +15,31 @@ import {
   goToRoot,
   groupIds,
   isFocused,
+  marker,
   openFolder,
   openHost,
   openNewGroupPanel,
   openNewHostPanel,
   pressEscape,
   restartAndUnlock,
+  runCommand,
+  sessionTab,
   setField,
   setSort,
   startFresh,
+  tabIds,
   waitFor,
   waitForAbsent,
   waitForGroupIds,
   waitForHostIds,
+  waitForLocalShell,
+  waitForNewTab,
+  waitForOutputLine,
+  waitForPaneState,
   waitForRecordId,
   waitForSaved,
+  waitForSelectedTab,
+  waitForTabClosed,
   type Session,
 } from '../helpers/index.ts';
 
@@ -67,8 +78,24 @@ describe('UI 2.2 Action bar', () => {
     await closePanel('host-panel');
   });
 
+  it('opens a local terminal in a new tab with Terminal', async () => {
+    const before = await tabIds();
+    await (await waitFor('hosts-local-terminal-button')).click();
+    const tab = await waitForNewTab(before);
+    await waitForSelectedTab(tab);
+    await expect(sessionTab(tab)).toHaveAttribute('data-kind', 'session');
+    await waitForPaneState('connected', { timeout: 30_000 });
+    await waitForLocalShell();
+    const value = marker('terminal-button');
+    await runCommand(`echo ${value}`);
+    await waitForOutputLine(value, { timeout: 20_000 });
+    await runCommand('exit');
+    await waitForTabClosed(tab, 20_000);
+    await waitForSelectedTab('vaults');
+  });
+
   it('does not render later-stage actions', async () => {
-    await expectAbsent(['hosts-local-terminal-button', 'hosts-serial-button', 'hosts-vault-members']);
+    await expectAbsent(['hosts-serial-button', 'hosts-vault-members']);
     await el('hosts-new-host-toggle').click();
     await waitFor('hosts-new-host-menu');
     await expect(el('hosts-new-host-item-new-group')).toBeExisting();

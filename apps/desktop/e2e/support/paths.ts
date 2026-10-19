@@ -1,5 +1,5 @@
 // Paths used by the e2e harness. Kept in sync with scripts/e2e-build.mjs,
-// which builds the binary that `applicationPath()` points to.
+// which builds the binaries that `applicationPath()` and `sshdPath()` point to.
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,15 @@ export function e2eTargetDir(): string {
 export function applicationPath(): string {
   const fromEnv = process.env.SHELLPP_E2E_APP;
   return fromEnv ? path.resolve(fromEnv) : path.join(e2eTargetDir(), 'debug', `shellpp${EXE}`);
+}
+
+/**
+ * The test SSH server `shellpp-test-sshd` built by scripts/e2e-build.mjs into
+ * the same target directory (`SHELLPP_E2E_SSHD` overrides it).
+ */
+export function sshdPath(): string {
+  const fromEnv = process.env.SHELLPP_E2E_SSHD;
+  return fromEnv ? path.resolve(fromEnv) : path.join(e2eTargetDir(), 'debug', `shellpp-test-sshd${EXE}`);
 }
 
 /** Directory for driver logs and WebdriverIO worker logs (gitignored). */

@@ -1,15 +1,20 @@
 // UI 2.3 Screen content: Groups above Hosts, groups as folders with
 // breadcrumbs, group card count (nested), host card title and subtitle,
 // selection (click, Ctrl+click, Shift+click), drag to reorder (Manual only)
-// and drop onto a group card, empty state and empty folder.
+// and drop onto a group card, empty state and empty folder. Stage 2: the OS
+// icon is neutral until the first successful connection detects the OS, from
+// the server banner or else with the detection script in an exec channel
+// (UI 12.4 "OS detection").
 
 import {
+  activateVaults,
   breadcrumbIds,
   cardText,
   closePanel,
   count,
   createGroup,
   createHost,
+  createSshHost,
   ctrlClick,
   dragTo,
   el,
@@ -20,7 +25,9 @@ import {
   hostIds,
   isFocused,
   openFolder,
+  openSshSession,
   restartAndUnlock,
+  runCommand,
   selectedHostIds,
   setSort,
   shiftClick,
@@ -29,8 +36,36 @@ import {
   waitForAbsent,
   waitForGroupIds,
   waitForHostIds,
+  waitForTabClosed,
   type Session,
 } from '../helpers/index.ts';
+import { startSshd, stopAllSshd, type Sshd } from '../support/sshd.ts';
+
+/** `data-os-family` / `data-os-distro` of a host card and of its OS icon. */
+async function osOf(id: string): Promise<{ family: string | null; distro: string | null; icon: string | null; iconExists: boolean }> {
+  return browser.execute((recordId: string) => {
+    const card = document.querySelector(`[data-testid="host-card"][data-record-id="${recordId}"]`);
+    const icon = card?.querySelector('[data-testid="host-card-os-icon"]') ?? null;
+    return {
+      family: card?.getAttribute('data-os-family') ?? null,
+      distro: card?.getAttribute('data-os-distro') ?? null,
+      icon: icon?.getAttribute('data-os-family') ?? null,
+      iconExists: icon !== null,
+    };
+  }, id);
+}
+
+/** Connects once (accepting the host key), exits, and waits for the detected OS on the card. */
+async function connectAndDetect(sshd: Sshd, id: string, distro: string): Promise<void> {
+  const tab = await openSshSession(id, sshd.users[0].name, { hostKey: 'accept' });
+  await runCommand('exit');
+  await waitForTabClosed(tab);
+  await activateVaults();
+  await browser.waitUntil(async () => (await osOf(id)).distro === distro, {
+    timeout: 15_000,
+    timeoutMsg: `the card does not show the detected OS "${distro}"`,
+  });
+}
 
 async function top(id: string): Promise<number> {
   return browser.execute(
@@ -52,6 +87,10 @@ describe('UI 2.3 Screen content', () => {
 
   before(async () => {
     session = await startFresh();
+  });
+
+  after(async () => {
+    await stopAllSshd();
   });
 
   it('shows the empty state with "Create host" in an empty vault', async () => {
@@ -124,7 +163,7 @@ describe('UI 2.3 Screen content', () => {
     expect(ssh).toBeGreaterThanOrEqual(0);
     expect(user).toBeGreaterThan(ssh);
     expect(tags).toBeGreaterThan(user);
-    // A neutral OS icon: OS detection is stage 2. Cards carry the default color.
+    // Cards carry the default color (the OS icon is checked at the end).
     await expect(hostCard(r1)).toHaveAttribute('data-color', 'graphite');
     // The sync conflict badge is stage 7 (hidden), even with cards on screen.
     await expectAbsent(['host-card-conflict-badge']);
@@ -190,5 +229,31 @@ describe('UI 2.3 Screen content', () => {
     await waitForHostIds([infraHost, r2]);
     await goToRoot();
     await setSort('manual');
+  });
+
+  it('shows a neutral OS icon before the first connection', async () => {
+    const os = await osOf(r1);
+    expect(os.iconExists).toBe(true);
+    expect(os.family).toBeNull();
+    expect(os.icon).toBeNull();
+  });
+
+  it('shows the OS detected from the server banner after the first connection', async () => {
+    const ubuntu = await startSshd({ bannerComment: 'Ubuntu-3ubuntu13' });
+    const id = await createSshHost(ubuntu, ubuntu.users[0], { label: 'Banner OS' });
+    expect((await osOf(id)).family).toBeNull();
+    await connectAndDetect(ubuntu, id, 'ubuntu');
+    const os = await osOf(id);
+    expect(os.family).toBe('linux');
+    expect(os.icon).toBe('linux');
+  });
+
+  it('runs the detection script in an exec channel when the banner does not name the OS', async () => {
+    const debian = await startSshd({ exec: { stdout: 'Linux\nID=debian\nVERSION_ID=12\n' } });
+    const id = await createSshHost(debian, debian.users[0], { label: 'Script OS' });
+    await connectAndDetect(debian, id, 'debian');
+    expect((await osOf(id)).family).toBe('linux');
+    const events = await debian.events();
+    expect(events.some((event) => event.kind === 'exec')).toBe(true);
   });
 });

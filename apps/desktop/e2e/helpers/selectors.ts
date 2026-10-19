@@ -114,6 +114,40 @@ export async function menuItemIds(menuId: string): Promise<string[]> {
   }, tid(menuId));
 }
 
+/** True when the element with this test id exists and is displayed (no waiting). */
+export async function isShown(id: string, extra = ''): Promise<boolean> {
+  const element = el(id, extra);
+  return (await element.isExisting()) && element.isDisplayed();
+}
+
+/** Waits until the element with this test id is absent or hidden (`hidden`, `display: none`). */
+export async function waitForHidden(id: string, extra = '', timeout = 10_000): Promise<void> {
+  await browser.waitUntil(async () => !(await isShown(id, extra)), {
+    timeout,
+    timeoutMsg: `expected ${tid(id, extra)} to be hidden or absent`,
+  });
+}
+
+/** Text (innerText, trimmed) of the first element matching a CSS selector; '' when absent. */
+export async function textAt(selector: string): Promise<string> {
+  return browser.execute(
+    (query: string) => ((document.querySelector(query) as HTMLElement | null)?.innerText ?? '').trim(),
+    selector,
+  );
+}
+
+/** Waits until the element matching a CSS selector has the focus. */
+export async function waitForFocusAt(selector: string, timeout = 5_000): Promise<void> {
+  await browser.waitUntil(
+    () =>
+      browser.execute((query: string) => {
+        const node = document.querySelector(query);
+        return node !== null && document.activeElement === node;
+      }, selector),
+    { timeout, timeoutMsg: `expected ${selector} to be focused` },
+  );
+}
+
 /** Asserts that none of these test ids is in the DOM (elements of later stages, D3). */
 export async function expectAbsent(ids: readonly string[]): Promise<void> {
   const present = await browser.execute(

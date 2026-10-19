@@ -1,50 +1,75 @@
 // UI 3.1 Host panel blocks: Address with the neutral OS icon, General
 // (label, parent group with search and create, tags, color, notes,
 // backspace), SSH (port, username, password, inherited placeholders) and
-// Show more. Vault, Share, credentials "+", linked key, identity hint,
-// startup snippet, host chaining, proxy, Mosh, Add Telnet and Connect belong
-// to later stages (hidden).
+// Show more. Stage 2: the Connect button pinned to the bottom (disabled for
+// a draft), and the credentials "+" with the Key option: paste the key text
+// or choose a file, or pick an existing key; an encrypted key asks for its
+// passphrase ("Save passphrase" off by default); the linked key field shows
+// label and type and can be unlinked. Vault, Share, the identity,
+// certificate and FIDO2 options, the identity hint, startup snippet, host
+// chaining, proxy, Mosh and Add Telnet belong to later stages (hidden).
 
 import { Key } from 'webdriverio';
 import {
+  activateVaults,
   addTag,
   attrOfAll,
   clearAndType,
   closePanel,
   createGroup,
   createHost,
+  createSshHost,
   el,
   expectAbsent,
   expectPresent,
   goToRoot,
   groupIds,
   hostCard,
+  hostKey,
   isFocused,
+  linkPastedKey,
+  linkedKeyId,
   openFolder,
   openHost,
+  openKeyDialog,
   openNewHostPanel,
   pickGroup,
+  pressEscape,
+  runCommand,
   setField,
   startFresh,
+  submitKeyDialog,
+  tabIds,
+  textAt,
+  tid,
   valueOf,
   waitFor,
   waitForAbsent,
+  waitForNewTab,
   waitForRecordId,
   waitForSaved,
+  waitForSelectedTab,
+  waitForShell,
+  waitForTabClosed,
 } from '../helpers/index.ts';
+import { generatedSecret, keygen, startSshd, stopAllSshd, type GeneratedKey, type Sshd } from '../support/sshd.ts';
 
 const HIDDEN = [
   'host-panel-vault', // stage 8
   'host-panel-share', // stage 8
-  'host-panel-ssh-credentials-add', // stage 2
-  'host-panel-ssh-linked-key', // stage 2
   'host-panel-identity-merge-hint', // stage 3
   'host-panel-startup-snippet', // stage 5
   'host-panel-host-chaining', // stage 5
   'host-panel-proxy', // stage 5
   'host-panel-mosh', // stage 10
   'host-panel-add-telnet', // stage 9
-  'host-panel-connect', // stage 2
+];
+
+/** Credential types of the "+" menu that belong to stage 3. */
+const HIDDEN_CREDENTIALS = [
+  'host-panel-credentials-menu-identity',
+  'host-panel-credentials-menu-certificate',
+  'host-panel-credentials-menu-fido2',
 ];
 
 const VISIBLE = [
@@ -60,6 +85,7 @@ const VISIBLE = [
   'host-panel-ssh-username',
   'host-panel-ssh-password',
   'host-panel-show-more',
+  'host-panel-connect',
 ];
 
 const SHOW_MORE = [
@@ -100,6 +126,8 @@ describe('UI 3.1 Host panel', () => {
     await browser.waitUntil(() => isFocused('host-panel-address'), { timeout: 5_000 });
     await expectPresent(VISIBLE);
     await expectAbsent(HIDDEN);
+    // A draft cannot connect.
+    await expect(el('host-panel-connect')).toBeDisabled();
     await expandShowMore();
     await expectPresent(SHOW_MORE);
     await expectAbsent(HIDDEN);
@@ -111,6 +139,12 @@ describe('UI 3.1 Host panel', () => {
     hostId = await waitForRecordId('host-panel');
     await waitForSaved('host-panel');
     await expect(el('host-panel-os-icon')).toBeDisplayed();
+    // Neutral until a connection detects the OS.
+    await expect(el('host-panel-os-icon')).not.toHaveAttribute('data-os-family');
+    // A saved host with a valid address can connect (not done here: example.com).
+    await expect(el('host-panel-connect')).toBeEnabled();
+    await expectPresent(['host-panel-ssh-credentials-add']);
+    await expectAbsent(['host-panel-ssh-linked-key']);
   });
 
   it('saves the label and shows it as the card title', async () => {
@@ -300,5 +334,121 @@ describe('UI 3.1 Host panel', () => {
     expect(await el('host-panel-theme').getText()).toContain('Paper');
     await expectAbsent(HIDDEN);
     await closePanel('host-panel');
+  });
+
+  describe('Connect and "+ -> Key"', () => {
+    let sshd: Sshd;
+    let encrypted: GeneratedKey;
+    let keyHost: string;
+    let pastedKey: string;
+
+    /** Connects with the pinned Connect button of the open panel and waits for the shell. */
+    async function connectFromPanel(user: string, acceptKey: boolean): Promise<string> {
+      const before = await tabIds();
+      await el('host-panel-connect').click();
+      const tab = await waitForNewTab(before);
+      await waitForSelectedTab(tab);
+      if (acceptKey) {
+        await hostKey('accept');
+      }
+      await waitForShell(user);
+      return tab;
+    }
+
+    /** Selects a file in the dialog's file input (`key-add-file`). */
+    async function chooseKeyFile(file: string): Promise<void> {
+      const input = el('key-add-file');
+      await input.waitForExist();
+      try {
+        await input.setValue(file);
+      } catch {
+        // A visually hidden file input: make it interactable for WebDriver.
+        await browser.execute((selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (node) {
+            node.hidden = false;
+            node.style.display = 'block';
+            node.style.visibility = 'visible';
+            node.style.opacity = '1';
+          }
+        }, tid('key-add-file'));
+        await input.setValue(file);
+      }
+    }
+
+    before(async () => {
+      encrypted = await keygen('ed25519', { passphrase: generatedSecret('Pass-'), comment: 'panel-key' });
+      sshd = await startSshd({ users: [{ name: 'keyuser', publicKeys: [encrypted.publicKey] }] });
+      await goToRoot();
+      keyHost = await createSshHost(sshd, sshd.users[0], { label: 'Key panel host' });
+    });
+
+    after(async () => {
+      await stopAllSshd();
+    });
+
+    it('offers only the Key type in the "+" menu', async () => {
+      await openHost(keyHost);
+      await el('host-panel-ssh-credentials-add').click();
+      await waitFor('host-panel-credentials-menu');
+      await expectPresent(['host-panel-credentials-menu-key']);
+      await expectAbsent(HIDDEN_CREDENTIALS);
+      await pressEscape();
+      await waitForAbsent('host-panel-credentials-menu');
+    });
+
+    it('adds a pasted encrypted key with its saved passphrase and links it', async () => {
+      pastedKey = await linkPastedKey({
+        privateKey: encrypted.privateKey,
+        passphrase: encrypted.passphrase,
+        savePassphrase: true,
+        label: 'Panel key',
+      });
+      await waitForSaved('host-panel', { changed: false });
+      expect(await textAt(`${tid('host-panel-ssh-linked-key')} ${tid('host-panel-ssh-linked-key-label')}`)).toBe('Panel key');
+      expect(await textAt(`${tid('host-panel-ssh-linked-key')} ${tid('host-panel-ssh-linked-key-type')}`)).toContain('ed25519');
+      await expectAbsent(['host-panel-ssh-linked-key-missing', 'host-panel-identity-merge-hint']);
+      // No credential type is left to add in stage 2.
+      await expectAbsent(['host-panel-ssh-credentials-add']);
+    });
+
+    it('connects with the linked key (the passphrase is saved: no question)', async () => {
+      const tab = await connectFromPanel('keyuser', true);
+      await runCommand('exit');
+      await waitForTabClosed(tab);
+    });
+
+    it('unlinks the key and links it again from the existing keys', async () => {
+      await activateVaults();
+      await openHost(keyHost);
+      await el('host-panel-ssh-linked-key-unlink').click();
+      await waitForAbsent('host-panel-ssh-linked-key');
+      await waitFor('host-panel-ssh-credentials-add');
+      await waitForSaved('host-panel');
+
+      await openKeyDialog();
+      const existing = el('key-add-existing-item', `[data-record-id="${pastedKey}"]`);
+      await existing.waitForExist();
+      await existing.click();
+      await waitForAbsent('key-add-dialog');
+      expect(await linkedKeyId()).toBe(pastedKey);
+      await waitForSaved('host-panel');
+      await el('host-panel-ssh-linked-key-unlink').click();
+      await waitForAbsent('host-panel-ssh-linked-key');
+      await waitForSaved('host-panel');
+    });
+
+    it('adds a key from a file', async () => {
+      const plain = await keygen('ed25519', { comment: 'file-key' });
+      await openKeyDialog();
+      await chooseKeyFile(plain.path);
+      await clearAndType('key-add-label', 'File key');
+      await submitKeyDialog({});
+      const id = await linkedKeyId();
+      expect(id).not.toBe(pastedKey);
+      expect(await textAt(`${tid('host-panel-ssh-linked-key')} ${tid('host-panel-ssh-linked-key-label')}`)).toBe('File key');
+      await waitForSaved('host-panel', { changed: false });
+      await closePanel('host-panel');
+    });
   });
 });

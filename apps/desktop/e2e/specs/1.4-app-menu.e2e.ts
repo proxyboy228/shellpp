@@ -1,8 +1,12 @@
 // UI 1.4 App menu: items in order with symbol shortcut hints, Settings
-// (menu and Ctrl+,), Edit, View zoom and sidebar, Window > New window (all
-// windows are equal: data and settings changes appear in every window at
-// once), Help links (through the mock launcher) and About, Lock, Exit.
+// (menu and Ctrl+,), New Local Terminal (menu and Ctrl+Shift+L, stage 2),
+// Edit, View zoom and sidebar, Window > New window (all windows are equal:
+// data and settings changes appear in every window at once) and the tab
+// items (next, previous, close; stage 2), Help links (through the mock
+// launcher) and About, Lock, Exit. SFTP, New Serial Connection and Check for
+// updates belong to later stages (hidden).
 
+import { Key } from 'webdriverio';
 import {
   appMenu,
   appOs,
@@ -23,25 +27,39 @@ import {
   openHost,
   openNewHostPanel,
   openSubmenu,
+  marker,
+  pressAlt,
   pressCtrl,
+  pressCtrlShift,
   pressEscape,
   restartApp,
+  runCommand,
   setField,
   startFresh,
+  tabIds,
   unlock,
   valueOf,
   waitFor,
   waitForAbsent,
+  waitForAppExit,
   waitForBoot,
   waitForHostsReady,
+  waitForLocalShell,
   waitForLockState,
+  waitForNewTab,
+  waitForOutputLine,
+  waitForPaneState,
   waitForSaved,
+  waitForSelectedTab,
+  waitForTabClosed,
+  waitForTabCount,
   type Session,
 } from '../helpers/index.ts';
 
 const TOP_LEVEL = [
   'app-menu-vaults',
   'app-menu-settings',
+  'app-menu-new-local-terminal',
   'app-menu-edit',
   'app-menu-view',
   'app-menu-window',
@@ -52,13 +70,20 @@ const TOP_LEVEL = [
 
 const HIDDEN = [
   'app-menu-sftp', // stage 4
-  'app-menu-new-local-terminal', // stage 2
   'app-menu-new-serial', // stage 9
-  'app-menu-window-next-tab', // stage 2
-  'app-menu-window-previous-tab', // stage 2
-  'app-menu-window-close-tab', // stage 2
   'app-menu-help-check-updates', // stage 9
 ];
+
+/** Opens a local terminal from the app menu and waits for its shell; returns the tab id. */
+async function newLocalTerminal(): Promise<string> {
+  const before = await tabIds();
+  await appMenu('app-menu-new-local-terminal');
+  const tab = await waitForNewTab(before);
+  await waitForSelectedTab(tab);
+  await waitForPaneState('connected', { timeout: 30_000 });
+  await waitForLocalShell();
+  return tab;
+}
 
 async function zoom(): Promise<number> {
   return browser.execute(() => {
@@ -88,7 +113,7 @@ describe('UI 1.4 App menu', () => {
     }
   });
 
-  it('lists the stage-1 items in order', async () => {
+  it('lists the stage-2 items in order', async () => {
     await openAppMenu();
     expect(await menuItemIds('app-menu')).toEqual(TOP_LEVEL);
   });
@@ -96,6 +121,7 @@ describe('UI 1.4 App menu', () => {
   it('writes shortcut hints as symbols', async () => {
     expect(await el('app-menu-vaults').getText()).toContain('Ctrl+1');
     expect(await el('app-menu-settings').getText()).toContain('Ctrl+,');
+    expect(await el('app-menu-new-local-terminal').getText()).toContain('Ctrl+L');
   });
 
   it('lists the Edit, View, Window and Help submenus', async () => {
@@ -117,8 +143,14 @@ describe('UI 1.4 App menu', () => {
       'app-menu-view-toggle-sidebar',
     ]);
     await openSubmenu('app-menu-window');
-    expect(await menuItemIds('app-menu-window-menu')).toEqual(['app-menu-window-new-window']);
-    await expectAbsent(['app-menu-window-next-tab', 'app-menu-window-previous-tab', 'app-menu-window-close-tab']);
+    expect(await menuItemIds('app-menu-window-menu')).toEqual([
+      'app-menu-window-new-window',
+      'app-menu-window-next-tab',
+      'app-menu-window-previous-tab',
+      'app-menu-window-close-tab',
+    ]);
+    expect(await el('app-menu-window-next-tab').getText()).toContain('Alt+');
+    expect(await el('app-menu-window-close-tab').getText()).toContain('Ctrl+Shift+W');
     await openSubmenu('app-menu-help');
     expect(await menuItemIds('app-menu-help-menu')).toEqual([
       'app-menu-help-documentation',
@@ -294,6 +326,47 @@ describe('UI 1.4 App menu', () => {
     await browser.switchToWindow(first);
   });
 
+  it('opens a local terminal with New Local Terminal', async () => {
+    await newLocalTerminal();
+    const value = marker('shellpp');
+    await runCommand(`echo ${value}`);
+    await waitForOutputLine(value, { timeout: 20_000 });
+  });
+
+  it('opens a local terminal with Ctrl+Shift+L from the terminal', async () => {
+    const before = await tabIds();
+    await pressCtrlShift('l');
+    const tab = await waitForNewTab(before);
+    await waitForSelectedTab(tab);
+    await waitForPaneState('connected', { timeout: 30_000 });
+    await waitForLocalShell();
+    await waitForTabCount(2);
+  });
+
+  it('moves between tabs with Window > Next tab and Previous tab', async () => {
+    const [first, second] = await tabIds();
+    await waitForSelectedTab(second);
+    await appMenu('app-menu-window', 'app-menu-window-previous-tab');
+    await waitForSelectedTab(first);
+    await appMenu('app-menu-window', 'app-menu-window-next-tab');
+    await waitForSelectedTab(second);
+    // The same with Alt+Left and Alt+Right.
+    await pressAlt(Key.ArrowLeft);
+    await waitForSelectedTab(first);
+    await pressAlt(Key.ArrowRight);
+    await waitForSelectedTab(second);
+  });
+
+  it('closes the active tab with Window > Close tab', async () => {
+    const [first, second] = await tabIds();
+    await appMenu('app-menu-window', 'app-menu-window-close-tab');
+    await waitForTabClosed(second);
+    await waitForSelectedTab(first);
+    await appMenu('app-menu-window', 'app-menu-window-close-tab');
+    await waitForTabClosed(first);
+    await waitForSelectedTab('vaults');
+  });
+
   it('locks the app with Lock', async () => {
     await appMenu('app-menu-lock');
     await waitForLockState('locked');
@@ -302,18 +375,10 @@ describe('UI 1.4 App menu', () => {
     await unlock(session.password);
   });
 
-  it('exits the app with Exit', async () => {
+  it('exits the app with Exit (no question without active sessions)', async () => {
+    expect(await tabIds()).toEqual([]);
     await appMenu('app-menu-exit');
-    await browser.waitUntil(
-      async () => {
-        try {
-          return (await browser.getWindowHandles()).length === 0;
-        } catch {
-          return true; // the session is gone with the app
-        }
-      },
-      { timeout: 15_000, timeoutMsg: 'the app did not exit' },
-    );
+    await waitForAppExit();
     // Start the app again so the session ends cleanly; the data survived.
     const state = await restartApp();
     expect(state).toBe('locked');
