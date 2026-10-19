@@ -439,3 +439,36 @@ Status: accepted, 2026-10-19 (owner's audit of the main window).
 - Every stage report lists what is still hidden and what is shown as a placeholder.
 
 **Spec impact:** `SPEC.md`, "Work order" (hidden-feature rule); `docs/ui-behavior-spec.md`, section 0.
+
+### 29. Closing stage 1: master password, lock and the Hosts screen
+
+Status: accepted, 2026-10-20 (owner's choice).
+
+**Context.** The owner's task that closes stage 1 describes the first run, the unlock screen and locking (`docs/ui-behavior-spec.md` 13.1–13.3) and asks for a tag filter, a vault icon, every block of the host panel and a minimum window size. Several points differ from the stage 0 decisions, which chose stricter defaults: nothing in the OS keychain by default and auto-lock after 15 minutes (D8, D9), a recovery key shown at the first run (D9, D11), a 10-character minimum (`docs/security.md` 5.4), later-stage fields hidden (D3) and Ctrl+Shift+L for a new local terminal (D17).
+
+**Decision:**
+
+- Master password: at least 8 characters (Unicode characters after NFC), with no rules about the kind of characters. The first-run screen shows a strength indicator as advice only.
+- "Remember on this device" is on by default and is set on the first-run screen. A device key in the OS keychain (crate keyring) wraps the vault key, so the app does not ask for the password at launch; lock and auto-lock still ask for it. Without an OS keychain the option is hidden, as before (D5, D7).
+- Auto-lock: Never, 5, 15, 30 or 60 minutes, Never by default. Manual lock: the Lock item in the app menu and Ctrl+Shift+L, which no longer opens a local terminal.
+- No recovery key is shown or required in local mode. The first-run screen warns that a forgotten master password cannot be recovered. The recovery key is shown when a sync account is registered (UI 13.5). The core still creates it at the first run and keeps it in the personal vault (the `recovery` wrap and the `recovery_key` record), because the key rotations and the sync design rely on that wrap; the app never shows it in local mode, so locally it cannot be used.
+- "Forgot password?" on the unlock screen says that recovery is impossible and offers "Restore from sync", shown disabled until sync exists, and "Start with a new vault". The latter asks for an explicit confirmation, renames the data file (`shellpp.db` with its `-wal` and `-shm` files) instead of deleting it, and returns the app to the first run.
+- After 5 wrong passwords in a row, unlocking pauses: 5 seconds, doubling after each further wrong password, at most 5 minutes. The core enforces the pause before it derives any key, not only the screen, and keeps the counter across restarts in plaintext in the database (`meta` table), because the counter is not a secret. A correct password resets it. Wrong passwords never delete data.
+- While locked, open session tabs stay alive; their content is hidden behind the unlock screen.
+- Tests, the demo mode and the screenshot mode never touch the OS keychain or the permanent profile: they use the in-memory secret store and a temporary `SHELLPP_DATA_DIR`. With "remember on this device" on by default, this keeps test runs from writing keychain items.
+- Hosts screen: the tag filter is a button with the tag icon that opens a dropdown with every tag (with host counts), a search field, checkboxes and "Clear"; the selected tags are chips next to the button, and those that do not fit collapse into a "+N" chip that opens the dropdown (UI 2.2). The vault icon is the app's own safe icon (an original drawing on the Lucide 24 px grid, stroke 2: a safe with a dial, a handle and feet), served under `IconName::Vault` in the Vaults tab and in the Vault selectors of the host and group panels. It replaces Lucide "vault", whose four bolts read as a cross ("close") at 16 px; being our own drawing, it needs no third-party license line. Copy to ▸ works within the current vault for now: "Top level" or a group, a copy with the same label (UI 2.4).
+- Host panel: every block of UI 3.1 is shown, including the "+" for a key, an identity or a certificate, all "Show more" fields with Mosh, and Add Telnet. Their values are saved; what they do in a session comes with the stages that implement them.
+- Minimum window size: 960 × 600 px. Nothing is clipped or overlaps at that size, with the 380 px details panel open or closed.
+
+The owner chose convenience at launch over the stricter defaults. The cost is stated in `docs/security.md` (section 8, RR8): with the key remembered, any program running as the same OS user can read the keychain item, and starting the app in the user's session opens the data without the password. Locking still wipes the keys from memory.
+
+Superseded parts of earlier decisions:
+
+- D3: Mosh and Telnet fields are no longer hidden until their stages: they are shown and their values are saved. "Restore from sync" is shown disabled instead of hidden.
+- D8: "by default nothing is stored in the OS keychain" and "remember on this device, off by default".
+- D9: the recovery key step of the first run and the auto-lock default of 15 minutes (the app no longer offers 1 minute). The lockout and "Forgot password?" are added.
+- D11: "the recovery key is created together with the first password, also without an account", as far as the user sees it: in local mode the key is not shown or required.
+- D17: Ctrl+Shift+L is the lock shortcut, not a second shortcut for a new local terminal.
+- `docs/security.md` 5.4: the minimum length of 10 characters becomes 8.
+
+**Spec impact:** `docs/ui-behavior-spec.md`, sections 0, 1, 1.4, 2.2, 2.4, 3.1, 12.2, 12.5 and 13; `docs/design-system.md` 6; `SPEC.md`, "Default stack", "Sync and team access" (recovery key) and "Work order"; `docs/security.md`; `docs/data-model.md` 7.3 (Mosh) and 16.1 (auto-lock default); `docs/architecture.md` 3.3 (auto-lock default); `docs/storage-format.md` 2.3 and 6.3 (keychain default); the new `docs/data-format.md`, which describes the implemented on-disk format.

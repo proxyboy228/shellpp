@@ -287,7 +287,12 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 - Widths:
   - sidebar: 220 px (`--width-sidebar`);
   - details panel: 380 px (`--width-details`), the width can be changed by
-    dragging from 320 px (`--width-details-min`) to 560 px (`--width-details-max`).
+    dragging from 320 px (`--width-details-min`) to 560 px (`--width-details-max`), but
+    never so wide that the main area gets narrower than 360 px; the chosen width comes back
+    when the window grows [decision].
+- Window: minimum size 960 × 600 px (UI 1, D29). At this width, with the sidebar and the
+  details panel at 380 px open, the main area is 360 px wide; every screen fits it without
+  clipping or overlap.
 - States:
   - hover: `--bg-raised-hover` for cards, rows and buttons; `--bg-overlay-hover`
     for menu and dropdown items [decision];

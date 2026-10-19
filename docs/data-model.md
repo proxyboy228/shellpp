@@ -496,7 +496,7 @@ UI 3.1 "SSH" block and "Show more". "Inherit" fields follow section 8.
 | `startup_snippet_id` | ref(snippet)? | none | runs in the interactive session right after login; variables are asked as for any run |
 | `env` | list<env_var>[64] | `[]` | names unique (case-sensitive); sent as SSH `env` requests, which the server accepts only for names it allows |
 | `keepalive_s` | int[0..3600]? | the global value | D20; `0` = off |
-| `mosh` | bool | `false` | hidden until the Mosh stage (D3) |
+| `mosh` | bool | `false` | shown and saved; Mosh connections come in their own stage (D29) |
 
 Rules:
 
@@ -928,7 +928,7 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 |---|---|---|---|---|
 | `appearance.ui_theme` | enum `auto`, `light`, `dark` | `auto` | 12.1 | |
 | `appearance.ui_zoom` | number 0.5–2.0 | 1.0 | 1.4 View | |
-| `security.auto_lock_minutes` | 1, 5, 15, 30, 60 or null (never) | 15 | 13.4 | D9 |
+| `security.auto_lock_minutes` | 1, 5, 15, 30, 60 or null (never); the app offers null, 5, 15, 30 and 60 | null | 13.4 | D9, D29 |
 | `terminal.autocomplete` | enum `off` | `off` | 12.4 | later stage |
 | `terminal.autoreconnect` | bool | `true` | 12.4 | D18 |
 | `terminal.record_history` | bool | `true` | 12.4 | UI 12.4 |

@@ -21,6 +21,9 @@
   behind a stage flag rather than shown disabled. The window frame and the sidebar are the
   exception: the SFTP tab (1.1) and all six sidebar sections (1.2) are always shown, and one
   whose screen is not implemented yet opens an "In development" placeholder. [decision]
+  Two more exceptions (D29): every field of the host panel (3.1) is shown and its value is
+  saved before the feature works in sessions, and "Restore from sync" (13.2) is shown
+  disabled until sync exists.
 - The interface is in English. Interface strings in this document define the meaning; the final
   texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
@@ -28,6 +31,10 @@
 ---
 
 ## 1. Main window
+
+- Minimum window size: 960 × 600 px (D29). At this size nothing is clipped and nothing
+  overlaps, with the details panel (1.3) open at its default width of 380 px and with it
+  closed.
 
 ### 1.1 Top bar (window title bar)
 
@@ -89,7 +96,7 @@
 10. Help ▸: documentation, report an issue (link to issues), check for
     updates, about. [decision] "Check for updates" is always available, even when the
     automatic check is off (see 12.7). [decision]
-11. Lock: lock the app now (see 13.3). [decision]
+11. Lock (Ctrl+Shift+L): lock the app now (see 13.3).
 12. — separator —
 13. Exit. While sessions, port forwards or file transfers are active, Exit asks for
     confirmation (see 4.6). [decision]
@@ -120,7 +127,9 @@ Additionally:
 ### 2.1 Search and quick connect
 
 - Search bar at the top of the main area, full width. The placeholder hints
-  that you can search for a host or enter `ssh user@hostname`.
+  that you can search for a host or enter `ssh user@hostname`. When the bar is too narrow
+  for it (the minimum window with the details panel open), a shorter hint is shown instead of
+  a cut-off one. [decision]
 - Typing filters groups and hosts in real time: by name, address,
   tags and username. [decision on the set of fields]
 - If the string is recognized as a connection address (`host`, `user@host`,
@@ -155,7 +164,26 @@ On the left:
 On the right:
 
 - View toggle: tiles / list.
-- Tag filter.
+- **Tag filter** (D29):
+  - a button with the tag icon. A click opens a dropdown:
+    - a search field at the top, with focus in it, that narrows the list while typing
+      (case-insensitive substring); [decision]
+    - every tag of the current vault, sorted by name, each with a checkbox and the number
+      of hosts that carry it. Several tags can be checked;
+    - a "Clear" button that unchecks every tag; disabled while none is checked. [decision]
+  - Checking a tag does not close the dropdown; Esc or a click outside closes it. [decision]
+  - The selected tags are shown as chips next to the button, in the order of selection,
+    each with a delete button that removes the tag from the filter. The chips use the active
+    filter style (`docs/design-system.md`, 3.4).
+  - When the chips do not fit, the ones that fit are shown and the rest collapse into a
+    "+N" chip, where N is the number of hidden selected tags. A click on "+N" opens the
+    dropdown. A selected tag is never hidden without being counted.
+  - While at least one tag is selected, the tag button shows its active state.
+  - A host passes when it carries every selected tag (case-insensitive). The filter combines
+    with the search text (2.1). Like a search, it shows the matching hosts of the current
+    group and its subgroups instead of the folder; groups are not shown while a tag is
+    selected, because groups carry no tags. A tag that no host carries any more leaves the
+    selection. [decision]
 - Sort menu: Manual, by name, by creation date, by modification date. Manual is the default
   on Hosts, and only in this mode does dragging change the order of cards (see 2.3). The icon
   is the same as on the other screens (see 7.1). [decision]
@@ -187,6 +215,9 @@ On the right:
   a card, Shift+click selects a range. Context menu actions that
   apply to multiple hosts (Connect, Add to Workspace, Move to, Copy to,
   Remove) are performed for all selected ones. [decision on keys and set]
+  - They act only on the selected cards on screen, in screen order (not in the order of
+    the clicks), and so does a drag; a search or a tag filter that hides a selected card
+    removes it from the selection. [decision]
 - Cards can be dragged [decision on details]:
   - in the Manual sort mode (see 2.2), dragging within the list changes the order. In the
     other sort modes the order does not change; [decision]
@@ -220,7 +251,10 @@ On the right:
      as the target. The unit of sharing is a whole vault, not a single host. [decision]
   6. **Move to ▸**: move to another vault or group. Moving to another vault goes through
      the dialog in 2.6. [decision]
-  7. **Copy to ▸**: copy to another vault, through the dialog in 2.6. [decision]
+  7. **Copy to ▸**: copy to a group or to another vault. The submenu lists "Top level" and
+     the groups of the current vault; choosing one creates a copy with the same label there
+     (D29). Other vaults join the submenu with team vaults (stage 8), and copying to another
+     vault goes through the dialog in 2.6. [decision]
   8. **Duplicate**: a copy of the host; the suffix " Copy" is appended to the name.
   9. **Copy Link**: a link to the host in the app's own URL scheme
      (`shellpp://host/<id>`). An (i) icon explains who will be able to open the link.
@@ -292,13 +326,16 @@ The same form is used for creating and editing; it opens in the details panel.
      - a hint above the fields if the same login with a password or key is also used
        in N other hosts: a one-link offer to merge them into an identity.
        After the identity is created, all these hosts reference it, and changing the password
-       in one place applies to all of them;
+       in one place applies to all of them. The hint arrives with the Keychain (stage 3) and
+       is hidden until then (section 0); it is not part of stage 1; [decision]
      - username;
      - password: masked, with a show/hide button;
      - a linked key is shown as a separate field with the key name from Keychain;
        it can be unlinked;
-     - a "+" button to link an identity, key, certificate or FIDO2 key.
-       A type that is already linked disappears from the list of options.
+     - a "+" button to link a key, an identity or a certificate (a key with an OpenSSH
+       certificate). Each linked item is shown as its own field and can be unlinked.
+       A type that is already linked disappears from the list of options. A FIDO2 key
+       joins the list with FIDO2 support (D5) and is hidden until then. [decision]
        For a key, the list offers the existing keys and a short way to add a new one:
        paste the key text or choose a file. An encrypted key asks for its passphrase
        (as in 7.3), and the key is saved to the Keychain; [decision]
@@ -307,7 +344,9 @@ The same form is used for creating and editing; it opens in the details panel.
        overrides the inherited one (see 3.4); [decision]
      - in a team vault, a host may have no credentials: each member attaches their own
        SSH ID or identity (see 2.6). [decision]
-   - "Show more" expands additional settings, one field per line:
+   - "Show more" expands additional settings, one field per line. Every field below is
+     shown and its value is saved; what a field changes in a session arrives with the
+     stage that implements that feature (D29):
      - Agent Forwarding: on/off, off by default;
      - Startup snippet: a snippet that runs right after login;
      - Host Chaining: a chain of intermediate hosts (jump hosts);
@@ -319,10 +358,13 @@ The same form is used for creating and editing; it opens in the details panel.
        (see 4.2, 12.4); [decision]
      - Record output: As in settings / On / Off, "As in settings" by default
        (see 11.2, 12.6); [decision]
-     - Mosh: on/off, off by default;
+     - Mosh: on/off, off by default. Shown, although Mosh connections come in a later
+       stage (D29);
      - terminal theme for this host: a preview thumbnail + name; clicking it
        opens theme selection. The theme set is our own; dark theme by default.
-6. **Add Telnet**: add a second protocol with its own settings to the same host.
+6. **Add Telnet**: add a second protocol with its own settings to the same host: a Telnet
+   block (port 23 by default) that can be removed again. Its values are saved; Telnet
+   connections come in stage 9 (D29).
 7. The **Connect** button is pinned to the bottom of the panel. Disabled until the address is filled in.
 
 ### 3.2 Behavior
@@ -1007,8 +1049,8 @@ With a connected server:
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
   (principle 3 in SPEC.md);
-- master password change and the recovery key are in Settings → Security (see 13.4),
-  because they exist without a server too; [decision]
+- master password change is in Settings → Security (see 13.4), because it exists without
+  a server too. The recovery key of the account is there as well; [decision]
 - deleting the account on the server. The local copy is kept in that case.
   If the account is the only owner of a team vault, deletion is blocked until ownership is
   transferred to another member (see 12.3). [decision]
@@ -1160,7 +1202,8 @@ Default set for Windows/Linux:
 | Ctrl+Shift+V | paste into the terminal |
 | Ctrl+Shift+A | select all in the terminal |
 | unassigned | open the Hosts screen |
-| Ctrl+L, Ctrl+Shift+L | new local terminal [decision on Ctrl+Shift+L] |
+| Ctrl+L | new local terminal |
+| Ctrl+Shift+L | lock the app (13.3) |
 | Ctrl+Alt+S | new serial connection |
 | Ctrl+Shift+W | close tab |
 | Alt+→ | next tab |
@@ -1174,8 +1217,9 @@ Default set for Windows/Linux:
 with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous
 command, `Ctrl+K` deletes to the end of the line. When focus is in the terminal, such
 shortcuts go to the shell, not to the application. Application actions from the terminal
-are available via Ctrl+Shift shortcuts: Ctrl+Shift+L, Ctrl+Shift+P and Ctrl+Shift+K work
-everywhere.
+are available via Ctrl+Shift shortcuts: Ctrl+Shift+P and Ctrl+Shift+K work everywhere.
+Ctrl+Shift+L locks the app (13.3) and also works everywhere; from the terminal, a new local
+terminal is opened with the "+" button or the app menu (D29).
 
 **Terminal focus** [decision]:
 
@@ -1226,86 +1270,139 @@ everywhere.
 
 ---
 
-## 13. Lock and account [decision]
+## 13. Lock and account
 
 The master password is required from the first launch, even without an account and a
-server. The same password later becomes the password of the sync account. The key
-hierarchy is described in `docs/security.md`.
+server. The same password later becomes the password of the sync account. Sections
+13.1–13.4 follow the owner's description of 2026-10-20 (D29); details we added are marked
+[decision]. The key hierarchy is described in `docs/security.md`, the files on disk in
+`docs/data-format.md`.
 
 ### 13.1 First run
 
-- On the first launch, before any other screen, the app asks to create a master password:
-  - "Password" and "Confirm password" fields, masked, with show/hide buttons;
-  - "Continue" is enabled when both fields are filled in and match.
-- The screen always shows a warning, not a dismissible hint: without the master password
-  and the recovery key, the data cannot be recovered by anyone, including the server
-  administrator.
-- Next step, the recovery key:
-  - the key is shown as text in a monospace font, with a "Copy" button. The clipboard is
-    cleared after 30 seconds, as for private keys (see 7.3);
-  - the "I saved the recovery key" checkbox is required: "Finish" is disabled until it
-    is checked.
-- After "Finish", the Vaults tab opens with the empty Hosts screen (see 2.3).
+- Shown at the first launch, while the data directory holds no vault, and after "Start
+  with a new vault" (13.2). It comes before any other screen and covers the whole window
+  like the unlock screen; only the window buttons stay available. [decision]
+- A centered block, from top to bottom:
+  - the app name and one line saying that the data is stored locally and encrypted;
+  - the "Master password" and "Repeat password" fields, masked, with show/hide buttons.
+    Focus is in the first field; [decision on show/hide and focus]
+  - a strength indicator under the password. The minimum is 8 characters; there are no
+    rules about the kind of characters (digits, letters of both cases, symbols). The
+    indicator is advice only and never blocks creation; [decision on the last sentence]
+  - a warning that is always shown and cannot be dismissed: if the master password is
+    forgotten, the data cannot be recovered;
+  - the "Remember on this device" toggle, on by default: the key is kept in the OS
+    keychain (crate keyring), and the password is not asked at launch (13.2). A short note
+    under the toggle says that any program running under this OS user can then open the
+    data (13.4). Where the OS has no keychain, the toggle is hidden and the password is
+    asked at every launch (13.4); [decision on the note and the hidden toggle]
+  - the "Create vault" button, accent style. Enabled when the password has at least 8
+    characters and both fields match; Enter in either field does the same. [decision on
+    when it is enabled and on Enter]
+- Under a password that is too short: "At least 8 characters"; under the second field when
+  the two differ: "Passwords do not match". They appear when the field loses focus or on an
+  attempt to create the vault. [decision]
+- While the vault is being created (the key derivation takes about a second), the fields
+  are read-only and the button shows progress. [decision]
+- No recovery key is shown or asked for in local mode (D29).
+- After "Create vault", the Vaults tab opens with the Hosts screen in its empty state
+  (see 2.3).
 
-### 13.2 Unlock screen
+### 13.2 Unlock
 
-- Shown at every launch and after locking (see 13.3). It covers the whole content of the
-  window, including the tabs and any open dialogs; only the window buttons stay available.
+- Shown at launch when the vault key is not remembered on this device (see 13.4) or the
+  remembered key cannot be used, and after locking (see 13.3). It covers the whole content
+  of the window, including the tabs and any open dialogs; only the window buttons stay
+  available. [decision on what it covers]
 - Contents: the app name, the "Master password" field with focus in it, the "Unlock"
-  button (Enter) and a "Use recovery key" link.
-- A wrong password shows an error under the field; the field is cleared and keeps focus.
-- With "Remember on this device" on (see 13.4), the app unlocks at launch without asking
-  for the password. Lock and auto-lock still ask for the password.
-- **Use recovery key**: the user enters the recovery key, then a new master password and its
-  confirmation, and the app unlocks. With a sync server, recovery normally goes through the
-  server: the new password also becomes the account password, and other devices are signed
-  out, as after a password change (see 13.4).
-  - With a sync server, the dialog also shows the account email, pre-filled and editable. If
-    the server does not accept the key, the dialog says that the email may have changed on
-    another device, as well as that the key may be wrong.
+  button (accent style) and a "Forgot password?" link. Enter in the field works the same
+  as the button.
+- While the password is being checked (about a second), the field and the button are
+  read-only. [decision]
+- A wrong password shows a message under the field ("Wrong password"); the field is
+  cleared and keeps focus.
+- After 5 wrong passwords in a row, unlocking pauses with a growing delay: the field and the
+  button are disabled, and the message under the field counts down the time left. The
+  pause is 5 seconds after the fifth wrong password and doubles after each further one
+  (10, 20, 40 … seconds), up to 5 minutes. The core enforces the pause, not only this
+  screen, and keeps the count across restarts; a correct password resets it. Wrong
+  passwords never delete data. [decision on the numbers and the counter]
+- **Forgot password?** opens a dialog. It explains that the master password cannot be
+  recovered: it is not stored anywhere, and without it nobody can decrypt the data. Then it
+  offers:
+  - **Restore from sync**: restore the data from the sync server with the account's
+    recovery key (see 13.5). Until a sync server is connected, it is shown disabled with
+    the hint that sync is not set up. This is an exception to the stage flag rule of
+    section 0 (D29).
+  - **Start with a new vault**: asks for an explicit confirmation in a second dialog. It
+    says that the current data is not deleted: the data file is renamed and kept next to
+    the new one (`docs/data-format.md`), and the app starts with an empty vault. "Cancel"
+    has the focus; the confirm button is a danger button labeled "Start with a new
+    vault". After the confirmation, the app returns to the first run (13.1). [decision on
+    the dialog]
+  - "Cancel" closes the dialog.
+- Restore from sync (stage 7) [decision]: the user enters the recovery key, then a new
+  master password and its confirmation, and the app unlocks. The new password also becomes
+  the account password, and other devices are signed out, as after a password change
+  (see 13.4).
+  - The dialog also shows the account email, pre-filled and editable. If the server does
+    not accept the key, the dialog says that the email may have changed on another device,
+    as well as that the key may be wrong.
   - When the server cannot be reached or does not accept the recovery, the dialog offers to
     recover only the data on this device: the new password unlocks the local copy, and this
     device is signed out of the account until the user signs in with the account password
     or recovers through the server.
 
-### 13.3 Lock and auto-lock
+### 13.3 Lock
 
 - The app locks:
-  - with the Lock item in the app menu (see 1.4);
-  - automatically after the auto-lock interval without user input (see 13.4). Only keyboard
-    and mouse input in the app's windows counts; terminal output does not.
-- Locking applies to all windows at once.
+  - manually: with the Lock item in the app menu (see 1.4) and with Ctrl+Shift+L;
+  - on inactivity: after the auto-lock interval without input (see 13.4): never, 5, 15, 30
+    or 60 minutes, "never" by default. Only keyboard and mouse input in the app's windows
+    counts (keys, mouse buttons and the scroll wheel, in dialogs and menus too); terminal
+    output does not. [decision on what counts as input]
+  - Before any lock, and before a window closes or the app quits, an edit in the details
+    panel that is still waiting for the autosave is saved. [decision]
+- Locking applies to all windows at once. [decision]
 - On lock:
-  - the unlock screen (13.2) covers every window: terminal output, panels and dialogs are
-    hidden;
-  - established sessions, port forwards and running file transfers keep running;
-  - the vault keys and decrypted secrets are wiped from memory;
+  - the unlock screen (13.2) covers every window. Open session tabs stay alive, but their
+    content (terminal output, panels and dialogs) is hidden until unlock;
+  - established sessions, port forwards and running file transfers keep running; nothing
+    is disconnected;
+  - the vault keys and decrypted secrets are wiped from memory; [decision]
   - everything that needs secrets waits for unlock: automatic reconnection (see 4.6) and
-    the autostart of forwarding rules (see 8.4).
-- After unlock, every window returns to the state it had before the lock.
+    the autostart of forwarding rules (see 8.4). [decision]
+- After unlock, every window returns to the state it had before the lock. [decision]
+- Lock and auto-lock always ask for the master password, also with "Remember on this
+  device": the remembered key is used only at launch (see 13.4). [decision]
 
 ### 13.4 Security settings
 
 Settings → Security (see 12.1):
 
-- **Auto-lock**: a dropdown of intervals (1, 5, 15, 30 or 60 minutes), 15 minutes by default.
-  The "Never" option turns auto-lock off.
-- **Change master password**: the current password, the new password and its confirmation.
+- **Auto-lock**: a dropdown with Never, 5, 15, 30 and 60 minutes; Never by default.
+- **Change master password**: the current password, the new password and its
+  confirmation. The new password follows the rules of 13.1 (at least 8 characters, the
+  strength indicator). [decision]
   - Works without a server too. The change takes effect immediately.
   - With a sync server, the change needs a connection to the server. Before confirming, a
     warning says that other devices will be signed out and will ask for the new password.
-- **Recovery key**: "Show" and "Reissue", both after entering the master password.
-  "Reissue" creates a new key and shows it as in 13.1, with the required "I saved it"
-  checkbox; the old key stops working.
-- **Remember on this device**: toggle, off by default. When it is on, a device key is stored
-  in the OS keychain, and the app unlocks at launch without the password (see 13.2).
-  - Turning it on shows a warning: any program running under this OS user will be able to
-    unlock the data.
+- **Recovery key**: only with a sync account (stage 7); in local mode the item is hidden
+  and the key is never shown (D29). "Show" and "Reissue", both after entering the master
+  password. "Reissue" creates a new key and shows it as in 13.5, with the required "I saved
+  it" checkbox; the old key stops working. [decision]
+- **Remember on this device**: toggle, on by default; the first-run screen sets it (13.1).
+  When it is on, a device key is stored in the OS keychain, and the app unlocks at launch
+  without the password (see 13.2). [decision on the details below]
+  - The explanation under the toggle says that any program running under this OS user can
+    then unlock the data. Turning it on later shows the same text as a warning. Turning it
+    off deletes the key from the keychain, and the next launch asks for the password.
   - Hidden when the OS has no keychain (for example, Linux without Secret Service) and in
     unsigned macOS builds.
   - Biometric unlock is a later stage and is hidden until then.
 
-### 13.5 Connect sync server wizard
+### 13.5 Connect sync server wizard [decision]
 
 - Opened with "Connect sync server" (see 12.2). A modal dialog with steps; every step has a
   "Back" button:
@@ -1320,10 +1417,13 @@ Settings → Security (see 12.1):
      - sign in: a one-time code, if TOTP is enabled for the account;
      - register: an offer to enable TOTP now (a QR code, the secret as text, and a code to
        confirm). It can be skipped and enabled later (see 12.2).
-  4. **Recovery key** (registration only): the recovery key that now also protects the
-     account is shown with the required "I saved it" checkbox, as in 13.1. If the data on
-     this device was connected to another account before, registration creates a new
-     recovery key, and this step shows the new one.
+  4. **Recovery key** (registration only): the recovery key that protects the account is
+     shown as text in a monospace font with a "Copy" button; the clipboard is cleared after
+     30 seconds, as for private keys (see 7.3). The "I saved the recovery key" checkbox is
+     required: "Finish" is disabled until it is checked. In local mode no recovery key is
+     shown (13.1), so this is the first time the user sees it. If the data on this device
+     was connected to another account before, registration creates a new recovery key, and
+     this step shows the new one.
 - The master password never leaves the device; the server receives only a key derived
   from it.
 - Signing in to an existing account on a device that already has local data merges the
@@ -1333,7 +1433,7 @@ Settings → Security (see 12.1):
 - When the wizard finishes, sync starts, and Account & Sync (12.2) shows the connected
   server.
 
-### 13.6 Sync conflicts
+### 13.6 Sync conflicts [decision]
 
 - When sync keeps a losing version of an object, the object's card shows a conflict badge
   in every list (hosts, groups, keys, identities, forwarding rules, snippets, known hosts),

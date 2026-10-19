@@ -225,7 +225,7 @@ Installation identity (stage 0 decision): `db_id` and `device_id` are UUIDv7 val
 
 - A guard in front of every command enforces the lock in Rust; the UI is not trusted to do it.
 - Terminals keep running while locked (D9), so the output and size commands of running sessions (`session_attach`, `session_resize`, `session_ack`) are accepted in every state (stage 2); they reveal nothing and act only on sessions of the calling window.
-- Auto-lock: one timer in `core::lock` for all windows (interval per UI 13.4, 15 minutes by default, "Never" possible). Only keyboard and mouse input in app windows counts (UI 13.3). Each window reports input with the `activity` command at most once every 30 seconds (stage 0 decision).
+- Auto-lock: one timer in `core::lock` for all windows (interval per UI 13.4, "Never" by default since D29). Only keyboard and mouse input in app windows counts (UI 13.3). Each window reports input with the `activity` command at most once every 30 seconds (stage 0 decision).
 - "Remember on this device" unlocks with the device key at launch only; lock and auto-lock always ask for the password (UI 13.2).
 - Lock rules, key wiping and the accepted risks are in [security.md](security.md).
 

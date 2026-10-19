@@ -66,11 +66,12 @@ If you see a reason to replace something, propose it BEFORE starting work.
   only the record id, coarse type, vault id, revision, key epoch, and sync
   service fields stay in the clear. Search and sorting run in memory after
   unlock. [decision]
-- Unlocking with the master password, optionally with biometrics. By default
-  nothing is stored in the OS keychain: only the "biometrics / remember on this
-  device" option (off by default, with a warning) stores a device key there
-  (crate keyring) that wraps the vault key a second time. Without an OS keychain
-  this option is unavailable; there is no fallback to a file. [decision]
+- Unlocking with the master password, optionally with biometrics. The "remember
+  on this device" option (on by default since D29, with a note about the risk)
+  stores a device key in the OS keychain (crate keyring) that wraps the vault
+  key a second time, so the password is not asked at launch; lock and auto-lock
+  still ask for it. Without an OS keychain this option is unavailable; there is
+  no fallback to a file. [decision]
 - Cryptography: Argon2id (KDF), HKDF (key separation), XChaCha20-Poly1305
   (data), X25519 in HPKE (RFC 9180) Auth mode (wrapping of shared vault keys).
   Only vetted crates (RustCrypto, dalek); russh uses the ring backend as an
@@ -219,11 +220,11 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   - the local copy of a removed member is NOT erased remotely (principle 3);
     it stays as a read-only local archive that can be exported or copied to
     the personal vault. [decision]
-- Recovery key: 256 random bits, created together with the first master
-  password, also without an account. It wraps the personal vault key and
-  yields a recovery auth key that allows setting a new password. An honest
-  warning in the UI: without the password and the recovery key, the data
-  cannot be recovered. [decision]
+- Recovery key: 256 random bits. It wraps the personal vault key and yields a
+  recovery auth key that allows setting a new password. In local mode no
+  recovery key is shown or required (D29): an honest warning in the UI says
+  that a forgotten master password cannot be recovered. The recovery key is
+  shown when a sync account is registered. [decision]
 - Server:
   - registration is open or invite-only (configurable);
   - TOTP 2FA (reset only with the admin CLI); [decision]
@@ -302,9 +303,12 @@ for my confirmation.
 Elements of future stages are hidden behind a stage flag, not shown disabled.
 The exception is the window frame and the sidebar: the SFTP tab and all six
 sidebar sections are always shown, and one whose screen is not implemented yet
-opens an "In development" placeholder. The UI tests of a feature are written in
-the stage that implements it, and every stage report lists what is still hidden
-or shown as a placeholder. [decision]
+opens an "In development" placeholder. D29 adds two more: every field of the
+host panel (UI spec, 3.1, including Mosh and Add Telnet) is shown and its value
+is saved before the feature works in sessions, and "Restore from sync" on the
+unlock screen is shown disabled until sync exists. The UI tests of a feature are
+written in the stage that implements it, and every stage report lists what is
+still hidden or shown as a placeholder. [decision]
 
 Stages 0–2 were first built on Tauri + React; their UI is rebuilt on GPUI Kit
 (`docs/decisions.md`, 27). [decision]
@@ -337,8 +341,8 @@ Stages 0–2 were first built on Tauri + React; their UI is rebuilt on GPUI Kit
    overridden in Settings → Updates). [decision]
 10. Later stages: mobile apps, shared session (multiplayer),
     import from cloud providers, autocomplete, snippet generation via
-    a pluggable LLM, Mosh (a separate stage; its toggle stays hidden until
-    then). [decision]
+    a pluggable LLM, Mosh (a separate stage; until then its toggle in the
+    host panel only saves the value, D29). [decision]
 
 If something in the specification is contradictory or technically unsound, say
 so before implementation, rather than silently.

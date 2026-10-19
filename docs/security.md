@@ -13,7 +13,7 @@ This is the threat model required by `SPEC.md` ("Security"). It states what Shel
 
 Goals:
 
-1. Confidentiality at rest: everything in the data directory except the metadata listed in section 9.3 and the short-lived files of explicit user actions (section 9.3) is encrypted under keys that only the master password (or the recovery key) opens.
+1. Confidentiality at rest: everything in the data directory except the metadata listed in section 9.3 and the short-lived files of explicit user actions (section 9.3) is encrypted under keys that only the master password (or the recovery key) opens, and, while "remember on this device" is on (the default since D29), the device key in the OS keychain (section 8).
 2. Zero-knowledge sync: the sync server stores ciphertext and the metadata of section 14.2; keys and plaintext never leave the client (principle 5).
 3. Integrity: a substituted, reordered or modified record is detected and not applied.
 4. Local availability: no server, member or administrator can wipe or lock data already on the device (principle 3).
@@ -35,7 +35,8 @@ Non-goals:
 | Asset | Examples | Where it lives | Main property |
 |---|---|---|---|
 | Master password | | the user's memory; process memory during key derivation | confidentiality |
-| Recovery key | `RK1-…` | paper copy; record `recovery_key` in the personal vault | confidentiality |
+| Recovery key | `RK1-…` | record `recovery_key` in the personal vault; the user's paper copy once it is shown at registration (in local mode it is never shown, D29) | confidentiality |
+| Device key | 32 random bytes | OS keychain while "remember on this device" is on (the default, D29) | confidentiality |
 | Vault keys and derived keys | section 5.3 | wrapped in the database and on the server; memory while unlocked | confidentiality |
 | Credentials | SSH private keys, passphrases, host and identity passwords, certificates, FIDO2 data | records (personal or team vault) | confidentiality |
 | Host configuration | addresses, usernames, groups, jump hosts, proxies, environment variables, startup snippets, forwarding rules | records | integrity (a change can redirect a connection or run a command), confidentiality |
@@ -90,7 +91,7 @@ Non-goals:
 | ID | Boundary | What crosses | Controls (section) |
 |---|---|---|---|
 | TB1 | Webview ↔ Rust core | UI requests, display data, events | CSP and capabilities (13); secret fields stay in the core (9.5) |
-| TB2 | App ↔ OS | files, keychain items, clipboard, child processes, dumps | encryption at rest (5), permissions (9.3), nothing in the keychain by default (8), clipboard clearing (9.4), no core dumps (9.5) |
+| TB2 | App ↔ OS | files, keychain items, clipboard, child processes, dumps | encryption at rest (5), permissions (9.3), only the device key in the keychain, while "remember on this device" is on (8), clipboard clearing (9.4), no core dumps (9.5) |
 | TB3 | Client ↔ sync server | auth keys, tokens, envelopes, wraps, public keys | HTTPS, end-to-end encryption, AAD, KDF bounds, pins (5, 14) |
 | TB4 | Client ↔ SSH server | credentials, keystrokes, output, files, channel requests | host key checks, escape-sequence policy, name checks, channel allowlist (11, 12) |
 | TB5 | User ↔ team members | vault keys and every record of the vault | HPKE Auth, pins, rosters, fingerprints, epochs, server-enforced roles (5.7, 15) |
@@ -129,7 +130,7 @@ master password ──Argon2id(argon2_salt(email, kdf_salt), params)──► ma
 recovery_key (32 B random) ──HKDF "shellpp/v1/recovery-kek"──► recovery_kek
 recovery_key ──HKDF "shellpp/v1/recovery-auth" ‖ origin─► recovery_auth_key ──► server verifier
 
-device_key (32 B random, OS keychain, optional) ──HKDF "shellpp/v1/device-wrap"──► device_wrap_key
+device_key (32 B random, OS keychain, with "remember on this device", on by default) ──HKDF "shellpp/v1/device-wrap"──► device_wrap_key
 
 vault_key[personal, e]  wrapped by: kek, recovery_kek, device_wrap_key (optional)
 vault_key[team, e]      wrapped by: HPKE Auth to each member's X25519 public key
@@ -153,8 +154,8 @@ personal vault records hold: user X25519 keypair, SSH ID private key, recovery k
 | `auth_key` | 32 B | HKDF from `master_key` | sent to server on login and sensitive operations; never stored by the client | wiped after the request | D11 |
 | `vault_key[v, e]` | 32 B | CSPRNG | only wrapped (local `key_wraps`, server); plaintext in memory while unlocked | wiped on lock; superseded by epoch `e + 1` | D8 |
 | `record_key[v, e]`, `chain_key[v, e]` | 32 B | HKDF from vault key | memory only | wiped on lock | stage 0 decision |
-| `device_key` | 32 B | CSPRNG | OS keychain, only with "remember on this device" (off by default) | deleted with its wrap when the option is turned off or the local copy is deleted | D8 |
-| `recovery_key` | 32 B | CSPRNG at first password | user's paper copy; copy inside the personal vault (record `recovery_key`) so it can be shown after password re-entry (UI 13.4) | replaced on reissue; a new one at a registration that moves data bound to another account (section 5.9) | D11; vault copy: stage 0 decision |
+| `device_key` | 32 B | CSPRNG | OS keychain, only with "remember on this device" (on by default, D29) | deleted with its wrap when the option is turned off or the local copy is deleted; kept at "Start with a new vault", where it opens only the archived file (section 8) | D8, D29 |
+| `recovery_key` | 32 B | CSPRNG at first password | copy inside the personal vault (record `recovery_key`) so it can be shown after password re-entry (UI 13.4). In local mode it is never shown (D29); with an account it is shown at registration (UI 13.5), and the user keeps a paper copy | replaced on reissue; a new one at a registration that moves data bound to another account (section 5.9) | D11, D29; vault copy: stage 0 decision |
 | `recovery_kek`, `recovery_auth_key` | 32 B | HKDF from `recovery_key` | memory only; server keeps a verifier of `recovery_auth_key` | wiped after recovery or reissue | D11 |
 | user X25519 keypair | 32 B + 32 B | CSPRNG at registration | private: record `user_keypair` in the personal vault; public: server | no rotation in the MVP | D13 |
 | SSH ID key | Ed25519 | generated at registration | private: record `ssh_id` in the personal vault (OpenSSH format); public: server | regenerated by the user | D13 |
@@ -192,7 +193,7 @@ Rules:
 | Mobile preset | `m_kib = 32768` (32 MiB), `t = 4`, `p = 2` | stage 0 decision |
 | Client-enforced floor | `alg = argon2id`, `v = 1`, `m_kib ≥ 32768`, `t ≥ 3`, `m_kib × t ≥ 131072` (the cost of the mobile preset), `1 ≤ p ≤ 16` | stage 0 decision |
 | Client-enforced ceiling | desktop: `m_kib ≤ 1048576`, `t ≤ 16`; mobile: `m_kib ≤ 262144`, `t ≤ 16` | stage 0 decision |
-| Minimum master password length | 10 characters, counted as Unicode code points after NFC normalization | stage 0 decision |
+| Minimum master password length | 8 characters, counted as Unicode scalar values after NFC normalization; no composition rules | D29 (was 10, stage 0 decision) |
 
 JSON form, used locally (`local_auth.kdf`), in the API and in the encrypted export:
 
@@ -308,16 +309,18 @@ Storage-level changes for each event are in [storage-format.md](storage-format.m
 
 | Event | Key operations | Source |
 |---|---|---|
-| First run | password (≥ 10 characters) → new `db_id`, `device_id`, personal `vault_id`, `vault_key[personal, 1]`, `kdf_salt`, `recovery_key` → `kek` and `recovery` wraps → records `vault_meta`, `recovery_key`, `device_info` → recovery key shown, "I saved it" required (UI 13.1) | D8, D11 |
+| First run | password (≥ 8 characters) → new `db_id`, `device_id`, personal `vault_id`, `vault_key[personal, 1]`, `kdf_salt`, `recovery_key` → `kek` and `recovery` wraps → records `vault_meta`, `recovery_key`, `device_info`. The recovery key is not shown in local mode. Then, with "remember on this device" (on by default, UI 13.1) and an OS keychain: `device_key` into the OS keychain → `device` wrap | D8, D11, D29 |
 | Unlock | Argon2id → `kek` → open `(personal, current, kek)` → older epochs through the chain → `user_keypair` (if any) → each team vault's HPKE wrap (sender pin checked) → in-memory index; `master_key` and `kek` wiped. With "remember on this device" at launch: `device_key` opens `(personal, current, device)` instead | D8, D9 |
+| Wrong password | `unlock` fails; the attempt counter grows. From the fifth wrong password in a row, `unlock` is refused before Argon2id runs until the pause ends (section 8). No key operation | D29 |
 | Lock | section 8 | D9 |
-| "Remember on this device" on / off | on: warning → `device_key` into the OS keychain → `device` wrap. Off: keychain item and wrap deleted. Unavailable without an OS keychain (D5) and in unsigned macOS builds (D7) | D5, D7, D8 |
+| "Remember on this device" on / off | on (at the first run by default, or later with a warning): `device_key` into the OS keychain → `device` wrap. Off: keychain item and wrap deleted. Unavailable without an OS keychain (D5) and in unsigned macOS builds (D7) | D5, D7, D8, D29 |
+| Start with a new vault | only while locked: the database is closed, `shellpp.db` and its `-wal` and `-shm` files are renamed to an archive name ([data-format.md](data-format.md)), and a new empty database puts the app in first run. Nothing is deleted. A keychain item of the old `db_id` is kept and opens only the archive | D29 |
 | Register | master password entered again (`master_key` is not kept) → `user_keypair` and `ssh_id` generated → keys re-derived with the account email in `argon2_salt` (existing `kdf_salt` and parameters) → new `kek` wrap and `auth_key` (bound to the server origin, section 5.5) → `auth_key`, `recovery_auth_key`, the new `kek_wrap`, the `recovery` wrap and public keys sent; `local_auth.kdf_email` set. Same password, no new recovery key. A personal vault that was bound to an earlier account is first moved to a new `vault_id` ([data-model.md](data-model.md), section 18.5), and in that case registration also generates a new `kdf_salt` and a new `recovery_key` (new `recovery_key` record, `recovery` wrap and `recovery_auth_key`; the key is shown with "I saved it" in step 4 of UI 13.5), so the new server never receives an auth key or a recovery auth key the earlier server accepts | D11, D13; email binding, move, new salt and recovery key: stage 0 decision |
 | Sign in on an empty device | pre-login → Argon2id → login (→ TOTP) → open `kek_wrap` → local `kek` wrap → pull → local `recovery` wrap built from the `recovery_key` record → the server's `recovery_wrap` checked against it | D11; check: stage 0 decision |
 | Sign in on a device with local data | as above; local records re-encrypted into the account's personal vault, recordings re-encrypted, then the local personal vault, its wraps and its recovery key are replaced by the account's. When the account's personal vault id equals the local one (the account this device was last bound to), it is a rebind instead: records and ids are kept and the vault runs a full resync. Records of an earlier account are never merged ([data-model.md](data-model.md), section 18.5) | D15; rebind and earlier account: stage 0 decision |
 | Password change | new salt, current preset → new `kek` and `auth_key` → rewrap of the current personal vault key → with an account, the server replaces verifier, salt, parameters and `kek_wrap` atomically and signs out the other devices. Recovery and device wraps unchanged; the vault key does not change and no record is re-encrypted. With "my old password may be compromised" (off by default) the change also rotates the personal vault, as a recovery does | D11; option: stage 0 decision |
 | Email change | current password re-entered → new salt and keys derived with the new email → rewrap, as a password change that keeps the password → the request names the email the material was derived for, and the server applies it only when that is the pending new email → the server replaces email, verifier, salt, parameters and `kek_wrap` atomically, deletes every ticket of the user and signs out the other devices; `local_auth.kdf_email` set to the new email | stage 0 decision |
-| Recovery | `recovery_key` → `recovery_auth_key` (server) and `recovery_kek` → open the recovery wrap → personal vault rotation (`vault_key[personal, e + 1]`, chain wrap, `kek` and `recovery` wraps of the new epoch, background re-encryption) and new password material as for a password change, in one server transaction, with the Argon2id salt bound to the email accepted by `recover/begin` → all other devices revoked; `local_auth.kdf_email` and `server_account.email` set to that email. `recover/complete` names that email and fails if the account email changed in between. A server epoch below the local one, or a `recovery_wrap` that opens to another key than the one this device holds for that epoch, stops the recovery (rollback). Local mode: local `recovery` wrap, the same rotation locally. A bound device whose server cannot be reached, refuses or rolled back can recover its local copy offline: local `recovery` wrap, new local password, no rotation, account signed out on that device until the next sign-in with the account password or a recovery through the server ([sync-protocol.md](sync-protocol.md), section 5.2) | D11; rotation, email, rollback check and offline recovery: stage 0 decision |
+| Recovery | `recovery_key` → `recovery_auth_key` (server) and `recovery_kek` → open the recovery wrap → personal vault rotation (`vault_key[personal, e + 1]`, chain wrap, `kek` and `recovery` wraps of the new epoch, background re-encryption) and new password material as for a password change, in one server transaction, with the Argon2id salt bound to the email accepted by `recover/begin` → all other devices revoked; `local_auth.kdf_email` and `server_account.email` set to that email. `recover/complete` names that email and fails if the account email changed in between. A server epoch below the local one, or a `recovery_wrap` that opens to another key than the one this device holds for that epoch, stops the recovery (rollback). Local mode: the app offers no recovery, because the key is never shown there (D29); the core operation (local `recovery` wrap, the same rotation locally) remains. A bound device whose server cannot be reached, refuses or rolled back can recover its local copy offline: local `recovery` wrap, new local password, no rotation, account signed out on that device until the next sign-in with the account password or a recovery through the server ([sync-protocol.md](sync-protocol.md), section 5.2) | D11; rotation, email, rollback check and offline recovery: stage 0 decision |
 | Recovery key reissue | master password re-entered → new `recovery_key` → personal vault rotation as in a recovery, with the `recovery` wrap and verifier of the new key → new revision of the `recovery_key` record committed in the same server transaction → all other devices revoked; they rebuild their local `recovery` wrap after signing in again. The old key stops working, except with old database copies and with other devices' local copies until they sign in (RR6) | D11; rotation and single transaction: stage 0 decision |
 | Team vault creation | `vault_key[team, 1]` from the CSPRNG → HPKE wrap to self | D14 |
 | Invitation confirmation | owner compares the invitee's fingerprint out of band → pin `verified = true`, roster entry `accepted` with the current epoch and its `epoch_commit` → HPKE wrap of the current epoch | D14; roster: stage 0 decision |
@@ -345,7 +348,7 @@ Notes:
 - (a) Only as strong as the master password: anyone with the database or the server data can run offline guesses at the cost of one Argon2id per guess (RR7); old database copies keep old wraps (RR6).
 - (b) Same-user malware can capture the password, read memory while unlocked, and read the device key when "remember on this device" is on (RR8).
 - (c) A host learns only what the user sends to it: the credentials used for it, typed input and uploaded files.
-- (d) Protected while the app is locked and "remember on this device" is off. If the app was unlocked, or "remember on this device" is on and the OS session is open, the finder has full access (section 8, RR8).
+- (d) Protected while the app is locked and "remember on this device" is off (it is on by default, D29). If the app was unlocked, or "remember on this device" is on and the OS session is open, the finder has full access (section 8, RR8).
 - (e) Confidential unless an active server substitutes keys during key distribution and nobody compares fingerprints (section 15, RR5), or works with a removed member (RR21). Adding an account the server controls as a recipient needs an owner's explicit confirmation (section 5.7).
 - (f) Every member, viewers included, decrypts every record of the vault, including host passwords and keys, and sees the member list (D13). Members' own credential bindings stay in their personal vaults.
 - (g) A removed member keeps everything received before removal (principle 3) and, with an honest server, cannot read epochs created after it. With an active server it can keep reading new records or plant an epoch (RR21); changing the host secrets is the only guaranteed remedy (section 15).
@@ -372,7 +375,8 @@ Notes:
 | Secrets never in URLs | SPEC "Security" | section 9.2 | API types carry secret fields only in bodies; test that no request path or query contains a canary (stage 0 decision) |
 | Master password from the first launch, also without an account; changeable in local mode | SPEC "Security", D8 | sections 5.3, 5.9 | e2e (UI 13.1, 13.4) |
 | Auto-lock on inactivity | SPEC "Security", D9 | section 8 | e2e (UI 13.3) |
-| Clipboard cleared after copying a password or key | SPEC "Security", UI 7.3, 13.1 | section 9.4 | e2e with the clipboard mock (D6) |
+| Unlock pauses after 5 wrong passwords in a row, also across restarts | D29, UI 13.2 | section 8 | unit tests of the counter in `crates/core` |
+| Clipboard cleared after copying a password or key | SPEC "Security", UI 7.3, 13.5 | section 9.4 | e2e with the clipboard mock (D6) |
 | Strict CSP, minimal set of commands | SPEC "Security" | sections 13.1, 13.2 | CI check of the CSP string and snapshot test of the capability files (stage 0 decision) |
 | No history during password prompts, control sequences stripped, no secret-like snippet hints | UI 4.2 | sections 10.1, 10.2 | unit tests in `crates/core` (SPEC "Quality": "secret filter in history") with a corpus of prompts and commands; the corpus includes snippet runs and inserts whose variable holds a low-entropy password the detector does not match, for example `htpasswd -b users alice {{pw}}` with `pw = summer2024`, which must not be recorded (stage 0 decision) |
 | Private key hidden, shown only via an explicit button | UI 7.3 | section 9.5 | e2e |
@@ -383,14 +387,14 @@ Notes:
 
 ## 8. Lock and auto-lock
 
-UI behavior is in UI 13.2–13.4; this section defines what happens underneath (D9).
+UI behavior is in UI 13.1–13.4; this section defines what happens underneath (D9, D29).
 
 Triggers:
 
-- The Lock item in the app menu (UI 1.4).
-- Inactivity: no keyboard or mouse input in any app window for the auto-lock interval (1, 5, 15, 30 or 60 minutes, 15 by default, or "Never"; UI 13.4). Terminal output, transfers, sync and forwards do not count as activity. The timer lives in the Rust core and covers all windows at once (D23).
+- The Lock item in the app menu and Ctrl+Shift+L (UI 1.4, 13.3).
+- Inactivity: no keyboard or mouse input (keys, mouse buttons, the scroll wheel) in any app window, its dialogs included, for the auto-lock interval (5, 15, 30 or 60 minutes, or "Never", the default since D29; UI 13.4). The core still accepts a stored value of 1 minute, which the app no longer offers. Terminal output, transfers, sync and forwards do not count as activity. The timer lives in the Rust core and covers all windows at once (D23). The desktop app asks the core every second whether the lock is due and then locks through its windows, which save pending edits of the details panel first; the core's own tick locks as well, as a backstop.
 - Sleep counts as inactivity: on resume, the core compares wall-clock time with the last input and locks at once if the interval has passed. Monotonic clocks stop during suspend on Linux and macOS, so they are not used for this check. (stage 0 decision)
-- Launch: the app always starts locked; with "remember on this device" it unlocks at launch with the device key (UI 13.2).
+- Launch: the app always starts locked; with "remember on this device" (on by default since D29) it unlocks at launch with the device key (UI 13.2). When the keychain item is missing or does not open the `device` wrap, the app asks for the password.
 
 On lock:
 
@@ -404,17 +408,32 @@ On lock:
 | Windows | the unlock screen covers every window, including dialogs and terminal output (UI 13.2) |
 | Pending sensitive clipboard content | cleared (section 9.4) |
 | Established sessions, forwards, running transfers | keep running with their transport state (D9) |
-| Terminal scrollback | stays in webview memory, hidden (RR11) |
+| Terminal scrollback | stays in memory, hidden: open session tabs stay alive behind the unlock screen (UI 13.3, D29; RR11) |
 | An open session recording | keeps its own `recording_key[file]` until the file is closed, so output keeps being recorded; this key opens only that file ([storage-format.md](storage-format.md)) (stage 0 decision) |
 | Reconnects, forward autostart, new connections | wait for unlock (D9) |
 | Proxying of the system agent for open sessions | continues; the system agent applies its own policy (stage 0 decision) |
 
 Unlock:
 
-- The master password, or the recovery key with a new password (UI 13.2). After lock, the password is required even with "remember on this device" (UI 13.2); the device key is used only at launch, so restarting the app bypasses that lock (RR8).
-- There is no attempt counter, lockout or wipe (principle 3). The Argon2id cost per attempt is the only brake; an offline attacker does not use the UI anyway.
+- The master password (UI 13.2). The recovery key is not offered in local mode, because it is never shown there (D29); with a sync account, "Restore from sync" uses it (UI 13.2, stage 7). After lock, the password is required even with "remember on this device" (UI 13.3); the device key is used only at launch, so restarting the app bypasses that lock (RR8).
+- Attempt limit (D29): wrong master passwords in a row are counted. From the fifth one, `unlock` is refused (`too_many_attempts`, with the seconds left) for a pause of 5 seconds that doubles with every further wrong password, up to 5 minutes: 5, 10, 20, 40, 80, 160, then 300 seconds. The core checks the pause before Argon2id runs, so no screen can skip it, and counts the attempt as wrong under the same lock, taking it back when the password proves right, so concurrent attempts (two windows, other callers) cannot guess in parallel. Any successful unlock (password, device key or recovery) resets the counter.
+- The counter and the end of the pause are kept in plaintext in the `meta` table (key `unlock_lockout`, [data-format.md](data-format.md)), so a restart does not reset them; they are not secret. A pause end further away than the counter allows (the clock was set back, or the value was edited) is cut back to the allowed pause. Wrong passwords never wipe data (principle 3).
+- The counter brakes guessing through the app's own screen only. An attacker with the database file (A1) guesses offline, where the Argon2id cost per attempt is the only brake (RR7), and same-user malware (A2) can edit the counter.
 - The master password is asked only by the app's own lock screen and settings dialogs, never inside a session tab (section 11.2).
 - Showing or reissuing the recovery key, changing the password and changing the account email require the master password again even while unlocked (UI 13.4; email: stage 0 decision, section 5.9).
+
+"Remember on this device" (on by default since D29, the owner's choice):
+
+- At the first run, when the toggle is on (the default) and the OS has a keychain, a random 32-byte `device_key` is stored in it (service `shellpp`, account `device-key:<db_id>`) and wraps the personal vault key in the `device` row ([data-format.md](data-format.md)). The app then unlocks at launch without the password.
+- The risk: any process running as the same OS user can read the keychain item (Windows Credential Manager, an unlocked Secret Service collection) and, together with the database file, open the data without the password. Starting the app in the user's session opens it without the password as well (RR8). The first-run screen and Settings say this next to the toggle (UI 13.1, 13.4).
+- What still holds: lock and auto-lock wipe the keys from memory and ask for the password; a disk-only attacker (A1) cannot read the keychain item; a copy of the database on another machine has no keychain item, except on Windows with a roaming profile (below); turning the option off deletes the item and then the `device` row, and when the OS refuses to delete the item nothing changes and Settings says so.
+- Windows roaming profiles: the crate `keyring` (the owner's choice, D29) stores the item as a generic credential with `CRED_PERSIST_ENTERPRISE`. In a domain with Credential Roaming or roaming profiles, the item travels with the profile to every machine the user signs in to and to the profile server, so a copy of the database on such a machine opens without the password (RR8). Users in such domains should turn the option off.
+- Tests, the demo mode and the screenshot mode use the in-memory secret store and a temporary `SHELLPP_DATA_DIR`, so they never write to the OS keychain or the permanent profile (D29).
+
+Forgotten master password (D29):
+
+- In local mode there is no recovery: the master password is not stored anywhere, and the recovery key that the core keeps in the personal vault is never shown (section 5.3).
+- "Start with a new vault" (UI 13.2) runs only while locked. The core closes the database, renames `shellpp.db` and its `-wal` and `-shm` files to an archive name and opens a new, empty database, so the app is in first run again; it keeps the lock of the data directory all along, so no second process can step in meanwhile. Nothing is deleted: the archive stays encrypted under the old password and can be put back by hand ([data-format.md](data-format.md)). The keychain item of the old `db_id`, if any, is kept and opens only the archive; `backups/` is kept as well. The attempt counter starts from zero in the new database.
 
 ## 9. Secret hygiene
 
@@ -447,7 +466,7 @@ Enforcement (stage 0 decision):
 
 ### 9.3 Plaintext on disk
 
-Plaintext in the data directory is limited to ids, class codes, revisions, epochs, tombstone flags, sequence numbers, timestamps of local bookkeeping, the account email and server URL, KDF parameters and salt, and `local_settings`, which never hold secrets, host data or command text ([storage-format.md](storage-format.md), "What is stored in the clear"). Diagnostic logs follow section 9.1.
+Plaintext in the data directory is limited to ids, class codes, revisions, epochs, tombstone flags, sequence numbers, timestamps of local bookkeeping, the account email and server URL, KDF parameters and salt, the unlock attempt counter (section 8), and `local_settings`, which never hold secrets, host data or command text ([storage-format.md](storage-format.md), "What is stored in the clear"; the implemented format is in [data-format.md](data-format.md)). Diagnostic logs follow section 9.1.
 
 Explicit user actions that write plaintext (D16):
 
@@ -464,12 +483,13 @@ Rules:
 - Unix permissions: directories `0700`, files `0600`. On Windows the data directory is in the local, non-roaming profile.
 - SQLite runs with `secure_delete = ON`, which overwrites deleted content inside the database file. Files are deleted by unlinking; copies kept by the file system, SSD wear leveling, snapshots or OS backups are not erased (RR18).
 - Pre-migration copies in `backups/` are ciphertext but keep the wraps of their time (RR6).
+- "Start with a new vault" (section 8) renames the database files and never deletes them; the archive stays in the data directory until the user removes it.
 - "Delete local copy" at log out removes the whole data directory, `backups/` and `recordings/` included, the temporary directory and the keychain item ([storage-format.md](storage-format.md), "Backup and restore").
 - Full-disk encryption and encrypted swap are recommended in the user documentation, because memory can reach swap and hibernation files (RR11).
 
 ### 9.4 Clipboard
 
-- Sensitive values: host and identity passwords, key passphrases, private keys (UI 7.3) and the recovery key (UI 13.1).
+- Sensitive values: host and identity passwords, key passphrases, private keys (UI 7.3) and the recovery key (UI 13.5).
 - They are copied by a Rust command straight to the OS clipboard and do not pass through the webview. (stage 0 decision)
 - Cleared after 30 seconds (UI 7.3), only if the clipboard still holds the copied value, compared by a hash kept in memory, so a later copy by the user is not erased. Also cleared on lock and on exit. (stage 0 decision)
 - Marked as sensitive where the platform has a convention, so clipboard history and cloud clipboard skip them: the Windows clipboard history and cloud exclusion formats, the macOS concealed pasteboard type, the KDE password-manager hint. (stage 0 decision; best effort)
@@ -802,8 +822,8 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | RR4 | Records are not signed: a key holder together with an active server can forge records, a viewer for the current epoch, a removed member for the epochs it held. Even with an honest server, any member, viewers included, can publish team connection log entries whose user fields name another member, because clients cannot compare them with the server's `created_by`. | Record signatures are deferred (D13). Checking the author of team log entries is an open item (section 18). |
 | RR5 | Key distribution is TOFU: an active server can hand a new member a fake owner key unless fingerprints are compared. A fake member receives a vault key only if an owner confirms it in the recipient dialog without comparing its fingerprint. | Fingerprints in Team and in the recipient dialog; automatic rotations never add recipients outside the client's roster; epoch chain check for existing members (section 5.7). |
 | RR6 | Old wraps open with old credentials: old database copies (`backups/`, OS backups, user copies) keep the wraps of their time, and the server and its backups keep the `kek_wrap` and `recovery_wrap` of every earlier password and recovery key, with the old salt. Until the personal vault key is rotated, such a wrap also yields the key of current and future data. Other devices keep opening their local copy with the old password or the old recovery key until they sign in again. | Recovery and recovery key reissue always rotate the personal vault key, and a password change rotates it when the user says the old password may be compromised (section 5.9); after a rotation, old wraps open only data from before it. Deleting pre-migration copies after credential changes is an open item. Users must protect or delete old copies. |
-| RR7 | Anyone with the database, a server copy or a server backup can guess the master password offline. | Argon2id 64 MiB, t = 3, never below the cost of the mobile preset; the email-bound salt makes every guess cost one Argon2id per account; minimum length 10; the recovery key has 256 bits. A strong password is the user's part. |
-| RR8 | Same-user malware or a compromised OS sees everything while the app is unlocked. With "remember on this device" the device key is readable by same-user programs on Windows and Linux, and restarting the app unlocks it without the password. | Off by default, with a warning (UI 13.4); disabled in unsigned macOS builds (D7). |
+| RR7 | Anyone with the database, a server copy or a server backup can guess the master password offline. The minimum length is 8 characters with no composition rules (D29), so a short password is cheaper to guess, and the attempt limit of the unlock screen (section 8) does not apply offline. | Argon2id 64 MiB, t = 3, never below the cost of the mobile preset; the email-bound salt makes every guess cost one Argon2id per account; the first-run screen shows a strength indicator (UI 13.1); the recovery key has 256 bits. A strong password is the user's part. |
+| RR8 | Same-user malware or a compromised OS sees everything while the app is unlocked. With "remember on this device", which is on by default (D29), the device key is readable by same-user programs on Windows and Linux, and starting or restarting the app unlocks it without the password. On Windows with a roaming profile the keychain item also roams to the user's other machines (section 8). | The owner's choice of convenience (D29). The risk is stated next to the toggle on the first-run screen and in Settings, where it can be turned off (UI 13.1, 13.4); lock and auto-lock still wipe the keys and ask for the password; disabled in unsigned macOS builds (D7). |
 | RR9 | Unsigned builds: users must bypass Gatekeeper or SmartScreen, the OS cannot check the origin of the first download, and on macOS the keychain-based features are disabled (D7). | Updates are signature-checked; release checksums are published. Buying certificates is the owner's decision. |
 | RR10 | History capture is a heuristic (section 10.1): it can miss prompts, capture wrong text, let a secret through (unknown formats, low-entropy passwords) or drop harmless commands. | Fails closed where possible; history is encrypted and not synced by default; any entry can be deleted (UI 4.2). OSC 133 is deferred. |
 | RR11 | Secrets can remain in memory beyond their use: terminal scrollback while locked, revealed values in the webview, swap, hibernation files and Windows crash dumps. | Rust-side zeroization, the webview reveal rule, no core dumps on Linux and macOS. Full-disk encryption recommended. |
@@ -811,7 +831,7 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | RR13 | Other programs can read sensitive clipboard content during the 30 seconds, and clipboard managers that ignore the platform hints can keep it. | Clearing, platform hints (section 9.4). |
 | RR14 | Forwarded ports and the SOCKS proxy on 127.0.0.1 are open to every local process and user; a web page can reach forwarded web services through DNS rebinding. | Loopback default; non-loopback needs a warning (UI 8.4). |
 | RR15 | Account enumeration is only partly prevented: registration answers `email_taken`, and real accounts whose KDF parameters differ from the desktop preset (mobile or upgraded) are told apart from fake answers. | Invite-only registration by default; fake salts and dummy Argon2id for the common case. |
-| RR16 | The recovery key copy inside the personal vault means anyone who once unlocks the vault learns the recovery key, and can later reset the password with it (plus a TOTP code, if TOTP is on). | Needed to show the key again (UI 13.4). After a suspected compromise: change the password with "my old password may be compromised" and reissue the recovery key; both rotate the personal vault key and sign out the other devices. |
+| RR16 | The recovery key copy inside the personal vault means anyone who once unlocks the vault learns the recovery key, and can later reset the password with it (plus a TOTP code, if TOTP is on). The core keeps this copy in local mode too, where the app never shows it (D29). | Needed to show the key again (UI 13.4). After a suspected compromise: change the password with "my old password may be compromised" and reissue the recovery key; both rotate the personal vault key and sign out the other devices. |
 | RR17 | A user's X25519 private key cannot be rotated in the MVP; if it leaks, every team vault key wrapped to that user is exposed. | Deferred; the key lives only inside the encrypted personal vault. |
 | RR18 | Deleted files are not securely erased (SSDs, journaling, snapshots); temporary SFTP files and plaintext exports are plaintext while they exist. | Short-lived temporary files; warnings for exports; full-disk encryption recommended. |
 | RR19 | With agent forwarding on, a malicious host can use the forwarded keys for the length of the session. | Off by default per host (UI 3.1). |
