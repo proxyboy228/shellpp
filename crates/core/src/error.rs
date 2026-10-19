@@ -59,6 +59,50 @@ impl FieldError {
     }
 }
 
+/// Why an SSH connection failed (`ssh_error`, `details.reason`; stage 2 plan,
+/// section 5.3). The desktop host maps `shellpp_ssh::FailureKind` to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshReason {
+    /// The host name did not resolve.
+    NotFound,
+    /// The TCP connection was refused.
+    Refused,
+    /// Connecting or the handshake timed out.
+    Timeout,
+    /// Another network error.
+    Network,
+    /// The user rejected the host key (Cancel in the TOFU or changed-key dialog).
+    HostKeyRejected,
+    /// Every authentication method failed.
+    AuthFailed,
+    /// Protocol error or no common algorithm.
+    Protocol,
+    /// The server refused the session, PTY, shell or exec request.
+    ChannelFailed,
+    /// The connection was closed (transport error, keepalive timeout).
+    Disconnected,
+    /// The linked private key cannot be decoded.
+    KeyUnusable,
+}
+
+impl SshReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::Refused => "refused",
+            Self::Timeout => "timeout",
+            Self::Network => "network",
+            Self::HostKeyRejected => "host_key_rejected",
+            Self::AuthFailed => "auth_failed",
+            Self::Protocol => "protocol",
+            Self::ChannelFailed => "channel_failed",
+            Self::Disconnected => "disconnected",
+            Self::KeyUnusable => "key_unusable",
+        }
+    }
+}
+
 /// Errors returned by [`crate::service::Core`].
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -96,6 +140,16 @@ pub enum CoreError {
     /// A stored record or key wrap failed its integrity checks.
     #[error("damaged data")]
     Damaged,
+    /// The user cancelled the operation (a connection attempt or a prompt).
+    #[error("cancelled")]
+    Cancelled,
+    /// An SSH connection failed; the reason is in `details.reason`.
+    #[error("ssh error")]
+    Ssh(SshReason),
+    /// The server presented a host key marked `@revoked` in known hosts
+    /// (docs/data-model.md, section 9.5; UI 10.2). Never continues.
+    #[error("host key revoked")]
+    HostKeyRevoked,
     #[error(transparent)]
     Crypto(#[from] CryptoError),
     #[error(transparent)]
@@ -125,6 +179,9 @@ impl CoreError {
             Self::Unavailable => "unavailable",
             Self::NewerSchema { .. } => "newer_schema",
             Self::Damaged => "damaged",
+            Self::Cancelled => "cancelled",
+            Self::Ssh(_) => "ssh_error",
+            Self::HostKeyRevoked => "host_key_revoked",
             Self::Crypto(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Internal(_) => "internal",
@@ -132,11 +189,13 @@ impl CoreError {
     }
 
     /// Code-specific details: `{"errors": [{"field", "reason"}]}` for
-    /// `validation_failed`, `{"found": N}` for `newer_schema`, `{}` otherwise.
+    /// `validation_failed`, `{"found": N}` for `newer_schema`,
+    /// `{"reason": "..."}` for `ssh_error`, `{}` otherwise.
     pub fn details(&self) -> Value {
         match self {
             Self::Validation(errors) => json!({ "errors": errors }),
             Self::NewerSchema { found } => json!({ "found": found }),
+            Self::Ssh(reason) => json!({ "reason": reason }),
             _ => json!({}),
         }
     }

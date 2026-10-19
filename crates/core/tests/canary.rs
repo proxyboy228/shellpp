@@ -4,6 +4,7 @@
 //! or in plaintext in `shellpp.db` and `shellpp.db-wal`.
 
 mod common;
+mod stage2;
 
 use std::io::Write;
 use std::path::Path;
@@ -15,8 +16,11 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
 use shellpp_core::crypto::decode_recovery_key;
 use shellpp_core::service::dto::{
-    QueryScope, RecordRef, RecordType, RecordsQuery, RecordsRef, SecretCopyTarget, SecretFieldRef,
-    SortMode,
+    HistoryCandidate, HistoryListInput, KeyImportInput, QueryScope, RecordRef, RecordType,
+    RecordsQuery, RecordsRef, SecretCopyTarget, SecretFieldRef, SessionTarget, SortMode,
+};
+use shellpp_core::service::host_api::{
+    ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
 };
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -305,6 +309,196 @@ fn canaries_never_reach_logs_debug_output_or_disk() {
         ("env value", env_value.as_str()),
         ("search text", search.as_str()),
         ("recovery key", recovery_text.as_str()),
+    ] {
+        assert!(
+            !log.contains(canary),
+            "canary {name} found in the log output"
+        );
+        assert!(
+            !debug_output.contains(canary),
+            "canary {name} found in Debug output"
+        );
+    }
+}
+
+/// Stage 2 additions (stage 2 plan, section 4.4): a password saved at a
+/// prompt, a key comment and passphrase, a known host address and a history
+/// command with a canary that passes the secret detector never appear in the
+/// captured TRACE logs, in `Debug` output or in plaintext on disk.
+#[test]
+fn stage2_canaries_never_reach_logs_debug_output_or_disk() {
+    let _serial = serial();
+    let tag = common::random_hex();
+    let prompted = format!("CanaryPrompted-{tag}");
+    let key_comment = format!("canarykey-{tag}");
+    let key_passphrase = format!("CanaryPassphrase-{tag}");
+    let known_address = format!("canary-kh-{tag}.example.com");
+    let host_address = format!("canary-host-{tag}.example.com");
+    // Short tokens: the history canary must pass rule S11.
+    let history_canary = format!("canaryhist-{}", &tag[..12]);
+    let history_command = format!("echo {history_canary}");
+
+    let capture = Capture::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(capture.clone())
+        .finish();
+
+    let env = Env::new();
+    let mut debug_output = String::new();
+    let mut files_checked = false;
+    tracing::subscriber::with_default(subscriber, || {
+        let core = env.open();
+        let password = common::new_password();
+        core.first_run_setup(password.clone()).expect("first run");
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+
+        // A key with a canary comment and a saved canary passphrase.
+        let key = stage2::generate(stage2::KeyKind::Ed25519, &key_comment);
+        let text = stage2::openssh(&key, Some(&key_passphrase));
+        let imported = core
+            .key_import(KeyImportInput {
+                vault_id,
+                label: None,
+                private_key: SecretString::from(text.clone()),
+                passphrase: Some(SecretString::from(key_passphrase.clone())),
+                save_passphrase: true,
+            })
+            .expect("key import");
+        debug_output.push_str(&format!("{imported:?}"));
+        let wrong = core
+            .key_import(KeyImportInput {
+                vault_id,
+                label: None,
+                private_key: SecretString::from(text.clone()),
+                passphrase: Some(SecretString::from(format!("{key_passphrase}-wrong"))),
+                save_passphrase: true,
+            })
+            .unwrap_err();
+        debug_output.push_str(&format!("{wrong:?} {wrong} {}", wrong.details()));
+        debug_output.push_str(&format!("{:?}", core.keys_list().unwrap()));
+
+        // A host linked to the key, with a password saved at a prompt.
+        let host = as_host(
+            save(
+                &core,
+                vault_id,
+                None,
+                RecordType::Host,
+                json!({"address": host_address, "ssh": {"key_id": imported.key.record_id}}),
+                &[],
+            )
+            .expect("host"),
+        );
+        let host_ref = RecordRef {
+            vault_id,
+            record_id: host.record_id,
+        };
+        core.save_prompted_password(host_ref, SecretString::from(prompted.clone()))
+            .expect("prompted password");
+        let config = core
+            .session_config(&SessionTarget::Host {
+                vault_id,
+                record_id: host.record_id,
+            })
+            .expect("session config");
+        debug_output.push_str(&format!("{config:?} {:?}", config.key));
+
+        // A known host with a canary address.
+        let public = key.public_key();
+        let check = HostKeyCheck {
+            address: known_address.clone(),
+            port: 2222,
+            key_type: public.algorithm().as_str().to_owned(),
+            public_key: data_encoding::BASE64.encode(&public.to_bytes().unwrap()),
+        };
+        debug_output.push_str(&format!("{check:?}"));
+        let status = core.known_host_check(&check).unwrap();
+        let view = core.known_host_accept(&check).unwrap();
+        debug_output.push_str(&format!(
+            "{status:?} {view:?} {:?}",
+            core.known_hosts_list().unwrap()
+        ));
+
+        // A history command with a canary that is recorded.
+        let candidate = HistoryCandidate {
+            command: history_command.clone(),
+            prompt_text: "$".into(),
+            typed_printable: true,
+            alt_screen: false,
+        };
+        debug_output.push_str(&format!("{candidate:?}"));
+        let input = HistoryRecordInput {
+            host: Some(host_ref),
+            session_id: uuid::Uuid::now_v7(),
+            candidate,
+            injected: false,
+            record_history: true,
+        };
+        debug_output.push_str(&format!("{input:?}"));
+        assert_eq!(
+            core.history_record(input).unwrap(),
+            HistoryDecision::Recorded
+        );
+        let listed = core
+            .history_list(HistoryListInput {
+                host: Some(host_ref),
+                ..HistoryListInput::default()
+            })
+            .unwrap();
+        assert_eq!(listed[0].command, history_command);
+        debug_output.push_str(&format!("{listed:?}"));
+
+        // A connection log entry with the canary address.
+        let log_id = core
+            .connection_log_start(ConnectionLogStart {
+                host: Some(host_ref),
+                host_label: None,
+                address: host_address.clone(),
+                port: 22,
+                username: None,
+                os: None,
+            })
+            .unwrap();
+        core.connection_log_end(log_id, ConnectionEndReason::Closed, None);
+        debug_output.push_str(&format!("{:?}", core.recent_connections().unwrap()));
+        core.lock().unwrap();
+        core.unlock(password).unwrap();
+        core.history_list(HistoryListInput::default()).unwrap();
+
+        let data_dir = env.config().data_dir;
+        let canaries: Vec<(&str, Vec<u8>)> = vec![
+            ("prompted password", prompted.clone().into_bytes()),
+            ("key comment", key_comment.clone().into_bytes()),
+            ("key passphrase", key_passphrase.clone().into_bytes()),
+            ("known host address", known_address.clone().into_bytes()),
+            ("host address", host_address.clone().into_bytes()),
+            ("history command", history_canary.clone().into_bytes()),
+        ];
+        assert_file_clean(&data_dir.join("shellpp.db"), &canaries);
+        assert_file_clean(&data_dir.join("shellpp.db-wal"), &canaries);
+        assert_file_clean(&data_dir.join("shellpp.db-shm"), &canaries);
+        core.on_exit();
+        drop(core);
+        assert_file_clean(&data_dir.join("shellpp.db"), &canaries);
+        assert_file_clean(&data_dir.join("shellpp.db-wal"), &canaries);
+        files_checked = true;
+    });
+    assert!(files_checked);
+
+    let log = capture.text();
+    assert!(
+        log.contains("key imported"),
+        "the subscriber captured the core's logs"
+    );
+    assert!(log.contains("known host saved"));
+    for (name, canary) in [
+        ("prompted password", prompted.as_str()),
+        ("key comment", key_comment.as_str()),
+        ("key passphrase", key_passphrase.as_str()),
+        ("known host address", known_address.as_str()),
+        ("host address", host_address.as_str()),
+        ("history command", history_canary.as_str()),
     ] {
         assert!(
             !log.contains(canary),

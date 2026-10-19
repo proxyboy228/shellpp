@@ -15,7 +15,8 @@
 //!   by explicit reveals (`RecoveryKeyResult`, `SecretValue`).
 //! - `Debug` never prints secrets, host data or search text.
 //!
-//! Owner: W2 (contract frozen by the lead; see the plan before changing it).
+//! Owner: W2 in stage 1; the stage 2 section at the end is the lead's S4/S5
+//! contract (stage 2 plan, section 5). Change shapes only through the plan.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -378,8 +379,8 @@ impl fmt::Debug for RecordView {
     }
 }
 
-/// Input of `record_get` and `record_duplicate`.
-#[derive(Clone, Copy, Debug, Deserialize)]
+/// Input of `record_get` and `record_duplicate`; also a host link in stage 2 outputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordRef {
     pub vault_id: Uuid,
     pub record_id: Uuid,
@@ -634,4 +635,630 @@ impl CoreEvent {
         payload.insert("v".to_owned(), Value::from(self.v));
         Value::Object(payload)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2: sessions, local terminal, known hosts, keys, history, recent
+// connections, windows (stage 2 plan, section 5). Written by the lead; owner
+// S4 (core side) together with S5 (desktop side). `apps/desktop/src/ipc/types.ts`
+// mirrors every type below.
+// ---------------------------------------------------------------------------
+
+/// What an SSH session connects to (docs/architecture.md, section 4.2, step 1).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionTarget {
+    /// A saved host, connected with its effective settings (docs/data-model.md, section 8).
+    Host { vault_id: Uuid, record_id: Uuid },
+    /// Quick connect from the search bar without a saved host (UI 2.1).
+    Quick {
+        address: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+    },
+}
+
+impl fmt::Debug for SessionTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Host { record_id, .. } => f
+                .debug_struct("Host")
+                .field("record_id", record_id)
+                .finish_non_exhaustive(),
+            Self::Quick { .. } => f.write_str("Quick { .. }"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    Ssh,
+    Local,
+}
+
+/// Session lifecycle (UI 4.6, 4.8; stage 2 plan, section 5.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionState {
+    /// The first attempt, a Retry or a reconnect attempt is in progress (`step` set).
+    Connecting,
+    /// The shell is running.
+    Connected,
+    /// The shell ended with a non-zero exit status or a signal (`exit_status`);
+    /// output stays, no automatic reconnect.
+    Ended,
+    /// Transport error, keepalive timeout or close without exit status
+    /// (`error`); autoreconnect may run (`reconnect`).
+    Dropped,
+    /// The first attempt (or a Retry) failed (`error`, maybe `host_key`).
+    Failed,
+    /// Exit status 0 or closed by the user: the tab closes. Final.
+    Closed,
+}
+
+/// Connection steps (UI 4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectStep {
+    Resolving,
+    Connecting,
+    HostKey,
+    Authenticating,
+    OpeningSession,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsFamily {
+    Linux,
+    Windows,
+    Macos,
+    Bsd,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsSource {
+    Banner,
+    Script,
+}
+
+/// OS detection result, the `host.os` member (docs/data-model.md, section 7.6).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostOs {
+    pub family: OsFamily,
+    /// Lowercase `ID` from `/etc/os-release`, or `freebsd`, `openbsd`, `netbsd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub source: OsSource,
+    pub detected_at: String,
+}
+
+/// What Backspace sends (host `backspace`, UI 3.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backspace {
+    #[default]
+    Default,
+    Del,
+    CtrlH,
+}
+
+/// Why a session failed or dropped: an error code with its text `errors.<code>`
+/// and, for `ssh_error`, the reason with its text `ssh_reason.<reason>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionError {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Autoreconnect state of a dropped session (UI 4.6).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconnectInfo {
+    /// 1-based number of the next (or running) attempt.
+    pub attempt: u32,
+    /// Milliseconds until the next attempt, measured when the event was
+    /// emitted; absent while an attempt runs or while waiting for unlock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_in_ms: Option<u64>,
+    /// Locked: attempts wait for unlock (UI 13.3).
+    pub waiting_for_unlock: bool,
+    /// An attempt is running now.
+    pub in_progress: bool,
+}
+
+/// A presented host key, for the dialogs of UI 10.2.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostKeyInfo {
+    pub address: String,
+    pub port: u16,
+    pub key_type: String,
+    /// `SHA256:` fingerprint.
+    pub fingerprint: String,
+}
+
+/// A pending question of a session (UI 4.8, 10.2). Replaced or removed by the
+/// next `sessions:changed` of the session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SessionPrompt {
+    /// Unique within the session; `session_prompt_reply` names it.
+    pub prompt_id: u64,
+    #[serde(flatten)]
+    pub kind: PromptKind,
+}
+
+/// Prompt kinds. Server texts (`name`, `instruction`, `prompt`) are untrusted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PromptKind {
+    /// First connection (TOFU): Accept and save / Connect once / Cancel.
+    HostKeyUnknown {
+        key: HostKeyInfo,
+    },
+    /// The saved key differs: only Replace saved key continues.
+    HostKeyChanged {
+        key: HostKeyInfo,
+        old_key_type: String,
+        old_fingerprint: String,
+    },
+    Username,
+    Password {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        /// The previous password was refused.
+        error: bool,
+        /// Show the "Save" checkbox.
+        can_save: bool,
+    },
+    Passphrase {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_label: Option<String>,
+        error: bool,
+        can_save: bool,
+    },
+    KeyboardInteractive {
+        name: String,
+        instruction: String,
+        prompt: String,
+        /// `false`: mask the answer.
+        echo: bool,
+        index: u32,
+        count: u32,
+        error: bool,
+    },
+}
+
+/// A session as its window sees it: the payload of `sessions:changed` and
+/// the elements of `StateSnapshot.sessions`.
+#[derive(Clone, Serialize)]
+pub struct SessionInfo {
+    pub session_id: Uuid,
+    /// Increases with every change of this session. A window applies an
+    /// event only when its `rev` is greater than the one it has.
+    pub rev: u64,
+    pub kind: SessionKind,
+    /// Label of the owning window (`w-<n>`).
+    pub window: String,
+    pub state: SessionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<ConnectStep>,
+    /// Tab title: the host label or address; the shell label for a local session.
+    pub title: String,
+    /// SSH sessions: what to connect to again (Duplicate, Retry, Restore).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<SessionTarget>,
+    /// Local sessions: the shell id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// The host's detected OS (tab icon).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<HostOs>,
+    /// Effective terminal theme, a `theme_ref` (docs/data-model.md, section 8.5).
+    pub terminal_theme: Value,
+    pub backspace: Backspace,
+    /// Effective "Record history": the UI sends history candidates only when true.
+    pub record_history: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<SessionPrompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<SessionError>,
+    /// The presented key when the error is `host_key_revoked`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<HostKeyInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconnect: Option<ReconnectInfo>,
+}
+
+impl fmt::Debug for SessionInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionInfo")
+            .field("session_id", &self.session_id)
+            .field("rev", &self.rev)
+            .field("kind", &self.kind)
+            .field("state", &self.state)
+            .field("step", &self.step)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Input of `session_open`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SessionOpenInput {
+    pub target: SessionTarget,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Input of `local_open`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LocalOpenInput {
+    /// An id from `local_shells`; absent = the `terminal.local_shell` setting or the default.
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Input of `session_cancel`, `session_close` and `session_reconnect`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct SessionRef {
+    pub session_id: Uuid,
+}
+
+/// A command line typed by the user, captured at Enter by the UI
+/// (docs/security.md, section 10.1, rules 1-3). The core applies rule 4 and
+/// the secret detector before anything is stored.
+#[derive(Clone, Deserialize)]
+pub struct HistoryCandidate {
+    /// The logical line from the prompt boundary to its end, trailing spaces removed.
+    pub command: String,
+    /// Text before the boundary on the same line, or the last non-empty
+    /// line above when that is empty (password prompt check). Never stored.
+    #[serde(default)]
+    pub prompt_text: String,
+    /// The user typed at least one printable character after the boundary.
+    #[serde(default)]
+    pub typed_printable: bool,
+    /// The alternate screen was active when typing started or at Enter.
+    #[serde(default)]
+    pub alt_screen: bool,
+}
+
+/// Input of `session_write`: typed input (and pastes). The write that
+/// carries the Enter of a command line may carry its history candidate.
+#[derive(Clone, Deserialize)]
+pub struct SessionWriteInput {
+    pub session_id: Uuid,
+    pub data: String,
+    /// `true`: every UTF-16 code unit of `data` is one byte (xterm.js `onBinary`).
+    #[serde(default)]
+    pub binary: bool,
+    #[serde(default)]
+    pub history: Option<HistoryCandidate>,
+}
+
+/// Input of `session_inject`: input the app sends on its own (a history
+/// entry insert in stage 2; snippets from stage 5). Never recorded in history.
+#[derive(Clone, Deserialize)]
+pub struct SessionInjectInput {
+    pub session_id: Uuid,
+    pub data: String,
+}
+
+/// Input of `session_resize`.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct SessionResizeInput {
+    pub session_id: Uuid,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Decision in the host key dialogs (UI 10.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostKeyDecision {
+    /// Unknown key: save a `known_host` record (`source = tofu`) and continue.
+    AcceptSave,
+    /// Unknown key: continue without saving.
+    ConnectOnce,
+    /// Changed key: update the matching record (`source = replaced`) and continue.
+    Replace,
+    Cancel,
+}
+
+/// Answer to a [`SessionPrompt`].
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PromptReply {
+    HostKey {
+        decision: HostKeyDecision,
+    },
+    /// Username, password, passphrase or keyboard-interactive answer.
+    Text {
+        value: SecretString,
+        /// The "Save" checkbox (password and passphrase only).
+        #[serde(default)]
+        save: bool,
+    },
+    Cancel,
+}
+
+/// Input of `session_prompt_reply`.
+#[derive(Deserialize)]
+pub struct SessionPromptReplyInput {
+    pub session_id: Uuid,
+    pub prompt_id: u64,
+    pub reply: PromptReply,
+}
+
+redacted_debug!(
+    HistoryCandidate,
+    SessionWriteInput,
+    SessionInjectInput,
+    PromptReply,
+    SessionPromptReplyInput
+);
+
+/// A local shell for `local_open` (UI 12.4).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LocalShell {
+    pub id: String,
+    pub label: String,
+}
+
+/// Result of `local_shells`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LocalShellsResult {
+    pub shells: Vec<LocalShell>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnownHostSource {
+    Tofu,
+    Replaced,
+    Import,
+}
+
+/// A `known_host` record as the Known Hosts screen sees it (UI 10.1).
+#[derive(Clone, Serialize)]
+pub struct KnownHostView {
+    pub vault_id: Uuid,
+    pub record_id: Uuid,
+    /// "Date added": the UUIDv7 time of the record id.
+    pub created_at: String,
+    pub modified_at: String,
+    /// The stored `host`: a name, an address, a pattern or `|1|<salt>|<hash>`.
+    pub host: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub hashed: bool,
+    /// `host` for port 22, `[host]:port` otherwise; absent for hashed entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_address: Option<String>,
+    pub key_type: String,
+    pub fingerprint: String,
+    pub revoked: bool,
+    pub source: KnownHostSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    /// Saved hosts whose address and effective port this entry matches.
+    pub host_ids: Vec<Uuid>,
+}
+
+impl fmt::Debug for KnownHostView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KnownHostView")
+            .field("record_id", &self.record_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Input of the e2e mock action `known_host_add` and of the stage 3
+/// known_hosts import: one entry as it would come from a known_hosts line.
+#[derive(Clone, Deserialize)]
+pub struct KnownHostAddInput {
+    /// A host name or address, a pattern, or `|1|<salt>|<hash>`.
+    pub host: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    pub key_type: String,
+    /// Base64 key blob.
+    pub public_key: String,
+    #[serde(default)]
+    pub revoked: bool,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+redacted_debug!(KnownHostAddInput);
+
+/// A `key` record without its secrets (docs/security.md, section 9.5).
+#[derive(Clone, Serialize)]
+pub struct KeyView {
+    pub vault_id: Uuid,
+    pub record_id: Uuid,
+    pub created_at: String,
+    pub modified_at: String,
+    pub label: String,
+    /// `ssh-ed25519`, `ecdsa-sha2-nistp256`, ..., or `unknown`.
+    pub algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// The private key is protected by a passphrase.
+    pub encrypted: bool,
+    /// The passphrase is saved in the vault.
+    pub passphrase_saved: bool,
+}
+
+impl fmt::Debug for KeyView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyView")
+            .field("record_id", &self.record_id)
+            .field("algorithm", &self.algorithm)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Input of `key_import`: the short "+ -> Key" path of the host panel (UI 3.1, D3).
+#[derive(Deserialize)]
+pub struct KeyImportInput {
+    pub vault_id: Uuid,
+    /// Default: the key comment, else the algorithm name.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// OpenSSH private key text (pasted or read from a chosen file).
+    pub private_key: SecretString,
+    #[serde(default)]
+    pub passphrase: Option<SecretString>,
+    /// Store the passphrase in the vault (UI 7.3); otherwise it is asked on every connection.
+    #[serde(default)]
+    pub save_passphrase: bool,
+}
+
+redacted_debug!(KeyImportInput);
+
+/// Result of `key_import`.
+#[derive(Clone, Debug, Serialize)]
+pub struct KeyImportResult {
+    pub key: KeyView,
+    /// `false`: a key with the same fingerprint existed and is returned instead.
+    pub created: bool,
+}
+
+/// Input of `history_list`.
+#[derive(Clone, Default, Deserialize)]
+pub struct HistoryListInput {
+    /// The host whose history to list; absent = entries without a host
+    /// (local terminals and quick connects).
+    #[serde(default)]
+    pub host: Option<RecordRef>,
+    /// Case-insensitive substring filter.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Default 500, at most 5000.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+impl fmt::Debug for HistoryListInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HistoryListInput")
+            .field("host", &self.host)
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One history entry, newest first in lists.
+#[derive(Clone, Serialize)]
+pub struct HistoryEntryView {
+    pub vault_id: Uuid,
+    pub record_id: Uuid,
+    pub command: String,
+    pub executed_at: String,
+}
+
+impl fmt::Debug for HistoryEntryView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HistoryEntryView")
+            .field("record_id", &self.record_id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Input of `history_clear`: every entry of one host (or of no host).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HistoryClearInput {
+    #[serde(default)]
+    pub host: Option<RecordRef>,
+}
+
+/// Result of `history_clear`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct HistoryClearResult {
+    pub removed: u32,
+}
+
+/// A row of Recent connections (UI 6; docs/data-model.md, section 13.3).
+#[derive(Clone, Serialize)]
+pub struct RecentConnection {
+    /// Absent for a quick connect without a saved host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<RecordRef>,
+    /// The host title now (label or address), else the snapshot.
+    pub title: String,
+    pub address: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<HostOs>,
+    /// "vault / group": the vault name, then the group names from the top level.
+    pub path: Vec<String>,
+    /// Start of the latest session.
+    pub last_at: String,
+}
+
+impl fmt::Debug for RecentConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecentConnection")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a window opened by `window_open` does first (UI 2.4 with Alt, UI 4.4
+/// "Duplicate in a new window"). Delivered once in its first `state_snapshot`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WindowIntent {
+    OpenSession {
+        target: SessionTarget,
+    },
+    OpenLocal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell_id: Option<String>,
+    },
+}
+
+/// Input of `window_open` (optional).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WindowOpenInput {
+    #[serde(default)]
+    pub intent: Option<WindowIntent>,
+}
+
+/// Input of `app_exit` and `window_close` (optional).
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub struct ExitInput {
+    /// The user confirmed closing active sessions (UI 4.6).
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+/// Result of `app_exit` and `window_close`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ExitResult {
+    /// Nothing was closed: active sessions need the user's confirmation.
+    pub needs_confirmation: bool,
+    /// Active sessions (app-wide for `app_exit`, of the window for `window_close`).
+    pub active_sessions: u32,
 }

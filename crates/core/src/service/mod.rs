@@ -19,9 +19,13 @@
 //! order and [`Core::snapshot`] never misses or double-counts one. An
 //! [`crate::platform::EventSink`] must therefore not call back into the core.
 //!
-//! Owner: W2. The signatures are the W2/W3 contract written by the lead.
+//! Owner: W2 (stage 1), S4 (stage 2). The signatures are the contract
+//! written by the lead; the stage 2 methods are listed at the end of the
+//! `impl` block (bodies in `connect.rs`, stage 2 plan, section 4.4).
 
+mod connect;
 pub mod dto;
+pub mod host_api;
 mod lock_ops;
 mod records;
 mod session;
@@ -39,14 +43,21 @@ use crate::error::CoreError;
 use crate::lock::{AutoLock, ClipboardGuard, RecoveryGrant};
 use crate::model::time::{IdGenerator, format_timestamp};
 use crate::notify::NotificationCenter;
+use crate::os_detect::DetectedOs;
 use crate::platform::{Availability, Platform};
 use crate::settings::Settings;
 use crate::store::{OpenOutcome, Store, StoreError, WrapKind};
 use dto::{
-    CoreEvent, CoreEventKind, CoreSnapshot, LockState, LockStatus, NewNotification, Notification,
-    NotificationList, RecordDeleteResult, RecordMoveInput, RecordRef, RecordSaveInput, RecordView,
-    RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget, SecretFieldRef,
-    SettingsSetInput, SettingsValues, VaultView,
+    CoreEvent, CoreEventKind, CoreSnapshot, HistoryClearInput, HistoryClearResult,
+    HistoryEntryView, HistoryListInput, KeyImportInput, KeyImportResult, KeyView,
+    KnownHostAddInput, KnownHostView, LockState, LockStatus, NewNotification, Notification,
+    NotificationList, OsSource, RecentConnection, RecordDeleteResult, RecordMoveInput, RecordRef,
+    RecordSaveInput, RecordView, RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget,
+    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, VaultView,
+};
+use host_api::{
+    ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
+    HostKeyStatus, SessionConfig,
 };
 use session::Session;
 
@@ -77,6 +88,9 @@ struct Inner {
     /// The device key is used at launch only, never after a lock (UI 13.2).
     device_unlock_allowed: bool,
     ids: IdGenerator,
+    /// Stage 2: connection log entries of this process and ends waiting for
+    /// unlock (survives locks; `connect.rs`).
+    connlog: crate::connlog::Tracker,
 }
 
 /// The core facade.
@@ -138,6 +152,7 @@ impl Core {
             v: 0,
             device_unlock_allowed: true,
             ids: IdGenerator::new(),
+            connlog: crate::connlog::Tracker::new(),
         };
         Ok(Core {
             platform,
@@ -490,6 +505,157 @@ impl Core {
     /// UI 13.4 "Remember on this device". `unavailable` without an OS keychain.
     pub fn remember_device_set(&self, enabled: bool) -> Result<LockStatus, CoreError> {
         self.remember_device_set_impl(enabled)
+    }
+
+    // ----- stage 2: sessions (bodies in `connect.rs`) ------------------------
+    //
+    // Every method needs the unlocked state (`locked` otherwise), except
+    // `connection_log_end`, which holds the end in memory while locked.
+
+    /// Effective settings of a new session (docs/data-model.md, sections 8.3
+    /// and 8.5). `not_found` for a missing host; a quick-connect target is
+    /// validated like a host address and username (`validation_failed` with
+    /// fields `address`, `port`, `username`).
+    pub fn session_config(&self, target: &SessionTarget) -> Result<SessionConfig, CoreError> {
+        self.session_config_impl(target)
+    }
+
+    /// Looks up a presented host key in known hosts (UI 10.2).
+    pub fn known_host_check(&self, check: &HostKeyCheck) -> Result<HostKeyStatus, CoreError> {
+        self.known_host_check_impl(check)
+    }
+
+    /// "Accept and save": a new `known_host` record with `source = tofu`
+    /// (plain `host` = the address in lowercase, `port` = the port).
+    pub fn known_host_accept(&self, check: &HostKeyCheck) -> Result<KnownHostView, CoreError> {
+        self.known_host_accept_impl(check)
+    }
+
+    /// "Replace saved key": updates `key_type` and `public_key` of the record
+    /// in place and sets `source = replaced` when the record is a plain or
+    /// hashed entry for exactly this address and port. A wildcard pattern
+    /// (or an entry for another host) is never rewritten: a new plain entry
+    /// for the address and port gets the key (`source = replaced`), so the
+    /// trust of the other hosts the pattern covers does not change.
+    pub fn known_host_replace(
+        &self,
+        record_id: Uuid,
+        check: &HostKeyCheck,
+    ) -> Result<KnownHostView, CoreError> {
+        self.known_host_replace_impl(record_id, check)
+    }
+
+    /// Adds an entry as from a known_hosts line (`source = import`): the e2e
+    /// mock action `known_host_add` now, the known_hosts import in stage 3.
+    /// An entry equal to an existing one (natural key) returns the existing one.
+    pub fn known_host_add(&self, input: KnownHostAddInput) -> Result<KnownHostView, CoreError> {
+        self.known_host_add_impl(input)
+    }
+
+    /// Every known host entry, sorted by display address (hashed entries last).
+    pub fn known_hosts_list(&self) -> Result<Vec<KnownHostView>, CoreError> {
+        self.known_hosts_list_impl()
+    }
+
+    /// Removes known host entries (UI 10.1 Remove).
+    pub fn known_host_remove(&self, input: RecordsRef) -> Result<(), CoreError> {
+        self.known_host_remove_impl(input)
+    }
+
+    /// Every key of the personal vault, by label.
+    pub fn keys_list(&self) -> Result<Vec<KeyView>, CoreError> {
+        self.keys_list_impl()
+    }
+
+    /// "+ -> Key": parses and stores an OpenSSH private key (rules and errors:
+    /// stage 2 plan, sections 4.4 and 5.1).
+    pub fn key_import(&self, input: KeyImportInput) -> Result<KeyImportResult, CoreError> {
+        self.key_import_impl(input)
+    }
+
+    /// A password typed at a prompt with "Save" checked: `host.ssh.password`
+    /// of a personal-vault host (docs/data-model.md, section 7.3).
+    pub fn save_prompted_password(
+        &self,
+        host: RecordRef,
+        password: SecretString,
+    ) -> Result<(), CoreError> {
+        self.save_prompted_password_impl(host, password)
+    }
+
+    /// A passphrase typed at a prompt with "Save" checked: `key.passphrase`.
+    pub fn save_key_passphrase(
+        &self,
+        key: RecordRef,
+        passphrase: SecretString,
+    ) -> Result<(), CoreError> {
+        self.save_key_passphrase_impl(key, passphrase)
+    }
+
+    /// Writes `host.os` when it is absent or the family or distro differs
+    /// (docs/data-model.md, section 7.6). Returns `true` when it wrote.
+    pub fn host_os_detected(
+        &self,
+        host: RecordRef,
+        os: DetectedOs,
+        source: OsSource,
+    ) -> Result<bool, CoreError> {
+        self.host_os_detected_impl(host, os, source)
+    }
+
+    /// Applies rule 4 of docs/security.md, section 10.1 and the secret
+    /// detector; writes a `history_entry` when everything passes.
+    pub fn history_record(&self, input: HistoryRecordInput) -> Result<HistoryDecision, CoreError> {
+        self.history_record_impl(input)
+    }
+
+    /// Whether a session linked to `host` (`None`: quick connect or local
+    /// terminal) records history now: the host's `record_history` override,
+    /// else `terminal.record_history`. Running sessions refresh their flag
+    /// with it when hosts or settings change.
+    pub fn record_history_now(&self, host: Option<RecordRef>) -> Result<bool, CoreError> {
+        self.record_history_now_impl(host)
+    }
+
+    /// History of one host (or of no host), newest first.
+    pub fn history_list(
+        &self,
+        input: HistoryListInput,
+    ) -> Result<Vec<HistoryEntryView>, CoreError> {
+        self.history_list_impl(input)
+    }
+
+    /// Deletes history entries (tombstones, docs/storage-format.md, section 7).
+    pub fn history_delete(&self, input: RecordsRef) -> Result<(), CoreError> {
+        self.history_delete_impl(input)
+    }
+
+    /// Clears the history of one host (or of no host) in one transaction.
+    pub fn history_clear(&self, input: HistoryClearInput) -> Result<HistoryClearResult, CoreError> {
+        self.history_clear_impl(input)
+    }
+
+    /// Writes the personal `connection_log_entry` of an established SSH
+    /// session; returns its record id.
+    pub fn connection_log_start(&self, entry: ConnectionLogStart) -> Result<Uuid, CoreError> {
+        self.connection_log_start_impl(entry)
+    }
+
+    /// Sets `ended_at`, `end_reason` and `exit_status`. Never fails visibly:
+    /// while locked the end is kept in memory and written after unlock.
+    pub fn connection_log_end(
+        &self,
+        log_id: Uuid,
+        reason: ConnectionEndReason,
+        exit_status: Option<u32>,
+    ) {
+        self.connection_log_end_impl(log_id, reason, exit_status)
+    }
+
+    /// Recent connections (UI 6): newest first, one row per host link (or
+    /// per address and port), at most 10.
+    pub fn recent_connections(&self) -> Result<Vec<RecentConnection>, CoreError> {
+        self.recent_connections_impl()
     }
 }
 

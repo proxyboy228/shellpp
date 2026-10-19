@@ -2,7 +2,14 @@
 # The sync server is AGPL-3.0-only and lives in its own workspace under server/.
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/sync-api", "apps/desktop/src-tauri"]
+members = [
+    "crates/core",
+    "crates/sync-api",
+    "crates/ssh",
+    "crates/term-local",
+    "tests/sshd",
+    "apps/desktop/src-tauri",
+]
 exclude = ["server"]
 
 [workspace.package]
@@ -19,6 +26,9 @@ publish = false
 # Project crates.
 shellpp-core = { path = "crates/core" }
 shellpp-sync-api = { path = "crates/sync-api" }
+shellpp-ssh = { path = "crates/ssh" }
+shellpp-term-local = { path = "crates/term-local" }
+shellpp-test-sshd = { path = "tests/sshd" }
 
 # Cryptography (docs/security.md, section 5.1; docs/architecture.md, section 8.2).
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
@@ -31,6 +41,26 @@ getrandom = "0.4.3"
 subtle = "2.6.1"
 zeroize = { version = "1.9.1", features = ["derive"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
+
+# SSH (docs/architecture.md, section 8.2; decision 4): russh with default
+# features off and the ring backend. "rsa" enables RSA keys (ssh-rsa with
+# rsa-sha2-256/512 signatures, docs/data-model.md, section 9.1); the rsa crate
+# has the documented advisory exception RUSTSEC-2023-0071 in deny.toml.
+russh = { version = "0.64.1", default-features = false, features = ["ring", "flate2", "rsa"] }
+# The exact ssh-key version russh 0.64.1 pins, so that shellpp-core parses keys
+# with the same crate (key import, fingerprints, known_hosts blobs).
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521", "rsa", "encryption"] }
+# HMAC-SHA1 matching of hashed known_hosts entries (docs/data-model.md, section 9.5; D21).
+hmac = "0.13.0"
+sha1 = { version = "0.11.0", default-features = false }
+# Local terminal (desktop only, decision 5).
+portable-pty = "0.9.0"
+# Remote charset conversion of terminal sessions (host `charset`, WHATWG labels).
+encoding_rs = "0.8.35"
+# History secret detector and password prompt patterns (docs/security.md, section 10).
+regex = "1.13.1"
+# Test-only key generation in the russh test server.
+rand = "0.10.0"
 
 # Storage, ids, encoding.
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "cache"] }
@@ -46,6 +76,7 @@ thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry", "env-filter"] }
 tokio = { version = "1.53.3", features = ["time", "sync", "macros", "rt"] }
+bytes = "1.12.1"
 
 # Desktop shell (docs/architecture.md, section 3.4).
 # Tauri's default features without "dbus": that feature makes tao link libdbus

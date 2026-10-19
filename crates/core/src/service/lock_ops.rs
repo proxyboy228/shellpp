@@ -287,6 +287,9 @@ impl Core {
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
         tracing::info!("unlocked");
+        // Stage 2: connection log ends held while locked (stage 2 plan,
+        // section 4.4); emits its own `records:changed`.
+        self.connlog_after_unlock(inner, now);
         if !written.is_empty() {
             self.emit(
                 inner,

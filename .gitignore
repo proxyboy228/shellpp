@@ -10,6 +10,8 @@ id_ecdsa*
 .env*
 known_hosts
 known_hosts.*
+# Source module of the known hosts store (not a key file).
+!/crates/core/src/known_hosts/
 *.p12
 *.pfx
 *.keystore

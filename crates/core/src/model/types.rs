@@ -8,7 +8,9 @@ use shellpp_sync_api::classes;
 
 use crate::service::dto::RecordType;
 
-/// The record types stage 1 reads and writes.
+/// The record types this app reads and writes (stage 1: vault records,
+/// hosts and groups; stage 2: keys, known hosts, history entries and
+/// connection log entries).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RecordKind {
     VaultMeta,
@@ -16,15 +18,23 @@ pub enum RecordKind {
     DeviceInfo,
     Host,
     Group,
+    Key,
+    HistoryEntry,
+    ConnectionLogEntry,
+    KnownHost,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 5] = [
+    pub const ALL: [RecordKind; 9] = [
         RecordKind::VaultMeta,
         RecordKind::RecoveryKey,
         RecordKind::DeviceInfo,
         RecordKind::Host,
         RecordKind::Group,
+        RecordKind::Key,
+        RecordKind::HistoryEntry,
+        RecordKind::ConnectionLogEntry,
+        RecordKind::KnownHost,
     ];
 
     /// The u16 type code.
@@ -35,6 +45,10 @@ impl RecordKind {
             Self::DeviceInfo => 0x0106,
             Self::Host => 0x0201,
             Self::Group => 0x0202,
+            Self::Key => 0x0301,
+            Self::HistoryEntry => 0x0601,
+            Self::ConnectionLogEntry => 0x0701,
+            Self::KnownHost => 0x0801,
         }
     }
 
@@ -51,6 +65,10 @@ impl RecordKind {
             Self::DeviceInfo => "device_info",
             Self::Host => "host",
             Self::Group => "group",
+            Self::Key => "key",
+            Self::HistoryEntry => "history_entry",
+            Self::ConnectionLogEntry => "connection_log_entry",
+            Self::KnownHost => "known_host",
         }
     }
 
@@ -83,6 +101,7 @@ impl RecordKind {
     pub fn secret_paths(self) -> &'static [&'static str] {
         match self {
             Self::Host => crate::model::host::SECRET_PATHS,
+            Self::Key => crate::model::key::SECRET_PATHS,
             _ => &[],
         }
     }
@@ -91,7 +110,16 @@ impl RecordKind {
     pub fn is_singleton(self) -> bool {
         matches!(self, Self::VaultMeta | Self::RecoveryKey)
     }
+
+    /// Records of a lazy class are decrypted on first use, not at unlock (D10).
+    pub fn is_lazy(self) -> bool {
+        LAZY_CLASSES.contains(&self.class())
+    }
 }
+
+/// Classes decrypted on first use instead of at unlock (D10;
+/// docs/storage-format.md, section 4.6): `history` and `connection_log`.
+pub const LAZY_CLASSES: [u8; 2] = [classes::HISTORY, classes::CONNECTION_LOG];
 
 /// The class of every type name defined in docs/data-model.md, section 2.3,
 /// including types of later stages, so that check 7 also applies to records
@@ -128,18 +156,38 @@ mod tests {
         assert_eq!(RecordKind::Host.code(), 0x0201);
         assert_eq!(RecordKind::Host.class(), 0x02);
         assert_eq!(RecordKind::VaultMeta.class(), 0x01);
-        assert_eq!(RecordKind::from_name("key"), None);
+        assert_eq!(RecordKind::from_name("key"), Some(RecordKind::Key));
+        assert_eq!(RecordKind::Key.code(), 0x0301);
+        assert_eq!(RecordKind::HistoryEntry.code(), 0x0601);
+        assert_eq!(RecordKind::ConnectionLogEntry.code(), 0x0701);
+        assert_eq!(RecordKind::KnownHost.code(), 0x0801);
+        assert_eq!(RecordKind::from_name("identity"), None);
         assert_eq!(class_of_type_name("key"), Some(0x03));
         assert_eq!(class_of_type_name("conflict"), None);
         assert_eq!(class_of_type_name("unknown_type"), None);
     }
 
     #[test]
-    fn secret_paths_only_for_hosts() {
+    fn secret_paths_of_hosts_and_keys() {
         assert_eq!(
             RecordKind::Host.secret_paths(),
             &["ssh.password", "ssh.proxy.password"]
         );
+        assert_eq!(
+            RecordKind::Key.secret_paths(),
+            &["private_key", "passphrase"]
+        );
         assert!(RecordKind::Group.secret_paths().is_empty());
+        assert!(RecordKind::KnownHost.secret_paths().is_empty());
+        assert!(RecordKind::HistoryEntry.secret_paths().is_empty());
+    }
+
+    #[test]
+    fn lazy_classes_are_history_and_connection_log() {
+        assert!(RecordKind::HistoryEntry.is_lazy());
+        assert!(RecordKind::ConnectionLogEntry.is_lazy());
+        assert!(!RecordKind::Key.is_lazy());
+        assert!(!RecordKind::KnownHost.is_lazy());
+        assert_eq!(LAZY_CLASSES, [classes::HISTORY, classes::CONNECTION_LOG]);
     }
 }

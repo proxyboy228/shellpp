@@ -1,5 +1,11 @@
 //! The unlocked session: key ring, index, HLC clock and undo buffer. Dropped
 //! (and thereby zeroized) on lock.
+//!
+//! Stage 2: rows of the lazy classes (`history`, `connection_log`; D10,
+//! docs/storage-format.md, section 4.6) are not decrypted at unlock but on
+//! first use ([`Session::ensure_class`]), and wiped on lock with the rest of
+//! the session. The last recorded command of each terminal session (the
+//! history duplicate rule) lives here too, so a lock wipes it.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -7,6 +13,7 @@ use std::time::SystemTime;
 
 use serde_json::{Map, Value};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::error::CoreError;
 use crate::index::{Index, IndexedRecord};
@@ -14,7 +21,7 @@ use crate::lock::UNDO_WINDOW;
 use crate::model::hlc::HlcClock;
 use crate::model::payload::Payload;
 use crate::model::time::{format_timestamp, unix_ms};
-use crate::model::types::RecordKind;
+use crate::model::types::{LAZY_CLASSES, RecordKind};
 use crate::store::{RecordRow, Store};
 use crate::vault::{self, KeyRing, Opened};
 
@@ -74,6 +81,12 @@ pub(crate) struct Session {
     pub undo: UndoBuffer,
     pub db_id: Uuid,
     pub device_id: Uuid,
+    /// Lazy classes whose rows are in the index.
+    pub lazy_loaded: Vec<u8>,
+    /// Rows of lazy classes decrypted so far in this session (tests and logs).
+    pub lazy_opened: usize,
+    /// The last recorded history command per terminal session (memory only).
+    pub history_last: HashMap<Uuid, Zeroizing<String>>,
 }
 
 impl fmt::Debug for Session {
@@ -81,12 +94,13 @@ impl fmt::Debug for Session {
         f.debug_struct("Session")
             .field("ring", &self.ring)
             .field("index", &self.index)
+            .field("lazy_loaded", &self.lazy_loaded)
             .finish_non_exhaustive()
     }
 }
 
 impl Session {
-    /// An empty session (first run).
+    /// An empty session (first run): the lazy classes have no rows yet.
     pub fn new(ring: KeyRing, db_id: Uuid, device_id: Uuid, hlc: HlcClock) -> Self {
         let index = Index::new(ring.vault_id());
         Self {
@@ -96,12 +110,15 @@ impl Session {
             undo: UndoBuffer::default(),
             db_id,
             device_id,
+            lazy_loaded: LAZY_CLASSES.to_vec(),
+            lazy_opened: 0,
+            history_last: HashMap::new(),
         }
     }
 
-    /// Decrypts every row of the vault into a new index (unlock). Rows that
-    /// fail the checks are kept and reported by id; records of unknown types
-    /// or newer versions are kept unchanged.
+    /// Decrypts every row of the vault into a new index (unlock), except rows
+    /// of the lazy classes. Rows that fail the checks are kept and reported
+    /// by id; records of unknown types or newer versions are kept unchanged.
     pub fn load(
         store: &Store,
         mut ring: KeyRing,
@@ -129,6 +146,9 @@ impl Session {
                     continue;
                 }
             };
+            if LAZY_CLASSES.contains(&row.class) {
+                continue;
+            }
             match vault::open_row(&mut ring, row) {
                 Opened::Live(kind, payload) => {
                     index.insert(IndexedRecord::new(
@@ -161,7 +181,46 @@ impl Session {
             undo: UndoBuffer::default(),
             db_id,
             device_id,
+            lazy_loaded: Vec::new(),
+            lazy_opened: 0,
+            history_last: HashMap::new(),
         })
+    }
+
+    /// Decrypts the rows of a lazy class into the index on its first use in
+    /// this session. Returns `true` when it loaded the class now. Records
+    /// written in this session before the load are read back from their
+    /// rows, so nothing is counted twice.
+    pub fn ensure_class(&mut self, store: &Store, class: u8) -> Result<bool, CoreError> {
+        if !LAZY_CLASSES.contains(&class) || self.lazy_loaded.contains(&class) {
+            return Ok(false);
+        }
+        let rows = store.records(&self.ring.vault_id(), Some(&[class]))?;
+        let mut loaded = 0usize;
+        for row in &rows {
+            self.lazy_opened += 1;
+            match vault::open_row(&mut self.ring, row) {
+                Opened::Live(kind, payload) => {
+                    loaded += 1;
+                    self.index.insert(IndexedRecord::new(
+                        row.record_id,
+                        kind,
+                        row.revision,
+                        row.key_epoch,
+                        payload,
+                    ));
+                }
+                Opened::Tombstone(_) => {}
+                Opened::Unsupported => self.index.mark_unsupported(row.record_id),
+                Opened::Damaged(reason) => {
+                    tracing::warn!(record_id = %row.record_id, reason, "damaged record left out of the index");
+                    self.index.mark_damaged(row.record_id);
+                }
+            }
+        }
+        self.lazy_loaded.push(class);
+        tracing::debug!(class, records = loaded, "lazy class loaded");
+        Ok(true)
     }
 
     /// Seals a new semantic version of a record (fresh HLC, this device).

@@ -18,3 +18,48 @@ paths = ['''(^|/)crates/core/tests/vectors/kat_[a-z_]+\.json$''']
 description = "keychain account name in the ids unit test"
 regexTarget = "match"
 regexes = ['''device-key:0199f6a1-b2c3-7d4e-8f00-112233445566''']
+
+# Source code that builds or recognizes OpenSSH/PEM armor: around key bytes
+# generated at run time (crates/core/tests/stage2), around placeholder bodies
+# ("AAAA", "Proc-Type" header only, crypto.randomUUID() in the mock key
+# format of src/ipc/mock/connect.ts), or as shell command samples of the
+# history secret detector. The default private-key rule matches from a BEGIN
+# line to the next "KEY-----" across ordinary code; each regex below pins the
+# code that directly follows the BEGIN line, which base64 key data never is.
+[[allowlists]]
+description = "private-key armor in test and mock code (no key material)"
+targetRules = ["private-key"]
+condition = "AND"
+paths = [
+  '''(^|/)crates/core/tests/stage2/mod\.rs$''',
+  '''(^|/)crates/ssh/tests/auth\.rs$''',
+  '''(^|/)crates/ssh/src/auth\.rs$''',
+  '''(^|/)crates/core/src/history/tests\.rs$''',
+  '''(^|/)apps/desktop/src/features/connect/KeyAddDialog\.test\.tsx$''',
+  '''(^|/)apps/desktop/src/features/panels/HostPanel\.stage2\.test\.tsx$''',
+  '''(^|/)apps/desktop/src/ipc/mock/mock\.connect\.test\.ts$''',
+  '''(^|/)apps/desktop/src/ipc/mock/connect\.ts$''',
+]
+regexTarget = "match"
+regexes = [
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----\\n"\);\n''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----\\nAAAA\\n-----END OPENSSH PRIVATE KEY-----\\n",''',
+  '''^-----BEGIN RSA PRIVATE KEY-----\\nProc-Type: 4,ENCRYPTED\\n"\n''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----' > k"\.to_owned\(\),\n''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----',\s*(?:options\.body \?\? )?crypto\.randomUUID\(\)''',
+  '''^-----BEGIN OPENSSH PRIVATE KEY-----`; optional lines\n''',
+]
+
+# Synthetic samples of the history secret detector tests (docs/security.md,
+# section 10.2): token-shaped strings made of the alphabet, and a curl
+# command with a placeholder user, that the detector must classify.
+[[allowlists]]
+description = "synthetic samples of the history secret detector tests"
+targetRules = ["aws-access-token", "stripe-access-token", "curl-auth-user"]
+condition = "AND"
+paths = ['''(^|/)crates/core/src/history/tests\.rs$''']
+regexes = [
+  '''^(?:AKIA|ASIA)ABCDEFGHIJKLMNOP$''',
+  '''^sk_test_abcdefghijklmnop$''',
+  '''^admin:admin@$''',
+]

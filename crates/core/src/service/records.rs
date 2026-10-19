@@ -51,21 +51,24 @@ pub(super) fn vault_view(session: &Session) -> VaultView {
     }
 }
 
-/// Disjoint borrows of the unlocked state.
-struct Parts<'a> {
-    store: &'a mut Store,
-    session: &'a mut Session,
-    ids: &'a IdGenerator,
-    v: &'a mut u64,
+/// Disjoint borrows of the unlocked state (also used by the stage 2 facade
+/// bodies in `connect.rs`).
+pub(super) struct Parts<'a> {
+    pub store: &'a mut Store,
+    pub session: &'a mut Session,
+    pub ids: &'a IdGenerator,
+    pub v: &'a mut u64,
+    pub connlog: &'a mut crate::connlog::Tracker,
 }
 
-fn parts(inner: &mut Inner) -> Result<Parts<'_>, CoreError> {
+pub(super) fn parts(inner: &mut Inner) -> Result<Parts<'_>, CoreError> {
     let Inner {
         store,
         session,
         state,
         ids,
         v,
+        connlog,
         ..
     } = inner;
     match (state, session.as_mut()) {
@@ -74,12 +77,13 @@ fn parts(inner: &mut Inner) -> Result<Parts<'_>, CoreError> {
             session,
             ids,
             v,
+            connlog,
         }),
         _ => Err(CoreError::Locked),
     }
 }
 
-fn check_vault(session: &Session, vault_id: Option<Uuid>) -> Result<(), CoreError> {
+pub(super) fn check_vault(session: &Session, vault_id: Option<Uuid>) -> Result<(), CoreError> {
     match vault_id {
         Some(id) if id != session.ring.vault_id() => Err(CoreError::NotFound),
         _ => Ok(()),
@@ -231,7 +235,7 @@ impl Plan {
 impl Core {
     /// Writes `writes`, deletes `deletions` and puts `tombstones` in one
     /// transaction, updates the index and emits `records:changed`.
-    fn commit_records(
+    pub(super) fn commit_records(
         &self,
         parts: &mut Parts<'_>,
         writes: Vec<PendingWrite>,

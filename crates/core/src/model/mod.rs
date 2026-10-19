@@ -1,5 +1,6 @@
 //! Record payloads and types for stage 1 (`vault_meta`, `recovery_key`,
-//! `device_info`, `host`, `group`), validation and normalization, the draft
+//! `device_info`, `host`, `group`) and stage 2 (`key`, `known_host`,
+//! `history_entry`, `connection_log_entry`), validation and normalization, the draft
 //! rule, group tree and inheritance helpers, manual order keys and the hybrid
 //! logical clock (docs/data-model.md, sections 1-8, 16, 18.1;
 //! docs/sync-protocol.md, section 6.2).
@@ -11,14 +12,18 @@
 //! nothing unless every field is valid ([`draft::creatable`] answers the same
 //! question without writing).
 //!
-//! Owner: W2.
+//! Owner: W2 (stage 1); S4 (stage 2 types).
 
+pub mod connection_log;
 pub mod draft;
 pub mod fields;
 pub mod group;
+pub mod history_entry;
 pub mod hlc;
 pub mod host;
 pub mod inherit;
+pub mod key;
+pub mod known_host;
 pub mod merge;
 pub mod order_key;
 pub mod payload;
