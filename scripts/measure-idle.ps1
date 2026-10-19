@@ -8,7 +8,11 @@
   waits until the main window exists and then for -IdleSeconds more, and
   reads the working set (RSS) and private bytes of the process and of its
   child processes, if any. Then it closes the window (the app deletes its
-  demo profile) and prints one line.
+  demo profile) and prints one line. On GitHub Actions the line is also
+  added to the job summary (CI runs this as an informational step that
+  never fails the build).
+
+  The demo profile uses the in-memory secret store, never the OS keychain.
 
   The launch gets SHELLPP_TEST=1, SHELLPP_DATA_DIR and TEMP/TMP pointing at a
   fresh temporary folder (the demo profile is created there), so the
@@ -44,12 +48,13 @@ function Fail([string] $message) {
     exit 1
 }
 
-function MB([long] $bytes) { '{0:N1} MB' -f ($bytes / 1MB) }
+# Culture-invariant ("55.6 MB" also in a ru-RU console).
+function MB([long] $bytes) { ($bytes / 1MB).ToString('N1', [System.Globalization.CultureInfo]::InvariantCulture) + ' MB' }
 
 Push-Location $repo
 try {
     if (-not $NoBuild) {
-        $cargoArgs = @('build', '-p', 'shellpp-desktop', '--features', 'dev-tools')
+        $cargoArgs = @('build', '--locked', '-p', 'shellpp-desktop', '--features', 'dev-tools')
         if ($BuildProfile -eq 'release') { $cargoArgs += '--release' }
         Write-Host "measure-idle: cargo $($cargoArgs -join ' ')"
         & cargo @cargoArgs
@@ -110,8 +115,8 @@ try {
                     $childPrivate += $childProcess.PrivateMemorySize64
                 }
             }
-            $line = ('shellpp idle ({0}, --demo 300 hosts, {1} s after the first window): working set (RSS) {2}, private bytes {3}, peak working set {4}; child processes {5} (working set {6}, private {7}); total working set {8}' -f `
-                    $BuildProfile, $IdleSeconds, (MB $workingSet), (MB $private), (MB $peak), $children.Count, (MB $childSet), (MB $childPrivate), (MB ($workingSet + $childSet)))
+            $line = ('shellpp idle ({0}, --demo 300 hosts, {1} s after the window appeared): RSS (working set) {2}, private bytes {3}; peak RSS {4}; child processes {5} (RSS {6}, private bytes {7})' -f `
+                    $BuildProfile, $IdleSeconds, (MB ($workingSet + $childSet)), (MB ($private + $childPrivate)), (MB $peak), $children.Count, (MB $childSet), (MB $childPrivate))
         }
     }
 }
@@ -133,4 +138,7 @@ finally {
 if ($problem) { Fail $problem }
 if (Test-Path -LiteralPath $tempDir) { Write-Host "measure-idle: temporary folder not removed: $tempDir" -ForegroundColor Yellow }
 Write-Output $line
+if ($env:GITHUB_STEP_SUMMARY) {
+    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value "**Idle memory (informational):** $line"
+}
 exit 0

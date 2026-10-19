@@ -5,10 +5,16 @@
 //! `198.51.100.0/24`). About a third of the hosts have tags, about a quarter
 //! a tile color other than graphite, and about half live in groups.
 //! The profile is deleted when the app exits.
+//!
+//! [`open_fresh`] opens an empty temporary profile at a chosen lock stage
+//! (first run, unlocked, locked) for the screenshots of the first-run, unlock
+//! and empty screens. Every profile here keeps the device key ("remember on
+//! this device") in memory, never in the OS keychain.
 
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
+use shellpp_core::lock::FirstRunOptions;
 use shellpp_core::service::dto::{
     LockState, RecordSaveInput, RecordType, RecordView, TagColor, VaultKind,
 };
@@ -66,8 +72,45 @@ pub fn create_profile_in(parent: &std::path::Path) -> Result<TempProfile, DemoEr
 /// runs the first run with a generated password and seeds the data. The
 /// returned value owns the profile, so the app deletes it at shutdown.
 pub fn open(profile: TempProfile) -> Result<(OpenedCore, SeedSummary), DemoError> {
+    let mut opened = open_core(profile)?;
+    first_run(&opened.core)?;
+    let summary = seed(&opened.core).map_err(DemoError::Core)?;
+    // The seeding events are already reflected in the first load.
+    while opened.events.try_recv().is_ok() {}
+    Ok((opened, summary))
+}
+
+/// The lock stage of a profile opened by [`open_fresh`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreshStage {
+    /// Nothing set up: the app shows the first-run screen (UI 13.1).
+    FirstRun,
+    /// First run done with a generated password: the empty Hosts screen.
+    Unlocked,
+    /// First run done, then locked: the unlock screen (UI 13.2).
+    Locked,
+}
+
+/// Opens an empty temporary profile at `stage` (no records; device key in
+/// memory). The returned value owns the profile, so the app state deletes
+/// it at shutdown.
+pub fn open_fresh(profile: TempProfile, stage: FreshStage) -> Result<OpenedCore, DemoError> {
+    let mut opened = open_core(profile)?;
+    if stage != FreshStage::FirstRun {
+        first_run(&opened.core)?;
+    }
+    if stage == FreshStage::Locked {
+        opened.core.lock().map_err(DemoError::Core)?;
+    }
+    while opened.events.try_recv().is_ok() {}
+    Ok(opened)
+}
+
+/// Opens the core in `profile` with the platform of temporary profiles
+/// (secret store in memory).
+fn open_core(profile: TempProfile) -> Result<OpenedCore, DemoError> {
     let dirs = profile.dirs();
-    let (sink, mut events) = event_channel();
+    let (sink, events) = event_channel();
     let (platform, extras) = platform::temporary(sink);
     let core = Core::open(
         CoreConfig {
@@ -77,25 +120,25 @@ pub fn open(profile: TempProfile) -> Result<(OpenedCore, SeedSummary), DemoError
         platform,
     )
     .map_err(DemoError::Core)?;
+    Ok(OpenedCore {
+        core: Arc::new(core),
+        events,
+        extras,
+        dirs: Some(dirs),
+        temp_profile: Some(profile),
+    })
+}
+
+/// The first run as the app runs it (decision D29: "Remember on this
+/// device" on, here into the in-memory secret store) with a generated master
+/// password, never shown or kept: the profile is temporary. Does nothing
+/// when it already ran.
+fn first_run(core: &Core) -> Result<(), DemoError> {
     if core.lock_status().state == LockState::FirstRun {
-        // The recovery key is dropped (zeroized) right away: the profile is
-        // deleted on exit anyway.
-        core.first_run_setup(generated_password())
+        core.first_run_setup_with(generated_password(), FirstRunOptions::default())
             .map_err(DemoError::Core)?;
     }
-    let summary = seed(&core).map_err(DemoError::Core)?;
-    // The seeding events are already reflected in the first load.
-    while events.try_recv().is_ok() {}
-    Ok((
-        OpenedCore {
-            core: Arc::new(core),
-            events,
-            extras,
-            dirs: Some(dirs),
-            temp_profile: Some(profile),
-        },
-        summary,
-    ))
+    Ok(())
 }
 
 const ROLES: [&str; 16] = [
@@ -302,7 +345,11 @@ mod tests {
         let profile = create_profile().unwrap();
         let path = profile.path().to_path_buf();
         let (opened, summary) = open(profile).unwrap();
-        assert_eq!(opened.core.lock_status().state, LockState::Unlocked);
+        let status = opened.core.lock_status();
+        assert_eq!(status.state, LockState::Unlocked);
+        // "Remember on this device" as the app's first run (D29), with the
+        // device key in the in-memory store of `platform::temporary`.
+        assert!(status.remember_device_enabled);
         assert_eq!(summary.hosts, DEMO_HOSTS);
         assert!(path.join(shellpp_core::ids::DB_FILE_NAME).is_file());
         // The seeding events were drained before the app sees the receiver.
@@ -312,6 +359,40 @@ mod tests {
         drop(opened.core);
         drop(opened.temp_profile);
         assert!(!path.exists());
+    }
+
+    /// The empty profiles of the first-run, unlock and empty-state
+    /// screenshots: the requested lock stage, no records, removed on drop.
+    #[test]
+    fn fresh_profiles_open_at_the_requested_stage() {
+        for (stage, expected) in [
+            (FreshStage::FirstRun, LockState::FirstRun),
+            (FreshStage::Unlocked, LockState::Unlocked),
+            (FreshStage::Locked, LockState::Locked),
+        ] {
+            let profile = create_profile().unwrap();
+            let path = profile.path().to_path_buf();
+            let opened = open_fresh(profile, stage).unwrap();
+            assert_eq!(opened.core.lock_status().state, expected, "{stage:?}");
+            if stage == FreshStage::Unlocked {
+                let views = opened
+                    .core
+                    .records_query(RecordsQuery {
+                        vault_id: None,
+                        types: vec![RecordType::Host, RecordType::Group],
+                        scope: QueryScope::All,
+                        text: None,
+                        tags: Vec::new(),
+                        sort: SortMode::Manual,
+                    })
+                    .unwrap();
+                assert!(views.is_empty(), "a fresh profile has no records");
+            }
+            drop(opened.events);
+            drop(opened.core);
+            drop(opened.temp_profile);
+            assert!(!path.exists());
+        }
     }
 
     #[test]

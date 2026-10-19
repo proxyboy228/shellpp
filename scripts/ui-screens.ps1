@@ -1,18 +1,31 @@
 <#
 .SYNOPSIS
-  Screenshots of the Shell++ window on demo data (owner's step 4).
+  Screenshots of the Shell++ window (owner's stage 1, step 5.2).
 
 .DESCRIPTION
-  Builds shellpp with the `screenshots` feature and runs it once per size
-  (`shellpp --screenshots <dir> --size WxH`). Each run starts the app on a
-  fresh demo profile (300 hosts, 5 groups) inside a temporary folder given as
-  SHELLPP_DATA_DIR (with SHELLPP_TEST=1, so the permanent profile can never be
-  used), renders OUR window offscreen through GPUI for the dark and the light
-  theme and three states (root, inside a group, host panel open), saves PNGs
-  and quits. Nothing is read from the screen: other windows never appear.
+  Builds shellpp with the `screenshots` feature and launches it ONCE for all
+  sizes (`shellpp --screenshots <dir> --size 1920x1200,1280x800,960x600`).
+  The app starts on a fresh demo profile (300 hosts, 5 groups) inside a
+  temporary folder given as SHELLPP_DATA_DIR (with SHELLPP_TEST=1, so the
+  permanent profile can never be used); the first-run, unlock and empty-state
+  screens get their own empty profiles in the same folder. Every profile
+  keeps its device key in the in-memory secret store, never in the OS
+  keychain. The app renders OUR window offscreen through GPUI for the dark
+  and the light theme, saves PNGs and quits. Nothing is read from the screen:
+  other windows never appear.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (12 files for the two
-  default sizes). Exits with 1 when the build, a run or a file check fails.
+  States per size (src/dev/screenshots.rs, `states_for`):
+  - 1920x1200: root, group, host-panel;
+  - 1280x800: root, group, host-panel, context-menu, search-address
+    (root@10.0.0.5:2222, Connect active), search-results, search-no-results,
+    three-selected, empty, list-view, new-host, quick-connect-toast,
+    tag-filter, tag-chips (two tags on and the host panel open: the chips
+    collapse into "+N"), show-more, first-run, unlock;
+  - 960x600 (the minimum window size): root, host-panel, first-run;
+  - any other size: root, group, host-panel.
+
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (46 files for the
+  default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1
@@ -21,12 +34,12 @@
 #>
 [CmdletBinding()]
 param(
-    # Window content sizes in logical pixels; one app launch per size.
-    [string[]] $Sizes = @('1920x1200', '1280x800'),
+    # Window content sizes in logical pixels; all of them in one app launch.
+    [string[]] $Sizes = @('1920x1200', '1280x800', '960x600'),
     # Output folder; default <repo>\target\ui-screens.
     [string] $OutDir,
     # A launch that takes longer is killed and counts as a failure.
-    [int] $TimeoutSeconds = 240,
+    [int] $TimeoutSeconds = 900,
     # Use the existing debug binary.
     [switch] $NoBuild
 )
@@ -38,8 +51,6 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\ui-screens' }
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
 $exe = Join-Path $targetDir 'debug\shellpp.exe'
-$themes = @('dark', 'light')
-$states = @('root', 'group', 'host-panel')
 
 function Fail([string] $message) {
     Write-Host "ui-screens: $message" -ForegroundColor Red
@@ -57,9 +68,12 @@ function Get-PngSize([string] $path) {
     return @($width, $height)
 }
 
+# Accept "-Sizes 1920x1200,1280x800" as well as separate values.
+$Sizes = @($Sizes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($size in $Sizes) {
     if ($size -notmatch '^\d{3,4}x\d{3,4}$') { Fail "bad size '$size' (expected WxH, e.g. 1920x1200)" }
 }
+if (@($Sizes | Select-Object -Unique).Count -ne $Sizes.Count) { Fail 'a size is listed twice' }
 
 Push-Location $repo
 try {
@@ -79,63 +93,83 @@ $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
 Get-ChildItem -LiteralPath $OutDir -Filter '*.png' -File | Remove-Item -Force
 
 $failures = @()
-foreach ($size in $Sizes) {
-    # A temporary data folder for this launch only; removed afterwards.
-    $dataDir = Join-Path ([System.IO.Path]::GetTempPath()) ('shellpp-ui-screens-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $dataDir | Out-Null
-    $process = $null
-    try {
-        $info = New-Object System.Diagnostics.ProcessStartInfo
-        $info.FileName = $exe
-        $info.Arguments = "--screenshots `"$OutDir`" --size $size"
-        $info.UseShellExecute = $false
-        $info.WorkingDirectory = $repo
-        $info.EnvironmentVariables['SHELLPP_DATA_DIR'] = $dataDir
-        $info.EnvironmentVariables['SHELLPP_TEST'] = '1'
-        # Debug builds log every core event to stderr; only warnings,
-        # errors and the tool's own messages are shown below.
-        $info.RedirectStandardError = $true
-        Write-Host "ui-screens: launch $size"
-        $process = [System.Diagnostics.Process]::Start($info)
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $exited = $process.WaitForExit($TimeoutSeconds * 1000)
-        if (-not $exited) {
-            $process.Kill()
-        }
-        $process.WaitForExit()
-        $stderr.Result -split "`r?`n" |
-            ForEach-Object { $_ -replace "$([char]27)\[[0-9;]*m", '' } |
-            Where-Object { $_ -and $_ -notmatch '^\d{4}-\d\d-\d\dT\S+\s+(TRACE|DEBUG|INFO)\s' } |
-            ForEach-Object { Write-Host "  $_" }
-        if (-not $exited) {
-            $failures += "${size}: no result after $TimeoutSeconds s (killed)"
-        }
-        elseif ($process.ExitCode -ne 0) {
-            $failures += "${size}: exit code $($process.ExitCode)"
+$saved = @()
+# A temporary data folder for this launch only; removed afterwards.
+$dataDir = Join-Path ([System.IO.Path]::GetTempPath()) ('shellpp-ui-screens-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $dataDir | Out-Null
+$process = $null
+try {
+    $sizeList = $Sizes -join ','
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = $exe
+    $info.Arguments = "--screenshots `"$OutDir`" --size $sizeList"
+    $info.UseShellExecute = $false
+    $info.WorkingDirectory = $repo
+    $info.EnvironmentVariables['SHELLPP_DATA_DIR'] = $dataDir
+    $info.EnvironmentVariables['SHELLPP_TEST'] = '1'
+    $info.RedirectStandardOutput = $true
+    # Debug builds log every core event to stderr; only warnings, errors and
+    # the tool's own messages are shown below.
+    $info.RedirectStandardError = $true
+    Write-Host "ui-screens: one launch for $sizeList"
+    $process = [System.Diagnostics.Process]::Start($info)
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $exited) {
+        $process.Kill()
+    }
+    $process.WaitForExit()
+    foreach ($line in ($stdout.Result -split "`r?`n")) {
+        if (-not $line) { continue }
+        Write-Host "  $line"
+        if ($line -match '^Saved (.+\.png) \((\d+)x(\d+)\)$') {
+            $saved += , @($Matches[1], [int]$Matches[2], [int]$Matches[3])
         }
     }
-    finally {
-        if ($process -and -not $process.HasExited) { $process.Kill() }
-        for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $dataDir); $attempt++) {
-            Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-            if (Test-Path -LiteralPath $dataDir) { Start-Sleep -Milliseconds 250 }
-        }
-        if (Test-Path -LiteralPath $dataDir) { $failures += "${size}: temporary data folder not removed: $dataDir" }
+    $stderr.Result -split "`r?`n" |
+        ForEach-Object { $_ -replace "$([char]27)\[[0-9;]*m", '' } |
+        Where-Object { $_ -and $_ -notmatch '^\d{4}-\d\d-\d\dT\S+\s+(TRACE|DEBUG|INFO)\s' } |
+        ForEach-Object { Write-Host "  $_" }
+    if (-not $exited) {
+        $failures += "no result after $TimeoutSeconds s (killed)"
     }
+    elseif ($process.ExitCode -ne 0) {
+        $failures += "exit code $($process.ExitCode)"
+    }
+}
+finally {
+    if ($process -and -not $process.HasExited) { $process.Kill() }
+    for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $dataDir); $attempt++) {
+        Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $dataDir) { Start-Sleep -Milliseconds 250 }
+    }
+    if (Test-Path -LiteralPath $dataDir) { $failures += "temporary data folder not removed: $dataDir" }
+}
 
-    foreach ($theme in $themes) {
-        foreach ($state in $states) {
+# Every file the app reported is there, is a PNG and has the reported size.
+foreach ($entry in $saved) {
+    $file = $entry[0]
+    if (-not (Test-Path -LiteralPath $file)) {
+        $failures += "missing $file"
+        continue
+    }
+    $pixels = Get-PngSize $file
+    if (-not $pixels) {
+        $failures += "not a PNG: $file"
+        continue
+    }
+    if ($pixels[0] -ne $entry[1] -or $pixels[1] -ne $entry[2]) {
+        $failures += "size of $file is $($pixels[0])x$($pixels[1]), reported $($entry[1])x$($entry[2])"
+    }
+}
+# One file per size, state and theme; each size has at least root and
+# host-panel in both themes.
+foreach ($size in $Sizes) {
+    foreach ($theme in @('dark', 'light')) {
+        foreach ($state in @('root', 'host-panel')) {
             $file = Join-Path $OutDir "$size-$theme-$state.png"
-            if (-not (Test-Path -LiteralPath $file)) {
-                $failures += "missing $file"
-                continue
-            }
-            $pixels = Get-PngSize $file
-            if (-not $pixels) {
-                $failures += "not a PNG: $file"
-                continue
-            }
-            Write-Host ("  {0}  {1}x{2}" -f $file, $pixels[0], $pixels[1])
+            if (-not (Test-Path -LiteralPath $file)) { $failures += "missing $file" }
         }
     }
 }
@@ -144,5 +178,5 @@ if ($failures.Count -gt 0) {
     foreach ($failure in $failures) { Write-Host "ui-screens: $failure" -ForegroundColor Red }
     exit 1
 }
-Write-Host "ui-screens: done, screenshots in $OutDir"
+Write-Host "ui-screens: done, $($saved.Count) screenshots in $OutDir"
 exit 0

@@ -41,8 +41,9 @@ Developer options (builds with the dev-tools feature):
   --theme <mode>     interface theme: auto (default), light or dark
   --screenshots <dir>
                      (feature screenshots) save PNGs of the window on demo
-                     data, dark and light, three states, then quit
-  --size <WxH>       window size for --screenshots (default 1280x800)
+                     data, dark and light, the screen states, then quit
+  --size <WxH[,WxH]> window size(s) for --screenshots, a comma-separated
+                     list of up to 8 sizes (default 1280x800)
 
 Environment:
   SHELLPP_DATA_DIR   data directory to use instead of the permanent profile
@@ -303,7 +304,7 @@ fn run_demo(_: Appearance) -> ExitCode {
     fail("--demo needs a build with the dev-tools feature")
 }
 
-/// `--screenshots <dir> [--size WxH]`: see `shellpp_desktop::dev::screenshots`.
+/// `--screenshots <dir> [--size WxH[,WxH...]]`: see `shellpp_desktop::dev::screenshots`.
 #[cfg(feature = "screenshots")]
 fn run_screenshots(out_dir: std::path::PathBuf, size: Option<String>) -> ExitCode {
     use shellpp_desktop::dev::screenshots::{self, ScreenshotOptions, ShotSize};
@@ -312,7 +313,11 @@ fn run_screenshots(out_dir: std::path::PathBuf, size: Option<String>) -> ExitCod
         None => screenshots::DEFAULT_SIZE,
         Some(value) => match ShotSize::parse(&value) {
             Some(size) => size,
-            None => return fail(&format!("--size takes WxH (e.g. 1920x1200), not {value}")),
+            None => {
+                return fail(&format!(
+                    "--size takes WxH or a list (e.g. 1920x1200,960x600), not {value}"
+                ));
+            }
         },
     };
     screenshots::run(ScreenshotOptions { out_dir, size })
