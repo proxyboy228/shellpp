@@ -20,7 +20,9 @@
 //! Core events (records written elsewhere, auto-lock from the tick) arrive
 //! through [`crate::platform::events`] and trigger the same reload.
 
+pub mod hosts_view;
 pub mod model;
+pub mod records_edit;
 pub mod selection;
 
 use std::rc::Rc;
