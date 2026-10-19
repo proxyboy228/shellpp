@@ -1,0 +1,756 @@
+//! Authentication (stage 2 plan, decision 23; docs/data-model.md, section
+//! 8.6): a missing username is asked first, then, while the server offers
+//! the method: the effective key (decrypted with its saved passphrase or a
+//! `Passphrase` prompt), the system agent's keys, the password (saved or
+//! prompted, asked again after a refusal), keyboard-interactive (one prompt
+//! per question). A cancelled prompt ends the attempt with `Cancelled`.
+//!
+//! Partial success (several required methods) is followed: after a method
+//! succeeds partially, the remaining methods that were not tried yet run.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
+use russh::keys::agent::AgentIdentity;
+use russh::keys::ssh_key::{Algorithm, HashAlg, Kdf, PrivateKey, PublicKey};
+use russh::keys::{PrivateKeyWithHashAlg, decode_secret_key};
+use russh::{MethodKind, MethodSet};
+use secrecy::{ExposeSecret, SecretString};
+
+use crate::agent::SystemAgent;
+use crate::client::{
+    AuthMethod, AuthOutcome, AuthPlan, Interaction, KeyCredential, Prompt, PromptAnswer,
+    PromptedSecrets,
+};
+use crate::error::FailureKind;
+use crate::handler::ClientHandler;
+
+/// Time allowed for an agent to sign (it may ask its user for confirmation).
+const AGENT_SIGN_TIMEOUT: Duration = Duration::from_secs(120);
+/// Time allowed for the server's answer to a password or to
+/// keyboard-interactive answers. Servers with push or out-of-band second
+/// factors (a PAM module waiting for an approval on a phone) hold this
+/// answer until the user approves, typically up to a minute; the user can
+/// cancel the attempt at any time, and a lost transport fails it at once.
+pub(crate) const AUTH_REPLY_TIMEOUT: Duration = Duration::from_secs(300);
+/// Most questions accepted in one keyboard-interactive round; a server that
+/// sends more is treated as broken (`Protocol`).
+pub(crate) const MAX_KI_QUESTIONS: usize = 32;
+/// Longest server texts of a keyboard-interactive round passed on, in characters.
+pub(crate) const MAX_KI_NAME_CHARS: usize = 256;
+pub(crate) const MAX_KI_PROMPT_CHARS: usize = 256;
+pub(crate) const MAX_KI_INSTRUCTION_CHARS: usize = 2048;
+/// Bound on keyboard-interactive rounds that need no answer (servers may
+/// send empty information requests; never loop on them forever).
+const MAX_EMPTY_KI_ROUNDS: u32 = 8;
+
+/// Why authentication did not succeed.
+#[derive(Debug)]
+pub(crate) enum AuthError {
+    /// The transport closed before the server answered anything (the server
+    /// may have given up while the user decided about the host key).
+    LostBeforeFirstReply,
+    Failed(FailureKind),
+}
+
+impl From<FailureKind> for AuthError {
+    fn from(kind: FailureKind) -> Self {
+        Self::Failed(kind)
+    }
+}
+
+/// The inputs of one authentication.
+pub(crate) struct AuthContext<'a> {
+    pub(crate) plan: &'a AuthPlan,
+    pub(crate) agent: Option<&'a SystemAgent>,
+    pub(crate) interaction: &'a dyn Interaction,
+    /// Server round-trip timeout.
+    pub(crate) timeout: Duration,
+}
+
+/// A successful authentication with the secrets typed at prompts.
+pub(crate) struct Authenticated {
+    pub(crate) outcome: AuthOutcome,
+    pub(crate) prompted: PromptedSecrets,
+}
+
+/// What one method did.
+enum Step {
+    Success(Authenticated),
+    /// The method is done (refused, unusable or not applicable); continue.
+    Next,
+}
+
+/// Progress over the methods of one authentication.
+struct Progress {
+    username: String,
+    methods: MethodSet,
+    tried_key: bool,
+    tried_agent: bool,
+    tried_password: bool,
+    tried_keyboard_interactive: bool,
+    /// The effective key could not be decoded.
+    key_unusable: bool,
+    /// The server refused at least one credential.
+    refused_any: bool,
+    /// The public key already offered from [`AuthPlan::key`].
+    offered_key: Option<PublicKey>,
+}
+
+impl Progress {
+    fn offers(&self, kind: MethodKind) -> bool {
+        self.methods.contains(&kind)
+    }
+
+    /// The server answered a failure. Returns the error to stop with when the
+    /// transport is gone.
+    fn refused(
+        &mut self,
+        handle: &Handle<ClientHandler>,
+        remaining: MethodSet,
+    ) -> Result<(), AuthError> {
+        if remaining.is_empty() && handle.is_closed() {
+            return Err(self.closed());
+        }
+        self.refused_any = true;
+        self.methods = remaining;
+        Ok(())
+    }
+
+    /// The error when the transport closed during authentication: after a
+    /// refusal the server most likely gave up on wrong credentials.
+    fn closed(&self) -> AuthError {
+        if self.refused_any {
+            AuthError::Failed(FailureKind::AuthFailed)
+        } else {
+            AuthError::Failed(FailureKind::Disconnected)
+        }
+    }
+
+    fn outcome(&self, method: AuthMethod) -> Authenticated {
+        Authenticated {
+            outcome: AuthOutcome {
+                username: self.username.clone(),
+                method,
+            },
+            prompted: PromptedSecrets::default(),
+        }
+    }
+}
+
+async fn with_timeout<T, F>(timeout: Duration, future: F) -> Result<T, AuthError>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| AuthError::Failed(FailureKind::Timeout))
+}
+
+/// Authenticates on an established transport. `username` is the spec's
+/// username or the one prompted in an earlier attempt; a prompted one is
+/// stored back so that a retry does not ask again.
+pub(crate) async fn authenticate(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    username: &mut Option<String>,
+) -> Result<Authenticated, AuthError> {
+    let user = match username.clone() {
+        Some(user) => user,
+        None => {
+            let user = ask_username(context.interaction).await?;
+            *username = Some(user.clone());
+            user
+        }
+    };
+
+    // `none` reveals the methods the server offers.
+    let first = with_timeout(context.timeout, handle.authenticate_none(user.clone()))
+        .await?
+        .map_err(|_| {
+            if handle.is_closed() {
+                AuthError::LostBeforeFirstReply
+            } else {
+                AuthError::Failed(FailureKind::Protocol)
+            }
+        })?;
+    let methods = match first {
+        AuthResult::Success => {
+            tracing::debug!(method = "none", "authenticated");
+            return Ok(Authenticated {
+                outcome: AuthOutcome {
+                    username: user,
+                    method: AuthMethod::None,
+                },
+                prompted: PromptedSecrets::default(),
+            });
+        }
+        AuthResult::Failure {
+            remaining_methods, ..
+        } => {
+            if remaining_methods.is_empty() && handle.is_closed() {
+                return Err(AuthError::LostBeforeFirstReply);
+            }
+            remaining_methods
+        }
+    };
+
+    let mut progress = Progress {
+        username: user,
+        methods,
+        tried_key: false,
+        tried_agent: false,
+        tried_password: false,
+        tried_keyboard_interactive: false,
+        key_unusable: false,
+        refused_any: false,
+        offered_key: None,
+    };
+
+    loop {
+        let step = if let Some(key) = context
+            .plan
+            .key
+            .as_ref()
+            .filter(|_| !progress.tried_key && progress.offers(MethodKind::PublicKey))
+        {
+            progress.tried_key = true;
+            try_key(handle, context, &mut progress, key).await?
+        } else if let Some(agent) = context.agent.filter(|_| {
+            context.plan.use_agent
+                && !progress.tried_agent
+                && progress.offers(MethodKind::PublicKey)
+        }) {
+            progress.tried_agent = true;
+            try_agent(handle, context, &mut progress, agent).await?
+        } else if !progress.tried_password && progress.offers(MethodKind::Password) {
+            progress.tried_password = true;
+            try_password(handle, context, &mut progress).await?
+        } else if context.plan.keyboard_interactive
+            && !progress.tried_keyboard_interactive
+            && progress.offers(MethodKind::KeyboardInteractive)
+        {
+            progress.tried_keyboard_interactive = true;
+            try_keyboard_interactive(handle, context, &mut progress).await?
+        } else {
+            break;
+        };
+        if let Step::Success(authenticated) = step {
+            tracing::debug!(method = ?authenticated.outcome.method, "authenticated");
+            return Ok(authenticated);
+        }
+    }
+
+    if progress.key_unusable {
+        Err(AuthError::Failed(FailureKind::KeyUnusable))
+    } else {
+        Err(AuthError::Failed(FailureKind::AuthFailed))
+    }
+}
+
+async fn ask_username(interaction: &dyn Interaction) -> Result<String, AuthError> {
+    loop {
+        let answer = interaction
+            .prompt(Prompt::Username)
+            .await
+            .ok_or(AuthError::Failed(FailureKind::Cancelled))?;
+        let user = answer.value.expose_secret().trim().to_owned();
+        if !user.is_empty() {
+            return Ok(user);
+        }
+    }
+}
+
+/// The RSA signature hash for this server: SHA-512 or SHA-256 from
+/// `server-sig-algs`, SHA-256 when the server sent no list. `None` when the
+/// server accepts only `ssh-rsa` (SHA-1), which is never used (decision 22).
+async fn rsa_hash(handle: &Handle<ClientHandler>, timeout: Duration) -> Option<HashAlg> {
+    match tokio::time::timeout(timeout, handle.best_supported_rsa_hash()).await {
+        Ok(Ok(Some(Some(hash)))) => Some(hash),
+        Ok(Ok(Some(None))) => None,
+        _ => Some(HashAlg::Sha256),
+    }
+}
+
+fn is_rsa(algorithm: &Algorithm) -> bool {
+    matches!(algorithm, Algorithm::Rsa { .. })
+}
+
+/// The signature hash for `algorithm`; `Err(())` when the key cannot be used
+/// without SHA-1.
+async fn hash_for(
+    handle: &Handle<ClientHandler>,
+    algorithm: &Algorithm,
+    timeout: Duration,
+) -> Result<Option<HashAlg>, ()> {
+    if !is_rsa(algorithm) {
+        return Ok(None);
+    }
+    match rsa_hash(handle, timeout).await {
+        Some(hash) => Ok(Some(hash)),
+        None => Err(()),
+    }
+}
+
+async fn try_key(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+    credential: &KeyCredential,
+) -> Result<Step, AuthError> {
+    let (key, prompted_passphrase) = match open_key(
+        credential,
+        context.plan.can_save_passphrase,
+        context.interaction,
+    )
+    .await?
+    {
+        Some(opened) => opened,
+        None => {
+            tracing::debug!("effective key unusable");
+            progress.key_unusable = true;
+            return Ok(Step::Next);
+        }
+    };
+    progress.offered_key = Some(key.public_key().clone());
+    let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
+        tracing::debug!("rsa key skipped: the server accepts only sha-1 signatures");
+        return Ok(Step::Next);
+    };
+    let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+    let result = with_timeout(
+        context.timeout,
+        handle.authenticate_publickey(progress.username.clone(), key),
+    )
+    .await?
+    .map_err(|_| progress.closed())?;
+    match result {
+        AuthResult::Success => {
+            let mut authenticated = progress.outcome(AuthMethod::PublicKey);
+            authenticated.prompted.passphrase = prompted_passphrase;
+            Ok(Step::Success(authenticated))
+        }
+        AuthResult::Failure {
+            remaining_methods, ..
+        } => {
+            tracing::debug!(method = "publickey", "refused");
+            progress.refused(handle, remaining_methods)?;
+            Ok(Step::Next)
+        }
+    }
+}
+
+/// Why a key text did not open.
+enum KeyDecode {
+    Encrypted,
+    Invalid,
+}
+
+/// Most bcrypt-pbkdf rounds of an encrypted OpenSSH key that are run (the
+/// same bound as the core's key import). The rounds come from the key file
+/// and decryption cannot be interrupted: a crafted key could tie up a
+/// thread for days, so such a key is unusable instead.
+pub(crate) const MAX_KDF_ROUNDS: u32 = 1024;
+
+/// `false` for an OpenSSH key whose bcrypt-pbkdf rounds exceed [`MAX_KDF_ROUNDS`].
+fn kdf_allowed(text: &str) -> bool {
+    match PrivateKey::from_openssh(text) {
+        Ok(key) => match key.kdf() {
+            Kdf::Bcrypt { rounds, .. } => *rounds <= MAX_KDF_ROUNDS,
+            _ => true,
+        },
+        Err(_) => true,
+    }
+}
+
+fn decode(text: &SecretString, passphrase: Option<&SecretString>) -> Result<PrivateKey, KeyDecode> {
+    let text = text.expose_secret();
+    if passphrase.is_some() && !kdf_allowed(text) {
+        tracing::debug!("key refused: too many kdf rounds");
+        return Err(KeyDecode::Invalid);
+    }
+    match decode_secret_key(text, passphrase.map(|p| p.expose_secret())) {
+        Ok(key) => Ok(key),
+        Err(russh::keys::Error::KeyIsEncrypted) => Err(KeyDecode::Encrypted),
+        Err(_) if passphrase.is_none() && looks_encrypted(text) => Err(KeyDecode::Encrypted),
+        Err(_) if passphrase.is_some() => Err(KeyDecode::Encrypted),
+        Err(_) => Err(KeyDecode::Invalid),
+    }
+}
+
+/// Encrypted PEM and PuTTY keys (OpenSSH keys report encryption themselves).
+fn looks_encrypted(text: &str) -> bool {
+    text.contains("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+        || text.contains("Proc-Type: 4,ENCRYPTED")
+        || text
+            .lines()
+            .any(|line| line.starts_with("Encryption:") && !line.trim_end().ends_with("none"))
+}
+
+/// Decodes on a blocking thread: decryption runs the key's KDF.
+async fn decode_blocking(
+    text: &SecretString,
+    passphrase: Option<&SecretString>,
+) -> Result<PrivateKey, KeyDecode> {
+    if !kdf_allowed(text.expose_secret()) {
+        tracing::debug!("key refused: too many kdf rounds");
+        return Err(KeyDecode::Invalid);
+    }
+    let text = text.clone();
+    let passphrase = passphrase.cloned();
+    tokio::task::spawn_blocking(move || decode(&text, passphrase.as_ref()))
+        .await
+        .unwrap_or(Err(KeyDecode::Invalid))
+}
+
+/// Opens the key: plain, with the saved passphrase, or with prompted ones
+/// until one works or the prompt is cancelled. `None`: the key text cannot
+/// be decoded at all.
+async fn open_key(
+    credential: &KeyCredential,
+    can_save: bool,
+    interaction: &dyn Interaction,
+) -> Result<Option<(PrivateKey, Option<PromptAnswer>)>, AuthError> {
+    match decode_blocking(&credential.private_key, None).await {
+        Ok(key) => return Ok(Some((key, None))),
+        Err(KeyDecode::Invalid) => return Ok(None),
+        Err(KeyDecode::Encrypted) => {}
+    }
+    let mut error = false;
+    if let Some(saved) = credential.passphrase.as_ref() {
+        match decode_blocking(&credential.private_key, Some(saved)).await {
+            Ok(key) => return Ok(Some((key, None))),
+            Err(_) => error = true,
+        }
+    }
+    loop {
+        let answer = interaction
+            .prompt(Prompt::Passphrase {
+                key_label: credential.label.clone(),
+                error,
+                can_save,
+            })
+            .await
+            .ok_or(AuthError::Failed(FailureKind::Cancelled))?;
+        match decode_blocking(&credential.private_key, Some(&answer.value)).await {
+            Ok(key) => return Ok(Some((key, Some(answer)))),
+            Err(_) => error = true,
+        }
+    }
+}
+
+async fn try_agent(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+    agent: &SystemAgent,
+) -> Result<Step, AuthError> {
+    let identities = match tokio::time::timeout(context.timeout, agent.identities_raw()).await {
+        Ok(Ok(identities)) => identities,
+        _ => {
+            tracing::debug!("system agent not reachable");
+            return Ok(Step::Next);
+        }
+    };
+    for identity in identities {
+        // Certificates are stage 3.
+        let AgentIdentity::PublicKey { key, .. } = identity else {
+            continue;
+        };
+        if progress.offered_key.as_ref().map(PublicKey::key_data) == Some(key.key_data()) {
+            continue;
+        }
+        if !progress.offers(MethodKind::PublicKey) {
+            break;
+        }
+        let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
+            continue;
+        };
+        let Ok(mut client) = agent.client().await else {
+            return Ok(Step::Next);
+        };
+        let result = tokio::time::timeout(
+            AGENT_SIGN_TIMEOUT,
+            handle.authenticate_publickey_with(progress.username.clone(), key, hash, &mut client),
+        )
+        .await
+        .map_err(|_| AuthError::Failed(FailureKind::Timeout))?;
+        match result {
+            Ok(AuthResult::Success) => {
+                return Ok(Step::Success(progress.outcome(AuthMethod::Agent)));
+            }
+            Ok(AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            }) => {
+                tracing::debug!(method = "agent", "refused");
+                progress.refused(handle, remaining_methods)?;
+                if partial_success {
+                    return Ok(Step::Next);
+                }
+            }
+            Err(russh::AgentAuthError::Send(_)) => return Err(progress.closed()),
+            Err(russh::AgentAuthError::Key(_)) => {
+                // The agent refused to sign (for example a declined
+                // confirmation); try its next key.
+                tracing::debug!("agent signature refused");
+                if handle.is_closed() {
+                    return Err(progress.closed());
+                }
+            }
+        }
+    }
+    Ok(Step::Next)
+}
+
+async fn try_password(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+) -> Result<Step, AuthError> {
+    let mut saved = context.plan.password.clone();
+    let mut error = false;
+    loop {
+        let (value, prompted) = match saved.take() {
+            Some(saved) => (saved, None),
+            None => {
+                let answer = context
+                    .interaction
+                    .prompt(Prompt::Password {
+                        username: progress.username.clone(),
+                        error,
+                        can_save: context.plan.can_save_password,
+                    })
+                    .await
+                    .ok_or(AuthError::Failed(FailureKind::Cancelled))?;
+                (answer.value.clone(), Some(answer))
+            }
+        };
+        let result = with_timeout(
+            context.timeout.max(AUTH_REPLY_TIMEOUT),
+            handle.authenticate_password(progress.username.clone(), value.expose_secret()),
+        )
+        .await?
+        .map_err(|_| progress.closed())?;
+        drop(value);
+        match result {
+            AuthResult::Success => {
+                let mut authenticated = progress.outcome(AuthMethod::Password);
+                authenticated.prompted.password = prompted;
+                return Ok(Step::Success(authenticated));
+            }
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                tracing::debug!(method = "password", "refused");
+                progress.refused(handle, remaining_methods)?;
+                if partial_success || !progress.offers(MethodKind::Password) {
+                    return Ok(Step::Next);
+                }
+                error = true;
+            }
+        }
+    }
+}
+
+/// The questions of one keyboard-interactive round, to recognize a repeated
+/// round (the server asking the same questions again after wrong answers).
+#[derive(PartialEq, Eq)]
+struct RoundSignature {
+    name: String,
+    instruction: String,
+    prompts: Vec<(String, bool)>,
+}
+
+async fn try_keyboard_interactive(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+) -> Result<Step, AuthError> {
+    let mut error = false;
+    loop {
+        let mut answered_any = false;
+        let mut empty_rounds = 0u32;
+        let mut previous: Option<RoundSignature> = None;
+        let mut response = with_timeout(
+            context.timeout,
+            handle.authenticate_keyboard_interactive_start(progress.username.clone(), None),
+        )
+        .await?
+        .map_err(|_| progress.closed())?;
+        loop {
+            match response {
+                KeyboardInteractiveAuthResponse::Success => {
+                    return Ok(Step::Success(
+                        progress.outcome(AuthMethod::KeyboardInteractive),
+                    ));
+                }
+                KeyboardInteractiveAuthResponse::Failure {
+                    remaining_methods,
+                    partial_success,
+                } => {
+                    tracing::debug!(method = "keyboard-interactive", "refused");
+                    progress.refused(handle, remaining_methods)?;
+                    if partial_success
+                        || !answered_any
+                        || !progress.offers(MethodKind::KeyboardInteractive)
+                    {
+                        return Ok(Step::Next);
+                    }
+                    error = true;
+                    break;
+                }
+                KeyboardInteractiveAuthResponse::InfoRequest {
+                    name,
+                    instructions,
+                    prompts,
+                } => {
+                    if prompts.len() > MAX_KI_QUESTIONS {
+                        tracing::debug!(
+                            questions = prompts.len(),
+                            "keyboard-interactive round with too many questions"
+                        );
+                        return Err(AuthError::Failed(FailureKind::Protocol));
+                    }
+                    let name = server_text(&name, MAX_KI_NAME_CHARS, false);
+                    let instructions = server_text(&instructions, MAX_KI_INSTRUCTION_CHARS, true);
+                    let answers = if prompts.is_empty() {
+                        empty_rounds += 1;
+                        if empty_rounds > MAX_EMPTY_KI_ROUNDS {
+                            return Ok(Step::Next);
+                        }
+                        Vec::new()
+                    } else {
+                        let signature = RoundSignature {
+                            name: name.clone(),
+                            instruction: instructions.clone(),
+                            prompts: prompts
+                                .iter()
+                                .map(|p| {
+                                    (server_text(&p.prompt, MAX_KI_PROMPT_CHARS, false), p.echo)
+                                })
+                                .collect(),
+                        };
+                        if previous.as_ref() == Some(&signature) {
+                            error = true;
+                        }
+                        let count = u32::try_from(prompts.len()).unwrap_or(u32::MAX);
+                        let mut answers = Vec::with_capacity(prompts.len());
+                        for (index, (prompt, echo)) in signature.prompts.iter().enumerate() {
+                            let answer = context
+                                .interaction
+                                .prompt(Prompt::KeyboardInteractive {
+                                    name: name.clone(),
+                                    instruction: instructions.clone(),
+                                    prompt: prompt.clone(),
+                                    echo: *echo,
+                                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                                    count,
+                                    error,
+                                })
+                                .await
+                                .ok_or(AuthError::Failed(FailureKind::Cancelled))?;
+                            answers.push(answer.value.expose_secret().to_owned());
+                        }
+                        answered_any = true;
+                        error = false;
+                        previous = Some(signature);
+                        answers
+                    };
+                    response = with_timeout(
+                        context.timeout.max(AUTH_REPLY_TIMEOUT),
+                        handle.authenticate_keyboard_interactive_respond(answers),
+                    )
+                    .await?
+                    .map_err(|_| progress.closed())?;
+                }
+            }
+        }
+    }
+}
+
+/// Server text shown to the user (keyboard-interactive name, instruction
+/// and prompts): C0 and C1 control characters (except LF when `keep_lf`;
+/// a tab becomes a space), bidi controls and invisible format characters
+/// are removed, and the text is cut at `max` characters.
+pub(crate) fn server_text(text: &str, max: usize, keep_lf: bool) -> String {
+    text.chars()
+        .filter_map(|c| match c {
+            '\n' if keep_lf => Some('\n'),
+            '\t' => Some(' '),
+            c if c.is_control() || is_invisible(c) => None,
+            c => Some(c),
+        })
+        .take(max)
+        .collect()
+}
+
+/// Bidi controls and zero-width or invisible formatting characters.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_texts_are_cleaned_and_bounded() {
+        assert_eq!(
+            server_text("Code\u{1b}[31m: \u{202E}evil\u{200B}\r\n", 256, false),
+            "Code[31m: evil"
+        );
+        assert_eq!(
+            server_text("line one\nline\ttwo\u{85}", 2048, true),
+            "line one\nline two"
+        );
+        assert_eq!(server_text(&"x".repeat(300), 256, false).len(), 256);
+        assert_eq!(server_text("\u{65e5}\u{672c}", 1, false), "\u{65e5}");
+    }
+
+    #[test]
+    fn keys_with_too_many_kdf_rounds_are_not_decrypted() {
+        // Not a key at all: left to the decoder.
+        assert!(kdf_allowed("not a key"));
+        let text = SecretString::from("not a key".to_owned());
+        assert!(matches!(
+            decode(&text, Some(&SecretString::from("p".to_owned()))),
+            Err(KeyDecode::Encrypted | KeyDecode::Invalid)
+        ));
+    }
+
+    #[test]
+    fn encrypted_pem_and_ppk_are_recognized() {
+        assert!(looks_encrypted(
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n"
+        ));
+        assert!(looks_encrypted(
+            "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n"
+        ));
+        assert!(looks_encrypted(
+            "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: aes256-cbc\n"
+        ));
+        assert!(!looks_encrypted(
+            "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n"
+        ));
+        assert!(!looks_encrypted("-----BEGIN OPENSSH PRIVATE KEY-----\n"));
+    }
+
+    #[test]
+    fn garbage_is_invalid_not_encrypted() {
+        let text = SecretString::from("not a key".to_owned());
+        assert!(matches!(decode(&text, None), Err(KeyDecode::Invalid)));
+    }
+}

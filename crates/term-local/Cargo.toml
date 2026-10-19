@@ -1,0 +1,25 @@
+[package]
+name = "shellpp-term-local"
+description = "Shell++ local terminal: shell detection and a portable-pty session (desktop only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Desktop only (decision 5): shellpp-desktop links this crate only for desktop
+# targets. Serial and Telnet join in stage 9.
+[dependencies]
+portable-pty.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+thiserror.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+
+[lints]
+workspace = true

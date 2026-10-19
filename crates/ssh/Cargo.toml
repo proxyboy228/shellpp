@@ -1,0 +1,33 @@
+[package]
+name = "shellpp-ssh"
+description = "Shell++ SSH client: connections, host key verification callbacks, authentication, shell and exec channels, keepalive, reconnect policy, system agent and agent forwarding."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# shellpp-ssh must stay mobile-ready (docs/architecture.md, sections 1.2 and
+# 2.3): no tauri, no shellpp-term-local, no keyring, no OS directory lookups.
+# In stage 2 it does not depend on shellpp-core either: the desktop host maps
+# core settings to `ConnectSpec` and implements `Interaction` (stage 2 plan,
+# section 4.2).
+[dependencies]
+russh.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] }
+secrecy.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+data-encoding.workspace = true
+
+[dev-dependencies]
+shellpp-test-sshd.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
+tempfile.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true
