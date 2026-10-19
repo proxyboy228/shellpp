@@ -1,0 +1,37 @@
+[package]
+name = "shellpp-test-sshd"
+description = "Shell++ test SSH server on russh (docs/architecture.md, section 9.3): password, public key and keyboard-interactive authentication, a deterministic shell, exec answers, host key rotation and connection drops. Tests only; never shipped."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+default-run = "shellpp-test-sshd"
+
+[lib]
+name = "shellpp_test_sshd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shellpp-test-sshd"
+path = "src/main.rs"
+
+# No project crates (docs/architecture.md, section 2.3).
+[dependencies]
+russh.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "io-std", "rt", "rt-multi-thread", "sync", "time", "macros"] }
+serde.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

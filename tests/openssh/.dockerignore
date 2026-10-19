@@ -1,0 +1,5 @@
+# The build context is only what the Dockerfile copies.
+*
+!Dockerfile
+!sshd_config
+!entrypoint.sh
