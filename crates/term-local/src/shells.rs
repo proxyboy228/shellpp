@@ -364,13 +364,20 @@ mod windows {
         let utf16 = output.starts_with(&[0xff, 0xfe])
             || (output.len() >= 2 && output.len().is_multiple_of(2) && {
                 let pairs = output.len() / 2;
-                let zero_high = output.chunks_exact(2).filter(|pair| pair[1] == 0).count();
+                let zero_high = output
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .filter(|pair| pair[1] == 0)
+                    .count();
                 zero_high * 2 > pairs
             });
         if utf16 {
             let units: Vec<u16> = output
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair))
                 .collect();
             String::from_utf16_lossy(&units)
         } else {

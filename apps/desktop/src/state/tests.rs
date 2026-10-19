@@ -1,0 +1,156 @@
+//! AppState against a real core in a temporary profile (GPUI context tests,
+//! no windows).
+
+use gpui::{Entity, TestAppContext};
+use serde_json::{Map, Value, json};
+use shellpp_core::CoreError;
+use shellpp_core::service::dto::LockState;
+
+use super::*;
+use crate::testing::TestProfile;
+
+fn map(value: Value) -> Map<String, Value> {
+    value.as_object().cloned().unwrap()
+}
+
+fn unlocked_state(cx: &mut TestAppContext) -> Entity<AppState> {
+    let opened = TestProfile::new().into_unlocked();
+    cx.new(|cx| AppState::new(opened, cx))
+}
+
+#[gpui_kit::test]
+fn loads_saves_and_navigates(cx: &mut TestAppContext) {
+    let state = unlocked_state(cx);
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = events.clone();
+    cx.update(|cx| {
+        cx.subscribe(&state, move |_, event: &AppStateEvent, _| {
+            seen.borrow_mut().push(event.clone())
+        })
+        .detach()
+    });
+
+    state.update(cx, |state, cx| {
+        assert!(state.is_unlocked());
+        assert!(state.vault_id().is_some());
+        assert!(state.hosts().is_empty());
+
+        let group = state
+            .save_group(None, map(json!({"name": "Production"})), cx)
+            .unwrap();
+        let host = state
+            .save_host(
+                None,
+                map(json!({"address": "web1.example.com", "group_id": group.record_id})),
+                cx,
+            )
+            .unwrap();
+        let top = state
+            .save_host(
+                None,
+                map(json!({"address": "192.0.2.10", "label": "Top"})),
+                cx,
+            )
+            .unwrap();
+        assert_eq!(state.hosts().len(), 2);
+        assert_eq!(state.groups_in(None).len(), 1);
+        assert_eq!(state.hosts_in(None).len(), 1);
+        assert_eq!(
+            state.hosts_in(Some(group.record_id))[0].record_id,
+            host.record_id
+        );
+        assert_eq!(state.host(top.record_id).unwrap().title(), "Top");
+
+        // Edit: start from the stored data, change one member.
+        let mut data = state.host(host.record_id).unwrap().data_map();
+        data.insert("label".to_owned(), json!("Web 1"));
+        let edited = state.save_host(Some(host.record_id), data, cx).unwrap();
+        assert_eq!(edited.label.as_deref(), Some("Web 1"));
+        assert_eq!(edited.group_id, Some(group.record_id));
+
+        // Validation errors come back with the failing field.
+        let error = state
+            .save_host(None, map(json!({"address": "bad host"})), cx)
+            .unwrap_err();
+        assert!(matches!(error, CoreError::Validation(_)));
+
+        state.set_location(Some(group.record_id), cx);
+        assert_eq!(state.location(), Some(group.record_id));
+        assert_eq!(state.location_path().len(), 1);
+
+        let order = vec![host.record_id, top.record_id];
+        state.select(host.record_id, SelectMode::Replace, &order, cx);
+        state.select(top.record_id, SelectMode::Toggle, &order, cx);
+        assert_eq!(state.selection().len(), 2);
+
+        // Deleting the group moves its host to the top level.
+        state.delete_records(vec![group.record_id], cx).unwrap();
+        assert_eq!(state.location(), None);
+        assert!(state.groups().is_empty());
+        assert_eq!(state.hosts_in(None).len(), 2);
+    });
+    cx.run_until_parked();
+    let events = events.borrow();
+    assert!(events.contains(&AppStateEvent::RecordsChanged));
+    assert!(events.contains(&AppStateEvent::SelectionChanged));
+    assert!(events.contains(&AppStateEvent::LocationChanged(None)));
+}
+
+#[gpui_kit::test]
+async fn lock_and_unlock_through_the_state(cx: &mut TestAppContext) {
+    let (opened, password) = TestProfile::new().into_opened();
+    let state = cx.new(|cx| AppState::new(opened, cx));
+    assert_eq!(
+        state.read_with(cx, |state, _| state.lock_state()),
+        LockState::FirstRun
+    );
+
+    // First run with the generated password (real KDF parameters).
+    let setup = state.update(cx, |state, cx| state.first_run_setup(password.clone(), cx));
+    assert!(setup.await.is_ok());
+    state.read_with(cx, |state, _| assert!(state.is_unlocked()));
+
+    state.update(cx, |state, cx| {
+        state
+            .save_host(None, map(json!({"address": "db.example.com"})), cx)
+            .unwrap();
+        state.lock(cx).unwrap();
+        assert_eq!(state.lock_state(), LockState::Locked);
+        // Nothing stays loaded while locked.
+        assert!(state.hosts().is_empty());
+        assert!(matches!(
+            state.save_host(None, map(json!({"address": "x.example.com"})), cx),
+            Err(CoreError::Locked)
+        ));
+    });
+
+    let wrong = state.update(cx, |state, cx| {
+        state.unlock(
+            secrecy::SecretString::from("not the password".to_owned()),
+            cx,
+        )
+    });
+    assert!(matches!(wrong.await, Err(CoreError::InvalidPassword)));
+
+    let unlock = state.update(cx, |state, cx| state.unlock(password, cx));
+    assert!(unlock.await.is_ok());
+    state.read_with(cx, |state, _| {
+        assert!(state.is_unlocked());
+        assert_eq!(state.hosts().len(), 1);
+    });
+}
+
+#[gpui_kit::test]
+fn shutdown_removes_a_temporary_profile(cx: &mut TestAppContext) {
+    let profile = TestProfile::new();
+    let path = profile.path().to_path_buf();
+    let opened = profile.into_unlocked();
+    let state = cx.new(|cx| AppState::new(opened, cx));
+    assert!(path.is_dir());
+    state.update(cx, |state, _| state.shutdown());
+    assert!(
+        !path.exists(),
+        "the temporary profile is deleted at shutdown"
+    );
+    state.read_with(cx, |state, _| assert!(state.core().is_none()));
+}

@@ -6,7 +6,8 @@
 //   node scripts/rust-notices.mjs --write   rewrite the generated parts
 //
 // The crate list is the union, over the desktop targets below, of the normal
-// (non-dev, non-build) dependencies of `shellpp-desktop` as resolved by
+// (non-dev, non-build) dependencies of `shellpp-desktop` (the GPUI Kit app in
+// apps/desktop, default features: `dev-tools` never ships) as resolved by
 // `cargo tree`. Procedural macros run in the compiler and are not part of the
 // binary, so they are left out; so are the workspace crates themselves.
 // SQLite, which libsqlite3-sys bundles, is public domain and gets its own row

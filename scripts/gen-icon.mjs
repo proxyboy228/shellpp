@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Renders the Shell++ placeholder app icon (apps/desktop/src-tauri/icons/source.svg)
+// Renders the Shell++ placeholder app icon (apps/desktop/assets/icons/source.svg)
 // to a square RGBA PNG without any image library: the shapes are evaluated as
 // signed distance fields with analytic anti-aliasing and the PNG is written
 // with node:zlib.
@@ -8,7 +8,8 @@
 // chevron and an underscore. Keep the geometry in sync with source.svg.
 //
 // Usage: node scripts/gen-icon.mjs <out.png> [size=1024]
-// Then:  pnpm --filter @shellpp/desktop tauri icon <out.png>
+// The platform icon files in apps/desktop/assets/icons/ (.ico, .icns, sized
+// PNGs) are derived from that PNG with any icon converter.
 
 import { writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';

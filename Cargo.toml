@@ -8,15 +8,17 @@ members = [
     "crates/ssh",
     "crates/term-local",
     "tests/sshd",
-    "apps/desktop/src-tauri",
+    "apps/desktop",
 ]
 exclude = ["server"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# MSRV-aware resolution (resolver 3) keeps dependency versions buildable with this toolchain.
-rust-version = "1.92"
+# The minimum for gpui-pre 0.3.9 (via gpui-kit). The toolchain itself is
+# pinned in rust-toolchain.toml; MSRV-aware resolution (resolver 3) keeps
+# dependency versions buildable with this version.
+rust-version = "1.93"
 license = "Apache-2.0"
 repository = "https://github.com/proxyboy228/shellpp"
 authors = ["Shell++ contributors"]
@@ -55,8 +57,6 @@ hmac = "0.13.0"
 sha1 = { version = "0.11.0", default-features = false }
 # Local terminal (desktop only, decision 5).
 portable-pty = "0.9.0"
-# Remote charset conversion of terminal sessions (host `charset`, WHATWG labels).
-encoding_rs = "0.8.35"
 # History secret detector and password prompt patterns (docs/security.md, section 10).
 regex = "1.13.1"
 # Test-only key generation in the russh test server.
@@ -76,23 +76,23 @@ thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry", "env-filter"] }
 tokio = { version = "1.53.3", features = ["time", "sync", "macros", "rt"] }
-bytes = "1.12.1"
 
-# Desktop shell (docs/architecture.md, section 3.4).
-# Tauri's default features without "dbus": that feature makes tao link libdbus
-# on Linux (dbus, libdbus-sys), which cargo-deny bans (docs/architecture.md,
-# section 8.3; decision 4). Cost: on Linux, tao does not read the light/dark
-# preference from the XDG desktop portal.
-tauri = { version = "2.12.4", default-features = false, features = ["wry", "compression", "common-controls-v6", "dynamic-acl", "x11"] }
-tauri-build = { version = "2.7.3", features = [] }
-tauri-plugin-single-instance = "2.5.4"
-tauri-plugin-clipboard-manager = "2.5.0"
-tauri-plugin-opener = "2.7.2"
+# Desktop UI (docs/architecture.md, section 3.4): GPUI Kit. gpui-kit 0.7.3
+# re-exports GPUI and pins the exact GPUI snapshot (gpui-pre and
+# gpui-pre-platform 0.3.9). The two `-pin` entries repeat that pin under other
+# names (code never uses them; GPUI is `gpui_kit::*`), so that an upgrade of
+# gpui-kit that moves GPUI fails to resolve until they are updated on purpose.
+# Upgrade all three together with the toolchain in rust-toolchain.toml.
+gpui-kit = "=0.7.3"
+gpui-pre-pin = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui-pre-platform-pin = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
+# Channel from the core's event sink (any thread) to the UI thread.
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
 keyring = { version = "3.6.3", default-features = false }
 dirs = "7.0.0"
-# The clipboard plugin uses arboard; the host calls it directly to mark sensitive values.
+# The OS clipboard for the core (sensitive values are marked for exclusion
+# from clipboard history, docs/security.md, section 9.4).
 arboard = { version = "3.7.0", default-features = false }
-url = "2.5.8"
 libc = "0.2.191"
 
 # Tests.

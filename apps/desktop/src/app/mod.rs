@@ -1,0 +1,121 @@
+//! Startup into a window and shutdown.
+//!
+//! [`run`] takes an already opened core (or the reason it did not open),
+//! starts GPUI with gpui-kit, installs the theme, creates the [`AppState`]
+//! entity and the main window (1280x800, frameless, our own title bar), and
+//! hooks shutdown: closing the last window quits, and quitting runs
+//! [`AppState::shutdown`] (which also deletes a `--demo` profile).
+
+pub mod assets;
+pub mod root;
+
+use gpui::{
+    AnyWindowHandle, App, AppContext as _, Entity, TitlebarOptions, WindowBounds, WindowOptions,
+    px, size,
+};
+use gpui_kit::component::TitleBar;
+
+use crate::i18n;
+use crate::state::{AppState, OpenedCore};
+use crate::theme::{self, Appearance};
+
+pub use root::RootView;
+
+/// Default size of the main window (logical pixels).
+pub const DEFAULT_WINDOW_WIDTH: f32 = 1280.;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 800.;
+/// Smallest size the window can be resized to.
+pub const MIN_WINDOW_WIDTH: f32 = 720.;
+pub const MIN_WINDOW_HEIGHT: f32 = 480.;
+/// Application id (Wayland app id, X11 class).
+pub const APP_ID: &str = "shellpp";
+
+/// What `main` hands to [`run`].
+#[derive(Debug)]
+pub struct Launch {
+    /// The opened core, or the message to show instead of the app.
+    pub opened: Result<OpenedCore, String>,
+    pub appearance: Appearance,
+}
+
+/// Runs the app until the last window closes. Never returns on macOS.
+pub fn run(launch: Launch) {
+    let Launch { opened, appearance } = launch;
+    gpui_kit::application()
+        .with_assets(assets::AppAssets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            theme::install(appearance, cx);
+            root::bind_keys(cx);
+
+            let state = cx.new(|cx| match opened {
+                Ok(opened) => {
+                    let mut state = AppState::new(opened, cx);
+                    state.start_tick(cx);
+                    state
+                }
+                Err(message) => AppState::failed(message),
+            });
+
+            if open_main_window(state.clone(), cx).is_err() {
+                tracing::error!("main window did not open");
+                state.update(cx, |state, _| state.shutdown());
+                cx.quit();
+                return;
+            }
+
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let quit_state = state.clone();
+            cx.on_app_quit(move |cx| {
+                quit_state.update(cx, |state, _| state.shutdown());
+                async {}
+            })
+            .detach();
+            cx.activate(true);
+        });
+}
+
+/// Options of the main window: centered 1280x800, frameless (the title bar
+/// is drawn by the app), at least 720x480.
+pub fn main_window_options(cx: &App) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::centered(
+            size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
+            cx,
+        )),
+        window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
+        // The OS-level title (taskbar, Alt+Tab); the bar itself is ours.
+        titlebar: Some(TitlebarOptions {
+            title: Some(i18n::APP_NAME.into()),
+            ..TitleBar::title_bar_options()
+        }),
+        app_id: Some(APP_ID.to_owned()),
+        ..TitleBar::window_options()
+    }
+}
+
+/// Opens the main window with the root view over `state`.
+pub fn open_main_window(
+    state: Entity<AppState>,
+    cx: &mut App,
+) -> gpui::Result<(AnyWindowHandle, Entity<RootView>)> {
+    let options = main_window_options(cx);
+    open_window_with(state, options, cx)
+}
+
+/// Opens a window with the root view over `state` and the given options
+/// (tests pass a fixed size).
+pub fn open_window_with(
+    state: Entity<AppState>,
+    options: WindowOptions,
+    cx: &mut App,
+) -> gpui::Result<(AnyWindowHandle, Entity<RootView>)> {
+    gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| RootView::new(state, window, cx))
+    })
+}

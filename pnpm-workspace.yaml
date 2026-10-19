@@ -1,9 +1,0 @@
-packages:
-  - apps/*
-
-# Install scripts that are never run: driver downloads are managed by the e2e
-# scripts, and esbuild works from its platform package without a postinstall.
-ignoredBuiltDependencies:
-  - edgedriver
-  - esbuild
-  - geckodriver

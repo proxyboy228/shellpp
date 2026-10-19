@@ -1,0 +1,72 @@
+[package]
+name = "shellpp-desktop"
+description = "Shell++ desktop application on GPUI Kit: windows, screens, theme and the platform services around shellpp-core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+default-run = "shellpp"
+
+[lib]
+name = "shellpp_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shellpp"
+path = "src/main.rs"
+
+[features]
+default = []
+# Developer tools (src/dev): `--demo` (a temporary profile with generated
+# data) and other flags that never ship. Release builds never enable it.
+dev-tools = []
+
+[dependencies]
+shellpp-core.workspace = true
+
+# GPUI Kit re-exports GPUI (`gpui_kit::*`), gpui-component and the icons.
+gpui-kit.workspace = true
+# Version guards only (see the workspace Cargo.toml); never used in code.
+gpui-pre-pin.workspace = true
+
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs.workspace = true
+arboard.workspace = true
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Version guard only (see the workspace Cargo.toml).
+gpui-pre-platform-pin.workspace = true
+
+# OS keychain for "remember on this device" (docs/architecture.md, section 5.2).
+# Never the features sync-secret-service or vendored (libdbus, D4).
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+# Linux: the Secret Service through zbus on its own async-io executor (GPUI
+# has no Tokio runtime, so not the "tokio" flavour).
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["async-secret-service", "crypto-rust", "async-io"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+# Headless UI tests (`#[gpui_kit::test]`, `gpui_kit::test::TestWindowExt`):
+# the same version as the normal dependency, plus `test-support`.
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
