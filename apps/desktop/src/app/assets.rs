@@ -13,6 +13,7 @@ gpui_kit::assets::icon_assets!(pub AppIcons, [
     FingerprintPattern,
     Folder,
     FolderOpen,
+    Key,
     KeyRound,
     LayoutGrid,
     List,

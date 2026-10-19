@@ -13,7 +13,7 @@ use shellpp_core::service::dto::LockState;
 use crate::lock::{FirstRunEvent, FirstRunScreen, UnlockScreen};
 use crate::shell::{self, Shell};
 use crate::state::{AppState, AppStateEvent};
-use crate::theme::metrics;
+use crate::theme::{self, metrics};
 
 /// Registers the key bindings of every view.
 pub fn bind_keys(cx: &mut App) {
@@ -54,12 +54,16 @@ impl RootView {
                 }
             },
         );
+        // Auto appearance keeps following the system while the app runs.
+        let appearance = cx.observe_window_appearance(window, |_, window, cx| {
+            theme::follow_system(window, cx);
+        });
         let mut this = Self {
             state,
             shell: None,
             first_run: None,
             unlock: None,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, appearance],
         };
         this.sync_screens(window, cx);
         this

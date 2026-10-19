@@ -1,5 +1,7 @@
-//! The "In development" placeholder for sections and tabs that are not built
-//! yet (owner's audit items 9 and 10).
+//! The "In development" placeholder (UI 0; owner's audit items 9 and 10;
+//! audit decision 5) for sections and tabs whose screen is not built yet:
+//! the title (16 px, 600, `--text-primary`) and "In development" (14 px,
+//! `--text-secondary`), centered.
 
 use gpui::prelude::*;
 use gpui::{App, ElementId, IntoElement, SharedString, div};
@@ -26,6 +28,7 @@ pub fn placeholder(
         .child(
             div()
                 .text_size(metrics::FONT_SIZE_HEADING)
+                .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(title.into()),
         )
