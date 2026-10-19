@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-records-query"
+description = "Enables the records_query command without any pre-configured scope."
+commands.allow = ["records_query"]
+
+[[permission]]
+identifier = "deny-records-query"
+description = "Denies the records_query command without any pre-configured scope."
+commands.deny = ["records_query"]

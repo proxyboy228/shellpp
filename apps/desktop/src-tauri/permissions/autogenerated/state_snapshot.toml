@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-state-snapshot"
+description = "Enables the state_snapshot command without any pre-configured scope."
+commands.allow = ["state_snapshot"]
+
+[[permission]]
+identifier = "deny-state-snapshot"
+description = "Denies the state_snapshot command without any pre-configured scope."
+commands.deny = ["state_snapshot"]

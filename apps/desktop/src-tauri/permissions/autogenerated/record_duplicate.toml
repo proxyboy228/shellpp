@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-duplicate"
+description = "Enables the record_duplicate command without any pre-configured scope."
+commands.allow = ["record_duplicate"]
+
+[[permission]]
+identifier = "deny-record-duplicate"
+description = "Denies the record_duplicate command without any pre-configured scope."
+commands.deny = ["record_duplicate"]
