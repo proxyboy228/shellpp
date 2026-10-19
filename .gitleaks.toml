@@ -4,3 +4,17 @@ title = "gitleaks config"
 
 [extend]
 useDefault = true
+
+# Known-answer test vectors (docs/storage-format.md, section 14.3): every
+# key in these files is derived from fixed, public test inputs and protects
+# nothing.
+[[allowlists]]
+description = "crypto known-answer test vectors"
+paths = ['''(^|/)crates/core/tests/vectors/kat_[a-z_]+\.json$''']
+
+# The keychain account name in the ids unit test is built from a fixed
+# test UUID, not from a key.
+[[allowlists]]
+description = "keychain account name in the ids unit test"
+regexTarget = "match"
+regexes = ['''device-key:0199f6a1-b2c3-7d4e-8f00-112233445566''']

@@ -1,0 +1,17 @@
+[package]
+name = "shellpp-sync-api"
+description = "Shell++ sync API types and the record envelope header codec. No cryptography and no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Shared with the AGPL server (docs/architecture.md, section 2.3): keep this crate
+# free of cryptography, I/O and client-only dependencies.
+[dependencies]
+
+[lints]
+workspace = true

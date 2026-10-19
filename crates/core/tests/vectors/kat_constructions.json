@@ -1,0 +1,130 @@
+{
+  "description": "Shell++ construction test vectors, computed with the Python 3 standard library by gen_vectors.py. Added with the stage 1 implementation (docs/storage-format.md, section 14.3). Hex strings are lowercase.",
+  "inputs": {
+    "master_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "recovery_key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "device_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "vault_key": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+    "kdf_salt": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "vault_id": "0199f6a1-b2c3-7d4e-8f00-112233445566",
+    "db_id": "0199f6a1-0000-7000-8000-000000000001",
+    "device_id": "0199f6a1-0000-7000-8000-000000000002",
+    "file_id": "0199f6a1-0000-7000-8000-000000000003",
+    "record_id": "0199f6a1-0000-7000-8000-0000000000aa",
+    "origin": "https://sync.example.com"
+  },
+  "labels": [
+    "shellpp/v1/kdf-salt",
+    "shellpp/v1/kek",
+    "shellpp/v1/auth",
+    "shellpp/v1/recovery-kek",
+    "shellpp/v1/recovery-auth",
+    "shellpp/v1/device-wrap",
+    "shellpp/v1/record",
+    "shellpp/v1/epoch-chain",
+    "shellpp/v1/roster-epoch",
+    "shellpp/v1/local-secrets",
+    "shellpp/v1/recording",
+    "shellpp/v1/export",
+    "shellpp/v1/wrap/kek",
+    "shellpp/v1/wrap/recovery",
+    "shellpp/v1/wrap/device",
+    "shellpp/v1/wrap/epoch-chain",
+    "shellpp/v1/wrap/refresh-token",
+    "shellpp/v1/hpke/vault-key",
+    "shellpp/v1/identity-fp"
+  ],
+  "kdf_json": {
+    "desktop": "{\"alg\":\"argon2id\",\"v\":1,\"m_kib\":65536,\"t\":3,\"p\":4}",
+    "mobile": "{\"alg\":\"argon2id\",\"v\":1,\"m_kib\":32768,\"t\":4,\"p\":2}"
+  },
+  "argon2_salt": {
+    "no_email": "66438bcb26cad80833fa3d54e372be2207200402ffe506253656a318b519db02",
+    "alice": "de707b10a41bbe7c41af2d322451552e7f4b650a909f1e65985013a9015eee01",
+    "unicode": "8c37400829e5fa35094a76a65729480ea386830e6c622f033506ea4bcb342bab"
+  },
+  "email_normalization": [
+    {
+      "input": "  Alice@Example.COM \t",
+      "normalized": "alice@example.com"
+    },
+    {
+      "input": "Zoe\u0308@Example.org",
+      "normalized": "zo\u00eb@example.org"
+    }
+  ],
+  "hkdf": {
+    "kek": "ef254734f945ead749587030e10ad33e229c1345e5e2ecf0fbebb26c95b5dd7a",
+    "auth_key": "30440a493f509c712dbaf79e9cbe056d609b3db7c40e0b1d154a9f3e80b07449",
+    "recovery_kek": "a60d261ea89b1898f1618d24633a54c6474776546d41ac2cb4e0e77f4ea3f4f4",
+    "recovery_auth_key": "2b9e4b15bcb13b4a06c0d184419321371b59c844a132f2b965b9a21e69b6516e",
+    "device_wrap_key": "75f50732852b7e7d3dff983855eddb6a5bae73385c192bed71b220bfc327fdae",
+    "record_key_e1": "e1b9f6a8478c935420d0388b7f43c7addf97804e76c3580ebfe6534180566ff3",
+    "record_key_e7": "151089576408ab7528e7da05d94966048f486d68869f94be51bef0b929a969a9",
+    "chain_key_e2": "308f2b444434c2fd3be1959c64774910cdf2d3d04e93d480034c0147b1c007ee",
+    "local_secrets_key_e1": "489a4bcdd4b35cdb25be9ec9179b31e99ee6114802a3d11914bce52ecdf1476c",
+    "recording_key": "fdcc40580ff6f502e3d29ee7107c4e8eae16bd552ae512585035d589bbf49d95",
+    "export_key": "a3e4e9e3b410363478f0f553ccef04f5b5146bacc632f8523b581069eb0ee96f",
+    "epoch_commit_e1": "41d3274dd8b96a3014cb786b8f51009c"
+  },
+  "aad": {
+    "wrap_kek_e1": "7368656c6c70702f76312f777261702f6b656b0199f6a1b2c37d4e8f0011223344556600000001",
+    "wrap_recovery_e1": "7368656c6c70702f76312f777261702f7265636f766572790199f6a1b2c37d4e8f0011223344556600000001",
+    "wrap_device_e1": "7368656c6c70702f76312f777261702f6465766963650199f6a1b2c37d4e8f0011223344556600000001",
+    "wrap_chain_e2": "7368656c6c70702f76312f777261702f65706f63682d636861696e0199f6a1b2c37d4e8f0011223344556600000001",
+    "refresh_token": "7368656c6c70702f76312f777261702f726566726573682d746f6b656e0199f6a1000070008000000000000002",
+    "record_header": "010200000199f6a1b2c37d4e8f001122334455660199f6a10000700080000000000000aa000000000000000300000001",
+    "record": "7368656c6c70702f76312f7265636f7264010200000199f6a1b2c37d4e8f001122334455660199f6a10000700080000000000000aa000000000000000300000001"
+  },
+  "padding": [
+    {
+      "payload_len": 0,
+      "padded_len": 256,
+      "padded_sha256": "84cd11fd4d28f21c91b609d25791cf1d47658bcde950faefdcf9b00d2ce89e43"
+    },
+    {
+      "payload_len": 1,
+      "padded_len": 256,
+      "padded_sha256": "41f628e0b313a7236a9f5b7ade5ed8068281cb5e92b7ceaff3f7af8e862114db"
+    },
+    {
+      "payload_len": 254,
+      "padded_len": 256,
+      "padded_sha256": "09d76849c03a2f6edf16f38de9793679be6e9a9560e4206229974fd5d13400c3"
+    },
+    {
+      "payload_len": 255,
+      "padded_len": 256,
+      "padded_sha256": "cca763ad3ba3c9318243b9bf1a56ace4ffc4d705e01f667897e874507d7fa8de"
+    },
+    {
+      "payload_len": 256,
+      "padded_len": 512,
+      "padded_sha256": "a0206e5575259106616ba50e42b2f737d6bff8ef5f17f53bf729a749690c5c4e"
+    },
+    {
+      "payload_len": 257,
+      "padded_len": 512,
+      "padded_sha256": "878099149b5e11da62378e3635dbe6a147c4b879d58889569723e105caa060a3"
+    },
+    {
+      "payload_len": 262143,
+      "padded_len": 262144,
+      "padded_sha256": "1a1fb7cf3bedfef33254b48d838bb8b28efd962fac333e7f5e86262402144bcd"
+    }
+  ],
+  "recovery_key_text": [
+    {
+      "key": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "text": "RK1-40GJ4-8S44M-K2EA1-958NJ-RB9E5-WR32C-HK6GT-KCDSR-74X3P-F1X7R-ZQ5PR"
+    },
+    {
+      "key": "0000000000000000000000000000000000000000000000000000000000000000",
+      "text": "RK1-00000-00000-00000-00000-00000-00000-00000-00000-00000-00000-06CT0"
+    },
+    {
+      "key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "text": "RK1-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZTZ5G"
+    }
+  ]
+}

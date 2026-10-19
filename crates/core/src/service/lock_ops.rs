@@ -1,0 +1,928 @@
+//! Lock state transitions of the facade (docs/security.md, sections 5.9 and 8;
+//! docs/storage-format.md, sections 6.2-6.6; UI 13.1-13.4).
+
+use std::time::SystemTime;
+
+use data_encoding::BASE64URL_NOPAD;
+use secrecy::{ExposeSecret, SecretString};
+use serde_json::{Map, Value, json};
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use super::session::{PendingWrite, Session};
+use super::{Core, Inner, checkpoint, device_row_exists};
+use crate::crypto::{self, Key32};
+use crate::error::{CoreError, FieldError, ValidationReason};
+use crate::ids;
+use crate::lock::{self, PasswordMaterial};
+use crate::model::hlc::HlcClock;
+use crate::model::time::{format_timestamp, unix_ms};
+use crate::model::types::RecordKind;
+use crate::platform::{Availability, OsKind};
+use crate::service::dto::{CoreEventKind, LockState, LockStatus, RecoveryKeyResult};
+use crate::store::{
+    KeyWrapRow, LocalAuthRow, META_CREATED_AT, META_DB_ID, META_DEVICE_ID, Store, VaultRow,
+    WrapKind,
+};
+use crate::vault::{self, KeyRing, Rotation};
+
+/// Rows needed to open the personal vault, read under the mutex.
+struct KeyContext {
+    local_auth: LocalAuthRow,
+    vault: VaultRow,
+    db_id: Uuid,
+    device_id: Uuid,
+    kek_row: KeyWrapRow,
+    recovery_row: Option<KeyWrapRow>,
+    device_row: Option<KeyWrapRow>,
+}
+
+fn meta_uuid(store: &Store, key: &str) -> Result<Uuid, CoreError> {
+    store
+        .meta_get(key)?
+        .and_then(|text| Uuid::parse_str(&text).ok())
+        .ok_or(CoreError::Damaged)
+}
+
+fn key_context(store: &Store) -> Result<KeyContext, CoreError> {
+    let local_auth = store.local_auth()?.ok_or(CoreError::WrongState)?;
+    let vault_id = local_auth.personal_vault_id;
+    let vault = store.vault(&vault_id)?.ok_or(CoreError::Damaged)?;
+    let epoch = vault.current_epoch;
+    let kek_row = store
+        .key_wrap(&vault_id, epoch, WrapKind::Kek)?
+        .ok_or(CoreError::Damaged)?;
+    Ok(KeyContext {
+        db_id: meta_uuid(store, META_DB_ID)?,
+        device_id: meta_uuid(store, META_DEVICE_ID)?,
+        recovery_row: store.key_wrap(&vault_id, epoch, WrapKind::Recovery)?,
+        device_row: store.key_wrap(&vault_id, epoch, WrapKind::Device)?,
+        local_auth,
+        vault,
+        kek_row,
+    })
+}
+
+/// `true` while the key material read into `context` is still the stored one:
+/// the vault epoch, the `local_auth` row and the current `kek` row. Every
+/// two-phase operation calls it after re-acquiring the mutex, because another
+/// window may have changed the password or rotated the vault while Argon2id
+/// ran; acting on the stale rows could leave a `kek` row that no password opens.
+fn key_rows_unchanged(store: &Store, context: &KeyContext) -> Result<bool, CoreError> {
+    let vault_id = context.vault.vault_id;
+    let epoch = context.vault.current_epoch;
+    Ok(
+        store.vault(&vault_id)?.map(|row| row.current_epoch) == Some(epoch)
+            && store.local_auth()?.as_ref() == Some(&context.local_auth)
+            && store.key_wrap(&vault_id, epoch, WrapKind::Kek)?.as_ref() == Some(&context.kek_row),
+    )
+}
+
+/// `true` while the `device` row read into `context` is still the stored one.
+/// Rotations rewrap it with the device key fetched for that row.
+fn device_row_unchanged(store: &Store, context: &KeyContext) -> Result<bool, CoreError> {
+    let current = store.key_wrap(
+        &context.vault.vault_id,
+        context.vault.current_epoch,
+        WrapKind::Device,
+    )?;
+    Ok(current == context.device_row)
+}
+
+/// [`Session::reseal_older`] as upkeep after a committed change: on failure
+/// the records stay on their older epochs, readable through the chain, and
+/// the next unlock re-seals them.
+fn reseal_or_defer(session: &mut Session, store: &mut Store, now: SystemTime) -> Vec<Uuid> {
+    session.reseal_older(store, now).unwrap_or_else(|error| {
+        tracing::warn!(code = error.code(), "re-seal deferred");
+        Vec::new()
+    })
+}
+
+fn os_name(os: OsKind) -> &'static str {
+    match os {
+        OsKind::Windows => "windows",
+        OsKind::Macos => "macos",
+        OsKind::Linux => "linux",
+        OsKind::Ios => "ios",
+        OsKind::Android => "android",
+    }
+}
+
+/// `device_info.name`: `string(64)` from the OS computer name, else `<Platform> device`.
+fn device_name(name: &str, os: OsKind) -> String {
+    let cleaned: String = name.chars().filter(|c| !c.is_control()).collect();
+    let cleaned: String = cleaned.trim().chars().take(64).collect();
+    let cleaned = cleaned.trim().to_owned();
+    if cleaned.is_empty() {
+        let platform = match os {
+            OsKind::Windows => "Windows",
+            OsKind::Macos => "macOS",
+            OsKind::Linux => "Linux",
+            OsKind::Ios => "iOS",
+            OsKind::Android => "Android",
+        };
+        format!("{platform} device")
+    } else {
+        cleaned
+    }
+}
+
+fn short_version(version: &str) -> String {
+    let version: String = version
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    if version.trim().is_empty() {
+        "0.0.0".to_owned()
+    } else {
+        version.trim().to_owned()
+    }
+}
+
+fn object(value: Value) -> Map<String, Value> {
+    match value {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
+/// The recovery key held in the `recovery_key` record. The decoded bytes
+/// go straight from a zeroizing buffer into the key (no stack copy).
+pub(super) fn recovery_key_of(session: &Session) -> Result<Key32, CoreError> {
+    let record = session
+        .index
+        .singleton(RecordKind::RecoveryKey)
+        .ok_or(CoreError::Damaged)?;
+    let text = record
+        .data()
+        .get("recovery_key")
+        .and_then(Value::as_str)
+        .ok_or(CoreError::Damaged)?;
+    let bytes = Zeroizing::new(
+        BASE64URL_NOPAD
+            .decode(text.as_bytes())
+            .map_err(|_| CoreError::Damaged)?,
+    );
+    Key32::from_slice(&bytes).ok_or(CoreError::Damaged)
+}
+
+fn recovery_record_data(key: &Key32, issued_at: &str) -> Map<String, Value> {
+    let encoded = Zeroizing::new(BASE64URL_NOPAD.encode(key.expose()));
+    object(json!({ "recovery_key": encoded.as_str(), "issued_at": issued_at }))
+}
+
+impl Core {
+    fn lock_changed(&self, inner: &mut Inner) {
+        let state = inner.state;
+        self.emit(
+            inner,
+            CoreEventKind::LockChanged {
+                locked: state != LockState::Unlocked,
+                state,
+            },
+        );
+    }
+
+    /// Wipes the session (keys, index, undo buffer), the recovery grant and our
+    /// clipboard content; emits `lock:changed`.
+    pub(super) fn lock_now(&self, inner: &mut Inner) {
+        inner.session = None;
+        inner.recovery_grant.clear();
+        self.clear_clipboard_if_ours(inner);
+        inner.device_unlock_allowed = false;
+        inner.state = LockState::Locked;
+        tracing::info!("locked");
+        self.lock_changed(inner);
+    }
+
+    /// Reads the device key from the OS keychain (call without the mutex).
+    fn fetch_device_key(&self, db_id: &Uuid) -> Option<Key32> {
+        if self.platform.secret_store.availability() != Availability::Available {
+            return None;
+        }
+        match self
+            .platform
+            .secret_store
+            .get(&ids::keychain_account(db_id))
+        {
+            Ok(Some(secret)) => Some(Key32::from_secret_box(&secret)),
+            Ok(None) => None,
+            Err(_) => {
+                tracing::warn!("device key could not be read");
+                None
+            }
+        }
+    }
+
+    fn delete_device_key(&self, db_id: &Uuid) {
+        if self
+            .platform
+            .secret_store
+            .delete(&ids::keychain_account(db_id))
+            .is_err()
+        {
+            tracing::warn!("device key could not be deleted");
+        }
+    }
+
+    /// Rewrites `device_info.app_version` of this device on the first unlock
+    /// after an update. Returns the record id when it wrote one.
+    fn refresh_app_version(
+        &self,
+        store: &mut Store,
+        session: &mut Session,
+        now: SystemTime,
+    ) -> Result<Option<Uuid>, CoreError> {
+        let version = short_version(&self.config.app_version);
+        let device_id = session.device_id.to_string();
+        let stale = session
+            .index
+            .of_kind(RecordKind::DeviceInfo)
+            .find(|record| {
+                record.data().get("device_id").and_then(Value::as_str) == Some(device_id.as_str())
+            })
+            .filter(|record| {
+                record.data().get("app_version").and_then(Value::as_str) != Some(version.as_str())
+            })
+            .map(|record| (record.record_id, record.data().clone()));
+        let Some((record_id, mut data)) = stale else {
+            return Ok(None);
+        };
+        data.insert("app_version".into(), Value::String(version));
+        let write = session.prepare_write(store, RecordKind::DeviceInfo, record_id, data, now)?;
+        store.write(|tx| tx.record_put(&write.row))?;
+        session.commit(vec![write]);
+        Ok(Some(record_id))
+    }
+
+    /// Opens the session with the current vault key and unlocks (password,
+    /// device key or recovery). Emits `lock:changed` and, when records were
+    /// written, `records:changed`.
+    ///
+    /// Re-sealing older records and the `app_version` rewrite are upkeep:
+    /// every record stays readable through the chain, so their failures are
+    /// logged and retried at the next unlock instead of failing the unlock.
+    fn start_session(
+        &self,
+        inner: &mut Inner,
+        context: &KeyContext,
+        vault_key: Key32,
+        now: SystemTime,
+    ) -> Result<(), CoreError> {
+        let vault_id = context.vault.vault_id;
+        let mut ring = KeyRing::new(vault_id, context.vault.current_epoch, vault_key);
+        ring.open_chain(&inner.store)?;
+        let mut session = Session::load(&inner.store, ring, context.db_id, context.device_id, now)?;
+        let mut written = reseal_or_defer(&mut session, &mut inner.store, now);
+        match self.refresh_app_version(&mut inner.store, &mut session, now) {
+            Ok(Some(record_id)) => written.push(record_id),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(code = error.code(), "device_info update deferred"),
+        }
+
+        inner.session = Some(session);
+        inner.personal_vault_id = Some(vault_id);
+        inner.state = LockState::Unlocked;
+        inner.auto_lock.activity(now);
+        tracing::info!("unlocked");
+        if !written.is_empty() {
+            self.emit(
+                inner,
+                CoreEventKind::RecordsChanged {
+                    vault_id,
+                    record_ids: written,
+                    classes: vec![
+                        shellpp_sync_api::classes::VAULT,
+                        shellpp_sync_api::classes::HOSTS,
+                    ],
+                },
+            );
+        }
+        self.lock_changed(inner);
+        Ok(())
+    }
+
+    pub(super) fn first_run_setup_impl(
+        &self,
+        password: SecretString,
+    ) -> Result<RecoveryKeyResult, CoreError> {
+        if self.inner().state != LockState::FirstRun {
+            return Err(CoreError::WrongState);
+        }
+        lock::check_new_password(&password, "password")?;
+        let class = self.platform.class;
+        let material = PasswordMaterial::fresh(class, None)?;
+        let kek = material.derive_kek(&password, class)?;
+        drop(password);
+        let recovery_key = Key32::generate()?;
+        let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
+
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        if inner.state != LockState::FirstRun {
+            return Err(CoreError::WrongState);
+        }
+        let now = self.now();
+        let now_text = format_timestamp(now);
+        let db_id = inner.ids.next(now);
+        let device_id = inner.ids.next(now);
+        let vault_id = inner.ids.next(now);
+        let new_vault = vault::create_personal_vault(vault_id, now_text.clone())?;
+        let kek_row = vault::wrap_row(WrapKind::Kek, vault_id, 1, &kek, &new_vault.key)?;
+        let recovery_row = vault::wrap_row(
+            WrapKind::Recovery,
+            vault_id,
+            1,
+            &recovery_kek,
+            &new_vault.key,
+        )?;
+        drop(kek);
+        drop(recovery_kek);
+        let vault_row = new_vault.row;
+        let ring = KeyRing::new(vault_id, 1, new_vault.key);
+        let mut session = Session::new(ring, db_id, device_id, HlcClock::start(None, unix_ms(now)));
+
+        let records = [
+            (
+                RecordKind::VaultMeta,
+                object(json!({ "name": "Personal", "color": "graphite" })),
+            ),
+            (
+                RecordKind::RecoveryKey,
+                recovery_record_data(&recovery_key, &now_text),
+            ),
+            (
+                RecordKind::DeviceInfo,
+                object(json!({
+                    "device_id": device_id,
+                    "name": device_name(&self.platform.device_name, self.platform.os),
+                    "platform": os_name(self.platform.os),
+                    "app_version": short_version(&self.config.app_version),
+                })),
+            ),
+        ];
+        let mut writes: Vec<PendingWrite> = Vec::with_capacity(records.len());
+        for (kind, data) in records {
+            let record_id = inner.ids.next(now);
+            writes.push(session.prepare_write(&inner.store, kind, record_id, data, now)?);
+        }
+        let local_auth = material.to_row(vault_id, now_text.clone());
+        let created = inner.store.write(|tx| {
+            // Another process on the same data directory may have completed
+            // a first run meanwhile: never replace its `local_auth` row.
+            if tx.local_auth()?.is_some() {
+                return Ok(false);
+            }
+            tx.meta_set(META_DB_ID, &db_id.to_string())?;
+            tx.meta_set(META_DEVICE_ID, &device_id.to_string())?;
+            tx.meta_set(META_CREATED_AT, &now_text)?;
+            tx.local_auth_put(&local_auth)?;
+            tx.vault_put(&vault_row)?;
+            tx.key_wrap_put(&kek_row)?;
+            tx.key_wrap_put(&recovery_row)?;
+            for write in &writes {
+                tx.record_put(&write.row)?;
+            }
+            Ok(true)
+        })?;
+        if !created {
+            return Err(CoreError::WrongState);
+        }
+        session.commit(writes);
+        inner.session = Some(session);
+        inner.personal_vault_id = Some(vault_id);
+        inner.state = LockState::Unlocked;
+        inner.auto_lock.activity(now);
+        inner.recovery_grant.grant(now);
+        tracing::info!(vault_id = %vault_id, "first run completed");
+        self.lock_changed(inner);
+        self.emit(
+            inner,
+            CoreEventKind::VaultsChanged {
+                vault_ids: vec![vault_id],
+            },
+        );
+        Ok(RecoveryKeyResult {
+            recovery_key: crypto::encode_recovery_key(&recovery_key),
+        })
+    }
+
+    pub(super) fn unlock_impl(&self, password: SecretString) -> Result<LockStatus, CoreError> {
+        let available = self.remember_available();
+        let context = {
+            let inner = self.inner();
+            if inner.state != LockState::Locked {
+                return Err(CoreError::WrongState);
+            }
+            key_context(&inner.store)?
+        };
+        let class = self.platform.class;
+        let material = PasswordMaterial::from_row(&context.local_auth)?;
+        let kek = material.derive_kek(&password, class)?;
+        drop(password);
+        let vault_key =
+            vault::open_wrap(&context.kek_row, &kek).map_err(|_| CoreError::InvalidPassword)?;
+        drop(kek);
+
+        let mut inner = self.inner();
+        if inner.state != LockState::Locked || !key_rows_unchanged(&inner.store, &context)? {
+            return Err(CoreError::WrongState);
+        }
+        let now = self.now();
+        self.start_session(&mut inner, &context, vault_key, now)?;
+        Ok(self.status(&inner, available))
+    }
+
+    pub(super) fn try_device_unlock_impl(&self) -> Result<bool, CoreError> {
+        let context = {
+            let inner = self.inner();
+            if inner.state != LockState::Locked || !inner.device_unlock_allowed {
+                return Ok(false);
+            }
+            match key_context(&inner.store) {
+                Ok(context) => context,
+                Err(_) => return Ok(false),
+            }
+        };
+        let Some(device_row) = context.device_row.as_ref() else {
+            return Ok(false);
+        };
+        let Some(device_key) = self.fetch_device_key(&context.db_id) else {
+            return Ok(false);
+        };
+        let wrapping_key = crypto::derive_device_wrap_key(&device_key, &context.db_id);
+        drop(device_key);
+        let Ok(vault_key) = vault::open_wrap(device_row, &wrapping_key) else {
+            tracing::warn!("device key does not open the vault");
+            return Ok(false);
+        };
+        drop(wrapping_key);
+
+        let mut inner = self.inner();
+        if inner.state != LockState::Locked
+            || !inner.device_unlock_allowed
+            || !matches!(key_rows_unchanged(&inner.store, &context), Ok(true))
+        {
+            return Ok(false);
+        }
+        let now = self.now();
+        match self.start_session(&mut inner, &context, vault_key, now) {
+            Ok(()) => Ok(true),
+            Err(error) => {
+                tracing::warn!(code = error.code(), "device unlock failed");
+                Ok(false)
+            }
+        }
+    }
+
+    pub(super) fn lock_impl(&self) -> Result<LockStatus, CoreError> {
+        let available = self.remember_available();
+        let mut inner = self.inner();
+        match inner.state {
+            LockState::FirstRun => Err(CoreError::WrongState),
+            LockState::Locked => Ok(self.status(&inner, available)),
+            LockState::Unlocked => {
+                self.lock_now(&mut inner);
+                Ok(self.status(&inner, available))
+            }
+        }
+    }
+
+    pub(super) fn recovery_unlock_impl(
+        &self,
+        recovery_key: SecretString,
+        new_password: SecretString,
+    ) -> Result<LockStatus, CoreError> {
+        let available = self.remember_available();
+        // Held until the end: the rotation rewraps the `device` row with the
+        // device key fetched below, and a lost device key is deleted last.
+        let _remember = self.remember_lock();
+        if self.inner().state != LockState::Locked {
+            return Err(CoreError::WrongState);
+        }
+        let mut errors: Vec<FieldError> = Vec::new();
+        let decoded = crypto::decode_recovery_key(recovery_key.expose_secret());
+        drop(recovery_key);
+        if decoded.is_err() {
+            errors.push(FieldError::new("recovery_key", ValidationReason::Invalid));
+        }
+        if !crypto::password_length_ok(&new_password) {
+            errors.push(FieldError::new("new_password", ValidationReason::TooShort));
+        }
+        let recovery_key = match decoded {
+            Ok(key) if errors.is_empty() => key,
+            _ => return Err(CoreError::Validation(errors)),
+        };
+
+        let context = {
+            let inner = self.inner();
+            if inner.state != LockState::Locked {
+                return Err(CoreError::WrongState);
+            }
+            key_context(&inner.store)?
+        };
+        let recovery_row = context
+            .recovery_row
+            .as_ref()
+            .ok_or(CoreError::InvalidRecoveryKey)?;
+        let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
+        drop(recovery_key);
+        let vault_key = vault::open_wrap(recovery_row, &recovery_kek)
+            .map_err(|_| CoreError::InvalidRecoveryKey)?;
+        let device_key = context
+            .device_row
+            .as_ref()
+            .and_then(|_| self.fetch_device_key(&context.db_id));
+        let device_lost = context.device_row.is_some() && device_key.is_none();
+        let class = self.platform.class;
+        let material = PasswordMaterial::fresh(class, context.local_auth.kdf_email.clone())?;
+        let kek = material.derive_kek(&new_password, class)?;
+        drop(new_password);
+
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        if inner.state != LockState::Locked
+            || !key_rows_unchanged(&inner.store, &context)?
+            || !device_row_unchanged(&inner.store, &context)?
+        {
+            return Err(CoreError::WrongState);
+        }
+        let vault_id = context.vault.vault_id;
+        let ring = KeyRing::new(vault_id, context.vault.current_epoch, vault_key);
+        let device_wrap_key = device_key
+            .as_ref()
+            .map(|key| crypto::derive_device_wrap_key(key, &context.db_id));
+        let rotation = Rotation::prepare(
+            &ring,
+            &context.vault,
+            &kek,
+            &recovery_kek,
+            device_wrap_key.as_ref(),
+        )?;
+        let now = self.now();
+        let local_auth = material.to_row(vault_id, format_timestamp(now));
+        inner.store.write(|tx| {
+            rotation.write(tx)?;
+            tx.local_auth_put(&local_auth)
+        })?;
+        drop(kek);
+        drop(recovery_kek);
+        tracing::info!(
+            epoch = rotation.new_epoch,
+            "recovered with the recovery key; vault rotated"
+        );
+
+        // The new password is in place: from here on nothing fails the
+        // command. Unlock with the new epoch's key; the session reaches the
+        // older epochs through the chain row written above and re-seals the
+        // older records. If the session cannot start, the app stays locked
+        // and the user unlocks with the new password.
+        drop(ring);
+        let started = match key_context(&inner.store) {
+            Ok(new_context) => self.start_session(inner, &new_context, rotation.new_key(), now),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = started {
+            tracing::warn!(code = error.code(), "unlock after recovery failed");
+        }
+        checkpoint(&inner.store);
+        self.emit(
+            inner,
+            CoreEventKind::VaultsChanged {
+                vault_ids: vec![vault_id],
+            },
+        );
+        let status = self.status(inner, available);
+        drop(guard);
+        if device_lost {
+            self.delete_device_key(&context.db_id);
+        }
+        Ok(status)
+    }
+
+    /// Verifies the master password against the current `kek` row and returns `kek`.
+    fn verify_password(
+        &self,
+        context: &KeyContext,
+        password: &SecretString,
+    ) -> Result<Key32, CoreError> {
+        let class = self.platform.class;
+        let material = PasswordMaterial::from_row(&context.local_auth)?;
+        let kek = material.derive_kek(password, class)?;
+        vault::open_wrap(&context.kek_row, &kek).map_err(|_| CoreError::InvalidPassword)?;
+        Ok(kek)
+    }
+
+    fn unlocked_context(&self) -> Result<KeyContext, CoreError> {
+        let inner = self.inner();
+        Self::require_session(&inner)?;
+        key_context(&inner.store)
+    }
+
+    pub(super) fn password_change_impl(
+        &self,
+        current: SecretString,
+        new: SecretString,
+    ) -> Result<(), CoreError> {
+        let context = self.unlocked_context()?;
+        lock::check_new_password(&new, "new_password")?;
+        self.verify_password(&context, &current)?;
+        drop(current);
+        let class = self.platform.class;
+        let material = PasswordMaterial::fresh(class, context.local_auth.kdf_email.clone())?;
+        let new_kek = material.derive_kek(&new, class)?;
+        drop(new);
+
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        let session = match (&inner.state, &inner.session) {
+            (LockState::Unlocked, Some(session)) => session,
+            _ => return Err(CoreError::Locked),
+        };
+        let epoch = session.ring.current_epoch();
+        if epoch != context.vault.current_epoch || !key_rows_unchanged(&inner.store, &context)? {
+            return Err(CoreError::WrongState);
+        }
+        let vault_id = session.ring.vault_id();
+        let kek_row = vault::wrap_row(
+            WrapKind::Kek,
+            vault_id,
+            epoch,
+            &new_kek,
+            session.ring.current_key(),
+        )?;
+        let local_auth = material.to_row(vault_id, format_timestamp(self.now()));
+        inner.store.write(|tx| {
+            tx.key_wrap_put(&kek_row)?;
+            tx.local_auth_put(&local_auth)
+        })?;
+        tracing::info!("master password changed");
+        // The replaced `kek` row opens the vault key with the old password.
+        checkpoint(&inner.store);
+        Ok(())
+    }
+
+    pub(super) fn recovery_key_show_impl(
+        &self,
+        password: SecretString,
+    ) -> Result<RecoveryKeyResult, CoreError> {
+        let context = self.unlocked_context()?;
+        self.verify_password(&context, &password)?;
+        drop(password);
+        let now = self.now();
+        let mut inner = self.inner();
+        let key = recovery_key_of(Self::require_session(&inner)?)?;
+        inner.recovery_grant.grant(now);
+        Ok(RecoveryKeyResult {
+            recovery_key: crypto::encode_recovery_key(&key),
+        })
+    }
+
+    pub(super) fn recovery_key_reissue_impl(
+        &self,
+        password: SecretString,
+    ) -> Result<RecoveryKeyResult, CoreError> {
+        // Held until the end: the rotation rewraps the `device` row with the
+        // device key fetched below, and a lost device key is deleted last.
+        let _remember = self.remember_lock();
+        let context = self.unlocked_context()?;
+        let kek = self.verify_password(&context, &password)?;
+        drop(password);
+        let device_key = context
+            .device_row
+            .as_ref()
+            .and_then(|_| self.fetch_device_key(&context.db_id));
+        let device_lost = context.device_row.is_some() && device_key.is_none();
+        let new_recovery_key = Key32::generate()?;
+        let recovery_kek = crypto::derive_recovery_kek(&new_recovery_key);
+        let device_wrap_key = device_key
+            .as_ref()
+            .map(|key| crypto::derive_device_wrap_key(key, &context.db_id));
+
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        let now = self.now();
+        let Inner {
+            store,
+            session,
+            state,
+            ..
+        } = &mut *inner;
+        let session = match (state, session.as_mut()) {
+            (LockState::Unlocked, Some(session)) => session,
+            _ => return Err(CoreError::Locked),
+        };
+        // `kek` came from the rows in `context`: a password change committed
+        // meanwhile would make the new `kek` row unopenable by any password.
+        if session.ring.current_epoch() != context.vault.current_epoch
+            || !key_rows_unchanged(store, &context)?
+            || !device_row_unchanged(store, &context)?
+        {
+            return Err(CoreError::WrongState);
+        }
+        let recovery_record = session
+            .index
+            .singleton(RecordKind::RecoveryKey)
+            .map(|record| record.record_id)
+            .ok_or(CoreError::Damaged)?;
+        let rotation = Rotation::prepare(
+            &session.ring,
+            &context.vault,
+            &kek,
+            &recovery_kek,
+            device_wrap_key.as_ref(),
+        )?;
+        session
+            .ring
+            .push_epoch(rotation.new_epoch, rotation.new_key());
+        let data = recovery_record_data(&new_recovery_key, &format_timestamp(now));
+        let write =
+            match session.prepare_write(store, RecordKind::RecoveryKey, recovery_record, data, now)
+            {
+                Ok(write) => write,
+                Err(error) => {
+                    session.ring.pop_epoch(rotation.old_epoch);
+                    return Err(error);
+                }
+            };
+        if let Err(error) = store.write(|tx| {
+            rotation.write(tx)?;
+            tx.record_put(&write.row)
+        }) {
+            session.ring.pop_epoch(rotation.old_epoch);
+            return Err(error.into());
+        }
+        // Committed: the old recovery key no longer works, so from here on
+        // nothing fails the command and the new key is always returned.
+        session.commit(vec![write]);
+        let mut written = reseal_or_defer(session, store, now);
+        written.push(recovery_record);
+        let vault_id = session.ring.vault_id();
+        tracing::info!(
+            epoch = rotation.new_epoch,
+            "recovery key reissued; vault rotated"
+        );
+        // The deleted `recovery` row opens the vault key with the old recovery key.
+        checkpoint(store);
+        inner.recovery_grant.grant(now);
+        self.emit(
+            inner,
+            CoreEventKind::VaultsChanged {
+                vault_ids: vec![vault_id],
+            },
+        );
+        self.emit(
+            inner,
+            CoreEventKind::RecordsChanged {
+                vault_id,
+                record_ids: written,
+                classes: vec![
+                    shellpp_sync_api::classes::VAULT,
+                    shellpp_sync_api::classes::HOSTS,
+                ],
+            },
+        );
+        drop(guard);
+        if device_lost {
+            self.delete_device_key(&context.db_id);
+        }
+        Ok(RecoveryKeyResult {
+            recovery_key: crypto::encode_recovery_key(&new_recovery_key),
+        })
+    }
+
+    pub(super) fn remember_device_set_impl(&self, enabled: bool) -> Result<LockStatus, CoreError> {
+        let available = self.remember_available();
+        // One toggle at a time, and never during a rotation: the keychain
+        // item and the `device` row must stay a pair.
+        let _remember = self.remember_lock();
+        let db_id = {
+            let inner = self.inner();
+            let db_id = Self::require_session(&inner)?.db_id;
+            if enabled && device_row_exists(&inner) {
+                // Already on (a window with a stale toggle): keep the key.
+                return Ok(self.status(&inner, available));
+            }
+            db_id
+        };
+        if enabled {
+            if !available {
+                return Err(CoreError::Unavailable);
+            }
+            let device_key = Key32::generate()?;
+            self.platform
+                .secret_store
+                .set(&ids::keychain_account(&db_id), &device_key.to_secret_box())
+                .map_err(|_| CoreError::Unavailable)?;
+            let wrapping_key = crypto::derive_device_wrap_key(&device_key, &db_id);
+            drop(device_key);
+
+            let result = (|| {
+                let mut inner = self.inner();
+                let session = Self::require_session(&inner)?;
+                let vault_id = session.ring.vault_id();
+                let epoch = session.ring.current_epoch();
+                let row = vault::wrap_row(
+                    WrapKind::Device,
+                    vault_id,
+                    epoch,
+                    &wrapping_key,
+                    session.ring.current_key(),
+                )?;
+                inner.store.write(|tx| tx.key_wrap_put(&row))?;
+                tracing::info!("remember on this device turned on");
+                self.remember_changed(&mut inner, vault_id);
+                Ok(self.status(&inner, available))
+            })();
+            if result.is_err() {
+                // Locked meanwhile or the write failed: no keychain item without its wrap.
+                self.delete_device_key(&db_id);
+            }
+            result
+        } else {
+            let status = {
+                let mut inner = self.inner();
+                let session = Self::require_session(&inner)?;
+                let vault_id = session.ring.vault_id();
+                let epoch = session.ring.current_epoch();
+                inner
+                    .store
+                    .write(|tx| tx.key_wrap_delete(&vault_id, epoch, WrapKind::Device))?;
+                tracing::info!("remember on this device turned off");
+                self.remember_changed(&mut inner, vault_id);
+                self.status(&inner, available)
+            };
+            self.delete_device_key(&db_id);
+            Ok(status)
+        }
+    }
+
+    /// The `device` row changed: every window takes a new snapshot, so its
+    /// "Remember on this device" toggle shows the stored state (UI 1.4).
+    fn remember_changed(&self, inner: &mut Inner, vault_id: Uuid) {
+        self.emit(
+            inner,
+            CoreEventKind::VaultsChanged {
+                vault_ids: vec![vault_id],
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::memory::MemoryPlatform;
+    use crate::service::CoreConfig;
+
+    fn generated_password() -> SecretString {
+        let bytes = crypto::random_array::<12>().expect("random");
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        SecretString::from(format!("Pw-{hex}-x"))
+    }
+
+    #[test]
+    fn key_rows_unchanged_sees_password_changes_and_rotations() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mem = MemoryPlatform::new();
+        let config = CoreConfig {
+            data_dir: dir.path().join("data"),
+            app_version: "0.1.0".to_owned(),
+        };
+        let core = Core::open(config, mem.platform(OsKind::Windows, "TEST-PC")).expect("open");
+        let first = generated_password();
+        core.first_run_setup(first.clone()).expect("first run");
+        let initial = key_context(&core.inner().store).expect("context");
+        assert!(key_rows_unchanged(&core.inner().store, &initial).unwrap());
+
+        // A password change keeps the epoch but replaces `kek` and `local_auth`.
+        let second = generated_password();
+        core.password_change(first, second.clone())
+            .expect("password change");
+        assert!(!key_rows_unchanged(&core.inner().store, &initial).unwrap());
+
+        // A reissue rotates the vault.
+        let changed = key_context(&core.inner().store).expect("context");
+        assert!(key_rows_unchanged(&core.inner().store, &changed).unwrap());
+        core.recovery_key_reissue(second).expect("reissue");
+        assert!(!key_rows_unchanged(&core.inner().store, &changed).unwrap());
+    }
+
+    #[test]
+    fn device_names() {
+        assert_eq!(
+            device_name("  WORKSTATION-7 ", OsKind::Windows),
+            "WORKSTATION-7"
+        );
+        assert_eq!(device_name("", OsKind::Macos), "macOS device");
+        assert_eq!(device_name("\u{7}", OsKind::Linux), "Linux device");
+        assert_eq!(
+            device_name(&"n".repeat(100), OsKind::Linux).chars().count(),
+            64
+        );
+        assert_eq!(short_version("0.1.0"), "0.1.0");
+        assert_eq!(short_version(&"9".repeat(40)).len(), 32);
+    }
+}

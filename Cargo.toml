@@ -1,0 +1,94 @@
+# Client Cargo workspace (docs/architecture.md, sections 2.1 and 2.3).
+# The sync server is AGPL-3.0-only and lives in its own workspace under server/.
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/sync-api", "apps/desktop/src-tauri"]
+exclude = ["server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# MSRV-aware resolution (resolver 3) keeps dependency versions buildable with this toolchain.
+rust-version = "1.92"
+license = "Apache-2.0"
+repository = "https://github.com/proxyboy228/shellpp"
+authors = ["Shell++ contributors"]
+publish = false
+
+[workspace.dependencies]
+# Project crates.
+shellpp-core = { path = "crates/core" }
+shellpp-sync-api = { path = "crates/sync-api" }
+
+# Cryptography (docs/security.md, section 5.1; docs/architecture.md, section 8.2).
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.13.0"
+# "zeroize": SHA-256 states (also inside HMAC and HKDF, via digest/zeroize)
+# are wiped on drop; they hold key material (docs/security.md, section 5.3).
+sha2 = { version = "0.11.1", default-features = false, features = ["zeroize"] }
+getrandom = "0.4.3"
+subtle = "2.6.1"
+zeroize = { version = "1.9.1", features = ["derive"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+
+# Storage, ids, encoding.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled", "cache"] }
+uuid = { version = "1.28.0", features = ["v7", "serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+data-encoding = "2.11.1"
+unicode-normalization = "0.1.26"
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+
+# Errors, logging, runtime.
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "registry", "env-filter"] }
+tokio = { version = "1.53.3", features = ["time", "sync", "macros", "rt"] }
+
+# Desktop shell (docs/architecture.md, section 3.4).
+# Tauri's default features without "dbus": that feature makes tao link libdbus
+# on Linux (dbus, libdbus-sys), which cargo-deny bans (docs/architecture.md,
+# section 8.3; decision 4). Cost: on Linux, tao does not read the light/dark
+# preference from the XDG desktop portal.
+tauri = { version = "2.12.4", default-features = false, features = ["wry", "compression", "common-controls-v6", "dynamic-acl", "x11"] }
+tauri-build = { version = "2.7.3", features = [] }
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-opener = "2.7.2"
+keyring = { version = "3.6.3", default-features = false }
+dirs = "7.0.0"
+# The clipboard plugin uses arboard; the host calls it directly to mark sensitive values.
+arboard = { version = "3.7.0", default-features = false }
+url = "2.5.8"
+libc = "0.2.191"
+
+# Tests.
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# KDF parameters are never weakened in tests (docs/architecture.md, section 9.4).
+# Instead the crypto crates are optimized in the dev and test profiles.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.chacha20]
+opt-level = 3
+
+[profile.dev.package.poly1305]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
