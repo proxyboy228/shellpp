@@ -1,5 +1,9 @@
 name: CI
 
+# Stage 1 job set of docs/architecture.md, section 9.2: lint, licenses, linux,
+# windows, macos. The gitleaks job lives in secret-scan.yml. Jobs for the SSH
+# test servers, the sync server and packages join in later stages.
+
 on:
   push:
   pull_request:
@@ -11,15 +15,40 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  # The workspace MSRV (rust-version in Cargo.toml).
+  RUST_TOOLCHAIN: "1.92.0"
+  NODE_VERSION: "22"
+  # tauri-driver for the UI e2e suite (MIT OR Apache-2.0, development only).
+  TAURI_DRIVER_VERSION: "2.1.0"
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  frontend:
-    name: Frontend (Linux)
-    runs-on: ubuntu-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: rustfmt (server workspace)
+        if: hashFiles('server/Cargo.toml') != ''
+        run: cargo fmt --manifest-path server/Cargo.toml --all -- --check
 
       # The pnpm version comes from "packageManager" in package.json.
       - name: Set up pnpm
@@ -28,7 +57,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Install dependencies
@@ -37,14 +66,286 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Lint
+      - name: ESLint
         run: pnpm -r lint
 
-      - name: Test
-        run: pnpm -r test --run
+      # Prints the stage flags above BUILD_STAGE (apps/desktop/src/stage.ts).
+      - name: List features hidden in this stage
+        run: node scripts/hidden-features.mjs
 
-      - name: Build
+      # Fails when a UI section of the current stage has no e2e spec
+      # (docs/architecture.md, section 9.4).
+      - name: UI sections without an e2e spec
+        run: node scripts/e2e-coverage.mjs
+
+      - name: Install Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: clippy (all features, including e2e-mocks)
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: clippy (server workspace)
+        if: hashFiles('server/Cargo.toml') != ''
+        run: cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
+
+  licenses:
+    name: Licenses and advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_DENY_VERSION: "0.20.2"
+      # SHA-256 of cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz
+      # (the digest of the release asset).
+      CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Install cargo-deny
+        working-directory: ${{ runner.temp }}
+        run: |
+          archive="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSLo "$archive" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${archive}"
+          echo "${CARGO_DENY_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir cargo-deny-dist
+          tar -xzf "$archive" -C cargo-deny-dist
+          binary="$(find cargo-deny-dist -type f -name cargo-deny -print -quit)"
+          sudo install -m 0755 "$binary" /usr/local/bin/cargo-deny
+          cargo deny --version
+
+      # deny.toml: licenses (shipped list), bans, advisories (RustSec), sources.
+      - name: cargo-deny
+        run: cargo deny --locked check
+
+      - name: cargo-deny (server workspace)
+        if: hashFiles('server/deny.toml') != ''
+        run: cargo deny --locked --manifest-path server/Cargo.toml check
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # The Rust table must match the crates that ship in the desktop binary.
+      - name: Rust crates recorded in THIRD_PARTY_NOTICES.md
+        run: node scripts/rust-notices.mjs
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Production packages against the shipped list, development packages
+      # against the development list (docs/architecture.md, section 8.1).
+      - name: npm licenses
+        run: pnpm licenses:check
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux system libraries
+        run: |
+          sudo apt-get update
+          # webkit2gtk-driver (WebKitWebDriver) and xvfb: UI e2e.
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config \
+            webkit2gtk-driver xvfb
+          echo "WebKitGTK $(pkg-config --modversion webkit2gtk-4.1)"
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust tests
+        run: cargo test --locked --workspace
+
+      - name: Frontend tests (Vitest)
+        run: pnpm -r test
+
+      - name: Frontend build
         run: pnpm -r build
 
-      - name: Check dependency licenses
-        run: node scripts/check-licenses.mjs
+      # shellpp-core stays mobile-ready (docs/architecture.md, section 2.3).
+      # The C parts (bundled SQLite) are compiled with the runner's NDK.
+      - name: Android check (shellpp-core)
+        run: |
+          ndk_bin="${ANDROID_NDK_LATEST_HOME:?Android NDK not found on the runner}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$ndk_bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$ndk_bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          cargo check --locked -p shellpp-core --target aarch64-linux-android
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+
+      - name: UI e2e build
+        run: pnpm --filter @shellpp/desktop e2e:build
+
+      - name: UI e2e (xvfb, WebKitWebDriver)
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" pnpm --filter @shellpp/desktop e2e
+
+      # Driver and WebdriverIO logs; the e2e data is fictional and the master
+      # password is generated per run.
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs-linux
+          path: target/e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust tests
+        run: cargo test --locked --workspace
+
+      # The e2e run script picks the msedgedriver that matches this version.
+      - name: Show the WebView2 runtime version
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv
+          if (-not $version) {
+            Write-Error 'The WebView2 runtime is not installed on this runner.'
+            exit 1
+          }
+          "WebView2 runtime $version"
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+
+      - name: UI e2e build
+        run: pnpm --filter @shellpp/desktop e2e:build
+
+      - name: UI e2e (msedgedriver)
+        run: pnpm --filter @shellpp/desktop e2e
+
+      - name: Upload e2e logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs-windows
+          path: target/e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos:
+    name: macOS
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-ios --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust tests
+        run: cargo test --locked --workspace
+
+      # shellpp-core stays mobile-ready (docs/architecture.md, section 2.3).
+      - name: iOS check (shellpp-core)
+        run: cargo check --locked -p shellpp-core --target aarch64-apple-ios
+
+      # Release build of the app with the bundled frontend, without packages
+      # (the .dmg arrives in stage 9). There is no tauri-driver on macOS; the
+      # screens are verified with docs/testing/macos-checklist.md.
+      - name: Build the app
+        run: pnpm --filter @shellpp/desktop tauri build --no-bundle
