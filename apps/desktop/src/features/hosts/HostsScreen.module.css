@@ -1,0 +1,314 @@
+/* Hosts screen (UI 2.1-2.4; docs/design-system.md 2-6). Colors and sizes
+   come from tokens.css only. */
+
+.root {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+/* The main column narrows when the details panel opens (UI 1.3). */
+.main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+}
+
+.searchRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.searchField {
+  flex: 1 1 auto;
+}
+
+.actionBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.actionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chipsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Overlay popovers are placed against this wrapper. */
+.anchor {
+  position: relative;
+}
+
+.menuItems {
+  display: flex;
+  flex-direction: column;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--space-6);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: calc(var(--radius-overlay) - var(--space-1));
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  text-align: left;
+  cursor: default;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.menuItem:hover,
+.menuItem:focus {
+  background: var(--bg-overlay-hover);
+  outline: none;
+}
+
+.menuItem:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.menuCheck {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--accent-text);
+}
+
+.menuLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuHint {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+/* Scrolling content with the cards; the drop indicator is placed in it. */
+.content {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+  padding: var(--space-2) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  outline: none;
+}
+
+.content[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crumbItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.crumbSeparator {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.crumb {
+  max-width: calc(var(--space-6) * 8);
+  padding: var(--space-1) var(--space-2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--easing-standard);
+}
+
+.crumb:hover {
+  background: var(--bg-raised-hover);
+  color: var(--text-primary);
+}
+
+.crumb[aria-current='page'] {
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.crumb:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Adaptive grid: the number of columns follows the width (UI 2.3). */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--space-6) * 7), 1fr));
+  gap: var(--space-3);
+}
+
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.card[data-dragging='true'] {
+  opacity: var(--opacity-disabled);
+}
+
+.card[data-drop-target='true'] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.dropIndicator {
+  position: absolute;
+  z-index: 5;
+  background: var(--accent);
+  border-radius: var(--size-tab-indicator);
+  pointer-events: none;
+}
+
+.dropIndicator[data-orientation='vertical'] {
+  width: var(--size-tab-indicator);
+  margin-left: calc(-1 * (var(--space-3) + var(--size-tab-indicator)) / 2);
+}
+
+.dropIndicator[data-orientation='horizontal'] {
+  height: var(--size-tab-indicator);
+  margin-top: calc(-1 * (var(--space-2) + var(--size-tab-indicator)) / 2);
+}
+
+/* Empty states. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  margin: auto;
+  padding: var(--space-6) var(--space-5);
+  max-width: calc(var(--space-6) * 12);
+  text-align: center;
+}
+
+.emptyIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space-6) + var(--space-5));
+  height: calc(var(--space-6) + var(--space-5));
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+}
+
+.emptyText {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.emptyLine {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+.dialogText {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.dialogHint {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menuItem,
+  .crumb {
+    transition: none;
+  }
+}
