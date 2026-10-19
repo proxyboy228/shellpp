@@ -5,7 +5,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ErrorCode, ValidationReason } from '../ipc';
+import type { ErrorCode, SshReason, ValidationReason } from '../ipc';
 import { CATALOG_FILES, hasKey, t } from './index';
 
 // Vitest runs in the package directory (apps/desktop).
@@ -39,6 +39,22 @@ const ERROR_CODES: readonly ErrorCode[] = [
   'storage_error',
   'io_error',
   'internal',
+  'cancelled',
+  'ssh_error',
+  'host_key_revoked',
+];
+
+const SSH_REASONS: readonly SshReason[] = [
+  'not_found',
+  'refused',
+  'timeout',
+  'network',
+  'host_key_rejected',
+  'auth_failed',
+  'protocol',
+  'channel_failed',
+  'disconnected',
+  'key_unusable',
 ];
 
 const VALIDATION_REASONS: readonly ValidationReason[] = [
@@ -100,6 +116,9 @@ describe('i18n catalog', () => {
     }
     for (const reason of VALIDATION_REASONS) {
       expect(hasKey(`validation.${reason}`), reason).toBe(true);
+    }
+    for (const reason of SSH_REASONS) {
+      expect(hasKey(`ssh_reason.${reason}`), reason).toBe(true);
     }
   });
 

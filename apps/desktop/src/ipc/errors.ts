@@ -5,22 +5,30 @@
 
 import type { CommandErrorPayload, ErrorCode, FieldError } from './types';
 
-const KNOWN_CODES: ReadonlySet<string> = new Set<ErrorCode>([
-  'locked',
-  'wrong_state',
-  'invalid_password',
-  'invalid_recovery_key',
-  'not_found',
-  'validation_failed',
-  'read_only',
-  'too_large',
-  'unavailable',
-  'newer_schema',
-  'damaged',
-  'storage_error',
-  'io_error',
-  'internal',
-]);
+// A record keyed by `ErrorCode`, so a code added to the type without being
+// listed here fails the type check.
+const CODES: Record<ErrorCode, true> = {
+  locked: true,
+  wrong_state: true,
+  invalid_password: true,
+  invalid_recovery_key: true,
+  not_found: true,
+  validation_failed: true,
+  read_only: true,
+  too_large: true,
+  unavailable: true,
+  newer_schema: true,
+  damaged: true,
+  storage_error: true,
+  io_error: true,
+  internal: true,
+  // stage 2
+  cancelled: true,
+  ssh_error: true,
+  host_key_revoked: true,
+};
+
+const KNOWN_CODES: ReadonlySet<string> = new Set(Object.keys(CODES));
 
 /** A rejected command. */
 export class IpcError extends Error {

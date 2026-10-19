@@ -1,16 +1,22 @@
 // Hosts screen (UI 2.1-2.4) with the host and group panels (UI 3) in the
-// details panel.
+// details panel. Stage 2: quick connect from the search bar, the Terminal
+// button, OS icons on cards, connect by double click, Enter and the context
+// menu (Alt: a new window; a multi-selection connects every selected host).
 //
-// Owner: W5. The props are the W4/W5 contract (stage plan 6.5).
+// Owner: W5 (stage 1), S7 (stage 2). The props are the W4/W5 contract (stage plan 6.5).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { ContextMenu } from '../../app/ContextMenu/ContextMenu';
 import { showToast } from '../../app/toast';
-import { HostCard } from '../../components';
-import { isIpcError, recordGet, settingsSet } from '../../ipc';
+import { HostCard, OsIcon, type HostCardEvent } from '../../components';
+import { isIpcError, recordGet } from '../../ipc';
 import type { GroupView, HostView, SettingsValues, SortMode, Uuid, VaultView } from '../../ipc';
 import { t } from '../../i18n';
+import { isVisible } from '../../stage';
+import { connectHosts, connectQuick } from '../connect/actions';
+import { installAltKeyTracker, isAltHeld } from '../connect/altKey';
+import { openLocalTerminal } from '../connect/workspaceBridge';
 import { GroupPanel } from '../panels/GroupPanel';
 import { HostPanel } from '../panels/HostPanel';
 import { ActionBar, SORT_MODES, type HostsLayout } from './ActionBar';
@@ -28,10 +34,12 @@ import { createDragController, type DragController, type DragOptions, type DragV
 import { FolderEmptyState, NoResults, VaultEmptyState } from './EmptyState';
 import { collectTags, hostSubtitle, hostTitle, isFiltering, subtreeIds } from './format';
 import { groupMenuEntries, hostMenuEntries } from './menus';
+import { resolveSearchConnect } from './quickConnect';
 import { GroupRemoveDialog, HostRemoveDialog } from './RemoveDialogs';
 import { SearchBar } from './SearchBar';
 import { arrowTarget, clickSelection, columnsOf, isArrowKey, type ClickModifiers } from './selection';
 import { useHostsData } from './useHostsData';
+import { useSettingValue } from './useSettingValue';
 import {
   dropDraftPanel,
   getHostsViewState,
@@ -61,38 +69,8 @@ export const SEARCH_DEBOUNCE_MS = 150;
 
 const LAYOUTS: readonly HostsLayout[] = ['grid', 'list'];
 
-/**
- * A setting value with an optimistic local override: the new value shows at
- * once and the stored value takes over when `settings` reports a change.
- */
-function useSettingValue<T extends string>(
-  settings: SettingsValues,
-  key: string,
-  values: readonly T[],
-  fallback: T,
-): [T, (value: T) => void] {
-  const raw = settings[key];
-  const stored = values.includes(raw as T) ? (raw as T) : fallback;
-  const [pending, setPending] = useState<{ value: T; stored: T } | null>(null);
-  // Any change of the stored value (this window's write or another window's)
-  // ends the override, so a later change back to the old stored value is not
-  // hidden behind it (UI 1.4: changes appear in all windows).
-  if (pending !== null && pending.stored !== stored) {
-    setPending(null);
-  }
-  const value = pending !== null && pending.stored === stored ? pending.value : stored;
-  const set = useCallback(
-    (next: T) => {
-      setPending({ value: next, stored });
-      settingsSet({ values: { [key]: next } }).catch((reason: unknown) => {
-        setPending(null);
-        showErrorToast(reason);
-      });
-    },
-    [key, stored],
-  );
-  return [value, set];
-}
+/** Longest time between the two clicks of a double click that we attribute to its first card. */
+const DOUBLE_CLICK_MS = 800;
 
 type MenuState =
   | { kind: 'host'; ids: Uuid[]; at: { x: number; y: number } }
@@ -110,6 +88,8 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
   const [searchText, setSearchText] = useState('');
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // The host card the first click of a possible double click landed on.
+  const firstClickRef = useRef<{ id: Uuid; at: number } | null>(null);
 
   const [layout, setLayout] = useSettingValue<HostsLayout>(settings, 'view.hosts.layout', LAYOUTS, 'grid');
   const [sort, setSort] = useSettingValue<SortMode>(settings, 'view.hosts.sort', SORT_MODES, 'manual');
@@ -369,6 +349,35 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
     return group.record_id;
   };
 
+  // ---- connect (stage 2) ------------------------------------------------------
+
+  useEffect(() => installAltKeyTracker(), []);
+
+  const connectRecords = (ids: readonly Uuid[], newWindow: boolean) => {
+    connectHosts(
+      ids.map((id) => ({ vault_id: vaultId, record_id: id })),
+      { newWindow },
+    ).catch(showErrorToast);
+  };
+
+  const searchConnect = useMemo(() => resolveSearchConnect(searchInput, data.allHosts), [searchInput, data.allHosts]);
+
+  const connectFromSearch = ({ newWindow }: { newWindow: boolean }) => {
+    if (searchConnect === null) {
+      return;
+    }
+    if (searchConnect.kind === 'host') {
+      connectRecords([searchConnect.host.record_id], newWindow);
+    } else {
+      // The typed address was used as a command: clear it once the session opened.
+      connectQuick(searchConnect.target, { newWindow }).then((result) => {
+        if (result !== null || newWindow) {
+          clearFilters();
+        }
+      }, showErrorToast);
+    }
+  };
+
   const groupActions = {
     open: (groupId: Uuid) => openFolder(groupId),
     edit: editGroup,
@@ -402,7 +411,7 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
   // ---- keyboard --------------------------------------------------------------
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!active || event.defaultPrevented || event.altKey) {
+    if (!active || event.defaultPrevented || (event.altKey && event.key !== 'Enter')) {
       return;
     }
     const target = event.target;
@@ -435,8 +444,11 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
     } else if (event.key === 'Escape' && panel !== null) {
       event.preventDefault();
       closePanel();
+    } else if (event.key === 'Enter' && isVisible('host-connect') && !event.ctrlKey && !event.metaKey && visibleSelected.length > 0) {
+      // Enter on the selection: quick connect via the primary protocol (UI 2.4); Alt: new windows.
+      event.preventDefault();
+      connectRecords(visibleSelected, event.altKey);
     }
-    // Enter (quick connect) is stage 2 (`host-connect`).
   };
 
   // ---- drag and drop -------------------------------------------------------
@@ -475,6 +487,69 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
       event.preventDefault();
     }
   };
+
+  // The first click of a double click selects the card and opens the details
+  // panel, which narrows the grid (UI 1.3): the second click may land on
+  // another card, between cards or on the panel. So while a double click
+  // that started on a host card is in progress, its second press, click and
+  // `dblclick` are taken in the capture phase before they reach any element,
+  // and the `dblclick` connects the card of the first click (UI 2.4).
+  const selectHostByClick = (event: HostCardEvent, recordId: Uuid) => {
+    if (event.type === 'click') {
+      firstClickRef.current = { id: recordId, at: event.timeStamp };
+    }
+    clickHost({ toggle: event.ctrlKey || event.metaKey, range: event.shiftKey }, recordId);
+  };
+
+  const connectByDoubleClickRef = useRef<(recordId: Uuid, newWindow: boolean) => void>(() => undefined);
+  useEffect(() => {
+    connectByDoubleClickRef.current = (recordId, newWindow) => {
+      if (!data.hostsById.has(recordId)) {
+        return;
+      }
+      clickHost({ toggle: false, range: false }, recordId);
+      if (isVisible('host-connect')) {
+        connectRecords([recordId], newWindow);
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+    const onSecondClick = (event: MouseEvent) => {
+      if (event.type === 'mousedown' && event.detail <= 1) {
+        // A new click sequence: only a click on a host card (after this
+        // press) starts a double click that is taken here.
+        firstClickRef.current = null;
+        return;
+      }
+      const first = firstClickRef.current;
+      if (first === null || event.button !== 0 || event.detail < 2) {
+        return;
+      }
+      if (event.timeStamp - first.at > DOUBLE_CLICK_MS) {
+        firstClickRef.current = null;
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.type === 'dblclick') {
+        firstClickRef.current = null;
+        connectByDoubleClickRef.current(first.id, event.altKey);
+      }
+    };
+    const types = ['mousedown', 'mouseup', 'click', 'dblclick'] as const;
+    for (const type of types) {
+      window.addEventListener(type, onSecondClick, true);
+    }
+    return () => {
+      for (const type of types) {
+        window.removeEventListener(type, onSecondClick, true);
+      }
+    };
+  }, [active]);
 
   // ---- render ----------------------------------------------------------------
 
@@ -563,23 +638,31 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
                     label={host.data.label}
                     address={host.data.address}
                     subtitle={hostSubtitle(host, filtering, groupsById)}
+                    iconSlot={<OsIcon os={host.data.os} size={20} className={styles.cardOsIcon} data-testid="host-card-os-icon" />}
                     color={host.data.color ?? 'graphite'}
                     selected={selected}
                     onClick={suppressClickAfterDrag}
-                    onSelect={(event) =>
-                      clickHost({ toggle: event.ctrlKey || event.metaKey, range: event.shiftKey }, host.record_id)
-                    }
+                    onSelect={(event) => selectHostByClick(event, host.record_id)}
                     onOpen={(event) => {
-                      // Double click connects from stage 2 (`host-connect`); in stage 1 it
-                      // acts as a plain click. Enter does nothing.
                       if (event.type === 'dblclick') {
                         clickHost({ toggle: false, range: false }, host.record_id);
                       }
+                      if (!isVisible('host-connect')) {
+                        return;
+                      }
+                      // Double click connects this host in a new tab (usually taken
+                      // earlier, see selectHostByClick); Enter on a selected card
+                      // connects every selected host. Alt: new windows (UI 2.4).
+                      const ids =
+                        event.type !== 'dblclick' && selected && visibleSelected.length > 0 ? visibleSelected : [host.record_id];
+                      connectRecords(ids, event.altKey);
                     }}
                     onContextMenu={(event) => openHostMenu(event, host.record_id)}
                     onPointerDown={(event) => dragRef.current?.press(event.nativeEvent, { type: 'host', id: host.record_id })}
                     data-record-id={host.record_id}
                     data-selected={selected ? 'true' : 'false'}
+                    data-os-family={host.data.os?.family}
+                    data-os-distro={host.data.os?.distro}
                     data-dragging={dragging.has(host.record_id) ? 'true' : undefined}
                     data-testid="host-card"
                   />
@@ -609,10 +692,15 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
             onChange={setSearchInput}
             onClear={clearFilters}
             inputRef={searchInputRef}
+            canConnect={searchConnect !== null}
+            onConnect={connectFromSearch}
           />
           <ActionBar
             onNewHost={newHost}
             onNewGroup={newGroup}
+            onLocalTerminal={() => {
+              openLocalTerminal().catch(showErrorToast);
+            }}
             layout={layout}
             onLayoutChange={setLayout}
             sort={sort}
@@ -702,6 +790,8 @@ export function HostsScreen({ vault, settings, active, selectRequest = null }: H
       {menu?.kind === 'host' ? (
         <ContextMenu
           items={hostMenuEntries(menu.ids, allGroups, groupsById, {
+            connect: (ids, { newWindow }) => connectRecords(ids, newWindow),
+            altHeld: isAltHeld,
             edit: editHost,
             move,
             duplicate: (recordId) => void duplicate(recordId),

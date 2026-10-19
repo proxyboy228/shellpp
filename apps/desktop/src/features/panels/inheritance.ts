@@ -15,6 +15,8 @@ export interface InheritedEntry<T> {
 export interface InheritedSsh {
   port?: InheritedEntry<number>;
   username?: InheritedEntry<string>;
+  /** The group's linked key (`ssh.key_id`, stage 3 sets it on groups). */
+  key_id?: InheritedEntry<Uuid>;
 }
 
 /** Maximum lookup depth (data-model 8.2). */
@@ -44,7 +46,7 @@ export function inheritanceChain(startGroupId: Uuid | null | undefined, groupsBy
 }
 
 /**
- * Port and username inherited by a record whose nearest group is
+ * Port, username and key inherited by a record whose nearest group is
  * `startGroupId` (a host's group, or a group's parent).
  */
 export function resolveInherited(startGroupId: Uuid | null | undefined, groupsById: ReadonlyMap<Uuid, GroupView>): InheritedSsh {
@@ -57,7 +59,10 @@ export function resolveInherited(startGroupId: Uuid | null | undefined, groupsBy
     if (result.username === undefined && typeof ssh?.username === 'string' && ssh.username !== '') {
       result.username = { value: ssh.username, group };
     }
-    if (result.port !== undefined && result.username !== undefined) {
+    if (result.key_id === undefined && typeof ssh?.key_id === 'string' && ssh.key_id !== '') {
+      result.key_id = { value: ssh.key_id, group };
+    }
+    if (result.port !== undefined && result.username !== undefined && result.key_id !== undefined) {
       break;
     }
   }

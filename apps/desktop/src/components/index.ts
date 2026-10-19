@@ -48,5 +48,8 @@ export type {
 export { Menu } from './Menu/Menu';
 export type { MenuEntry, MenuItemDef, MenuProps, MenuSeparatorDef } from './Menu/Menu';
 
+export { OsIcon } from './OsIcon/OsIcon';
+export type { OsIconProps } from './OsIcon/OsIcon';
+
 export { Modal } from './Modal/Modal';
 export type { ModalProps, ModalSize } from './Modal/Modal';

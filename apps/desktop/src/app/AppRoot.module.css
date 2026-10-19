@@ -14,6 +14,8 @@
 }
 
 .content {
+  /* Layers: the Vaults tab, the terminal area and the lock screens share it. */
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

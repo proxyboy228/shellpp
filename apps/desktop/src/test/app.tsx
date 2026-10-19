@@ -1,13 +1,14 @@
 // Test helpers for the app shell: a fresh mock backend and window stores per
 // test, and the rendered `<AppRoot/>`. Passwords are generated at run time.
 //
-// Owner: W4.
+// Owner: lead.
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect } from 'vitest';
 import { AppRoot } from '../app/AppRoot';
 import { resetStores } from '../app/store';
+import { resetWorkspace } from '../features/terminal';
 import { clearToasts } from '../app/toast';
 import { setBackend } from '../ipc';
 import { createMockBackend, type MockBackend, type MockBackendOptions } from '../ipc/mock';
@@ -20,6 +21,7 @@ export function newPassword(): string {
 /** Fresh stores and a new mock backend; call `resetApp()` after the test. */
 export function setupBackend(options: MockBackendOptions = {}): MockBackend {
   resetStores();
+  resetWorkspace();
   clearToasts();
   const backend = createMockBackend(options);
   setBackend(backend);
@@ -31,6 +33,7 @@ export function resetApp(): void {
   cleanup();
   setBackend(null);
   resetStores();
+  resetWorkspace();
   clearToasts();
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.style.removeProperty('zoom');

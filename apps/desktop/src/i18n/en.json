@@ -1,15 +1,12 @@
 {
   "app.name": "Shell++",
-
   "common.cancel": "Cancel",
   "common.close": "Close",
   "common.copy": "Copy",
   "common.dismiss": "Dismiss",
   "common.done": "Done",
   "common.show_password": "Show password",
-
   "toasts.region": "Messages",
-
   "titlebar.tabs": "Tabs",
   "titlebar.menu": "Application menu",
   "titlebar.vaults": "Vaults",
@@ -24,7 +21,6 @@
   "titlebar.maximize": "Maximize",
   "titlebar.restore": "Restore",
   "titlebar.close": "Close",
-
   "menu.vaults": "Vaults",
   "menu.sftp": "SFTP",
   "menu.settings": "Settings",
@@ -55,7 +51,6 @@
   "menu.help.about": "About Shell++",
   "menu.lock": "Lock",
   "menu.exit": "Exit",
-
   "sidebar.label": "Vault sections",
   "sidebar.hosts": "Hosts",
   "sidebar.keychain": "Keychain",
@@ -63,34 +58,27 @@
   "sidebar.snippets": "Snippets",
   "sidebar.known_hosts": "Known Hosts",
   "sidebar.logs": "Logs",
-
   "details_panel.menu": "More actions",
   "details_panel.collapse": "Collapse panel",
   "details_panel.resize": "Resize panel",
-
   "notifications.title": "Notifications",
   "notifications.empty": "No notifications.",
   "notifications.level.info": "Information",
   "notifications.level.success": "Success",
   "notifications.level.warning": "Warning",
   "notifications.level.error": "Error",
-
   "about.title": "About Shell++",
   "about.version": "Version {version}",
   "about.description": "A self-hosted, local-first SSH client.",
   "about.license": "Licensed under the Apache License, Version 2.0.",
   "about.repository": "Source code and documentation",
-
   "fatal.title": "Shell++ cannot open its data",
   "fatal.schema_version": "The data uses schema version {found}.",
   "fatal.hint": "Your data was not changed. Close Shell++ and check the data directory, or install a newer version.",
-
   "render_error.title": "Something went wrong in this window",
   "render_error.text": "Your data is safe. Reload the window to continue.",
   "render_error.reload": "Reload",
-
   "lock.warning": "Without the master password and the recovery key, nobody can recover your data, including the administrator of a sync server.",
-
   "first_run.title": "Create a master password",
   "first_run.subtitle": "The master password encrypts everything Shell++ stores on this device. Use at least 10 characters.",
   "first_run.password": "Password",
@@ -101,17 +89,14 @@
   "first_run.recovery_title": "Save your recovery key",
   "first_run.recovery_text": "If you forget the master password, the recovery key lets you set a new one. Keep it somewhere safe, away from this device.",
   "first_run.finish": "Finish",
-
   "recovery_key.label": "Recovery key",
   "recovery_key.saved": "I saved the recovery key",
   "recovery_key.copied": "Recovery key copied. The clipboard is cleared in 30 seconds.",
   "recovery_key.copy_expired": "To copy the recovery key again, show it again from Settings > Security.",
-
   "unlock.password": "Master password",
   "unlock.submit": "Unlock",
   "unlock.use_recovery_key": "Use recovery key",
   "unlock.wrong_password": "Wrong password. Try again.",
-
   "recovery.title": "Unlock with the recovery key",
   "recovery.subtitle": "Enter your recovery key and choose a new master password.",
   "recovery.key": "Recovery key",
@@ -124,7 +109,6 @@
   "recovery.wrong_key": "This recovery key does not unlock the data on this device.",
   "recovery.submit": "Unlock",
   "recovery.back": "Unlock with the master password",
-
   "settings.title": "Settings",
   "settings.nav": "Settings sections",
   "settings.account_sync": "Account & Sync",
@@ -145,7 +129,6 @@
   "settings.link.changelog": "Changelog",
   "settings.opens_in_browser": "Opens in the browser",
   "settings.version": "Version {version}",
-
   "security.auto_lock": "Auto-lock",
   "security.auto_lock_description": "Lock Shell++ after this long without keyboard or mouse input.",
   "security.auto_lock.minute": "1 minute",
@@ -162,7 +145,6 @@
   "security.remember_device": "Remember on this device",
   "security.remember_device_description": "Unlock at launch without the master password. Lock and auto-lock still ask for it.",
   "security.biometric": "Unlock with biometrics",
-
   "change_password.title": "Change master password",
   "change_password.current": "Current password",
   "change_password.new": "New password",
@@ -172,7 +154,6 @@
   "change_password.mismatch": "The passwords do not match.",
   "change_password.too_short": "Use at least 10 characters.",
   "change_password.sync_warning": "Your other devices will be signed out and will ask for the new password.",
-
   "recovery_password.title_show": "Show recovery key",
   "recovery_password.title_reissue": "Reissue recovery key",
   "recovery_password.text_show": "Enter the master password to show the recovery key.",
@@ -181,16 +162,13 @@
   "recovery_password.submit_show": "Show",
   "recovery_password.submit_reissue": "Reissue",
   "recovery_password.wrong": "Wrong password. Try again.",
-
   "recovery_key_dialog.title": "Recovery key",
   "recovery_key_dialog.title_new": "New recovery key",
   "recovery_key_dialog.text": "Keep this key somewhere safe, away from this device.",
   "recovery_key_dialog.text_new": "This is your new recovery key. The previous key no longer works. Keep it somewhere safe, away from this device.",
-
   "remember_device.title": "Remember on this device?",
   "remember_device.text": "Shell++ will store a device key in the system keychain and unlock at launch without the master password. Any program running under your user account on this device will be able to unlock your data.",
   "remember_device.confirm": "Turn on",
-
   "errors.locked": "Shell++ is locked. Unlock it and try again.",
   "errors.wrong_state": "This action is not available right now.",
   "errors.invalid_password": "Wrong password.",
@@ -205,7 +183,19 @@
   "errors.storage_error": "Shell++ could not read or write its database.",
   "errors.io_error": "A file or system operation failed.",
   "errors.internal": "Something went wrong. Try again.",
-
+  "errors.cancelled": "The operation was cancelled.",
+  "errors.ssh_error": "The SSH connection failed.",
+  "errors.host_key_revoked": "The host key of this server is marked as revoked. The connection is blocked.",
+  "ssh_reason.not_found": "The address was not found.",
+  "ssh_reason.refused": "The connection was refused.",
+  "ssh_reason.timeout": "The connection timed out.",
+  "ssh_reason.network": "A network error occurred.",
+  "ssh_reason.host_key_rejected": "The host key was not accepted.",
+  "ssh_reason.auth_failed": "Authentication failed.",
+  "ssh_reason.protocol": "The server and Shell++ could not agree on the SSH protocol.",
+  "ssh_reason.channel_failed": "The server refused to open the session.",
+  "ssh_reason.disconnected": "The connection was closed.",
+  "ssh_reason.key_unusable": "The linked private key cannot be read.",
   "validation.required": "This field is required.",
   "validation.too_long": "This value is too long.",
   "validation.too_short": "This value is too short.",

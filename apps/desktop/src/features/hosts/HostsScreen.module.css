@@ -219,6 +219,11 @@
   gap: var(--space-2);
 }
 
+/* The OS icon takes the tile's text color (it is muted elsewhere). */
+.card .cardOsIcon {
+  color: inherit;
+}
+
 .card[data-dragging='true'] {
   opacity: var(--opacity-disabled);
 }

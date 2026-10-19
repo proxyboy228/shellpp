@@ -50,7 +50,12 @@ export interface ViewState {
   unlockMode: 'password' | 'recovery';
   /** Full screen as requested from View > Full screen. */
   fullscreen: boolean;
+  /** The Vaults tab section (UI 1.2): Hosts or, from stage 2, Known Hosts. */
+  vaultsSection: VaultsSection;
 }
+
+/** Sections of the Vaults tab sidebar implemented so far. */
+export type VaultsSection = 'hosts' | 'known_hosts';
 
 export const INITIAL_WINDOW_STATE: WindowState = { phase: 'booting', errorCode: null, errorFound: null, label: '' };
 export const INITIAL_VIEW_STATE: ViewState = {
@@ -59,6 +64,7 @@ export const INITIAL_VIEW_STATE: ViewState = {
   firstRunInProgress: false,
   unlockMode: 'password',
   fullscreen: false,
+  vaultsSection: 'hosts',
 };
 const EMPTY_NOTIFICATIONS: NotificationList = { items: [], unread: 0 };
 const EMPTY_SETTINGS: SettingsValues = {};

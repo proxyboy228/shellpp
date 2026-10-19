@@ -26,6 +26,8 @@ export interface HostForm {
   backspace: Backspace;
   port: string;
   username: string;
+  /** Linked key (`ssh.key_id`, "+ -> Key"); `''`: none. */
+  key_id: string;
   agent_forwarding: boolean;
   env: EnvRow[];
   charset: string;
@@ -111,6 +113,7 @@ export const HOST_FIELDS: FieldTable<HostForm> = {
     toForm: asString,
     parse: (value) => single('ssh.username', parseString(value, 256)),
   },
+  key_id: uuidField('ssh.key_id'),
   agent_forwarding: {
     path: 'ssh.agent_forwarding',
     defaultValue: false,

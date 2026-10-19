@@ -248,10 +248,12 @@ describe('HostPanel: fields', () => {
 
   it('hides the blocks of later stages', async () => {
     await renderPanel({ showMore: true });
+    // Stage 2 shows the "+" credentials and the Connect button (S7).
+    expect(screen.getByTestId('host-panel-ssh-credentials-add')).toBeInTheDocument();
+    expect(screen.getByTestId('host-panel-connect')).toBeDisabled();
     for (const id of [
       'host-panel-vault',
       'host-panel-share',
-      'host-panel-ssh-credentials-add',
       'host-panel-ssh-linked-key',
       'host-panel-identity-merge-hint',
       'host-panel-startup-snippet',
@@ -259,7 +261,6 @@ describe('HostPanel: fields', () => {
       'host-panel-proxy',
       'host-panel-mosh',
       'host-panel-add-telnet',
-      'host-panel-connect',
     ]) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
@@ -317,7 +318,8 @@ describe('HostPanel: menu', () => {
     const { props, unmount } = await renderPanel({ recordId: id, view: await hostView(id), focusNonce: 0 });
     await user.click(screen.getByTestId('host-panel-menu-button'));
     expect(screen.getByTestId('host-panel-menu-duplicate')).toBeInTheDocument();
-    expect(screen.queryByTestId('host-panel-menu-connect')).not.toBeInTheDocument();
+    // Stage 2: Connect is the first item (UI 3.3).
+    expect(screen.getByTestId('host-panel-menu-connect')).toBeInTheDocument();
     expect(screen.queryByTestId('host-panel-menu-add-telnet')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('host-panel-menu-remove'));
     expect(props.onRemove).toHaveBeenCalledWith(id);

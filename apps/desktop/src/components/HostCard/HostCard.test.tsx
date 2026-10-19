@@ -282,3 +282,23 @@ describe('HostCard', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
   });
 });
+
+describe('HostCard icon slot (stage 2: the OS icon)', () => {
+  it('renders the slot inside the tile instead of the icon', () => {
+    render(
+      <Grid>
+        <HostCard
+          label="web"
+          address="web.example.com"
+          color="ocean"
+          iconSlot={<span data-testid="slot-icon" />}
+          data-testid="host-card"
+        />
+      </Grid>,
+    );
+    const card = screen.getByTestId('host-card');
+    const tile = tileOf(card);
+    expect(tile).toContainElement(screen.getByTestId('slot-icon'));
+    expect(tile.querySelector('svg')).toBeNull();
+  });
+});

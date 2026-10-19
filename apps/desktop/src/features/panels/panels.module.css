@@ -388,6 +388,63 @@
   background: var(--swatch, var(--text-secondary));
 }
 
+/* The OS icon takes the tile's text color (stage 2). */
+.osTile .osTileIcon {
+  color: inherit;
+}
+
+/* Linked key field (UI 3.1, "+ -> Key"). */
+.linkedKey {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  min-height: var(--height-control);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-input);
+}
+
+.linkedKey[data-inherited='true'] {
+  border-style: dashed;
+  background: transparent;
+}
+
+.linkedKeyIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.linkedKeyText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+.linkedKeyLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkedKeyType {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+.linkedKeyMissing {
+  color: var(--danger);
+  font-size: var(--font-size-body);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .swatch,
   .pickerButton,

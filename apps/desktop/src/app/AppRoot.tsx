@@ -10,11 +10,18 @@
 // stay (UI 13.2). `data-lock-state` follows what the window shows: during the
 // recovery key step of first run it stays `first_run`.
 //
-// Owner: W4.
+// Stage 2: the terminal area (features/terminal `TerminalHost`) is mounted
+// from the first unlock on and stays mounted while locked, hidden and inert
+// under the unlock screen, so sessions keep their scrollback and output
+// (docs/security.md, section 8). The close confirmation dialogs work in every
+// lock state.
+//
+// Owner: lead.
 
 import { CircleAlert } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { FirstRunScreen, RecoveryUnlockScreen, UnlockScreen } from '../features/lock';
+import { CloseGuardDialogs, startSessionsSync, TerminalHost, useWorkspace } from '../features/terminal';
 import { t } from '../i18n';
 import { installActivityReporter } from './activity';
 import { applyAppearance } from './appearance';
@@ -47,7 +54,12 @@ export function AppRoot() {
   const settings = useSettings();
   const os = useOs();
 
+  const workspace = useWorkspace();
+  // The terminal area mounts at the first unlock and then stays.
+  const [terminalsMounted, setTerminalsMounted] = useState(false);
+
   useEffect(() => startSession(), []);
+  useEffect(() => startSessionsSync(), []);
   useEffect(() => applyAppearance(settings), [settings]);
   // Input counts for auto-lock whenever the core is unlocked, including the
   // recovery key step of first run, which runs unlocked (UI 13.1, 13.3).
@@ -64,6 +76,10 @@ export function AppRoot() {
   } else {
     displayed = lock.state;
   }
+  if (displayed === 'unlocked' && !terminalsMounted) {
+    setTerminalsMounted(true);
+  }
+  const terminalsVisible = displayed === 'unlocked' && workspace.active !== 'vaults';
 
   return (
     <div
@@ -81,12 +97,18 @@ export function AppRoot() {
         ) : null}
         {displayed === 'first_run' ? <FirstRunScreen /> : null}
         {displayed === 'locked' ? view.unlockMode === 'recovery' ? <RecoveryUnlockScreen /> : <UnlockScreen /> : null}
+        {terminalsMounted ? (
+          <RenderErrorBoundary>
+            <TerminalHost visible={terminalsVisible} />
+          </RenderErrorBoundary>
+        ) : null}
         {displayed === 'unlocked' ? (
           <RenderErrorBoundary>
             <MainWindow />
           </RenderErrorBoundary>
         ) : null}
       </div>
+      <CloseGuardDialogs />
       <ToastRegion />
     </div>
   );

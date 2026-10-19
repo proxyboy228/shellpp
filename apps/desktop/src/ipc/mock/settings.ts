@@ -70,6 +70,10 @@ const shortcutOverrides: Validator = (value) => {
 const stringList: Validator = (value) =>
   Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? null : 'invalid';
 
+/** `session.last` (docs/data-model.md 16.3): null or `{saved_at, tabs: [...]}` (shape checked by the UI on read). */
+const lastSession: Validator = (value) =>
+  value === null || (isPlainObject(value) && typeof value.saved_at === 'string' && Array.isArray(value.tabs)) ? null : 'invalid';
+
 const SCREENS = ['hosts', 'keychain', 'forwarding', 'snippets', 'known_hosts'] as const;
 
 /** The settings table for the given OS (`shortcuts.preset` depends on it). */
@@ -111,6 +115,8 @@ export function settingsSchema(os: OsKind): Readonly<Record<string, SettingSpec>
     'updates.manifest_url': { default: null, validate: stringOrNull },
     'view.details_panel_width': { default: 380, validate: intRange(320, 560) },
     'hints.dismissed': { default: [], validate: stringList },
+    // Stage 2 (written by the terminal workspace, S6).
+    'session.last': { default: null, validate: lastSession },
   };
   for (const screen of SCREENS) {
     schema[`view.${screen}.layout`] = { default: 'grid', validate: oneOf('grid', 'list') };

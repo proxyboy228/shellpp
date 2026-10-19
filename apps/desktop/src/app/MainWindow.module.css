@@ -1,0 +1,13 @@
+/* The Vaults tab layer of the window content (stacked with the terminal area). */
+
+.vaults {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.vaults[hidden] {
+  display: none;
+}

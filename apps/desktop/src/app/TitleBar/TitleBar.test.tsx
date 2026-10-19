@@ -18,10 +18,7 @@ afterEach(() => {
 const HIDDEN = [
   'titlebar-vault-switcher',
   'titlebar-tab-sftp',
-  'titlebar-session-tab',
-  'titlebar-new-tab',
   'titlebar-update-button',
-  'titlebar-terminal-sidebar-toggle',
 ];
 
 describe('TitleBar', () => {
@@ -39,6 +36,22 @@ describe('TitleBar', () => {
     for (const id of HIDDEN) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
+    // Stage 2: "+" is shown; there are no session tabs yet, and the terminal
+    // sidebar toggle appears only while a session tab is active (UI 1.1).
+    expect(screen.getByTestId('titlebar-new-tab')).toBeInTheDocument();
+    expect(screen.queryByTestId('titlebar-session-tab')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('titlebar-terminal-sidebar-toggle')).not.toBeInTheDocument();
+  });
+
+  it('opens a new tab with "+" and returns to Vaults', async () => {
+    const { user } = await renderUnlocked();
+    await user.click(screen.getByTestId('titlebar-new-tab'));
+    const tab = await screen.findByTestId('titlebar-session-tab');
+    expect(tab).toHaveAttribute('aria-selected', 'true');
+    expect(tab).toHaveAttribute('data-kind', 'newtab');
+    expect(screen.getByTestId('titlebar-tab-vaults')).toHaveAttribute('aria-selected', 'false');
+    await user.click(screen.getByTestId('titlebar-tab-vaults'));
+    expect(screen.getByTestId('titlebar-tab-vaults')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('drives the window: minimize, maximize with data-maximized, close', async () => {

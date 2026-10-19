@@ -8,6 +8,7 @@
 import type { Backend } from '../../../ipc';
 import { IpcError } from '../../../ipc';
 import type {
+  IpcChannel,
   CommandInput,
   CommandName,
   CommandOutput,
@@ -473,6 +474,8 @@ export function createFakeBackend(initialSettings: SettingsValues = {}): FakeBac
         set.delete(wrapped);
       });
     },
+    // Stage 2 contract (lead): the hosts screen opens no channels.
+    createChannel: <T,>() => ({ __ipcChannel: true as const, close: () => undefined }) as IpcChannel<T> & { close(): void },
     window: {
       label: 'w-1',
       minimize: () => Promise.resolve(),

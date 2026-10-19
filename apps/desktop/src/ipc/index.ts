@@ -6,7 +6,7 @@
 
 export * from './commands';
 export { IpcError, isIpcError, toIpcError } from './errors';
-export { createEventBuffer, subscribe, BROADCAST_EVENTS } from './events';
+export { createEventBuffer, subscribe, BROADCAST_EVENTS, SESSION_EVENTS } from './events';
 export type { BroadcastEventName, BufferedEvent } from './events';
 export { getBackend, initBackend, isTauriRuntime, setBackend } from './backend';
 export type { Backend, Unlisten, WindowControls } from './backend';

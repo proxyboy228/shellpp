@@ -3,11 +3,11 @@
 //
 // Owner: W4.
 
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { Backend, WindowControls } from './backend';
 import { toIpcError } from './errors';
-import type { CommandInput, CommandName, CommandOutput, EventMap, EventName } from './types';
+import type { CommandInput, CommandName, CommandOutput, EventMap, EventName, IpcChannel } from './types';
 
 export function createTauriBackend(): Backend {
   const webviewWindow = getCurrentWebviewWindow();
@@ -38,6 +38,22 @@ export function createTauriBackend(): Backend {
       // The window-scoped listener receives broadcast events and the events
       // targeted at this window (`link:open`, `menu:action`), not those of other windows.
       return webviewWindow.listen<EventMap[E]>(event, (received) => handler(received.payload));
+    },
+    createChannel<T>(onMessage: (message: T) => void) {
+      // A Tauri Channel serializes itself as `__CHANNEL__:<id>` (toJSON), also
+      // when nested inside `input`. Messages are delivered in order.
+      const channel = new Channel<T>();
+      let open = true;
+      channel.onmessage = (message) => {
+        if (open) {
+          onMessage(message);
+        }
+      };
+      return Object.assign(channel as unknown as IpcChannel<T>, {
+        close() {
+          open = false;
+        },
+      });
     },
     window: windowControls,
   };

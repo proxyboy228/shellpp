@@ -26,6 +26,14 @@ export const BROADCAST_EVENTS = [
 
 export type BroadcastEventName = (typeof BROADCAST_EVENTS)[number];
 
+/**
+ * Window-targeted events of stage 2. `sessions:changed` is ordered per
+ * session by `rev`, not by `v`, so it is not buffered: a window subscribes
+ * before its snapshot and keeps, per session, the payload with the greatest
+ * `rev` (snapshot or event).
+ */
+export const SESSION_EVENTS = ['sessions:changed', 'window:close-requested'] as const satisfies readonly EventName[];
+
 export type BufferedEvent = {
   [E in BroadcastEventName]: { name: E; payload: EventMap[E] };
 }[BroadcastEventName];

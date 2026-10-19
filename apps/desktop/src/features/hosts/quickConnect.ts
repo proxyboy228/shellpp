@@ -3,10 +3,11 @@
 //
 // A single word without a user counts as an address only when it contains a
 // dot or a colon, is an IP address, or is `localhost`; any other single word
-// is only a search query. The Connect action itself is stage 2
-// (`hosts-quick-connect`); stage 1 uses this parser only to decide whether
-// the hidden Connect button would be enabled.
+// is only a search query. Text that exactly matches a saved host's label or
+// address (case-insensitive) connects to that host with its settings
+// (`resolveSearchConnect`, stage 2 `hosts-quick-connect`).
 
+import type { HostView } from '../../ipc';
 import { isIpv4, isIpv6Literal, parseAddress, parseInteger } from '../panels/validators';
 
 export interface QuickConnectTarget {
@@ -139,4 +140,30 @@ export function parseQuickConnect(text: string): QuickConnectTarget | null {
     target.port = port;
   }
   return target;
+}
+
+/** What Enter or the Connect button of the search bar does (UI 2.1). */
+export type SearchConnect = { kind: 'host'; host: HostView } | { kind: 'quick'; target: QuickConnectTarget };
+
+/** A saved host whose label or address equals the text (trimmed, case-insensitive). */
+export function findExactHost(text: string, hosts: readonly HostView[]): HostView | undefined {
+  const needle = text.trim().toLowerCase();
+  if (needle === '') {
+    return undefined;
+  }
+  const byLabel = hosts.find((host) => (host.data.label ?? '').trim().toLowerCase() === needle);
+  return byLabel ?? hosts.find((host) => host.data.address.trim().toLowerCase() === needle);
+}
+
+/**
+ * An exact match with a saved host connects to it; otherwise a connection
+ * address quick connects without saving; otherwise null (Connect disabled).
+ */
+export function resolveSearchConnect(text: string, hosts: readonly HostView[]): SearchConnect | null {
+  const host = findExactHost(text, hosts);
+  if (host !== undefined) {
+    return { kind: 'host', host };
+  }
+  const target = parseQuickConnect(text);
+  return target === null ? null : { kind: 'quick', target };
 }

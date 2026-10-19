@@ -42,12 +42,13 @@ async function openSubmenu(user: Awaited<ReturnType<typeof renderUnlocked>>['use
 }
 
 describe('App menu', () => {
-  it('lists the stage-1 items in order with shortcut hints', async () => {
+  it('lists the stage-2 items in order with shortcut hints', async () => {
     const { user } = await renderUnlocked();
     await openMenu(user);
     expect(topLevelIds()).toEqual([
       'app-menu-vaults',
       'app-menu-settings',
+      'app-menu-new-local-terminal',
       'app-menu-edit',
       'app-menu-view',
       'app-menu-window',
@@ -57,7 +58,8 @@ describe('App menu', () => {
     ]);
     expect(screen.getByTestId('app-menu-vaults')).toHaveAttribute('aria-keyshortcuts', 'Ctrl+1');
     expect(screen.getByTestId('app-menu-settings')).toHaveAttribute('aria-keyshortcuts', 'Ctrl+,');
-    for (const id of ['app-menu-sftp', 'app-menu-new-local-terminal', 'app-menu-new-serial']) {
+    expect(screen.getByTestId('app-menu-new-local-terminal')).toHaveAttribute('aria-keyshortcuts', 'Ctrl+L');
+    for (const id of ['app-menu-sftp', 'app-menu-new-serial']) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
     expect(within(screen.getByTestId('app-menu')).getAllByRole('separator')).toHaveLength(2);
@@ -86,7 +88,7 @@ describe('App menu', () => {
     const windowMenu = await openSubmenu(user, 'app-menu-window');
     expect(within(windowMenu).getByTestId('app-menu-window-new-window')).toBeInTheDocument();
     for (const id of ['next-tab', 'previous-tab', 'close-tab']) {
-      expect(screen.queryByTestId(`app-menu-window-${id}`)).not.toBeInTheDocument();
+      expect(within(windowMenu).getByTestId(`app-menu-window-${id}`)).toBeInTheDocument();
     }
     await user.keyboard('{Escape}{Escape}');
 
@@ -138,7 +140,8 @@ describe('App menu', () => {
 
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar-hosts')).toHaveAttribute('aria-current', 'page');
-    for (const id of ['sidebar-keychain', 'sidebar-port-forwarding', 'sidebar-snippets', 'sidebar-known-hosts', 'sidebar-logs']) {
+    expect(screen.getByTestId('sidebar-known-hosts')).toBeInTheDocument();
+    for (const id of ['sidebar-keychain', 'sidebar-port-forwarding', 'sidebar-snippets', 'sidebar-logs']) {
       expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
     await openSubmenu(user, 'app-menu-view');

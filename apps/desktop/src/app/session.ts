@@ -12,7 +12,7 @@
 // Window-targeted events: `link:open` (host link) and `menu:action` (macOS
 // native menu bar).
 //
-// Owner: W4.
+// Owner: lead (stage 2 wiring).
 
 import { t } from '../i18n';
 import {
@@ -28,6 +28,7 @@ import {
   type StateSnapshot,
   type Unlisten,
 } from '../ipc';
+import { applySnapshotSessions } from '../features/terminal';
 import { runAppMenuAction } from './AppMenu/actions';
 import {
   appInfoStore,
@@ -103,6 +104,12 @@ export function startSession(): () => void {
       updateView({ unlockMode: 'password' });
     }
     lockStore.set(snapshot.lock);
+    // Stage 2: this window's sessions (and, once, the intent of a new window).
+    applySnapshotSessions(snapshot.sessions, snapshot.intent, {
+      settings: snapshot.settings,
+      launchedAt: snapshot.launched_at,
+      unlocked: snapshot.lock.state === 'unlocked',
+    });
   };
 
   const refreshSettings = async () => {

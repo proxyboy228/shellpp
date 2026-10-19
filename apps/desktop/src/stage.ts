@@ -10,15 +10,19 @@
 // `'feature-id': <stage>,` entry per line; `LATER` marks features without a
 // stage yet.
 //
-// Owner: W4. New ids are added only through the stage plan.
+// Owner: lead (stage 2). New ids are added only through the stage plan.
 
 /** The stage this build implements. */
-export const BUILD_STAGE = 1;
+export const BUILD_STAGE = 2;
 
 /** A feature planned after the numbered stages (biometric unlock after the stage 6 decision, D5). */
 export const LATER = 100;
 
-/** Feature id -> the stage that implements it. Features of stage 1 and earlier are not listed. */
+/**
+ * Feature id -> the stage that implements it. Features of stage 1 are not
+ * listed; features of stage 2 stay listed (they are visible from this build
+ * on) so the code that checks them keeps its guard.
+ */
 export const FEATURE_STAGES = {
   // UI 1.1 Top bar
   'topbar-vault-switcher': 8,
@@ -65,6 +69,18 @@ export const FEATURE_STAGES = {
   'host-proxy': 5,
   'host-telnet': 9,
   'host-mosh': 10,
+  // UI 4.2-4.7 Terminal sidebar, tab menu, splits
+  'terminal-sidebar-snippets': 5,
+  'terminal-autocomplete': 10,
+  'history-snippet-hint': 5,
+  'session-multiplayer': 10,
+  'session-broadcast': 9,
+  'terminal-keyword-highlighting': 6,
+  // UI 6 New tab page
+  'newtab-workspaces': 9,
+  // UI 10.1 Known Hosts
+  'known-hosts-import': 3,
+  'known-hosts-export': 3,
   // UI 12.1 Settings window sections
   'settings-account-sync': 3,
   'settings-ssh-id': 8,

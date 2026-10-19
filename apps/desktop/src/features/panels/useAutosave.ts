@@ -34,6 +34,12 @@ export interface Autosave {
   state: SaveState;
   /** Saves pending changes now (no effect for a draft or without changes). */
   flush: () => void;
+  /**
+   * Saves pending changes now and resolves when no save is running any more
+   * (the host panel's Connect, stage 2): true when the last save succeeded
+   * or nothing needed saving.
+   */
+  settle: () => Promise<boolean>;
 }
 
 export function useAutosave(options: AutosaveOptions): Autosave {
@@ -48,6 +54,8 @@ export function useAutosave(options: AutosaveOptions): Autosave {
   const inFlightRef = useRef(false);
   const rerunRef = useRef(false);
   const mountedRef = useRef(false);
+  // `settle()` callers waiting for the running save (and its re-runs).
+  const waitersRef = useRef<((succeeded: boolean) => void)[]>([]);
 
   useLayoutEffect(() => {
     optionsRef.current = options;
@@ -88,6 +96,11 @@ export function useAutosave(options: AutosaveOptions): Autosave {
           rerunRef.current = false;
           runSave();
         }
+        if (!inFlightRef.current) {
+          for (const resolve of waitersRef.current.splice(0)) {
+            resolve(succeeded);
+          }
+        }
       });
   }, []);
 
@@ -121,6 +134,16 @@ export function useAutosave(options: AutosaveOptions): Autosave {
     }
   }, [run]);
 
+  const settle = useCallback((): Promise<boolean> => {
+    flush();
+    if (!inFlightRef.current) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      waitersRef.current.push(resolve);
+    });
+  }, [flush]);
+
   let state: SaveState;
   if (isNew && !canSave) {
     state = 'draft';
@@ -133,5 +156,5 @@ export function useAutosave(options: AutosaveOptions): Autosave {
   } else {
     state = 'saved';
   }
-  return { state, flush };
+  return { state, flush, settle };
 }

@@ -59,6 +59,8 @@ export interface RecordForm<F, V extends FormRecord> {
   /** Marks a change outside the form (restarts the autosave delay). */
   touch: () => void;
   flush: () => void;
+  /** Saves pending changes and waits for the running save (see `useAutosave`). */
+  settle: () => Promise<boolean>;
 }
 
 /** The newer of the list's view and the last saved view. */
@@ -180,5 +182,15 @@ export function useRecordForm<F, V extends FormRecord>(options: RecordFormOption
     return [...shown, ...active.map((entry) => entry.error)];
   }, [table, validation, active, touched]);
 
-  return { recordId, form, base, errors, saveState: autosave.state, update, touch, flush: autosave.flush };
+  return {
+    recordId,
+    form,
+    base,
+    errors,
+    saveState: autosave.state,
+    update,
+    touch,
+    flush: autosave.flush,
+    settle: autosave.settle,
+  };
 }

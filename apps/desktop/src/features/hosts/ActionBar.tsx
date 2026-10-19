@@ -1,14 +1,15 @@
 // Action bar of the Hosts screen (UI 2.2): the New host split button with
-// New Group on the left; the view toggle, the tag filter and the sort menu on
-// the right. Import (stage 3), cloud integrations (stage 10), the Terminal
-// (stage 2) and Serial (stage 9) buttons and the vault members (stage 8) are
-// hidden.
+// New Group and the Terminal button (a local terminal in a new tab) on the
+// left; the view toggle, the tag filter and the sort menu on the right.
+// Import (stage 3), cloud integrations (stage 10), Serial (stage 9) and the
+// vault members (stage 8) are hidden.
 
-import { ArrowDownUp, Check, FolderPlus, LayoutGrid, List, Plus, Tag } from 'lucide-react';
+import { ArrowDownUp, Check, FolderPlus, LayoutGrid, List, Plus, SquareTerminal, Tag } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { Button, Chip, IconButton, SegmentedControl, SplitButton, type SplitButtonItem } from '../../components';
 import type { SortMode } from '../../ipc';
 import { t } from '../../i18n';
+import { isVisible } from '../../stage';
 import { Popover } from '../panels/Popover';
 import styles from './HostsScreen.module.css';
 
@@ -17,7 +18,7 @@ export type HostsLayout = 'grid' | 'list';
 export const SORT_MODES: readonly SortMode[] = ['manual', 'name', 'created', 'modified'];
 
 /** Up/Down move between the items of a popover menu. */
-function handleMenuKeys(event: KeyboardEvent<HTMLElement>) {
+export function handleMenuKeys(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
     return;
   }
@@ -105,15 +106,25 @@ function TagFilter({ tags, selected, onChange }: TagFilterProps) {
   );
 }
 
-interface SortMenuProps {
-  value: SortMode;
-  onChange: (mode: SortMode) => void;
+export interface SortMenuProps<T extends string> {
+  value: T;
+  onChange: (mode: T) => void;
+  /** The modes in menu order; labels are `hosts.sort.<mode>`. Default: the Hosts screen modes. */
+  modes?: readonly T[];
+  /** Test id prefix: `<prefix>-button`, `<prefix>-menu`, `<prefix>-<mode>`. Default `hosts-sort`. */
+  testIdPrefix?: string;
 }
 
-function SortMenu({ value, onChange }: SortMenuProps) {
+/** The sort menu of the Hosts and Known Hosts screens. */
+export function SortMenu<T extends string>({
+  value,
+  onChange,
+  modes = SORT_MODES as readonly string[] as readonly T[],
+  testIdPrefix = 'hosts-sort',
+}: SortMenuProps<T>) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const choose = (mode: SortMode) => {
+  const choose = (mode: T) => {
     onChange(mode);
     setOpen(false);
     buttonRef.current?.focus();
@@ -131,7 +142,7 @@ function SortMenu({ value, onChange }: SortMenuProps) {
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
         data-sort={value}
-        data-testid="hosts-sort-button"
+        data-testid={`${testIdPrefix}-button`}
       />
       {open ? (
         <Popover
@@ -140,10 +151,10 @@ function SortMenu({ value, onChange }: SortMenuProps) {
           placement="below-end"
           role="menu"
           aria-label={t('hosts.sort.menu')}
-          data-testid="hosts-sort-menu"
+          data-testid={`${testIdPrefix}-menu`}
         >
           <div className={styles.menuItems} onKeyDown={handleMenuKeys}>
-            {SORT_MODES.map((mode) => (
+            {modes.map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -152,7 +163,7 @@ function SortMenu({ value, onChange }: SortMenuProps) {
                 className={styles.menuItem}
                 autoFocus={mode === value}
                 onClick={() => choose(mode)}
-                data-testid={`hosts-sort-${mode}`}
+                data-testid={`${testIdPrefix}-${mode}`}
               >
                 <span className={styles.menuCheck} aria-hidden="true">
                   {mode === value ? <Check size={16} strokeWidth={2} /> : null}
@@ -170,6 +181,8 @@ function SortMenu({ value, onChange }: SortMenuProps) {
 export interface ActionBarProps {
   onNewHost: () => void;
   onNewGroup: () => void;
+  /** Terminal button: a local terminal in a new tab (UI 2.2). */
+  onLocalTerminal?: () => void;
   layout: HostsLayout;
   onLayoutChange: (layout: HostsLayout) => void;
   sort: SortMode;
@@ -183,6 +196,7 @@ export interface ActionBarProps {
 export function ActionBar({
   onNewHost,
   onNewGroup,
+  onLocalTerminal,
   layout,
   onLayoutChange,
   sort,
@@ -209,7 +223,12 @@ export function ActionBar({
           >
             {t('hosts.actions.new_host')}
           </SplitButton>
-          {/* `hosts-local-terminal-button` (stage 2) and `hosts-serial-button` (stage 9) are hidden. */}
+          {isVisible('hosts-local-terminal-button') ? (
+            <Button icon={<SquareTerminal />} onClick={onLocalTerminal} data-testid="hosts-local-terminal-button">
+              {t('hosts.actions.terminal')}
+            </Button>
+          ) : null}
+          {/* `hosts-serial-button` (stage 9) is hidden. */}
         </div>
         <div className={styles.actionGroup}>
           <SegmentedControl<HostsLayout>

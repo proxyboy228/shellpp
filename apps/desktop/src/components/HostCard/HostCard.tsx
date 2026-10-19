@@ -49,6 +49,11 @@ export interface HostCardHostProps extends HostCardCommonProps {
   subtitle?: string;
   /** OS icon from lucide-react. Default: a neutral server icon. */
   icon?: LucideIcon;
+  /**
+   * Tile content that replaces `icon`, for example the `OsIcon` of the
+   * detection result (stage 2). Rendered inside the colored tile.
+   */
+  iconSlot?: ReactNode;
 }
 
 export interface HostCardGroupProps extends HostCardCommonProps {
@@ -72,6 +77,7 @@ interface HostCardContent {
   title: string;
   subtitle: string | undefined;
   Icon: LucideIcon;
+  iconSlot?: ReactNode;
 }
 
 function splitProps(props: HostCardProps): { content: HostCardContent; common: HostCardCommonProps } {
@@ -82,10 +88,10 @@ function splitProps(props: HostCardProps): { content: HostCardContent; common: H
       common,
     };
   }
-  const { variant = 'host', label, address, subtitle, icon = Server, ...common } = props;
+  const { variant = 'host', label, address, subtitle, icon = Server, iconSlot, ...common } = props;
   const title = label !== undefined && label.trim() !== '' ? label : address;
   return {
-    content: { variant, title, subtitle: subtitle === '' ? undefined : subtitle, Icon: icon },
+    content: { variant, title, subtitle: subtitle === '' ? undefined : subtitle, Icon: icon, iconSlot },
     common,
   };
 }
@@ -116,7 +122,7 @@ export function HostCard(props: HostCardProps) {
     'data-testid': testId,
     ...rest
   } = common;
-  const { variant, title, subtitle, Icon } = content;
+  const { variant, title, subtitle, Icon, iconSlot } = content;
 
   const rootClassName = [
     styles.card,
@@ -181,7 +187,11 @@ export function HostCard(props: HostCardProps) {
       onKeyDown={handleKeyDown}
     >
       <span className={`${styles.tile} ${tileColorClass[color]}`} aria-hidden="true">
-        <Icon className={styles.icon} size={20} strokeWidth={1.75} aria-hidden="true" focusable="false" />
+        {iconSlot === undefined || iconSlot === null ? (
+          <Icon className={styles.icon} size={20} strokeWidth={1.75} aria-hidden="true" focusable="false" />
+        ) : (
+          iconSlot
+        )}
       </span>
       <span className={styles.text}>
         <span className={styles.title} title={title} data-testid={testId === undefined ? undefined : `${testId}-title`}>

@@ -7,7 +7,7 @@
 // Owner: W4.
 
 import type { MockBackendOptions } from './mock';
-import type { CommandInput, CommandName, CommandOutput, EventMap, EventName } from './types';
+import type { CommandInput, CommandName, CommandOutput, EventMap, EventName, IpcChannel } from './types';
 
 export type Unlisten = () => void;
 
@@ -31,6 +31,11 @@ export interface Backend {
   invoke<C extends CommandName>(command: C, input: CommandInput<C>): Promise<CommandOutput<C>>;
   /** Broadcast events and events targeted at this window. */
   listen<E extends EventName>(event: E, handler: (payload: EventMap[E]) => void): Promise<Unlisten>;
+  /**
+   * Creates a channel to pass inside a command input (`session_attach`).
+   * Messages arrive in order; `close()` stops delivery to `onMessage`.
+   */
+  createChannel<T>(onMessage: (message: T) => void): IpcChannel<T> & { close(): void };
   readonly window: WindowControls;
 }
 

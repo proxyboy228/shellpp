@@ -55,4 +55,12 @@ describe('toIpcError', () => {
     expect(isIpcError(error, 'locked')).toBe(false);
     expect(toIpcError(error)).toBe(error);
   });
+
+  it('keeps the stage-2 codes', () => {
+    const ssh = toIpcError({ code: 'ssh_error', details: { reason: 'refused' } });
+    expect(ssh.code).toBe('ssh_error');
+    expect(ssh.details.reason).toBe('refused');
+    expect(toIpcError({ code: 'cancelled', details: {} }).code).toBe('cancelled');
+    expect(toIpcError({ code: 'host_key_revoked', details: {} }).code).toBe('host_key_revoked');
+  });
 });

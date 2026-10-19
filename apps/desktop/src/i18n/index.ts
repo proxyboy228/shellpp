@@ -1,16 +1,22 @@
 // i18n catalog (docs/decisions.md, decision 22): English only, flat dotted
 // keys such as `hosts.search.placeholder`.
 //
-// Catalog files: `en.json` (W4: app shell, lock, settings, notifications,
-// errors, common) and `hosts.en.json` (W5: hosts screen and panels). The
-// loader merges them; a key must not appear in both (checked by the i18n test).
+// Catalog files: `en.json` (app shell, lock, settings, notifications,
+// errors, `ssh_reason.*`, common), `hosts.en.json` (hosts screen and panels;
+// S7 in stage 2), `terminal.en.json` (S6: tabs, terminal, splits, terminal
+// sidebar, session end, paste, close confirmation) and `connect.en.json`
+// (S7: connection screen, prompts, host key dialogs, new tab page, search,
+// Known Hosts, "+ -> Key"). The loader merges them; a key must not appear in
+// two files (checked by the i18n test).
 //
 // Placeholders use `{name}` and are replaced from `params`.
 //
-// Owner: W4.
+// Owner: lead.
 
+import connectEn from './connect.en.json';
 import en from './en.json';
 import hostsEn from './hosts.en.json';
+import terminalEn from './terminal.en.json';
 
 export type Catalog = Readonly<Record<string, string>>;
 
@@ -18,9 +24,11 @@ export type Catalog = Readonly<Record<string, string>>;
 export const CATALOG_FILES: Readonly<Record<string, Catalog>> = {
   'en.json': en,
   'hosts.en.json': hostsEn,
+  'terminal.en.json': terminalEn,
+  'connect.en.json': connectEn,
 };
 
-const catalog: Catalog = { ...en, ...hostsEn };
+const catalog: Catalog = { ...en, ...hostsEn, ...terminalEn, ...connectEn };
 
 export type TranslationParams = Readonly<Record<string, string | number>>;
 

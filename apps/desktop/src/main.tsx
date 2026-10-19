@@ -5,6 +5,13 @@
 // - e2e builds (`vite build --mode e2e`) expose `window.__SHELLPP_E2E__`.
 // - Development only: `#/showcase` renders the stage 0 design system page;
 //   production and e2e builds do not contain it.
+// - Freezes `Object.prototype` before the backend starts (docs/security.md,
+//   section 13.1). Tauri's `freezePrototype` would freeze it before any
+//   script runs, but xterm.js 6 assigns `toString` to a plain object while
+//   its module initializes (a namespace of its bundled keyboard code), which
+//   throws once `Object.prototype` is frozen. So the terminal engine is
+//   loaded first, then the prototype is frozen, before any IPC data or
+//   terminal output is processed.
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -19,7 +26,18 @@ if (rootElement === null) {
 }
 const root = createRoot(rootElement);
 
+/** Loads the terminal engine, then freezes `Object.prototype` (see above). */
+async function freezePrototype(): Promise<void> {
+  try {
+    await import('./features/terminal/engine/xtermEngine');
+  } catch {
+    // The terminal views try again when they open; the freeze applies anyway.
+  }
+  Object.freeze(Object.prototype);
+}
+
 async function start(): Promise<void> {
+  await freezePrototype();
   if (import.meta.env.DEV && window.location.hash === '#/showcase') {
     const { default: Showcase } = await import('./showcase/App');
     root.render(

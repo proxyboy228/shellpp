@@ -9,7 +9,11 @@
 // compares against; it never protects real data and is not part of release
 // builds (`initBackend` picks it only in development and tests).
 //
-// Owner: W4.
+// Stage 2 (stage 2 plan, section 6.6): the session, local terminal and
+// history commands live in `sessions.ts` (S6), known hosts, keys and recent
+// connections in `connect.ts` (S7); both share `context.ts`.
+//
+// Owner: W4 (stage 1), lead (stage 2 wiring).
 
 import type { Backend, Unlisten, WindowControls } from '../backend';
 import { IpcError } from '../errors';
@@ -21,7 +25,9 @@ import type {
   ErrorCode,
   EventMap,
   EventName,
+  ExitResult,
   FieldError,
+  IpcChannel,
   JsonValue,
   LockState,
   LockStatus,
@@ -31,15 +37,21 @@ import type {
   SettingsValues,
   ValidationReason,
   VaultView,
+  WindowIntent,
 } from '../types';
+import { createConnectMock, type ConnectMockControl } from './connect';
+import type { Stage2MockContext } from './context';
 import { seedDemoRecords } from './fixtures';
 import { createIdFactory, createRandom, fakeRecoveryKey, normalizeRecoveryKey } from './ids';
 import { RecordStore } from './records';
+import { createSessionMock, type SessionMockControl } from './sessions';
 import { settingsSchema } from './settings';
 
 export interface MockBackendOptions {
   /** Initial lock state. Default `'first_run'`. */
   initialState?: 'first_run' | 'locked' | 'unlocked';
+  /** `state_snapshot.launched_at` (default: when the mock was created). */
+  launchedAt?: string;
   /** Master password accepted by `unlock` when starting `'locked'`. */
   password?: string;
   /** Seed hosts and groups (`'demo'`) or start empty (`'empty'`, default). */
@@ -110,6 +122,14 @@ export interface MockBackend extends Backend {
     emitMenuAction(id: string): void;
     /** Window state changed through the window controls. */
     windowState(): Readonly<MockWindowState>;
+    /** Intents passed to `window_open`, in order (undefined = none). */
+    windowIntents(): readonly (WindowIntent | undefined)[];
+    /** Sends `window:close-requested` to this window (the OS close button). */
+    emitCloseRequested(): void;
+    /** Stage 2: sessions, local terminal and history (S6). */
+    sessions: SessionMockControl;
+    /** Stage 2: known hosts, keys and recent connections (S7). */
+    connect: ConnectMockControl;
   };
 }
 
@@ -123,9 +143,14 @@ const ALWAYS: ReadonlySet<CommandName> = new Set<CommandName>([
   'window_open',
   'activity',
   'app_exit',
+  'window_close',
   'lock_status',
   'settings_get',
   'e2e_mock',
+  // Running terminals keep their output and size while locked (D9).
+  'session_attach',
+  'session_resize',
+  'session_ack',
 ]);
 const MAX_NOTIFICATIONS = 200;
 const RECOVERY_GRANT_MS = 5 * 60_000;
@@ -149,6 +174,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   const random = createRandom();
   let clockOffset = 0;
   const now = () => Date.now() + clockOffset;
+  const launchedAt = options.launchedAt ?? new Date().toISOString();
   const newId = createIdFactory(random, now);
   const os: OsKind = options.os ?? 'windows';
   const schema = settingsSchema(os);
@@ -167,6 +193,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   let sensitiveClipboard: { text: string; clearAt: number } | null = null;
   const openedUrls: string[] = [];
   const windowsOpened: string[] = [];
+  const windowIntents: (WindowIntent | undefined)[] = [];
   const calls: string[] = [];
   let activityCount = 0;
   let exitRequested = false;
@@ -197,6 +224,32 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       }
     });
   };
+  // --- Stage 2 modules ---------------------------------------------------------
+
+  let nextChannelId = 1;
+  const stage2: Stage2MockContext = {
+    vaultId,
+    windowLabel,
+    now,
+    newId: () => newId().id,
+    records,
+    lockState: () => lockState,
+    settings: () => effectiveSettings(),
+    emit: (event, payload) => dispatch(event, payload),
+    recordsChanged: (recordIds, classes) => {
+      if (recordIds.length > 0) {
+        broadcast('records:changed', { vault_id: vaultId, record_ids: [...recordIds], classes: [...classes] });
+      }
+    },
+    knownHosts: [],
+    keys: [],
+    history: [],
+    connections: [],
+    channels: new Map(),
+  };
+  const sessionMock = createSessionMock(stage2);
+  const connectMock = createConnectMock(stage2);
+
   /** Broadcast events carry the state version, increased under the same "lock" as the change. */
   const broadcast = <E extends 'lock:changed' | 'records:changed' | 'vaults:changed' | 'settings:changed' | 'notifications:changed'>(
     event: E,
@@ -239,13 +292,20 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
     records.clearUndo();
     recoveryGrantUntil = 0;
     clearSensitiveClipboard();
+    sessionMock.onLockChanged(true);
     broadcast('lock:changed', { locked: true, state: 'locked' });
   };
 
   const unlocked = () => {
     lockState = 'unlocked';
     lastActivity = now();
+    sessionMock.onLockChanged(false);
     broadcast('lock:changed', { locked: false, state: 'unlocked' });
+  };
+
+  const exitResult = (confirmed: boolean): ExitResult => {
+    const active = sessionMock.activeCount();
+    return { needs_confirmation: active > 0 && !confirmed, active_sessions: active };
   };
 
   const tick = () => {
@@ -360,11 +420,14 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       notifications: notificationList(),
       vaults: lockState === 'unlocked' ? [structuredClone(vault)] : [],
       window_label: windowLabel,
+      launched_at: launchedAt,
+      sessions: sessionMock.snapshot(),
     }),
-    window_open: () => {
+    window_open: (input) => {
       windowCounter += 1;
       const label = `w-${windowCounter}`;
       windowsOpened.push(label);
+      windowIntents.push(input?.intent);
       return { label };
     },
     activity: () => {
@@ -372,13 +435,25 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       lastActivity = now();
       return null;
     },
-    app_exit: () => {
-      exitRequested = true;
-      return null;
+    app_exit: (input) => {
+      const result = exitResult(input?.confirmed ?? false);
+      if (!result.needs_confirmation) {
+        exitRequested = true;
+      }
+      return result;
     },
-    external_open_url: ({ url }) => {
+    window_close: (input) => {
+      const result = exitResult(input?.confirmed ?? false);
+      if (!result.needs_confirmation) {
+        windowState.closed = true;
+      }
+      return result;
+    },
+    external_open_url: ({ url, source }) => {
       const parsed = URL.canParse(url) ? new URL(url) : null;
-      if (parsed === null || parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || url.length > 2048) {
+      // Terminal links may also be `http:` (docs/security.md 12, 13.3; stage 2 plan, decision 6).
+      const schemeAllowed = parsed !== null && (parsed.protocol === 'https:' || (source === 'terminal' && parsed.protocol === 'http:'));
+      if (parsed === null || !schemeAllowed || parsed.username !== '' || parsed.password !== '' || url.length > 2048) {
         throw validation('url', 'not_allowed');
       }
       openedUrls.push(url);
@@ -588,6 +663,9 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
     },
     clipboard_read_text: () => ({ text: clipboard }),
 
+    ...sessionMock.handlers,
+    ...connectMock.handlers,
+
     e2e_mock: (action) => {
       switch (action.kind) {
         case 'clipboard_read':
@@ -617,6 +695,12 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
           if (match !== null && lockState === 'unlocked') {
             dispatch('link:open', { kind: 'host', record_id: match[1] });
           }
+          return {};
+        }
+        case 'known_host_add': {
+          const { kind: _kind, ...entry } = action;
+          void _kind;
+          connectMock.control.addKnownHost(entry);
           return {};
         }
         default:
@@ -681,6 +765,19 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
         listeners.get(event)?.delete(entry);
       });
     },
+    createChannel<T>(onMessage: (message: T) => void) {
+      const id = nextChannelId++;
+      stage2.channels.set(id, onMessage as (message: unknown) => void);
+      // Plain data, so that `structuredClone(input)` keeps it; `close` is not enumerable.
+      const channel = { __ipcChannel: true as const, id };
+      Object.defineProperty(channel, 'close', {
+        enumerable: false,
+        value: () => {
+          stage2.channels.delete(id);
+        },
+      });
+      return channel as unknown as IpcChannel<T> & { close(): void };
+    },
     window: windowControls,
     control: {
       autoLock: () => {
@@ -711,6 +808,10 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       emitLink: (recordId) => dispatch('link:open', { kind: 'host', record_id: recordId }),
       emitMenuAction: (id) => dispatch('menu:action', { id }),
       windowState: () => ({ ...windowState }),
+      windowIntents: () => [...windowIntents],
+      emitCloseRequested: () => dispatch('window:close-requested', {}),
+      sessions: sessionMock.control,
+      connect: connectMock.control,
     },
   };
 }

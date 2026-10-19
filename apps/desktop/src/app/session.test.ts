@@ -141,7 +141,7 @@ describe('activity reporting', () => {
 });
 
 describe('shortcuts', () => {
-  it('binds Ctrl+1 and Ctrl+, and nothing for hidden features or AltGr', async () => {
+  it('binds the stage-2 app shortcuts and nothing for hidden features or AltGr', async () => {
     await boot({ initialState: 'unlocked', password: newPassword() });
     const uninstall = installShortcuts('windows');
     const press = (init: KeyboardEventInit) => {
@@ -153,10 +153,19 @@ describe('shortcuts', () => {
     expect(viewStore.get().settingsOpen).toBe(true);
     expect(press({ key: '1', ctrlKey: true })).toBe(true);
     expect(press({ key: ',', ctrlKey: true, altKey: true })).toBe(false);
-    for (const key of ['2', 'l', 'L', 'k', 'p']) {
-      expect(press({ key, ctrlKey: true })).toBe(false);
-      expect(press({ key, ctrlKey: true, shiftKey: true })).toBe(false);
+    // Stage 2: Ctrl+1...9 tabs, Ctrl+L / Ctrl+Shift+L local terminal, Ctrl+K /
+    // Ctrl+Shift+K search, Ctrl+Shift+W close tab, Alt+arrows tabs.
+    expect(press({ key: '2', ctrlKey: true })).toBe(true);
+    for (const key of ['l', 'k']) {
+      expect(press({ key, ctrlKey: true })).toBe(true);
+      expect(press({ key: key.toUpperCase(), ctrlKey: true, shiftKey: true })).toBe(true);
     }
+    expect(press({ key: 'W', ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(press({ key: 'ArrowRight', altKey: true })).toBe(true);
+    // Hidden until later stages: Ctrl+P (snippets, port forwarding), Ctrl+Alt+S (serial).
+    expect(press({ key: 'p', ctrlKey: true })).toBe(false);
+    expect(press({ key: 'P', ctrlKey: true, shiftKey: true })).toBe(false);
+    expect(press({ key: 's', ctrlKey: true, altKey: true })).toBe(false);
     expect(press({ key: ',', metaKey: true })).toBe(false);
     uninstall();
 

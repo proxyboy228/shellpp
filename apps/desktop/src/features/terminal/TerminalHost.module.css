@@ -1,0 +1,231 @@
+/* Terminal area (UI 4.1): fills the window content below the title bar, no
+   Vaults sidebar and no borders, a small inner padding around the terminal.
+   Colors come from tokens; the terminal's own colors from its theme. */
+
+.host {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-base);
+}
+
+/* `hidden` keeps the terminals mounted (scrollback, live output) but invisible. */
+.host[hidden] {
+  display: flex;
+  visibility: hidden;
+}
+
+.panels {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Inactive tabs keep their layout so their terminals keep their size. */
+.panel[hidden] {
+  display: flex;
+  visibility: hidden;
+}
+
+.paneArea {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+
+/* The active pane of a split tab (UI 4.7). */
+.pane[data-highlight='true'] {
+  border-color: var(--accent);
+}
+
+.view {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-2);
+  overflow: hidden;
+}
+
+/* The engine's element: fitted to this box (no padding of its own). */
+.screen {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.picker {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-4);
+  overflow: auto;
+  background: var(--bg-base);
+}
+
+.divider {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+.divider[data-direction='row'] {
+  width: var(--space-2);
+  margin-left: calc(-1 * var(--space-1));
+  cursor: col-resize;
+}
+
+.divider[data-direction='column'] {
+  height: var(--space-2);
+  margin-top: calc(-1 * var(--space-1));
+  cursor: row-resize;
+}
+
+.divider::after {
+  position: absolute;
+  background: var(--border-subtle);
+  content: '';
+}
+
+.divider[data-direction='row']::after {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-1) - 0.5px);
+  width: 1px;
+}
+
+.divider[data-direction='column']::after {
+  right: 0;
+  left: 0;
+  top: calc(var(--space-1) - 0.5px);
+  height: 1px;
+}
+
+.divider:hover::after,
+.divider:active::after {
+  background: var(--accent);
+}
+
+/* Session end overlays (UI 4.6): over the terminal, output stays visible. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-5);
+  pointer-events: none;
+}
+
+.overlayCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 480px;
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text-primary);
+  pointer-events: auto;
+}
+
+.overlayMessage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+.overlayDetail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-dense);
+}
+
+.overlayActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* The connection screen over a terminal (prompts and failures of a reconnect). */
+.screenOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  background: var(--scrim);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+.dialogText {
+  margin: 0 0 var(--space-3);
+  line-height: 1.5;
+}
+
+.preview {
+  max-height: 240px;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-dense);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.url {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-dense);
+  word-break: break-all;
+}

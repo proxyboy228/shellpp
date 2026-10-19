@@ -124,11 +124,12 @@ describe('Hosts screen content (UI 2.3)', () => {
     const user = userEvent.setup();
     await renderScreen();
     await user.click(screen.getByTestId('hosts-new-host-toggle'));
+    // Stage 2: the Connect and Terminal buttons are visible.
+    expect(screen.getByTestId('hosts-search-connect')).toBeInTheDocument();
+    expect(screen.getByTestId('hosts-local-terminal-button')).toBeInTheDocument();
     for (const id of [
-      'hosts-search-connect',
       'hosts-new-host-item-import',
       'hosts-new-host-item-cloud',
-      'hosts-local-terminal-button',
       'hosts-serial-button',
       'hosts-vault-members',
       'host-card-conflict-badge',
@@ -326,11 +327,18 @@ describe('context menus, remove and undo (UI 2.4, 3.4)', () => {
     const items = within(menu)
       .getAllByRole('menuitem')
       .map((item) => item.getAttribute('data-testid'));
-    expect(items).toEqual(['host-menu-edit', 'host-menu-move-to', 'host-menu-duplicate', 'host-menu-copy-link', 'host-menu-remove']);
-    expect(screen.getByTestId('host-menu-copy-link-info')).toBeInTheDocument();
-    for (const id of [
+    // Stage 2: Quick Connect and Connect come first (UI 2.4, S7).
+    expect(items).toEqual([
       'host-menu-quick-connect',
       'host-menu-connect',
+      'host-menu-edit',
+      'host-menu-move-to',
+      'host-menu-duplicate',
+      'host-menu-copy-link',
+      'host-menu-remove',
+    ]);
+    expect(screen.getByTestId('host-menu-copy-link-info')).toBeInTheDocument();
+    for (const id of [
       'host-menu-add-to-workspace',
       'host-menu-collaborate',
       'host-menu-copy-to',

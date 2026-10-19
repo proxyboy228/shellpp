@@ -1,0 +1,225 @@
+/* Known Hosts screen and the host key dialogs (UI 10.1, 10.2;
+   docs/design-system.md 2-6). Colors and sizes come from tokens.css only;
+   the screen layout reuses the Hosts screen stylesheet. */
+
+/* Host key dialogs: inline alert dialogs of the connection screen. */
+.hostKeyDialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+/* Changed and revoked keys use the danger color (UI 10.2). */
+.hostKeyDialog[data-kind='changed'],
+.hostKeyDialog[data-kind='revoked'] {
+  border-color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.hostKeyHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hostKeyIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--info);
+}
+
+.hostKeyDialog[data-kind='changed'] .hostKeyIcon,
+.hostKeyDialog[data-kind='revoked'] .hostKeyIcon {
+  color: var(--danger);
+}
+
+.hostKeyTitle {
+  margin: 0;
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+}
+
+.hostKeyText,
+.hostKeyHint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+.hostKeyWarning {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+}
+
+.hostKeyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.keyBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.keyBlockTitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Label / value pairs; one label column width so separate lists line up. */
+.facts {
+  display: grid;
+  grid-template-columns: calc(var(--space-6) * 3) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-body);
+}
+
+.facts dt {
+  color: var(--text-secondary);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+}
+
+/* Known Hosts cards. */
+.revokedBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-control);
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--space-5);
+}
+
+/* Details panel: the slot takes part in the screen's flex row directly. */
+.panelSlot {
+  display: contents;
+}
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4);
+  font-family: var(--font-ui);
+}
+
+.panelRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.panelRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.panelLabel {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.panelValue {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.panelValueRow {
+  display: flex;
+  margin: 0;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.panelValueRow > .panelValue {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hostLinks {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hostLink {
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hostLink:hover {
+  text-decoration: underline;
+}
+
+.hostLink:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-control);
+}
+
+.barSearch {
+  display: flex;
+  width: 280px;
+  max-width: 100%;
+}
+
+.barSearchField {
+  flex: 1 1 auto;
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hostLink {
+    transition: none;
+  }
+}

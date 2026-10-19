@@ -1,25 +1,31 @@
 // Host panel (UI 3.1-3.3) in the details panel: create and edit a host with
 // autosave. Stage 1 shows the Address, General and SSH blocks and the "Show
-// more" settings; later-stage blocks are hidden (src/stage.ts).
+// more" settings; stage 2 adds the OS icon, the "+" credentials with the
+// linked key ("+ -> Key"), the pinned Connect button and the "..." menu
+// Connect; later-stage blocks are hidden (src/stage.ts).
 
-import { ChevronDown, ChevronUp, Copy, Server, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, Copy, Plug, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DetailsPanel } from '../../app/DetailsPanel/DetailsPanel';
 import type { ContextMenuEntry } from '../../app/ContextMenu/ContextMenu';
-import { Button, PasswordInput, Select, TextInput, Toggle } from '../../components';
+import { Button, OsIcon, PasswordInput, Select, TextInput, Toggle } from '../../components';
 import { recordSave, secretReveal, toIpcError } from '../../ipc';
 import type { GroupView, HostData, HostView, SettingsValues, ThemeRef, Uuid } from '../../ipc';
 import { t } from '../../i18n';
 import { showToast } from '../../app/toast';
+import { isVisible } from '../../stage';
+import { connectHost } from '../connect/actions';
+import { installAltKeyTracker, isAltHeld } from '../connect/altKey';
 import { reasonFor } from './form';
 import { BACKSPACE_VALUES, HOST_FIELDS, RECORD_MODES, type HostForm } from './fields';
 import { inheritedPlaceholder, resolveInherited } from './inheritance';
 import { usePanelRootAttributes } from './panelAttributes';
 import { useRecordForm } from './useRecordForm';
-import { CHARSETS, parseSecret } from './validators';
+import { CHARSETS, parseAddress, parseSecret } from './validators';
 import { ColorField } from './fields/ColorField';
 import { EnvVarsField } from './fields/EnvVarsField';
 import { GroupPicker } from './fields/GroupPicker';
+import { KeyField } from './fields/KeyField';
 import { TagsField } from './fields/TagsField';
 import { TextAreaField } from './fields/TextAreaField';
 import { ThemePicker } from './fields/ThemePicker';
@@ -169,6 +175,23 @@ export function HostPanel({
   };
 
   const inherited = useMemo(() => resolveInherited(form.group_id, groupsById), [form.group_id, groupsById]);
+  const addressValid = parseAddress(form.address).ok && form.address.trim() !== '';
+  const canConnect = !isDraft && addressValid;
+
+  useEffect(() => installAltKeyTracker(), []);
+
+  // Connect saves pending edits first, then opens the session (UI 3.1, 3.3).
+  const connect = (newWindow: boolean) => {
+    if (recordId === null || !canConnect) {
+      return;
+    }
+    record
+      .settle()
+      .then(() => connectHost({ vault_id: vaultId, record_id: recordId }, { newWindow }))
+      .catch((reason: unknown) => {
+        showToast({ message: t(`errors.${toIpcError(reason).code}`), level: 'error', testId: 'panels-connect-error-toast' });
+      });
+  };
   const keepaliveGlobal = settingNumber(settings, 'terminal.keepalive_s');
   const passwordSaved = base?.secrets_set.includes('ssh.password') ?? false;
 
@@ -212,7 +235,19 @@ export function HostPanel({
     recordId === null
       ? []
       : [
-          // `host-connect` (stage 2) and `host-telnet` (stage 9) items are hidden.
+          ...(isVisible('host-connect')
+            ? [
+                {
+                  id: 'connect',
+                  label: t('host_panel.menu.connect'),
+                  icon: Plug,
+                  disabled: !canConnect,
+                  onSelect: () => connect(isAltHeld()),
+                  'data-testid': `${TID}-menu-connect`,
+                },
+              ]
+            : []),
+          // `host-telnet` (stage 9) is hidden.
           {
             id: 'duplicate',
             label: t('host_panel.menu.duplicate'),
@@ -245,6 +280,20 @@ export function HostPanel({
         title={isDraft ? t('host_panel.title_new') : t('host_panel.title')}
         menuItems={menuItems}
         onCollapse={onClose}
+        footer={
+          isVisible('host-connect') ? (
+            <Button
+              variant="primary"
+              icon={<Plug />}
+              fullWidth
+              disabled={!canConnect}
+              onClick={(event) => connect(event.altKey)}
+              data-testid={`${TID}-connect`}
+            >
+              {t('host_panel.connect')}
+            </Button>
+          ) : undefined
+        }
         data-testid={TID}
         data-record-id={recordId ?? undefined}
         data-save-state={record.saveState}
@@ -252,8 +301,8 @@ export function HostPanel({
         <div className={styles.form}>
           {/* `panel-vault-field` (stage 8) is hidden. */}
           <div className={styles.addressRow}>
-            <span className={styles.osTile} data-color={form.color} data-testid={`${TID}-os-icon`} aria-hidden="true">
-              <Server size={20} strokeWidth={1.75} aria-hidden="true" focusable="false" />
+            <span className={styles.osTile} data-color={form.color} aria-hidden="true">
+              <OsIcon os={base?.data.os} size={20} className={styles.osTileIcon} data-testid={`${TID}-os-icon`} />
             </span>
             <TextInput
               ref={addressRef}
@@ -358,7 +407,20 @@ export function HostPanel({
               onBlur={handlePasswordBlur}
               data-testid={`${TID}-ssh-password`}
             />
-            {/* `host-credentials-key` (stage 2): "+" credentials and the linked key are hidden. */}
+            {isVisible('host-credentials-key') ? (
+              <KeyField
+                vaultId={vaultId}
+                keyId={form.key_id}
+                inherited={
+                  inherited.key_id === undefined
+                    ? undefined
+                    : { keyId: inherited.key_id.value, groupName: inherited.key_id.group.data.name }
+                }
+                onLink={(keyId) => update('key_id', keyId)}
+                onUnlink={() => update('key_id', '')}
+                testIdPrefix={TID}
+              />
+            ) : null}
             <div>
               <Button
                 variant="text"
@@ -429,7 +491,7 @@ export function HostPanel({
               </div>
             ) : null}
           </section>
-          {/* `host-telnet` (stage 9) and the `host-connect` button (stage 2) are hidden. */}
+          {/* `host-telnet` (stage 9) is hidden. */}
         </div>
       </DetailsPanel>
     </div>

@@ -1,6 +1,8 @@
 // Title bar (UI 1.1): a custom frameless title bar. From the left: the app
-// menu button, the persistent Vaults tab; on the right: the notification
-// center and the window buttons. Elements of later stages are not rendered.
+// menu button, the persistent Vaults tab, the session tabs and "+" (stage 2,
+// rendered by features/terminal); on the right: the notification center, the
+// terminal sidebar toggle (only while a session tab is active) and the window
+// buttons. Elements of later stages are not rendered.
 //
 // - `minimal` (lock screens, UI 13.2): only the drag area and the window buttons.
 // - macOS: the system traffic lights on the left (overlay title bar), no app
@@ -8,10 +10,18 @@
 // - Drag: a press on the empty bar area starts a window drag; a double click
 //   toggles maximize (plan, "Routing": `data-tauri-drag-region` is not used).
 //
-// Owner: W4.
+// Owner: lead (stage 2 structure); the session tab parts are S6's.
 
-import { ArrowDownToLine, ChevronDown, Copy, Minus, PanelRight, Plus, Square, Vault, X } from 'lucide-react';
+import { ArrowDownToLine, ChevronDown, Copy, Minus, Square, Vault, X } from 'lucide-react';
 import { useEffect, useState, type MouseEvent } from 'react';
+import {
+  activateTab,
+  NewTabButton,
+  requestWindowClose,
+  SessionTabs,
+  TerminalSidebarToggle,
+  useWorkspace,
+} from '../../features/terminal';
 import { t } from '../../i18n';
 import { getBackend } from '../../ipc';
 import { isVisible } from '../../stage';
@@ -95,7 +105,8 @@ function WindowButtons() {
         type="button"
         className={`${styles.windowButton} ${styles.close}`}
         aria-label={t('titlebar.close')}
-        onClick={() => void controls.close().catch(() => undefined)}
+        // The core decides whether running sessions need a confirmation (UI 4.6).
+        onClick={() => void requestWindowClose().catch(() => undefined)}
         data-testid="titlebar-window-close"
       >
         <X size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -105,9 +116,17 @@ function WindowButtons() {
 }
 
 function Tabs() {
+  const { active } = useWorkspace();
   return (
     <div role="tablist" aria-label={t('titlebar.tabs')} className={styles.tabs}>
-      <button type="button" role="tab" aria-selected="true" className={styles.tab} data-testid="titlebar-tab-vaults">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active === 'vaults'}
+        className={styles.tab}
+        onClick={() => activateTab('vaults')}
+        data-testid="titlebar-tab-vaults"
+      >
         <Vault size={16} strokeWidth={1.75} aria-hidden="true" />
         <span>{t('titlebar.vaults')}</span>
       </button>
@@ -126,11 +145,8 @@ function Tabs() {
           {t('titlebar.sftp')}
         </button>
       ) : null}
-      {isVisible('topbar-new-tab') ? (
-        <button type="button" className={styles.iconTab} aria-label={t('titlebar.new_tab')} data-testid="titlebar-new-tab">
-          <Plus size={16} strokeWidth={1.75} aria-hidden="true" />
-        </button>
-      ) : null}
+      {isVisible('topbar-session-tabs') ? <SessionTabs /> : null}
+      {isVisible('topbar-new-tab') ? <NewTabButton /> : null}
     </div>
   );
 }
@@ -175,16 +191,7 @@ export function TitleBar({ variant }: TitleBarProps) {
             </button>
           ) : null}
           <NotificationCenter />
-          {isVisible('topbar-terminal-sidebar-toggle') ? (
-            <button
-              type="button"
-              className={styles.iconTab}
-              aria-label={t('titlebar.terminal_sidebar')}
-              data-testid="titlebar-terminal-sidebar-toggle"
-            >
-              <PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            </button>
-          ) : null}
+          {isVisible('topbar-terminal-sidebar-toggle') ? <TerminalSidebarToggle /> : null}
         </div>
       ) : null}
       {mac ? null : <WindowButtons />}

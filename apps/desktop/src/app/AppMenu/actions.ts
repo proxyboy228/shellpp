@@ -2,9 +2,17 @@
 // (`app-menu-settings`, ...); the macOS native menu bar sends the same ids in
 // `menu:action` events (plan, decision 20), so both run these functions.
 //
-// Owner: W4.
+// Owner: lead (stage 2 wiring to features/terminal).
 
-import { appExit, externalOpenUrl, getBackend, lock, settingsSet, windowOpen } from '../../ipc';
+import {
+  activateNextTab,
+  activatePreviousTab,
+  activateTab,
+  closeActiveTab,
+  openLocalTerminal,
+  requestAppExit,
+} from '../../features/terminal';
+import { externalOpenUrl, getBackend, lock, settingsSet, windowOpen } from '../../ipc';
 import { MAX_ZOOM, MIN_ZOOM, normalizeZoom, UI_ZOOM_KEY, ZOOM_STEP } from '../appearance';
 import { runEditCommand, type EditCommand } from '../editCommands';
 import { showErrorToast } from '../errors';
@@ -26,9 +34,9 @@ function edit(command: EditCommand) {
 
 /** Action ids (= app menu test ids) and what they do. */
 export const APP_MENU_ACTIONS: Readonly<Record<string, () => void | Promise<unknown>>> = {
-  // The Vaults tab is the only tab in stage 1: it is always active.
-  'app-menu-vaults': () => updateView({}),
+  'app-menu-vaults': () => activateTab('vaults'),
   'app-menu-settings': () => updateView({ settingsOpen: true }),
+  'app-menu-new-local-terminal': () => openLocalTerminal(),
   'app-menu-edit-undo': edit('undo'),
   'app-menu-edit-redo': edit('redo'),
   'app-menu-edit-cut': edit('cut'),
@@ -45,6 +53,9 @@ export const APP_MENU_ACTIONS: Readonly<Record<string, () => void | Promise<unkn
   },
   'app-menu-view-toggle-sidebar': () => updateView({ sidebarVisible: !viewStore.get().sidebarVisible }),
   'app-menu-window-new-window': () => windowOpen(),
+  'app-menu-window-next-tab': () => activateNextTab(),
+  'app-menu-window-previous-tab': () => activatePreviousTab(),
+  'app-menu-window-close-tab': () => closeActiveTab(),
   'app-menu-help-documentation': () => externalOpenUrl(DOCUMENTATION_URL),
   'app-menu-help-report-issue': () => externalOpenUrl(ISSUES_URL),
   'app-menu-help-about': () => dialogsStore.set({ ...dialogsStore.get(), about: true }),
@@ -52,7 +63,8 @@ export const APP_MENU_ACTIONS: Readonly<Record<string, () => void | Promise<unkn
     await lock();
     requestResync();
   },
-  'app-menu-exit': () => appExit(),
+  // Asks first while sessions are active (UI 1.4, 4.6).
+  'app-menu-exit': () => requestAppExit(),
 };
 
 /**
