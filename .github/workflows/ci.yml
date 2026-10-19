@@ -172,6 +172,15 @@ jobs:
           SHELLPP_TEST: "1"
         run: cargo test --locked --workspace
 
+      # The desktop app with its developer features (dev-tools, screenshots):
+      # the demo data and every state of the screenshot mode are reached in
+      # GPUI's headless test platform (no window, temporary profiles,
+      # in-memory secret store).
+      - name: Rust tests (desktop, all features)
+        env:
+          SHELLPP_TEST: "1"
+        run: cargo test --locked -p shellpp-desktop --all-features
+
       # OpenSSH in Docker for the shellpp-ssh suite (tests/openssh/README.md).
       # The image is built once here; each test server container gets its own
       # generated credentials and host keys from tests/openssh/start.sh.
@@ -232,6 +241,19 @@ jobs:
 
       - name: Build the app
         run: cargo build --locked -p shellpp-desktop
+
+      # Informational only (owner's stage 1, step 4): idle memory of the
+      # release build on 300 demo hosts (a temporary profile, in-memory
+      # secret store), 10 s after the window appears. The step never fails
+      # the job: a missing desktop session or GPU on the runner only shows
+      # up as a failed step in the log.
+      - name: Idle memory, release, 300 hosts (informational)
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: pwsh
+        env:
+          SHELLPP_TEST: "1"
+        run: ./scripts/measure-idle.ps1
 
   macos:
     name: macOS
