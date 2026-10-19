@@ -47,7 +47,14 @@ pub struct SeedSummary {
 
 /// Creates the temporary demo profile directory.
 pub fn create_profile() -> Result<TempProfile, DemoError> {
-    let profile = TempProfile::create(DEMO_PREFIX).map_err(DemoError::Profile)?;
+    create_profile_in(&std::env::temp_dir())
+}
+
+/// Creates the demo profile directory `<parent>/shellpp-demo-<random>`
+/// (`--screenshots` puts it inside the `SHELLPP_DATA_DIR` it is given).
+/// It is deleted like any temporary profile.
+pub fn create_profile_in(parent: &std::path::Path) -> Result<TempProfile, DemoError> {
+    let profile = TempProfile::create_in(parent, DEMO_PREFIX).map_err(DemoError::Profile)?;
     profile.dirs().create().map_err(|error| match error {
         crate::dirs::DirsError::Create(io) => DemoError::Profile(io),
         other => DemoError::Profile(std::io::Error::other(other.to_string())),
@@ -202,14 +209,17 @@ pub fn seed(core: &Core) -> Result<SeedSummary, CoreError> {
             data["color"] = color_name(color);
             summary.hosts_with_color += 1;
         }
-        let group = match index % 10 {
-            0 => Some(production),
-            1 => Some(databases),
-            2 => Some(staging),
-            3 => Some(office),
-            4 => Some(lab),
-            _ => None,
+        // Half of the hosts live in the group of their environment, so a
+        // folder never shows "(office)" hosts inside Production; the split
+        // also puts tagged and colored hosts in every group.
+        let home = match environment {
+            "prod" if (index / 4) % 2 == 1 => databases,
+            "prod" => production,
+            "staging" => staging,
+            "office" => office,
+            _ => lab,
         };
+        let group = ((index / 3) % 2 == 0).then_some(home);
         if let Some(group) = group {
             data["group_id"] = json!(group);
             summary.hosts_in_groups += 1;
@@ -236,7 +246,7 @@ mod tests {
         // About a third with tags, about a quarter with a color.
         assert_eq!(summary.hosts_with_tags, DEMO_HOSTS / 3);
         assert_eq!(summary.hosts_with_color, DEMO_HOSTS / 4);
-        assert!(summary.hosts_in_groups > 0 && summary.hosts_in_groups < DEMO_HOSTS);
+        assert_eq!(summary.hosts_in_groups, DEMO_HOSTS / 2);
 
         let views = opened
             .core
@@ -271,6 +281,18 @@ mod tests {
             );
         }
         assert!(hosts.iter().all(|host| host.username.is_some()));
+        // A grouped host carries its group's environment in its label.
+        let environment = |group: Uuid| match summary.groups.iter().position(|id| *id == group) {
+            Some(0 | 1) => "(prod)",
+            Some(2) => "(staging)",
+            Some(3) => "(office)",
+            _ => "(lab)",
+        };
+        for host in hosts.iter() {
+            if let (Some(group), Some(label)) = (host.group_id, host.label.as_deref()) {
+                assert!(label.ends_with(environment(group)), "{label}");
+            }
+        }
     }
 
     /// The whole `--demo` setup without the window: temporary profile, real

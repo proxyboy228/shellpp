@@ -39,6 +39,10 @@ Developer options (builds with the dev-tools feature):
   --demo             run on a temporary profile with generated data
                      (300 hosts, 5 groups); the profile is deleted on exit
   --theme <mode>     interface theme: auto (default), light or dark
+  --screenshots <dir>
+                     (feature screenshots) save PNGs of the window on demo
+                     data, dark and light, three states, then quit
+  --size <WxH>       window size for --screenshots (default 1280x800)
 
 Environment:
   SHELLPP_DATA_DIR   data directory to use instead of the permanent profile
@@ -52,6 +56,10 @@ struct Args {
     help: bool,
     demo: bool,
     appearance: Appearance,
+    /// `--screenshots <dir>` (feature `screenshots`).
+    screenshots: Option<std::path::PathBuf>,
+    /// `--size <WxH>` for `--screenshots`, checked by the screenshot mode.
+    size: Option<String>,
 }
 
 /// Why the command line was refused.
@@ -61,6 +69,7 @@ enum ArgsError {
     MissingValue(&'static str),
     BadTheme(String),
     NeedsDevTools(&'static str),
+    NeedsScreenshots(&'static str),
 }
 
 impl std::fmt::Display for ArgsError {
@@ -72,12 +81,16 @@ impl std::fmt::Display for ArgsError {
             Self::NeedsDevTools(arg) => {
                 write!(f, "{arg} needs a build with the dev-tools feature")
             }
+            Self::NeedsScreenshots(arg) => {
+                write!(f, "{arg} needs a build with the screenshots feature")
+            }
         }
     }
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, ArgsError> {
     let dev_tools = cfg!(feature = "dev-tools");
+    let screenshots = cfg!(feature = "screenshots");
     let mut parsed = Args::default();
     let mut args = args
         .into_iter()
@@ -93,6 +106,22 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Args, ArgsErro
                 parsed.appearance = Appearance::parse(&value).ok_or(ArgsError::BadTheme(value))?;
             }
             "--theme" => return Err(ArgsError::NeedsDevTools("--theme")),
+            "--screenshots" if screenshots => {
+                let value = args
+                    .next()
+                    .ok_or(ArgsError::MissingValue("--screenshots"))?;
+                parsed.screenshots = Some(value.into());
+            }
+            "--size" if screenshots => {
+                parsed.size = Some(args.next().ok_or(ArgsError::MissingValue("--size"))?);
+            }
+            "--screenshots" | "--size" => {
+                return Err(ArgsError::NeedsScreenshots(if arg == "--size" {
+                    "--size"
+                } else {
+                    "--screenshots"
+                }));
+            }
             // A `shellpp://` link (UI deep links) arrives in a later stage.
             other => return Err(ArgsError::Unknown(other.to_owned())),
         }
@@ -123,6 +152,9 @@ fn main() -> ExitCode {
     if args.help {
         print_line(USAGE.trim_end());
         return ExitCode::SUCCESS;
+    }
+    if let Some(out_dir) = args.screenshots {
+        return run_screenshots(out_dir, args.size);
     }
     if args.demo {
         return run_demo(args.appearance);
@@ -271,6 +303,26 @@ fn run_demo(_: Appearance) -> ExitCode {
     fail("--demo needs a build with the dev-tools feature")
 }
 
+/// `--screenshots <dir> [--size WxH]`: see `shellpp_desktop::dev::screenshots`.
+#[cfg(feature = "screenshots")]
+fn run_screenshots(out_dir: std::path::PathBuf, size: Option<String>) -> ExitCode {
+    use shellpp_desktop::dev::screenshots::{self, ScreenshotOptions, ShotSize};
+
+    let size = match size {
+        None => screenshots::DEFAULT_SIZE,
+        Some(value) => match ShotSize::parse(&value) {
+            Some(size) => size,
+            None => return fail(&format!("--size takes WxH (e.g. 1920x1200), not {value}")),
+        },
+    };
+    screenshots::run(ScreenshotOptions { out_dir, size })
+}
+
+#[cfg(not(feature = "screenshots"))]
+fn run_screenshots(_: std::path::PathBuf, _: Option<String>) -> ExitCode {
+    fail("--screenshots needs a build with the screenshots feature")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +358,32 @@ mod tests {
             assert_eq!(
                 parse(&["--theme", "dark"]),
                 Err(ArgsError::NeedsDevTools("--theme"))
+            );
+        }
+    }
+
+    #[test]
+    fn screenshot_flags_follow_their_feature() {
+        if cfg!(feature = "screenshots") {
+            let args = parse(&["--screenshots", "out", "--size", "1920x1200"]).unwrap();
+            assert_eq!(
+                args.screenshots.as_deref(),
+                Some(std::path::Path::new("out"))
+            );
+            assert_eq!(args.size.as_deref(), Some("1920x1200"));
+            assert_eq!(
+                parse(&["--screenshots"]),
+                Err(ArgsError::MissingValue("--screenshots"))
+            );
+            assert_eq!(parse(&["--size"]), Err(ArgsError::MissingValue("--size")));
+        } else {
+            assert_eq!(
+                parse(&["--screenshots", "out"]),
+                Err(ArgsError::NeedsScreenshots("--screenshots"))
+            );
+            assert_eq!(
+                parse(&["--size", "1x1"]),
+                Err(ArgsError::NeedsScreenshots("--size"))
             );
         }
     }

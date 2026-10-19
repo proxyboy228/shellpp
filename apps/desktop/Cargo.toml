@@ -23,6 +23,12 @@ default = []
 # Developer tools (src/dev): `--demo` (a temporary profile with generated
 # data) and other flags that never ship. Release builds never enable it.
 dev-tools = []
+# `--screenshots <dir> --size WxH` (src/dev/screenshots.rs, used by
+# scripts/ui-screens.ps1): renders our own window offscreen through GPUI
+# (`Window::render_to_image`, which needs gpui-kit's test-support) and saves
+# PNGs. A separate feature, so `--demo` builds (memory measurement) stay
+# without test-support.
+screenshots = ["dev-tools", "gpui-kit/test-support"]
 
 [dependencies]
 shellpp-core.workspace = true
