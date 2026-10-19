@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use gpui::{Pixels, px};
+use gpui::{FontWeight, Pixels, px};
 
 // Spacing: the 4 px grid (`--space-1` .. `--space-6`).
 pub const SPACE_1: Pixels = px(4.);
@@ -76,3 +76,12 @@ pub const DURATION_NORMAL: Duration = Duration::from_millis(180);
 pub const TOAST_DURATION: Duration = Duration::from_secs(5);
 /// Debounce of panel edits before they are saved (docs/architecture.md, 2.5).
 pub const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+// Font weights (`--font-weight-*`).
+pub const FONT_WEIGHT_REGULAR: FontWeight = FontWeight::NORMAL;
+pub const FONT_WEIGHT_MEDIUM: FontWeight = FontWeight::MEDIUM;
+pub const FONT_WEIGHT_SEMIBOLD: FontWeight = FontWeight::SEMIBOLD;
+
+/// The interface font on Windows (`--font-ui`): Segoe UI Variable, which
+/// ships with Windows 11. Where it is missing the system UI font stays.
+pub const FONT_UI_WINDOWS: &[&str] = &["Segoe UI Variable Text", "Segoe UI Variable"];

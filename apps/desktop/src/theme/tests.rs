@@ -151,3 +151,40 @@ fn appearance_names() {
     assert_eq!(Appearance::parse("auto"), Some(Appearance::Auto));
     assert_eq!(Appearance::parse("blue"), None);
 }
+
+/// Auto is the default and follows the window appearance; an explicit
+/// Light or Dark setting is not overridden by a system change.
+#[gpui_kit::test]
+fn auto_follows_the_system_explicit_modes_stay(cx: &mut TestAppContext) {
+    use gpui::{AppContext as _, WindowOptions};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install(Appearance::default(), cx);
+        assert_eq!(appearance(cx), Appearance::Auto);
+    });
+    let window = cx
+        .update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                cx.new(|_| gpui::EmptyView)
+            })
+        })
+        .unwrap()
+        .0;
+    cx.update_window(window, |_, window, cx| {
+        let system_dark = ThemeMode::from(window.appearance()).is_dark();
+        // Auto: the theme matches the system.
+        follow_system(window, cx);
+        assert_eq!(cx.theme().is_dark(), system_dark);
+        // Explicit: a system change does not override it.
+        let explicit = if system_dark {
+            Appearance::Light
+        } else {
+            Appearance::Dark
+        };
+        set_appearance(explicit, Some(window), cx);
+        follow_system(window, cx);
+        assert_eq!(cx.theme().is_dark(), !system_dark);
+        assert_eq!(appearance(cx), explicit);
+    })
+    .unwrap();
+}

@@ -332,6 +332,87 @@ pub const fn status_color(status: Status, tokens: &InterfaceTokens) -> Token {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 4.3 Keyword highlighting (default colors)
+// ---------------------------------------------------------------------------
+
+/// The keyword highlighting defaults of one background column (design-system
+/// 4.3). Error, Warning, OK and Info are the interface theme's `--danger`,
+/// `--warning`, `--success` and `--info` of the same brightness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeywordColors {
+    pub error: Token,
+    pub warning: Token,
+    pub ok: Token,
+    pub info: Token,
+    pub debug: Token,
+    pub ip_and_mac: Token,
+}
+
+impl KeywordColors {
+    /// The six categories in the order of the design-system table.
+    pub const fn all(&self) -> [Token; 6] {
+        [
+            self.error,
+            self.warning,
+            self.ok,
+            self.info,
+            self.debug,
+            self.ip_and_mac,
+        ]
+    }
+}
+
+/// Defaults for a dark terminal background.
+pub const KEYWORDS_ON_DARK: KeywordColors = KeywordColors {
+    error: DARK.danger,
+    warning: DARK.warning,
+    ok: DARK.success,
+    info: DARK.info,
+    debug: opaque(0xA38FD9),
+    ip_and_mac: opaque(0xD883A6),
+};
+
+/// Defaults for a light terminal background.
+pub const KEYWORDS_ON_LIGHT: KeywordColors = KeywordColors {
+    error: LIGHT.danger,
+    warning: LIGHT.warning,
+    ok: LIGHT.success,
+    info: LIGHT.info,
+    debug: opaque(0x6B55B0),
+    ip_and_mac: opaque(0xA84B70),
+};
+
+/// The keyword column for a terminal background (design-system 4.3): light
+/// when black text has a higher contrast on it than white text.
+pub fn keyword_colors(background: Token) -> &'static KeywordColors {
+    if is_light_background(background) {
+        &KEYWORDS_ON_LIGHT
+    } else {
+        &KEYWORDS_ON_DARK
+    }
+}
+
+/// Whether black text contrasts more with `background` than white text.
+pub fn is_light_background(background: Token) -> bool {
+    let luminance = relative_luminance(background.rgb);
+    // (1.05) / (L + 0.05) for white vs (L + 0.05) / 0.05 for black.
+    (luminance + 0.05) / 0.05 > 1.05 / (luminance + 0.05)
+}
+
+/// WCAG 2.x relative luminance of an opaque `0xRRGGBB` color.
+pub fn relative_luminance(rgb: u32) -> f64 {
+    let channel = |shift: u32| {
+        let value = f64::from((rgb >> shift) & 0xFF) / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
 /// Looks a token up by its design-system name without the `--` prefix
 /// (`"bg-raised"`, `"tag-jade"`, `"text-on-tag"`), plus the derived names
 /// `selection`, `thumb`, `thumb-hover`, `plum-subtle` and `transparent`.

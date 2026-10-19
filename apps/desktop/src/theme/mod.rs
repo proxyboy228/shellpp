@@ -4,51 +4,42 @@
 //! installed as the theme's dark and light modes. Every gpui-kit component
 //! then paints with our tokens.
 //!
-//! Token mapping (our token -> gpui-kit `ThemeColor` field):
-//! [`THEME_COLOR_MAPPING`] is the full table, checked against the JSON by a
-//! unit test. The trap: gpui-kit's `accent` is the hover background of menu
+//! Token mapping (our token -> gpui-kit `ThemeColor` field): design-system
+//! 7.4; [`THEME_COLOR_MAPPING`] is the full table of theme-file keys, checked
+//! against the JSON, the applied theme and the design-system tables by the
+//! unit tests. The trap: gpui-kit's `accent` is the hover background of menu
 //! and list items (our `--bg-overlay-hover`); **our accent is gpui-kit's
-//! `primary`**. Main pairs:
+//! `primary`**.
 //!
-//! | Our token | gpui-kit field(s) |
-//! |---|---|
-//! | `--bg-base` | `background`, `title_bar`, `tab_bar`, `tab`, `status_bar` |
-//! | `--bg-sidebar` | `sidebar`, `tab_bar_segmented` |
-//! | `--bg-surface` | `list`, `table` (and their even/head rows) |
-//! | `--bg-raised` | `secondary`, `button`, `muted`, `group_box`, `accordion` |
-//! | `--bg-raised-hover` | `secondary_hover`, `button_hover`, `list_hover`, `table_hover` |
-//! | `--bg-pressed` | `secondary_active`, `button_active` |
-//! | `--bg-overlay` | `popover` |
-//! | `--bg-overlay-hover` | `accent` (menu and list item hover) |
-//! | `--scrim` | `overlay` |
-//! | `--border-subtle` | `border`, `title_bar_border`, `sidebar_border`, `window_border` |
-//! | `--border-strong` | `input` (field borders), `switch` (off track) |
-//! | `--text-primary` | `foreground` and the `*_foreground` of neutral surfaces |
-//! | `--text-secondary` | `muted_foreground`, `tab_foreground`, table head text |
-//! | `--accent` | `primary`, `button_primary`, `caret`, `progress_bar`, `slider_bar`, `drag_border` |
-//! | `--accent-hover` / `--accent-pressed` | `primary_hover` / `primary_active` |
-//! | `--accent-subtle` | `sidebar_accent` (active item), `list_active`, `table_active`, `tab_active`, `drop_target` |
-//! | `--accent-text` | `link` |
-//! | `--text-on-accent` | `primary_foreground`, `sidebar_primary_foreground` |
-//! | `--focus-ring` | `ring` |
-//! | `--danger*`, `--text-on-danger` | `danger*`, `button_danger*` |
-//! | `--warning`, `--success`, `--info` | `warning`, `success`, `info` (and the `base.*` colors) |
+//! Colors without a `ThemeColor` field (`--bg-input`, `--text-muted`,
+//! `--text-disabled`, the `*-subtle` tints, shadows, `--tag-*`,
+//! `--text-on-tag`, badges, status dots, keyword highlighting) are in
+//! [`palette`]; read the theme-dependent ones through [`tokens`]. Sizes,
+//! spacing, radii, fonts: [`metrics`]. Motion: [`motion`]. The keyboard
+//! focus ring: [`focus`]. Button colors for kit buttons: [`controls`].
+//! Terminal themes: [`terminal`].
 //!
-//! Not in `ThemeColor` (read them through [`tokens`] or [`palette`]):
-//! `--bg-input`, `--text-muted`, `--text-disabled`, the `*-subtle` tints as
-//! fills, `--tag-*`, `--text-on-tag`, badges, status dots, shadows. Sizes are
-//! in [`metrics`].
+//! Appearance (design-system 1, 7.1): Auto (default) follows the system and
+//! keeps following it while the app runs ([`follow_system`] is called on
+//! every window appearance change); Light and Dark set the mode explicitly.
+//! A change applies to all windows at once.
 //!
-//! Known gaps for the shell work: gpui-kit's `muted_foreground` is also its
-//! placeholder color, so placeholders use `--text-secondary` (above the 3:1
-//! of `--text-muted`); the sidebar hover is `sidebar_accent` at 80 %
-//! (an accent tint), not `--bg-raised-hover`.
+//! Known gaps of gpui-kit 0.7.3 (our own views do not have them): kit input
+//! placeholders use `muted_foreground` (`--text-secondary`, not
+//! `--text-muted`); kit popup menus draw their own fixed shadow and a
+//! `border` (`--border-subtle`) separator; the kit dialog paints `background`.
 
+pub mod controls;
+pub mod focus;
 pub mod metrics;
+pub mod motion;
 pub mod palette;
+pub mod terminal;
 
-use gpui::{App, Window};
-use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};
+use std::rc::Rc;
+
+use gpui::{App, BoxShadow, Global, Window, px};
+use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry};
 
 pub use palette::InterfaceTokens;
 
@@ -123,8 +114,8 @@ pub const THEME_COLOR_MAPPING: &[(&str, &str)] = &[
     ("info.hover.background", "info"),
     ("input.border", "border-strong"),
     ("link", "accent-text"),
-    ("link.active", "accent-pressed"),
-    ("link.hover", "accent-hover"),
+    ("link.active", "accent-text"),
+    ("link.hover", "accent-text"),
     ("list.background", "bg-surface"),
     ("list.active.background", "accent-subtle"),
     ("list.active.border", "accent"),
@@ -227,8 +218,15 @@ impl Appearance {
     }
 }
 
-/// Registers both Graphite themes and applies `appearance`. Call once after
-/// `gpui_kit::init`.
+/// The current appearance setting (one per app: a change applies to every
+/// window).
+#[derive(Clone, Copy, Debug, Default)]
+struct AppearanceSetting(Appearance);
+
+impl Global for AppearanceSetting {}
+
+/// Registers both Graphite themes, the interface font, the motion durations,
+/// and applies `appearance`. Call once after `gpui_kit::init`.
 pub fn install(appearance: Appearance, cx: &mut App) {
     let registry = ThemeRegistry::global_mut(cx);
     if let Err(error) = registry.load_themes_from_str(THEME_FILE) {
@@ -238,22 +236,69 @@ pub fn install(appearance: Appearance, cx: &mut App) {
     }
     let dark = registry.themes().get(DARK_THEME_NAME).cloned();
     let light = registry.themes().get(LIGHT_THEME_NAME).cloned();
+    let font = ui_font(cx);
     let theme = Theme::global_mut(cx);
     if let Some(dark) = dark {
-        theme.dark_theme = dark;
+        theme.dark_theme = with_font(dark, font.as_deref());
     }
     if let Some(light) = light {
-        theme.light_theme = light;
+        theme.light_theme = with_font(light, font.as_deref());
     }
+    motion::install(cx);
     set_appearance(appearance, None, cx);
 }
 
-/// Switches the interface theme (every window repaints).
+/// The interface font family of this platform when it is installed
+/// (design-system 5): Segoe UI Variable on Windows. Elsewhere the kit's
+/// system font (`.SystemUIFont`: SF Pro on macOS, the desktop's sans on
+/// Linux) is already right.
+fn ui_font(cx: &App) -> Option<String> {
+    if !cfg!(target_os = "windows") {
+        return None;
+    }
+    let installed = cx.text_system().all_font_names();
+    metrics::FONT_UI_WINDOWS
+        .iter()
+        .find(|family| installed.iter().any(|name| name == *family))
+        .map(|family| (*family).to_owned())
+}
+
+fn with_font(config: Rc<ThemeConfig>, font: Option<&str>) -> Rc<ThemeConfig> {
+    match font {
+        Some(font) => {
+            let mut config = (*config).clone();
+            config.font_family = Some(font.to_owned().into());
+            Rc::new(config)
+        }
+        None => config,
+    }
+}
+
+/// The appearance setting in effect.
+pub fn appearance(cx: &App) -> Appearance {
+    cx.try_global::<AppearanceSetting>()
+        .map(|setting| setting.0)
+        .unwrap_or_default()
+}
+
+/// Changes the appearance setting and applies it (every window repaints).
 pub fn set_appearance(appearance: Appearance, window: Option<&mut Window>, cx: &mut App) {
+    cx.set_global(AppearanceSetting(appearance));
     match appearance {
         Appearance::Auto => Theme::sync_system_appearance(window, cx),
         Appearance::Light => Theme::change(ThemeMode::Light, window, cx),
         Appearance::Dark => Theme::change(ThemeMode::Dark, window, cx),
+    }
+}
+
+/// Follows a system appearance change when the setting is Auto. Windows call
+/// this from `observe_window_appearance`.
+pub fn follow_system(window: &mut Window, cx: &mut App) {
+    if appearance(cx) == Appearance::Auto {
+        let mode = ThemeMode::from(window.appearance());
+        if Theme::global(cx).mode != mode {
+            Theme::change(mode, Some(window), cx);
+        }
     }
 }
 
@@ -266,5 +311,29 @@ pub fn tokens(cx: &App) -> &'static InterfaceTokens {
     }
 }
 
+/// `--shadow-overlay` (menus, popovers, toasts) of the active theme.
+pub fn shadow_overlay(cx: &App) -> Vec<BoxShadow> {
+    vec![box_shadow(tokens(cx).shadow_overlay)]
+}
+
+/// `--shadow-modal` (modal windows) of the active theme.
+pub fn shadow_modal(cx: &App) -> Vec<BoxShadow> {
+    vec![box_shadow(tokens(cx).shadow_modal)]
+}
+
+/// A design-system shadow (`0 <y>px <blur>px <color>`, CSS terms) as a GPUI
+/// shadow. GPUI's `blur_radius` is the gaussian's standard deviation, CSS's
+/// blur radius is twice that, so the CSS value is halved.
+pub fn box_shadow(shadow: palette::Shadow) -> BoxShadow {
+    BoxShadow::new(px(0.), px(f32::from(shadow.y)), shadow.color.hsla())
+        .blur_radius(px(f32::from(shadow.blur) / 2.))
+}
+
+#[cfg(test)]
+mod contrast;
+#[cfg(test)]
+mod ds_tables;
+#[cfg(test)]
+mod literals;
 #[cfg(test)]
 mod tests;
