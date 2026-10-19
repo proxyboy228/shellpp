@@ -42,6 +42,8 @@ means the crate is available under either license.
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | <https://github.com/oyvindln/adler2> |
 | aead | 0.6.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
 | aes | 0.8.4 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-ciphers> |
+| aes | 0.9.3 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-ciphers> |
+| aes-gcm | 0.11.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/AEADs> |
 | aho-corasick | 1.1.5 | Unlicense OR MIT | <https://github.com/BurntSushi/aho-corasick> |
 | alloc-no-stdlib | 3.0.0 | BSD-3-Clause | <https://github.com/dropbox/rust-alloc-no-stdlib> |
 | alloc-stdlib | 0.3.0 | BSD-3-Clause | <https://github.com/dropbox/rust-alloc-no-stdlib> |
@@ -60,16 +62,20 @@ means the crate is available under either license.
 | atk | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | atk-sys | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT | <https://github.com/smol-rs/atomic-waker> |
+| base16ct | 1.0.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | <https://github.com/marshallpierce/rust-base64> |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
+| bcrypt-pbkdf | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/password-hashes> |
 | bitflags | 1.3.2 | MIT OR Apache-2.0 | <https://github.com/bitflags/bitflags> |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 | <https://github.com/bitflags/bitflags> |
 | blake2 | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | block-padding | 0.3.3 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
+| block-padding | 0.4.2 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | block2 | 0.6.2 | MIT | <https://github.com/madsmtm/objc2> |
 | blocking | 1.7.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/blocking> |
+| blowfish | 0.10.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-ciphers> |
 | brotli | 9.0.0 | BSD-3-Clause AND MIT | <https://github.com/dropbox/rust-brotli> |
 | brotli-decompressor | 6.0.1 | BSD-3-Clause OR MIT | <https://github.com/dropbox/rust-brotli-decompressor> |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | <https://github.com/Lokathor/bytemuck> |
@@ -79,6 +85,7 @@ means the crate is available under either license.
 | cairo-rs | 0.18.5 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | cairo-sys-rs | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | cbc | 0.1.2 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-modes> |
+| cbc | 0.2.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-modes> |
 | cfb | 0.14.0 | MIT | <https://github.com/mdsteele/rust-cfb> |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | <https://github.com/rust-lang/cfg-if> |
 | chacha20 | 0.10.2 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/stream-ciphers> |
@@ -88,21 +95,29 @@ means the crate is available under either license.
 | clipboard-win | 5.4.1 | BSL-1.0 | <https://github.com/DoumanAsh/clipboard-win> |
 | cmov | 0.5.4 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/utils> |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/concurrent-queue> |
+| const-oid | 0.10.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | cookie | 0.18.2 | MIT OR Apache-2.0 | <https://github.com/SergioBenitez/cookie-rs> |
+| core_detect | 1.0.0 | MIT OR Apache-2.0 | <https://github.com/thomcc/core_detect> |
 | core-foundation | 0.10.1 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
 | core-foundation-sys | 0.8.7 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
 | core-graphics | 0.25.0 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
 | core-graphics-types | 0.2.0 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
+| cpubits | 0.1.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | crc32fast | 1.5.2 | MIT OR Apache-2.0 | <https://github.com/srijs/rust-crc32fast> |
 | crossbeam-channel | 0.5.17 | MIT OR Apache-2.0 | <https://github.com/crossbeam-rs/crossbeam> |
 | crossbeam-utils | 0.8.23 | MIT OR Apache-2.0 | <https://github.com/crossbeam-rs/crossbeam> |
+| crypto-bigint | 0.7.5 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/crypto-bigint> |
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
 | crypto-common | 0.2.2 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
+| crypto-primes | 0.7.2 | Apache-2.0 OR MIT | <https://github.com/entropyxyz/crypto-primes> |
 | ctor | 1.0.13 | Apache-2.0 OR MIT | <https://github.com/mmastrac/linktime> |
+| ctr | 0.10.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/block-modes> |
 | ctutils | 0.4.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/utils> |
+| curve25519-dalek | 5.0.0 | BSD-3-Clause | <https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek> |
 | data-encoding | 2.11.1 | MIT | <https://github.com/ia0/data-encoding> |
+| der | 0.8.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | deranged | 0.5.9 | MIT OR Apache-2.0 | <https://github.com/jhpratt/deranged> |
 | digest | 0.10.7 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
 | digest | 0.11.3 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
@@ -113,7 +128,12 @@ means the crate is available under either license.
 | downcast-rs | 1.2.1 | MIT OR Apache-2.0 | <https://github.com/marcianx/downcast-rs> |
 | dpi | 0.1.2 | Apache-2.0 AND MIT | <https://github.com/rust-windowing/winit> |
 | dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 | <https://gitlab.com/kornelski/dunce> |
+| ecdsa | 0.17.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/signatures> |
+| ed25519 | 3.0.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/signatures> |
+| ed25519-dalek | 3.0.0 | BSD-3-Clause | <https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek> |
+| elliptic-curve | 0.14.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/traits> |
 | embed_plist | 1.2.2 | MIT OR Apache-2.0 | <https://github.com/nvzqz/embed-plist-rs> |
+| encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause | <https://github.com/hsivonen/encoding_rs> |
 | endi | 1.1.1 | MIT | <https://github.com/zeenix/endi> |
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 | <https://github.com/meithecatte/enumflags2> |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT | <https://github.com/indexmap-rs/equivalent> |
@@ -127,7 +147,9 @@ means the crate is available under either license.
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/fastrand> |
 | fax | 0.2.7 | MIT | <https://github.com/pdf-rs/fax> |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | <https://github.com/image-rs/fdeflate> |
+| ff | 0.14.0 | MIT OR Apache-2.0 | <https://github.com/zkcrypto/ff> |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 | <https://github.com/Diggsey/rust-field-offset> |
+| filedescriptor | 0.8.3 | MIT | <https://github.com/wezterm/wezterm> |
 | fixedbitset | 0.5.7 | MIT OR Apache-2.0 | <https://github.com/petgraph/fixedbitset> |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | <https://github.com/rust-lang/flate2-rs> |
 | fnv | 1.0.7 | Apache-2.0 OR MIT | <https://github.com/servo/rust-fnv> |
@@ -136,6 +158,7 @@ means the crate is available under either license.
 | foreign-types | 0.5.0 | MIT OR Apache-2.0 | <https://github.com/sfackler/foreign-types> |
 | foreign-types-shared | 0.3.1 | MIT OR Apache-2.0 | <https://github.com/sfackler/foreign-types> |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
+| futures | 0.3.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/futures-rs> |
 | futures-channel | 0.3.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/futures-rs> |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/futures-rs> |
 | futures-executor | 0.3.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/futures-rs> |
@@ -152,16 +175,19 @@ means the crate is available under either license.
 | gdkx11 | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | gdkx11-sys | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | generic-array | 0.14.7 | MIT | <https://github.com/fizyk20/generic-array.git> |
+| generic-array | 1.4.5 | MIT | <https://github.com/fizyk20/generic-array.git> |
 | gethostname | 1.1.0 | Apache-2.0 | <https://codeberg.org/swsnr/gethostname.rs.git> |
 | getrandom | 0.2.17 | MIT OR Apache-2.0 | <https://github.com/rust-random/getrandom> |
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | <https://github.com/rust-random/getrandom> |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | <https://github.com/rust-random/getrandom> |
+| ghash | 0.6.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/universal-hashes> |
 | gio | 0.18.4 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | gio-sys | 0.18.1 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | glib | 0.18.5 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | glib-sys | 0.18.1 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | glob | 0.3.4 | MIT OR Apache-2.0 | <https://github.com/rust-lang/glob> |
 | gobject-sys | 0.18.0 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
+| group | 0.14.0 | MIT OR Apache-2.0 | <https://github.com/zkcrypto/group> |
 | gtk | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | gtk-sys | 0.18.2 | MIT | <https://github.com/gtk-rs/gtk3-rs> |
 | half | 2.7.1 | MIT OR Apache-2.0 | <https://github.com/VoidStarKat/half-rs> |
@@ -170,6 +196,7 @@ means the crate is available under either license.
 | hashlink | 0.12.2 | MIT OR Apache-2.0 | <https://github.com/djc/hashlink> |
 | heck | 0.5.0 | MIT OR Apache-2.0 | <https://github.com/withoutboats/heck> |
 | hex | 0.4.3 | MIT OR Apache-2.0 | <https://github.com/KokaKiwi/rust-hex> |
+| hex-literal | 1.1.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | hkdf | 0.12.4 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/KDFs/> |
 | hkdf | 0.13.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/KDFs/> |
 | hmac | 0.12.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/MACs> |
@@ -197,6 +224,8 @@ means the crate is available under either license.
 | javascriptcore-rs-sys | 1.1.1 | MIT | <https://github.com/tauri-apps/javascriptcore-rs> |
 | json-patch | 4.2.0 | MIT OR Apache-2.0 | <https://github.com/idubrov/json-patch> |
 | jsonptr | 0.7.1 | MIT OR Apache-2.0 | <https://github.com/chanced/jsonptr> |
+| keccak | 0.2.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/sponges> |
+| kem | 0.3.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/traits> |
 | keyboard-types | 0.8.3 | MIT OR Apache-2.0 | <https://github.com/rust-windowing/keyboard-types> |
 | keyring | 3.6.3 | MIT OR Apache-2.0 | <https://github.com/hwchen/keyring-rs.git> |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | <https://github.com/rust-lang-nursery/lazy-static.rs> |
@@ -207,18 +236,24 @@ means the crate is available under either license.
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | <https://github.com/Amanieu/parking_lot> |
 | log | 0.4.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/log> |
 | matchers | 0.2.0 | MIT | <https://github.com/hawkw/matchers> |
+| md5 | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/stainless-steel/md5> |
 | memchr | 2.8.3 | Unlicense OR MIT | <https://github.com/BurntSushi/memchr> |
 | memoffset | 0.9.1 | MIT | <https://github.com/Gilnaa/memoffset> |
 | mime | 0.3.17 | MIT OR Apache-2.0 | <https://github.com/hyperium/mime> |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | <https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide> |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | <https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide> |
 | mio | 1.2.4 | MIT | <https://github.com/tokio-rs/mio> |
+| ml-kem | 0.3.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/KEMs> |
+| module-lattice | 0.2.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/KEMs> |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | <https://github.com/awxkee/moxcms.git> |
 | muda | 0.20.0 | Apache-2.0 OR MIT | <https://github.com/tauri-apps/muda> |
+| nix | 0.28.0 | MIT | <https://github.com/nix-rust/nix> |
 | nix | 0.29.0 | MIT | <https://github.com/nix-rust/nix> |
+| nix | 0.31.3 | MIT | <https://github.com/nix-rust/nix> |
 | nom | 8.0.0 | MIT | <https://github.com/rust-bakery/nom> |
 | num | 0.4.3 | MIT OR Apache-2.0 | <https://github.com/rust-num/num> |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 | <https://github.com/rust-num/num-bigint> |
+| num-bigint | 0.5.1 | MIT OR Apache-2.0 | <https://github.com/rust-num/num-bigint> |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 | <https://github.com/rust-num/num-complex> |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 | <https://github.com/jhpratt/num-conv> |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 | <https://github.com/rust-num/num-integer> |
@@ -239,40 +274,64 @@ means the crate is available under either license.
 | option-ext | 0.2.0 | MPL-2.0 | <https://github.com/soc/option-ext.git> |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 | <https://github.com/danieldg/ordered-stream> |
 | os_pipe | 1.2.3 | MIT | <https://github.com/oconnor663/os_pipe.rs> |
+| p256 | 0.14.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
+| p384 | 0.14.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
+| p521 | 0.14.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
+| pageant | 0.2.4 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | pango | 0.18.3 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | pango-sys | 0.18.0 | MIT | <https://github.com/gtk-rs/gtk-rs-core> |
 | parking | 2.2.1 | Apache-2.0 OR MIT | <https://github.com/smol-rs/parking> |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | <https://github.com/Amanieu/parking_lot> |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 | <https://github.com/Amanieu/parking_lot> |
+| pbkdf2 | 0.13.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/password-hashes> |
+| pem-rfc7468 | 1.0.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url/> |
 | petgraph | 0.8.3 | MIT OR Apache-2.0 | <https://github.com/petgraph/petgraph> |
 | phf | 0.13.1 | MIT | <https://github.com/rust-phf/rust-phf> |
 | phf_shared | 0.13.1 | MIT | <https://github.com/rust-phf/rust-phf> |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT | <https://github.com/taiki-e/pin-project-lite> |
 | piper | 0.2.5 | MIT OR Apache-2.0 | <https://github.com/smol-rs/piper> |
+| pkcs1 | 0.8.0-rc.4 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
+| pkcs5 | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
+| pkcs8 | 0.11.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | plist | 1.10.1 | MIT | <https://github.com/ebarnard/rust-plist/> |
 | png | 0.18.1 | MIT OR Apache-2.0 | <https://github.com/image-rs/image-png> |
 | polling | 3.11.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/polling> |
 | poly1305 | 0.9.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/universal-hashes> |
+| polyval | 0.7.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/universal-hashes> |
+| portable-pty | 0.9.0 | MIT | <https://github.com/wezterm/wezterm> |
 | potential_utf | 0.1.6 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 | <https://github.com/jhpratt/powerfmt> |
 | ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 | <https://github.com/cryptocorrosion/cryptocorrosion> |
+| primefield | 0.14.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
+| primeorder | 0.14.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | <https://github.com/dtolnay/proc-macro2> |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | <https://github.com/awxkee/pxfm> |
 | quick-error | 2.0.1 | MIT OR Apache-2.0 | <http://github.com/tailhook/quick-error> |
 | quick-xml | 0.42.0 | MIT | <https://github.com/tafia/quick-xml> |
 | quote | 1.0.47 | MIT OR Apache-2.0 | <https://github.com/dtolnay/quote> |
 | rand | 0.8.8 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand> |
+| rand | 0.10.3 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand> |
 | rand_chacha | 0.3.1 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand> |
 | rand_core | 0.6.4 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand> |
+| rand_core | 0.10.1 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand_core> |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | <https://github.com/rust-windowing/raw-window-handle> |
 | regex | 1.13.1 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
+| rfc6979 | 0.6.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/signatures> |
+| ring | 0.17.14 | Apache-2.0 AND ISC | <https://github.com/briansmith/ring> |
+| rsa | 0.10.0-rc.18 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/RSA> |
 | rusqlite | 0.40.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| russh | 0.64.1 | Apache-2.0 | <https://github.com/warp-tech/russh> |
+| russh-cryptovec | 0.62.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
+| russh-util | 0.52.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/bytecodealliance/rustix> |
+| salsa20 | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/stream-ciphers> |
 | same-file | 1.0.6 | Unlicense OR MIT | <https://github.com/BurntSushi/same-file> |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 | <https://github.com/bluss/scopeguard> |
+| scrypt | 0.12.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/password-hashes> |
+| sec1 | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | secrecy | 0.10.3 | Apache-2.0 OR MIT | <https://github.com/iqlusioninc/crates/tree/main/secrecy> |
 | secret-service | 4.0.0 | MIT OR Apache-2.0 | <https://github.com/hwchen/secret-service-rs.git> |
 | security-framework | 3.7.0 | MIT OR Apache-2.0 | <https://github.com/kornelski/rust-security-framework> |
@@ -284,13 +343,21 @@ means the crate is available under either license.
 | serde_spanned | 1.1.2 | MIT OR Apache-2.0 | <https://github.com/toml-rs/toml> |
 | serde_with | 3.24.0 | MIT OR Apache-2.0 | <https://github.com/jonasbb/serde_with/> |
 | serde-untagged | 0.1.9 | MIT OR Apache-2.0 | <https://github.com/dtolnay/serde-untagged> |
+| serial2 | 0.2.38 | BSD-2-Clause OR Apache-2.0 | <https://github.com/de-vri-es/serial2-rs> |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | <https://github.com/chippers/serialize-to-javascript> |
 | sha1 | 0.10.7 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
+| sha1 | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
+| sha3 | 0.12.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
+| shake | 0.1.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/XOFs> |
 | sharded-slab | 0.1.7 | MIT | <https://github.com/hawkw/sharded-slab> |
+| shared_library | 0.1.9 | Apache-2.0 OR MIT | <https://github.com/tomaka/shared_library/> |
+| shell-words | 1.1.1 | MIT OR Apache-2.0 | <https://github.com/tmiasko/shell-words> |
 | signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 | <https://github.com/vorner/signal-hook> |
+| signature | 3.0.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/traits> |
 | simd-adler32 | 0.3.10 | MIT | <https://github.com/mcountryman/simd-adler32> |
+| simdutf8 | 0.1.5 | MIT OR Apache-2.0 | <https://github.com/rusticstuff/simdutf8> |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 | <https://github.com/jedisct1/rust-siphash> |
 | slab | 0.4.12 | MIT | <https://github.com/tokio-rs/slab> |
 | smallvec | 1.16.3 | MIT OR Apache-2.0 | <https://github.com/servo/rust-smallvec> |
@@ -298,6 +365,11 @@ means the crate is available under either license.
 | softbuffer | 0.4.8 | MIT OR Apache-2.0 | <https://github.com/rust-windowing/softbuffer> |
 | soup3 | 0.5.0 | MIT | <https://gitlab.gnome.org/World/Rust/soup3-rs> |
 | soup3-sys | 0.5.0 | MIT | <https://gitlab.gnome.org/World/Rust/soup3-rs> |
+| spki | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
+| sponge-cursor | 0.1.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
+| ssh-cipher | 0.3.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/SSH> |
+| ssh-encoding | 0.3.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/SSH> |
+| ssh-key | 0.7.0-rc.11 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/SSH> |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | <https://github.com/storyyeller/stable_deref_trait> |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 | <https://github.com/nvzqz/static-assertions-rs> |
 | subtle | 2.6.1 | BSD-3-Clause | <https://github.com/dalek-cryptography/subtle> |
@@ -333,6 +405,7 @@ means the crate is available under either license.
 | unicode-normalization | 0.1.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | <https://github.com/unicode-rs/unicode-normalization> |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | <https://github.com/unicode-rs/unicode-segmentation> |
 | universal-hash | 0.6.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
+| untrusted | 0.9.0 | ISC | <https://github.com/briansmith/untrusted> |
 | url | 2.5.8 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
 | urlpattern | 0.6.0 | MIT | <https://github.com/denoland/rust-urlpattern> |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | <https://github.com/hsivonen/utf8_iter> |
@@ -349,9 +422,11 @@ means the crate is available under either license.
 | webview2-com | 0.39.1 | MIT | <https://github.com/wravery/webview2-rs> |
 | webview2-com-sys | 0.39.1 | MIT | <https://github.com/wravery/webview2-rs> |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | <https://github.com/image-rs/weezl> |
+| winapi | 0.3.9 | MIT OR Apache-2.0 | <https://github.com/retep998/winapi-rs> |
 | winapi-util | 0.1.11 | Unlicense OR MIT | <https://github.com/BurntSushi/winapi-util> |
 | window-vibrancy | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/tauri-apps/tauri-plugin-vibrancy> |
 | windows | 0.62.2 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
+| windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows_aarch64_msvc | 0.53.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows_x86_64_msvc | 0.53.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
@@ -361,13 +436,17 @@ means the crate is available under either license.
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
+| windows-sys | 0.52.0 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-sys | 0.60.2 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-sys | 0.61.2 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
+| windows-targets | 0.52.6 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-targets | 0.53.5 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | windows-version | 0.1.7 | MIT OR Apache-2.0 | <https://github.com/microsoft/windows-rs> |
 | winnow | 1.0.4 | MIT | <https://github.com/winnow-rs/winnow> |
+| winreg | 0.10.1 | MIT | <https://github.com/gentoo90/winreg-rs> |
 | wl-clipboard-rs | 0.9.4 | MIT OR Apache-2.0 | <https://github.com/YaLTeR/wl-clipboard-rs> |
+| wnaf | 0.14.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/elliptic-curves> |
 | writeable | 0.6.4 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | wry | 0.57.0 | Apache-2.0 OR MIT | <https://github.com/tauri-apps/wry> |
 | x11 | 2.21.0 | MIT | <https://github.com/AltF02/x11-rs.git> |
@@ -401,6 +480,12 @@ means the crate is available under either license.
 |---|---|---|---|
 | @tauri-apps/api | 2.12.4 | Apache-2.0 OR MIT | <https://github.com/tauri-apps/tauri> |
 | @types/react | 19.3.0 | MIT | <https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react> |
+| @xterm/addon-fit | 0.11.0 | MIT | <https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit> |
+| @xterm/addon-search | 0.16.0 | MIT | <https://github.com/xtermjs/xterm.js/tree/master/addons/addon-search> |
+| @xterm/addon-unicode11 | 0.9.0 | MIT | <https://github.com/xtermjs/xterm.js/tree/master/addons/addon-unicode11> |
+| @xterm/addon-web-links | 0.12.0 | MIT | <https://github.com/xtermjs/xterm.js/tree/master/addons/addon-web-links> |
+| @xterm/addon-webgl | 0.19.0 | MIT | <https://github.com/xtermjs/xterm.js/tree/master/addons/addon-webgl> |
+| @xterm/xterm | 6.0.0 | MIT | <https://github.com/xtermjs/xterm.js> |
 | csstype | 3.2.3 | MIT | <https://github.com/frenic/csstype> |
 | lucide-react | 1.59.0 | ISC (some icons derived from Feather, MIT) | <https://github.com/lucide-icons/lucide> |
 | react | 19.3.1 | MIT | <https://github.com/react/react> |

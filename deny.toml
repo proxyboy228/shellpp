@@ -36,12 +36,17 @@ feature-depth = 1
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin attack, timing side channel): signing happens locally; risk is low; upstream is tracked (docs/decisions.md, decision 4)" },
 ]
-# The rsa crate arrives with SSH support in stage 2; until then the exception
-# above is listed by policy and is not reported as unused.
+# Since stage 2 the rsa crate is in the graph: russh (feature `rsa`) and
+# ssh-key (feature `rsa`) use it for RSA user keys, host keys and agent
+# identities in shellpp-ssh and shellpp-core. There is no fixed release yet, so
+# the exception above stays. An advisory exception that no longer matches
+# (after an rsa release with the fix) is allowed by policy rather than
+# reported, so removing it is a deliberate review step.
 unused-ignored-advisory = "allow"
 # Unmaintained and unsound notices fail for crates that the workspace depends
 # on directly. Transitive notices come from the Tauri runtime and keyring and
-# cannot be fixed here; at stage 1 they are RUSTSEC-2024-0429 (glib 0.18,
+# cannot be fixed here; at stage 2 (unchanged since stage 1: the SSH and local
+# terminal crates added none) they are RUSTSEC-2024-0429 (glib 0.18,
 # unsound VariantStrIter, under the GTK 3 bindings of the Linux runtime),
 # RUSTSEC-2024-0370 (proc-macro-error, unmaintained) and RUSTSEC-2026-0370,
 # -0371, -0372 (zvariant, zbus_names, zvariant_derive: merged into zbus).

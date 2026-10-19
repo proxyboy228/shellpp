@@ -1,8 +1,14 @@
 name: CI
 
-# Stage 1 job set of docs/architecture.md, section 9.2: lint, licenses, linux,
-# windows, macos. The gitleaks job lives in secret-scan.yml. Jobs for the SSH
-# test servers, the sync server and packages join in later stages.
+# Job set of docs/architecture.md, section 9.2 (stage 2): lint, licenses,
+# linux, windows, macos. The gitleaks job lives in secret-scan.yml.
+#
+# SSH integration (docs/architecture.md, sections 9.1 and 9.3): every Rust
+# test run uses the russh test server (tests/sshd, SHELLPP_TEST_SSHD=russh);
+# the linux job also runs the shellpp-ssh suite against OpenSSH in Docker
+# (tests/openssh, SHELLPP_TEST_SSHD=openssh). The UI e2e suites start the
+# russh test server themselves; `e2e:build` builds it next to the app. The
+# sync server and packages join in later stages.
 
 on:
   push:
@@ -82,7 +88,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config
+            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config shellcheck
+
+      # Scripts of the OpenSSH test server (tests/openssh).
+      - name: shellcheck
+        run: shellcheck tests/openssh/*.sh
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -201,8 +211,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Includes the shellpp-ssh suite against the russh test server.
       - name: Rust tests
+        env:
+          SHELLPP_TEST_SSHD: russh
         run: cargo test --locked --workspace
+
+      # OpenSSH in Docker for the shellpp-ssh suite (tests/openssh/README.md).
+      # The image is built once here; each test server container gets its own
+      # generated credentials and host keys from tests/openssh/start.sh.
+      - name: Build the OpenSSH test image
+        run: docker build --tag shellpp-test-openssh:ci tests/openssh
+
+      - name: SSH integration (OpenSSH in Docker)
+        env:
+          SHELLPP_TEST_SSHD: openssh
+          SHELLPP_OPENSSH_IMAGE: shellpp-test-openssh:ci
+        run: cargo test --locked -p shellpp-ssh
+
+      - name: Remove OpenSSH test containers
+        if: always()
+        run: bash tests/openssh/stop.sh --all
 
       - name: Frontend tests (Vitest)
         run: pnpm -r test
@@ -210,19 +239,22 @@ jobs:
       - name: Frontend build
         run: pnpm -r build
 
-      # shellpp-core stays mobile-ready (docs/architecture.md, section 2.3).
-      # The C parts (bundled SQLite) are compiled with the runner's NDK.
-      - name: Android check (shellpp-core)
+      # shellpp-core and shellpp-ssh stay mobile-ready (docs/architecture.md,
+      # section 2.3). The C parts (bundled SQLite, ring) are compiled with the
+      # runner's NDK.
+      - name: Android check (shellpp-core, shellpp-ssh)
         run: |
           ndk_bin="${ANDROID_NDK_LATEST_HOME:?Android NDK not found on the runner}/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export CC_aarch64_linux_android="$ndk_bin/aarch64-linux-android24-clang"
           export AR_aarch64_linux_android="$ndk_bin/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
-          cargo check --locked -p shellpp-core --target aarch64-linux-android
+          cargo check --locked -p shellpp-core -p shellpp-ssh --target aarch64-linux-android
 
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
 
+      # The e2e-mocks app and the russh test server (shellpp-test-sshd) that
+      # the specs start with generated credentials.
       - name: UI e2e build
         run: pnpm --filter @shellpp/desktop e2e:build
 
@@ -272,7 +304,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Includes the shellpp-ssh suite against the russh test server.
       - name: Rust tests
+        env:
+          SHELLPP_TEST_SSHD: russh
         run: cargo test --locked --workspace
 
       # The e2e run script picks the msedgedriver that matches this version.
@@ -290,6 +325,7 @@ jobs:
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
 
+      # The e2e-mocks app and the russh test server (shellpp-test-sshd.exe).
       - name: UI e2e build
         run: pnpm --filter @shellpp/desktop e2e:build
 
@@ -337,12 +373,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Includes the shellpp-ssh suite against the russh test server.
       - name: Rust tests
+        env:
+          SHELLPP_TEST_SSHD: russh
         run: cargo test --locked --workspace
 
-      # shellpp-core stays mobile-ready (docs/architecture.md, section 2.3).
-      - name: iOS check (shellpp-core)
-        run: cargo check --locked -p shellpp-core --target aarch64-apple-ios
+      # shellpp-core and shellpp-ssh stay mobile-ready (docs/architecture.md,
+      # section 2.3).
+      - name: iOS check (shellpp-core, shellpp-ssh)
+        run: cargo check --locked -p shellpp-core -p shellpp-ssh --target aarch64-apple-ios
 
       # Release build of the app with the bundled frontend, without packages
       # (the .dmg arrives in stage 9). There is no tauri-driver on macOS; the
