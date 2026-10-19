@@ -5,10 +5,17 @@
 //! creating anything or opening a window. The base-directory variables are
 //! pointed at an empty temporary directory, which must stay empty.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
+use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
+use serde_json::json;
 use shellpp_core::ids;
+use shellpp_core::service::dto::RecordView;
+use shellpp_desktop::hosts::host_card_id;
 use shellpp_desktop::profile::TempProfile;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_shellpp");
@@ -93,4 +100,68 @@ fn test_profiles_are_temporary() {
     drop(opened);
     drop(profile);
     assert!(!path.exists());
+}
+
+/// The permanent profile without `logs/` (a Shell++ instance the owner runs
+/// at the same time may write its log; the tests never initialize logging).
+fn permanent_snapshot(permanent: Option<&Path>) -> Option<Option<Vec<common::TreeEntry>>> {
+    permanent.map(|path| {
+        common::tree_snapshot(path).map(|entries| {
+            entries
+                .into_iter()
+                .filter(|(relative, _, _)| !relative.starts_with("logs"))
+                .collect()
+        })
+    })
+}
+
+/// Owner's steps 0 and 5: a whole UI flow in this test process (records
+/// written through the app state and through the host panel's autosave,
+/// moves, duplicates, removal, lock) runs on a temporary profile and leaves
+/// the permanent profile (`%LOCALAPPDATA%\shellpp` on Windows) exactly as it
+/// was: same entries, sizes and modification times, or still absent.
+#[gpui_kit::test]
+fn ui_flows_leave_the_permanent_profile_untouched(cx: &mut TestAppContext) {
+    let permanent = common::permanent_profile();
+    let before = permanent_snapshot(permanent.as_deref());
+
+    let (ui, ids) = common::Ui::open(
+        cx,
+        &[
+            json!({"address": "web1.example.com", "label": "Web"}),
+            json!({"name": "Group"}),
+        ],
+    );
+    let [web, group] = ids[..] else {
+        unreachable!()
+    };
+    common::assert_temporary(&ui.profile);
+    ui.frame(cx, |window, cx| window.click(host_card_id(web), cx));
+    ui.settle(cx);
+    ui.frame(cx, |window, cx| {
+        window.click("host-label", cx);
+        window.input(" edited", cx);
+    });
+    ui.wait(cx, common::AFTER_DEBOUNCE);
+    assert_eq!(
+        ui.host(cx, web).unwrap().label.as_deref(),
+        Some("Web edited")
+    );
+    ui.state.update(cx, |state, cx| {
+        state.move_records(vec![web], Some(group), cx).unwrap();
+        let copy = match state.duplicate_record(web, cx).unwrap() {
+            RecordView::Host(view) => view.record_id,
+            RecordView::Group(view) => view.record_id,
+        };
+        state.delete_records(vec![copy], cx).unwrap();
+        state.lock(cx).unwrap();
+    });
+    ui.settle(cx);
+    ui.finish(cx);
+
+    assert_eq!(
+        permanent_snapshot(permanent.as_deref()),
+        before,
+        "the permanent profile changed during a test"
+    );
 }
