@@ -12,7 +12,7 @@
 
 [graph]
 # Every target the client crates are built or checked for: the desktop
-# platforms of shellpp-desktop and the mobile targets that CI checks for
+# platforms of shellpp-desktop (GPUI Kit) and the mobile targets that CI checks for
 # shellpp-core (docs/architecture.md, section 2.3). A crate that is used only
 # on one of these targets is still checked.
 targets = [
@@ -25,7 +25,7 @@ targets = [
     "aarch64-linux-android",
     "aarch64-apple-ios",
 ]
-# Optional features such as `e2e-mocks` are part of the graph as well.
+# Optional features such as `dev-tools` are part of the graph as well.
 all-features = true
 
 [output]
@@ -44,13 +44,14 @@ ignore = [
 # reported, so removing it is a deliberate review step.
 unused-ignored-advisory = "allow"
 # Unmaintained and unsound notices fail for crates that the workspace depends
-# on directly. Transitive notices come from the Tauri runtime and keyring and
-# cannot be fixed here; at stage 2 (unchanged since stage 1: the SSH and local
-# terminal crates added none) they are RUSTSEC-2024-0429 (glib 0.18,
-# unsound VariantStrIter, under the GTK 3 bindings of the Linux runtime),
-# RUSTSEC-2024-0370 (proc-macro-error, unmaintained) and RUSTSEC-2026-0370,
-# -0371, -0372 (zvariant, zbus_names, zvariant_derive: merged into zbus).
-# Review them with `unmaintained = "all"` and `unsound = "all"`.
+# on directly. Transitive notices come from GPUI (gpui-kit) and keyring and
+# cannot be fixed here; with the GPUI UI they are RUSTSEC-2024-0384 (instant),
+# RUSTSEC-2024-0436 (paste), RUSTSEC-2026-0206 (rustybuzz) and
+# RUSTSEC-2026-0192 (ttf-parser), all unmaintained, under GPUI's text stack,
+# and RUSTSEC-2026-0370, -0371, -0372 (zvariant, zbus_names, zvariant_derive:
+# merged into zbus) under the Linux keychain and GPUI's Linux platform. No
+# unsound notice remains (the GTK 3 bindings left with Tauri). Review them
+# with `unmaintained = "all"` and `unsound = "all"`.
 unmaintained = "workspace"
 unsound = "workspace"
 # A yanked crate version in Cargo.lock fails the check.
@@ -84,21 +85,17 @@ confidence-threshold = 0.93
 # (BlueOak-1.0.0, CC-BY-4.0) gets a per-crate exception with a reason.
 include-dev = true
 include-build = true
-exceptions = [
-    # Build-only on Linux (system-deps -> cfg-expr -> target-lexicon, which the
-    # GTK and WebKitGTK -sys crates use to find system libraries); never part
-    # of a shipped binary. The LLVM exception only adds permissions to
-    # Apache-2.0.
-    { crate = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
-]
+# No per-crate exceptions are needed with the GPUI UI (the Tauri build needed
+# one for target-lexicon, a Linux build-only crate of the GTK bindings).
+exceptions = []
 
 [licenses.private]
 # Workspace crates are checked too (all are Apache-2.0).
 ignore = false
 
 [bans]
-# Duplicate versions are common under the Tauri runtime and are not a policy
-# item; `cargo deny check bans` with `multiple-versions = "warn"` lists them.
+# Duplicate versions are common under GPUI (and were under Tauri) and are not
+# a policy item; `cargo deny check bans` with `multiple-versions = "warn"` lists them.
 multiple-versions = "allow"
 wildcards = "deny"
 # Path dependencies between the unpublished workspace crates are not wildcards.

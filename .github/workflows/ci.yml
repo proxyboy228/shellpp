@@ -1,14 +1,19 @@
 name: CI
 
-# Job set of docs/architecture.md, section 9.2 (stage 2): lint, licenses,
-# linux, windows, macos. The gitleaks job lives in secret-scan.yml.
+# Job set of docs/architecture.md, section 9.2: lint, licenses, linux,
+# windows, macos. The gitleaks job lives in secret-scan.yml.
+#
+# The toolchain comes from rust-toolchain.toml (Rust 1.99.1 with rustfmt and
+# clippy; gpui-kit's GPUI needs Rust >= 1.93). The desktop app is GPUI Kit:
+# its UI tests run headless inside `cargo test` (GPUI's test platform, no
+# window, no display server) with temporary data directories only
+# (SHELLPP_TEST=1 makes a missing SHELLPP_DATA_DIR an error).
 #
 # SSH integration (docs/architecture.md, sections 9.1 and 9.3): every Rust
 # test run uses the russh test server (tests/sshd, SHELLPP_TEST_SSHD=russh);
 # the linux job also runs the shellpp-ssh suite against OpenSSH in Docker
-# (tests/openssh, SHELLPP_TEST_SSHD=openssh). The UI e2e suites start the
-# russh test server themselves; `e2e:build` builds it next to the app. The
-# sync server and packages join in later stages.
+# (tests/openssh, SHELLPP_TEST_SSHD=openssh). The sync server and packages
+# join in later stages.
 
 on:
   push:
@@ -23,11 +28,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # The workspace MSRV (rust-version in Cargo.toml).
-  RUST_TOOLCHAIN: "1.92.0"
   NODE_VERSION: "22"
-  # tauri-driver for the UI e2e suite (MIT OR Apache-2.0, development only).
-  TAURI_DRIVER_VERSION: "2.1.0"
+  # System libraries GPUI links on Linux (xkbcommon, xcb, fontconfig,
+  # freetype; Wayland is loaded at run time) plus pkg-config to find them.
+  LINUX_GPUI_PACKAGES: >-
+    pkg-config libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev
+    libx11-xcb-dev libfontconfig-dev libfreetype-dev libwayland-dev
 
 defaults:
   run:
@@ -44,10 +50,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # Without a name, rustup installs the toolchain of rust-toolchain.toml
+      # (channel, profile and components).
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
+          rustup toolchain install --no-self-update
+          rustc --version
 
       - name: rustfmt
         run: cargo fmt --all -- --check
@@ -56,39 +64,10 @@ jobs:
         if: hashFiles('server/Cargo.toml') != ''
         run: cargo fmt --manifest-path server/Cargo.toml --all -- --check
 
-      # The pnpm version comes from "packageManager" in package.json.
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck
-        run: pnpm -r typecheck
-
-      - name: ESLint
-        run: pnpm -r lint
-
-      # Prints the stage flags above BUILD_STAGE (apps/desktop/src/stage.ts).
-      - name: List features hidden in this stage
-        run: node scripts/hidden-features.mjs
-
-      # Fails when a UI section of the current stage has no e2e spec
-      # (docs/architecture.md, section 9.4).
-      - name: UI sections without an e2e spec
-        run: node scripts/e2e-coverage.mjs
-
       - name: Install Linux system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config shellcheck
+          sudo apt-get install -y --no-install-recommends $LINUX_GPUI_PACKAGES shellcheck
 
       # Scripts of the OpenSSH test server (tests/openssh).
       - name: shellcheck
@@ -102,7 +81,7 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: clippy (all features, including e2e-mocks)
+      - name: clippy (all features, including dev-tools)
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: clippy (server workspace)
@@ -126,8 +105,8 @@ jobs:
 
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
+          rustup toolchain install --no-self-update
+          rustc --version
 
       - name: Install cargo-deny
         working-directory: ${{ runner.temp }}
@@ -149,26 +128,15 @@ jobs:
         if: hashFiles('server/deny.toml') != ''
         run: cargo deny --locked --manifest-path server/Cargo.toml check
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
+      # The notices script uses only Node's built-in modules (no npm packages).
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
 
       # The Rust table must match the crates that ship in the desktop binary.
       - name: Rust crates recorded in THIRD_PARTY_NOTICES.md
         run: node scripts/rust-notices.mjs
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Production packages against the shipped list, development packages
-      # against the development list (docs/architecture.md, section 8.1).
-      - name: npm licenses
-        run: pnpm licenses:check
 
   linux:
     name: Linux
@@ -183,38 +151,25 @@ jobs:
       - name: Install Linux system libraries
         run: |
           sudo apt-get update
-          # webkit2gtk-driver (WebKitWebDriver) and xvfb: UI e2e.
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config \
-            webkit2gtk-driver xvfb
-          echo "WebKitGTK $(pkg-config --modversion webkit2gtk-4.1)"
+          sudo apt-get install -y --no-install-recommends $LINUX_GPUI_PACKAGES
 
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-linux-android
+          rustc --version
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Includes the shellpp-ssh suite against the russh test server.
+      # Includes the shellpp-ssh suite against the russh test server and the
+      # headless GPUI tests of the desktop app.
       - name: Rust tests
         env:
           SHELLPP_TEST_SSHD: russh
+          SHELLPP_TEST: "1"
         run: cargo test --locked --workspace
 
       # OpenSSH in Docker for the shellpp-ssh suite (tests/openssh/README.md).
@@ -233,12 +188,6 @@ jobs:
         if: always()
         run: bash tests/openssh/stop.sh --all
 
-      - name: Frontend tests (Vitest)
-        run: pnpm -r test
-
-      - name: Frontend build
-        run: pnpm -r build
-
       # shellpp-core and shellpp-ssh stay mobile-ready (docs/architecture.md,
       # section 2.3). The C parts (bundled SQLite, ring) are compiled with the
       # runner's NDK.
@@ -250,27 +199,8 @@ jobs:
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
           cargo check --locked -p shellpp-core -p shellpp-ssh --target aarch64-linux-android
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
-
-      # The e2e-mocks app and the russh test server (shellpp-test-sshd) that
-      # the specs start with generated credentials.
-      - name: UI e2e build
-        run: pnpm --filter @shellpp/desktop e2e:build
-
-      - name: UI e2e (xvfb, WebKitWebDriver)
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" pnpm --filter @shellpp/desktop e2e
-
-      # Driver and WebdriverIO logs; the e2e data is fictional and the master
-      # password is generated per run.
-      - name: Upload e2e logs
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: e2e-logs-linux
-          path: target/e2e-logs/
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Build the app
+        run: cargo build --locked -p shellpp-desktop
 
   windows:
     name: Windows
@@ -284,62 +214,24 @@ jobs:
 
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
+          rustup toolchain install --no-self-update
+          rustc --version
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Includes the shellpp-ssh suite against the russh test server.
+      # Includes the shellpp-ssh suite against the russh test server and the
+      # headless GPUI tests of the desktop app.
       - name: Rust tests
         env:
           SHELLPP_TEST_SSHD: russh
+          SHELLPP_TEST: "1"
         run: cargo test --locked --workspace
 
-      # The e2e run script picks the msedgedriver that matches this version.
-      - name: Show the WebView2 runtime version
-        shell: pwsh
-        run: |
-          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-          $version = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv
-          if (-not $version) {
-            Write-Error 'The WebView2 runtime is not installed on this runner.'
-            exit 1
-          }
-          "WebView2 runtime $version"
-
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
-
-      # The e2e-mocks app and the russh test server (shellpp-test-sshd.exe).
-      - name: UI e2e build
-        run: pnpm --filter @shellpp/desktop e2e:build
-
-      - name: UI e2e (msedgedriver)
-        run: pnpm --filter @shellpp/desktop e2e
-
-      - name: Upload e2e logs
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: e2e-logs-windows
-          path: target/e2e-logs/
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Build the app
+        run: cargo build --locked -p shellpp-desktop
 
   macos:
     name: macOS
@@ -353,30 +245,21 @@ jobs:
 
       - name: Install the Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-ios --no-self-update
-          rustup default "$RUST_TOOLCHAIN"
+          rustup toolchain install --no-self-update
+          rustup target add aarch64-apple-ios
+          rustc --version
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Includes the shellpp-ssh suite against the russh test server.
+      # Includes the shellpp-ssh suite against the russh test server and the
+      # headless GPUI tests of the desktop app.
       - name: Rust tests
         env:
           SHELLPP_TEST_SSHD: russh
+          SHELLPP_TEST: "1"
         run: cargo test --locked --workspace
 
       # shellpp-core and shellpp-ssh stay mobile-ready (docs/architecture.md,
@@ -384,8 +267,7 @@ jobs:
       - name: iOS check (shellpp-core, shellpp-ssh)
         run: cargo check --locked -p shellpp-core -p shellpp-ssh --target aarch64-apple-ios
 
-      # Release build of the app with the bundled frontend, without packages
-      # (the .dmg arrives in stage 9). There is no tauri-driver on macOS; the
-      # screens are verified with docs/testing/macos-checklist.md.
+      # Release build of the app, without packages (the .dmg arrives in
+      # stage 9). The screens are verified with docs/testing/macos-checklist.md.
       - name: Build the app
-        run: pnpm --filter @shellpp/desktop tauri build --no-bundle
+        run: cargo build --locked --release -p shellpp-desktop
