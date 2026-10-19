@@ -1,0 +1,133 @@
+/* Lock screens: first run, unlock, recovery unlock (UI 13.1-13.2;
+   docs/design-system.md, 2.1, 2.5, 5, 6). Shared with the recovery key
+   dialogs of the Security settings. */
+
+.screen {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 0;
+  padding: var(--space-6) var(--space-4);
+  overflow-y: auto;
+  background: var(--bg-base);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 440px;
+  margin: auto 0;
+  padding: var(--space-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-overlay);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+}
+
+.appName {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.appTitle {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.formError {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+}
+
+.link {
+  align-self: center;
+}
+
+/* Permanent warning (UI 13.1): tinted background, icon in the semantic color. */
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-card);
+  background: var(--warning-subtle);
+}
+
+.warningIcon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.warningText {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-dense);
+  line-height: 1.5;
+}
+
+/* Recovery key: monospace text with the Copy button. */
+.recoveryKey {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.keyBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-input);
+}
+
+.copyButton {
+  flex: none;
+}
+
+.keyText {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+  overflow-wrap: anywhere;
+  /* Not `all`: the Copy button (protected copy) is the intended path. */
+  user-select: text;
+}

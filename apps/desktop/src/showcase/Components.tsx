@@ -23,6 +23,7 @@ import {
 import { useId, useRef, useState, type ReactNode } from 'react';
 import {
   Button,
+  Checkbox,
   Chip,
   HostCard,
   IconButton,
@@ -30,6 +31,7 @@ import {
   Modal,
   PasswordInput,
   SegmentedControl,
+  Select,
   SplitButton,
   STATUS_DOT_LABELS,
   StatusDot,
@@ -336,6 +338,62 @@ function ToggleDemo({ log }: DemoProps) {
         <Toggle label="Label at the start" labelPosition="start" />
         <Toggle label="Disabled, off" disabled />
         <Toggle label="Disabled, on" disabled defaultChecked />
+      </div>
+    </Specimen>
+  );
+}
+
+// --- Select ---------------------------------------------------------------
+
+type AutoLockDemoValue = '1' | '5' | '15' | '30' | '60' | 'never';
+
+const AUTO_LOCK_DEMO_OPTIONS: readonly { value: AutoLockDemoValue; label: string }[] = [
+  { value: '1', label: '1 minute' },
+  { value: '5', label: '5 minutes' },
+  { value: '15', label: '15 minutes' },
+  { value: '30', label: '30 minutes' },
+  { value: '60', label: '60 minutes' },
+  { value: 'never', label: 'Never' },
+];
+
+function SelectDemo({ log }: DemoProps) {
+  const [value, setValue] = useState<AutoLockDemoValue>('15');
+  return (
+    <Specimen id="select" title="Select" description="A dropdown on the native select element: platform keyboard and screen reader support.">
+      <div className={styles.fields}>
+        <Select
+          label="Auto-lock"
+          description="Lock after this long without input"
+          options={AUTO_LOCK_DEMO_OPTIONS}
+          value={value}
+          onValueChange={(next) => {
+            setValue(next);
+            log(`Auto-lock ${next}`);
+          }}
+        />
+        <Select label="With an error" options={AUTO_LOCK_DEMO_OPTIONS} value="5" onValueChange={noop} error="This value is not valid." />
+        <Select label="Disabled" options={AUTO_LOCK_DEMO_OPTIONS} value="30" onValueChange={noop} disabled />
+      </div>
+    </Specimen>
+  );
+}
+
+// --- Checkbox -------------------------------------------------------------
+
+function CheckboxDemo({ log }: DemoProps) {
+  const [saved, setSaved] = useState(false);
+  return (
+    <Specimen id="checkbox" title="Checkbox" description="A native checkbox with a label, for required confirmations.">
+      <div className={styles.fields}>
+        <Checkbox
+          label="I saved the recovery key"
+          checked={saved}
+          onCheckedChange={(checked) => {
+            setSaved(checked);
+            log(`Saved ${checked ? 'checked' : 'unchecked'}`);
+          }}
+        />
+        <Checkbox label="Disabled, checked" checked onCheckedChange={noop} disabled />
       </div>
     </Specimen>
   );
@@ -815,6 +873,8 @@ export const COMPONENT_SPECIMENS: readonly { id: string; title: string }[] = [
   { id: 'password-input', title: 'PasswordInput' },
   { id: 'toggle', title: 'Toggle' },
   { id: 'segmented-control', title: 'SegmentedControl' },
+  { id: 'select', title: 'Select' },
+  { id: 'checkbox', title: 'Checkbox' },
   { id: 'chip', title: 'Chip' },
   { id: 'status-dot', title: 'StatusDot' },
   { id: 'host-card', title: 'HostCard' },
@@ -842,6 +902,8 @@ export function Components({ onAction: log }: ComponentsProps) {
       <PasswordInputDemo />
       <ToggleDemo log={log} />
       <SegmentedControlDemo />
+      <SelectDemo log={log} />
+      <CheckboxDemo log={log} />
       <ChipDemo log={log} />
       <StatusDotDemo />
       <HostCardDemo log={log} />

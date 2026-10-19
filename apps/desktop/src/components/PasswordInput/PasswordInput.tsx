@@ -23,6 +23,12 @@ export interface PasswordInputProps extends Omit<TextInputProps, 'type' | 'trail
  * Text field for secrets: masked by default, with a toggle that shows the
  * value. Autocomplete, spell check and autocorrection are off unless the
  * caller overrides them.
+ *
+ * The value never leaves through copy or cut, also while it is shown: the
+ * field is marked `data-sensitive` (the app's Edit menu refuses it) and the
+ * native copy and cut events are cancelled before the caller's handlers run.
+ * Sensitive values reach the clipboard only through the core's protected copy
+ * (docs/security.md, section 9.4).
  */
 export function PasswordInput({
   visible,
@@ -35,6 +41,8 @@ export function PasswordInput({
   autoCapitalize = 'off',
   autoCorrect = 'off',
   className,
+  onCopy,
+  onCut,
   'data-testid': testId,
   ...rest
 }: PasswordInputProps) {
@@ -59,6 +67,15 @@ export function PasswordInput({
       spellCheck={spellCheck}
       autoCapitalize={autoCapitalize}
       autoCorrect={autoCorrect}
+      data-sensitive=""
+      onCopy={(event) => {
+        event.preventDefault();
+        onCopy?.(event);
+      }}
+      onCut={(event) => {
+        event.preventDefault();
+        onCut?.(event);
+      }}
       data-testid={testId}
       trailing={
         <IconButton

@@ -1,0 +1,52 @@
+/* Select: design-system §2, §5, §6. Colors and sizes come from tokens.css only. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  font-family: var(--font-ui);
+}
+
+.root[data-disabled] {
+  opacity: var(--opacity-disabled);
+}
+
+.label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+}
+
+.select {
+  box-sizing: border-box;
+  height: var(--height-control);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+}
+
+.select:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.select[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--font-size-caption);
+}

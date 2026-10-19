@@ -27,6 +27,25 @@ describe('PasswordInput', () => {
     expect(screen.getByTestId('password-toggle')).toBe(toggle);
   });
 
+  it('never lets the value out through copy or cut, also while it is shown', async () => {
+    const user = userEvent.setup();
+    const onCopy = vi.fn();
+    render(<PasswordInput label="Password" onCopy={onCopy} />);
+    const input = screen.getByLabelText('Password');
+    expect(input).toHaveAttribute('data-sensitive');
+    await user.type(input, 's3cret-value');
+    await user.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(input).toHaveAttribute('type', 'text');
+
+    for (const type of ['copy', 'cut'] as const) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    expect(onCopy).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue('s3cret-value');
+  });
+
   it('turns off autocomplete, spell check and autocorrection by default', () => {
     render(<PasswordInput label="Password" />);
 

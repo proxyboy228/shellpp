@@ -23,6 +23,12 @@ export type { ToggleProps } from './Toggle/Toggle';
 export { SegmentedControl } from './SegmentedControl/SegmentedControl';
 export type { SegmentedControlOption, SegmentedControlProps } from './SegmentedControl/SegmentedControl';
 
+export { Select } from './Select/Select';
+export type { SelectOption, SelectProps } from './Select/Select';
+
+export { Checkbox } from './Checkbox/Checkbox';
+export type { CheckboxProps } from './Checkbox/Checkbox';
+
 // Display and overlays: chips, status dots, host cards, menus and modal windows.
 export { Chip } from './Chip/Chip';
 export type { ChipProps } from './Chip/Chip';

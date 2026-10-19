@@ -94,6 +94,10 @@ function splitProps(props: HostCardProps): { content: HostCardContent; common: H
  * Host or group card of 64 px (ui-behavior-spec 2.3). It is an `option`:
  * place it in an element with `role="listbox"` (the card grid), or pass
  * another `role` that supports `aria-selected`.
+ *
+ * With a `data-testid`, the title gets `<id>-title` and the second line
+ * `<id>-subtitle` (host) or `<id>-count` (group). Other `data-*` attributes
+ * are passed to the root element.
  */
 export function HostCard(props: HostCardProps) {
   const { content, common } = splitProps(props);
@@ -180,11 +184,15 @@ export function HostCard(props: HostCardProps) {
         <Icon className={styles.icon} size={20} strokeWidth={1.75} aria-hidden="true" focusable="false" />
       </span>
       <span className={styles.text}>
-        <span className={styles.title} title={title}>
+        <span className={styles.title} title={title} data-testid={testId === undefined ? undefined : `${testId}-title`}>
           {title}
         </span>
         {subtitle === undefined ? null : (
-          <span className={styles.subtitle} title={subtitle}>
+          <span
+            className={styles.subtitle}
+            title={subtitle}
+            data-testid={testId === undefined ? undefined : `${testId}-${variant === 'group' ? 'count' : 'subtitle'}`}
+          >
             {subtitle}
           </span>
         )}

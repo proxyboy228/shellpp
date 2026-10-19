@@ -137,6 +137,26 @@ describe('HostCard', () => {
     expect(screen.getByText('Hosts: 5')).toBeInTheDocument();
   });
 
+  it('derives sub test ids and passes data attributes to the root', () => {
+    const { rerender } = render(
+      <Grid>
+        <HostCard label="web-1" address="10.0.0.5" subtitle="SSH" data-record-id="h1" data-testid="host-card" />
+      </Grid>,
+    );
+    expect(screen.getByTestId('host-card')).toHaveAttribute('data-record-id', 'h1');
+    expect(screen.getByTestId('host-card-title')).toHaveTextContent('web-1');
+    expect(screen.getByTestId('host-card-subtitle')).toHaveTextContent('SSH');
+
+    rerender(
+      <Grid>
+        <HostCard variant="group" label="prod" hostCount={2} data-testid="group-card" />
+      </Grid>,
+    );
+    expect(screen.getByTestId('group-card-title')).toHaveTextContent('prod');
+    expect(screen.getByTestId('group-card-count')).toHaveTextContent('2 hosts');
+    expect(screen.queryByTestId('group-card-subtitle')).not.toBeInTheDocument();
+  });
+
   it('marks the selected card', () => {
     render(
       <Grid>

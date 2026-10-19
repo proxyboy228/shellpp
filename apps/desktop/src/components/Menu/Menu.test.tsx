@@ -266,3 +266,62 @@ describe('Menu', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.menu\s*\{\s*animation:\s*none/);
   });
 });
+
+describe('Menu info icon', () => {
+  it('describes the item and shows the text on hover of the icon or keyboard focus', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <Menu
+        items={[
+          { id: 'edit', label: 'Edit', 'data-testid': 'menu-edit' },
+          { id: 'link', label: 'Copy Link', info: 'Works only in this app.', onSelect, 'data-testid': 'menu-link' },
+        ]}
+        aria-label="Host actions"
+      />,
+    );
+    const item = screen.getByTestId('menu-link');
+    expect(item).toHaveAccessibleName('Copy Link');
+    expect(item).toHaveAccessibleDescription('Works only in this app.');
+    const text = screen.getByTestId('menu-link-info-text');
+    expect(text).not.toBeVisible();
+
+    await user.hover(screen.getByTestId('menu-link-info'));
+    expect(text).toBeVisible();
+    await user.click(screen.getByTestId('menu-link-info'));
+    expect(onSelect).not.toHaveBeenCalled();
+    await user.unhover(screen.getByTestId('menu-link-info'));
+    expect(text).not.toBeVisible();
+
+    await user.keyboard('{Home}{End}');
+    expect(item).toHaveFocus();
+    expect(text).toBeVisible();
+  });
+
+  it('accepts several anchor elements for outside presses', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    function Harness() {
+      const first = useRef<HTMLButtonElement>(null);
+      const second = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={first} type="button">
+            First
+          </button>
+          <button ref={second} type="button">
+            Second
+          </button>
+          <button type="button">Outside</button>
+          <Menu items={[{ id: 'a', label: 'A' }]} onClose={onClose} anchorRef={[first, second]} />
+        </>
+      );
+    }
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'First' }));
+    await user.click(screen.getByRole('button', { name: 'Second' }));
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

@@ -119,6 +119,51 @@
   color: var(--text-secondary);
 }
 
+/* Info icon at the end of an item and its tooltip (shown on hover of the
+   icon and while the item has keyboard focus). */
+.infoWrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.info:hover {
+  color: var(--text-primary);
+}
+
+.tooltip {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: calc(-1 * var(--space-2));
+  z-index: 1;
+  width: max-content;
+  max-width: 280px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text-primary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.tooltip[hidden] {
+  display: none;
+}
+
 .separator {
   flex: none;
   height: 1px;

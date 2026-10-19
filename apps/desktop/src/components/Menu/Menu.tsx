@@ -1,8 +1,10 @@
-import { ChevronRight, type LucideIcon } from 'lucide-react';
+import { ChevronRight, Info, type LucideIcon } from 'lucide-react';
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
+  useState,
   type HTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
@@ -28,6 +30,12 @@ export interface MenuItemDef {
    * and activating it (Enter, Space, Right, click) does not close the menu.
    */
   submenu?: boolean;
+  /**
+   * Explanation shown by an info icon at the end of the item: on hover of the
+   * icon and while the item has keyboard focus. The icon gets
+   * `<item test id>-info`; the text is also the item's accessible description.
+   */
+  info?: string;
   /** Called when the item is activated, before `onAction`. */
   onSelect?: () => void;
   'data-testid'?: string;
@@ -51,8 +59,11 @@ export interface MenuProps extends Omit<HTMLAttributes<HTMLDivElement>, 'childre
   onClose?: () => void;
   /** Focus the first enabled item on mount. Default: true. */
   autoFocus?: boolean;
-  /** The trigger element: a press on it does not count as an outside press. */
-  anchorRef?: RefObject<HTMLElement | null>;
+  /**
+   * The trigger element (or several elements, for example the trigger and a
+   * nested submenu): a press on them does not count as an outside press.
+   */
+  anchorRef?: RefObject<HTMLElement | null> | readonly RefObject<HTMLElement | null>[];
   'data-testid'?: string;
 }
 
@@ -66,6 +77,15 @@ function getEnabledItems(menu: HTMLElement): HTMLElement[] {
 
 function isSeparator(entry: MenuEntry): entry is MenuSeparatorDef {
   return entry.type === 'separator';
+}
+
+function anchorList(
+  anchorRef: MenuProps['anchorRef'],
+): readonly RefObject<HTMLElement | null>[] {
+  if (anchorRef === undefined) {
+    return [];
+  }
+  return 'current' in anchorRef ? [anchorRef] : anchorRef;
 }
 
 /**
@@ -87,6 +107,12 @@ export function Menu({
   ...rest
 }: MenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const infoIdPrefix = useId();
+  // Info tooltips: the item whose info icon is hovered, and the focused item
+  // while the keyboard is used (a hover also focuses an item).
+  const [infoHover, setInfoHover] = useState<number | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [keyboardMode, setKeyboardMode] = useState(false);
   const hasIcons = items.some((entry) => !isSeparator(entry) && entry.icon !== undefined);
 
   // Move focus into the menu on mount; give it back on unmount when it is
@@ -120,7 +146,7 @@ export function Menu({
       if (!(target instanceof Node)) {
         return;
       }
-      if (menuRef.current?.contains(target) || anchorRef?.current?.contains(target)) {
+      if (menuRef.current?.contains(target) || anchorList(anchorRef).some((ref) => ref.current?.contains(target))) {
         return;
       }
       onClose();
@@ -151,6 +177,7 @@ export function Menu({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(event);
+    setKeyboardMode(true);
     const menu = menuRef.current;
     if (event.defaultPrevented || menu === null) {
       return;
@@ -236,12 +263,16 @@ export function Menu({
       className={rootClassName}
       data-testid={testId}
       onKeyDown={handleKeyDown}
+      onMouseMove={() => setKeyboardMode(false)}
     >
       {items.map((entry, index) => {
         if (isSeparator(entry)) {
           return <div key={entry.id} role="separator" className={styles.separator} />;
         }
         const Icon = entry.icon;
+        const infoId = entry.info === undefined ? undefined : `${infoIdPrefix}-info-${index}`;
+        const infoVisible = infoHover === index || (keyboardMode && focusedIndex === index);
+        const itemTestId = entry['data-testid'];
         const itemClassName = [
           styles.item,
           entry.danger ? styles.danger : undefined,
@@ -258,6 +289,7 @@ export function Menu({
             aria-disabled={entry.disabled ? 'true' : undefined}
             aria-haspopup={entry.submenu ? 'menu' : undefined}
             aria-keyshortcuts={entry.shortcut}
+            aria-describedby={infoId}
             data-index={index}
             data-danger={entry.danger ? 'true' : undefined}
             data-testid={entry['data-testid']}
@@ -272,6 +304,8 @@ export function Menu({
                 event.currentTarget.focus();
               }
             }}
+            onFocus={() => setFocusedIndex(index)}
+            onBlur={() => setFocusedIndex((current) => (current === index ? null : current))}
             onClick={() => activate(entry)}
           >
             {hasIcons ? (
@@ -280,6 +314,32 @@ export function Menu({
               </span>
             ) : null}
             <span className={styles.label}>{entry.label}</span>
+            {entry.info === undefined ? null : (
+              <span className={styles.infoWrap} aria-hidden="true">
+                <span
+                  className={styles.info}
+                  data-testid={itemTestId === undefined ? undefined : `${itemTestId}-info`}
+                  onMouseEnter={() => setInfoHover(index)}
+                  onMouseLeave={() => setInfoHover((current) => (current === index ? null : current))}
+                  onClick={(event) => {
+                    // The icon explains the item; it does not activate it.
+                    event.stopPropagation();
+                    event.preventDefault();
+                  }}
+                >
+                  <Info size={14} strokeWidth={1.75} aria-hidden="true" focusable="false" />
+                </span>
+                <span
+                  id={infoId}
+                  role="tooltip"
+                  className={styles.tooltip}
+                  hidden={!infoVisible}
+                  data-testid={itemTestId === undefined ? undefined : `${itemTestId}-info-text`}
+                >
+                  {entry.info}
+                </span>
+              </span>
+            )}
             {entry.shortcut === undefined ? null : (
               <span className={styles.shortcut} aria-hidden="true">
                 {entry.shortcut}

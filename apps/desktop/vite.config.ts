@@ -9,7 +9,7 @@ export default defineConfig({
   server: {
     // A fixed port: the Tauri dev configuration (stage 1) points at it,
     // so fail instead of silently switching to another port.
-    port: 1420,
+    port: 5173,
     strictPort: true,
   },
 });
