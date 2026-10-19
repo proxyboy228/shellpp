@@ -3,9 +3,8 @@
 Thank you for your interest in Shell++, an open-source,
 cross-platform, self-hosted, local-first SSH client.
 
-The project is in early development. At the moment only the specifications
-exist; there is no code yet. Build and test instructions will be added to
-this file once the code base exists.
+The project is in early development. Build and test instructions are in
+[Toolchain and build](#toolchain-and-build) and [Tests](#tests).
 
 ## Table of contents
 
@@ -13,6 +12,7 @@ this file once the code base exists.
 - [Specifications are the source of truth](#specifications-are-the-source-of-truth)
 - [Clean-room rules](#clean-room-rules)
 - [Development workflow](#development-workflow)
+- [Toolchain and build](#toolchain-and-build)
 - [Tests](#tests)
 - [Commit messages](#commit-messages)
 - [Pull requests](#pull-requests)
@@ -114,8 +114,7 @@ owned by your employer without permission.
 
 ### Dependencies
 
-Any new dependency (Rust crate, npm package, font, icon set or other
-third-party asset) that ships with the application or the server must use a
+Any new dependency (Rust crate, font, icon set or other third-party asset) that ships with the application or the server must use a
 permissive license:
 
 - MIT
@@ -152,25 +151,48 @@ request.
 
 Write code, comments, commit messages and documentation in English.
 
+## Toolchain and build
+
+- Install Rust with [rustup](https://rustup.rs/). The repository pins the
+  toolchain in `rust-toolchain.toml` (Rust 1.99.1; `gpui-pre`, the GPUI crate
+  behind GPUI Kit, needs Rust 1.93 or later). Install it once with
+  `rustup toolchain install 1.99.1`; inside the repository, `cargo` then uses
+  it automatically.
+- The desktop app is the crate `shellpp-desktop` in `apps/desktop`, built on
+  GPUI Kit. Run it with `cargo run -p shellpp-desktop`. The README section
+  [Running](README.md#running) shows how to start it with demo data in a
+  temporary folder and where the permanent profile lives.
+
 ## Tests
 
 Changes to behavior must include tests. Pure refactoring must not change
 existing tests unless the tests themselves were wrong.
 
-- **Unit tests** cover the Rust core and the TypeScript frontend logic, for
-  example encryption, sync merge, the `ssh_config` parser and the secret
-  filter for command history.
+Run the tests with `cargo test`. While you iterate, run only the tests of the
+crate or module you changed; run the full suite before each commit.
+
+- **Unit tests** cover the Rust crates, for example encryption, sync merge,
+  the `ssh_config` parser and the secret filter for command history.
 - **Integration tests** cover SSH, SFTP and port forwarding against OpenSSH
   running in Docker.
-- **End-to-end acceptance tests** cover the UI. As described in `SPEC.md`,
-  each screen and scenario in `docs/ui-behavior-spec.md` has an e2e test
-  (WebdriverIO and tauri-driver) that checks the described behavior. A screen
-  is considered done when its tests pass. If you change UI behavior, add or
-  update the matching e2e tests in the same pull request.
+- **UI tests** cover the interface. As described in `SPEC.md`, each screen
+  and scenario in `docs/ui-behavior-spec.md` has GPUI tests
+  (`TestAppContext` / `VisualTestContext`) that check the described behavior.
+  They run headless as part of `cargo test` and never open a window. If you
+  change UI behavior, add or update the matching UI tests in the same pull
+  request.
+- **UI screenshots** show our own application's window:
+  `scripts/ui-screens.ps1` starts the app with demo data and saves the
+  screenshots to `target/ui-screens/`. A screen is considered done when its
+  tests pass and its screenshots match the specifications.
 - **Sync end-to-end tests** run two clients against a server.
 
-Once the code base exists, CI runs linters (clippy, eslint), all tests, and
-builds for Windows, macOS and Linux. Today CI runs the secret scan only.
+Tests and the screenshot script must never use the permanent profile. They
+work in temporary data directories passed through `SHELLPP_DATA_DIR`, which
+are deleted afterwards.
+
+CI runs rustfmt, clippy, the license checks, all tests and builds for
+Windows, macOS and Linux, plus the secret scan.
 
 ## Commit messages
 
@@ -213,7 +235,7 @@ Commit messages follow
 
 The scope is optional. Suggested scopes:
 
-- `desktop`: the Tauri application and the React/TypeScript UI
+- `desktop`: the GPUI Kit desktop application in `apps/desktop`
 - `core`: the shared Rust core
 - `ssh`: SSH, SFTP and port forwarding
 - `server`: the optional sync server

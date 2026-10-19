@@ -19,6 +19,40 @@ Shell++ is in early development. The specifications, the stage-0 design document
 - The application is not usable yet, and there is nothing to install.
 - Expect breaking changes to the specifications, data formats and interfaces.
 
+## Running
+
+Prerequisite: the Rust toolchain pinned in `rust-toolchain.toml` (Rust 1.99.1). Install it once with `rustup toolchain install 1.99.1`; inside the repository, `cargo` then uses it automatically.
+
+Normal development build, with your permanent profile:
+
+```sh
+cargo run -p shellpp-desktop
+```
+
+The permanent profile is the data directory from [docs/storage-format.md](docs/storage-format.md), section 2.1:
+
+- Windows: `%LOCALAPPDATA%\shellpp\`
+- macOS: `~/Library/Application Support/shellpp/`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/shellpp/`
+
+Test data in a temporary folder (300 hosts, 5 groups, some hosts with tags and colors):
+
+```sh
+cargo run -p shellpp-desktop --features dev-tools -- --demo
+```
+
+- It creates a new folder `shellpp-demo-<random>` in the system temporary directory, on Windows `%TEMP%\shellpp-demo-<random>\`, and prints its path to the console.
+- It unlocks the demo data automatically and deletes the folder when the app exits.
+- It never touches the permanent profile.
+
+To use another data folder, set the `SHELLPP_DATA_DIR` environment variable, for example in PowerShell:
+
+```powershell
+$env:SHELLPP_DATA_DIR = "D:\shellpp-data"; cargo run -p shellpp-desktop
+```
+
+The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELLPP_DATA_DIR` returns to the permanent profile.
+
 ## Specifications
 
 - [SPEC.md](SPEC.md): product specification, covering scope, principles, data model, security and sync.
@@ -39,8 +73,8 @@ The specifications were originally written in Russian. The Russian originals are
 
 ## Planned stack
 
-- Desktop app: Tauri 2 (Rust core) with React and TypeScript.
-- Terminal: xterm.js.
+- Desktop app: GPUI Kit, a native Rust UI without a webview.
+- Terminal: alacritty_terminal with our own GPUI element.
 - SSH: russh.
 - Local storage: SQLite with record-level encryption.
 - Sync server: Rust (axum) with PostgreSQL or SQLite, shipped as a Docker image.
