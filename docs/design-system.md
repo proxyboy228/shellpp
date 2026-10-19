@@ -1,7 +1,7 @@
 # Design system
 
 > The application's own visual style. All colors are defined by tokens.
-> Component code contains no "raw" hex values, only variables from the tokens file.
+> Component code contains no "raw" hex values, only tokens from the theme (section 7).
 
 Changes made by the stage 0 decisions (`docs/decisions.md`, 24–26) are marked
 [decision].
@@ -317,22 +317,39 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 
 ## 7. Implementation
 
-### 7.1 Tokens file
+### 7.1 Theme
 
-- Tokens live in `apps/desktop/src/theme/tokens.css` as CSS variables:
-  - theme-independent tokens (spacing, sizes, fonts, motion, tile colors) on
-    `:root`;
-  - the dark theme on `:root` and `[data-theme="dark"]`;
-  - the light theme on `[data-theme="light"]`;
-  - Auto: the `data-theme` attribute is absent, and
-    `@media (prefers-color-scheme: light)` applies the light values to
-    `:root:not([data-theme])`.
-- The `data-theme` attribute is set on the root element. It may also be set on
-  an inner element to show part of a page in the other theme (showcase).
-- Values in `tokens.css` match this document. `tokens.test.ts` compares them with
-  the tables in sections 2–4, checks that the Auto block repeats the light theme
-  and that `docs/ru/design-system.md` has the same values.
-- Raw color values are allowed only in `apps/desktop/src/theme/`.
+- The interface theme goes through the gpui-component theme system, which
+  gpui-kit re-exports: the `Theme` global and its `ThemeColor` fields. Kit
+  components (inputs, menus, tabs, the sidebar, the title bar, scrollbars,
+  dialogs) paint from it, and our views read the same values with `cx.theme()`.
+- The theme file is `apps/desktop/themes/graphite.json` in the gpui-component
+  theme schema: one theme set, Graphite, with two themes, `"mode": "dark"` and
+  `"mode": "light"`. Its values match this document. The mapping of our tokens
+  to `ThemeColor` fields is in 7.4.
+- Auto follows the system appearance; Light and Dark set the mode explicitly.
+  A mode change applies to all windows at once.
+- Colors that have no `ThemeColor` field are constants in
+  `apps/desktop/src/theme/palette.rs`:
+  - the tile colors `--tag-*` and `--text-on-tag` (3.1) and the port forwarding
+    type badges (3.2);
+  - the status dot colors (3.3);
+  - the keyword highlighting defaults (4.3);
+  - the theme-dependent tokens marked "palette.rs" in 7.4, each with a dark and
+    a light value.
+- A palette entry that reuses another token refers to it instead of repeating
+  its value: a badge uses a `--tag-*` color, and a status dot uses `--success`,
+  `--warning`, `--danger` or `--text-muted`.
+- Tokens that are not colors (spacing, sizes, radii, fonts, motion) are Rust
+  constants in `apps/desktop/src/theme/`. `graphite.json` also sets the kit's
+  base values from them: `font.size` is `--font-size-body`, `radius` is
+  `--radius-control` and `radius.lg` is `--radius-overlay`.
+- Raw color values are allowed only in `apps/desktop/themes/graphite.json` and
+  in `apps/desktop/src/theme/`. Views take colors from `cx.theme()` and
+  `palette.rs`, never from literals.
+- A Rust test in `apps/desktop/src/theme` compares the values of both modes of
+  `graphite.json` and the `palette.rs` constants with the tables in sections 2–4
+  and 7.4, and checks that `docs/ru/design-system.md` has the same values.
 
 ### 7.2 Terminal theme format [decision]
 
@@ -399,12 +416,13 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 
 ### 7.3 Contrast pairs [decision]
 
-- The automated test (`apps/desktop/src/theme/contrast.test.ts`) reads
-  `tokens.css` and the built-in terminal themes, draws translucent colors over
-  the surface below them, computes the WCAG 2.x contrast ratio and compares it
-  with the threshold without rounding.
-- The pair list is kept in `apps/desktop/src/theme/contrast-pairs.ts` and
-  mirrors the tables below; change both together.
+- The automated test is a Rust test in `apps/desktop/src/theme`, run by
+  `cargo test`. It reads both modes of `apps/desktop/themes/graphite.json`, the
+  `palette.rs` constants and the built-in terminal themes, draws translucent
+  colors over the surface below them, computes the WCAG 2.x contrast ratio and
+  compares it with the threshold without rounding.
+- The pair list is kept in the same test module and mirrors the tables below;
+  change both together.
 - "Base surfaces" are the seven surfaces of 2.1; "all surfaces" adds
   `--bg-pressed` and `--bg-overlay-hover`.
 
@@ -448,3 +466,61 @@ Terminal pairs, checked for every built-in theme:
   - ANSI `black`, `white` and `brightWhite` of terminal themes, and ANSI colors
     on the selection or on search matches;
   - imported themes and colors chosen by the user.
+
+### 7.4 Tokens and `ThemeColor` fields
+
+- Field names are those of `ThemeColor` in gpui-component 0.7.3; the last
+  column gives the key in `graphite.json`. Both modes use the same mapping.
+- gpui-component's `accent` is **not** our accent. It is the background of a
+  hovered or highlighted menu or list item (menu items, command and completion
+  lists, the hover of a ghost button). Our `--accent` maps to `primary` and the
+  `button_primary` fields; `accent` takes `--bg-overlay-hover`.
+- `muted_foreground` takes `--text-secondary`, not `--text-muted`: the kit uses
+  it for menu shortcut hints, secondary labels, tab text and icons, which
+  section 6 requires in `--text-secondary`.
+- "palette.rs" means that the token has no `ThemeColor` field (7.1).
+- A field that is not in the table is not used by our screens. `graphite.json`
+  still sets it to the token closest in role, so no kit default color appears.
+- Where a kit component paints a surface or a state differently from sections 2
+  and 6 (for example, the kit dialog uses `background`, and the kit derives the
+  input background from `input`), our view or wrapper component sets that color
+  from the tokens.
+
+| Token | `ThemeColor` fields | Keys in `graphite.json` |
+|---|---|---|
+| `--bg-base` | `background`, `title_bar`, `tab_bar` | `background`, `title_bar.background`, `tab_bar.background` |
+| `--bg-sidebar` | `sidebar` | `sidebar.background` |
+| `--bg-surface` | `list`, `table` | `list.background`, `table.background` |
+| `--bg-raised` | `secondary`, `muted`, `group_box` | `secondary.background`, `muted.background`, `group_box.background` |
+| `--bg-raised-hover` | `secondary_hover`, `button_hover`, `list_hover`, `table_hover` | `secondary.hover.background`, `button.hover.background`, `list.hover.background`, `table.hover.background` |
+| `--bg-pressed` | `secondary_active`, `button_active` | `secondary.active.background`, `button.active.background` |
+| `--bg-input` | palette.rs | — |
+| `--bg-overlay` | `popover` | `popover.background` |
+| `--bg-overlay-hover` | `accent` | `accent.background` |
+| `--scrim` | `overlay` | `overlay` |
+| `--border-subtle` | `border`, `sidebar_border`, `title_bar_border`, `window_border`, `table_row_border` | `border`, `sidebar.border`, `title_bar.border`, `window.border`, `table.row.border` |
+| `--border-strong` | `input`, `switch` | `input.border`, `switch.background` |
+| `--text-primary` | `foreground`, `accent_foreground`, `popover_foreground`, `secondary_foreground`, `sidebar_foreground`, `sidebar_accent_foreground`, `tab_active_foreground` | `foreground`, `accent.foreground`, `popover.foreground`, `secondary.foreground`, `sidebar.foreground`, `sidebar.accent.foreground`, `tab.active.foreground` |
+| `--text-secondary` | `muted_foreground`, `tab_foreground` | `muted.foreground`, `tab.foreground` |
+| `--text-muted` | palette.rs | — |
+| `--text-disabled` | palette.rs | — |
+| `--accent` | `primary`, `button_primary`, `sidebar_primary`, `progress_bar`, `caret` | `primary.background`, `button.primary.background`, `sidebar.primary.background`, `progress.bar.background`, `caret` |
+| `--accent-hover` | `primary_hover`, `button_primary_hover` | `primary.hover.background`, `button.primary.hover.background` |
+| `--accent-pressed` | `primary_active`, `button_primary_active` | `primary.active.background`, `button.primary.active.background` |
+| `--accent-subtle` | `list_active`, `table_active`, `sidebar_accent`, `tab_active` | `list.active.background`, `table.active.background`, `sidebar.accent.background`, `tab.active.background` |
+| `--accent-text` | `link`, `link_hover`, `link_active` | `link`, `link.hover`, `link.active` |
+| `--text-on-accent` | `primary_foreground`, `button_primary_foreground`, `sidebar_primary_foreground` | `primary.foreground`, `button.primary.foreground`, `sidebar.primary.foreground` |
+| `--focus-ring` | `ring` | `ring` |
+| `--danger` | `danger`, `button_danger` | `danger.background`, `button.danger.background` |
+| `--danger-hover` | `danger_hover`, `button_danger_hover` | `danger.hover.background`, `button.danger.hover.background` |
+| `--danger-pressed` | `danger_active`, `button_danger_active` | `danger.active.background`, `button.danger.active.background` |
+| `--danger-subtle` | palette.rs | — |
+| `--text-on-danger` | `danger_foreground`, `button_danger_foreground` | `danger.foreground`, `button.danger.foreground` |
+| `--warning` | `warning` | `warning.background` |
+| `--warning-subtle` | palette.rs | — |
+| `--success` | `success` | `success.background` |
+| `--success-subtle` | palette.rs | — |
+| `--info` | `info` | `info.background` |
+| `--info-subtle` | palette.rs | — |
+| `--shadow-overlay`, `--shadow-modal` | palette.rs (the kit theme has only an on/off `shadow` setting) | — |
+| `--tag-*`, `--text-on-tag` | palette.rs | — |

@@ -3,6 +3,7 @@
 This is the public record of the decisions taken before stage 0 (see `SPEC.md`, "Work order"). The numbering follows the list of 26 open questions raised against the specifications. All 26 proposals were accepted as written, with no owner overrides.
 
 - Status: accepted, 2026-10-18.
+- Decisions 27 and later were taken after stage 2. Each states its own date and the earlier decisions it supersedes.
 - Each entry has three parts: the context (what was unclear), the decision, and the spec impact (which specification is updated to match).
 - Decisions that set UI defaults are marked [decision] in `docs/ui-behavior-spec.md` and can be changed later through the normal specification change process.
 - Technical details are in `docs/architecture.md`, `docs/data-model.md`, `docs/storage-format.md`, `docs/sync-protocol.md` and `docs/security.md`.
@@ -391,3 +392,50 @@ This is the public record of the decisions taken before stage 0 (see `SPEC.md`, 
 - Unselected tag chips are neutral; `--accent-subtle` is kept only for the active filter.
 
 **Spec impact:** `docs/design-system.md`, §2 and §6.
+
+## After stage 2
+
+### 27. UI stack: GPUI Kit instead of Tauri + React
+
+Status: accepted, 2026-10-19 (owner's choice).
+
+**Context.** Stages 0–2 were built on Tauri 2 with a React + TypeScript webview and xterm.js. Measured idle on Windows, that build used 386 MB working set and 204 MB private memory in 8 processes. A prototype of the main window on GPUI Kit (crate `gpui-kit` 0.7.3 over `gpui-pre` 0.3.9, GPUI from the Zed editor, both Apache-2.0), with a local terminal on alacritty_terminal and portable-pty, used about 53 MB working set on the Vaults screen and about 100 MB for the whole process tree after 100,000 terminal lines with a full 10,000-line scrollback, in 3 processes (the app, conhost and the shell). The cost: GPUI is published as frequent snapshots with breaking changes, and the terminal widget is our own code.
+
+**Decision:**
+
+- The desktop UI is GPUI Kit, without a webview. `apps/desktop` is the GPUI Kit application crate `shellpp-desktop`; there is no frontend package.
+- The terminal is alacritty_terminal (parser, grid, scrollback) with our own GPUI element for rendering and input. Code from Zed's GPL-licensed crates (`terminal`, `terminal_view`) is not used or copied.
+- The mobile client gets a separate UI later. The logic stays in `crates/core` and `crates/ssh`, which never depend on GPUI.
+- UI acceptance: GPUI tests (`TestAppContext` / `VisualTestContext`, headless) plus screenshots of our own application's window.
+- Performance targets are part of `SPEC.md` ("Performance") and are checked by a benchmark.
+- The theme goes through the gpui-component theme system (`docs/design-system.md` §7).
+- The Rust toolchain is pinned to 1.99.1 in `rust-toolchain.toml`: `gpui-pre` 0.3.9 needs Rust 1.93 or later.
+
+Superseded parts of earlier decisions and documents:
+
+- D1: the frontend-only package (pnpm, Vite, React, TypeScript), `tokens.css` and the Vitest tests.
+- D2: the npm package name `@shellpp/desktop`; the desktop crate is `shellpp-desktop`.
+- D4: WebView2 and WebKitGTK as platform dependencies, and the npm license check.
+- D6: WebdriverIO and tauri-driver e2e tests and the macOS exception that came with them. Kept: the mocks behind a cargo feature that never reaches release builds, OpenSSH in Docker in the Linux job and the russh test server for Windows.
+- D7: tauri-plugin-updater and the Tauri bundler. The update rules (off by default, manual check, own source and signing key) and the package formats stay; the tools are chosen before stage 9.
+- D16: commands are read from the alacritty_terminal grid instead of the xterm.js buffer; the capture rules are unchanged.
+- D22: `data-testid` and the JSON i18n catalog. UI tests find elements by element id, not by text; the interface stays in English with one `en` string catalog.
+- `docs/security.md` §13: the Tauri CSP and capabilities.
+- `docs/architecture.md` §2–3: the parts about IPC commands and events and the webview.
+
+**Spec impact:** `SPEC.md`, "Clean room", "Default stack", "UI/UX" (acceptance), "Security", new "Performance" section, "Quality" and "Work order"; `docs/design-system.md` §7; `docs/ui-behavior-spec.md`, section 0. `docs/architecture.md` and `docs/security.md` carry a note and will be rewritten.
+
+### 28. Unimplemented sections are visible with an "in development" placeholder
+
+Status: accepted, 2026-10-19 (owner's audit of the main window).
+
+**Context.** D3 hides elements of future stages behind a stage flag. The owner's audit of the GPUI main window asks for the full window frame from the start: the persistent SFTP tab (`docs/ui-behavior-spec.md` 1.1) and all six sidebar sections (1.2), even before their screens exist.
+
+**Decision:**
+
+- The top bar always shows the persistent Vaults and SFTP tabs. The sidebar always shows all six sections: Hosts, Keychain, Port Forwarding, Snippets, Known Hosts and Logs.
+- A tab or section whose screen is not implemented yet opens an "In development" placeholder in the main area. It is not shown disabled; navigation to it works as usual.
+- This replaces D3's hide-until-stage rule for the window frame and the sidebar only. Elements of future stages inside screens (menu items, buttons, fields) stay hidden behind the stage flag.
+- Every stage report lists what is still hidden and what is shown as a placeholder.
+
+**Spec impact:** `SPEC.md`, "Work order" (hidden-feature rule); `docs/ui-behavior-spec.md`, section 0.

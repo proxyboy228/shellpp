@@ -2,6 +2,8 @@
 
 This is the threat model required by `SPEC.md` ("Security"). It states what Shell++ protects, from whom, how, and what it does not protect. It is normative: code that contradicts it is a bug, and changes to it follow the specification change process.
 
+> **Note (2026-10-19).** The UI moved from Tauri + React to GPUI Kit ([decisions.md](decisions.md), D27). The sections that describe Tauri, the webview, IPC commands and events, and the CSP (mainly section 13) are superseded by D27 and will be rewritten; where they differ, D27 and `SPEC.md` win.
+
 - `Dn` cites decision n in [decisions.md](decisions.md). "UI n.m" cites section n.m of [ui-behavior-spec.md](ui-behavior-spec.md).
 - Choices made while writing the stage 0 documents that are not in the specifications or the decisions are marked "(stage 0 decision)".
 - This document owns: the threat model, the key hierarchy, the KDF and HKDF parameters, HPKE parameters, fingerprints and human-readable secrets, lock behavior, the list of server-visible metadata, the history capture heuristics and the accepted risks.

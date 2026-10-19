@@ -18,9 +18,11 @@
 - Keyboard shortcuts are given for Windows/Linux. On macOS, Ctrl is replaced with Cmd
   where this is the platform convention; the Mac key set is described in 12.5. [decision]
 - Elements of features that belong to later stages (see SPEC.md, "Work order") are hidden
-  behind a stage flag rather than shown disabled. [decision]
+  behind a stage flag rather than shown disabled. The window frame and the sidebar are the
+  exception: the SFTP tab (1.1) and all six sidebar sections (1.2) are always shown, and one
+  whose screen is not implemented yet opens an "In development" placeholder. [decision]
 - The interface is in English. Interface strings in this document define the meaning; the final
-  texts live in the i18n catalog (`en`). e2e tests find elements by `data-testid`, not by
+  texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
 
 ---
@@ -278,10 +280,10 @@ The same form is used for creating and editing; it opens in the details panel.
    - Parent Group: group selection with search and creation of a new group on the fly; [decision]
    - Tags: tags are shown as chips with a delete button; input with autocomplete
      and creation of new tags on the fly;
-   - Color: one of the 8 tile colors (`docs/design-system.md`, 3.1), graphite by
+   - Color: one of the 8 tile colors (`--tag-*`, `docs/design-system.md`, 3.1), graphite by
      default; [decision]
-   - Notes: a multi-line free text field; [decision]
-   - Backspace: what the Backspace key sends (default / options). [decision: Default, `^?` (DEL), `^H`]
+   - Backspace: what the Backspace key sends (default / options); [decision: Default, `^?` (DEL), `^H`]
+   - Notes: a multi-line free text field. [decision]
 4. **Share this host**: opens the "Move or copy to a vault" dialog (see 2.6). Disabled until
    the host is created. [decision]
 5. **SSH**:

@@ -4,7 +4,7 @@
 - `SPEC.md` (this file): goals, principles, stack, functionality, work order.
 - `docs/ui-behavior-spec.md`: interface behavior, screen by screen.
 - `docs/design-system.md`: palette, typography, tokens, terminal themes.
-- `docs/decisions.md`: design decisions accepted before stage 0.
+- `docs/decisions.md`: design decisions accepted before stage 0 and later.
 - `docs/architecture.md`, `docs/data-model.md`, `docs/storage-format.md`,
   `docs/sync-protocol.md`, `docs/security.md`: stage 0 design documents
   (architecture, data schema, storage format, sync protocol, threat model). [decision]
@@ -31,13 +31,13 @@ Here this must be impossible by design.
   Unlicense / 0BSD / CDLA-Permissive-2.0 and public domain, for example SQLite).
   Before adding a dependency, check its license and record it in
   THIRD_PARTY_NOTICES.md. [decision]
-- System components that are not shipped (WebView2, WebKitGTK, GTK, glibc)
-  are platform dependencies. LGPL libraries bundled inside an AppImage are
-  listed in THIRD_PARTY_NOTICES.md. GPL and AGPL code is never shipped in the
-  client. [decision]
+- System components that are not shipped (the OS graphics and windowing
+  libraries, glibc) are platform dependencies. LGPL libraries bundled inside
+  an AppImage are listed in THIRD_PARTY_NOTICES.md. GPL and AGPL code is never
+  shipped in the client. [decision]
 - Development-only dependencies that are never shipped (build, lint, and test
   tools) may also use BlueOak-1.0.0 and CC-BY-4.0. CI checks licenses with
-  cargo-deny and license-checker. [decision]
+  cargo-deny. [decision]
 
 ## Principles (non-negotiable)
 1. Local-first. The application works fully offline, without an account or server.
@@ -57,8 +57,10 @@ Here this must be impossible by design.
 
 ## Default stack
 If you see a reason to replace something, propose it BEFORE starting work.
-- Desktop: Tauri 2 (Rust core) + React + TypeScript + Vite.
-- Terminal: xterm.js (addons: fit, search, webgl, web-links, unicode11).
+- Desktop UI: GPUI Kit (crate `gpui-kit`: GPUI from the Zed editor plus the
+  gpui-component library), a native Rust UI without a webview. [decision]
+- Terminal: alacritty_terminal (VT parser, grid, scrollback) + our own GPUI
+  element for rendering and input. [decision]
 - SSH/SFTP: russh + russh-sftp, key handling via ssh-key.
 - Local storage: SQLite. The entire payload of every record is encrypted;
   only the record id, coarse type, vault id, revision, key epoch, and sync
@@ -79,15 +81,16 @@ If you see a reason to replace something, propose it BEFORE starting work.
 - Sync server: Rust (axum) + PostgreSQL, SQLite for small
   installations. Docker image, docker-compose.yml, configuration via env.
 - Monorepo:
-  - apps/desktop: Tauri application
+  - apps/desktop: GPUI Kit application (crate `shellpp-desktop`) [decision]
   - crates/core: data model, encryption, sync client (reused on mobile)
   - crates/ssh: SSH, SFTP, port forwarding, agent
   - crates/term-local: local PTY and serial connections (desktop only) [decision]
   - server/: sync server
   - docs/: specifications, architecture, data schema, storage format, sync protocol,
     threat model, decisions [decision]
-- Mobile apps (iOS/Android) are built later via Tauri 2 mobile.
-  The core architecture must not get in the way of this.
+- Mobile client (iOS/Android): a separate UI, built later. The logic stays in
+  crates/core and crates/ssh, which have no GPUI dependency, so the core
+  architecture does not get in the way of this. [decision]
 
 ## Functionality
 Interface details for each item are described in `docs/ui-behavior-spec.md`.
@@ -238,12 +241,13 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   choice (the decisions behind the marks in this file are recorded in `docs/decisions.md`).
   If it gets in the way of the architecture or contradicts another place in the specification,
   say so before implementation.
-- Acceptance: for each screen and scenario in the UI specification there is an e2e test
-  (WebdriverIO + tauri-driver) that verifies the described behavior. A screen is considered
-  done when its tests pass on Linux and Windows. On macOS, where tauri-driver is not
-  available, acceptance is the build, unit and Rust integration tests, and a manual
-  checklist. In e2e builds, native dialogs, the clipboard, and launching external programs
-  are replaced by mocks behind a cargo feature that never reaches release builds. [decision]
+- Acceptance: for each screen and scenario in the UI specification there are GPUI tests
+  (`TestAppContext` / `VisualTestContext`, headless, no window is opened) that verify the
+  described behavior, plus screenshots of our application's window that are checked
+  against the UI specification and the design system. A screen is considered done when
+  its tests pass and its screenshots match. In tests, native dialogs, the clipboard, and
+  launching external programs are replaced by mocks behind a cargo feature that never
+  reaches release builds. [decision]
 
 ## Security
 - Secrets never end up in logs, in plaintext on disk, or in URLs. The allowed
@@ -255,7 +259,6 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   mode too. [decision]
 - Auto-lock on inactivity. The clipboard is cleared after copying
   a password or key.
-- Strict CSP in Tauri and a minimal set of allowed commands.
 - Threat model in docs/security.md.
 - Mandatory requirements from `docs/ui-behavior-spec.md`:
   - 4.2: history does not record input during a password prompt, strips control
@@ -266,6 +269,13 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   - 12.4 and 12.6: importing history from the server (12.4) and recording session
     output (12.6) are off by default.
 
+## Performance
+Targets, checked by a benchmark:
+- startup under 1 s (from launch to the first frame of the main window);
+- idle with 300 hosts under 150 MB RSS (the working set on Windows);
+- at most 10 MB per new session;
+- default scrollback of 10,000 lines.
+
 ## Quality
 - Unit tests for crates/core: encryption, merge during sync,
   ssh_config parser, secret filter in history.
@@ -273,10 +283,12 @@ Interface details for each item are described in `docs/ui-behavior-spec.md`.
   in the Linux CI job; Windows e2e tests use a test SSH/SFTP server built on
   russh and kept in the repository. [decision]
 - Sync E2E test: two clients + server.
-- Interface E2E tests based on the UI specification; they find elements by
-  data-testid, not by text. [decision]
+- Interface tests based on the UI specification (GPUI tests, see "UI/UX"); they find
+  elements by element id, not by text. [decision]
+- Tests and the screenshot script use a temporary data directory (`SHELLPP_DATA_DIR`)
+  and never touch the user's permanent profile.
 - Automated contrast test for color tokens.
-- CI on GitHub Actions: clippy, eslint, tests, builds for Windows, macOS, and Linux.
+- CI on GitHub Actions: clippy, rustfmt, tests, builds for Windows, macOS, and Linux.
 - Code, comments, commits, and documentation in English. The English
   specifications are canonical; their Russian versions in docs/ru/ are updated
   in the same commit. The interface is in English, with all strings in an i18n
@@ -288,18 +300,22 @@ brief report (what was done, what remains, what risks there are). Then wait
 for my confirmation.
 
 Elements of future stages are hidden behind a stage flag, not shown disabled.
-Their e2e tests are written in the stage that implements them, and every stage
-report lists what is still hidden. [decision]
+The exception is the window frame and the sidebar: the SFTP tab and all six
+sidebar sections are always shown, and one whose screen is not implemented yet
+opens an "In development" placeholder. The UI tests of a feature are written in
+the stage that implements it, and every stage report lists what is still hidden
+or shown as a placeholder. [decision]
+
+Stages 0–2 were first built on Tauri + React; their UI is rebuilt on GPUI Kit
+(`docs/decisions.md`, 27). [decision]
 
 0. Design documents in docs/: architecture, data schema, storage format,
    sync protocol, threat model (`docs/architecture.md`, `docs/data-model.md`,
    `docs/storage-format.md`, `docs/sync-protocol.md`, `docs/security.md`).
-   Plus a tokens file and base components per design-system.md, in
-   `apps/desktop` as a frontend-only package (pnpm, Vite, React, TypeScript)
-   without `src-tauri`, with a showcase page. Tests for this stage: the contrast
-   test and Vitest render tests, `tsc` and eslint, in one Linux CI job.
-   Show them before writing the main code. [decision]
-1. Monorepo skeleton, Tauri application, main window shell (UI spec,
+   Plus the theme and base components per design-system.md in `apps/desktop`,
+   with a showcase page. Tests for this stage: the contrast test and component
+   tests. Show them before writing the main code. [decision]
+1. Monorepo skeleton, GPUI Kit application, main window shell (UI spec,
    section 1), encrypted storage, master password, Hosts screen and host
    panel (sections 2–3).
 2. SSH terminal: password and key authentication, known hosts and TOFU,

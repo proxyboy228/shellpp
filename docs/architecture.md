@@ -2,6 +2,8 @@
 
 This document describes how Shell++ is built: components and their licenses, the process and window model, the main runtime flows, the platform abstraction, stages and stage flags, identifiers, the dependency policy, testing, packaging and server deployment. It is a stage 0 design document; no Rust code exists yet.
 
+> **Note (2026-10-19).** The UI moved from Tauri + React to GPUI Kit ([decisions.md](decisions.md), D27). The sections that describe Tauri, the webview, IPC commands and events, and the CSP are superseded by D27 and will be rewritten; where they differ, D27 and `SPEC.md` win. The stage flag rule is amended by D28 for the window frame and the sidebar.
+
 Marks:
 
 - (D*n*): accepted decision *n* in [decisions.md](decisions.md).
