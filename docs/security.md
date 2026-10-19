@@ -640,7 +640,7 @@ Terminal output from any host is untrusted. xterm.js renders it in its own rende
 
 ### 13.1 Content Security Policy
 
-Set in `tauri.conf.json` (`app.security.csp`); the development server gets a separate `devCsp` that adds only the local Vite origin. This is the normative release CSP; [architecture.md](architecture.md) (section 3.7) refers to it. (stage 0 decision)
+Set in `tauri.conf.json` (`app.security.csp`); the development server gets a separate `devCsp` that adds only the local Vite origin and the development-only `style-src` exception below. This is the normative release CSP; [architecture.md](architecture.md) (section 3.7) refers to it. (stage 0 decision)
 
 ```text
 default-src 'none';
@@ -660,8 +660,9 @@ Rules (stage 0 decision):
 
 - Never allowed: `'unsafe-eval'`, `'unsafe-inline'` in `script-src`, remote origins, wildcards. Fonts and icons are bundled (Inter, JetBrains Mono, Lucide).
 - If xterm.js or another dependency needs inline `<style>` elements, `'unsafe-inline'` may be added to `style-src` only, after review, and the reason is recorded here.
+- Recorded exception, development builds only (`tauri dev`, stage 1 review): `devCsp` adds `'unsafe-inline'` to `style-src`, because the Vite dev server injects the CSS modules as `<style>` elements and replaces them on hot reload. The release `csp` never contains `'unsafe-inline'`; `apps/desktop/src-tauri/tests/config.rs` checks both.
 - Tauri settings: `freezePrototype: true`, `withGlobalTauri: false`, the asset protocol disabled, Tauri's own nonce and hash injection left on.
-- Untrusted strings (host names, file names, server messages, prompts, emails) are rendered as text. `dangerouslySetInnerHTML` and `innerHTML` are not used; eslint `react/no-danger` is an error.
+- Untrusted strings (host names, file names, server messages, prompts, emails) are rendered as text. `dangerouslySetInnerHTML` and `innerHTML` are not used; eslint reports them as errors (`no-restricted-syntax` rules in `apps/desktop/eslint.config.js`, equivalent to `react/no-danger`, also covering `innerHTML`, `outerHTML` and `insertAdjacentHTML`).
 
 ### 13.2 Capabilities and commands
 

@@ -47,7 +47,7 @@ The directory policy is owned by [architecture.md](architecture.md); this table 
 - Windows uses the local (non-roaming) profile on purpose: the database belongs to one device.
 - The environment variable `SHELLPP_DATA_DIR` replaces the data directory (tests and portable use).
 - Unix permissions: directories `0700`, files `0600`. On Windows the per-user profile ACLs apply unchanged.
-- One app process opens a data directory at a time (process model in [architecture.md](architecture.md)).
+- One app process opens a data directory at a time (process model in [architecture.md](architecture.md)). The app enforces it with an exclusive OS file lock on `shellpp.lock` (section 2.2), also where the single-instance check is not available; a second process waits a few seconds for the lock (a restart), then reports a storage error.
 
 ### 2.2 Files in the data directory
 
@@ -55,6 +55,7 @@ The directory policy is owned by [architecture.md](architecture.md); this table 
 |---|---|---|
 | `shellpp.db` | the database | SQLite 3, WAL mode (section 4) |
 | `shellpp.db-wal`, `shellpp.db-shm` | SQLite write-ahead log and shared-memory index | SQLite; part of the database while the app runs |
+| `shellpp.lock` | empty; the running app holds an exclusive OS file lock on it, so a second process refuses to open the directory (section 2.1) | empty file |
 | `recordings/<file_id>.shpprec` | encrypted session output | section 8 |
 | `backups/shellpp-<UTC yyyymmddThhmmssZ>.db` | copy taken before each schema migration; the last 3 are kept | SQLite (section 12) |
 
@@ -95,6 +96,7 @@ Section 6.3 describes how the device key is used.
 - Crate `rusqlite` with feature `bundled` (SQLite is public domain, D4).
 - `PRAGMA journal_mode = WAL`, `PRAGMA foreign_keys = ON`, `PRAGMA secure_delete = ON` (freed pages are overwritten with zeros).
 - `PRAGMA synchronous = FULL`, because key material changes (password change, recovery) must survive a power loss once the server has accepted them (stage 0 decision).
+- `PRAGMA journal_size_limit = 0`, and `PRAGMA wal_checkpoint(TRUNCATE)` right after every change of key material (password change, recovery with the recovery key, recovery key reissue) and at exit, so replaced key wraps do not stay in `shellpp.db-wal` (`secure_delete` covers only the database file).
 - `PRAGMA user_version` holds the schema version (section 11). The schema below is version 1.
 
 ### 4.2 Schema, version 1
@@ -519,7 +521,7 @@ asciicast v2: newline-delimited JSON, UTF-8.
 
 - `PRAGMA user_version` is the schema version. `0` with no tables means a new database; the first run creates version 1 (section 4.2).
 - Migrations ship inside the app as an ordered list of SQL scripts, one per version step N → N + 1. They run at start, before unlock: they never need keys and never touch envelope or wrap bytes.
-- Before the first migration step, the app writes a consistent copy with `VACUUM INTO 'backups/shellpp-<UTC yyyymmddThhmmssZ>.db'`, then keeps only the 3 newest copies.
+- Before the first migration step, the app writes a consistent copy with `VACUUM INTO` to `backups/shellpp-<UTC yyyymmddThhmmssZ>.db.tmp`, syncs it and renames it to `backups/shellpp-<UTC yyyymmddThhmmssZ>.db` (section 10), then keeps only the 3 newest copies. Leftover `.db.tmp` files from an interrupted copy are deleted.
 - Each step runs in its own transaction that also sets `PRAGMA user_version = N + 1`. A failed step rolls back and the app reports the error with the path of the backup.
 - Migrations are additive: new tables, new columns with defaults, new indexes. They never rename or drop the tables and columns of section 4.2.
 - If `user_version` is higher than the app knows, the database was written by a newer app: the app refuses to open it and does not modify it.
