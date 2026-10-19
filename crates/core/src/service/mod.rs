@@ -26,6 +26,7 @@
 mod connect;
 pub mod dto;
 pub mod host_api;
+pub mod keychain;
 mod lock_ops;
 mod records;
 mod session;
@@ -33,14 +34,15 @@ mod session;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use secrecy::SecretString;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
 use crate::error::CoreError;
-use crate::lock::{AutoLock, ClipboardGuard, RecoveryGrant};
+use crate::lock::lockout::META_UNLOCK_LOCKOUT;
+use crate::lock::{AutoLock, ClipboardGuard, FirstRunOptions, Lockout, RecoveryGrant};
 use crate::model::time::{IdGenerator, format_timestamp};
 use crate::notify::NotificationCenter;
 use crate::os_detect::DetectedOs;
@@ -82,6 +84,9 @@ struct Inner {
     notifications: NotificationCenter,
     clipboard_guard: Option<ClipboardGuard>,
     auto_lock: AutoLock,
+    /// Wrong master passwords in a row and the current pause (D29); kept in
+    /// `meta` across restarts.
+    lockout: Lockout,
     recovery_grant: RecoveryGrant,
     /// State version of the last emitted event.
     v: u64,
@@ -138,6 +143,7 @@ impl Core {
             LockState::FirstRun
         };
         let settings = Settings::new(platform.os, &store.settings()?);
+        let lockout = Lockout::from_meta(store.meta_get(META_UNLOCK_LOCKOUT)?.as_deref());
         let now = platform.clock.now();
         let inner = Inner {
             store,
@@ -148,6 +154,7 @@ impl Core {
             notifications: NotificationCenter::new(),
             clipboard_guard: None,
             auto_lock: AutoLock::new(now),
+            lockout,
             recovery_grant: RecoveryGrant::default(),
             v: 0,
             device_unlock_allowed: true,
@@ -304,6 +311,17 @@ impl Core {
         inner.auto_lock.activity(now);
     }
 
+    /// `true` when unlocked and the auto-lock interval has passed since the
+    /// last input: [`Core::tick`] and [`Core::activity`] would lock now. Only
+    /// a check: a host that saves pending edits before locking asks this
+    /// first, saves, then calls [`Core::lock`]; the tick stays the backstop.
+    pub fn auto_lock_due(&self) -> bool {
+        let now = self.now();
+        let mut inner = self.inner();
+        let interval = inner.settings.auto_lock_interval();
+        inner.state == LockState::Unlocked && inner.auto_lock.due(now, interval)
+    }
+
     /// Called by the host about once per second: auto-lock check and the
     /// 30-second clearing of sensitive clipboard content.
     pub fn tick(&self) {
@@ -451,14 +469,51 @@ impl Core {
     /// First run (UI 13.1): creates ids, the personal vault, wraps and the
     /// records `vault_meta`, `recovery_key`, `device_info`; leaves the app
     /// unlocked; returns the recovery key text. `wrong_state` unless `first_run`;
-    /// `validation_failed` (`password`, `too_short`) under 10 characters.
+    /// `validation_failed` (`password`, `too_short`) under 8 characters.
     pub fn first_run_setup(&self, password: SecretString) -> Result<RecoveryKeyResult, CoreError> {
         self.first_run_setup_impl(password)
     }
 
-    /// `invalid_password` on a failed unwrap; `wrong_state` unless `locked`.
+    /// UI 13.1 as the app runs it (D29): the first run, then "Remember on
+    /// this device" when `options` ask for it and an OS keychain is there
+    /// (a keychain failure only leaves the option off). The recovery key is
+    /// created and kept in the vault but not returned: local mode never shows
+    /// it. Errors as [`Core::first_run_setup`].
+    pub fn first_run_setup_with(
+        &self,
+        password: SecretString,
+        options: FirstRunOptions,
+    ) -> Result<LockStatus, CoreError> {
+        self.first_run_setup_with_impl(password, options)
+    }
+
+    /// `invalid_password` on a failed unwrap; `wrong_state` unless `locked`;
+    /// `too_many_attempts` during a pause after 5 wrong passwords in a row
+    /// (D29), checked before any key derivation.
     pub fn unlock(&self, password: SecretString) -> Result<LockStatus, CoreError> {
         self.unlock_impl(password)
+    }
+
+    /// The time left before the next unlock attempt is accepted; `None` when
+    /// an attempt is allowed now (D29).
+    pub fn unlock_retry_after(&self) -> Option<Duration> {
+        let now = self.now();
+        self.inner().lockout.remaining(now)
+    }
+
+    /// Wrong master passwords since the last successful unlock (D29).
+    pub fn unlock_failures(&self) -> u32 {
+        self.inner().lockout.failures()
+    }
+
+    /// "Forgot password?" -> "Start with a new vault" (UI 13.2, D29): only
+    /// while `locked`. Closes the database, renames `shellpp.db` (and its
+    /// `-wal` / `-shm`) to `shellpp.db.<UTC yyyymmddThhmmssZ>.old`, never
+    /// deleting it, opens a new empty database and returns to `first_run`
+    /// (settings and the attempt counter start over). Returns the archive's
+    /// file name. On failure the old database stays in place and open.
+    pub fn start_new_vault(&self) -> Result<String, CoreError> {
+        self.start_new_vault_impl()
     }
 
     /// Wipes keys, index and sensitive clipboard content. Idempotent while locked.

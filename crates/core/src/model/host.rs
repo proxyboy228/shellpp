@@ -192,6 +192,16 @@ fn normalize(
         if let Some(port) = opt_int(&telnet, "port", "telnet.port", 1, 65535, errors) {
             telnet.insert("port".into(), json!(port));
         }
+        // The login name typed at the Telnet prompt (UI 3.1 "Add Telnet"):
+        // `string(256)?`, not inherited.
+        match opt_string(&telnet, "username", "telnet.username", 256, errors) {
+            Some(username) => {
+                telnet.insert("username".into(), Value::String(username));
+            }
+            None => {
+                telnet.remove("username");
+            }
+        }
         telnet
     });
     if let Some(protocol) = opt_enum(
@@ -767,6 +777,40 @@ mod tests {
         .unwrap();
         assert_eq!(data["primary_protocol"], json!("telnet"));
         assert_eq!(data["telnet"], json!({"port": 23}));
+    }
+
+    #[test]
+    fn telnet_username_is_validated_and_trimmed() {
+        let data = build(
+            &map(json!({"address": "h.example.com", "telnet": {"port": 2323, "username": " admin "}})),
+            None,
+            &no_secrets(),
+            &rules(),
+        )
+        .unwrap();
+        assert_eq!(data["telnet"], json!({"port": 2323, "username": "admin"}));
+        let blank = build(
+            &map(json!({"address": "h.example.com", "telnet": {"username": "  "}})),
+            None,
+            &no_secrets(),
+            &rules(),
+        )
+        .unwrap();
+        assert_eq!(blank["telnet"], json!({}));
+        assert_eq!(
+            errors_of(build(
+                &map(
+                    json!({"address": "h.example.com", "telnet": {"port": 0, "username": "a\u{7}"}})
+                ),
+                None,
+                &no_secrets(),
+                &rules()
+            )),
+            vec![
+                ("telnet.port".into(), OutOfRange),
+                ("telnet.username".into(), Invalid)
+            ]
+        );
     }
 
     #[test]

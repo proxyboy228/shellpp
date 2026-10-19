@@ -17,8 +17,9 @@ use super::{CryptoError, PlatformClass};
 pub const ALG_ARGON2ID: &str = "argon2id";
 /// KDF scheme version 1: Argon2id, 32-byte output, HKDF labels `shellpp/v1/*`.
 pub const KDF_VERSION_1: u32 = 1;
-/// Minimum master password length in Unicode scalar values after NFC.
-pub const MIN_PASSWORD_CHARS: usize = 10;
+/// Minimum master password length in Unicode scalar values after NFC
+/// (decision D29: 8, without composition rules).
+pub const MIN_PASSWORD_CHARS: usize = 8;
 /// Length of the stored random `kdf_salt`.
 pub const KDF_SALT_LEN: usize = 16;
 
@@ -329,16 +330,16 @@ mod tests {
 
     #[test]
     fn password_length_counts_scalars_after_nfc() {
-        assert!(!password_length_ok(&SecretString::from("123456789")));
-        assert!(password_length_ok(&SecretString::from("1234567890")));
-        // 9 composed characters written with 18 code points: too short after NFC.
-        let decomposed = "e\u{0301}".repeat(9);
+        assert!(!password_length_ok(&SecretString::from("1234567")));
+        assert!(password_length_ok(&SecretString::from("12345678")));
+        // 7 composed characters written with 14 code points: too short after NFC.
+        let decomposed = "e\u{0301}".repeat(7);
         assert!(!password_length_ok(&SecretString::from(
             decomposed.as_str()
         )));
-        // Ten emoji (4 UTF-8 bytes each) count as ten.
+        // Eight emoji (4 UTF-8 bytes each) count as eight.
         assert!(password_length_ok(&SecretString::from(
-            "\u{1F600}".repeat(10)
+            "\u{1F600}".repeat(8)
         )));
         assert!(!password_length_ok(&SecretString::from("")));
     }

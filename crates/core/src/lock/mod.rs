@@ -1,13 +1,15 @@
 //! Lock state machine: first run, unlock (password or device key), lock,
 //! recovery unlock, password change, recovery key show and reissue, "remember
-//! on this device" and the auto-lock timer (docs/security.md, sections 5.9 and
-//! 8; docs/architecture.md, sections 3.3 and 4.1; UI 13.1-13.4).
+//! on this device", the auto-lock timer, the unlock attempt limit and "start
+//! with a new vault" (docs/security.md, sections 5.9 and 8; docs/architecture.md,
+//! sections 3.3 and 4.1; UI 13.1-13.4; decision D29).
 //!
 //! This module holds the pieces that do not need the facade's mutex: password
 //! rules, the key derivation from a password (Argon2id, slow: never called
-//! while the core mutex is held), the auto-lock timer, the recovery key grant
-//! and the clipboard guard. The state transitions themselves live in
-//! [`crate::service::Core`], which owns the store and the key ring.
+//! while the core mutex is held), the auto-lock timer, the attempt limit
+//! ([`lockout`]), the archive of the data file ([`new_vault`]), the recovery
+//! key grant and the clipboard guard. The state transitions themselves live
+//! in [`crate::service::Core`], which owns the store and the key ring.
 //!
 //! State machine (architecture 3.3):
 //!
@@ -15,9 +17,20 @@
 //! first_run --first_run_setup--> unlocked
 //! locked    --unlock / recovery_unlock / device key at launch--> unlocked
 //! unlocked  --lock / auto-lock--> locked
+//! locked    --start_new_vault (data file archived)--> first_run
 //! ```
 //!
+//! Local mode (D29): the recovery key is still created at first run and kept
+//! in the vault (the sync design and the key rotations need its wrap), but
+//! the app does not show it; a forgotten master password cannot be
+//! recovered locally.
+//!
 //! Owner: W2.
+
+pub mod lockout;
+pub mod new_vault;
+
+pub use lockout::Lockout;
 
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -39,12 +52,30 @@ pub const CLIPBOARD_RETRY_FOR: Duration = Duration::from_secs(5 * 60);
 /// Removed records can be restored for 60 seconds (plan decision 14).
 pub const UNDO_WINDOW: Duration = Duration::from_secs(60);
 
-/// A new master password must have at least 10 Unicode scalar values after NFC.
+/// A new master password must have at least [`crypto::MIN_PASSWORD_CHARS`]
+/// (8) Unicode scalar values after NFC; there are no composition rules (D29).
 pub fn check_new_password(password: &SecretString, field: &str) -> Result<(), CoreError> {
     if crypto::password_length_ok(password) {
         Ok(())
     } else {
         Err(CoreError::field(field, ValidationReason::TooShort))
+    }
+}
+
+/// Options of the first run (UI 13.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstRunOptions {
+    /// "Remember on this device": store a device key in the OS keychain so
+    /// the app unlocks at launch without the password. On by default (D29);
+    /// ignored without an OS keychain.
+    pub remember_device: bool,
+}
+
+impl Default for FirstRunOptions {
+    fn default() -> Self {
+        Self {
+            remember_device: true,
+        }
     }
 }
 
@@ -237,8 +268,11 @@ mod tests {
 
     #[test]
     fn password_length_rule() {
-        assert!(check_new_password(&SecretString::from("123456789"), "password").is_err());
-        assert!(check_new_password(&SecretString::from("1234567890"), "password").is_ok());
+        assert!(check_new_password(&SecretString::from("1234567"), "password").is_err());
+        assert!(check_new_password(&SecretString::from("12345678"), "password").is_ok());
+        // No composition rules: eight spaces or one repeated letter are fine.
+        assert!(check_new_password(&SecretString::from("        "), "password").is_ok());
+        assert!(check_new_password(&SecretString::from("aaaaaaaa"), "password").is_ok());
         match check_new_password(&SecretString::from("short"), "new_password") {
             Err(CoreError::Validation(errors)) => {
                 assert_eq!(errors[0].field, "new_password");

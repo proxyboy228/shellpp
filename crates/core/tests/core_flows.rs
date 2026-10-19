@@ -73,7 +73,7 @@ fn first_run_lock_unlock_round_trip() {
     assert!(matches!(all_hosts(&core), Err(CoreError::Locked)));
     assert!(matches!(core.vaults(), Err(CoreError::Locked)));
     let short = core
-        .first_run_setup(SecretString::from("123456789"))
+        .first_run_setup(SecretString::from("1234567"))
         .unwrap_err();
     assert_eq!(
         common::reasons(short),
@@ -508,6 +508,7 @@ fn auto_lock_follows_the_wall_clock() {
     set_setting(core, "security.auto_lock_minutes", json!(1));
     core.activity();
     clock.advance(Duration::from_secs(59));
+    assert!(!core.auto_lock_due());
     core.tick();
     assert!(core.is_unlocked());
     core.activity();
@@ -520,8 +521,12 @@ fn auto_lock_follows_the_wall_clock() {
     assert!(core.is_unlocked());
     clock.advance(Duration::from_secs(61));
     app.env.take_events();
+    // The check alone does not lock: a host saves pending edits first.
+    assert!(core.auto_lock_due());
+    assert!(core.is_unlocked());
     core.tick();
     assert!(!core.is_unlocked());
+    assert!(!core.auto_lock_due(), "never due while locked");
     let events = app.env.take_events();
     assert!(matches!(
         events[0].kind,

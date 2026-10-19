@@ -809,7 +809,8 @@ fn settings_are_readable_while_locked_and_validated() {
     let env = Env::new();
     let core = env.open();
     let values = core.settings_get().unwrap();
-    assert_eq!(values["security.auto_lock_minutes"], json!(15));
+    // "Never" by default (decision D29).
+    assert_eq!(values["security.auto_lock_minutes"], Value::Null);
     assert_eq!(values["view.hosts.sort"], json!("manual"));
     assert_eq!(values["shortcuts.preset"], json!("pc"));
     assert!(matches!(
@@ -850,7 +851,7 @@ fn settings_are_readable_while_locked_and_validated() {
     let mut values = BTreeMap::new();
     values.insert("view.hosts.layout".to_owned(), json!("list"));
     values.insert("view.hosts.sort".to_owned(), json!("manual"));
-    values.insert("security.auto_lock_minutes".to_owned(), Value::Null);
+    values.insert("security.auto_lock_minutes".to_owned(), json!(30));
     let result = core
         .settings_set(SettingsSetInput {
             values,
@@ -878,7 +879,7 @@ fn settings_are_readable_while_locked_and_validated() {
     let core = env.open();
     let values = core.settings_get().unwrap();
     assert_eq!(values["view.hosts.layout"], json!("list"));
-    assert_eq!(values["security.auto_lock_minutes"], Value::Null);
+    assert_eq!(values["security.auto_lock_minutes"], json!(30));
     assert_eq!(core.snapshot().settings["view.hosts.layout"], json!("list"));
     core.unlock(password).unwrap();
     core.settings_set(SettingsSetInput {

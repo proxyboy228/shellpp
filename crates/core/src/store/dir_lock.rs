@@ -109,6 +109,30 @@ mod tests {
         other.try_lock().expect("released with the last store");
     }
 
+    /// "Start with a new vault" closes the database while it keeps a handle:
+    /// no other process can take the directory meanwhile, and the new store
+    /// shares the lock.
+    #[test]
+    fn a_handle_keeps_the_directory_locked_after_the_store_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = crate::store::Store::open(tmp.path(), "0.1.0").unwrap();
+        let handle = store.dir_lock().expect("a file store holds the lock");
+        drop(store);
+        let other = open_lock_file(&tmp.path().join(LOCK_FILE_NAME)).unwrap();
+        assert!(matches!(other.try_lock(), Err(TryLockError::WouldBlock)));
+        let (again, _) = crate::store::Store::open(tmp.path(), "0.1.0").expect("shared");
+        drop(handle);
+        assert!(matches!(other.try_lock(), Err(TryLockError::WouldBlock)));
+        drop(again);
+        other.try_lock().expect("released with the last handle");
+        assert!(
+            crate::store::Store::open_in_memory()
+                .unwrap()
+                .dir_lock()
+                .is_none()
+        );
+    }
+
     #[test]
     fn waits_for_a_process_that_is_exiting_then_gives_up() {
         let tmp = tempfile::tempdir().unwrap();

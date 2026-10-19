@@ -1,6 +1,7 @@
 //! Record payloads and types for stage 1 (`vault_meta`, `recovery_key`,
-//! `device_info`, `host`, `group`) and stage 2 (`key`, `known_host`,
-//! `history_entry`, `connection_log_entry`), validation and normalization, the draft
+//! `device_info`, `host`, `group`, `identity`) and stage 2 (`key`,
+//! `known_host`, `history_entry`, `connection_log_entry`), validation and
+//! normalization, the draft
 //! rule, group tree and inheritance helpers, manual order keys and the hybrid
 //! logical clock (docs/data-model.md, sections 1-8, 16, 18.1;
 //! docs/sync-protocol.md, section 6.2).
@@ -21,6 +22,7 @@ pub mod group;
 pub mod history_entry;
 pub mod hlc;
 pub mod host;
+pub mod identity;
 pub mod inherit;
 pub mod key;
 pub mod known_host;

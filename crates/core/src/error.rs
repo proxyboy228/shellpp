@@ -22,7 +22,7 @@ pub enum ValidationReason {
     Required,
     /// Longer than the field limit.
     TooLong,
-    /// Shorter than the minimum (for example a master password under 10 characters).
+    /// Shorter than the minimum (for example a master password under 8 characters).
     TooShort,
     /// Not a valid value for this field (wrong characters, format or enum value).
     Invalid,
@@ -116,6 +116,10 @@ pub enum CoreError {
     /// The master password did not open the vault key.
     #[error("invalid password")]
     InvalidPassword,
+    /// Unlock attempts pause after 5 wrong master passwords in a row
+    /// (decision D29); `retry_after_secs` is the time left, rounded up.
+    #[error("too many attempts")]
+    TooManyAttempts { retry_after_secs: u64 },
     /// The recovery key is well-formed but does not open the recovery wrap.
     #[error("invalid recovery key")]
     InvalidRecoveryKey,
@@ -171,6 +175,7 @@ impl CoreError {
             Self::Locked => "locked",
             Self::WrongState => "wrong_state",
             Self::InvalidPassword => "invalid_password",
+            Self::TooManyAttempts { .. } => "too_many_attempts",
             Self::InvalidRecoveryKey => "invalid_recovery_key",
             Self::NotFound => "not_found",
             Self::Validation(_) => "validation_failed",
@@ -190,12 +195,16 @@ impl CoreError {
 
     /// Code-specific details: `{"errors": [{"field", "reason"}]}` for
     /// `validation_failed`, `{"found": N}` for `newer_schema`,
-    /// `{"reason": "..."}` for `ssh_error`, `{}` otherwise.
+    /// `{"reason": "..."}` for `ssh_error`, `{"retry_after_secs": N}` for
+    /// `too_many_attempts`, `{}` otherwise.
     pub fn details(&self) -> Value {
         match self {
             Self::Validation(errors) => json!({ "errors": errors }),
             Self::NewerSchema { found } => json!({ "found": found }),
             Self::Ssh(reason) => json!({ "reason": reason }),
+            Self::TooManyAttempts { retry_after_secs } => {
+                json!({ "retry_after_secs": retry_after_secs })
+            }
             _ => json!({}),
         }
     }

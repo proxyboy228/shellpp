@@ -49,7 +49,8 @@ enum Kind {
     NullableText(usize),
     /// `https://` URL of at most 2048 bytes, or `null`.
     NullableHttpsUrl,
-    /// 1, 5, 15, 30, 60 or `null` (never).
+    /// 1, 5, 15, 30, 60 or `null` (never). The app offers Never, 5, 15, 30
+    /// and 60 (decision D29); 1 stays valid for tests and older values.
     AutoLock,
     ThemeRef,
     /// Object: action id -> shortcut string or `null`.
@@ -102,7 +103,8 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
         json!("auto"),
     );
     add("appearance.ui_zoom", Kind::Number(0.5, 2.0), json!(1.0));
-    add(AUTO_LOCK_KEY, Kind::AutoLock, json!(15));
+    // Never by default (decision D29).
+    add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
     add("terminal.autocomplete", Kind::Enum(&["off"]), json!("off"));
     add("terminal.autoreconnect", Kind::Bool, json!(true));
     add("terminal.record_history", Kind::Bool, json!(true));
@@ -552,7 +554,7 @@ mod tests {
         let values = settings.values();
         assert_eq!(values["appearance.ui_theme"], json!("auto"));
         assert_eq!(values["appearance.ui_zoom"], json!(1.0));
-        assert_eq!(values[AUTO_LOCK_KEY], json!(15));
+        assert_eq!(values[AUTO_LOCK_KEY], Value::Null);
         assert_eq!(values["view.hosts.sort"], json!("manual"));
         assert_eq!(values["view.keychain.sort"], json!("name"));
         assert_eq!(values["view.hosts.layout"], json!("grid"));
@@ -570,23 +572,23 @@ mod tests {
             Settings::new(OsKind::Macos, &[]).get("shortcuts.preset"),
             Some(json!("mac"))
         );
-        assert_eq!(
-            settings.auto_lock_interval(),
-            Some(Duration::from_secs(900))
-        );
+        assert_eq!(settings.auto_lock_interval(), None);
     }
 
     #[test]
     fn stored_rows_and_invalid_rows() {
         let rows = vec![
-            (AUTO_LOCK_KEY.to_owned(), "null".to_owned()),
+            (AUTO_LOCK_KEY.to_owned(), "30".to_owned()),
             ("appearance.ui_theme".to_owned(), "\"neon\"".to_owned()),
             ("view.hosts.layout".to_owned(), "\"list\"".to_owned()),
             ("unknown.key".to_owned(), "1".to_owned()),
         ];
         let settings = Settings::new(OsKind::Linux, &rows);
-        assert_eq!(settings.get(AUTO_LOCK_KEY), Some(Value::Null));
-        assert_eq!(settings.auto_lock_interval(), None);
+        assert_eq!(settings.get(AUTO_LOCK_KEY), Some(json!(30)));
+        assert_eq!(
+            settings.auto_lock_interval(),
+            Some(Duration::from_secs(1800))
+        );
         assert_eq!(settings.get("appearance.ui_theme"), Some(json!("auto")));
         assert_eq!(settings.get("view.hosts.layout"), Some(json!("list")));
         assert_eq!(settings.get("unknown.key"), None);
@@ -634,7 +636,7 @@ mod tests {
         let mut settings = Settings::new(OsKind::Windows, &[]);
         let update = settings
             .prepare(&input(
-                json!({AUTO_LOCK_KEY: null, "view.hosts.layout": "grid", "appearance.ui_zoom": 1.1}),
+                json!({AUTO_LOCK_KEY: 5, "view.hosts.layout": "grid", "appearance.ui_zoom": 1.1}),
                 &[],
             ))
             .unwrap();
@@ -645,16 +647,19 @@ mod tests {
             changed,
             vec!["appearance.ui_zoom".to_owned(), AUTO_LOCK_KEY.to_owned()]
         );
-        assert_eq!(settings.auto_lock_interval(), None);
+        assert_eq!(
+            settings.auto_lock_interval(),
+            Some(Duration::from_secs(300))
+        );
 
         let reset = settings
             .prepare(&input(json!({}), &[AUTO_LOCK_KEY]))
             .unwrap();
         assert_eq!(reset.deletes, vec![AUTO_LOCK_KEY.to_owned()]);
         assert_eq!(settings.apply(&reset), vec![AUTO_LOCK_KEY.to_owned()]);
-        assert_eq!(settings.get(AUTO_LOCK_KEY), Some(json!(15)));
+        assert_eq!(settings.get(AUTO_LOCK_KEY), Some(Value::Null));
         let rows = update.put_rows();
-        assert!(rows.contains(&(AUTO_LOCK_KEY.to_owned(), "null".to_owned())));
+        assert!(rows.contains(&(AUTO_LOCK_KEY.to_owned(), "5".to_owned())));
     }
 
     #[test]

@@ -10,16 +10,18 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::session::{PendingWrite, Session};
-use super::{Core, Inner, checkpoint, device_row_exists};
+use super::{Core, Inner, checkpoint, device_row_exists, open_error};
 use crate::crypto::{self, Key32};
 use crate::error::{CoreError, FieldError, ValidationReason};
 use crate::ids;
-use crate::lock::{self, PasswordMaterial};
+use crate::lock::lockout::{self, META_UNLOCK_LOCKOUT};
+use crate::lock::{self, AutoLock, FirstRunOptions, Lockout, PasswordMaterial};
 use crate::model::hlc::HlcClock;
 use crate::model::time::{format_timestamp, unix_ms};
 use crate::model::types::RecordKind;
 use crate::platform::{Availability, OsKind};
 use crate::service::dto::{CoreEventKind, LockState, LockStatus, RecoveryKeyResult};
+use crate::settings::Settings;
 use crate::store::{
     KeyWrapRow, LocalAuthRow, META_CREATED_AT, META_DB_ID, META_DEVICE_ID, Store, VaultRow,
     WrapKind,
@@ -286,6 +288,9 @@ impl Core {
         inner.personal_vault_id = Some(vault_id);
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
+        if inner.lockout.reset() {
+            Self::save_lockout(inner);
+        }
         tracing::info!("unlocked");
         // Stage 2: connection log ends held while locked (stage 2 plan,
         // section 4.4); emits its own `records:changed`.
@@ -415,27 +420,170 @@ impl Core {
     pub(super) fn unlock_impl(&self, password: SecretString) -> Result<LockStatus, CoreError> {
         let available = self.remember_available();
         let context = {
-            let inner = self.inner();
+            let mut guard = self.inner();
+            let inner = &mut *guard;
             if inner.state != LockState::Locked {
                 return Err(CoreError::WrongState);
             }
-            key_context(&inner.store)?
+            // The attempt limit (D29) is checked before Argon2id runs.
+            let now = self.now();
+            if let Some(left) = inner.lockout.remaining(now) {
+                return Err(CoreError::TooManyAttempts {
+                    retry_after_secs: lockout::whole_seconds(left),
+                });
+            }
+            let context = key_context(&inner.store)?;
+            // The attempt counts as a wrong password until Argon2id proves
+            // otherwise, under the same lock as the check: concurrent unlocks
+            // (another window, another caller) see the pause as soon as the
+            // attempt that earns it starts, so they cannot guess in parallel.
+            inner.lockout.record_failure(now);
+            Self::save_lockout(inner);
+            context
         };
         let class = self.platform.class;
         let material = PasswordMaterial::from_row(&context.local_auth)?;
         let kek = material.derive_kek(&password, class)?;
         drop(password);
-        let vault_key =
-            vault::open_wrap(&context.kek_row, &kek).map_err(|_| CoreError::InvalidPassword)?;
+        let vault_key = match vault::open_wrap(&context.kek_row, &kek) {
+            Ok(key) => key,
+            Err(_) => {
+                drop(kek);
+                self.unlock_failed();
+                return Err(CoreError::InvalidPassword);
+            }
+        };
         drop(kek);
 
-        let mut inner = self.inner();
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        // The password is right: the attempt reserved above was no failure.
+        if inner.lockout.reset() {
+            Self::save_lockout(inner);
+        }
         if inner.state != LockState::Locked || !key_rows_unchanged(&inner.store, &context)? {
             return Err(CoreError::WrongState);
         }
         let now = self.now();
-        self.start_session(&mut inner, &context, vault_key, now)?;
-        Ok(self.status(&inner, available))
+        self.start_session(inner, &context, vault_key, now)?;
+        Ok(self.status(inner, available))
+    }
+
+    /// Logs a wrong master password (D29). [`Core::unlock_impl`] counted it
+    /// and stored the counter before Argon2id ran.
+    fn unlock_failed(&self) {
+        let now = self.now();
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        let failures = inner.lockout.failures();
+        match inner.lockout.remaining(now) {
+            Some(pause) => tracing::warn!(
+                failures,
+                pause_s = lockout::whole_seconds(pause),
+                "wrong master password; unlock paused"
+            ),
+            None => tracing::info!(failures, "wrong master password"),
+        }
+    }
+
+    /// Writes the attempt counter to `meta` (best effort: on failure it
+    /// stays in memory for this run).
+    fn save_lockout(inner: &mut Inner) {
+        let text = inner.lockout.to_meta();
+        if let Err(error) = inner
+            .store
+            .write(|tx| tx.meta_set(META_UNLOCK_LOCKOUT, &text))
+        {
+            tracing::warn!(code = error.code(), "unlock attempt counter not saved");
+        }
+    }
+
+    pub(super) fn first_run_setup_with_impl(
+        &self,
+        password: SecretString,
+        options: FirstRunOptions,
+    ) -> Result<LockStatus, CoreError> {
+        let recovery = self.first_run_setup_impl(password)?;
+        // Local mode never shows the recovery key (D29); it stays in the vault.
+        drop(recovery);
+        self.inner().recovery_grant.clear();
+        if options.remember_device
+            && self.remember_available()
+            && let Err(error) = self.remember_device_set_impl(true)
+        {
+            tracing::warn!(code = error.code(), "remember on this device not turned on");
+        }
+        Ok(self.lock_status())
+    }
+
+    pub(super) fn start_new_vault_impl(&self) -> Result<String, CoreError> {
+        // No keychain or rotation work may run while the database changes.
+        let _remember = self.remember_lock();
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        if inner.state != LockState::Locked {
+            return Err(CoreError::WrongState);
+        }
+        let data_dir = inner
+            .store
+            .data_dir()
+            .map(std::path::Path::to_path_buf)
+            .ok_or(CoreError::Unavailable)?;
+        checkpoint(&inner.store);
+        // The directory stays locked until the new store holds it: another
+        // process must not open the directory while no database is in place.
+        // `Store::open` below shares this lock (same process).
+        let _dir_lock = inner.store.dir_lock();
+        // Closes the database file (Windows cannot rename an open file).
+        drop(std::mem::replace(
+            &mut inner.store,
+            Store::open_in_memory()?,
+        ));
+        let app_version = self.config.app_version.clone();
+        let reopen_old = |inner: &mut Inner| match Store::open(&data_dir, &app_version) {
+            Ok((store, _)) => inner.store = store,
+            Err(error) => tracing::error!(code = error.code(), "database not reopened"),
+        };
+        let now = self.now();
+        let archived = match lock::new_vault::archive_data_file(&data_dir, now) {
+            Ok(name) => name,
+            Err(error) => {
+                reopen_old(inner);
+                return Err(CoreError::Store(error.into()));
+            }
+        };
+        let store = match Store::open(&data_dir, &self.config.app_version) {
+            Ok((store, _)) => store,
+            Err(error) => {
+                // Sets the half-made database aside (never deletes it) and
+                // puts the archive back.
+                if lock::new_vault::restore_archived(&data_dir, &archived, now).is_err() {
+                    tracing::error!("archived database not put back");
+                }
+                reopen_old(inner);
+                return Err(open_error(error));
+            }
+        };
+        let settings = match store.settings() {
+            Ok(rows) => Settings::new(self.platform.os, &rows),
+            Err(_) => Settings::new(self.platform.os, &[]),
+        };
+        inner.store = store;
+        inner.settings = settings;
+        inner.session = None;
+        inner.personal_vault_id = None;
+        inner.lockout = Lockout::default();
+        inner.recovery_grant.clear();
+        inner.auto_lock = AutoLock::new(now);
+        inner.device_unlock_allowed = true;
+        inner.state = LockState::FirstRun;
+        // The old device key (if any) stays in the OS keychain under the old
+        // database id: it opens only the archived file, which is kept too.
+        tracing::info!("data file archived; first run");
+        self.lock_changed(inner);
+        let keys: Vec<String> = inner.settings.keys().map(str::to_owned).collect();
+        self.emit(inner, CoreEventKind::SettingsChanged { keys });
+        Ok(archived)
     }
 
     pub(super) fn try_device_unlock_impl(&self) -> Result<bool, CoreError> {
@@ -845,20 +993,33 @@ impl Core {
             }
             result
         } else {
-            let status = {
-                let mut inner = self.inner();
-                let session = Self::require_session(&inner)?;
-                let vault_id = session.ring.vault_id();
-                let epoch = session.ring.current_epoch();
-                inner
-                    .store
-                    .write(|tx| tx.key_wrap_delete(&vault_id, epoch, WrapKind::Device))?;
-                tracing::info!("remember on this device turned off");
-                self.remember_changed(&mut inner, vault_id);
-                self.status(&inner, available)
-            };
-            self.delete_device_key(&db_id);
-            Ok(status)
+            // The keychain item goes first. When the OS refuses to delete it,
+            // nothing changes: the option stays on, and Settings says so and
+            // can try again. A `device` row left without its item (locked
+            // meanwhile, or the write below failed) opens nothing; the next
+            // launch asks for the password, and turning the option off again
+            // removes the row.
+            if self
+                .platform
+                .secret_store
+                .delete(&ids::keychain_account(&db_id))
+                .is_err()
+            {
+                tracing::warn!("device key could not be deleted; remember stays on");
+                return Err(CoreError::Unavailable);
+            }
+            let mut inner = self.inner();
+            let session = Self::require_session(&inner)?;
+            let vault_id = session.ring.vault_id();
+            let epoch = session.ring.current_epoch();
+            inner
+                .store
+                .write(|tx| tx.key_wrap_delete(&vault_id, epoch, WrapKind::Device))?;
+            // The deleted `device` row opens the vault key with the device key.
+            checkpoint(&inner.store);
+            tracing::info!("remember on this device turned off");
+            self.remember_changed(&mut inner, vault_id);
+            Ok(self.status(&inner, available))
         }
     }
 

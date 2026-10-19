@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 pub use rows::{KeyWrapRow, LocalAuthRow, RecordRow, VaultRow, WrapKind};
 
-use dir_lock::DirLock;
+pub(crate) use dir_lock::DirLock;
 use migrate::MigrationPlan;
 use rows::{
     parse_role, parse_vault_kind, parse_vault_status, role_str, u32_from_db, u64_from_db,
@@ -111,7 +111,7 @@ pub struct Store {
     data_dir: Option<PathBuf>,
     /// The exclusive lock of the data directory; `None` in memory. Declared
     /// after `conn`, so the connection closes before the lock is released.
-    _dir_lock: Option<DirLock>,
+    dir_lock: Option<DirLock>,
 }
 
 impl std::fmt::Debug for Store {
@@ -265,7 +265,7 @@ impl Store {
         let mut store = Store {
             conn,
             data_dir: Some(data_dir.to_path_buf()),
-            _dir_lock: Some(dir_lock),
+            dir_lock: Some(dir_lock),
         };
         store.write(|tx| tx.meta_set(META_LAST_APP_VERSION, app_version))?;
         Ok((store, outcome))
@@ -279,7 +279,7 @@ impl Store {
         Ok(Store {
             conn,
             data_dir: None,
-            _dir_lock: None,
+            dir_lock: None,
         })
     }
 
@@ -291,6 +291,15 @@ impl Store {
     /// The data directory, `None` for an in-memory store.
     pub fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()
+    }
+
+    /// Another handle on the lock of the data directory (`None` in memory).
+    /// While it lives, other processes stay locked out even after this store
+    /// is dropped, and a [`Store::open`] of the same directory in this
+    /// process shares it ("Start with a new vault" closes the database and
+    /// creates a new one under it).
+    pub(crate) fn dir_lock(&self) -> Option<DirLock> {
+        self.dir_lock.clone()
     }
 
     /// Path of the database file (tests: the storage canary scans it and the WAL).
