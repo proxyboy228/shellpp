@@ -1,0 +1,10 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm build:e2e"
+  },
+  "app": {
+    "security": {
+      "capabilities": ["default", "e2e"]
+    }
+  }
+}
