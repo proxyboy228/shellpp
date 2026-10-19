@@ -8,12 +8,13 @@
 //! 5. If the core is `locked`: try the device key ("remember on this
 //!    device") before any window exists, so the first window never flashes
 //!    the unlock screen.
+//!    Then the session manager (stage 2), following the lock state.
 //! 6. Create window `w-1`; register the macOS menu bar.
 //! 7. Start the 1-second tick (auto-lock, clipboard clearing).
 //! 8. Queue a `shellpp://` link from the command line until unlock.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use shellpp_core::error::CoreError;
@@ -23,8 +24,9 @@ use tauri::{App, AppHandle, Manager, Wry};
 
 use crate::dirs::{self, AppDirs};
 use crate::error::CmdError;
-use crate::events::receive_link;
+use crate::events::{SessionSlot, TauriSessionEvents, receive_link};
 use crate::links::{LinkQueue, find_link};
+use crate::sessions::{ManagerParts, SessionManager, SshConnector};
 use crate::state::AppState;
 use crate::windows::{self, WindowRegistry};
 use crate::{hardening, logging, platform};
@@ -70,20 +72,33 @@ pub fn setup(app: &mut App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
 
     let windows = Arc::new(WindowRegistry::new());
     let links = Arc::new(LinkQueue::new(false));
+    let session_slot: SessionSlot = Arc::new(OnceLock::new());
 
     // 3-5. Platform, core, device unlock.
     let (core, platform, extras) = match &dirs {
         Some(dirs) => {
-            let (platform, extras) =
-                platform::install(&handle, &dirs.data, links.clone(), windows.clone());
+            let (platform, extras) = platform::install(
+                &handle,
+                &dirs.data,
+                links.clone(),
+                windows.clone(),
+                session_slot.clone(),
+            );
             let core = open_core(dirs, platform.clone());
             (core, Some(platform), Some(extras))
         }
         None => (Err(CmdError::code("io_error")), None, None),
     };
+    let mut sessions = None;
     if let Ok(core) = &core {
         try_device_unlock(core);
-        links.set_unlocked(lock_state(core) == Some(LockState::Unlocked));
+        let unlocked = lock_state(core) == Some(LockState::Unlocked);
+        links.set_unlocked(unlocked);
+        let manager = Arc::new(new_session_manager(&handle, core.clone(), unlocked));
+        let _ = session_slot.set(manager.clone());
+        // A lock change between the read above and `set` is caught here.
+        manager.set_unlocked(lock_state(core) == Some(LockState::Unlocked));
+        sessions = Some(manager);
     }
 
     let tick_core = core.as_ref().ok().cloned();
@@ -95,6 +110,7 @@ pub fn setup(app: &mut App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         windows.clone(),
         links.clone(),
         dirs,
+        sessions,
     ));
 
     // 6. First window, menu bar.
@@ -120,6 +136,20 @@ pub fn setup(app: &mut App<Wry>) -> Result<(), Box<dyn std::error::Error>> {
         receive_link(&handle, &links, &windows, link);
     }
     Ok(())
+}
+
+/// The session manager with the real SSH connector and local terminal.
+fn new_session_manager(handle: &AppHandle<Wry>, core: Arc<Core>, unlocked: bool) -> SessionManager {
+    SessionManager::new(ManagerParts {
+        events: Arc::new(TauriSessionEvents::new(handle.clone())),
+        core,
+        // e2e builds never use the developer's system agent.
+        connector: Arc::new(SshConnector::new(!cfg!(feature = "e2e-mocks"))),
+        #[cfg(desktop)]
+        local: Arc::new(crate::sessions::local::PtyBackend::new()),
+        runtime: tauri::async_runtime::handle().inner().clone(),
+        unlocked,
+    })
 }
 
 /// Opens the core; a panic during development is reported as `internal`.

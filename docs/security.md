@@ -645,7 +645,7 @@ Set in `tauri.conf.json` (`app.security.csp`); the development server gets a sep
 ```text
 default-src 'none';
 script-src 'self';
-style-src 'self';
+style-src 'self' 'unsafe-inline';
 img-src 'self' data:;
 font-src 'self';
 connect-src ipc: http://ipc.localhost;
@@ -660,8 +660,10 @@ Rules (stage 0 decision):
 
 - Never allowed: `'unsafe-eval'`, `'unsafe-inline'` in `script-src`, remote origins, wildcards. Fonts and icons are bundled (Inter, JetBrains Mono, Lucide).
 - If xterm.js or another dependency needs inline `<style>` elements, `'unsafe-inline'` may be added to `style-src` only, after review, and the reason is recorded here.
-- Recorded exception, development builds only (`tauri dev`, stage 1 review): `devCsp` adds `'unsafe-inline'` to `style-src`, because the Vite dev server injects the CSS modules as `<style>` elements and replaces them on hot reload. The release `csp` never contains `'unsafe-inline'`; `apps/desktop/src-tauri/tests/config.rs` checks both.
-- Tauri settings: `freezePrototype: true`, `withGlobalTauri: false`, the asset protocol disabled, Tauri's own nonce and hash injection left on.
+- Recorded exception, development builds only (`tauri dev`, stage 1 review): `devCsp` adds `'unsafe-inline'` to `style-src`, because the Vite dev server injects the CSS modules as `<style>` elements and replaces them on hot reload.
+- Recorded exception, release builds (stage 2 review, terminal): `style-src` allows `'unsafe-inline'`. xterm.js 6 creates `<style>` elements at run time and writes their text: the viewport's scrollbar colors (always, for every renderer) and the cell dimensions and theme colors of its DOM renderer, which is also the fallback when WebGL is unavailable or its context is lost. xterm.js has no nonce option, and Tauri's nonce and hash injection covers only the `<style>` and `<script>` elements of the bundled HTML, not elements created later. The allowance covers styles only: `script-src` stays `'self'` (no inline scripts, no `eval`), and the strings written into those elements come from xterm.js's own options (theme colors, font family, sizes), not from terminal output. `apps/desktop/src-tauri/tests/config.rs` checks that `'unsafe-inline'` appears in `style-src` and nowhere else.
+- Tauri settings: `withGlobalTauri: false`, the asset protocol disabled, Tauri's own nonce and hash injection left on.
+- `Object.prototype` is frozen in every window before the IPC backend starts and before any IPC data or terminal output is processed. Recorded change (stage 2 integration, terminal): the frontend entry (`apps/desktop/src/main.tsx`) loads the xterm.js engine and then calls `Object.freeze(Object.prototype)`, and Tauri's `freezePrototype` is `false`. Tauri's setting freezes the prototype before any script runs, but xterm.js 6 assigns `toString` to a plain object while its module initializes (a namespace of the keyboard code it bundles), and in strict mode that assignment throws once `Object.prototype` is frozen, so the terminal could not load. Only the app's own bundled modules run before the freeze. `apps/desktop/src-tauri/tests/config.rs` checks the setting and that the entry freezes the prototype before it starts the backend.
 - Untrusted strings (host names, file names, server messages, prompts, emails) are rendered as text. `dangerouslySetInnerHTML` and `innerHTML` are not used; eslint reports them as errors (`no-restricted-syntax` rules in `apps/desktop/eslint.config.js`, equivalent to `react/no-danger`, also covering `innerHTML`, `outerHTML` and `insertAdjacentHTML`).
 
 ### 13.2 Capabilities and commands

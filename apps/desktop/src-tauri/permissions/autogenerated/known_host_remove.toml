@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-known-host-remove"
+description = "Enables the known_host_remove command without any pre-configured scope."
+commands.allow = ["known_host_remove"]
+
+[[permission]]
+identifier = "deny-known-host-remove"
+description = "Denies the known_host_remove command without any pre-configured scope."
+commands.deny = ["known_host_remove"]

@@ -4,7 +4,14 @@
 //!   `generate_handler!` (src/lib.rs) and listed in `build.rs`, which gives it
 //!   its own `allow-<command>` permission;
 //! - takes at most one argument, named `input` (`invoke(name, { input })`);
-//! - is `async` and runs every `Core` call on a `spawn_blocking` thread;
+//! - is `async` and runs every `Core` call on a `spawn_blocking` thread
+//!   (exception: `session_write`, `session_inject` and `session_resize` are
+//!   synchronous so typed input keeps its order; they never call the core on
+//!   the calling thread, see [`sessions`]);
+//! - output of running terminals keeps flowing while locked (D9), so
+//!   `session_attach`, `session_resize` and `session_ack` are accepted in
+//!   every lock state (they reveal nothing; the session manager still
+//!   checks that the session belongs to the calling window);
 //! - passes the lock guard below before doing anything (architecture 3.3):
 //!   the UI is not trusted to enforce the lock;
 //! - rejects with [`CmdError`] (`{"code", "details"}`).
@@ -17,9 +24,14 @@ pub mod app;
 pub mod clipboard;
 #[cfg(feature = "e2e-mocks")]
 pub mod e2e;
+pub mod history;
+pub mod keys;
+pub mod knownhosts;
+pub mod local;
 pub mod lock;
 pub mod notifications;
 pub mod records;
+pub mod sessions;
 pub mod settings;
 
 use std::sync::Arc;
@@ -55,6 +67,7 @@ pub const COMMAND_ACCESS: &[(&str, Access)] = &[
     ("window_open", Access::Any),
     ("activity", Access::Any),
     ("app_exit", Access::Any),
+    ("window_close", Access::Any),
     ("external_open_url", Access::Unlocked),
     // lock
     ("lock_status", Access::Any),
@@ -85,6 +98,31 @@ pub const COMMAND_ACCESS: &[(&str, Access)] = &[
     // clipboard
     ("clipboard_write_text", Access::Unlocked),
     ("clipboard_read_text", Access::Unlocked),
+    // sessions (stage 2)
+    ("session_open", Access::Unlocked),
+    ("session_attach", Access::Any),
+    ("session_write", Access::Unlocked),
+    ("session_inject", Access::Unlocked),
+    ("session_resize", Access::Any),
+    ("session_prompt_reply", Access::Unlocked),
+    ("session_cancel", Access::Unlocked),
+    ("session_close", Access::Unlocked),
+    ("session_reconnect", Access::Unlocked),
+    ("session_ack", Access::Any),
+    // local terminal
+    ("local_shells", Access::Unlocked),
+    ("local_open", Access::Unlocked),
+    // known hosts
+    ("known_hosts_list", Access::Unlocked),
+    ("known_host_remove", Access::Unlocked),
+    // keys
+    ("keys_list", Access::Unlocked),
+    ("key_import", Access::Unlocked),
+    // history and recent connections
+    ("history_list", Access::Unlocked),
+    ("history_delete", Access::Unlocked),
+    ("history_clear", Access::Unlocked),
+    ("recent_connections", Access::Unlocked),
     // e2e only
     ("e2e_mock", Access::Any),
 ];
@@ -230,9 +268,13 @@ mod tests {
                 "lock",
                 "lock_status",
                 "recovery_unlock",
+                "session_ack",
+                "session_attach",
+                "session_resize",
                 "settings_get",
                 "state_snapshot",
                 "unlock",
+                "window_close",
                 "window_open",
             ]
         );
@@ -251,8 +293,12 @@ mod tests {
                 "e2e_mock",
                 "first_run_setup",
                 "lock_status",
+                "session_ack",
+                "session_attach",
+                "session_resize",
                 "settings_get",
                 "state_snapshot",
+                "window_close",
                 "window_open",
             ]
         );
@@ -264,6 +310,15 @@ mod tests {
             "external_open_url",
             "clipboard_write_text",
             "clipboard_read_text",
+            "session_open",
+            "session_write",
+            "session_inject",
+            "session_prompt_reply",
+            "session_cancel",
+            "session_close",
+            "session_reconnect",
+            "local_shells",
+            "local_open",
         ] {
             assert_eq!(access_of(command), Some(Access::Unlocked), "{command}");
         }

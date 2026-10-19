@@ -1,5 +1,6 @@
 //! Snapshot tests of the Tauri configuration, the capabilities and the
-//! command lists (plan 4.7 "Tests"; docs/security.md, sections 13.1, 13.2).
+//! command lists (stage 1 plan 4.7 "Tests", stage 2 plan 4.5;
+//! docs/security.md, sections 13.1, 13.2).
 
 use std::path::{Path, PathBuf};
 
@@ -124,7 +125,21 @@ fn tauri_conf_security() {
     let app = &conf["app"];
     let security = &app["security"];
     assert_eq!(app["withGlobalTauri"], false);
-    assert_eq!(security["freezePrototype"], true);
+    // Tauri's early freeze breaks xterm.js 6; the frontend entry freezes
+    // `Object.prototype` itself once the terminal engine has loaded, before
+    // the backend starts (docs/security.md, section 13.1).
+    assert_eq!(security["freezePrototype"], false);
+    let main = read(&manifest_dir().join("../src/main.tsx"));
+    let freeze = main
+        .find("Object.freeze(Object.prototype);")
+        .expect("main.tsx freezes Object.prototype");
+    let backend = main
+        .find("await initBackend();")
+        .expect("main.tsx starts the backend");
+    let first_call = main
+        .find("await freezePrototype();")
+        .expect("main.tsx calls freezePrototype");
+    assert!(freeze < first_call && first_call < backend);
     assert_eq!(security["assetProtocol"]["enable"], false);
     assert_eq!(security["capabilities"], serde_json::json!(["default"]));
     assert_eq!(
@@ -140,8 +155,30 @@ fn tauri_conf_security() {
     assert!(app.get("security").and_then(|s| s.get("pattern")).is_none());
 
     let release = security["csp"].as_str().expect("csp");
-    assert!(!release.contains("unsafe-inline"));
     assert!(!release.contains("unsafe-eval"));
+    assert!(!release.contains('*'));
+    // The recorded xterm.js exception (docs/security.md, section 13.1):
+    // `'unsafe-inline'` in `style-src` only, never in `script-src`.
+    for directive in release.split(';').map(str::trim) {
+        if directive.contains("unsafe-inline") {
+            assert!(
+                directive.starts_with("style-src "),
+                "'unsafe-inline' outside style-src: {directive}"
+            );
+        }
+    }
+    let release_script = release
+        .split(';')
+        .map(str::trim)
+        .find(|directive| directive.starts_with("script-src"))
+        .expect("script-src");
+    assert_eq!(release_script, "script-src 'self'");
+    let release_style = release
+        .split(';')
+        .map(str::trim)
+        .find(|directive| directive.starts_with("style-src"))
+        .expect("style-src");
+    assert_eq!(release_style, "style-src 'self' 'unsafe-inline'");
 
     let dev = security["devCsp"].as_str().expect("devCsp");
     assert!(!dev.contains("unsafe-eval"));
@@ -153,8 +190,8 @@ fn tauri_conf_security() {
     assert!(!script_src.contains("unsafe-inline"));
     assert!(!dev.contains('*'));
 
-    // The dev CSP is the release CSP plus the Vite origin and the recorded
-    // `style-src 'unsafe-inline'` exception (docs/security.md, section 13.1).
+    // The dev CSP is the release CSP plus the Vite origin and socket
+    // (docs/security.md, section 13.1).
     let release = directives(release);
     let dev = directives(dev);
     assert_eq!(
@@ -211,7 +248,7 @@ fn first_window_config() {
 }
 
 #[test]
-fn default_capability_grants_exactly_the_stage_1_commands() {
+fn default_capability_grants_exactly_the_app_commands() {
     let cap = json("capabilities/default.json");
     assert_eq!(cap["identifier"], "default");
     assert_eq!(cap["windows"], serde_json::json!(["w-*"]));
@@ -265,8 +302,40 @@ fn e2e_capability_grants_only_the_mock_command() {
 #[test]
 fn handler_list_matches_build_rs() {
     let commands = build_rs_commands();
-    assert_eq!(commands.len(), 31);
+    // Stage 1 (31) + `window_close` + the 20 stage-2 commands (plan 5.1,
+    // plus `session_ack`).
+    assert_eq!(commands.len(), 52);
     assert_eq!(handler_commands(), commands);
+    for (index, name) in [
+        "session_open",
+        "session_attach",
+        "session_write",
+        "session_inject",
+        "session_resize",
+        "session_prompt_reply",
+        "session_cancel",
+        "session_close",
+        "session_reconnect",
+        "session_ack",
+        "local_shells",
+        "local_open",
+        "known_hosts_list",
+        "known_host_remove",
+        "keys_list",
+        "key_import",
+        "history_list",
+        "history_delete",
+        "history_clear",
+        "recent_connections",
+        "e2e_mock",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(commands[31 + index], *name);
+    }
+    let exit = commands.iter().position(|c| c == "app_exit").unwrap();
+    assert_eq!(commands[exit + 1], "window_close");
 }
 
 #[test]
@@ -278,11 +347,29 @@ fn every_command_has_a_lock_rule() {
     assert_eq!(rules, build_rs_commands());
 }
 
+/// The start of the next `pub fn` or `pub async fn` in `text`, and whether
+/// it is async.
+fn next_fn(text: &str) -> Option<(usize, bool)> {
+    let sync = text.find("pub fn ");
+    let asynchronous = text.find("pub async fn ");
+    match (sync, asynchronous) {
+        (Some(s), Some(a)) if s < a => Some((s, false)),
+        (_, Some(a)) => Some((a, true)),
+        (Some(s), None) => Some((s, false)),
+        (None, None) => None,
+    }
+}
+
+/// Commands declared without `async` (they run on the main thread).
+const SYNC_COMMANDS: &[&str] = &["session_write", "session_inject", "session_resize"];
+
 #[test]
 fn commands_follow_the_one_input_rule() {
     // Every command file declares `rename_all = "snake_case"` and at most one
-    // non-injected argument named `input` (plan decision 5).
+    // non-injected argument named `input` (plan decision 5). Only the
+    // ordered input commands are synchronous (stage 2, commands/sessions.rs).
     let dir = manifest_dir().join("src").join("commands");
+    let mut sync_seen = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("commands dir") {
         let path = entry.expect("entry").path();
         let text = read(&path);
@@ -294,7 +381,13 @@ fn commands_follow_the_one_input_rule() {
                 "{}: command without rename_all",
                 path.display()
             );
-            let sig_start = rest[attr_end..].find("pub async fn").expect("async fn") + attr_end;
+            let (offset, is_async) = next_fn(&rest[attr_end..]).expect("command fn");
+            let sig_start = offset + attr_end;
+            if !is_async {
+                let name_start = sig_start + "pub fn ".len();
+                let name_end = rest[name_start..].find('(').expect("(") + name_start;
+                sync_seen.push(rest[name_start..name_end].to_owned());
+            }
             let sig_end = rest[sig_start..].find('{').expect("body") + sig_start;
             let signature = &rest[sig_start..sig_end];
             let open = signature.find('(').expect("(");
@@ -329,4 +422,11 @@ fn commands_follow_the_one_input_rule() {
             rest = &rest[sig_end..];
         }
     }
+    sync_seen.sort_unstable();
+    let mut expected: Vec<String> = SYNC_COMMANDS.iter().map(|c| (*c).to_owned()).collect();
+    expected.sort_unstable();
+    assert_eq!(
+        sync_seen, expected,
+        "only the ordered input commands are synchronous"
+    );
 }

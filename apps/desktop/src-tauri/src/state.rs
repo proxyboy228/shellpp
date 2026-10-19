@@ -11,6 +11,7 @@ use crate::dirs::AppDirs;
 use crate::error::CmdError;
 use crate::links::LinkQueue;
 use crate::platform::PlatformExtras;
+use crate::sessions::SessionManager;
 use crate::windows::WindowRegistry;
 
 /// Everything the commands need.
@@ -27,6 +28,8 @@ pub struct AppState {
     pub windows: Arc<WindowRegistry>,
     pub links: Arc<LinkQueue>,
     pub dirs: Option<AppDirs>,
+    /// Terminal sessions (absent when the core did not open).
+    pub sessions: Option<Arc<SessionManager>>,
     shut_down: AtomicBool,
 }
 
@@ -46,6 +49,7 @@ impl AppState {
         windows: Arc<WindowRegistry>,
         links: Arc<LinkQueue>,
         dirs: Option<AppDirs>,
+        sessions: Option<Arc<SessionManager>>,
     ) -> Self {
         Self {
             core,
@@ -54,7 +58,17 @@ impl AppState {
             windows,
             links,
             dirs,
+            sessions,
             shut_down: AtomicBool::new(false),
+        }
+    }
+
+    /// The session manager, or the startup error.
+    pub fn sessions(&self) -> Result<&Arc<SessionManager>, CmdError> {
+        match (&self.sessions, &self.core) {
+            (Some(sessions), _) => Ok(sessions),
+            (None, Err(error)) => Err(error.clone()),
+            (None, Ok(_)) => Err(CmdError::internal()),
         }
     }
 
@@ -72,17 +86,25 @@ impl AppState {
         }
     }
 
-    /// Exit work, run once: clears sensitive clipboard content (core), empties
+    /// Exit work, run once: closes the sessions (their connection log
+    /// entries end), clears sensitive clipboard content (core), empties
     /// `tmp/` and releases the clipboard handle.
     pub fn shutdown(&self) {
         if self.shut_down.swap(true, Ordering::SeqCst) {
             return;
         }
+        let sessions = self.sessions.clone();
         if let Ok(core) = &self.core {
             let core = core.clone();
             // `on_exit` may block on the clipboard; never on the main thread.
             let _ = std::thread::spawn(move || {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| core.on_exit()));
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(sessions) = sessions {
+                        let logs = sessions.close_all();
+                        sessions.end_logs_now(&logs);
+                    }
+                    core.on_exit();
+                }));
             })
             .join();
         }

@@ -4,12 +4,13 @@
 //! same bundled frontend and may navigate only within the app's own origin
 //! (docs/security.md, section 13.3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::Serialize;
+use shellpp_core::service::dto::WindowIntent;
 use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, Runtime, WebviewWindow, WebviewWindowBuilder,
@@ -36,6 +37,9 @@ pub struct WindowRegistry {
 struct RegistryInner {
     focused: Option<String>,
     ready: BTreeSet<String>,
+    /// What a window opened with `window_open({intent})` does first; taken
+    /// by its first `state_snapshot` (stage 2 plan, section 5.1).
+    intents: BTreeMap<String, WindowIntent>,
 }
 
 impl Default for WindowRegistry {
@@ -81,6 +85,17 @@ impl WindowRegistry {
             inner.focused = None;
         }
         inner.ready.remove(label);
+        inner.intents.remove(label);
+    }
+
+    /// Stores the intent of a window about to open.
+    pub fn set_intent(&self, label: &str, intent: WindowIntent) {
+        self.lock().intents.insert(label.to_owned(), intent);
+    }
+
+    /// The intent of a window, once.
+    pub fn take_intent(&self, label: &str) -> Option<WindowIntent> {
+        self.lock().intents.remove(label)
     }
 
     /// The label to target among the existing windows (see [`pick_target`]).
@@ -227,14 +242,25 @@ pub fn build_window<R: Runtime>(
         .build()
 }
 
-/// Window ▸ New window: opens `w-<n>` and returns its label.
+/// Window ▸ New window (and Connect with Alt, Duplicate in a new window):
+/// opens `w-<n>` with an optional intent and returns its label.
 pub fn open_window<R: Runtime>(
     app: &AppHandle<R>,
     registry: &WindowRegistry,
     webview_dir: Option<&Path>,
+    intent: Option<WindowIntent>,
 ) -> tauri::Result<String> {
     let label = registry.next_label();
-    let window = build_window(app, &label, webview_dir)?;
+    if let Some(intent) = intent {
+        registry.set_intent(&label, intent);
+    }
+    let window = match build_window(app, &label, webview_dir) {
+        Ok(window) => window,
+        Err(error) => {
+            registry.take_intent(&label);
+            return Err(error);
+        }
+    };
     let _ = window.set_focus();
     tracing::info!(label = %label, "window opened");
     Ok(label)
@@ -299,6 +325,19 @@ mod tests {
             registry.target_label(&labels(&["w-10"])).as_deref(),
             Some("w-10")
         );
+    }
+
+    #[test]
+    fn intents_are_taken_once() {
+        let registry = WindowRegistry::new();
+        let intent = WindowIntent::OpenLocal { shell_id: None };
+        registry.set_intent("w-2", intent.clone());
+        assert_eq!(registry.take_intent("w-1"), None);
+        assert_eq!(registry.take_intent("w-2"), Some(intent.clone()));
+        assert_eq!(registry.take_intent("w-2"), None);
+        registry.set_intent("w-3", intent);
+        registry.destroyed("w-3");
+        assert_eq!(registry.take_intent("w-3"), None);
     }
 
     #[test]

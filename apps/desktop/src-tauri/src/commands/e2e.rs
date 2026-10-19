@@ -10,7 +10,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use shellpp_core::error::ValidationReason;
 use shellpp_core::service::dto::{
-    NewNotification, NotificationLevel, NotificationSource, NotificationSourceKind,
+    KnownHostAddInput, NewNotification, NotificationLevel, NotificationSource,
+    NotificationSourceKind,
 };
 use tauri::{AppHandle, State};
 
@@ -48,6 +49,9 @@ pub enum E2eMockAction {
     InjectLink {
         url: String,
     },
+    /// Seeds a known_hosts entry (hashed and revoked scenarios of UI 10.1,
+    /// 10.2; stage 2 plan, decision 11).
+    KnownHostAdd(KnownHostAddInput),
 }
 
 /// Parses the action. An unknown `kind` or a malformed member is
@@ -143,6 +147,10 @@ pub async fn e2e_mock(
             }
             Ok(json!({}))
         }
+        E2eMockAction::KnownHostAdd(entry) => {
+            with_core(&state, "e2e_mock", move |core| core.known_host_add(entry)).await?;
+            Ok(json!({}))
+        }
     }
 }
 
@@ -168,6 +176,8 @@ mod tests {
             json!({"kind": "clock_advance", "seconds": 0}),
             json!({"kind": "clock_advance", "seconds": 86400}),
             json!({"kind": "inject_link", "url": "shellpp://host/0199f6a1-b2c3-7d4e-8f00-112233445566"}),
+            json!({"kind": "known_host_add", "host": "127.0.0.1", "port": 2222, "key_type": "ssh-ed25519", "public_key": "AAAAC3NzaC1lZDI1NTE5AAAAIA=="}),
+            json!({"kind": "known_host_add", "host": "|1|c2FsdA==|aGFzaA==", "key_type": "ssh-ed25519", "public_key": "AAAA", "revoked": true, "comment": "x"}),
         ] {
             assert!(parse_action(input.clone()).is_ok(), "{input}");
         }
@@ -197,5 +207,6 @@ mod tests {
         assert!(parse_action(json!({"kind": "clipboard_write"})).is_err());
         assert!(parse_action(json!({"kind": "clipboard_write", "text": "x", "extra": 1})).is_err());
         assert!(parse_action(json!("clipboard_read")).is_err());
+        assert!(parse_action(json!({"kind": "known_host_add", "host": "h"})).is_err());
     }
 }

@@ -1,6 +1,7 @@
 // Generates the app manifest: every command gets its own `allow-<command>`
-// permission, and `capabilities/default.json` grants exactly the stage-1 list
-// (docs/architecture.md, section 3.4; docs/security.md, section 13.2).
+// permission, and `capabilities/default.json` grants exactly this list
+// without `e2e_mock` (docs/architecture.md, section 3.4; docs/security.md,
+// section 13.2; stage 2 plan, section 5.1).
 //
 // Keep COMMANDS in the same order as the `generate_handler!` list in
 // src/lib.rs and the permissions in capabilities/default.json.
@@ -15,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "window_open",
     "activity",
     "app_exit",
+    "window_close",
     "external_open_url",
     // lock
     "lock_status",
@@ -45,6 +47,31 @@ const COMMANDS: &[&str] = &[
     // clipboard
     "clipboard_write_text",
     "clipboard_read_text",
+    // sessions (stage 2)
+    "session_open",
+    "session_attach",
+    "session_write",
+    "session_inject",
+    "session_resize",
+    "session_prompt_reply",
+    "session_cancel",
+    "session_close",
+    "session_reconnect",
+    "session_ack",
+    // local terminal
+    "local_shells",
+    "local_open",
+    // known hosts
+    "known_hosts_list",
+    "known_host_remove",
+    // keys
+    "keys_list",
+    "key_import",
+    // history and recent connections
+    "history_list",
+    "history_delete",
+    "history_clear",
+    "recent_connections",
     // e2e only (registered with the e2e-mocks feature)
     "e2e_mock",
 ];

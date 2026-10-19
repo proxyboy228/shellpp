@@ -222,6 +222,7 @@ Installation identity (stage 0 decision): `db_id` and `device_id` are UUIDv7 val
 | `unlocked` | normal operation | all commands of the current stage |
 
 - A guard in front of every command enforces the lock in Rust; the UI is not trusted to do it.
+- Terminals keep running while locked (D9), so the output and size commands of running sessions (`session_attach`, `session_resize`, `session_ack`) are accepted in every state (stage 2); they reveal nothing and act only on sessions of the calling window.
 - Auto-lock: one timer in `core::lock` for all windows (interval per UI 13.4, 15 minutes by default, "Never" possible). Only keyboard and mouse input in app windows counts (UI 13.3). Each window reports input with the `activity` command at most once every 30 seconds (stage 0 decision).
 - "Remember on this device" unlocks with the device key at launch only; lock and auto-lock always ask for the password (UI 13.2).
 - Lock rules, key wiping and the accepted risks are in [security.md](security.md).
@@ -251,7 +252,7 @@ Command groups (names are indicative; each stage fixes them in code):
 | records | `records_query`, `record_get`, `record_save`, `record_delete`, `record_move`, `record_copy`, `secret_reveal`, `secret_copy` | 1 |
 | settings | `settings_get`, `settings_set` | 1 |
 | notifications | `notifications_list`, `notifications_mark_read` | 1 |
-| sessions | `session_open`, `session_attach`, `session_write`, `session_inject`, `session_resize`, `session_prompt_reply`, `session_cancel`, `session_close` | 2 |
+| sessions | `session_open`, `session_attach`, `session_write`, `session_inject`, `session_resize`, `session_prompt_reply`, `session_cancel`, `session_close`, `session_reconnect`, `session_ack` | 2 |
 | local terminal | `local_shells`, `local_open` (stage 2); `serial_ports`, `serial_open`, `telnet_open` (stage 9) | 2, 9 |
 | clipboard | `clipboard_write_text`, `clipboard_read_text` | 2 |
 | import and export | `import_pick`, `import_preview`, `import_apply`, `export_run` | 3 |
@@ -304,7 +305,7 @@ Window-targeted events go to one window (`emit_to`):
 | `transfers:conflict` | `transfer_id`, the name, and size and modification time of both files (UI 5.7) | the window that started the operation |
 | `link:open` | the parsed `shellpp://` link | the focused or last focused window; held until unlock |
 
-Terminal output uses a Tauri `Channel` per session subscriber: binary and ordered. It never goes through broadcast events.
+Terminal output uses a Tauri `Channel` per session subscriber: binary and ordered. It never goes through broadcast events. Output has flow control: the pane acknowledges the bytes its terminal has processed with `session_ack`; while more than 2 MiB sent to the pane are unacknowledged, the host stops reading the session's output (the SSH channel or the PTY then pushes back on the program that writes) and resumes below 512 KiB. Input waiting for the terminal is bounded as well: `session_write` and `session_inject` answer `unavailable` while more than 4 MiB wait, and the webview sends the input again later. `session_attach`, `session_resize` and `session_ack` are accepted while the app is locked, because running terminals keep running and showing output under the lock screen (D9).
 
 Snapshot protocol (stage 0 decision): a new or reloaded window (1) subscribes to all broadcast events and buffers them, (2) calls `state_snapshot`, which returns `v` with the lock state, vaults, settings, notifications, forwards, transfers, sync status and the sessions of that window, (3) applies the buffered events whose `v` is greater. Records are loaded with `records_query`.
 
@@ -326,11 +327,11 @@ Snapshot protocol (stage 0 decision): a new or reloaded window (1) subscribes to
 Release CSP (`app.security.csp`, stage 0 decision; the normative string is in [security.md](security.md), section 13.1):
 
 ```text
-default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'
+default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'
 ```
 
-- Tauri adds hashes or nonces for the bundled assets at build time. If xterm.js needs dynamically inserted styles, stage 2 adds the narrowest allowance to `style-src` only and records the reason in [security.md](security.md), section 13.1. `script-src` is never relaxed. The development CSP (`app.security.devCsp`) may allow the Vite dev server.
-- `app.withGlobalTauri = false`, `app.security.freezePrototype = true`, the asset protocol is disabled, devtools exist only in debug builds.
+- Tauri adds hashes or nonces for the bundled assets at build time. xterm.js inserts `<style>` elements at run time, so stage 2 added `'unsafe-inline'` to `style-src` only; the reason is recorded in [security.md](security.md), section 13.1. `script-src` is never relaxed. The development CSP (`app.security.devCsp`) may allow the Vite dev server.
+- `app.withGlobalTauri = false`, the asset protocol is disabled, devtools exist only in debug builds. `Object.prototype` is frozen by the frontend entry once the xterm.js engine has loaded and before the backend starts; `app.security.freezePrototype` is `false` because Tauri's earlier freeze breaks xterm.js 6 (reason in [security.md](security.md), section 13.1).
 - Windows load only bundled assets. No remote URL is ever loaded in a webview, and capabilities have no `remote` entries.
 - Links (terminal web links, Help, the links in Settings 12.1) open in the system browser through `ExternalLauncher`, only for `http` and `https`.
 - Untrusted text is rendered as React text; `dangerouslySetInnerHTML` is forbidden by a lint rule. Clipboard access from terminal escape sequences (OSC 52) is not enabled.

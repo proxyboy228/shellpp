@@ -40,11 +40,19 @@ fn item<R: Runtime>(
 pub fn install<R: Runtime>(app: &AppHandle<R>, windows: Arc<WindowRegistry>) -> tauri::Result<()> {
     let vaults = item(app, "app-menu-vaults", "Vaults", Some("CmdOrCtrl+1"))?;
     let settings = item(app, "app-menu-settings", "Settings…", Some("CmdOrCtrl+,"))?;
+    let local_terminal = item(
+        app,
+        "app-menu-new-local-terminal",
+        "New Local Terminal",
+        Some("CmdOrCtrl+Shift+L"),
+    )?;
     let lock = item(app, "app-menu-lock", "Lock", None)?;
     let exit = item(app, "app-menu-exit", "Quit Shell++", Some("CmdOrCtrl+Q"))?;
     let app_menu = SubmenuBuilder::new(app, "Shell++")
         .item(&vaults)
         .item(&settings)
+        .separator()
+        .item(&local_terminal)
         .separator()
         .item(&lock)
         .separator()
@@ -100,8 +108,22 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, windows: Arc<WindowRegistry>) -> 
         .build()?;
 
     let new_window = item(app, "app-menu-window-new-window", "New Window", None)?;
+    // Tab switching has no shortcut on macOS (Alt+arrows are Windows and
+    // Linux only, UI 12.5); Close Tab keeps Cmd+Shift+W.
+    let next_tab = item(app, "app-menu-window-next-tab", "Next Tab", None)?;
+    let previous_tab = item(app, "app-menu-window-previous-tab", "Previous Tab", None)?;
+    let close_tab = item(
+        app,
+        "app-menu-window-close-tab",
+        "Close Tab",
+        Some("CmdOrCtrl+Shift+W"),
+    )?;
     let window_menu = SubmenuBuilder::new(app, "Window")
         .item(&new_window)
+        .separator()
+        .item(&next_tab)
+        .item(&previous_tab)
+        .item(&close_tab)
         .separator()
         .minimize()
         .maximize()

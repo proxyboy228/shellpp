@@ -28,7 +28,7 @@ use shellpp_core::platform::SystemClock;
 use shellpp_core::platform::{OsKind, Platform, PlatformClass};
 use tauri::{AppHandle, Runtime};
 
-use crate::events::TauriEventSink;
+use crate::events::{SessionSlot, TauriEventSink};
 use crate::links::LinkQueue;
 use crate::windows::WindowRegistry;
 
@@ -69,9 +69,10 @@ pub fn install<R: Runtime>(
     data_dir: &Path,
     links: Arc<LinkQueue>,
     windows: Arc<WindowRegistry>,
+    sessions: SessionSlot,
 ) -> (Platform, PlatformExtras<R>) {
     let os = current_os();
-    let events = Arc::new(TauriEventSink::new(app.clone(), links, windows));
+    let events = Arc::new(TauriEventSink::new(app.clone(), links, windows, sessions));
     let device_name = device_name::device_name(os);
 
     #[cfg(feature = "e2e-mocks")]

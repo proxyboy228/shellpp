@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "All local app windows (labels w-*): the stage-1 commands, events and title bar window controls. core:default is not granted (docs/security.md, section 13.2).",
+  "description": "All local app windows (labels w-*): the app commands (stage 2), events and title bar window controls. core:default is not granted (docs/security.md, section 13.2).",
   "windows": [
     "w-*"
   ],
@@ -25,6 +25,7 @@
     "allow-window-open",
     "allow-activity",
     "allow-app-exit",
+    "allow-window-close",
     "allow-external-open-url",
     "allow-lock-status",
     "allow-first-run-setup",
@@ -49,6 +50,26 @@
     "allow-notifications-list",
     "allow-notifications-mark-read",
     "allow-clipboard-write-text",
-    "allow-clipboard-read-text"
+    "allow-clipboard-read-text",
+    "allow-session-open",
+    "allow-session-attach",
+    "allow-session-write",
+    "allow-session-inject",
+    "allow-session-resize",
+    "allow-session-prompt-reply",
+    "allow-session-cancel",
+    "allow-session-close",
+    "allow-session-reconnect",
+    "allow-session-ack",
+    "allow-local-shells",
+    "allow-local-open",
+    "allow-known-hosts-list",
+    "allow-known-host-remove",
+    "allow-keys-list",
+    "allow-key-import",
+    "allow-history-list",
+    "allow-history-delete",
+    "allow-history-clear",
+    "allow-recent-connections"
   ]
 }

@@ -6,8 +6,10 @@
 //! - [`startup`]: the startup sequence (directories, logging, hardening,
 //!   platform, core, device unlock, first window, tick).
 //! - [`commands`]: every IPC command, its lock guard and [`error::CmdError`].
-//! - [`events`]: core events to all windows; `shellpp://` link delivery.
-//! - [`windows`]: `w-<n>` windows, focus tracking, navigation guard.
+//! - [`events`]: core events to all windows; `shellpp://` link delivery;
+//!   window-targeted session events.
+//! - [`sessions`]: SSH sessions and local terminals (stage 2).
+//! - [`windows`]: `w-<n>` windows, focus tracking, navigation guard, intents.
 //! - [`links`], [`dirs`], [`logging`], [`hardening`], [`platform`].
 //!
 //! Owner: W3.
@@ -26,10 +28,12 @@ pub mod logging;
 #[cfg_attr(test, allow(dead_code))]
 mod menu_macos;
 pub mod platform;
+pub mod sessions;
 pub mod startup;
 pub mod state;
 pub mod windows;
 
+use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 pub use windows::FIRST_WINDOW_LABEL;
@@ -38,6 +42,8 @@ use crate::state::AppState;
 
 /// Builds and runs the Tauri application.
 pub fn run() {
+    // The launch time tells a window which `session.last` is the previous launch's.
+    let _ = commands::app::launched_at();
     let builder = tauri::Builder::default();
 
     // Single instance first: a second launch hands its arguments (a
@@ -58,13 +64,40 @@ pub fn run() {
                 .build(),
         )
         .setup(startup::setup)
+        // A reloaded page lost its output channels (stage 2 plan, decision 3).
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Started
+                && let Some(state) = webview.try_state::<AppState>()
+                && let Some(sessions) = &state.sessions
+            {
+                sessions.detach_window(webview.label());
+            }
+        })
         .on_window_event(|window, event| {
             let Some(state) = window.try_state::<AppState>() else {
                 return;
             };
             match event {
                 WindowEvent::Focused(true) => state.windows.focused(window.label()),
-                WindowEvent::Destroyed => state.windows.destroyed(window.label()),
+                // Closing a window with active sessions asks first (stage 2
+                // plan, decision 17): the window shows its dialog and calls
+                // `window_close` again with `confirmed`.
+                WindowEvent::CloseRequested { api, .. } => {
+                    if let Some(sessions) = &state.sessions
+                        && sessions.active_count_of(window.label()) > 0
+                    {
+                        api.prevent_close();
+                        events::emit_close_requested(window.app_handle(), window.label());
+                    }
+                }
+                WindowEvent::Destroyed => {
+                    state.windows.destroyed(window.label());
+                    // A window's sessions end with it (D23, plan decision 28).
+                    if let Some(sessions) = &state.sessions {
+                        let logs = sessions.close_window(window.label());
+                        sessions.end_logs_later(logs);
+                    }
+                }
                 _ => {}
             }
         })
@@ -76,6 +109,7 @@ pub fn run() {
             commands::app::window_open,
             commands::app::activity,
             commands::app::app_exit,
+            commands::app::window_close,
             commands::app::external_open_url,
             // lock
             commands::lock::lock_status,
@@ -106,6 +140,31 @@ pub fn run() {
             // clipboard
             commands::clipboard::clipboard_write_text,
             commands::clipboard::clipboard_read_text,
+            // sessions (stage 2)
+            commands::sessions::session_open,
+            commands::sessions::session_attach,
+            commands::sessions::session_write,
+            commands::sessions::session_inject,
+            commands::sessions::session_resize,
+            commands::sessions::session_prompt_reply,
+            commands::sessions::session_cancel,
+            commands::sessions::session_close,
+            commands::sessions::session_reconnect,
+            commands::sessions::session_ack,
+            // local terminal
+            commands::local::local_shells,
+            commands::local::local_open,
+            // known hosts
+            commands::knownhosts::known_hosts_list,
+            commands::knownhosts::known_host_remove,
+            // keys
+            commands::keys::keys_list,
+            commands::keys::key_import,
+            // history and recent connections
+            commands::history::history_list,
+            commands::history::history_delete,
+            commands::history::history_clear,
+            commands::history::recent_connections,
             // e2e only
             #[cfg(feature = "e2e-mocks")]
             commands::e2e::e2e_mock,

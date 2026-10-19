@@ -8,11 +8,16 @@ use std::collections::BTreeMap;
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use shellpp_core::error::{CoreError, SshReason};
 use shellpp_core::platform::OsKind;
 use shellpp_core::service::dto::*;
-use shellpp_desktop::commands::app::{ExternalOpenInput, StateSnapshot, WindowOpenResult};
+use shellpp_desktop::commands::app::{
+    ExternalOpenInput, LinkSource, StateSnapshot, WindowOpenResult,
+};
 use shellpp_desktop::commands::clipboard::{ClipboardText, ClipboardWriteInput};
+use shellpp_desktop::commands::sessions::SessionAttachInput;
 use shellpp_desktop::error::CmdError;
+use shellpp_desktop::events::{SESSIONS_CHANGED_EVENT, WINDOW_CLOSE_REQUESTED_EVENT};
 use shellpp_desktop::links::Link;
 use uuid::Uuid;
 
@@ -334,6 +339,9 @@ fn app_outputs() {
             }],
         },
         window_label: "w-1".to_owned(),
+        launched_at: "2026-10-19T08:00:00.000Z".to_owned(),
+        sessions: vec![],
+        intent: None,
     };
     assert_eq!(
         output(&snapshot),
@@ -343,7 +351,9 @@ fn app_outputs() {
             "settings": {"appearance.ui_theme": "auto", "security.auto_lock_minutes": 15},
             "notifications": {"items": [], "unread": 0},
             "vaults": [{"vault_id": VAULT, "kind": "personal", "status": "active", "name": "Personal", "color": "graphite"}],
-            "window_label": "w-1"
+            "window_label": "w-1",
+            "launched_at": "2026-10-19T08:00:00.000Z",
+            "sessions": []
         })
     );
 }
@@ -546,5 +556,655 @@ fn error_shape() {
     assert_eq!(
         output(&CmdError::locked()),
         json!({"code": "locked", "details": {}})
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 (stage 2 plan, section 5; `apps/desktop/src/ipc/types.ts`)
+// ---------------------------------------------------------------------------
+
+const SESSION: &str = "0199f6a1-b2c3-7d4e-8f00-000000000010";
+const KEY: &str = "0199f6a1-b2c3-7d4e-8f00-000000000011";
+
+fn host_target_json() -> Value {
+    json!({"kind": "host", "vault_id": VAULT, "record_id": HOST})
+}
+
+#[test]
+fn session_inputs() {
+    let open: SessionOpenInput =
+        input(json!({"target": host_target_json(), "cols": 80, "rows": 24}));
+    assert_eq!(
+        open.target,
+        SessionTarget::Host {
+            vault_id: id(VAULT),
+            record_id: id(HOST)
+        }
+    );
+    assert_eq!((open.cols, open.rows), (80, 24));
+    let quick: SessionOpenInput = input(json!({
+        "target": {"kind": "quick", "address": "example.com", "port": 2222, "username": "deploy"},
+        "cols": 120, "rows": 40
+    }));
+    assert_eq!(
+        quick.target,
+        SessionTarget::Quick {
+            address: "example.com".into(),
+            port: Some(2222),
+            username: Some("deploy".into())
+        }
+    );
+    // Debug never shows the quick-connect address.
+    assert!(!format!("{quick:?}").contains("example.com"));
+    let bare: SessionOpenInput = input(json!({
+        "target": {"kind": "quick", "address": "192.0.2.1"}, "cols": 1, "rows": 1
+    }));
+    assert_eq!(
+        bare.target,
+        SessionTarget::Quick {
+            address: "192.0.2.1".into(),
+            port: None,
+            username: None
+        }
+    );
+
+    let attach: SessionAttachInput =
+        input(json!({"session_id": SESSION, "on_output": "__CHANNEL__:7"}));
+    assert_eq!(attach.session_id, id(SESSION));
+
+    let reference: SessionRef = input(json!({"session_id": SESSION}));
+    assert_eq!(reference.session_id, id(SESSION));
+
+    let write: SessionWriteInput = input(json!({
+        "session_id": SESSION,
+        "data": "ls -la\r",
+        "binary": false,
+        "history": {"command": "ls -la", "prompt_text": "$ ", "typed_printable": true, "alt_screen": false}
+    }));
+    assert_eq!(write.data, "ls -la\r");
+    assert!(!write.binary);
+    let history = write.history.as_ref().unwrap();
+    assert_eq!(history.command, "ls -la");
+    assert_eq!(history.prompt_text, "$ ");
+    assert!(history.typed_printable);
+    assert!(!history.alt_screen);
+    assert!(!format!("{write:?}").contains("ls -la"));
+    let minimal: SessionWriteInput = input(json!({"session_id": SESSION, "data": "\u{1b}[A"}));
+    assert!(!minimal.binary);
+    assert!(minimal.history.is_none());
+    let binary: SessionWriteInput =
+        input(json!({"session_id": SESSION, "data": "\u{1b}[M", "binary": true}));
+    assert!(binary.binary);
+
+    let inject: SessionInjectInput = input(json!({"session_id": SESSION, "data": "git status"}));
+    assert_eq!(inject.data, "git status");
+    assert!(!format!("{inject:?}").contains("git"));
+
+    let resize: SessionResizeInput = input(json!({"session_id": SESSION, "cols": 132, "rows": 43}));
+    assert_eq!((resize.cols, resize.rows), (132, 43));
+}
+
+#[test]
+fn prompt_reply_inputs() {
+    for (decision, expected) in [
+        ("accept_save", HostKeyDecision::AcceptSave),
+        ("connect_once", HostKeyDecision::ConnectOnce),
+        ("replace", HostKeyDecision::Replace),
+        ("cancel", HostKeyDecision::Cancel),
+    ] {
+        let reply: SessionPromptReplyInput = input(json!({
+            "session_id": SESSION, "prompt_id": 3,
+            "reply": {"kind": "host_key", "decision": decision}
+        }));
+        assert_eq!(reply.prompt_id, 3);
+        assert!(matches!(reply.reply, PromptReply::HostKey { decision } if decision == expected));
+    }
+    let text: SessionPromptReplyInput = input(json!({
+        "session_id": SESSION, "prompt_id": 4,
+        "reply": {"kind": "text", "value": "pw-sample-9", "save": true}
+    }));
+    match &text.reply {
+        PromptReply::Text { value, save } => {
+            assert_eq!(value.expose_secret(), "pw-sample-9");
+            assert!(*save);
+        }
+        _ => panic!("text reply"),
+    }
+    assert!(!format!("{text:?}").contains("pw-sample"));
+    let unsaved: SessionPromptReplyInput = input(json!({
+        "session_id": SESSION, "prompt_id": 5, "reply": {"kind": "text", "value": "alice"}
+    }));
+    assert!(matches!(
+        unsaved.reply,
+        PromptReply::Text { save: false, .. }
+    ));
+    let cancel: SessionPromptReplyInput = input(json!({
+        "session_id": SESSION, "prompt_id": 6, "reply": {"kind": "cancel"}
+    }));
+    assert!(matches!(cancel.reply, PromptReply::Cancel));
+}
+
+#[test]
+fn local_and_window_inputs() {
+    let local: LocalOpenInput = input(json!({"shell_id": "pwsh", "cols": 80, "rows": 24}));
+    assert_eq!(local.shell_id.as_deref(), Some("pwsh"));
+    let default: LocalOpenInput = input(json!({"shell_id": null, "cols": 80, "rows": 24}));
+    assert_eq!(default.shell_id, None);
+    let omitted: LocalOpenInput = input(json!({"cols": 80, "rows": 24}));
+    assert_eq!(omitted.shell_id, None);
+
+    let open: WindowOpenInput =
+        input(json!({"intent": {"kind": "open_session", "target": host_target_json()}}));
+    assert_eq!(
+        open.intent,
+        Some(WindowIntent::OpenSession {
+            target: SessionTarget::Host {
+                vault_id: id(VAULT),
+                record_id: id(HOST)
+            }
+        })
+    );
+    let local_intent: WindowOpenInput =
+        input(json!({"intent": {"kind": "open_local", "shell_id": "cmd"}}));
+    assert_eq!(
+        local_intent.intent,
+        Some(WindowIntent::OpenLocal {
+            shell_id: Some("cmd".into())
+        })
+    );
+    let bare: WindowOpenInput = input(json!({"intent": {"kind": "open_local"}}));
+    assert_eq!(
+        bare.intent,
+        Some(WindowIntent::OpenLocal { shell_id: None })
+    );
+    let empty: WindowOpenInput = input(json!({}));
+    assert_eq!(empty.intent, None);
+
+    let exit: ExitInput = input(json!({"confirmed": true}));
+    assert!(exit.confirmed);
+    let exit: ExitInput = input(json!({}));
+    assert!(!exit.confirmed);
+
+    let terminal: ExternalOpenInput =
+        input(json!({"url": "http://example.com/x", "source": "terminal"}));
+    assert_eq!(terminal.source, Some(LinkSource::Terminal));
+    let plain: ExternalOpenInput = input(json!({"url": "https://example.com/x"}));
+    assert_eq!(plain.source, None);
+}
+
+#[test]
+fn key_and_history_inputs() {
+    let import: KeyImportInput = input(json!({
+        "vault_id": VAULT,
+        "label": "deploy key",
+        "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nsample\n-----END OPENSSH PRIVATE KEY-----\n",
+        "passphrase": "pp-sample-1",
+        "save_passphrase": true
+    }));
+    assert_eq!(import.vault_id, id(VAULT));
+    assert_eq!(import.label.as_deref(), Some("deploy key"));
+    assert!(import.private_key.expose_secret().contains("sample"));
+    assert_eq!(
+        import.passphrase.as_ref().unwrap().expose_secret(),
+        "pp-sample-1"
+    );
+    assert!(import.save_passphrase);
+    assert!(!format!("{import:?}").contains("sample"));
+    let minimal: KeyImportInput = input(json!({"vault_id": VAULT, "private_key": "k"}));
+    assert_eq!(minimal.label, None);
+    assert!(minimal.passphrase.is_none());
+    assert!(!minimal.save_passphrase);
+
+    let list: HistoryListInput = input(json!({
+        "host": {"vault_id": VAULT, "record_id": HOST}, "text": "git", "limit": 100
+    }));
+    assert_eq!(
+        list.host,
+        Some(RecordRef {
+            vault_id: id(VAULT),
+            record_id: id(HOST)
+        })
+    );
+    assert_eq!(list.text.as_deref(), Some("git"));
+    assert_eq!(list.limit, Some(100));
+    let none: HistoryListInput = input(json!({"host": null}));
+    assert_eq!(none.host, None);
+    let empty: HistoryListInput = input(json!({}));
+    assert_eq!((empty.host, empty.text, empty.limit), (None, None, None));
+
+    let clear: HistoryClearInput = input(json!({"host": {"vault_id": VAULT, "record_id": HOST}}));
+    assert!(clear.host.is_some());
+    let clear: HistoryClearInput = input(json!({}));
+    assert!(clear.host.is_none());
+
+    let remove: RecordsRef = input(json!({"vault_id": VAULT, "record_ids": [KEY]}));
+    assert_eq!(remove.record_ids, vec![id(KEY)]);
+}
+
+#[cfg(feature = "e2e-mocks")]
+#[test]
+fn e2e_known_host_add_input() {
+    use shellpp_desktop::commands::e2e::parse_action;
+    for sample in [
+        json!({"kind": "known_host_add", "host": "127.0.0.1", "port": 2222, "key_type": "ssh-ed25519", "public_key": "AAAA"}),
+        json!({"kind": "known_host_add", "host": "|1|c2FsdA==|aGFzaA==", "key_type": "ssh-ed25519", "public_key": "AAAA", "revoked": true, "comment": "c"}),
+    ] {
+        assert!(parse_action(sample.clone()).is_ok(), "{sample}");
+    }
+}
+
+fn host_key_info() -> HostKeyInfo {
+    HostKeyInfo {
+        address: "192.0.2.5".into(),
+        port: 2222,
+        key_type: "ssh-ed25519".into(),
+        fingerprint: "SHA256:abc".into(),
+    }
+}
+
+fn host_key_json() -> Value {
+    json!({"address": "192.0.2.5", "port": 2222, "key_type": "ssh-ed25519", "fingerprint": "SHA256:abc"})
+}
+
+fn session_info() -> SessionInfo {
+    SessionInfo {
+        session_id: id(SESSION),
+        rev: 7,
+        kind: SessionKind::Ssh,
+        window: "w-1".into(),
+        state: SessionState::Connecting,
+        step: Some(ConnectStep::HostKey),
+        title: "web".into(),
+        target: Some(SessionTarget::Host {
+            vault_id: id(VAULT),
+            record_id: id(HOST),
+        }),
+        shell_id: None,
+        address: Some("192.0.2.5".into()),
+        port: Some(2222),
+        username: Some("alice".into()),
+        os: Some(HostOs {
+            family: OsFamily::Linux,
+            distro: Some("ubuntu".into()),
+            version: Some("24.04".into()),
+            source: OsSource::Banner,
+            detected_at: TS.into(),
+        }),
+        terminal_theme: json!({"builtin": "graphite"}),
+        backspace: Backspace::CtrlH,
+        record_history: true,
+        prompt: Some(SessionPrompt {
+            prompt_id: 2,
+            kind: PromptKind::HostKeyUnknown {
+                key: host_key_info(),
+            },
+        }),
+        error: None,
+        host_key: None,
+        exit_status: None,
+        reconnect: None,
+    }
+}
+
+#[test]
+fn session_outputs() {
+    assert_eq!(
+        output(&session_info()),
+        json!({
+            "session_id": SESSION,
+            "rev": 7,
+            "kind": "ssh",
+            "window": "w-1",
+            "state": "connecting",
+            "step": "host_key",
+            "title": "web",
+            "target": host_target_json(),
+            "address": "192.0.2.5",
+            "port": 2222,
+            "username": "alice",
+            "os": {"family": "linux", "distro": "ubuntu", "version": "24.04", "source": "banner", "detected_at": TS},
+            "terminal_theme": {"builtin": "graphite"},
+            "backspace": "ctrl_h",
+            "record_history": true,
+            "prompt": {"prompt_id": 2, "kind": "host_key_unknown", "key": host_key_json()}
+        })
+    );
+    // Debug carries ids and states only.
+    let debug = format!("{:?}", session_info());
+    assert!(!debug.contains("192.0.2.5") && !debug.contains("alice") && !debug.contains("web"));
+
+    let dropped = SessionInfo {
+        state: SessionState::Dropped,
+        step: None,
+        prompt: None,
+        error: Some(SessionError {
+            code: "ssh_error".into(),
+            reason: Some("disconnected".into()),
+        }),
+        reconnect: Some(ReconnectInfo {
+            attempt: 2,
+            next_in_ms: Some(2000),
+            waiting_for_unlock: false,
+            in_progress: false,
+        }),
+        ..session_info()
+    };
+    let json = output(&dropped);
+    assert_eq!(
+        json["error"],
+        json!({"code": "ssh_error", "reason": "disconnected"})
+    );
+    assert_eq!(
+        json["reconnect"],
+        json!({"attempt": 2, "next_in_ms": 2000, "waiting_for_unlock": false, "in_progress": false})
+    );
+    assert!(json.get("prompt").is_none() && json.get("step").is_none());
+
+    let waiting = ReconnectInfo {
+        attempt: 3,
+        next_in_ms: None,
+        waiting_for_unlock: true,
+        in_progress: false,
+    };
+    assert_eq!(
+        output(&waiting),
+        json!({"attempt": 3, "waiting_for_unlock": true, "in_progress": false})
+    );
+
+    let revoked = SessionInfo {
+        state: SessionState::Failed,
+        step: None,
+        prompt: None,
+        error: Some(SessionError {
+            code: "host_key_revoked".into(),
+            reason: None,
+        }),
+        host_key: Some(host_key_info()),
+        ..session_info()
+    };
+    let json = output(&revoked);
+    assert_eq!(json["error"], json!({"code": "host_key_revoked"}));
+    assert_eq!(json["host_key"], host_key_json());
+
+    let local = SessionInfo {
+        kind: SessionKind::Local,
+        state: SessionState::Ended,
+        step: None,
+        title: "PowerShell".into(),
+        target: None,
+        shell_id: Some("powershell".into()),
+        address: None,
+        port: None,
+        username: None,
+        os: None,
+        backspace: Backspace::Default,
+        prompt: None,
+        exit_status: Some(3),
+        ..session_info()
+    };
+    assert_eq!(
+        output(&local),
+        json!({
+            "session_id": SESSION, "rev": 7, "kind": "local", "window": "w-1", "state": "ended",
+            "title": "PowerShell", "shell_id": "powershell",
+            "terminal_theme": {"builtin": "graphite"}, "backspace": "default",
+            "record_history": true, "exit_status": 3
+        })
+    );
+    for (state, text) in [
+        (SessionState::Connected, "connected"),
+        (SessionState::Closed, "closed"),
+    ] {
+        assert_eq!(output(&state), json!(text));
+    }
+    for (step, text) in [
+        (ConnectStep::Resolving, "resolving"),
+        (ConnectStep::Connecting, "connecting"),
+        (ConnectStep::Authenticating, "authenticating"),
+        (ConnectStep::OpeningSession, "opening_session"),
+    ] {
+        assert_eq!(output(&step), json!(text));
+    }
+    assert_eq!(output(&Backspace::Del), json!("del"));
+}
+
+#[test]
+fn prompt_outputs() {
+    let prompt = |kind| output(&SessionPrompt { prompt_id: 9, kind });
+    assert_eq!(
+        prompt(PromptKind::HostKeyChanged {
+            key: host_key_info(),
+            old_key_type: "ssh-rsa".into(),
+            old_fingerprint: "SHA256:old".into()
+        }),
+        json!({"prompt_id": 9, "kind": "host_key_changed", "key": host_key_json(),
+               "old_key_type": "ssh-rsa", "old_fingerprint": "SHA256:old"})
+    );
+    assert_eq!(
+        prompt(PromptKind::Username),
+        json!({"prompt_id": 9, "kind": "username"})
+    );
+    assert_eq!(
+        prompt(PromptKind::Password {
+            username: Some("alice".into()),
+            error: true,
+            can_save: false
+        }),
+        json!({"prompt_id": 9, "kind": "password", "username": "alice", "error": true, "can_save": false})
+    );
+    assert_eq!(
+        prompt(PromptKind::Passphrase {
+            key_label: None,
+            error: false,
+            can_save: true
+        }),
+        json!({"prompt_id": 9, "kind": "passphrase", "error": false, "can_save": true})
+    );
+    assert_eq!(
+        prompt(PromptKind::KeyboardInteractive {
+            name: "srv".into(),
+            instruction: "2FA".into(),
+            prompt: "Code: ".into(),
+            echo: false,
+            index: 1,
+            count: 2,
+            error: false
+        }),
+        json!({"prompt_id": 9, "kind": "keyboard_interactive", "name": "srv", "instruction": "2FA",
+               "prompt": "Code: ", "echo": false, "index": 1, "count": 2, "error": false})
+    );
+}
+
+#[test]
+fn data_outputs() {
+    let shells = LocalShellsResult {
+        shells: vec![LocalShell {
+            id: "powershell".into(),
+            label: "PowerShell".into(),
+        }],
+        default_id: Some("powershell".into()),
+    };
+    assert_eq!(
+        output(&shells),
+        json!({"shells": [{"id": "powershell", "label": "PowerShell"}], "default_id": "powershell"})
+    );
+    assert_eq!(
+        output(&LocalShellsResult {
+            shells: vec![],
+            default_id: None
+        }),
+        json!({"shells": []})
+    );
+
+    let known = KnownHostView {
+        vault_id: id(VAULT),
+        record_id: id(KEY),
+        created_at: TS.into(),
+        modified_at: TS.into(),
+        host: "192.0.2.5".into(),
+        port: Some(2222),
+        hashed: false,
+        display_address: Some("[192.0.2.5]:2222".into()),
+        key_type: "ssh-ed25519".into(),
+        fingerprint: "SHA256:abc".into(),
+        revoked: false,
+        source: KnownHostSource::Tofu,
+        comment: None,
+        host_ids: vec![id(HOST)],
+    };
+    assert_eq!(
+        output(&known),
+        json!({
+            "vault_id": VAULT, "record_id": KEY, "created_at": TS, "modified_at": TS,
+            "host": "192.0.2.5", "port": 2222, "hashed": false, "display_address": "[192.0.2.5]:2222",
+            "key_type": "ssh-ed25519", "fingerprint": "SHA256:abc", "revoked": false,
+            "source": "tofu", "host_ids": [HOST]
+        })
+    );
+    let hashed = KnownHostView {
+        host: "|1|c2FsdA==|aGFzaA==".into(),
+        port: None,
+        hashed: true,
+        display_address: None,
+        revoked: true,
+        source: KnownHostSource::Import,
+        comment: Some("c".into()),
+        host_ids: vec![],
+        ..known.clone()
+    };
+    let json = output(&hashed);
+    assert!(json.get("port").is_none() && json.get("display_address").is_none());
+    assert_eq!(json["source"], "import");
+    assert_eq!(json["comment"], "c");
+    assert_eq!(json["revoked"], true);
+    assert_eq!(output(&KnownHostSource::Replaced), json!("replaced"));
+
+    let key = KeyView {
+        vault_id: id(VAULT),
+        record_id: id(KEY),
+        created_at: TS.into(),
+        modified_at: TS.into(),
+        label: "deploy".into(),
+        algorithm: "ssh-ed25519".into(),
+        fingerprint: Some("SHA256:key".into()),
+        encrypted: true,
+        passphrase_saved: false,
+    };
+    let key_json = json!({
+        "vault_id": VAULT, "record_id": KEY, "created_at": TS, "modified_at": TS,
+        "label": "deploy", "algorithm": "ssh-ed25519", "fingerprint": "SHA256:key",
+        "encrypted": true, "passphrase_saved": false
+    });
+    assert_eq!(output(&key), key_json);
+    assert_eq!(
+        output(&KeyImportResult {
+            key: key.clone(),
+            created: true
+        }),
+        json!({"key": key_json, "created": true})
+    );
+
+    let entry = HistoryEntryView {
+        vault_id: id(VAULT),
+        record_id: id(KEY),
+        command: "git status".into(),
+        executed_at: TS.into(),
+    };
+    assert_eq!(
+        output(&entry),
+        json!({"vault_id": VAULT, "record_id": KEY, "command": "git status", "executed_at": TS})
+    );
+    assert!(!format!("{entry:?}").contains("git"));
+    assert_eq!(
+        output(&HistoryClearResult { removed: 4 }),
+        json!({"removed": 4})
+    );
+
+    let recent = RecentConnection {
+        host: Some(RecordRef {
+            vault_id: id(VAULT),
+            record_id: id(HOST),
+        }),
+        title: "web".into(),
+        address: "192.0.2.5".into(),
+        port: 22,
+        username: Some("alice".into()),
+        os: None,
+        path: vec!["Personal".into(), "Prod".into()],
+        last_at: TS.into(),
+    };
+    assert_eq!(
+        output(&recent),
+        json!({
+            "host": {"vault_id": VAULT, "record_id": HOST}, "title": "web", "address": "192.0.2.5",
+            "port": 22, "username": "alice", "path": ["Personal", "Prod"], "last_at": TS
+        })
+    );
+
+    assert_eq!(
+        output(&ExitResult {
+            needs_confirmation: true,
+            active_sessions: 2
+        }),
+        json!({"needs_confirmation": true, "active_sessions": 2})
+    );
+}
+
+#[test]
+fn snapshot_with_sessions_and_intent() {
+    let snapshot = StateSnapshot {
+        core: CoreSnapshot {
+            v: 1,
+            lock: lock_status(),
+            settings: BTreeMap::new(),
+            notifications: NotificationList {
+                items: vec![],
+                unread: 0,
+            },
+            vaults: vec![],
+        },
+        window_label: "w-2".to_owned(),
+        launched_at: "2026-10-19T08:00:00.000Z".to_owned(),
+        sessions: vec![session_info()],
+        intent: Some(WindowIntent::OpenLocal {
+            shell_id: Some("cmd".into()),
+        }),
+    };
+    let json = output(&snapshot);
+    assert_eq!(json["window_label"], "w-2");
+    assert_eq!(json["sessions"][0]["session_id"], SESSION);
+    assert_eq!(json["sessions"][0]["rev"], 7);
+    assert_eq!(
+        json["intent"],
+        json!({"kind": "open_local", "shell_id": "cmd"})
+    );
+    let session_intent = WindowIntent::OpenSession {
+        target: SessionTarget::Quick {
+            address: "example.com".into(),
+            port: None,
+            username: None,
+        },
+    };
+    assert_eq!(
+        output(&session_intent),
+        json!({"kind": "open_session", "target": {"kind": "quick", "address": "example.com"}})
+    );
+}
+
+#[test]
+fn stage_2_event_names_and_errors() {
+    assert_eq!(SESSIONS_CHANGED_EVENT, "sessions:changed");
+    assert_eq!(WINDOW_CLOSE_REQUESTED_EVENT, "window:close-requested");
+    assert_eq!(
+        output(&CmdError::from(CoreError::Cancelled)),
+        json!({"code": "cancelled", "details": {}})
+    );
+    assert_eq!(
+        output(&CmdError::from(CoreError::Ssh(SshReason::Refused))),
+        json!({"code": "ssh_error", "details": {"reason": "refused"}})
+    );
+    assert_eq!(
+        output(&CmdError::from(CoreError::HostKeyRevoked)),
+        json!({"code": "host_key_revoked", "details": {}})
     );
 }
