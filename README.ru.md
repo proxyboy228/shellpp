@@ -72,6 +72,7 @@ $env:SHELLPP_DATA_DIR = "D:\shellpp-data"; cargo run -p shellpp-desktop
 - [docs/architecture.md](docs/architecture.md): компоненты, модель процессов и правила для зависимостей.
 - [docs/data-model.md](docs/data-model.md): сущности, поля и поведение при синхронизации.
 - [docs/storage-format.md](docs/storage-format.md): формат хранения на диске, шифрование записей и форматы экспорта.
+- [docs/ru/data-format.md](docs/ru/data-format.md): формат хранения версии 1 в том виде, в каком он реализован сейчас.
 - [docs/sync-protocol.md](docs/sync-protocol.md): протокол синхронизации со сквозным шифрованием.
 - [docs/security.md](docs/security.md): модель угроз и меры защиты.
 

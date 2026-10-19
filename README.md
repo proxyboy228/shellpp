@@ -68,6 +68,7 @@ The specifications were originally written in Russian. The Russian originals are
 - [docs/architecture.md](docs/architecture.md): components, process model and dependency policy.
 - [docs/data-model.md](docs/data-model.md): entities, fields and sync behavior.
 - [docs/storage-format.md](docs/storage-format.md): on-disk format, encryption envelope and export formats.
+- [docs/data-format.md](docs/data-format.md): the on-disk format version 1 as implemented now.
 - [docs/sync-protocol.md](docs/sync-protocol.md): the end-to-end encrypted sync protocol.
 - [docs/security.md](docs/security.md): threat model and security controls.
 

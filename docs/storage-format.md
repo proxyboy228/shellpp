@@ -63,7 +63,7 @@ The directory policy is owned by [architecture.md](architecture.md); this table 
 
 ### 2.3 OS keychain item
 
-Nothing is stored in the OS keychain by default (D8). Only when "remember on this device" is on:
+Only when "remember on this device" is on (D8; on by default since D29, see [data-format.md](data-format.md)):
 
 | Attribute | Value |
 |---|---|
@@ -386,7 +386,7 @@ For a 32-byte key, n = 32 and the blob is 73 bytes.
 
 ### 6.3 Device key ("remember on this device")
 
-- Off by default; turning it on shows a warning (D8). It is unavailable without an OS keychain, for example without Secret Service on Linux (D5), and in unsigned macOS builds (D7).
+- On by default since D29 and set on the first-run screen; turning it on later shows a warning (D8). It is unavailable without an OS keychain, for example without Secret Service on Linux (D5), and in unsigned macOS builds (D7).
 - Turning it on: generate `device_key` (32 bytes from the OS CSPRNG), store it in the keychain item of section 2.3, write the `device` row for the current personal epoch.
 - Unlock: read `device_key`, derive `device_wrap_key`, open the `device` row. On any failure (missing item, wrong `db_id`, failed unwrap) the app asks for the master password.
 - Turning it off, or logging out with "delete local copy": delete the keychain item and the `device` row. A password change keeps the `device` row, because it does not depend on the password.
