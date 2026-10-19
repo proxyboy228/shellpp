@@ -10,13 +10,16 @@
 //! 4. Share this host (`host-block-share`): an `--accent-text` text button,
 //!    disabled until the host exists; opens the "In development" placeholder.
 //! 5. SSH (`host-block-ssh`): port on the protocol line (placeholder 22),
-//!    username, password (masked, show/hide), "+" to link an identity, key,
-//!    certificate or FIDO2 key (placeholder until the Keychain exists),
-//!    inherited values as "from group X", and "Show more" (Agent Forwarding,
-//!    Startup snippet, Host Chaining, Proxy, Environment Variables, Charset,
-//!    Keepalive, Record history, Record output, terminal theme). Mosh stays
-//!    hidden (D3).
-//! 6. Add Telnet (`host-block-telnet`): placeholder (Telnet is stage 9).
+//!    username, password (masked, show/hide), the linked identity, key,
+//!    certificate and FIDO2 key as removable rows with "+" to link more
+//!    ([`credentials`]), inherited values as "from group X", and "Show more"
+//!    with one field per line: Agent Forwarding, Startup snippet, Host
+//!    Chaining, Proxy, Environment Variables, Charset, Keepalive, Record
+//!    history, Record output, Mosh (lead decision 2: shown, only the value is
+//!    saved) and the terminal theme.
+//! 6. Telnet (`host-block-telnet`): "Add Telnet" adds a second protocol block
+//!    to the same host (port, placeholder 23, and username; removable). The
+//!    "…" menu's Add Telnet does the same. Sessions come later (stage 9).
 //! 7. Connect (`host-connect`), pinned to the bottom, disabled until the
 //!    address is valid. It is the screen's one accent button unless the
 //!    search bar holds a recognized address ([`HostPanel::set_search_has_address`]).
@@ -28,6 +31,10 @@
 //! not saved. Closing an empty draft discards it without asking. The rules
 //! themselves live in [`crate::state::records_edit`].
 
+mod credentials;
+#[cfg(test)]
+mod tests;
+
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -37,31 +44,31 @@ use gpui::{
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, IconName, Sizable as _, h_flex,
-    v_flex,
+    ActiveTheme as _, FocusableExt as _, IconName, Sizable as _, h_flex, v_flex,
 };
 use secrecy::{ExposeSecret as _, SecretString};
 use uuid::Uuid;
 
+use self::credentials::Credentials;
 use super::autosave::Autosave;
 use super::menus::{self, HOST_PANEL_MENU, HostPanelAction};
+pub use super::picker::CredentialKind;
 use super::picker::{self, OnPick, PickValue, PickerRow};
 use super::{PanelEvent, PanelRequest, strings, widgets};
 use crate::shell::details::DetailsHeader;
 use crate::state::records_edit::{
-    BackspaceMode, EnvVar, FieldErrors, HostDraft, HostSecrets, OverrideMode, ProxyKind,
-    SecretChange, check_address, has_tag, normalize_tag,
+    BackspaceMode, CHARSETS, EnvVar, FieldErrors, HostDraft, HostSecrets, OverrideMode, ProxyKind,
+    SecretChange, TERMINAL_THEMES, TelnetDraft, check_address, has_tag, normalize_tag,
 };
 use crate::state::{AppState, AppStateEvent, SelectMode};
-use crate::theme::controls::ButtonColors as _;
+use crate::theme::controls::{ButtonColors as _, Filled};
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::terminal::TerminalTheme;
-use crate::theme::{self, controls, metrics, palette};
+use crate::theme::{self, metrics, palette};
 
 /// Which inline dropdown of the panel is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +76,11 @@ enum Dropdown {
     Vault,
     ParentGroup,
     JumpHost,
+    /// The credential types of "+".
+    Credential,
+    StartupSnippet,
+    Charset,
+    TerminalTheme,
 }
 
 /// One environment variable row.
@@ -98,18 +110,21 @@ pub struct HostPanel {
     port: Entity<InputState>,
     username: Entity<InputState>,
     password: Entity<InputState>,
-    charset: Entity<InputState>,
     keepalive: Entity<InputState>,
     proxy_address: Entity<InputState>,
     proxy_port: Entity<InputState>,
     proxy_username: Entity<InputState>,
     proxy_password: Entity<InputState>,
+    telnet_port: Entity<InputState>,
+    telnet_username: Entity<InputState>,
     tag_input: Entity<InputState>,
     group_search: Entity<InputState>,
     jump_search: Entity<InputState>,
     env_rows: Vec<EnvRow>,
-    /// The default terminal theme, for the "terminal theme" preview.
-    terminal_theme: Option<TerminalTheme>,
+    /// The built-in terminal themes with their slugs, for the previews.
+    terminal_themes: Vec<(String, TerminalTheme)>,
+    /// The "+" forms and the names of linked identities and keys.
+    credentials: Credentials,
     autosave: Autosave,
     _subscriptions: Vec<Subscription>,
 }
@@ -188,8 +203,10 @@ impl HostPanel {
                 .masked(true)
                 .placeholder(password_placeholder)
         });
-        let charset = new_input(strings::CHARSET_PLACEHOLDER, &draft.charset, window, cx);
         let keepalive = new_input(strings::KEEPALIVE_PLACEHOLDER, &draft.keepalive, window, cx);
+        let telnet = draft.telnet.clone().unwrap_or_default();
+        let telnet_port = new_input(strings::TELNET_DEFAULT_PORT, &telnet.port, window, cx);
+        let telnet_username = new_input(strings::USERNAME, &telnet.username, window, cx);
         let proxy_address = new_input(
             strings::ADDRESS_PLACEHOLDER,
             &draft.proxy_address,
@@ -230,17 +247,23 @@ impl HostPanel {
             port,
             username,
             password,
-            charset,
             keepalive,
             proxy_address,
             proxy_port,
             proxy_username,
             proxy_password,
+            telnet_port,
+            telnet_username,
             tag_input,
             group_search,
             jump_search,
             env_rows: Vec::new(),
-            terminal_theme: crate::theme::terminal::builtin().into_iter().next(),
+            terminal_themes: crate::theme::terminal::builtin()
+                .into_iter()
+                .map(|theme| (theme.name.to_lowercase(), theme))
+                .filter(|(slug, _)| TERMINAL_THEMES.contains(&slug.as_str()))
+                .collect(),
+            credentials: Credentials::new(window, cx),
             autosave: Autosave::default(),
             _subscriptions: Vec::new(),
         };
@@ -248,6 +271,7 @@ impl HostPanel {
         for var in env {
             this.push_env_row(&var, window, cx);
         }
+        this.refresh_keychain(cx);
 
         let mut subscriptions = Vec::new();
         for input in [
@@ -255,11 +279,12 @@ impl HostPanel {
             &this.label,
             &this.port,
             &this.username,
-            &this.charset,
             &this.keepalive,
             &this.proxy_address,
             &this.proxy_port,
             &this.proxy_username,
+            &this.telnet_port,
+            &this.telnet_username,
         ] {
             subscriptions.push(cx.subscribe_in(input, window, Self::on_field_event));
         }
@@ -486,8 +511,11 @@ impl HostPanel {
         self.draft.notes = self.notes.read(cx).value().to_string();
         self.draft.port = text(&self.port);
         self.draft.username = text(&self.username);
-        self.draft.charset = text(&self.charset);
         self.draft.keepalive = text(&self.keepalive);
+        if let Some(telnet) = self.draft.telnet.as_mut() {
+            telnet.port = text(&self.telnet_port);
+            telnet.username = text(&self.telnet_username);
+        }
         self.draft.proxy_address = text(&self.proxy_address);
         self.draft.proxy_port = text(&self.proxy_port);
         self.draft.proxy_username = text(&self.proxy_username);
@@ -520,6 +548,7 @@ impl HostPanel {
     }
 
     fn on_records_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_keychain(cx);
         let Some(id) = self.record_id else {
             self.refresh_placeholders(window, cx);
             return;
@@ -530,10 +559,14 @@ impl HostPanel {
             cx.emit(PanelEvent::Close);
             return;
         };
+        let stored = HostDraft::from_host(&host);
+        // The group of a stored host changes only through `move_records`
+        // (Parent Group here, at once; drags and Move to elsewhere), never
+        // through the autosave: always take it from the stored record, or a
+        // pending autosave would move the host back.
+        self.draft.group_id = stored.group_id;
         if !self.autosave.is_pending() {
-            // Moves and tag edits made elsewhere (drag to a group, Move to).
-            let stored = HostDraft::from_host(&host);
-            self.draft.group_id = stored.group_id;
+            // Tag and color edits made elsewhere.
             self.draft.tags = stored.tags;
             self.draft.color = stored.color;
         }
@@ -583,7 +616,11 @@ impl HostPanel {
             let search = match dropdown {
                 Dropdown::ParentGroup => Some(self.group_search.clone()),
                 Dropdown::JumpHost => Some(self.jump_search.clone()),
-                Dropdown::Vault => None,
+                Dropdown::Vault
+                | Dropdown::Credential
+                | Dropdown::StartupSnippet
+                | Dropdown::Charset
+                | Dropdown::TerminalTheme => None,
             };
             if let Some(search) = search {
                 picker::clear_search(&search, window, cx);
@@ -634,6 +671,41 @@ impl HostPanel {
                 self.add_tag(&tag, window, cx);
                 return;
             }
+            PickValue::Credential(kind) => {
+                self.open_credential(kind, window, cx);
+                return;
+            }
+            PickValue::Identity(id) => self.pick_identity(id, window, cx),
+            PickValue::NewIdentity => {
+                self.start_new_identity(window, cx);
+                return;
+            }
+            PickValue::Key(id) => self.pick_key(id, window, cx),
+            PickValue::Charset(label) => {
+                // UTF-8 is the default: stored as no value (data-model 8.5).
+                let label = if label == CHARSETS[0] {
+                    String::new()
+                } else {
+                    label
+                };
+                if self.draft.charset.to_lowercase() != label {
+                    self.draft.charset = label;
+                    self.errors.remove("charset");
+                    self.changed(cx);
+                }
+            }
+            PickValue::TerminalTheme(slug) => {
+                if self.draft.terminal_theme.as_deref() != Some(slug.as_str()) {
+                    self.draft.terminal_theme = Some(slug);
+                    self.changed(cx);
+                }
+            }
+            PickValue::Snippet(id) => {
+                if self.draft.startup_snippet_id != id {
+                    self.draft.startup_snippet_id = id;
+                    self.changed(cx);
+                }
+            }
         }
         self.dropdown = None;
         self.refresh_placeholders(window, cx);
@@ -646,7 +718,7 @@ impl HostPanel {
         if self.draft.group_id == group {
             return;
         }
-        self.draft.group_id = group;
+        let previous = std::mem::replace(&mut self.draft.group_id, group);
         let Some(id) = self.record_id else {
             self.changed(cx);
             return;
@@ -656,6 +728,8 @@ impl HostPanel {
             .update(cx, |state, cx| state.move_records(vec![id], group, cx));
         if let Err(error) = moved {
             tracing::warn!(code = error.code(), "host not moved");
+            // The host stays where it is; the autosave must not move it.
+            self.draft.group_id = previous;
             cx.emit(PanelEvent::Toast(strings::NOT_SAVED.into()));
         }
         cx.notify();
@@ -727,6 +801,29 @@ impl HostPanel {
         cx.emit(PanelEvent::Toast(strings::IN_DEVELOPMENT.into()));
     }
 
+    /// Add Telnet (UI 3.1, 3.3): a Telnet block on the same host, port 23
+    /// unless changed. The focus goes to its port.
+    pub fn add_telnet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft.telnet.is_some() {
+            return;
+        }
+        for input in [&self.telnet_port, &self.telnet_username] {
+            picker::clear_search(input, window, cx);
+        }
+        self.draft.telnet = Some(TelnetDraft::default());
+        self.telnet_port
+            .update(cx, |input, cx| input.focus(window, cx));
+        self.changed(cx);
+    }
+
+    /// Removes the Telnet block (data-model 7.4: the member is removed).
+    pub fn remove_telnet(&mut self, cx: &mut Context<Self>) {
+        if self.draft.telnet.take().is_some() {
+            self.errors.retain(|path, _| !path.starts_with("telnet"));
+            self.changed(cx);
+        }
+    }
+
     fn connect(&mut self, cx: &mut Context<Self>) {
         if !self.can_connect() {
             return;
@@ -746,7 +843,7 @@ impl HostPanel {
     ) {
         match action {
             HostPanelAction::Connect => self.connect(cx),
-            HostPanelAction::AddTelnet => self.placeholder(cx),
+            HostPanelAction::AddTelnet => self.add_telnet(window, cx),
             HostPanelAction::Duplicate => {
                 self.flush(cx);
                 let Some(id) = self.record_id else {
@@ -798,7 +895,7 @@ impl HostPanel {
     pub fn menu_action_enabled(&self, action: HostPanelAction) -> bool {
         match action {
             HostPanelAction::Connect => self.can_connect(),
-            HostPanelAction::AddTelnet => true,
+            HostPanelAction::AddTelnet => self.draft.telnet.is_none(),
             HostPanelAction::Duplicate | HostPanelAction::Remove => self.record_id.is_some(),
         }
     }
@@ -862,7 +959,7 @@ impl HostPanel {
         let open = self.dropdown == Some(Dropdown::Vault);
         let trigger = widgets::select_trigger(
             "host-vault",
-            Some(Icon::new(Lucide::Vault).small().into_any_element()),
+            Some(crate::app::assets::vault_icon().small().into_any_element()),
             strings::PERSONAL_VAULT,
             open,
             cx,
@@ -1210,124 +1307,6 @@ impl HostPanel {
         widgets::block("host-block-share", None, cx).child(button)
     }
 
-    fn render_credentials(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let inherited = state.inherited_ssh(self.draft.group_id);
-        let mut rows: Vec<AnyElement> = Vec::new();
-        let linked = [
-            (
-                "identity",
-                strings::CREDENTIAL_IDENTITY,
-                self.draft.identity_id,
-            ),
-            ("key", strings::CREDENTIAL_KEY, self.draft.key_id),
-            (
-                "certificate",
-                strings::CREDENTIAL_CERTIFICATE,
-                self.draft.certificate_key_id,
-            ),
-            ("fido2", strings::CREDENTIAL_FIDO2, self.draft.fido2_key_id),
-        ];
-        for (key, label, value) in linked {
-            if value.is_none() {
-                continue;
-            }
-            let unlink = widgets::text_button(
-                SharedString::from(format!("host-unlink-{key}")),
-                strings::UNLINK,
-                true,
-                cx,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                match key {
-                    "identity" => this.draft.identity_id = None,
-                    "key" => this.draft.key_id = None,
-                    "certificate" => this.draft.certificate_key_id = None,
-                    _ => this.draft.fido2_key_id = None,
-                }
-                this.changed(cx);
-            }));
-            rows.push(
-                widgets::inline_row(format!("{label} \u{b7} {}", strings::LINKED), unlink, cx)
-                    .into_any_element(),
-            );
-        }
-        for (label, from) in [
-            (
-                strings::CREDENTIAL_IDENTITY,
-                inherited
-                    .identity_id
-                    .as_ref()
-                    .filter(|_| self.draft.identity_id.is_none())
-                    .map(|value| value.group_id),
-            ),
-            (
-                strings::CREDENTIAL_KEY,
-                inherited
-                    .key_id
-                    .as_ref()
-                    .filter(|_| self.draft.key_id.is_none())
-                    .map(|value| value.group_id),
-            ),
-        ] {
-            if let Some(group_id) = from {
-                let group = state
-                    .group(group_id)
-                    .map(|group| group.name.clone())
-                    .unwrap_or_default();
-                rows.push(
-                    div()
-                        .text_size(metrics::FONT_SIZE_CAPTION)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{label} \u{b7} {}", strings::from_group(&group)))
-                        .into_any_element(),
-                );
-            }
-        }
-        let available: Vec<(&'static str, bool)> = vec![
-            (
-                strings::CREDENTIAL_IDENTITY,
-                self.draft.identity_id.is_none(),
-            ),
-            (strings::CREDENTIAL_KEY, self.draft.key_id.is_none()),
-            (
-                strings::CREDENTIAL_CERTIFICATE,
-                self.draft.certificate_key_id.is_none(),
-            ),
-            (strings::CREDENTIAL_FIDO2, self.draft.fido2_key_id.is_none()),
-        ];
-        let panel = cx.entity().downgrade();
-        let any_available = available.iter().any(|(_, free)| *free);
-        let surface = cx.theme().secondary;
-        let add = Button::new("host-add-credential")
-            .custom(controls::ghost(cx))
-            .small()
-            .rounded(metrics::RADIUS_CONTROL)
-            .focus_ring(false)
-            .focus_ring_visible(surface, cx)
-            .icon(IconName::Plus)
-            .tooltip(strings::ADD_CREDENTIAL)
-            .disabled(!any_available)
-            .dropdown_menu(move |mut menu, _, _| {
-                for &(label, free) in &available {
-                    // A type that is already linked disappears (UI 3.1).
-                    if !free {
-                        continue;
-                    }
-                    let panel = panel.clone();
-                    menu = menu.item(menus::menu_item(label, false, false, move |_, cx| {
-                        let _ = panel.update(cx, |panel, cx| panel.placeholder(cx));
-                    }));
-                }
-                menu
-            });
-        v_flex()
-            .w_full()
-            .gap(metrics::SPACE_1)
-            .children(rows)
-            .child(h_flex().w_full().justify_end().child(add))
-    }
-
     fn render_password(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let toggle = widgets::icon_button(
             "host-password-toggle",
@@ -1409,7 +1388,7 @@ impl HostPanel {
                 cx,
             ))
             .child(self.render_password(window, cx))
-            .child(self.render_credentials(cx))
+            .child(self.render_credentials(window, cx))
             .child(show_more)
             .when(self.show_more, |this| {
                 this.child(self.render_more(window, cx))
@@ -1716,6 +1695,212 @@ impl HostPanel {
         widgets::field(label, widgets::segments(options), None, cx)
     }
 
+    /// A small preview of a terminal theme: its background, foreground,
+    /// cursor and two ANSI colors.
+    fn theme_preview(theme: &TerminalTheme, cx: &App) -> gpui::Div {
+        let bar = |token: theme::palette::Token, width: f32| {
+            div()
+                .w(px(width))
+                .h(px(3.))
+                .rounded(px(1.))
+                .bg(token.hsla())
+        };
+        div()
+            .flex_none()
+            .w(px(40.))
+            .h(px(24.))
+            .rounded(metrics::RADIUS_CONTROL)
+            .border_1()
+            .border_color(cx.theme().input)
+            .bg(theme.background.hsla())
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(bar(theme.foreground, 22.))
+            .child(
+                h_flex()
+                    .gap(px(2.))
+                    .child(bar(theme.ansi.0[2], 8.))
+                    .child(bar(theme.ansi.0[4], 12.)),
+            )
+            .child(bar(theme.cursor, 6.))
+    }
+
+    /// A select of "Show more": the trigger and, while open, its list.
+    fn select_field(
+        &self,
+        dropdown: Dropdown,
+        id: &'static str,
+        leading: Option<AnyElement>,
+        value: SharedString,
+        list: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let open = self.dropdown == Some(dropdown);
+        let trigger = widgets::select_trigger(id, leading, value, open, cx).on_click(cx.listener(
+            move |this, _: &ClickEvent, window, cx| this.toggle_dropdown(dropdown, window, cx),
+        ));
+        v_flex()
+            .w_full()
+            .gap(metrics::SPACE_1)
+            .child(trigger)
+            .when(open, |this| {
+                this.children(list)
+                    .on_mouse_down_out(cx.listener(Self::close_dropdown))
+            })
+    }
+
+    fn render_startup_snippet(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let value: SharedString = match self.draft.startup_snippet_id {
+            None => strings::NONE.into(),
+            // Snippets arrive with their screen; a stored reference is kept.
+            Some(_) => strings::MISSING_ITEM.into(),
+        };
+        let list = (self.dropdown == Some(Dropdown::StartupSnippet)).then(|| {
+            let mut rows = vec![
+                PickerRow::new("none", PickValue::Snippet(None), strings::NONE)
+                    .checked(self.draft.startup_snippet_id.is_none()),
+            ];
+            if let Some(id) = self.draft.startup_snippet_id {
+                rows.push(
+                    PickerRow::new(
+                        "current",
+                        PickValue::Snippet(Some(id)),
+                        strings::MISSING_ITEM,
+                    )
+                    .checked(true),
+                );
+            }
+            v_flex()
+                .w_full()
+                .gap(metrics::SPACE_1)
+                .child(picker::render_list(
+                    "host-startup-snippet",
+                    None,
+                    rows,
+                    window,
+                    cx,
+                    self.on_pick(),
+                ))
+                .child(widgets::caption(strings::NO_SNIPPETS, cx))
+                .into_any_element()
+        });
+        let error = self.error("ssh.startup_snippet_id");
+        widgets::field(
+            strings::STARTUP_SNIPPET,
+            self.select_field(
+                Dropdown::StartupSnippet,
+                "host-startup-snippet",
+                None,
+                value,
+                list,
+                cx,
+            ),
+            error,
+            cx,
+        )
+    }
+
+    fn render_charset(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.draft.charset.trim().to_lowercase();
+        let value: SharedString = if current.is_empty() || current == CHARSETS[0] {
+            strings::CHARSET_DEFAULT.into()
+        } else {
+            current.to_uppercase().into()
+        };
+        let list = (self.dropdown == Some(Dropdown::Charset)).then(|| {
+            let mut labels: Vec<String> =
+                CHARSETS.iter().map(|label| (*label).to_owned()).collect();
+            if !current.is_empty() && !labels.contains(&current) {
+                // A label set elsewhere (an import) stays selectable.
+                labels.push(current.clone());
+            }
+            let rows = labels
+                .into_iter()
+                .map(|label| {
+                    let selected = if current.is_empty() {
+                        label == CHARSETS[0]
+                    } else {
+                        label == current
+                    };
+                    let title = if label == CHARSETS[0] {
+                        strings::CHARSET_DEFAULT.to_owned()
+                    } else {
+                        label.to_uppercase()
+                    };
+                    PickerRow::new(label.clone(), PickValue::Charset(label), title)
+                        .checked(selected)
+                })
+                .collect();
+            picker::render_list("host-charset", None, rows, window, cx, self.on_pick())
+                .into_any_element()
+        });
+        let error = self.error("charset");
+        widgets::field(
+            strings::CHARSET,
+            self.select_field(Dropdown::Charset, "host-charset", None, value, list, cx),
+            error,
+            cx,
+        )
+    }
+
+    fn render_terminal_theme(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Graphite is the default (data-model 8.5).
+        let current = self
+            .draft
+            .terminal_theme
+            .clone()
+            .unwrap_or_else(|| TERMINAL_THEMES[0].to_owned());
+        let chosen = self
+            .terminal_themes
+            .iter()
+            .find(|(slug, _)| *slug == current)
+            .or_else(|| self.terminal_themes.first());
+        let value: SharedString = chosen
+            .map(|(_, theme)| SharedString::from(theme.name.clone()))
+            .unwrap_or_else(|| strings::DEFAULT_THEME_NAME.into());
+        let leading = chosen.map(|(_, theme)| Self::theme_preview(theme, cx).into_any_element());
+        let list = (self.dropdown == Some(Dropdown::TerminalTheme)).then(|| {
+            let rows = self
+                .terminal_themes
+                .iter()
+                .map(|(slug, theme)| {
+                    PickerRow::new(
+                        slug.clone(),
+                        PickValue::TerminalTheme(slug.clone()),
+                        theme.name.clone(),
+                    )
+                    .checked(*slug == current)
+                    .leading(Self::theme_preview(theme, cx))
+                })
+                .collect();
+            picker::render_list(
+                "host-terminal-theme",
+                None,
+                rows,
+                window,
+                cx,
+                self.on_pick(),
+            )
+            .into_any_element()
+        });
+        let error = self.error("terminal_theme");
+        widgets::field(
+            strings::TERMINAL_THEME,
+            self.select_field(
+                Dropdown::TerminalTheme,
+                "host-terminal-theme",
+                leading,
+                value,
+                list,
+                cx,
+            ),
+            error,
+            cx,
+        )
+    }
+
     fn render_more(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent = Switch::new("host-agent-forwarding")
             .checked(self.draft.agent_forwarding)
@@ -1723,62 +1908,13 @@ impl HostPanel {
                 this.draft.agent_forwarding = *checked;
                 this.changed(cx);
             }));
-        let snippet =
-            widgets::select_trigger("host-startup-snippet", None, strings::NONE, false, cx)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.placeholder(cx)));
-        let charset_error = self.error("charset");
+        let mosh = Switch::new("host-mosh")
+            .checked(self.draft.mosh)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.mosh = *checked;
+                this.changed(cx);
+            }));
         let keepalive_error = self.error("ssh.keepalive_s");
-        // The default terminal theme (Graphite) as a small preview: its
-        // background, foreground and a few ANSI colors.
-        let theme_name = self
-            .terminal_theme
-            .as_ref()
-            .map(|theme| SharedString::from(theme.name.clone()))
-            .unwrap_or_else(|| strings::DEFAULT_THEME_NAME.into());
-        let theme_preview = self.terminal_theme.as_ref().map(|theme| {
-            let bar = |token: theme::palette::Token, width: f32| {
-                div()
-                    .w(px(width))
-                    .h(px(3.))
-                    .rounded(px(1.))
-                    .bg(token.hsla())
-            };
-            div()
-                .flex_none()
-                .w(px(40.))
-                .h(px(24.))
-                .rounded(metrics::RADIUS_CONTROL)
-                .border_1()
-                .border_color(cx.theme().input)
-                .bg(theme.background.hsla())
-                .p(px(4.))
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(bar(theme.foreground, 22.))
-                .child(
-                    h_flex()
-                        .gap(px(2.))
-                        .child(bar(theme.ansi.0[2], 8.))
-                        .child(bar(theme.ansi.0[4], 12.)),
-                )
-                .child(bar(theme.cursor, 6.))
-        });
-        let terminal_theme = widgets::hit("host-terminal-theme")
-            .w_full()
-            .h(metrics::HEIGHT_CONTROL)
-            .flex()
-            .items_center()
-            .gap(metrics::SPACE_2)
-            .cursor_pointer()
-            .children(theme_preview)
-            .child(
-                div()
-                    .text_size(metrics::FONT_SIZE_BODY)
-                    .text_color(cx.theme().foreground)
-                    .child(theme_name),
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.placeholder(cx)));
         v_flex()
             .id("host-more")
             .test_support()
@@ -1787,22 +1923,11 @@ impl HostPanel {
             .child(widgets::divider(cx))
             // UI 3.1 "Show more", one field per line, in this order.
             .child(widgets::inline_row(strings::AGENT_FORWARDING, agent, cx))
-            .child(widgets::field(strings::STARTUP_SNIPPET, snippet, None, cx))
+            .child(self.render_startup_snippet(window, cx))
             .child(self.render_jump_hosts(window, cx))
             .child(self.render_proxy(window, cx))
             .child(self.render_env(window, cx))
-            .child(widgets::field(
-                strings::CHARSET,
-                widgets::text_input(
-                    &self.charset,
-                    "host-charset",
-                    charset_error.is_some(),
-                    window,
-                    cx,
-                ),
-                charset_error,
-                cx,
-            ))
+            .child(self.render_charset(window, cx))
             .child(widgets::field(
                 strings::KEEPALIVE,
                 widgets::text_input(
@@ -1829,25 +1954,67 @@ impl HostPanel {
                 |draft, mode| draft.record_output = mode,
                 cx,
             ))
-            // Mosh is hidden until its stage (D3).
-            .child(widgets::field(
-                strings::TERMINAL_THEME,
-                terminal_theme,
-                None,
-                cx,
-            ))
+            .child(widgets::inline_row(strings::MOSH, mosh, cx))
+            .child(self.render_terminal_theme(window, cx))
     }
 
-    fn render_telnet(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        widgets::block("host-block-telnet", None, cx).child(
-            widgets::outline_button(
-                "host-add-telnet",
-                Some(IconName::Plus),
-                strings::ADD_TELNET,
-                cx,
+    fn render_telnet(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let block = widgets::block("host-block-telnet", None, cx);
+        if self.draft.telnet.is_none() {
+            return block.child(
+                widgets::outline_button(
+                    "host-add-telnet",
+                    Some(IconName::Plus),
+                    strings::ADD_TELNET,
+                    cx,
+                )
+                .on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.add_telnet(window, cx)),
+                ),
+            );
+        }
+        let port_error = self.error("telnet.port");
+        let username_error = self.error("telnet.username");
+        let remove = widgets::icon_button("host-telnet-remove", IconName::Close, cx)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.remove_telnet(cx)));
+        let protocol_line = h_flex()
+            .w_full()
+            .gap(metrics::SPACE_3)
+            .items_center()
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                    .text_color(cx.theme().foreground)
+                    .child(strings::TELNET),
             )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.placeholder(cx))),
-        )
+            .child(widgets::caption(strings::PORT, cx))
+            .child(div().flex_1().min_w(px(72.)).child(widgets::text_input(
+                &self.telnet_port,
+                "host-telnet-port",
+                port_error.is_some(),
+                window,
+                cx,
+            )))
+            .child(remove);
+        block
+            .child(protocol_line)
+            .when_some(port_error, |this, error| {
+                this.child(widgets::error_text(error, cx))
+            })
+            .child(widgets::field(
+                strings::USERNAME,
+                widgets::text_input(
+                    &self.telnet_username,
+                    "host-telnet-username",
+                    username_error.is_some(),
+                    window,
+                    cx,
+                ),
+                username_error,
+                cx,
+            ))
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1873,8 +2040,15 @@ impl HostPanel {
             .label(strings::CONNECT)
             .focus_ring(false)
             .focus_ring_visible(surface, cx)
-            .disabled(!enabled)
-            .when(!enabled, |this| this.opacity(metrics::OPACITY_DISABLED))
+            .disabled_as_designed(
+                !enabled,
+                if accent {
+                    Filled::Accent
+                } else {
+                    Filled::Neutral
+                },
+                cx,
+            )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.connect(cx)));
         div()
             .flex_none()
@@ -1889,6 +2063,8 @@ impl HostPanel {
 /// Members the panel checks itself (their errors are recomputed on edit).
 fn is_client_checked(path: &str) -> bool {
     path == "address"
+        || path == "charset"
+        || path.starts_with("telnet")
         || path == "ssh.port"
         || path == "ssh.keepalive_s"
         || path == "tags"
@@ -1922,7 +2098,7 @@ impl Render for HostPanel {
                     .child(self.render_general(window, cx))
                     .child(self.render_share(cx))
                     .child(self.render_ssh(window, cx))
-                    .child(self.render_telnet(cx)),
+                    .child(self.render_telnet(window, cx)),
             )
             .child(self.render_footer(cx))
     }

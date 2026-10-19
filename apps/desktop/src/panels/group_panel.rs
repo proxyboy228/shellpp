@@ -25,7 +25,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::{
-    ActiveTheme as _, FocusableExt as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, FocusableExt as _, IconName, Sizable as _, h_flex, v_flex,
 };
 use shellpp_core::CoreError;
 use uuid::Uuid;
@@ -254,9 +254,13 @@ impl GroupPanel {
                 cx.emit(PanelEvent::Close);
                 return;
             };
+            // The parent of a stored group changes only through
+            // `move_records` (Parent Group here, at once; Move to and drags
+            // elsewhere), never through the autosave: always take it from the
+            // stored record, or a pending autosave would move the group back.
+            self.draft.parent_id = group.parent_id;
             if !self.autosave.is_pending() {
-                // Moved elsewhere (Move to, drag and drop).
-                self.draft.parent_id = group.parent_id;
+                // A color picked elsewhere.
                 self.draft.color = GroupDraft::from_group(&group).color;
             }
         }
@@ -326,7 +330,8 @@ impl GroupPanel {
                 self.draft.jump_chain = Some(chain);
                 self.changed(cx);
             }
-            PickValue::PersonalVault | PickValue::Tag(_) | PickValue::Create(_) => {}
+            // Values of the host panel's pickers only.
+            _ => {}
         }
         self.dropdown = None;
         self.refresh_placeholders(window, cx);
@@ -499,7 +504,7 @@ impl GroupPanel {
         let open = self.dropdown == Some(Dropdown::Vault);
         let trigger = widgets::select_trigger(
             "group-vault",
-            Some(Icon::new(Lucide::Vault).small().into_any_element()),
+            Some(crate::app::assets::vault_icon().small().into_any_element()),
             strings::PERSONAL_VAULT,
             open,
             cx,

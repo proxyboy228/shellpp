@@ -4,12 +4,21 @@
 //! without padding (43 characters).
 //!
 //! Availability:
+//! - A test run (`cfg(test)` or `SHELLPP_TEST=1`, see
+//!   [`crate::dirs::is_test_run`]): `Unavailable(Unsupported)`, so no test
+//!   can reach the OS keychain even through the real platform (decision
+//!   D29: tests, the demo and the screenshot mode use the in-memory store).
 //! - macOS builds without the compile-time constant `SHELLPP_MACOS_SIGNED`
 //!   (set by the release workflow for Developer ID signed builds):
 //!   `Unavailable(UnsignedBuild)`.
 //! - Otherwise a lookup of a probe account that never exists decides: "no
 //!   entry" means the keychain works; any other error means it cannot be used
 //!   (Linux without a Secret Service provider: `Unavailable(NoSecretService)`).
+//!
+//! Windows: `keyring` writes a generic credential with
+//! `CRED_PERSIST_ENTERPRISE`, which travels with a domain roaming profile to
+//! the user's other machines; the owner chose `keyring` (D29), and the risk
+//! is documented in docs/security.md (section 8, RR8).
 //!
 //! All calls block; the core calls them from `spawn_blocking` threads.
 
@@ -40,6 +49,9 @@ impl KeyringSecretStore {
     }
 
     fn probe() -> Availability {
+        if crate::dirs::is_test_run() {
+            return Availability::Unavailable(UnavailableReason::Unsupported);
+        }
         if cfg!(target_os = "macos") && option_env!("SHELLPP_MACOS_SIGNED").is_none() {
             return Availability::Unavailable(UnavailableReason::UnsignedBuild);
         }
@@ -115,6 +127,9 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn delete(&self, account: &str) -> Result<(), SecretStoreError> {
+        if crate::dirs::is_test_run() {
+            return Err(SecretStoreError::Unavailable);
+        }
         match Self::entry(account)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(map_error(error)),
@@ -140,26 +155,27 @@ mod tests {
         ));
     }
 
-    /// Writes, reads and deletes a random test account in the real OS
-    /// keychain. Not run by default: `cargo test -p shellpp-desktop -- --ignored`.
+    /// Tests never reach the OS keychain (D29): in a test build the store
+    /// reports itself unavailable and refuses every call.
     #[test]
-    #[ignore = "touches the OS keychain"]
-    fn round_trip_in_the_os_keychain() {
+    fn a_test_run_never_reaches_the_os_keychain() {
         let store = KeyringSecretStore::new();
-        if cfg!(windows) {
-            // The Windows Credential Manager is always present.
-            assert_eq!(store.availability(), Availability::Available);
-        }
-        if store.availability() != Availability::Available {
-            return;
-        }
-        let account = format!("test-{}", uuid::Uuid::now_v7());
+        assert_eq!(
+            store.availability(),
+            Availability::Unavailable(UnavailableReason::Unsupported)
+        );
         let key = SecretBox::new(Box::new([0x5a_u8; 32]));
-        store.set(&account, &key).unwrap();
-        let read = store.get(&account).unwrap().unwrap();
-        assert_eq!(read.expose_secret(), key.expose_secret());
-        store.delete(&account).unwrap();
-        assert!(store.get(&account).unwrap().is_none());
-        store.delete(&account).unwrap();
+        assert!(matches!(
+            store.set("test-never-written", &key),
+            Err(SecretStoreError::Unavailable)
+        ));
+        assert!(matches!(
+            store.get("test-never-written"),
+            Err(SecretStoreError::Unavailable)
+        ));
+        assert!(matches!(
+            store.delete("test-never-written"),
+            Err(SecretStoreError::Unavailable)
+        ));
     }
 }

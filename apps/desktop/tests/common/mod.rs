@@ -113,6 +113,71 @@ impl Ui {
         Self::open_sized(cx, 1280., 800., records)
     }
 
+    /// One launch of the app on a profile the test keeps (a restart is
+    /// [`Ui::close`] and another launch): the core opens in the profile's
+    /// folder and is unlocked with its master password (the first run on a
+    /// new profile). The window is 1280 x 800.
+    pub fn launch(cx: &mut TestAppContext, profile: &mut TestProfile) -> Self {
+        let opened = profile.open_unlocked();
+        Self::launch_opened(cx, profile, opened)
+    }
+
+    /// Like [`Ui::launch`], but the core stays as it opens: at the first
+    /// run on a new profile, locked otherwise.
+    pub fn launch_locked(cx: &mut TestAppContext, profile: &mut TestProfile) -> Self {
+        let opened = profile.open();
+        Self::launch_opened(cx, profile, opened)
+    }
+
+    fn launch_opened(
+        cx: &mut TestAppContext,
+        profile: &TestProfile,
+        opened: shellpp_desktop::state::OpenedCore,
+    ) -> Self {
+        setup(cx);
+        let path = profile.path().to_path_buf();
+        assert_temporary(&path);
+        let state = cx.new(|cx| AppState::new(opened, cx));
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                Default::default(),
+                size(px(1280.), px(800.)),
+            ))),
+            ..Default::default()
+        };
+        let (handle, root) = cx
+            .update(|cx| app::open_window_with(state.clone(), options, cx))
+            .expect("test window");
+        cx.run_until_parked();
+        Self {
+            state,
+            handle,
+            root,
+            profile: path,
+        }
+    }
+
+    /// Quits this launch: the window closes and the core closes its files;
+    /// the profile folder stays (the next [`Ui::launch`] is a restart).
+    pub fn close(self, cx: &mut TestAppContext) {
+        let _ = cx.update_window(self.handle, |_, window, _| window.remove_window());
+        cx.run_until_parked();
+        self.state.update(cx, |state, _| state.shutdown());
+        cx.run_until_parked();
+        assert!(self.profile.exists(), "a kept profile stays on disk");
+    }
+
+    /// The screen the window shows.
+    pub fn screen(&self, cx: &mut TestAppContext) -> shellpp_desktop::app::root::Screen {
+        cx.update(|cx| self.root.read(cx).screen(cx))
+    }
+
+    /// The core of this launch.
+    pub fn core(&self, cx: &mut TestAppContext) -> std::sync::Arc<shellpp_core::Core> {
+        cx.update(|cx| self.state.read(cx).core().cloned())
+            .expect("the core is open")
+    }
+
     /// Runs `f` on the window after a fresh frame.
     pub fn frame<R>(
         &self,

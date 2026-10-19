@@ -21,11 +21,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gpui::Context;
+use gpui::{AppContext as _, Context, Task};
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
+pub use shellpp_core::model::identity::PasswordChange;
 use shellpp_core::model::{fields, text};
-use shellpp_core::service::dto::{RecordSaveInput, RecordType, RecordView, TagColor};
+use shellpp_core::service::dto::{
+    KeyImportInput, KeyImportResult, KeyView, RecordRef, RecordSaveInput, RecordType, RecordView,
+    TagColor,
+};
+pub use shellpp_core::service::keychain::IdentityView;
+use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput};
 use shellpp_core::{CoreError, FieldError, ValidationReason};
 use uuid::Uuid;
 
@@ -219,6 +225,43 @@ pub struct EnvVar {
     pub value: String,
 }
 
+/// The Telnet protocol block of a host (UI 3.1 "Add Telnet"; data-model 7.4):
+/// port (23 when empty) and the login name, as typed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TelnetDraft {
+    pub port: String,
+    pub username: String,
+}
+
+/// Default Telnet port (data-model 8.5).
+pub const TELNET_DEFAULT_PORT: u16 = 23;
+
+/// Charset labels offered by the Charset select (WHATWG Encoding labels,
+/// stored in lowercase; data-model 7.2). `utf-8` is the default.
+pub const CHARSETS: &[&str] = &[
+    "utf-8",
+    "iso-8859-1",
+    "iso-8859-2",
+    "iso-8859-5",
+    "iso-8859-15",
+    "windows-1250",
+    "windows-1251",
+    "windows-1252",
+    "koi8-r",
+    "koi8-u",
+    "ibm866",
+    "gbk",
+    "gb18030",
+    "big5",
+    "euc-jp",
+    "shift_jis",
+    "euc-kr",
+];
+
+/// The built-in terminal themes a host can name (data-model 3.5 `theme_ref`);
+/// Graphite is the default (data-model 8.5).
+pub const TERMINAL_THEMES: &[&str] = shellpp_core::model::fields::BUILTIN_THEMES;
+
 /// What the password field asks to do with `ssh.password`.
 #[derive(Clone, Debug, Default)]
 pub enum SecretChange {
@@ -259,6 +302,8 @@ pub struct HostDraft {
     pub certificate_key_id: Option<Uuid>,
     pub fido2_key_id: Option<Uuid>,
     pub agent_forwarding: bool,
+    /// The startup snippet (`ssh.startup_snippet_id`), kept as stored.
+    pub startup_snippet_id: Option<Uuid>,
     /// `None`: inherit from the group (or none).
     pub jump_chain: Option<Vec<Uuid>>,
     pub proxy_kind: ProxyKind,
@@ -266,10 +311,17 @@ pub struct HostDraft {
     pub proxy_port: String,
     pub proxy_username: String,
     pub env: Vec<EnvVar>,
+    /// A charset label; empty means the default (`utf-8`).
     pub charset: String,
     pub keepalive: String,
     pub record_history: OverrideMode,
     pub record_output: OverrideMode,
+    /// `ssh.mosh` (lead decision 2: shown, only the value is saved).
+    pub mosh: bool,
+    /// A built-in theme slug; `None`: the global default (Graphite).
+    pub terminal_theme: Option<String>,
+    /// The Telnet block; `None` until Add Telnet.
+    pub telnet: Option<TelnetDraft>,
 }
 
 fn str_of<'a>(map: &'a Map<String, Value>, key: &str) -> &'a str {
@@ -428,6 +480,16 @@ fn env_name_ok(name: &str) -> bool {
     name.len() <= 256 && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// A charset label as the core accepts it (data-model 7.2): up to 64
+/// characters of `a-z 0-9 . _ : -` after lowercasing.
+fn charset_ok(raw: &str) -> bool {
+    let label = raw.trim().to_lowercase();
+    label.chars().count() <= 64
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._:-".contains(&b))
+}
+
 impl HostDraft {
     /// The form of a stored host.
     pub fn from_host(host: &HostItem) -> Self {
@@ -481,6 +543,7 @@ impl HostDraft {
                 .get("agent_forwarding")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            startup_snippet_id: uuid_member(ssh, "startup_snippet_id"),
             jump_chain: uuid_list(ssh.get("jump_chain")),
             proxy_kind: ProxyKind::parse(proxy.map(|proxy| str_of(proxy, "type"))),
             proxy_address: proxy
@@ -497,6 +560,20 @@ impl HostDraft {
             keepalive: int_text(ssh, "keepalive_s"),
             record_history: OverrideMode::parse(str_of(data, "record_history")),
             record_output: OverrideMode::parse(str_of(data, "record_output")),
+            mosh: ssh.get("mosh").and_then(Value::as_bool).unwrap_or(false),
+            terminal_theme: data
+                .get("terminal_theme")
+                .and_then(|theme| theme.get("builtin"))
+                .and_then(Value::as_str)
+                .filter(|slug| TERMINAL_THEMES.contains(slug))
+                .map(str::to_owned),
+            telnet: data
+                .get("telnet")
+                .and_then(Value::as_object)
+                .map(|telnet| TelnetDraft {
+                    port: int_text(telnet, "port"),
+                    username: str_of(telnet, "username").to_owned(),
+                }),
         }
     }
 
@@ -550,6 +627,17 @@ impl HostDraft {
                 errors.insert("ssh.proxy.port".into(), reason);
             }
         }
+        if let Some(telnet) = &self.telnet {
+            if let Err(reason) = check_port(&telnet.port) {
+                errors.insert("telnet.port".into(), reason);
+            }
+            if telnet.username.trim().chars().count() > 256 {
+                errors.insert("telnet.username".into(), ValidationReason::TooLong);
+            }
+        }
+        if !self.charset.trim().is_empty() && !charset_ok(&self.charset) {
+            errors.insert("charset".into(), ValidationReason::Invalid);
+        }
         errors
     }
 
@@ -591,7 +679,36 @@ impl HostDraft {
                 Value::from(self.notes.replace("\r\n", "\n")),
             );
         }
-        set_text(&mut data, "charset", &self.charset);
+        set_text(&mut data, "charset", &self.charset.to_lowercase());
+        match &self.terminal_theme {
+            Some(slug) => {
+                data.insert("terminal_theme".into(), json!({ "builtin": slug }));
+            }
+            None => {
+                // A reference this form cannot show (an imported theme) is kept.
+                if data
+                    .get("terminal_theme")
+                    .is_some_and(|theme| theme.get("builtin").is_some())
+                {
+                    data.remove("terminal_theme");
+                }
+            }
+        }
+        match &self.telnet {
+            Some(telnet) => {
+                let block = object_mut(&mut data, "telnet");
+                set_int(block, "port", &telnet.port);
+                set_text(block, "username", &telnet.username);
+            }
+            None => {
+                // Removing Telnet removes the member (data-model 7.4); a
+                // Telnet primary protocol cannot outlive it.
+                data.remove("telnet");
+                if data.get("primary_protocol").and_then(Value::as_str) == Some("telnet") {
+                    data.remove("primary_protocol");
+                }
+            }
+        }
         for (member, mode) in [
             ("record_history", self.record_history),
             ("record_output", self.record_output),
@@ -621,10 +738,23 @@ impl HostDraft {
                 }
             }
         }
-        if self.agent_forwarding {
-            ssh.insert("agent_forwarding".into(), Value::Bool(true));
-        } else {
-            ssh.remove("agent_forwarding");
+        for (member, flag) in [
+            ("agent_forwarding", self.agent_forwarding),
+            ("mosh", self.mosh),
+        ] {
+            if flag {
+                ssh.insert(member.into(), Value::Bool(true));
+            } else {
+                ssh.remove(member);
+            }
+        }
+        match self.startup_snippet_id {
+            Some(id) => {
+                ssh.insert("startup_snippet_id".into(), json!(id));
+            }
+            None => {
+                ssh.remove("startup_snippet_id");
+            }
         }
         match &self.jump_chain {
             Some(chain) => {
@@ -985,6 +1115,135 @@ impl AppState {
         }
     }
 
+    // -- Keychain records of the "+" in the host panel (UI 3.1) ------------------
+
+    /// Every identity of the personal vault, by label (empty while locked).
+    pub fn identities(&self) -> Vec<IdentityView> {
+        self.require_core()
+            .and_then(|core| core.identities_list())
+            .unwrap_or_else(|error| {
+                tracing::warn!(code = error.code(), "identities not listed");
+                Vec::new()
+            })
+    }
+
+    /// Every key of the personal vault, by label (empty while locked).
+    pub fn keys(&self) -> Vec<KeyView> {
+        self.require_core()
+            .and_then(|core| core.keys_list())
+            .unwrap_or_else(|error| {
+                tracing::warn!(code = error.code(), "keys not listed");
+                Vec::new()
+            })
+    }
+
+    /// Creates (`record_id` `None`) or updates an identity: label (required),
+    /// username, password (UI 3.1 "+ -> Identity", 7.4).
+    pub fn save_identity(
+        &mut self,
+        record_id: Option<Uuid>,
+        label: &str,
+        username: &str,
+        password: PasswordChange,
+        cx: &mut Context<Self>,
+    ) -> Result<IdentityView, CoreError> {
+        let vault_id = self.require_vault()?;
+        let key_id = record_id
+            .and_then(|id| {
+                self.identities()
+                    .into_iter()
+                    .find(|view| view.record_id == id)
+            })
+            .and_then(|view| view.key_id);
+        let view = self.require_core()?.identity_save(IdentitySaveInput {
+            vault_id,
+            record_id,
+            label: label.to_owned(),
+            username: username.to_owned(),
+            key_id,
+            password,
+        })?;
+        cx.notify();
+        Ok(view)
+    }
+
+    /// Imports an OpenSSH private key (pasted or read from a file) as a key
+    /// record (UI 3.1 "+ -> Key", 7.3). An encrypted key needs its
+    /// passphrase (`passphrase` `required` otherwise); `save_passphrase`
+    /// stores it, otherwise it is asked on each connection. Decryption
+    /// (bcrypt-pbkdf) runs on the background executor.
+    pub fn import_key(
+        &mut self,
+        private_key: SecretString,
+        label: Option<String>,
+        passphrase: Option<SecretString>,
+        save_passphrase: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<KeyImportResult, CoreError>> {
+        let (core, vault_id) = match (self.require_core(), self.require_vault()) {
+            (Ok(core), Ok(vault_id)) => (core.clone(), vault_id),
+            (Err(error), _) | (_, Err(error)) => return Task::ready(Err(error)),
+        };
+        let work = cx.background_spawn(async move {
+            core.key_import(KeyImportInput {
+                vault_id,
+                label,
+                private_key,
+                passphrase,
+                save_passphrase,
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            match &result {
+                Ok(imported) => tracing::info!(
+                    created = imported.created,
+                    "key imported from the host panel"
+                ),
+                Err(error) => tracing::info!(code = error.code(), "key not imported"),
+            }
+            let _ = this.update(cx, |_, cx| cx.notify());
+            result
+        })
+    }
+
+    /// Stores the OpenSSH user certificate of a key (UI 3.1 "+ ->
+    /// Certificate"; data-model 9.2); it must certify that key.
+    pub fn set_key_certificate(
+        &mut self,
+        key_id: Uuid,
+        certificate: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<KeyView, CoreError> {
+        let vault_id = self.require_vault()?;
+        let view = self
+            .require_core()?
+            .key_certificate_set(KeyCertificateInput {
+                key: RecordRef {
+                    vault_id,
+                    record_id: key_id,
+                },
+                certificate: certificate.to_owned(),
+            })?;
+        cx.notify();
+        Ok(view)
+    }
+
+    /// Whether a key holds a certificate.
+    pub fn key_has_certificate(&self, key_id: Uuid) -> bool {
+        let Ok(vault_id) = self.require_vault() else {
+            return false;
+        };
+        self.require_core()
+            .and_then(|core| {
+                core.key_has_certificate(RecordRef {
+                    vault_id,
+                    record_id: key_id,
+                })
+            })
+            .unwrap_or(false)
+    }
+
     /// Saves the group panel form by the saving rule. `record_id` `None`
     /// creates the group once the name is valid.
     pub fn save_group_draft(
@@ -1049,7 +1308,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui::TestAppContext;
     use secrecy::ExposeSecret as _;
 
     use super::*;
@@ -1090,11 +1349,15 @@ mod tests {
             "notes": "line 1\nline 2",
             "charset": "utf-8",
             "record_history": "off",
+            "terminal_theme": {"builtin": "paper"},
+            "telnet": {"port": 2323, "username": "admin"},
             "custom": {"kept": true},
             "ssh": {
                 "port": 2222,
                 "username": "admin",
                 "agent_forwarding": true,
+                "mosh": true,
+                "startup_snippet_id": "0199f6a1-0000-7000-8000-000000000004",
                 "keepalive_s": 30,
                 "env": [{"name": "LANG", "value": "C"}],
                 "proxy": {"type": "socks5", "address": "proxy.example.com", "port": 1080},
@@ -1106,9 +1369,65 @@ mod tests {
         assert_eq!(draft.backspace, BackspaceMode::CtrlH);
         assert_eq!(draft.record_history, OverrideMode::Off);
         assert_eq!(draft.proxy_kind, ProxyKind::Socks5);
+        assert!(draft.mosh);
+        assert_eq!(draft.terminal_theme.as_deref(), Some("paper"));
+        assert_eq!(
+            draft.telnet,
+            Some(TelnetDraft {
+                port: "2323".into(),
+                username: "admin".into()
+            })
+        );
+        assert!(draft.startup_snippet_id.is_some());
         assert!(draft.validate().is_empty());
         let applied = draft.apply(&data);
         assert_eq!(applied, data);
+    }
+
+    #[test]
+    fn telnet_charset_and_theme_members() {
+        let base = map(json!({
+            "address": "h.example.com",
+            "primary_protocol": "telnet",
+            "telnet": {"port": 23, "x_kept": 1}
+        }));
+        let mut draft = HostDraft::from_data(&base, None);
+        // Edits keep unknown members of the block.
+        draft.telnet = Some(TelnetDraft {
+            port: String::new(),
+            username: " root ".into(),
+        });
+        draft.charset = "KOI8-R".into();
+        let data = draft.apply(&base);
+        assert_eq!(data["telnet"], json!({"username": "root", "x_kept": 1}));
+        assert_eq!(data["charset"], json!("koi8-r"));
+        // Removing Telnet removes the member and a Telnet primary protocol.
+        draft.telnet = None;
+        let data = draft.apply(&base);
+        assert!(data.get("telnet").is_none());
+        assert!(data.get("primary_protocol").is_none());
+        // Client checks of the new members.
+        draft.telnet = Some(TelnetDraft {
+            port: "70000".into(),
+            username: String::new(),
+        });
+        draft.charset = "utf 8".into();
+        let errors = draft.validate();
+        assert_eq!(
+            errors.get("telnet.port"),
+            Some(&ValidationReason::OutOfRange)
+        );
+        assert_eq!(errors.get("charset"), Some(&ValidationReason::Invalid));
+        assert_eq!(member_of("telnet.port"), "telnet.port");
+        // A theme reference the form cannot show is kept.
+        let imported = map(json!({
+            "address": "h.example.com",
+            "terminal_theme": {"record_id": "0199f6a1-0000-7000-8000-000000000005"}
+        }));
+        let kept = HostDraft::from_data(&imported, None).apply(&imported);
+        assert_eq!(kept["terminal_theme"], imported["terminal_theme"]);
+        assert!(CHARSETS.iter().all(|label| charset_ok(label)));
+        assert_eq!(TERMINAL_THEMES, ["graphite", "paper"]);
     }
 
     #[test]

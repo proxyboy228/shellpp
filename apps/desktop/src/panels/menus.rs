@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 use super::strings;
 use crate::state::AppState;
-use crate::theme::metrics;
 
 /// The actions of the host panel's "…" menu (UI 3.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +86,8 @@ impl GroupMenuAction {
     }
 }
 
-/// A popup menu item; a dangerous one is drawn in `--danger`.
+/// A popup menu item; a dangerous one is drawn in `--danger`. Both keep the
+/// kit's menu item text size, so the menu has one size.
 pub fn menu_item(
     label: &'static str,
     danger: bool,
@@ -101,7 +101,6 @@ pub fn menu_item(
             let danger_hover = theme.danger_hover;
             div()
                 .id(SharedString::from(label))
-                .text_size(metrics::FONT_SIZE_BODY)
                 .text_color(danger)
                 .hover(move |style| style.text_color(danger_hover))
                 .child(label)

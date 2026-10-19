@@ -47,6 +47,8 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true
+# Strength indicator of the master password (lock::strength).
+zxcvbn.workspace = true
 arboard.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -73,6 +75,10 @@ libc.workspace = true
 # Headless UI tests (`#[gpui_kit::test]`, `gpui_kit::test::TestWindowExt`):
 # the same version as the normal dependency, plus `test-support`.
 gpui-kit = { workspace = true, features = ["test-support"] }
+# Host panel tests generate SSH keys and certificates at run time for the
+# "+ -> Key" and "+ -> Certificate" flows (already in the tree via shellpp-core).
+ssh-key.workspace = true
+getrandom.workspace = true
 
 [lints]
 workspace = true

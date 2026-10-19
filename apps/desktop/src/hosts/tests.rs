@@ -1,7 +1,10 @@
 //! Headless tests of the Hosts screen alone (GPUI `TestAppContext`, no real
 //! window): the screen is the window's root view, so these tests cover the
 //! screen's own behavior and the requests it sends to the shell. Every test
-//! runs on its own temporary profile (`TestProfile`).
+//! runs on its own temporary profile (`TestProfile`: in-memory secret store,
+//! never the OS keychain or the permanent profile). The persistence tests
+//! close the core and open the same profile again with its password (a
+//! restart). The minimum window tests open the whole app (`RootView`).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,8 +20,8 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::*;
-use crate::state::AppState;
 use crate::state::hosts_view::{HostsLayout, HostsSort};
+use crate::state::{AppState, OpenedCore};
 use crate::testing::TestProfile;
 use crate::theme::{self, Appearance, metrics};
 
@@ -40,15 +43,30 @@ fn map(value: Value) -> Map<String, Value> {
     value.as_object().cloned().unwrap()
 }
 
+fn setup(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::install(Appearance::Dark, cx);
+    });
+}
+
 impl Screen {
     /// A `width` x `height` window with the Hosts screen over a temporary
     /// profile holding `records` (a group when it has a `name`).
     fn open(cx: &mut TestAppContext, width: f32, records: &[Value]) -> (Self, Vec<Uuid>) {
-        cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
-        });
-        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        setup(cx);
+        Self::open_on(cx, width, TestProfile::new().into_unlocked(), records)
+    }
+
+    /// The screen over an opened core (the same profile again after a
+    /// restart); `setup` must have run once in this test.
+    fn open_on(
+        cx: &mut TestAppContext,
+        width: f32,
+        opened: OpenedCore,
+        records: &[Value],
+    ) -> (Self, Vec<Uuid>) {
+        let state = cx.new(|cx| AppState::new(opened, cx));
         let ids = state.update(cx, |state, cx| {
             records
                 .iter()
@@ -400,6 +418,57 @@ fn clicks_select_open_and_connect(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// Commands and drags act on the selected cards that are on screen, in
+/// screen order: a search drops hidden cards from the selection, a card that
+/// left the view elsewhere is not a target, and Ctrl+clicks in any order
+/// place the records in the order the user sees.
+#[gpui_kit::test]
+fn the_selection_acts_on_cards_on_screen_in_screen_order(cx: &mut TestAppContext) {
+    let (ui, ids) = Screen::open(
+        cx,
+        1280.,
+        &[
+            json!({"address": "db-a.example.com"}),
+            json!({"address": "db-b.example.com"}),
+            json!({"address": "web-c.example.com"}),
+            json!({"name": "Lab"}),
+        ],
+    );
+    let [a, b, c, lab] = ids[..] else {
+        unreachable!()
+    };
+    // Ctrl+clicks in the order C, A, B: the targets are in screen order.
+    ui.frame(cx, |window, cx| window.click(host_card_id(c), cx));
+    for id in [a, b] {
+        ui.frame(cx, |window, cx| {
+            click_with(window, host_card_id(id), Modifiers::secondary_key(), cx)
+        });
+    }
+    assert_eq!(ui.selected(cx), vec![c, a, b], "click order");
+    let screen = ui.screen.clone();
+    let targets = ui.frame(cx, |_, cx| screen.read(cx).menu_targets(c, cx));
+    assert_eq!(targets, vec![a, b, c], "screen order");
+    let dragged = ui.frame(cx, |_, cx| screen.read(cx).drag_value(a, cx));
+    assert_eq!(dragged.ids, vec![a, b, c]);
+
+    // A search that hides a selected card drops it from the selection.
+    ui.type_search(cx, "db-");
+    assert_eq!(ui.selected(cx), vec![a, b]);
+    ui.type_search(cx, "");
+    assert_eq!(ui.selected(cx), vec![a, b], "both still on screen");
+
+    // A card that left the view elsewhere (moved into a group) is not a
+    // target any more, although it is still selected.
+    ui.state.update(cx, |state, cx| {
+        state.move_records(vec![a], Some(lab), cx).unwrap()
+    });
+    cx.run_until_parked();
+    assert_eq!(ui.selected(cx), vec![a, b]);
+    let targets = ui.frame(cx, |_, cx| screen.read(cx).menu_targets(b, cx));
+    assert_eq!(targets, vec![b]);
+    ui.finish(cx);
+}
+
 #[gpui_kit::test]
 fn keys_connect_edit_and_move_the_selection(cx: &mut TestAppContext) {
     let records: Vec<Value> = (0..6)
@@ -627,8 +696,24 @@ fn view_sort_and_tag_filter(cx: &mut TestAppContext) {
         HostsSort::Name
     );
 
-    // Tag chips: "prod" matches both spellings.
-    ui.frame(cx, |window, cx| window.click(tag_chip_id("prod"), cx));
+    // The tag filter (lead decision 5): the tag button opens a dropdown
+    // with every tag and its host count ("prod" in both spellings).
+    assert!(!ui.visible(cx, "tag-filter-menu"));
+    ui.frame(cx, |window, cx| window.click("tag-filter", cx));
+    assert!(ui.visible(cx, "tag-filter-menu"));
+    assert!(ui.screen.read_with(cx, |screen, _| screen.tag_menu_open()));
+    let options: Vec<(String, usize)> = ui.screen.read_with(cx, |screen, _| {
+        screen
+            .tag_options()
+            .iter()
+            .map(|option| (option.name.clone(), option.hosts))
+            .collect()
+    });
+    assert_eq!(options, [("legacy".to_owned(), 1), ("prod".to_owned(), 2)]);
+    // Several tags at once: every tag must match.
+    ui.frame(cx, |window, cx| {
+        window.click(tag_filter::tag_option_id("prod"), cx)
+    });
     let mut visible = ui
         .screen
         .read_with(cx, |screen, _| screen.visible_host_ids());
@@ -636,11 +721,45 @@ fn view_sort_and_tag_filter(cx: &mut TestAppContext) {
     let mut expected = vec![web, mail];
     expected.sort();
     assert_eq!(visible, expected);
-    ui.frame(cx, |window, cx| window.click(tag_chip_id("legacy"), cx));
+    assert!(
+        ui.visible(cx, tag_chip_id("prod")),
+        "a chip next to the button"
+    );
+    ui.frame(cx, |window, cx| {
+        window.click(tag_filter::tag_option_id("legacy"), cx)
+    });
     assert_eq!(
         ui.screen
             .read_with(cx, |screen, _| screen.visible_host_ids()),
         vec![mail]
+    );
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.selected_tags().to_vec()),
+        ["prod".to_owned(), "legacy".to_owned()]
+    );
+    // A click outside closes the dropdown; a chip's click turns its tag off.
+    ui.frame(cx, |window, cx| window.click("hosts-content", cx));
+    assert!(!ui.visible(cx, "tag-filter-menu"));
+    ui.frame(cx, |window, cx| window.click(tag_chip_id("legacy"), cx));
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.selected_tags().to_vec()),
+        ["prod".to_owned()]
+    );
+    assert!(!ui.visible(cx, tag_chip_id("legacy")));
+    // Clear turns every tag off.
+    ui.frame(cx, |window, cx| window.click("tag-filter", cx));
+    ui.frame(cx, |window, cx| window.click("tag-filter-clear", cx));
+    assert!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.selected_tags().is_empty())
+    );
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.visible_host_ids())
+            .len(),
+        3
     );
     ui.finish(cx);
 }
@@ -656,38 +775,353 @@ fn hosts_with_eight_tags() -> Vec<Value> {
         .collect()
 }
 
+/// Bounds of the elements with these ids that are on screen.
+fn bounds_of(window: &Window, ids: &[SharedString]) -> Vec<(String, Bounds<gpui::Pixels>)> {
+    ids.iter()
+        .filter_map(|id| {
+            let found = window.try_find(id.clone())?;
+            found.visible().then(|| (id.to_string(), found.bounds()))
+        })
+        .collect()
+}
+
+/// No two of `items` overlap (a half pixel of rounding allowed).
+fn assert_disjoint(items: &[(String, Bounds<gpui::Pixels>)]) {
+    for (index, (a, first)) in items.iter().enumerate() {
+        for (b, second) in &items[index + 1..] {
+            let overlap_x = first.right().min(second.right()) - first.left().max(second.left());
+            let overlap_y = first.bottom().min(second.bottom()) - first.top().max(second.top());
+            assert!(
+                overlap_x <= px(0.5) || overlap_y <= px(0.5),
+                "{a} {first:?} overlaps {b} {second:?}"
+            );
+        }
+    }
+}
+
+/// Every one of `items` lies inside `outer` horizontally and vertically.
+fn assert_inside(items: &[(String, Bounds<gpui::Pixels>)], outer: Bounds<gpui::Pixels>) {
+    for (id, bounds) in items {
+        assert!(
+            bounds.left() + px(0.5) >= outer.left()
+                && bounds.right() <= outer.right() + px(0.5)
+                && bounds.top() + px(0.5) >= outer.top()
+                && bounds.bottom() <= outer.bottom() + px(0.5),
+            "{id} {bounds:?} is clipped by {outer:?}"
+        );
+    }
+}
+
+/// The ids of the action bar's controls and chips.
+fn action_bar_ids(tags: &[&str]) -> Vec<SharedString> {
+    let mut ids: Vec<SharedString> = [
+        "new-host",
+        "new-host-menu",
+        "terminal",
+        "serial",
+        "view-tiles",
+        "view-list",
+        "tag-filter",
+        "tag-chip-more",
+        "sort",
+    ]
+    .into_iter()
+    .map(SharedString::from)
+    .collect();
+    ids.extend(tags.iter().map(|tag| tag_chip_id(tag)));
+    ids
+}
+
+const EIGHT_TAGS: [&str; 8] = [
+    "prod", "staging", "linux", "windows", "critical", "eu", "us", "legacy",
+];
+
 #[gpui_kit::test]
-fn tag_filter_uses_the_free_room(cx: &mut TestAppContext) {
-    // 1920 px window (1700 px screen): every chip is whole, none clipped.
-    let (ui, _) = Screen::open(cx, 1700., &hosts_with_eight_tags());
-    let (strip, last) = ui.frame(cx, |window, _| {
+fn tag_filter_search_counts_and_more_chip(cx: &mut TestAppContext) {
+    // 700 px for the screen: every tag on does not fit next to the button.
+    let (ui, _) = Screen::open(cx, 700., &hosts_with_eight_tags());
+    ui.frame(cx, |window, cx| window.click("tag-filter", cx));
+    // The search narrows the options (case-insensitive substring); Enter
+    // turns the first match on.
+    ui.frame(cx, |window, cx| {
+        window.click("tag-filter-search", cx);
+        window.input("IN", cx);
+    });
+    let menu = ui
+        .screen
+        .read_with(cx, |screen, _| screen.tag_menu().clone());
+    let names: Vec<String> = menu.read_with(cx, |menu, cx| {
+        menu.visible_options(cx)
+            .into_iter()
+            .map(|option| option.name)
+            .collect()
+    });
+    assert_eq!(names, ["linux", "staging", "windows"]);
+    // Space types a space (tags may hold one); the dropdown stays open.
+    ui.frame(cx, |window, cx| window.press("space", cx));
+    assert_eq!(menu.read_with(cx, |menu, cx| menu.search_text(cx)), "IN ");
+    assert!(ui.visible(cx, "tag-filter-menu"));
+    assert!(ui.visible(cx, tag_filter::tag_option_id("linux")));
+    assert!(!ui.visible(cx, tag_filter::tag_option_id("prod")));
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.selected_tags().to_vec()),
+        ["linux".to_owned()]
+    );
+    ui.frame(cx, |window, cx| {
+        window.input("xyz", cx);
+    });
+    assert!(ui.visible(cx, "tag-filter-empty"), "no tag matches");
+    ui.frame(cx, |window, cx| window.click("hosts-content", cx));
+
+    // Every tag on: the chips that do not fit collapse into "+N", nothing
+    // overlaps and nothing leaves the bar; the button shows the active state.
+    ui.screen.update(cx, |screen, cx| {
+        for tag in EIGHT_TAGS.iter().filter(|tag| **tag != "linux") {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    let plan = ui
+        .screen
+        .read_with(cx, |screen, _| screen.bar_plan())
+        .unwrap();
+    assert!(plan.chips < EIGHT_TAGS.len(), "{plan:?}");
+    assert!(ui.visible(cx, "tag-chip-more"));
+    let (screen_bounds, items) = ui.frame(cx, |window, _| {
         (
-            window.find("tag-filter").bounds(),
-            window.find(tag_chip_id("windows")).bounds(),
+            window.find("hosts-screen").bounds(),
+            bounds_of(window, &action_bar_ids(&EIGHT_TAGS)),
         )
     });
-    assert!(
-        last.right() <= strip.right() + px(0.5),
-        "last chip {last:?} clipped by the strip {strip:?}"
-    );
+    assert!(items.iter().any(|(id, _)| id == "tag-chip-more"));
+    assert_disjoint(&items);
+    assert_inside(&items, screen_bounds);
+    // "+N" opens the dropdown, with the focus in its search field; Esc
+    // closes it.
+    ui.frame(cx, |window, cx| window.click("tag-chip-more", cx));
+    assert!(ui.visible(cx, "tag-filter-menu"));
+    assert!(ui.screen.read_with(cx, |screen, _| screen.tag_menu_open()));
+    assert!(ui.frame(cx, |window, _| {
+        window.find("tag-filter-search").focused().unwrap_or(false)
+    }));
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert!(!ui.visible(cx, "tag-filter-menu"));
+    assert!(!ui.screen.read_with(cx, |screen, _| screen.tag_menu_open()));
     ui.finish(cx);
 }
 
-#[gpui_kit::test]
-fn tag_filter_scrolls_when_the_room_runs_out(cx: &mut TestAppContext) {
-    // A narrow screen: the strip shrinks and scrolls; the sort button stays
-    // inside the action bar.
-    let (ui, _) = Screen::open(cx, 700., &hosts_with_eight_tags());
-    let (bar, strip, sort) = ui.frame(cx, |window, _| {
-        (
-            window.find("action-bar").bounds(),
-            window.find("tag-filter").bounds(),
-            window.find("sort").bounds(),
-        )
+/// The whole app in a window of `width` x `height` over a profile with
+/// hosts carrying the eight tags and a group.
+fn open_app(
+    cx: &mut TestAppContext,
+    width: f32,
+    height: f32,
+) -> (
+    Entity<AppState>,
+    AnyWindowHandle,
+    Entity<crate::app::RootView>,
+    Vec<Uuid>,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::install(Appearance::Dark, cx);
+        crate::app::root::bind_keys(cx);
     });
-    assert!(strip.right() <= sort.left() + px(0.5), "{strip:?} {sort:?}");
-    assert!(sort.right() <= bar.right() + px(0.5), "{sort:?} {bar:?}");
-    ui.finish(cx);
+    let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+    let mut records = hosts_with_eight_tags();
+    records.push(json!({"name": "Production"}));
+    let ids = state.update(cx, |state, cx| {
+        records
+            .iter()
+            .map(|record| {
+                let data = map(record.clone());
+                if data.contains_key("address") {
+                    state.save_host(None, data, cx).unwrap().record_id
+                } else {
+                    state.save_group(None, data, cx).unwrap().record_id
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+            Default::default(),
+            size(px(width), px(height)),
+        ))),
+        ..Default::default()
+    };
+    let (handle, root) = cx
+        .update(|cx| crate::app::open_window_with(state.clone(), options, cx))
+        .unwrap();
+    for _ in 0..3 {
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    (state, handle, root, ids)
+}
+
+/// At the minimum window size: the top bar, the search bar, the action bar
+/// (with chips) and the first card are whole and apart.
+fn check_min_window(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&str]) {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let viewport = Bounds::new(Default::default(), window.viewport_size());
+        let top: Vec<SharedString> = [
+            "app-menu",
+            "tab-vaults",
+            "vault-switcher",
+            "tab-sftp",
+            "tab-new",
+            "top-bar-notifications",
+        ]
+        .into_iter()
+        .map(SharedString::from)
+        .collect();
+        let top = bounds_of(window, &top);
+        assert_eq!(top.len(), 6, "{top:?}");
+        assert_disjoint(&top);
+        assert_inside(&top, viewport);
+
+        let screen = window.find("hosts-screen").bounds();
+        let main = window.find("main-area").bounds();
+        assert_inside(&[("hosts-screen".to_owned(), screen)], main);
+        let mut bar = bounds_of(window, &action_bar_ids(tags));
+        assert!(bar.len() >= 8, "{bar:?}");
+        assert!(
+            tags.is_empty() || bar.iter().any(|(id, _)| id.starts_with("tag-chip-")),
+            "{bar:?}"
+        );
+        bar.extend(bounds_of(window, &["search-field".into()]));
+        assert_disjoint(&bar);
+        assert_inside(&bar, screen);
+        assert_inside(&bar, viewport);
+        // The content keeps room for cards.
+        let content = window.find("hosts-content").bounds();
+        assert!(
+            content.size.height >= metrics::HEIGHT_HOST_CARD * 2.,
+            "{content:?}"
+        );
+        let cards: Vec<SharedString> = ["heading-groups", "heading-hosts"]
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        let cards = bounds_of(window, &cards);
+        assert_inside(&cards, screen);
+        if let Some(panel) = window
+            .try_find("right-panel")
+            .filter(|panel| panel.visible())
+        {
+            assert_disjoint(&[
+                ("main-area".to_owned(), main),
+                ("right-panel".to_owned(), panel.bounds()),
+            ]);
+            assert_inside(&[("right-panel".to_owned(), panel.bounds())], viewport);
+        }
+    })
+    .unwrap();
+}
+
+/// Owner's step 1.4, lead decision 4: the window cannot get smaller than
+/// 960x600, and at that size nothing is clipped or overlaps, with and
+/// without the 380 px details panel, with tag chips on.
+#[gpui_kit::test]
+fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
+    let options = cx.update(|cx| crate::app::main_window_options(cx));
+    assert_eq!(
+        options.window_min_size,
+        Some(size(px(960.), px(600.))),
+        "the minimum window size"
+    );
+    let (state, handle, root, ids) = open_app(cx, 960., 600.);
+    let screen = cx.update(|cx| {
+        root.read(cx)
+            .shell()
+            .expect("unlocked")
+            .read(cx)
+            .hosts_screen()
+            .clone()
+    });
+    // Without the details panel: one row, every label, the full search hint.
+    check_min_window(cx, handle, &[]);
+    let plan = screen.read_with(cx, |screen, _| screen.bar_plan()).unwrap();
+    assert!(!plan.wrapped, "{plan:?}");
+    let search_hint = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            screen.read(cx).search_hint_fits(window, cx)
+        })
+        .unwrap()
+    };
+    assert_eq!(search_hint(cx), (strings::SEARCH_PLACEHOLDER.into(), true));
+    // Three tags on.
+    screen.update(cx, |screen, cx| {
+        for tag in ["prod", "staging", "critical"] {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    check_min_window(cx, handle, &["prod", "staging", "critical"]);
+    screen.update(cx, |screen, cx| screen.clear_tags(cx));
+
+    // With the details panel: the bar wraps, labels collapse as needed.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(host_card_id(ids[0]), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    for _ in 0..2 {
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    let panel = cx
+        .update_window(handle, |_, window, _| {
+            window.try_find("right-panel").map(|panel| panel.bounds())
+        })
+        .unwrap()
+        .expect("the details panel");
+    assert_eq!(panel.size.width, metrics::WIDTH_DETAILS);
+    check_min_window(cx, handle, &[]);
+    // The search hint shortens instead of being cut off.
+    let (hint, fits) = search_hint(cx);
+    assert!(fits, "{hint}");
+    screen.update(cx, |screen, cx| {
+        for tag in ["prod", "staging", "critical", "legacy"] {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    check_min_window(cx, handle, &["prod", "staging", "critical", "legacy"]);
+    let plan = screen.read_with(cx, |screen, _| screen.bar_plan()).unwrap();
+    assert!(plan.wrapped, "{plan:?}");
+
+    // A panel dragged to its widest keeps the main area at 360 px.
+    let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_details_width(metrics::WIDTH_DETAILS_MAX, cx)
+    });
+    for _ in 0..2 {
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    check_min_window(cx, handle, &["prod", "staging", "critical", "legacy"]);
+    let main = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("main-area").bounds()
+        })
+        .unwrap();
+    assert_eq!(main.size.width, crate::shell::details::MAIN_AREA_MIN);
+    let (hint, fits) = search_hint(cx);
+    assert!(fits, "{hint}");
+
+    let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    cx.run_until_parked();
+    state.update(cx, |state, _| state.shutdown());
 }
 
 #[gpui_kit::test]
@@ -823,4 +1257,246 @@ fn exact_match_prefers_the_exact_spelling() {
     assert_eq!(exact_match(&hosts, "WEB"), Some(hosts[0].record_id));
     assert_eq!(exact_match(&hosts, "b.lan"), Some(hosts[1].record_id));
     assert_eq!(exact_match(&hosts, "c.lan"), None);
+}
+
+/// The hosts and groups of a state, in manual order.
+fn records_of(
+    state: &Entity<AppState>,
+    cx: &mut TestAppContext,
+) -> (Vec<HostItem>, Vec<GroupItem>) {
+    state.read_with(cx, |state, _| {
+        (
+            state.hosts().as_ref().clone(),
+            state.groups().as_ref().clone(),
+        )
+    })
+}
+
+/// Owner's step 3.3: every Hosts operation is written at once and survives
+/// a restart (the core closed, the same profile opened again with the
+/// password): create and edit hosts and groups, drag to reorder and onto a
+/// group, Duplicate, Move to, Copy to, Remove with Undo, Remove.
+#[gpui_kit::test]
+fn hosts_operations_survive_a_restart(cx: &mut TestAppContext) {
+    setup(cx);
+    let mut profile = TestProfile::new();
+    let (ui, ids) = Screen::open_on(
+        cx,
+        1280.,
+        profile.open_unlocked(),
+        &[
+            json!({"address": "a.example.com", "tags": ["prod"], "ssh": {"username": "deploy", "port": 2222}}),
+            json!({"address": "b.example.com"}),
+            json!({"address": "c.example.com"}),
+            json!({"name": "Lab"}),
+            json!({"name": "Production"}),
+        ],
+    );
+    let [a, b, c, lab, production] = ids[..] else {
+        unreachable!()
+    };
+    // Edit a host and a group.
+    ui.state.update(cx, |state, cx| {
+        let mut data = state.host(a).unwrap().data_map();
+        data.insert("label".to_owned(), json!("Alpha"));
+        data.insert("notes".to_owned(), json!("kept across restarts"));
+        state.save_host(Some(a), data, cx).unwrap();
+        let mut data = state.group(lab).unwrap().data_map();
+        data.insert("name".to_owned(), json!("Lab 2"));
+        state.save_group(Some(lab), data, cx).unwrap();
+    });
+    // Drag c onto a (Manual order): c, a, b.
+    ui.frame(cx, |window, cx| {
+        window.drag_to(host_card_id(c), host_card_id(a), cx)
+    });
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.visible_host_ids()),
+        vec![c, a, b]
+    );
+    // Drag b onto the group card: b is in Lab 2.
+    ui.frame(cx, |window, cx| {
+        window.drag_to(host_card_id(b), group_card_id(lab), cx)
+    });
+    // Duplicate a: "Alpha Copy" right after it.
+    ui.frame(cx, |window, cx| window.right_click(host_card_id(a), cx));
+    ui.frame(cx, |window, cx| window.click("menu-duplicate", cx));
+    let copy = ui.selected(cx)[0];
+    assert_ne!(copy, a);
+    // Move to Production; Copy to Lab 2 (the same label).
+    let screen = ui.screen.clone();
+    cx.update_window(ui.handle, |_, window, cx| {
+        screen.update(cx, |screen, cx| {
+            screen.run_command(MenuCommand::MoveTo(Some(production)), vec![c], window, cx);
+            screen.run_command(MenuCommand::CopyTo(Some(lab)), vec![a], window, cx);
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let copied = ui.state.read_with(cx, |state, _| {
+        state
+            .hosts_in(Some(lab))
+            .into_iter()
+            .find(|host| host.label.as_deref() == Some("Alpha"))
+            .map(|host| (host.record_id, host.data.clone()))
+    });
+    let (copied, copied_data) = copied.expect("the copy in Lab 2");
+    assert_ne!(copied, a);
+    assert_eq!(copied_data["notes"], json!("kept across restarts"));
+    assert_eq!(copied_data["ssh"]["port"], json!(2222));
+    assert!(
+        ui.take_events()
+            .contains(&HostsEvent::Toast(strings::copied_to(Some("Lab 2")).into()))
+    );
+    // Remove the duplicate and undo it within the 5 seconds.
+    ui.take_requests();
+    ui.screen.update(cx, |screen, cx| {
+        screen.remove_now(vec![copy], Some("Alpha Copy".into()), cx)
+    });
+    let undo = ui
+        .take_requests()
+        .into_iter()
+        .find_map(|request| match request {
+            HostsRequest::ToastWithAction { action, .. } => Some(action),
+            _ => None,
+        })
+        .expect("Undo");
+    cx.executor().advance_clock(Duration::from_secs(4));
+    cx.run_until_parked();
+    ui.frame(cx, |window, cx| (undo.run)(window, cx));
+    assert!(
+        ui.state
+            .read_with(cx, |state, _| state.host(copy).is_some())
+    );
+    // Remove b and the group Production for good (the window passes); c
+    // moves up to the top level.
+    ui.screen
+        .update(cx, |screen, cx| screen.remove_now(vec![b], None, cx));
+    ui.screen.update(cx, |screen, cx| {
+        screen.remove_now(vec![production], Some("Production".into()), cx)
+    });
+    cx.executor().advance_clock(Duration::from_secs(6));
+    cx.run_until_parked();
+
+    let before = records_of(&ui.state, cx);
+    assert!(before.0.iter().all(|host| host.record_id != b));
+    assert_eq!(before.0.len(), 4, "a, its duplicate, c, the copy");
+    assert_eq!(before.1.len(), 1, "Lab 2");
+    ui.finish(cx);
+
+    // Restart: the same profile, unlocked again with its password.
+    let (ui, _) = Screen::open_on(cx, 1280., profile.open_unlocked(), &[]);
+    let after = records_of(&ui.state, cx);
+    assert_eq!(after, before, "every host and group, field and order");
+    ui.state.read_with(cx, |state, _| {
+        assert_eq!(state.host(a).unwrap().label.as_deref(), Some("Alpha"));
+        assert_eq!(state.group(lab).unwrap().name, "Lab 2");
+        assert!(
+            state.group(production).is_none(),
+            "the group removal is final"
+        );
+        assert_eq!(state.host(c).unwrap().group_id, None, "its host moved up");
+        assert_eq!(state.host(copied).unwrap().group_id, Some(lab));
+        assert!(state.host(b).is_none(), "the removal is final");
+        assert_eq!(
+            state.host(copy).unwrap().label.as_deref(),
+            Some("Alpha Copy")
+        );
+    });
+    // The manual order of the top level: a, its duplicate, then c (moved up
+    // from the removed group, at the end).
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.visible_host_ids()),
+        vec![a, copy, c]
+    );
+    ui.finish(cx);
+    drop(profile);
+}
+
+/// UI 2.4: Undo works for 5 seconds and brings a removed group back with
+/// its children; after the window the removal is final, also after a
+/// restart.
+#[gpui_kit::test]
+fn undo_window_of_remove(cx: &mut TestAppContext) {
+    setup(cx);
+    let mut profile = TestProfile::new();
+    let (ui, ids) = Screen::open_on(
+        cx,
+        1280.,
+        profile.open_unlocked(),
+        &[
+            json!({"name": "Lab"}),
+            json!({"address": "x.example.com"}),
+            json!({"address": "y.example.com"}),
+        ],
+    );
+    let [lab, x, y] = ids[..] else { unreachable!() };
+    ui.state
+        .update(cx, |state, cx| state.move_records(vec![x], Some(lab), cx))
+        .unwrap();
+    let before = records_of(&ui.state, cx);
+
+    // Remove the non-empty group: x moves up; Undo puts it back inside.
+    ui.state
+        .update(cx, |state, cx| state.delete_records(vec![lab], cx))
+        .unwrap();
+    assert_eq!(
+        ui.state
+            .read_with(cx, |state, _| state.host(x).unwrap().group_id),
+        None
+    );
+    assert!(
+        ui.state
+            .read_with(cx, |state, _| state.can_undo_removal(&[lab]))
+    );
+    ui.state
+        .update(cx, |state, cx| state.restore_records(vec![lab], cx))
+        .unwrap();
+    let fields = |groups: &[GroupItem]| -> Vec<(Uuid, Value, Option<Uuid>)> {
+        groups
+            .iter()
+            .map(|group| (group.record_id, group.data.clone(), group.parent_id))
+            .collect()
+    };
+    let restored = records_of(&ui.state, cx);
+    assert_eq!(
+        fields(&restored.1),
+        fields(&before.1),
+        "the group, same id and fields"
+    );
+    assert_eq!(
+        ui.state
+            .read_with(cx, |state, _| state.host(x).unwrap().group_id),
+        Some(lab),
+        "its host is back inside"
+    );
+
+    // After 5 seconds Undo no longer works.
+    ui.state
+        .update(cx, |state, cx| state.delete_records(vec![y], cx))
+        .unwrap();
+    cx.executor().advance_clock(crate::state::undo::UNDO_WINDOW);
+    cx.run_until_parked();
+    assert!(
+        !ui.state
+            .read_with(cx, |state, _| state.can_undo_removal(&[y]))
+    );
+    let late = ui
+        .state
+        .update(cx, |state, cx| state.restore_records(vec![y], cx));
+    assert!(matches!(late, Err(shellpp_core::CoreError::NotFound)));
+    ui.finish(cx);
+
+    let (ui, _) = Screen::open_on(cx, 1280., profile.open_unlocked(), &[]);
+    ui.state.read_with(cx, |state, _| {
+        assert!(state.host(y).is_none());
+        assert_eq!(state.host(x).unwrap().group_id, Some(lab));
+        assert!(
+            !state.can_undo_removal(&[y]),
+            "nothing to undo after a restart"
+        );
+    });
+    ui.finish(cx);
+    drop(profile);
 }

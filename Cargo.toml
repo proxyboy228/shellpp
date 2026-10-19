@@ -94,6 +94,9 @@ dirs = "7.0.0"
 # from clipboard history, docs/security.md, section 9.4).
 arboard = { version = "3.7.0", default-features = false }
 libc = "0.2.191"
+# Master password strength indicator of the first-run screen (UI 13.1), MIT.
+# Without the default "builder" feature (derive_builder is not needed).
+zxcvbn = { version = "3.1.1", default-features = false }
 
 # Tests.
 tempfile = "3.27.0"

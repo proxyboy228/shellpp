@@ -8,6 +8,11 @@ pub const IN_DEVELOPMENT: &str = "In development";
 
 // 2.1 Search and quick connect.
 pub const SEARCH_PLACEHOLDER: &str = "Search hosts or type ssh user@hostname";
+/// The same hint for a narrow search bar (the minimum window with the
+/// details panel open), so it is never cut off.
+pub const SEARCH_PLACEHOLDER_SHORT: &str = "Search or ssh user@host";
+/// The hint of a search bar too narrow even for the short one.
+pub const SEARCH_PLACEHOLDER_SHORTEST: &str = "Search";
 pub const CONNECT: &str = "Connect";
 pub const SAVE_HOST_OFFER: &str = "Save host?";
 pub const SAVE_HOST_ACTION: &str = "Save";
@@ -23,17 +28,32 @@ pub const SERIAL: &str = "Serial";
 pub const VIEW_TILES: &str = "Tiles";
 pub const VIEW_LIST: &str = "List";
 pub const TAG_FILTER: &str = "Filter by tag";
+pub const TAG_SEARCH_PLACEHOLDER: &str = "Search tags";
+pub const TAG_CLEAR: &str = "Clear";
+pub const TAG_NONE: &str = "No tags yet";
+pub const TAG_NO_MATCH: &str = "No tags match";
 pub const SORT: &str = "Sort";
 pub const SORT_MANUAL: &str = "Manual";
 pub const SORT_NAME: &str = "Name";
 pub const SORT_CREATED: &str = "Date created";
 pub const SORT_MODIFIED: &str = "Date modified";
 
+/// The chip of the tags that did not fit: `"+3"`.
+pub fn more_tags(hidden: usize) -> String {
+    format!("+{hidden}")
+}
+
+/// Tooltip of a chip of a tag that is on.
+pub fn remove_tag_filter(tag: &str) -> String {
+    format!("Stop filtering by “{tag}”")
+}
+
 // 2.3 Content.
 pub const GROUPS: &str = "Groups";
 pub const HOSTS: &str = "Hosts";
 pub const BREADCRUMB_SEPARATOR: &str = "›";
 pub const PROTOCOL_SSH: &str = "SSH";
+pub const PROTOCOL_TELNET: &str = "Telnet";
 pub const EMPTY_TITLE: &str = "No hosts yet";
 pub const EMPTY_BODY: &str =
     "Add a host to connect to it, or import your hosts from an SSH config file.";
@@ -116,6 +136,14 @@ pub fn removed(name: Option<&str>, count: usize) -> String {
     match name {
         Some(name) if count == 1 => format!("Removed “{name}”"),
         _ => format!("Removed {count} items"),
+    }
+}
+
+/// Toast after Copy to: `"Copied to Production"` / `"Copied to the top level"`.
+pub fn copied_to(group: Option<&str>) -> String {
+    match group {
+        Some(group) => format!("Copied to {group}"),
+        None => "Copied to the top level".to_owned(),
     }
 }
 

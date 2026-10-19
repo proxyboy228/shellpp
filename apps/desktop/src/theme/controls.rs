@@ -18,13 +18,45 @@
 //! Primary / Secondary variants, whose colors come from `graphite.json`.
 //!
 //! Disabled buttons are the whole component at `--opacity-disabled` without
-//! hover (section 6): set `.disabled(true)` and
-//! `.opacity(metrics::OPACITY_DISABLED)` on the button.
+//! hover (section 6): [`ButtonColors::disabled_as_designed`].
+//!
+//! Trap (gpui-kit 0.7.3): the kit's own disabled style repaints a filled
+//! button (Primary and Danger fill at 15 %, text `muted_foreground` at 50 %),
+//! so `.disabled(true)` plus `.opacity(0.45)` faded it twice (an accent fill
+//! at about 7 %). The helper keeps the button inert through the kit but
+//! gives the disabled state the variant's normal colors: the kit replays
+//! the caller's own style inside its disabled state, so explicit colors win.
 
-use gpui::{App, Entity, IntoElement, Styled as _, canvas};
+use gpui::{App, Entity, Hsla, IntoElement, Styled, canvas};
 use gpui_kit::base::input::{DiagnosticColors, InputBaseState, InputEditorStyle, InputModeKind};
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants};
+use gpui_kit::component::{ActiveTheme as _, Disableable};
+
+use super::metrics;
+
+/// The filled buttons of design-system 6 (the kit variant a view picked).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filled {
+    /// [`ButtonColors::accent_colors`]: `--accent`, text `--text-on-accent`.
+    Accent,
+    /// [`ButtonColors::neutral_colors`]: `--bg-raised`, text `--text-primary`.
+    Neutral,
+    /// The kit's Danger variant: `--danger`, text `--text-on-accent`.
+    Danger,
+}
+
+impl Filled {
+    /// The fill and text colors of the variant's normal state (the same
+    /// theme fields the kit paints it with).
+    pub fn colors(self, cx: &App) -> (Hsla, Hsla) {
+        let theme = cx.theme();
+        match self {
+            Self::Accent => (theme.button_primary, theme.button_primary_foreground),
+            Self::Neutral => (theme.button_secondary, theme.button_secondary_foreground),
+            Self::Danger => (theme.button_danger, theme.button_danger_foreground),
+        }
+    }
+}
 
 /// Design-system colors for a kit button.
 pub trait ButtonColors: ButtonVariants + Sized {
@@ -41,6 +73,25 @@ pub trait ButtonColors: ButtonVariants + Sized {
     /// The ghost (icon) button of bars.
     fn ghost_colors(self, cx: &App) -> Self {
         self.custom(ghost(cx))
+    }
+
+    /// Disabled per design-system 6 when `disabled`: no clicks, no hover or
+    /// pressed state, the variant's normal fill and text (`kind`), and the
+    /// whole component once at `--opacity-disabled`. Nothing changes while
+    /// enabled.
+    fn disabled_as_designed(self, disabled: bool, kind: Filled, cx: &App) -> Self
+    where
+        Self: Disableable + Styled,
+    {
+        if !disabled {
+            return self;
+        }
+        let (fill, text) = kind.colors(cx);
+        self.disabled(true)
+            .bg(fill)
+            .border_color(fill)
+            .text_color(text)
+            .opacity(metrics::OPACITY_DISABLED)
     }
 }
 
@@ -144,11 +195,12 @@ mod tests {
     struct Buttons;
 
     impl Render for Buttons {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             // Away from the pointer at the window origin (no hover state).
             div()
                 .size_full()
                 .flex()
+                .flex_wrap()
                 .p(px(40.))
                 .gap(px(8.))
                 .child(
@@ -163,10 +215,26 @@ mod tests {
                         .neutral_colors()
                         .w(px(120.)),
                 )
+                .child(
+                    Button::new("accent-disabled")
+                        .label("Accent")
+                        .accent_colors()
+                        .w(px(120.))
+                        .disabled_as_designed(true, Filled::Accent, cx),
+                )
+                .child(
+                    Button::new("neutral-disabled")
+                        .label("Neutral")
+                        .neutral_colors()
+                        .w(px(120.))
+                        .disabled_as_designed(true, Filled::Neutral, cx),
+                )
         }
     }
 
-    /// The fills are the exact tokens (the custom-variant trap above).
+    /// The fills are the exact tokens (the custom-variant trap above), and a
+    /// disabled button is its normal fill at `--opacity-disabled` (0.45),
+    /// not the kit's own faded disabled style under that opacity.
     #[gpui_kit::test]
     fn filled_buttons_paint_the_exact_tokens(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -176,7 +244,7 @@ mod tests {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 Default::default(),
-                size(px(400.), px(100.)),
+                size(px(400.), px(200.)),
             ))),
             ..Default::default()
         };
@@ -188,12 +256,19 @@ mod tests {
             window.render_frame(cx);
             let theme = cx.theme();
             let quads = window.painted_quads();
-            for (id, color) in [("accent", theme.primary), ("neutral", theme.secondary)] {
+            let faded = metrics::OPACITY_DISABLED;
+            for (id, color, alpha) in [
+                ("accent", theme.primary, 1.),
+                ("neutral", theme.secondary, 1.),
+                ("accent-disabled", theme.primary, faded),
+                ("neutral-disabled", theme.secondary, faded),
+            ] {
                 let bounds = window.find(id).bounds();
                 let scale = window.scale_factor();
                 let found = quads.iter().any(|quad| {
                     let inside = (quad.bounds.origin.x.0 / scale - bounds.origin.x.as_f32()).abs()
                         < 1.
+                        && (quad.bounds.origin.y.0 / scale - bounds.origin.y.as_f32()).abs() < 1.
                         && (quad.bounds.size.width.0 / scale - bounds.size.width.as_f32()).abs()
                             < 1.;
                     inside
@@ -202,10 +277,10 @@ mod tests {
                             (a.r - b.r).abs() < 1e-3
                                 && (a.g - b.g).abs() < 1e-3
                                 && (a.b - b.b).abs() < 1e-3
-                                && (a.a - 1.).abs() < 1e-3
+                                && (a.a - alpha).abs() < 1e-3
                         })
                 });
-                assert!(found, "{id}: opaque fill of its token");
+                assert!(found, "{id}: fill of its token at alpha {alpha}");
             }
         })
         .unwrap();

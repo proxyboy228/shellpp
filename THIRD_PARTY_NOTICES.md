@@ -80,7 +80,9 @@ means the crate is available under either license.
 | base64ct | 1.8.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | bcrypt-pbkdf | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/password-hashes> |
 | bit_field | 0.10.3 | Apache-2.0 OR MIT | <https://github.com/phil-opp/rust-bit-field> |
+| bit-set | 0.8.0 | Apache-2.0 OR MIT | <https://github.com/contain-rs/bit-set> |
 | bit-set | 0.9.1 | Apache-2.0 OR MIT | <https://github.com/contain-rs/bit-set> |
+| bit-vec | 0.8.0 | Apache-2.0 OR MIT | <https://github.com/contain-rs/bit-vec> |
 | bit-vec | 0.9.1 | Apache-2.0 OR MIT | <https://github.com/contain-rs/bit-vec> |
 | bitflags | 1.3.2 | MIT OR Apache-2.0 | <https://github.com/bitflags/bitflags> |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 | <https://github.com/bitflags/bitflags> |
@@ -173,6 +175,7 @@ means the crate is available under either license.
 | exr | 1.74.2 | BSD-3-Clause | <https://github.com/johannesvollmer/exrs> |
 | fallible-iterator | 0.3.0 | MIT OR Apache-2.0 | <https://github.com/sfackler/rust-fallible-iterator> |
 | fallible-streaming-iterator | 0.1.9 | MIT OR Apache-2.0 | <https://github.com/sfackler/fallible-streaming-iterator> |
+| fancy-regex | 0.18.0 | MIT | <https://github.com/fancy-regex/fancy-regex> |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/fastrand> |
 | fax | 0.2.7 | MIT | <https://github.com/pdf-rs/fax> |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | <https://github.com/image-rs/fdeflate> |
@@ -291,7 +294,6 @@ means the crate is available under either license.
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | <https://github.com/rust-lang-nursery/lazy-static.rs> |
 | lebe | 0.5.3 | BSD-3-Clause | <https://github.com/johannesvollmer/lebe> |
 | libc | 0.2.191 | MIT OR Apache-2.0 | <https://github.com/rust-lang/libc> |
-| libloading | 0.7.4 | ISC | <https://github.com/nagisa/rust_libloading/> |
 | libloading | 0.8.9 | ISC | <https://github.com/nagisa/rust_libloading/> |
 | libm | 0.2.16 | MIT | <https://github.com/rust-lang/compiler-builtins> |
 | libsqlite3-sys | 0.38.2 | MIT | <https://github.com/rusqlite/rusqlite> |
@@ -621,6 +623,7 @@ means the crate is available under either license.
 | zvariant | 4.2.0 | MIT | <https://github.com/dbus2/zbus/> |
 | zvariant | 5.15.1 | MIT | <https://github.com/z-galaxy/zbus/> |
 | zvariant_utils | 4.2.0 | MIT | <https://github.com/z-galaxy/zbus/> |
+| zxcvbn | 3.1.1 | MIT | <https://github.com/shssoichiro/zxcvbn-rs> |
 
 <!-- rust-crates:end -->
 

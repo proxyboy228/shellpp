@@ -341,6 +341,34 @@ fn details_panel_container(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// Lead decision 4: the panel never squeezes the main area below 360 px;
+/// the chosen width comes back in a wider window.
+#[test]
+fn details_panel_leaves_the_main_area_its_minimum() {
+    use details::fitted_width;
+    let sidebar = metrics::WIDTH_SIDEBAR;
+    // 960 px window: 960 - 220 - 360 = 380.
+    assert_eq!(
+        fitted_width(metrics::WIDTH_DETAILS_MAX, px(960.), sidebar),
+        metrics::WIDTH_DETAILS
+    );
+    assert_eq!(
+        fitted_width(metrics::WIDTH_DETAILS, px(960.), sidebar),
+        metrics::WIDTH_DETAILS
+    );
+    // Without the sidebar there is room for the widest panel.
+    assert_eq!(
+        fitted_width(metrics::WIDTH_DETAILS_MAX, px(960.), px(0.)),
+        metrics::WIDTH_DETAILS_MAX
+    );
+    assert_eq!(fitted_width(px(440.), px(1280.), sidebar), px(440.));
+    // Never below the panel's own minimum.
+    assert_eq!(
+        fitted_width(metrics::WIDTH_DETAILS, px(800.), sidebar),
+        metrics::WIDTH_DETAILS_MIN
+    );
+}
+
 /// UI 1.4, 4.6: Exit asks first while session tabs are open.
 #[gpui_kit::test]
 fn exit_asks_while_sessions_are_open(cx: &mut TestAppContext) {
@@ -361,23 +389,78 @@ fn exit_asks_while_sessions_are_open(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// Placeholder actions show an "In development" toast (audit decision 1).
+/// An edit still waiting for the 500 ms autosave is saved when the window
+/// is closed (and, through `flush_all_panels`, when the app quits): the
+/// panel and its autosave timer go with the window.
 #[gpui_kit::test]
-fn settings_shortcut_shows_the_placeholder(cx: &mut TestAppContext) {
+fn closing_the_window_saves_a_pending_panel_edit(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
-    ui.press("ctrl-,", cx);
-    let shell = ui.shell(cx);
-    let messages: Vec<String> = cx.update(|cx| {
-        shell
-            .read(cx)
-            .toasts()
-            .read(cx)
-            .items()
-            .iter()
-            .map(|toast| toast.message().to_string())
-            .collect()
+    let host = ui.state.update(cx, |state, cx| {
+        state
+            .save_host(
+                None,
+                json!({"address": "192.0.2.40"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+                cx,
+            )
+            .unwrap()
+            .record_id
     });
-    assert_eq!(messages, [i18n::placeholder::feature(i18n::menu::SETTINGS)]);
+    let shell = ui.shell(cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_host_panel(Some(host), window, cx)
+        });
+    })
+    .unwrap();
+    ui.frame(cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-label", cx);
+        window.input("Closed fast", cx);
+    })
+    .unwrap();
+    ui.frame(cx);
+    let label = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            ui.state
+                .read(cx)
+                .host(host)
+                .and_then(|host| host.label.clone())
+        })
+    };
+    assert_eq!(label(cx), None, "still waiting for the autosave");
+    let closed = gpui::VisualTestContext::from_window(ui.handle, cx).simulate_close();
+    assert!(closed, "no session tabs: the window closes without asking");
+    assert_eq!(label(cx).as_deref(), Some("Closed fast"));
+
+    // Quit: every window's panel is saved first.
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-label", cx);
+        window.input(" again", cx);
+    })
+    .unwrap();
+    ui.frame(cx);
+    cx.update(flush_all_panels);
+    assert_eq!(label(cx).as_deref(), Some("Closed fast again"));
+    ui.finish(cx);
+}
+
+/// Ctrl+, opens the Settings window (UI 12.1) on its Security section
+/// (UI 13.4); no placeholder toast any more.
+#[gpui_kit::test]
+fn settings_shortcut_opens_the_settings_window(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    assert!(!ui.visible("settings", cx));
+    ui.press("ctrl-,", cx);
+    assert!(ui.visible("settings", cx));
+    assert!(ui.visible("settings-security", cx));
+    let shell = ui.shell(cx);
+    let toasts = cx.update(|cx| shell.read(cx).toasts().read(cx).items().len());
+    assert_eq!(toasts, 0);
     ui.finish(cx);
 }
 

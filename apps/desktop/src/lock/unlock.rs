@@ -1,20 +1,28 @@
-//! MINIMAL unlock screen (UI 13.2): the app name, "Master password" with the
-//! focus in it, Unlock (also Enter). A wrong password shows an error under
-//! the field; the field is cleared and keeps the focus.
+//! The unlock screen (UI 13.2, decision D29): the app name, "Master
+//! password" with the focus in it, the accent button "Unlock" (Enter does the
+//! same) and "Forgot password?". A wrong password shows a message under the
+//! field and clears it. After 5 wrong passwords in a row the core pauses
+//! unlocking (5 s, doubling, at most 5 minutes, kept across restarts); the
+//! screen counts the pause down and keeps Unlock inactive meanwhile.
+
+use std::time::Duration;
 
 use gpui::{
-    AppContext as _, ClickEvent, Context, Entity, FontWeight, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Task, Window, div, prelude::*,
+    AppContext as _, ClickEvent, Context, Entity, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Subscription, Task, Window, prelude::*,
 };
-use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, v_flex};
-use secrecy::SecretString;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::{ActiveTheme as _, FocusableExt as _, Sizable as _, h_flex, v_flex};
 use shellpp_core::CoreError;
+use shellpp_core::lock::lockout::whole_seconds;
 
-use crate::i18n;
+use super::forgot::{ForgotDialog, ForgotEvent};
+use super::{error_line, heading, password_field, strings};
+use crate::panels::widgets;
 use crate::state::AppState;
+use crate::theme::controls::{ButtonColors as _, Filled};
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::metrics;
 
 pub struct UnlockScreen {
@@ -22,23 +30,30 @@ pub struct UnlockScreen {
     password: Entity<InputState>,
     busy: bool,
     error: Option<SharedString>,
+    /// Whole seconds left in the pause after 5 wrong passwords (D29).
+    retry_after: Option<u64>,
+    /// The countdown task runs while this is set.
+    counting: bool,
+    forgot: Option<Entity<ForgotDialog>>,
     work: Option<Task<()>>,
+    countdown: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
+    forgot_subscription: Option<Subscription>,
 }
 
 impl std::fmt::Debug for UnlockScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UnlockScreen").finish_non_exhaustive()
+        // Never the field contents.
+        f.debug_struct("UnlockScreen")
+            .field("busy", &self.busy)
+            .field("retry_after", &self.retry_after)
+            .finish_non_exhaustive()
     }
 }
 
 impl UnlockScreen {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder(i18n::lock::MASTER_PASSWORD)
-        });
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let subscription = cx.subscribe_in(
             &password,
             window,
@@ -49,34 +64,84 @@ impl UnlockScreen {
             },
         );
         password.update(cx, |input, cx| input.focus(window, cx));
-        Self {
+        let mut this = Self {
             state,
             password,
             busy: false,
             error: None,
+            retry_after: None,
+            counting: false,
+            forgot: None,
             work: None,
+            countdown: None,
             _subscriptions: vec![subscription],
-        }
+            forgot_subscription: None,
+        };
+        // A pause from an earlier run is still counted down (D29).
+        this.refresh_pause(window, cx);
+        this
     }
 
-    /// The error under the field, if any.
+    /// The message under the field, if any ("Wrong password.").
     pub fn error(&self) -> Option<&SharedString> {
         self.error.as_ref()
+    }
+
+    /// Whole seconds left in the pause after 5 wrong passwords, if any.
+    pub fn retry_after(&self) -> Option<u64> {
+        self.retry_after
     }
 
     pub fn is_busy(&self) -> bool {
         self.busy
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy {
+    /// The "Forgot password?" card, while open.
+    pub fn forgot(&self) -> Option<&Entity<ForgotDialog>> {
+        self.forgot.as_ref()
+    }
+
+    fn can_submit(&self) -> bool {
+        !self.busy && self.retry_after.is_none()
+    }
+
+    /// Re-reads the pause from the core and runs the countdown while it lasts.
+    pub fn refresh_pause(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retry_after = self.state.read(cx).unlock_retry_after().map(whole_seconds);
+        cx.notify();
+        if self.retry_after.is_none() || self.counting {
             return;
         }
-        let value = self.password.read(cx).value();
-        if value.is_empty() {
+        self.counting = true;
+        self.countdown = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let running = this.update_in(cx, |this, window, cx| {
+                    this.retry_after = this.state.read(cx).unlock_retry_after().map(whole_seconds);
+                    if this.retry_after.is_none() {
+                        this.counting = false;
+                        this.password
+                            .update(cx, |input, cx| input.focus(window, cx));
+                    }
+                    cx.notify();
+                    this.retry_after.is_some()
+                });
+                if !matches!(running, Ok(true)) {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// "Unlock" (also Enter).
+    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_submit() || self.forgot.is_some() {
             return;
         }
-        let password = SecretString::from(value.to_string());
+        if self.password.read(cx).text().len() == 0 {
+            return;
+        }
+        let password = super::secret_text(self.password.read(cx));
         self.password
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.busy = true;
@@ -89,70 +154,107 @@ impl UnlockScreen {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.busy = false;
                 match result {
+                    // The root view replaces this screen with the shell.
                     Ok(()) => {}
                     Err(CoreError::InvalidPassword) => {
-                        this.error = Some(i18n::lock::WRONG_PASSWORD.into());
+                        this.error = Some(strings::WRONG_PASSWORD.into());
                         this.password
                             .update(cx, |input, cx| input.focus(window, cx));
                     }
+                    Err(CoreError::TooManyAttempts { .. }) => {}
                     Err(error) => {
                         tracing::warn!(code = error.code(), "unlock failed");
-                        this.error = Some(i18n::lock::FAILED.into());
+                        this.error = Some(strings::FAILED.into());
                     }
                 }
-                cx.notify();
+                this.refresh_pause(window, cx);
             });
         }));
+        cx.notify();
+    }
+
+    /// "Forgot password?": opens the card over the screen.
+    pub fn open_forgot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.forgot.is_some() || self.busy {
+            return;
+        }
+        let dialog = cx.new(|cx| ForgotDialog::new(self.state.clone(), window, cx));
+        self.forgot_subscription = Some(cx.subscribe_in(
+            &dialog,
+            window,
+            |this: &mut Self, _, event: &ForgotEvent, window, cx| {
+                let ForgotEvent::Close = event;
+                this.close_forgot(window, cx);
+            },
+        ));
+        self.forgot = Some(dialog);
+        cx.notify();
+    }
+
+    fn close_forgot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.forgot = None;
+        self.forgot_subscription = None;
+        self.password
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 }
 
 impl Render for UnlockScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let danger = cx.theme().danger;
-        let muted = cx.theme().muted_foreground;
-        let content = v_flex()
-            .gap(metrics::SPACE_3)
-            .child(
-                div()
-                    .text_size(metrics::FONT_SIZE_TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(i18n::APP_NAME),
-            )
-            .child(
-                Input::new(&self.password)
-                    .id("unlock-password")
-                    .mask_toggle(),
-            )
-            .when_some(self.error.clone(), |this, error| {
-                this.child(
-                    div()
-                        .id("unlock-error")
-                        .test_support()
-                        .text_color(danger)
-                        .child(error),
-                )
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let surface = cx.theme().secondary;
+        let enabled = self.can_submit();
+        let below = match (self.retry_after, &self.error) {
+            (Some(seconds), _) => Some(error_line("unlock-retry", strings::retry_in(seconds), cx)),
+            (None, Some(error)) => Some(error_line("unlock-error", error.clone(), cx)),
+            (None, None) => None,
+        };
+        let unlock = Button::new("unlock-submit")
+            .accent_colors()
+            .large()
+            .w_full()
+            .h(metrics::HEIGHT_CONTROL)
+            .rounded(metrics::RADIUS_CONTROL)
+            .label(if self.busy {
+                strings::WORKING
+            } else {
+                strings::UNLOCK
             })
-            .child(
-                Button::new("unlock-submit")
-                    .primary()
-                    .label(if self.busy {
-                        i18n::lock::WORKING
-                    } else {
-                        i18n::lock::UNLOCK
-                    })
-                    .disabled(self.busy)
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)),
-                    ),
+            .focus_ring(false)
+            .focus_ring_visible(surface, cx)
+            .disabled_as_designed(!enabled, Filled::Accent, cx)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)));
+        let forgot = widgets::text_button(
+            "unlock-forgot",
+            strings::FORGOT_PASSWORD,
+            !self.busy,
+            cx,
+        )
+        .when(!self.busy, |this| {
+            this.on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.open_forgot(window, cx)),
             )
-            // TODO(lock): recovery flow of UI 13.2.
+        });
+        let content = v_flex()
+            .w_full()
+            .gap(metrics::SPACE_4)
+            .child(heading(strings::UNLOCK_SUBTITLE, cx))
             .child(
-                div()
-                    .text_size(metrics::FONT_SIZE_CAPTION)
-                    .text_color(muted)
-                    .child(i18n::lock::USE_RECOVERY_KEY),
-            );
-        super::frame("unlock", content, cx)
+                password_field(
+                    strings::MASTER_PASSWORD,
+                    &self.password,
+                    "unlock-password",
+                    below.is_some(),
+                    // Read-only while checking and during a pause (UI 13.2).
+                    !enabled,
+                    window,
+                    cx,
+                )
+                .children(below),
+            )
+            .child(unlock)
+            .child(h_flex().w_full().justify_center().child(forgot));
+        let overlay = self.forgot.clone().map(|dialog| dialog.into_any_element());
+        super::frame("unlock", content, overlay, cx)
     }
 }

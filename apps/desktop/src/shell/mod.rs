@@ -65,6 +65,14 @@ pub enum Panel {
     Group(Entity<GroupPanel>),
 }
 
+/// The record a details panel showed when the app locked (UI 13.3: unlock
+/// brings it back).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelTarget {
+    Host(Uuid),
+    Group(Uuid),
+}
+
 /// The shell of each open window, so window-level calls find it.
 #[derive(Default)]
 struct ShellRegistry(Vec<(WindowId, WeakEntity<Shell>)>);
@@ -124,6 +132,56 @@ pub fn in_development(feature: &str, window: &mut Window, cx: &mut App) {
     show_toast(i18n::placeholder::feature(feature), window, cx);
 }
 
+/// The shell of every open window.
+fn all_shells(cx: &App) -> Vec<Entity<Shell>> {
+    cx.try_global::<ShellRegistry>()
+        .map(|registry| {
+            registry
+                .0
+                .iter()
+                .filter_map(|(_, shell)| shell.upgrade())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Saves the pending edits of every window's details panel (a window
+/// closes, the app quits): the autosave waits 500 ms, and dropping the
+/// panel would drop the edit.
+pub fn flush_all_panels(cx: &mut App) {
+    for shell in all_shells(cx) {
+        shell.update(cx, |shell, cx| shell.flush_panel(cx));
+    }
+}
+
+/// Locks the app (UI 13.3) from outside a shell: Ctrl+Shift+L that no view
+/// handled, and a due auto-lock. Every window's details panel saves its
+/// pending edits and closes first, then the core locks once. Does nothing
+/// while locked.
+pub fn lock_all(state: &Entity<AppState>, cx: &mut App) {
+    if !state.read(cx).is_unlocked() {
+        return;
+    }
+    for shell in all_shells(cx) {
+        shell.update(cx, |shell, cx| shell.suspend_panel(cx));
+    }
+    if let Err(error) = state.update(cx, |state, cx| state.lock(cx)) {
+        tracing::warn!(code = error.code(), "lock failed");
+    }
+}
+
+/// Ctrl+Shift+L that no view handled: a kit dialog (Settings, a
+/// confirmation) has the focus, so the shell is not on the dispatch path.
+/// Locks like the shell's own handler; does nothing while locked (UI 13.3).
+fn lock_from_anywhere(_: &LockApp, cx: &mut App) {
+    let state = all_shells(cx)
+        .first()
+        .map(|shell| shell.read(cx).state.clone());
+    if let Some(state) = state {
+        lock_all(&state, cx);
+    }
+}
+
 /// Opens a session tab and makes it active.
 pub fn open_session_tab(request: SessionRequest, window: &mut Window, cx: &mut App) {
     with_shell(window, cx, move |shell, _, cx| {
@@ -155,6 +213,8 @@ pub struct Shell {
     _subscriptions: Vec<Subscription>,
     /// Subscriptions to the open details panel (replaced with the panel).
     panel_subscriptions: Vec<Subscription>,
+    /// The panel closed by the last lock, reopened after unlock.
+    panel_before_lock: Option<PanelTarget>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -183,12 +243,15 @@ impl Shell {
         registry.0.push((window.window_handle().window_id(), this));
 
         // Closing the window while sessions are open asks first (UI 4.6).
+        // An edit still waiting for the autosave is saved before the window
+        // (and the panel with it) goes.
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             let Some(shell) = this.upgrade() else {
                 return true;
             };
             if shell.read(cx).sessions.is_empty() {
+                shell.update(cx, |shell, cx| shell.flush_panel(cx));
                 return true;
             }
             let sessions = shell.read(cx).sessions.len();
@@ -221,6 +284,7 @@ impl Shell {
             session_focus: Vec::new(),
             _subscriptions: subscriptions,
             panel_subscriptions: Vec::new(),
+            panel_before_lock: None,
         }
     }
 
@@ -369,8 +433,10 @@ impl Shell {
     }
 
     /// Exit (UI 1.4): asks first while session tabs are open (UI 4.6).
+    /// Pending panel edits are saved first.
     pub fn request_exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sessions.is_empty() {
+            self.flush_panel(cx);
             cx.quit();
         } else {
             confirm_exit(self.sessions.len(), true, window, cx);
@@ -426,6 +492,58 @@ impl Shell {
         cx.notify();
     }
 
+    /// Locks the app now (Lock, Ctrl+Shift+L; UI 13.3). Pending panel edits
+    /// of every window are saved before the keys go. Does nothing while
+    /// locked.
+    pub fn lock_app(&mut self, cx: &mut Context<Self>) {
+        if !self.state.read(cx).is_unlocked() {
+            return;
+        }
+        // This shell is being updated: its own panel here, the others'
+        // through their entities.
+        self.suspend_panel(cx);
+        let me = cx.entity_id();
+        for shell in all_shells(cx) {
+            if shell.entity_id() != me {
+                shell.update(cx, |shell, cx| shell.suspend_panel(cx));
+            }
+        }
+        if let Err(error) = self.state.update(cx, |state, cx| state.lock(cx)) {
+            tracing::warn!(code = error.code(), "lock failed");
+        }
+    }
+
+    /// On lock: closes the details panel (its record data goes with the
+    /// keys; pending edits are saved first while they still can be) and
+    /// remembers its record for [`Shell::resume_panel`]. Without an open
+    /// panel it keeps what an earlier call remembered.
+    pub fn suspend_panel(&mut self, cx: &mut Context<Self>) {
+        let target = match &self.panel {
+            Some(Panel::Host(panel)) => panel.read(cx).record_id().map(PanelTarget::Host),
+            Some(Panel::Group(panel)) => panel.read(cx).record_id().map(PanelTarget::Group),
+            None => return,
+        };
+        self.panel_before_lock = target;
+        self.close_panel(cx);
+    }
+
+    /// After unlock: reopens the panel [`Shell::suspend_panel`] closed when
+    /// its record still exists; the top-bar tab stays as it was (UI 13.3).
+    pub fn resume_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.top_tab;
+        match self.panel_before_lock.take() {
+            Some(PanelTarget::Host(id)) if self.state.read(cx).host(id).is_some() => {
+                self.open_host_panel(Some(id), window, cx);
+            }
+            Some(PanelTarget::Group(id)) if self.state.read(cx).group(id).is_some() => {
+                self.open_group_panel(Some(id), window, cx);
+            }
+            _ => return,
+        }
+        self.top_tab = tab;
+        cx.notify();
+    }
+
     /// Closes the details panel; pending edits are saved first.
     pub fn close_panel(&mut self, cx: &mut Context<Self>) {
         self.flush_panel(cx);
@@ -434,7 +552,10 @@ impl Shell {
         cx.notify();
     }
 
-    fn flush_panel(&mut self, cx: &mut Context<Self>) {
+    /// Saves the details panel's pending edit now (the autosave waits
+    /// 500 ms): before it closes or changes, before the window closes and
+    /// before the app quits.
+    pub(crate) fn flush_panel(&mut self, cx: &mut Context<Self>) {
         match &self.panel {
             Some(Panel::Host(panel)) => panel.update(cx, |panel, cx| panel.flush(cx)),
             Some(Panel::Group(panel)) => panel.update(cx, |panel, cx| panel.flush(cx)),
@@ -730,7 +851,7 @@ impl Shell {
             .child(self.render_toast_host())
     }
 
-    fn render_panel(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_panel(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let (panel, entity_id) = match self.panel.as_ref()? {
             Panel::Host(panel) => (panel.clone().into_any_element(), panel.entity_id()),
             Panel::Group(panel) => (panel.clone().into_any_element(), panel.entity_id()),
@@ -749,12 +870,20 @@ impl Shell {
             .into_any_element()
         };
         let handle_hover = theme.drag_border;
+        // The main area keeps its minimum width (lead decision 4).
+        let sidebar = if self.sidebar_visible {
+            metrics::WIDTH_SIDEBAR
+        } else {
+            px(0.)
+        };
+        let width =
+            details::fitted_width(self.details_width, window.viewport_size().width, sidebar);
         Some(
             div()
                 .id("right-panel")
                 .test_support()
                 .relative()
-                .w(self.details_width)
+                .w(width)
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -824,6 +953,10 @@ fn confirm_exit(sessions: usize, quit: bool, window: &mut Window, cx: &mut App) 
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_modal(cx))
             .on_ok(move |_, window, cx| {
+                // Pending panel edits are saved before the window goes.
+                if let Some(shell) = shell_for(window, cx) {
+                    shell.update(cx, |shell, cx| shell.flush_panel(cx));
+                }
                 if quit {
                     cx.quit();
                 } else {
@@ -877,7 +1010,7 @@ fn render_notification_list(list: &Entity<Notifications>, cx: &App) -> AnyElemen
 }
 
 impl Render for Shell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.top_tab {
             TopTab::Vaults => h_flex()
                 .size_full()
@@ -896,7 +1029,7 @@ impl Render for Shell {
                     ))
                 })
                 .child(self.render_main(cx))
-                .children(self.render_panel(cx))
+                .children(self.render_panel(window, cx))
                 .into_any_element(),
             TopTab::Sftp => div()
                 .id("sftp-area")
@@ -933,8 +1066,8 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, action: &ActivateTab, _, cx| this.activate_tab(action.0, cx)),
             )
-            .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
-                this.placeholder_toast(i18n::menu::SETTINGS, cx)
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                crate::settings::open(this.state.clone(), window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewLocalTerminal, _, cx| {
                 this.open_session(SessionRequest::new(SessionKind::Local), cx);
@@ -979,11 +1112,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &About, _, cx| this.toast(i18n::menu::about_text(), cx)),
             )
-            .on_action(cx.listener(|this, _: &LockApp, _, cx| {
-                if let Err(error) = this.state.update(cx, |state, cx| state.lock(cx)) {
-                    tracing::warn!(code = error.code(), "lock failed");
-                }
-            }))
+            .on_action(cx.listener(|this, _: &LockApp, _, cx| this.lock_app(cx)))
             .on_action(cx.listener(|this, _: &Exit, window, cx| this.request_exit(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleTerminalSidebar, _, cx| {
                 this.placeholder_toast(i18n::top_bar::TERMINAL_SIDEBAR, cx)

@@ -24,9 +24,12 @@ pub use root::RootView;
 /// Default size of the main window (logical pixels).
 pub const DEFAULT_WINDOW_WIDTH: f32 = 1280.;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 800.;
-/// Smallest size the window can be resized to.
-pub const MIN_WINDOW_WIDTH: f32 = 720.;
-pub const MIN_WINDOW_HEIGHT: f32 = 480.;
+/// Smallest size the window can be resized to (owner's step 1.4, lead
+/// decision 4): at 960x600 nothing is clipped or overlaps, with and without
+/// the 380 px details panel (the Hosts action bar collapses its labels and
+/// wraps; `hosts::tests::min_window_*` check it).
+pub const MIN_WINDOW_WIDTH: f32 = 960.;
+pub const MIN_WINDOW_HEIGHT: f32 = 600.;
 /// Application id (Wayland app id, X11 class).
 pub const APP_ID: &str = "shellpp";
 
@@ -72,6 +75,9 @@ pub fn run(launch: Launch) {
             .detach();
             let quit_state = state.clone();
             cx.on_app_quit(move |cx| {
+                // The windows are still open here: edits waiting for the
+                // autosave are saved before the core closes.
+                crate::shell::flush_all_panels(cx);
                 quit_state.update(cx, |state, _| state.shutdown());
                 async {}
             })
@@ -81,7 +87,7 @@ pub fn run(launch: Launch) {
 }
 
 /// Options of the main window: centered 1280x800, frameless (the title bar
-/// is drawn by the app), at least 720x480.
+/// is drawn by the app), at least 960x600.
 pub fn main_window_options(cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::centered(

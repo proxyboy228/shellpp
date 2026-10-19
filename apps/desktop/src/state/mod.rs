@@ -8,22 +8,32 @@
 //!
 //! Writing: [`AppState::save_host`], [`AppState::save_group`],
 //! [`AppState::delete_records`], [`AppState::move_records`],
-//! [`AppState::duplicate_record`]. Each runs synchronously (one record:
-//! encryption plus one SQLite write), reloads the lists and emits
-//! [`AppStateEvent::RecordsChanged`]. Validation errors come back as
-//! `CoreError::Validation` with the failing fields.
+//! [`AppState::duplicate_record`], and in [`hosts_view`]
+//! [`AppState::move_records_to`] and [`AppState::copy_hosts_to`]. Each runs
+//! synchronously (one record: encryption plus one SQLite write), reloads the
+//! lists and emits [`AppStateEvent::RecordsChanged`]. Validation errors come
+//! back as `CoreError::Validation` with the failing fields. Everything is
+//! written to the encrypted store at once and survives a restart; a removal
+//! can be undone for 5 seconds ([`undo`], [`AppState::restore_records`]).
 //!
-//! Lock: [`AppState::first_run_setup`] and [`AppState::unlock`] run Argon2id
+//! Lock: [`AppState::create_vault`] (first run) and [`AppState::unlock`] run Argon2id
 //! on the background executor and return a task; [`AppState::lock`] is
 //! immediate. While not unlocked the lists are empty.
 //!
 //! Core events (records written elsewhere, auto-lock from the tick) arrive
 //! through [`crate::platform::events`] and trigger the same reload.
+//!
+//! Auto-lock (UI 13.3): when the interval has passed, the tick (and the
+//! first input after a sleep, [`AppState::activity`]) asks the windows to
+//! lock with [`AppStateEvent::AutoLockDue`], so their details panels save
+//! pending edits before the keys go; the core's own tick is the backstop.
 
 pub mod hosts_view;
 pub mod model;
 pub mod records_edit;
+pub mod security;
 pub mod selection;
+pub mod undo;
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -36,7 +46,7 @@ use serde_json::{Map, Value};
 use shellpp_core::service::dto::{
     CoreEvent, CoreEventKind, LockState, QueryScope, RecordDeleteResult, RecordMoveInput,
     RecordRef, RecordSaveInput, RecordType, RecordView, RecordsQuery, RecordsRef,
-    RecoveryKeyResult, SecretCopyTarget, SortMode, VaultKind,
+    RecoveryKeyResult, SortMode, VaultKind,
 };
 use shellpp_core::{Core, CoreError};
 use uuid::Uuid;
@@ -81,6 +91,9 @@ pub enum AppStateEvent {
     SelectionChanged,
     /// The current group (navigation) changed.
     LocationChanged(Option<Uuid>),
+    /// The auto-lock interval has passed: the windows save pending edits
+    /// and lock (`shell::lock_all`). Nothing is locked yet when it arrives.
+    AutoLockDue,
 }
 
 /// The application state entity. Field order matters: the core is dropped
@@ -97,6 +110,8 @@ pub struct AppState {
     /// The group whose contents the Hosts screen shows; `None` is the top level.
     location: Option<Uuid>,
     selection: Selection,
+    /// Removals that can still be undone ([`undo::UNDO_WINDOW`]).
+    removals: undo::PendingRemovals,
     extras: PlatformExtras,
     dirs: Option<AppDirs>,
     shut_down: bool,
@@ -147,6 +162,7 @@ impl AppState {
             groups: Rc::default(),
             location: None,
             selection: Selection::default(),
+            removals: undo::PendingRemovals::default(),
             extras,
             dirs,
             shut_down: false,
@@ -172,6 +188,7 @@ impl AppState {
             groups: Rc::default(),
             location: None,
             selection: Selection::default(),
+            removals: undo::PendingRemovals::default(),
             extras: PlatformExtras::default(),
             dirs: None,
             shut_down: false,
@@ -181,19 +198,41 @@ impl AppState {
         }
     }
 
-    /// Calls `core.tick()` about once per second (auto-lock, clipboard
-    /// clearing). The app starts it; tests usually do not.
+    /// About once per second: a due auto-lock goes to the windows first
+    /// ([`AppState::check_auto_lock`]), then `core.tick()` runs on the
+    /// background executor (undo expiry, clipboard clearing, and the lock
+    /// itself when no window took the request). The app starts it; tests
+    /// usually do not.
     pub fn start_tick(&mut self, cx: &mut Context<Self>) {
         let Some(core) = self.core.clone() else {
             return;
         };
-        let executor = cx.background_executor().clone();
-        self.tick_task = Some(cx.background_spawn(async move {
+        self.tick_task = Some(cx.spawn(async move |this, cx| {
             loop {
-                executor.timer(Duration::from_secs(1)).await;
-                core.tick();
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                // Checked here, on the app's thread, before the core's tick:
+                // the windows save their edits and lock while handling the
+                // event, so the tick never locks ahead of them.
+                if this
+                    .update(cx, |state, cx| state.check_auto_lock(cx))
+                    .is_err()
+                {
+                    break;
+                }
+                let core = core.clone();
+                cx.background_spawn(async move { core.tick() }).await;
             }
         }));
+    }
+
+    /// Emits [`AppStateEvent::AutoLockDue`] when the auto-lock interval has
+    /// passed. Returns whether it did.
+    pub fn check_auto_lock(&mut self, cx: &mut Context<Self>) -> bool {
+        let due = self.core.as_ref().is_some_and(|core| core.auto_lock_due());
+        if due {
+            cx.emit(AppStateEvent::AutoLockDue);
+        }
+        due
     }
 
     // -- Reading ------------------------------------------------------------
@@ -315,6 +354,17 @@ impl AppState {
         }
     }
 
+    /// Keeps only the selected records that are in `visible` (the cards on
+    /// screen): a search or a tag filter never leaves hidden cards selected.
+    pub fn retain_selection(&mut self, visible: &[Uuid], cx: &mut Context<Self>) {
+        let before = self.selection.clone();
+        self.selection.retain(|id| visible.contains(id));
+        if self.selection != before {
+            cx.emit(AppStateEvent::SelectionChanged);
+            cx.notify();
+        }
+    }
+
     // -- Writing ---------------------------------------------------------------
 
     /// Creates (`record_id: None`) or updates a host. `data` is the full data
@@ -364,17 +414,21 @@ impl AppState {
         Ok(view)
     }
 
-    /// Deletes hosts and groups (a removed group's children move one level up).
+    /// Deletes hosts and groups (a removed group's children move one level
+    /// up). [`AppState::restore_records`] undoes it for
+    /// [`undo::UNDO_WINDOW`]; after that the removal is final.
     pub fn delete_records(
         &mut self,
         record_ids: Vec<Uuid>,
         cx: &mut Context<Self>,
     ) -> Result<RecordDeleteResult, CoreError> {
         let vault_id = self.require_vault()?;
+        let children = undo::moved_children(&record_ids, &self.hosts, &self.groups);
         let result = self.require_core()?.record_delete(RecordsRef {
             vault_id,
             record_ids,
         })?;
+        self.remember_removal(result.deleted.clone(), children, cx);
         self.records_written(cx);
         Ok(result)
     }
@@ -430,8 +484,10 @@ impl AppState {
 
     // -- Lock ------------------------------------------------------------------
 
-    /// First run (UI 13.1): sets the master password, unlocks and returns the
-    /// recovery key. Argon2id runs on the background executor.
+    /// First run without "Remember on this device": sets the master password
+    /// and unlocks. Argon2id runs on the background executor. The first-run
+    /// screen uses [`AppState::create_vault`] (UI 13.1); the returned recovery
+    /// key is never shown in local mode (D29).
     pub fn first_run_setup(
         &mut self,
         password: SecretString,
@@ -478,18 +534,20 @@ impl AppState {
         result.map(|_| ())
     }
 
-    /// Copies the recovery key shown at first run (the core clears the
-    /// clipboard after 30 seconds; allowed for 5 minutes after the first run).
-    pub fn copy_recovery_key(&self) -> Result<(), CoreError> {
-        self.require_core()?
-            .secret_copy(SecretCopyTarget::RecoveryKey)
-    }
-
-    /// Reports user activity to the auto-lock timer.
-    pub fn activity(&self) {
-        if let Some(core) = &self.core {
-            core.activity();
+    /// Reports keyboard or mouse input to the auto-lock timer. Returns
+    /// `true` instead when the interval has already passed (the first input
+    /// after a sleep): the caller then locks through the windows
+    /// (`shell::lock_all`), which save pending edits first.
+    #[must_use]
+    pub fn activity(&self) -> bool {
+        let Some(core) = &self.core else {
+            return false;
+        };
+        if core.auto_lock_due() {
+            return true;
         }
+        core.activity();
+        false
     }
 
     // -- Shutdown --------------------------------------------------------------
@@ -503,6 +561,7 @@ impl AppState {
         }
         self.shut_down = true;
         self.tick_task = None;
+        self.removals.clear();
         if let Some(core) = self.core.take() {
             core.on_exit();
             drop(core);
@@ -571,8 +630,15 @@ impl AppState {
             self.vault_id = None;
             self.hosts = Rc::default();
             self.groups = Rc::default();
-            self.location = None;
-            self.selection.clear();
+            // A lock keeps the place (open group, selection): after unlock the
+            // window returns to it (UI 13.3); the next reload drops ids that
+            // no longer exist. A new vault starts at the top level.
+            if state == LockState::FirstRun {
+                self.location = None;
+                self.selection.clear();
+            }
+            // The core wiped its undo buffer with the session.
+            self.removals.clear();
         }
         tracing::info!(state = ?state, "lock state changed");
         cx.emit(AppStateEvent::LockChanged(state));

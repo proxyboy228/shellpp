@@ -141,6 +141,12 @@ impl HostItem {
         self.label.as_deref().unwrap_or(&self.address)
     }
 
+    /// The host has a Telnet block ("Add Telnet", UI 3.1): the card lists
+    /// Telnet among its protocols (UI 2.3).
+    pub fn has_telnet(&self) -> bool {
+        self.data.get("telnet").is_some_and(Value::is_object)
+    }
+
     /// The data object to start an edit from.
     pub fn data_map(&self) -> Map<String, Value> {
         self.data.as_object().cloned().unwrap_or_default()

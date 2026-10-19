@@ -8,7 +8,10 @@
 //! Duplicate, Copy Link, Open, Edit) stay in place but are inactive while
 //! several cards are selected; the others act on every selected card
 //! (UI 2.3). Targets that are not built yet open an "In development"
-//! placeholder (lead decision 1).
+//! placeholder (lead decision 1). Move to ▸ and Copy to ▸ list the top
+//! level and every group of this vault (lead decision 7); Move to ▸ ends
+//! with "Another vault…" (dialog 2.6, a placeholder), while other vaults
+//! join Copy to ▸ only with team vaults (stage 8, UI 2.4).
 
 use std::rc::Rc;
 
@@ -37,8 +40,9 @@ pub enum MenuCommand {
     MoveTo(Option<Uuid>),
     /// Move to another vault (dialog 2.6, placeholder).
     MoveToVault,
-    /// Copy to another vault (dialog 2.6, placeholder).
-    CopyToVault,
+    /// Copy into a group of this vault (`None`: the top level): a copy with
+    /// the same label.
+    CopyTo(Option<Uuid>),
     Duplicate,
     CopyLink,
     Remove,
@@ -171,6 +175,34 @@ pub fn move_target_id(group: Option<Uuid>) -> SharedString {
     }
 }
 
+/// Element id of a Copy to target.
+pub fn copy_target_id(group: Option<Uuid>) -> SharedString {
+    match group {
+        Some(id) => format!("menu-copy-{id}").into(),
+        None => "menu-copy-top".into(),
+    }
+}
+
+/// Copy to ▸: the top level and every group (a copy may go next to its
+/// original, so every target is active). Other vaults join with team
+/// vaults (stage 8, UI 2.4).
+fn copy_to_entries(targets: &[MoveTarget]) -> Vec<MenuEntry> {
+    targets
+        .iter()
+        .map(|target| {
+            let mut entry = MenuEntry::command(
+                &copy_target_id(target.group),
+                &target.name,
+                MenuCommand::CopyTo(target.group),
+            );
+            if let MenuEntry::Command { depth, .. } = &mut entry {
+                *depth = target.depth;
+            }
+            entry
+        })
+        .collect()
+}
+
 fn move_to_entries(targets: &[MoveTarget]) -> Vec<MenuEntry> {
     let mut entries: Vec<MenuEntry> = targets
         .iter()
@@ -256,11 +288,7 @@ pub fn host_menu(count: usize, move_targets: &[MoveTarget]) -> Vec<MenuEntry> {
         MenuEntry::submenu(
             "menu-copy-to",
             strings::MENU_COPY_TO,
-            vec![MenuEntry::command(
-                "menu-copy-vault",
-                strings::MENU_VAULT,
-                MenuCommand::CopyToVault,
-            )],
+            copy_to_entries(move_targets),
         ),
         MenuEntry::command(
             "menu-duplicate",
@@ -387,6 +415,8 @@ struct ItemStyle {
 /// explanation, and a key hint on the right in `--text-secondary`.
 /// Dangerous items use `--danger` (`--danger-hover` under the pointer);
 /// inactive items use `--text-disabled` at full opacity (design-system 6).
+/// The text keeps the kit's menu item size, which the kit also gives the
+/// submenu labels (Connect ▸, Move to ▸): one size in the whole menu.
 fn item_label(id: SharedString, label: SharedString, style: ItemStyle, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let tokens = theme::tokens(cx);
@@ -412,7 +442,6 @@ fn item_label(id: SharedString, label: SharedString, style: ItemStyle, cx: &App)
         .justify_between()
         .gap(metrics::SPACE_3)
         .pl(metrics::SPACE_3 * style.depth as f32)
-        .text_size(metrics::FONT_SIZE_BODY)
         .text_color(text)
         .when(style.danger && style.enabled, |this| {
             // The hover area covers the whole item (its 8 px / 4 px padding
@@ -558,6 +587,26 @@ mod tests {
                 "menu-move-vault"
             ]
         );
+        // Copy to ▸ (lead decision 7): the top level and the groups, all
+        // active (the place the host is in included); no other vault before
+        // team vaults (stage 8, UI 2.4).
+        let copy = submenu(&entries, "menu-copy-to");
+        assert_eq!(
+            entry_ids(copy),
+            [
+                "menu-copy-top",
+                "menu-copy-00000000-0000-0000-0000-000000000000"
+            ]
+        );
+        assert!(!copy.contains(&MenuEntry::Separator));
+        assert!(matches!(
+            &copy[0],
+            MenuEntry::Command {
+                enabled: true,
+                command: MenuCommand::CopyTo(None),
+                ..
+            }
+        ));
         // Hints, Remove is the danger item.
         assert!(matches!(
             &entries[0],

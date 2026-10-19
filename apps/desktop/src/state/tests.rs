@@ -154,3 +154,157 @@ fn shutdown_removes_a_temporary_profile(cx: &mut TestAppContext) {
     );
     state.read_with(cx, |state, _| assert!(state.core().is_none()));
 }
+
+/// Owner's step 3.2: the profile starts empty; demo data exists only in a
+/// dev-tools build started with `--demo` (a temporary profile).
+#[gpui_kit::test]
+async fn a_new_profile_starts_empty(cx: &mut TestAppContext) {
+    let (opened, password) = TestProfile::new().into_opened();
+    let state = cx.new(|cx| AppState::new(opened, cx));
+    let setup = state.update(cx, |state, cx| state.first_run_setup(password, cx));
+    assert!(setup.await.is_ok());
+    state.read_with(cx, |state, _| {
+        assert!(state.is_unlocked());
+        assert!(state.hosts().is_empty(), "no demo hosts");
+        assert!(state.groups().is_empty(), "no demo groups");
+    });
+    state.update(cx, |state, _| state.shutdown());
+}
+
+#[test]
+fn demo_data_needs_the_dev_tools_build_and_demo_flag() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: &str| std::fs::read_to_string(root.join(path)).expect(path);
+    // The dev module (the seed) is compiled only with the feature, and the
+    // feature is off by default (release builds never enable it).
+    assert!(
+        read("src/lib.rs").contains("#[cfg(feature = \"dev-tools\")]\npub mod dev;"),
+        "src/dev is behind the dev-tools feature"
+    );
+    assert!(read("Cargo.toml").contains("default = []"));
+    // Outside src/dev only `run_demo` of main.rs (behind the feature,
+    // reached by `--demo`) opens the demo profile.
+    let main = read("src/main.rs");
+    let uses: Vec<usize> = main
+        .match_indices("dev::demo")
+        .map(|(index, _)| index)
+        .collect();
+    assert!(!uses.is_empty());
+    for index in uses {
+        let before = &main[..index];
+        let function = before.rfind("fn run_demo").expect("inside run_demo");
+        let gate = before[..function].rfind("#[cfg(feature = \"dev-tools\")]");
+        assert!(
+            gate.is_some_and(|gate| function - gate < 64),
+            "run_demo is behind the dev-tools feature"
+        );
+    }
+    let mut stack = vec![root.join("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if !path.ends_with("dev") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("main.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // This test names the module it looks for.
+            if path.ends_with(std::path::Path::new("state").join("tests.rs")) {
+                continue;
+            }
+            assert!(
+                !text.contains("dev::demo") && !text.contains("demo::seed"),
+                "{} opens demo data",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Copy to (lead decision 7) copies every field and the secrets, with the
+/// original label, into the target group; the original stays.
+#[gpui_kit::test]
+fn copy_to_copies_fields_and_secrets(cx: &mut TestAppContext) {
+    use secrecy::ExposeSecret as _;
+    use shellpp_core::service::dto::{RecordSaveInput, RecordType, SecretFieldRef};
+
+    let state = unlocked_state(cx);
+    state.update(cx, |state, cx| {
+        let vault_id = state.vault_id().unwrap();
+        let lab = state
+            .save_group(None, map(json!({"name": "Lab"})), cx)
+            .unwrap()
+            .record_id;
+        let secret = format!("pw-{}", uuid::Uuid::now_v7().simple());
+        let mut secrets = std::collections::BTreeMap::new();
+        secrets.insert(
+            "ssh.password".to_owned(),
+            Some(secrecy::SecretString::from(secret.clone())),
+        );
+        let original = state
+            .core()
+            .unwrap()
+            .record_save(RecordSaveInput {
+                vault_id,
+                record_id: None,
+                record_type: RecordType::Host,
+                data: map(json!({
+                    "address": "db.example.com",
+                    "label": "DB",
+                    "tags": ["prod"],
+                    "ssh": {"username": "pg", "port": 5022}
+                })),
+                secrets,
+            })
+            .unwrap()
+            .record_id();
+        let unlabeled = state
+            .save_host(None, map(json!({"address": "192.0.2.5"})), cx)
+            .unwrap()
+            .record_id;
+        state.reload_and_notify(cx);
+
+        let copies = state
+            .copy_hosts_to(vec![original, unlabeled], Some(lab), cx)
+            .unwrap();
+        assert_eq!(copies.len(), 2);
+        let copy = state.host(copies[0]).unwrap().clone();
+        let source = state.host(original).unwrap().clone();
+        assert_eq!(copy.label.as_deref(), Some("DB"), "the same label");
+        assert_eq!(copy.group_id, Some(lab));
+        assert_eq!(source.group_id, None, "the original stays");
+        assert_eq!(copy.tags, source.tags);
+        assert_eq!(copy.username.as_deref(), Some("pg"));
+        assert_eq!(copy.port, Some(5022));
+        let revealed = state
+            .core()
+            .unwrap()
+            .secret_reveal(SecretFieldRef {
+                vault_id,
+                record_id: copies[0],
+                path: "ssh.password".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(revealed.expose_secret(), secret);
+        // No label stays no label (the title is the address).
+        let copy = state.host(copies[1]).unwrap();
+        assert_eq!(copy.label, None);
+        assert_eq!(copy.title(), "192.0.2.5");
+        // Copy to the top level.
+        let top = state.copy_hosts_to(vec![copies[1]], None, cx).unwrap();
+        assert_eq!(state.host(top[0]).unwrap().group_id, None);
+        // An unknown group is refused, nothing is copied.
+        let before = state.hosts().len();
+        assert!(matches!(
+            state.copy_hosts_to(vec![original], Some(uuid::Uuid::now_v7()), cx),
+            Err(CoreError::NotFound)
+        ));
+        assert_eq!(state.hosts().len(), before);
+    });
+    state.update(cx, |state, _| state.shutdown());
+}

@@ -12,11 +12,17 @@
 //!   button: one accent-filled button per screen, lead decision 3).
 //!
 //! Module map: [`address`] (quick-connect parser), [`layout`] (columns,
-//! keyboard navigation, subtitle, tile icon), [`menu`] (context menu model
-//! and builder), [`controls`] (buttons and chips per design-system 6),
-//! `view` (rendering), `dialogs` (removal confirmation, placeholders),
-//! [`strings`] (English texts). The filter, sort and layout preferences are
-//! in [`crate::state::hosts_view`].
+//! the action bar at narrow widths, keyboard navigation, subtitle, tile
+//! icon), [`menu`] (context menu model and builder), [`tag_filter`] (the tag
+//! dropdown and its chips), [`controls`] (buttons and chips per
+//! design-system 6), `view` (rendering), `dialogs` (removal confirmation,
+//! placeholders), [`strings`] (English texts). The filter, sort and layout
+//! preferences are in [`crate::state::hosts_view`].
+//!
+//! Every operation goes through the app state into the encrypted store and
+//! survives a restart: create, edit, remove (with Undo for 5 seconds),
+//! drag to reorder (Manual sort) and onto a group, Duplicate, Move to and
+//! Copy to a group.
 
 pub mod address;
 pub mod controls;
@@ -24,6 +30,7 @@ mod dialogs;
 pub mod layout;
 pub mod menu;
 pub mod strings;
+pub mod tag_filter;
 mod view;
 
 #[cfg(test)]
@@ -34,7 +41,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, KeyDownEvent, Pixels, ScrollHandle, SharedString, Size, Subscription, Window,
+    Focusable, KeyDownEvent, Pixels, SharedString, Size, Subscription, Window,
 };
 use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -43,9 +50,11 @@ use shellpp_core::service::dto::MovePosition;
 use uuid::Uuid;
 
 use crate::state::hosts_view::{
-    self, HostsFilter, HostsLayout, HostsListing, HostsSort, group_tree, subtree_of,
+    self, HostsFilter, HostsLayout, HostsListing, HostsSort, TagCount, group_tree, subtree_of,
 };
 use crate::state::{AppState, AppStateEvent, GroupItem, HostItem, SelectMode};
+use layout::BarPlan;
+use tag_filter::{TagFilterEvent, TagFilterMenu};
 
 pub use address::{QuickTarget, parse_address};
 pub use menu::{MenuCommand, MenuEntry};
@@ -170,7 +179,7 @@ pub fn group_card_id(id: Uuid) -> SharedString {
     format!("group-card-{id}").into()
 }
 
-/// Stable element id of a tag filter chip.
+/// Stable element id of the chip of a tag that is on (the tag filter).
 pub fn tag_chip_id(tag: &str) -> SharedString {
     format!("tag-chip-{}", tag.to_lowercase()).into()
 }
@@ -196,8 +205,15 @@ pub struct HostsScreen {
     hosts: Rc<Vec<HostItem>>,
     groups: Rc<Vec<GroupItem>>,
     listing: HostsListing,
-    /// Every tag in use (tag filter chips).
+    /// Every tag in use (the names of `tag_options`).
     tags: Vec<String>,
+    /// Every tag with its host count (the tag filter's options).
+    tag_options: Vec<TagCount>,
+    /// The tag filter's dropdown.
+    tag_menu: Entity<TagFilterMenu>,
+    tag_menu_open: bool,
+    /// The action bar of the last frame (labels, wrapping, chips).
+    bar_plan: Option<BarPlan>,
     search_target: SearchTarget,
     rows: Vec<Row>,
     row_sizes: Rc<Vec<Size<Pixels>>>,
@@ -208,9 +224,10 @@ pub struct HostsScreen {
     /// Width of the content area, measured after layout (the details panel
     /// narrows it).
     measured_width: Option<f32>,
+    /// Width of the search bar's text area, measured after layout: picks a
+    /// hint that fits ([`layout::search_placeholder`]).
+    search_text_width: Option<f32>,
     scroll: VirtualListScrollHandle,
-    /// Sideways scroll of the tag filter strip (its edge fades read it).
-    tag_scroll: ScrollHandle,
     /// Keyboard focus of the cards (Enter, E, arrows).
     focus: FocusHandle,
     /// The card of the last single click: a second click counts as a double
@@ -249,7 +266,7 @@ impl HostsScreen {
                 InputEvent::Change => {
                     let text = input.read(cx).value().to_string();
                     this.filter.set_text(text);
-                    this.refresh(cx);
+                    this.refilter(cx);
                     this.scroll_to_top();
                 }
                 InputEvent::PressEnter { .. } => this.connect_from_search(window, cx),
@@ -264,8 +281,16 @@ impl HostsScreen {
                     this.scroll_to_top();
                 }
                 AppStateEvent::SelectionChanged => cx.notify(),
-                AppStateEvent::LockChanged(_) => {}
+                AppStateEvent::LockChanged(_) | AppStateEvent::AutoLockDue => {}
             });
+        let tag_menu = cx.new(|cx| TagFilterMenu::new(window, cx));
+        let tag_subscription = cx.subscribe(
+            &tag_menu,
+            |this: &mut Self, _, event: &TagFilterEvent, cx| match event {
+                TagFilterEvent::Toggle(tag) => this.toggle_tag(tag, cx),
+                TagFilterEvent::Clear => this.clear_tags(cx),
+            },
+        );
         let (layout, sort) = {
             let state = state.read(cx);
             (state.hosts_layout(), state.hosts_sort())
@@ -280,6 +305,10 @@ impl HostsScreen {
             groups: Rc::default(),
             listing: HostsListing::default(),
             tags: Vec::new(),
+            tag_options: Vec::new(),
+            tag_menu,
+            tag_menu_open: false,
+            bar_plan: None,
             search_target: SearchTarget::None,
             rows: Vec::new(),
             row_sizes: Rc::default(),
@@ -287,12 +316,12 @@ impl HostsScreen {
             columns: 1,
             card_width: 0.,
             measured_width: None,
+            search_text_width: None,
             scroll: VirtualListScrollHandle::new(),
-            tag_scroll: ScrollHandle::new(),
             // The cards are one tab stop; the arrows move inside them.
             focus: cx.focus_handle().tab_stop(true),
             last_click: None,
-            _subscriptions: vec![search_subscription, state_subscription],
+            _subscriptions: vec![search_subscription, state_subscription, tag_subscription],
         };
         this.refresh(cx);
         this
@@ -348,6 +377,16 @@ impl HostsScreen {
         ids
     }
 
+    /// The selected cards that are on screen, in screen order (not in the
+    /// order they were clicked): commands and drags place records in it.
+    fn selected_on_screen(&self, cx: &App) -> Vec<Uuid> {
+        let selection = self.state.read(cx).selection();
+        self.visible_ids()
+            .into_iter()
+            .filter(|id| selection.contains(id))
+            .collect()
+    }
+
     pub fn layout(&self) -> HostsLayout {
         self.layout
     }
@@ -360,9 +399,34 @@ impl HostsScreen {
         &self.filter
     }
 
-    /// Every tag in use (the tag filter chips).
+    /// Every tag in use.
     pub fn tags(&self) -> &[String] {
         &self.tags
+    }
+
+    /// Every tag with its host count (the options of the tag filter).
+    pub fn tag_options(&self) -> &[TagCount] {
+        &self.tag_options
+    }
+
+    /// The tags that are on (lower case, in the order they were turned on).
+    pub fn selected_tags(&self) -> &[String] {
+        self.filter.tags()
+    }
+
+    /// The tag filter's dropdown (its search field, its options).
+    pub fn tag_menu(&self) -> &Entity<TagFilterMenu> {
+        &self.tag_menu
+    }
+
+    /// Whether the tag filter's dropdown is open.
+    pub fn tag_menu_open(&self) -> bool {
+        self.tag_menu_open
+    }
+
+    /// The action bar of the last frame.
+    pub fn bar_plan(&self) -> Option<BarPlan> {
+        self.bar_plan
     }
 
     /// Card columns of the last layout (1 in the list layout).
@@ -416,11 +480,34 @@ impl HostsScreen {
         self.refresh(cx);
     }
 
-    /// Turns a tag filter chip on or off.
+    /// Turns a tag of the tag filter on or off.
     pub fn toggle_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
         self.filter.toggle_tag(tag);
-        self.refresh(cx);
+        self.refilter(cx);
         self.scroll_to_top();
+    }
+
+    /// Turns every tag off ("Clear").
+    pub fn clear_tags(&mut self, cx: &mut Context<Self>) {
+        if !self.filter.tags().is_empty() {
+            self.filter.clear_tags();
+            self.refilter(cx);
+            self.scroll_to_top();
+        }
+    }
+
+    /// Opens or closes the tag filter's dropdown (the tag button, the "+N"
+    /// chip, a click outside, Esc). It opens with an empty search.
+    pub fn set_tag_menu_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tag_menu_open == open {
+            return;
+        }
+        self.tag_menu_open = open;
+        if open {
+            self.tag_menu
+                .update(cx, |menu, cx| menu.reset_search(window, cx));
+        }
+        cx.notify();
     }
 
     /// New results start at the top.
@@ -428,15 +515,43 @@ impl HostsScreen {
         self.scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
     }
 
+    /// [`HostsScreen::refresh`] after the search text or the tag filter
+    /// changed: the selection then keeps only the cards still on screen, so
+    /// a search never leaves hidden cards selected. (Commands and drags use
+    /// only the selected cards on screen in any case.)
+    fn refilter(&mut self, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        if self.state.read(cx).is_unlocked() {
+            let visible = self.visible_ids();
+            self.state
+                .update(cx, |state, cx| state.retain_selection(&visible, cx));
+        }
+    }
+
     /// Re-reads the lists from the state and applies location, filter and
     /// sort; recomputes the search target.
+    ///
+    /// While locked the lists are empty: the selected tags stay as they
+    /// were, so the window returns to its state after unlock (UI 13.3).
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
+        let unlocked = state.is_unlocked();
         self.hosts = state.hosts();
         self.groups = state.groups();
         let location = state.location();
-        self.tags = hosts_view::all_tags(&self.hosts);
-        self.filter.retain_tags(&self.tags);
+        self.tag_options = hosts_view::tag_counts(&self.hosts);
+        self.tags = self
+            .tag_options
+            .iter()
+            .map(|tag| tag.name.clone())
+            .collect();
+        if unlocked {
+            self.filter.retain_tags(&self.tags);
+            let options = self.tag_options.clone();
+            let selected = self.filter.tags().to_vec();
+            self.tag_menu
+                .update(cx, |menu, cx| menu.set_options(options, selected, cx));
+        }
         self.listing =
             hosts_view::listing(&self.hosts, &self.groups, location, &self.filter, self.sort);
         self.update_search_target(cx);
@@ -570,10 +685,9 @@ impl HostsScreen {
                 if let Some(group) = selection.single().filter(|id| self.is_group(*id)) {
                     self.open_group(group, cx);
                 } else {
-                    let hosts: Vec<Uuid> = selection
-                        .ids()
-                        .iter()
-                        .copied()
+                    let hosts: Vec<Uuid> = self
+                        .selected_on_screen(cx)
+                        .into_iter()
                         .filter(|id| !self.is_group(*id))
                         .collect();
                     self.connect_hosts(&hosts, SessionKind::Ssh, false, cx);
@@ -751,12 +865,13 @@ impl HostsScreen {
 
     // -- Context menu commands -------------------------------------------------------
 
-    /// The records a menu opened on `card` acts on: the selection when the
-    /// card is part of it, otherwise the card alone.
+    /// The records a menu (or a drag) on `card` acts on: the selected cards
+    /// on screen, in screen order, when the card is one of them; otherwise
+    /// the card alone.
     fn menu_targets(&self, card: Uuid, cx: &App) -> Vec<Uuid> {
-        let selection = self.state.read(cx).selection();
-        if selection.contains(&card) && selection.len() > 1 {
-            selection.ids().to_vec()
+        let selected = self.selected_on_screen(cx);
+        if selected.len() > 1 && selected.contains(&card) {
+            selected
         } else {
             vec![card]
         }
@@ -837,10 +952,11 @@ impl HostsScreen {
                     cx.emit(HostsRequest::EditHost(*id));
                 }
             }
-            MenuCommand::Collaborate | MenuCommand::MoveToVault | MenuCommand::CopyToVault => {
+            MenuCommand::Collaborate | MenuCommand::MoveToVault => {
                 dialogs::open_placeholder("vault-dialog", strings::MOVE_OR_COPY_TITLE, window, cx);
             }
             MenuCommand::MoveTo(group) => self.move_records(records, group, cx),
+            MenuCommand::CopyTo(group) => self.copy_hosts(hosts, group, cx),
             MenuCommand::Duplicate => {
                 if let [id] = hosts.as_slice() {
                     self.duplicate(*id, cx);
@@ -903,6 +1019,29 @@ impl HostsScreen {
             }
             Err(error) => {
                 tracing::warn!(code = error.code(), "move failed");
+                cx.emit(HostsEvent::Toast(strings::FAILED.into()));
+            }
+        }
+    }
+
+    /// Copy to ▸ a group (lead decision 7): a copy of every host with the
+    /// same label in the group (`None`: the top level).
+    fn copy_hosts(&mut self, hosts: Vec<Uuid>, group: Option<Uuid>, cx: &mut Context<Self>) {
+        if hosts.is_empty() {
+            return;
+        }
+        let result = self
+            .state
+            .update(cx, |state, cx| state.copy_hosts_to(hosts, group, cx));
+        match result {
+            Ok(_) => {
+                let name = group.and_then(|id| self.group(id).map(|group| group.name.clone()));
+                cx.emit(HostsEvent::Toast(
+                    strings::copied_to(name.as_deref()).into(),
+                ));
+            }
+            Err(error) => {
+                tracing::warn!(code = error.code(), "copy failed");
                 cx.emit(HostsEvent::Toast(strings::FAILED.into()));
             }
         }

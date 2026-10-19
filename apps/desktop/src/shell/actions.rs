@@ -1,7 +1,9 @@
 //! Shell actions (app menu UI 1.4, shortcuts UI 12.5) and their key
 //! bindings. The bindings live in the `Shell` key context, so they work
 //! anywhere in an unlocked window; a focused text field keeps its own keys
-//! (its context is deeper).
+//! (its context is deeper). Ctrl+Shift+L (lock) is bound in every context:
+//! while a kit dialog such as Settings has the focus, the shell is not on
+//! the dispatch path and a global handler locks instead (UI 13.3).
 
 use gpui::{App, KeyBinding};
 
@@ -12,9 +14,9 @@ gpui_kit::actions!(
         ShowVaults,
         /// Ctrl+2: the SFTP tab.
         ShowSftp,
-        /// Ctrl+,: settings (placeholder).
+        /// Ctrl+,: the Settings window (UI 12.1).
         OpenSettings,
-        /// Ctrl+L, Ctrl+Shift+L: new local terminal tab.
+        /// Ctrl+L: new local terminal tab.
         NewLocalTerminal,
         /// Ctrl+Alt+S: new serial connection tab.
         NewSerialConnection,
@@ -36,7 +38,7 @@ gpui_kit::actions!(
         ReportIssue,
         CheckForUpdates,
         About,
-        /// Lock the app now (UI 13.3).
+        /// Ctrl+Shift+L: lock the app now (UI 13.3, decision D29).
         LockApp,
         /// Exit; asks first while sessions are open (UI 4.6).
         Exit,
@@ -61,7 +63,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-2", ShowSftp, context),
         KeyBinding::new("secondary-,", OpenSettings, context),
         KeyBinding::new("secondary-l", NewLocalTerminal, context),
-        KeyBinding::new("secondary-shift-l", NewLocalTerminal, context),
+        KeyBinding::new("secondary-shift-l", LockApp, None),
         KeyBinding::new("secondary-alt-s", NewSerialConnection, context),
         KeyBinding::new("secondary-shift-w", CloseTab, context),
         KeyBinding::new("alt-right", NextTab, context),
@@ -75,4 +77,5 @@ pub fn bind_keys(cx: &mut App) {
         ));
     }
     cx.bind_keys(bindings);
+    cx.on_action(super::lock_from_anywhere);
 }

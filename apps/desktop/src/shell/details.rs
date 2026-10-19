@@ -1,6 +1,7 @@
 //! The details panel frame (UI 1.3): the shell owns the container on the
 //! right (380 px, `--width-details`; resizable from 320 to 560 px by
-//! dragging its left edge; it narrows the main area and never overlaps it;
+//! dragging its left edge, but never narrowing the main area below 360 px;
+//! it narrows the main area and never overlaps it;
 //! background `--bg-surface`, audit decision 7), and every object panel
 //! renders [`DetailsHeader`] at its top: the title ("Host details" / "New
 //! host"), the "…" menu with the object's actions and the collapse button.
@@ -34,6 +35,20 @@ pub fn clamp_width(width: Pixels) -> Pixels {
     width
         .max(metrics::WIDTH_DETAILS_MIN)
         .min(metrics::WIDTH_DETAILS_MAX)
+}
+
+/// The narrowest main area next to the panel: its width at the minimum
+/// window (960 px) with the sidebar and the 380 px panel (design-system 6,
+/// lead decision 4).
+pub const MAIN_AREA_MIN: Pixels = gpui::px(360.);
+
+/// The panel width on display: the chosen `width`, narrowed so the main area
+/// keeps [`MAIN_AREA_MIN`] in a `window` px wide window whose sidebar takes
+/// `sidebar` px, but never below `--width-details-min`. The chosen width
+/// comes back when the window grows.
+pub fn fitted_width(width: Pixels, window: Pixels, sidebar: Pixels) -> Pixels {
+    let room = window - sidebar - MAIN_AREA_MIN;
+    clamp_width(width).min(room.max(metrics::WIDTH_DETAILS_MIN))
 }
 
 /// The value dragged by the resize handle.

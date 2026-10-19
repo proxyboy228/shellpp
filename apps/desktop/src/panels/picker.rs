@@ -30,6 +30,55 @@ pub enum PickValue {
     Tag(String),
     /// Create a group (Parent Group) or a tag with the typed name.
     Create(String),
+    /// A credential type of the "+" list (UI 3.1).
+    Credential(CredentialKind),
+    /// A saved identity or key to link.
+    Identity(Uuid),
+    Key(Uuid),
+    /// "New identity": the inline creation form.
+    NewIdentity,
+    /// A charset label (`utf-8` is the default).
+    Charset(String),
+    /// A built-in terminal theme slug.
+    TerminalTheme(String),
+    /// The startup snippet; `None` is "None".
+    Snippet(Option<Uuid>),
+}
+
+/// The credential types of the host panel's "+" (UI 3.1), in menu order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CredentialKind {
+    Identity,
+    Key,
+    Certificate,
+    Fido2,
+}
+
+impl CredentialKind {
+    /// Every type a host can have linked (stored data is always shown).
+    pub const ALL: [Self; 4] = [Self::Identity, Self::Key, Self::Certificate, Self::Fido2];
+    /// The types the "+" offers: a FIDO2 key joins with FIDO2 support (D5)
+    /// and is hidden until then (UI 3.1, section 0).
+    pub const OFFERED: [Self; 3] = [Self::Identity, Self::Key, Self::Certificate];
+
+    /// The id part of elements about this type (`host-cred-key`, ...).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::Key => "key",
+            Self::Certificate => "certificate",
+            Self::Fido2 => "fido2",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Identity => super::strings::CREDENTIAL_IDENTITY,
+            Self::Key => super::strings::CREDENTIAL_KEY,
+            Self::Certificate => super::strings::CREDENTIAL_CERTIFICATE,
+            Self::Fido2 => super::strings::CREDENTIAL_FIDO2,
+        }
+    }
 }
 
 /// One row of a picker.

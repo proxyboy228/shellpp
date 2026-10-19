@@ -10,7 +10,8 @@
 //!   read and write records only through it (there is no IPC layer).
 //! - [`shell`]: title bar, sidebar, "In development" placeholder, toasts.
 //! - [`hosts`]: the Hosts screen. [`panels`]: the host and group panels.
-//! - [`lock`]: minimal first-run and unlock screens.
+//! - [`lock`]: the first-run and unlock screens. [`settings`]: the
+//!   Settings window (Security section).
 //! - [`theme`]: `themes/graphite.json` in gpui-kit's theme registry (dark and
 //!   light), the token mapping and the colors that are not part of gpui-kit's
 //!   `ThemeColor` ([`theme::palette`]).
@@ -36,6 +37,7 @@ pub mod logging;
 pub mod panels;
 pub mod platform;
 pub mod profile;
+pub mod settings;
 pub mod shell;
 pub mod state;
 pub mod testing;

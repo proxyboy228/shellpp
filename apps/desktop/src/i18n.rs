@@ -151,26 +151,11 @@ pub use crate::hosts::strings as hosts;
 /// Host and group panels (UI 1.3, 3): `crate::panels::strings`.
 pub use crate::panels::strings as panels;
 
-/// Lock screens (UI 13.1, 13.2).
-pub mod lock {
-    pub const FIRST_RUN_TITLE: &str = "Create a master password";
-    pub const FIRST_RUN_WARNING: &str = "Without the master password and the recovery key, nobody can recover your data, not even a server administrator.";
-    pub const PASSWORD: &str = "Password";
-    pub const CONFIRM_PASSWORD: &str = "Confirm password";
-    pub const CONTINUE: &str = "Continue";
-    pub const PASSWORDS_DIFFER: &str = "The passwords do not match.";
-    pub const RECOVERY_TITLE: &str = "Save your recovery key";
-    pub const RECOVERY_BODY: &str = "Keep this key somewhere safe. It is the only way back in if you forget the master password.";
-    pub const COPY: &str = "Copy";
-    pub const SAVED_CHECKBOX: &str = "I saved the recovery key";
-    pub const FINISH: &str = "Finish";
-    pub const MASTER_PASSWORD: &str = "Master password";
-    pub const UNLOCK: &str = "Unlock";
-    pub const WRONG_PASSWORD: &str = "Wrong password.";
-    pub const USE_RECOVERY_KEY: &str = "Use recovery key";
-    pub const WORKING: &str = "Please wait…";
-    pub const FAILED: &str = "Something went wrong. Try again.";
-}
+/// Lock screens (UI 13.1-13.3): `crate::lock::strings`.
+pub use crate::lock::strings as lock;
+
+/// Settings window (UI 12.1, 13.4): `crate::settings::strings`.
+pub use crate::settings::strings as settings;
 
 /// Startup failures shown instead of the app.
 pub mod startup {

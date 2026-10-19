@@ -1,39 +1,79 @@
-//! MINIMAL first-run screen (UI 13.1): create the master password, then show
-//! the recovery key until "I saved the recovery key" is checked.
+//! The first-run screen (UI 13.1, decision D29): the app name and one line
+//! about local encrypted storage; "Master password" and "Repeat password"
+//! with a strength indicator (at least 8 characters, no composition rules);
+//! the warning that a forgotten password cannot be recovered; "Remember on
+//! this device" (on by default, shown only with an OS keychain); the accent
+//! button "Create vault", enabled when the password has at least 8
+//! characters and both fields match. The core then unlocks and the root
+//! view shows the Hosts screen in its empty state.
+//!
+//! Messages: "At least 8 characters" under a too short password once the
+//! user moves on (the field loses focus, the second field is used) or tries
+//! to create the vault; "Passwords do not match" under the second field once
+//! it loses focus, as soon as it is as long as the password and differs, or
+//! on an attempt to create the vault (also while it is empty). Enter in
+//! either field does the same as "Create vault".
+//!
+//! The fields are read in place (lengths, comparison); the typed text is
+//! copied only into the `SecretString` for the core and, for the strength
+//! estimate, into a buffer that is wiped when dropped (see [`super`]).
 
 use gpui::{
-    AppContext as _, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Task, Window, div,
-    prelude::*,
+    AppContext as _, ClickEvent, Context, Entity, FocusHandle, IntoElement, ParentElement as _,
+    Render, SharedString, Styled as _, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, v_flex};
-use secrecy::{ExposeSecret as _, SecretString};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, FocusableExt as _, Sizable as _, h_flex, v_flex,
+};
 use shellpp_core::{CoreError, ValidationReason};
 
-use crate::i18n;
+use super::strength::Strength;
+use super::{NoticeKind, error_line, heading, hint_line, notice, password_field, strings};
 use crate::state::AppState;
-use crate::theme::metrics;
+use crate::state::security::ArchivedDataFile;
+use crate::theme::controls::{ButtonColors as _, Filled};
+use crate::theme::focus::FocusRingExt as _;
+use crate::theme::{self, metrics};
 
-/// Emitted when the user finished the recovery key step.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FirstRunEvent {
-    Finished,
-}
+/// The minimum the screen checks before asking the core (which checks the
+/// same rule after NFC normalization).
+const MIN_CHARS: usize = shellpp_core::crypto::MIN_PASSWORD_CHARS;
+/// Width of the strength label, so the bar does not move with the text.
+const STRENGTH_LABEL_WIDTH: gpui::Pixels = px(96.);
 
-enum Step {
-    Password,
-    RecoveryKey { key: SecretString, saved: bool },
+/// What the fields hold, without their text.
+#[derive(Clone, Copy, Debug)]
+struct Fields {
+    password_chars: usize,
+    repeat_chars: usize,
+    matches: bool,
 }
 
 pub struct FirstRunScreen {
     state: Entity<AppState>,
     password: Entity<InputState>,
-    confirm: Entity<InputState>,
-    step: Step,
+    repeat: Entity<InputState>,
+    /// Focus of the screen itself: a click outside the fields takes it, so
+    /// the field loses focus and its message appears.
+    focus: FocusHandle,
+    /// "Remember on this device" (on by default, D29).
+    remember: bool,
+    /// Updated on every change of the first field.
+    strength: Option<Strength>,
+    /// The field lost focus once (or creation was attempted): its message
+    /// may show.
+    password_checked: bool,
+    repeat_checked: bool,
+    /// "Create vault" (or Enter) was refused for invalid fields and nothing
+    /// was typed since: every applicable message shows, also under an empty
+    /// field (UI 13.1).
+    submit_attempted: bool,
+    /// The core refused the password as too short (after NFC).
+    core_too_short: bool,
     busy: bool,
     error: Option<SharedString>,
     work: Option<Task<()>>,
@@ -42,45 +82,62 @@ pub struct FirstRunScreen {
 
 impl std::fmt::Debug for FirstRunScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FirstRunScreen").finish_non_exhaustive()
+        // Never the field contents.
+        f.debug_struct("FirstRunScreen")
+            .field("remember", &self.remember)
+            .field("busy", &self.busy)
+            .finish_non_exhaustive()
     }
 }
 
-impl EventEmitter<FirstRunEvent> for FirstRunScreen {}
-
 impl FirstRunScreen {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let password = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder(i18n::lock::PASSWORD)
-        });
-        let confirm = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder(i18n::lock::CONFIRM_PASSWORD)
-        });
-        let mut subscriptions = Vec::new();
-        for input in [&password, &confirm] {
-            subscriptions.push(cx.subscribe_in(
-                input,
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let repeat = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let subscriptions = vec![
+            cx.subscribe_in(
+                &password,
                 window,
                 |this: &mut Self, _, event: &InputEvent, window, cx| match event {
-                    InputEvent::Change => {
-                        this.error = None;
+                    InputEvent::Change => this.fields_changed(true, cx),
+                    InputEvent::Blur => {
+                        this.password_checked = true;
                         cx.notify();
                     }
                     InputEvent::PressEnter { .. } => this.submit(window, cx),
-                    _ => {}
+                    InputEvent::Focus => {}
                 },
-            ));
-        }
+            ),
+            cx.subscribe_in(
+                &repeat,
+                window,
+                |this: &mut Self, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.fields_changed(false, cx),
+                    InputEvent::Blur => {
+                        this.repeat_checked = true;
+                        cx.notify();
+                    }
+                    InputEvent::PressEnter { .. } => this.submit(window, cx),
+                    // Moving on to the second field checks the first one.
+                    InputEvent::Focus => {
+                        this.password_checked = true;
+                        cx.notify();
+                    }
+                },
+            ),
+        ];
         password.update(cx, |input, cx| input.focus(window, cx));
         Self {
             state,
             password,
-            confirm,
-            step: Step::Password,
+            repeat,
+            focus: cx.focus_handle(),
+            remember: true,
+            strength: None,
+            password_checked: false,
+            repeat_checked: false,
+            submit_attempted: false,
+            core_too_short: false,
             busy: false,
             error: None,
             work: None,
@@ -88,59 +145,124 @@ impl FirstRunScreen {
         }
     }
 
-    /// Whether the screen shows the recovery key step.
-    pub fn is_recovery_step(&self) -> bool {
-        matches!(self.step, Step::RecoveryKey { .. })
+    /// Lengths of both fields and whether they match, read in place from
+    /// the fields' text (no copy of it is made).
+    fn fields(&self, cx: &gpui::App) -> Fields {
+        let password = self.password.read(cx).text();
+        let repeat = self.repeat.read(cx).text();
+        Fields {
+            password_chars: password.len_chars(),
+            repeat_chars: repeat.len_chars(),
+            matches: password == repeat,
+        }
     }
 
-    fn can_continue(&self, cx: &gpui::App) -> bool {
-        let password = self.password.read(cx).value();
-        let confirm = self.confirm.read(cx).value();
-        !self.busy && !password.is_empty() && password == confirm
+    /// After an edit of either field.
+    fn fields_changed(&mut self, password_edited: bool, cx: &mut Context<Self>) {
+        self.submit_attempted = false;
+        if password_edited {
+            self.strength = super::strength_of(self.password.read(cx));
+            self.core_too_short = false;
+        } else {
+            // Typing the second password means the first one is done.
+            self.password_checked = true;
+        }
+        if self.fields(cx).repeat_chars == 0 {
+            self.repeat_checked = false;
+        }
+        self.error = None;
+        cx.notify();
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.step, Step::Password) {
+    /// "Remember on this device" as it will be applied (off without an OS
+    /// keychain).
+    pub fn remember(&self, cx: &gpui::App) -> bool {
+        self.remember && self.state.read(cx).remember_available()
+    }
+
+    pub fn set_remember(&mut self, remember: bool, cx: &mut Context<Self>) {
+        self.remember = remember;
+        cx.notify();
+    }
+
+    /// The strength of the typed password (`None` while empty).
+    pub fn strength(&self) -> Option<Strength> {
+        self.strength
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
+    /// The message under the first field, if any.
+    pub fn password_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        let fields = self.fields(cx);
+        let short = fields.password_chars < MIN_CHARS;
+        let shown = (self.password_checked && short && fields.password_chars > 0)
+            || (self.submit_attempted && short)
+            || self.core_too_short;
+        shown.then_some(strings::TOO_SHORT)
+    }
+
+    /// The message under the second field, if any.
+    pub fn repeat_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        let fields = self.fields(cx);
+        let differs = !fields.matches;
+        let shown = (differs
+            && fields.repeat_chars > 0
+            && (self.repeat_checked || fields.repeat_chars >= fields.password_chars))
+            || (differs && self.submit_attempted);
+        shown.then_some(strings::PASSWORDS_DIFFER)
+    }
+
+    /// "Create vault" is enabled: at least 8 characters, both fields match.
+    pub fn can_create(&self, cx: &gpui::App) -> bool {
+        let fields = self.fields(cx);
+        !self.busy && fields.password_chars >= MIN_CHARS && fields.matches
+    }
+
+    /// "Create vault" (also Enter). With invalid fields it only shows why.
+    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
             return;
         }
-        if !self.can_continue(cx) {
-            let differ = self.password.read(cx).value() != self.confirm.read(cx).value();
-            if differ {
-                self.error = Some(i18n::lock::PASSWORDS_DIFFER.into());
-                cx.notify();
-            }
+        if !self.can_create(cx) {
+            self.password_checked = true;
+            self.repeat_checked = true;
+            self.submit_attempted = true;
+            cx.notify();
             return;
         }
-        let password = SecretString::from(self.password.read(cx).value().to_string());
-        for input in [&self.password, &self.confirm] {
+        self.submit_attempted = false;
+        let password = super::secret_text(self.password.read(cx));
+        for input in [&self.password, &self.repeat] {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.busy = true;
         self.error = None;
-        let setup = self
+        let remember = self.remember(cx);
+        let create = self
             .state
-            .update(cx, |state, cx| state.first_run_setup(password, cx));
-        self.work = Some(cx.spawn(async move |this, cx| {
-            let result = setup.await;
-            let _ = this.update(cx, |this, cx| {
+            .update(cx, |state, cx| state.create_vault(password, remember, cx));
+        self.work = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = create.await;
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.busy = false;
                 match result {
-                    Ok(result) => {
-                        this.step = Step::RecoveryKey {
-                            key: result.recovery_key,
-                            saved: false,
-                        };
-                    }
+                    // The root view replaces this screen with the shell.
+                    Ok(_) => {}
                     Err(CoreError::Validation(fields))
                         if fields
                             .iter()
                             .any(|field| field.reason == ValidationReason::TooShort) =>
                     {
-                        this.error = Some("The master password is too short.".into());
+                        this.core_too_short = true;
+                        this.password
+                            .update(cx, |input, cx| input.focus(window, cx));
                     }
                     Err(error) => {
                         tracing::warn!(code = error.code(), "first run failed");
-                        this.error = Some(i18n::lock::FAILED.into());
+                        this.error = Some(strings::FAILED.into());
                     }
                 }
                 cx.notify();
@@ -149,129 +271,160 @@ impl FirstRunScreen {
         cx.notify();
     }
 
-    fn render_password_step(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_strength(&self, cx: &gpui::App) -> impl IntoElement {
         let theme = cx.theme();
-        v_flex()
-            .gap(metrics::SPACE_3)
+        let track = theme::tokens(cx).border_subtle.hsla();
+        let (filled, color) = match self.strength {
+            None => (0, track),
+            Some(level) => (
+                level.segments(),
+                match level {
+                    Strength::Weak => theme.danger,
+                    Strength::Fair => theme.warning,
+                    Strength::Good | Strength::Strong => theme.success,
+                },
+            ),
+        };
+        h_flex()
+            .id("first-run-strength")
+            .test_support()
+            .w_full()
+            .items_center()
+            .gap(metrics::SPACE_2)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .gap(metrics::SPACE_1)
+                    .children((0..4).map(|index| {
+                        div()
+                            .flex_1()
+                            .h(metrics::SPACE_1)
+                            .rounded_full()
+                            .bg(if index < filled { color } else { track })
+                    })),
+            )
             .child(
                 div()
-                    .text_size(metrics::FONT_SIZE_TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(i18n::lock::FIRST_RUN_TITLE),
-            )
-            // Always shown, not dismissible (UI 13.1).
-            .child(
-                div()
-                    .id("first-run-warning")
-                    .test_support()
-                    .text_color(theme.warning)
-                    .child(i18n::lock::FIRST_RUN_WARNING),
-            )
-            .child(
-                Input::new(&self.password)
-                    .id("first-run-password")
-                    .mask_toggle(),
-            )
-            .child(
-                Input::new(&self.confirm)
-                    .id("first-run-confirm")
-                    .mask_toggle(),
-            )
-            .when_some(self.error.clone(), |this, error| {
-                this.child(div().text_color(theme.danger).child(error))
-            })
-            .child(
-                Button::new("first-run-continue")
-                    .primary()
-                    .label(if self.busy {
-                        i18n::lock::WORKING
-                    } else {
-                        i18n::lock::CONTINUE
-                    })
-                    .disabled(!self.can_continue(cx))
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)),
+                    .flex_none()
+                    .w(STRENGTH_LABEL_WIDTH)
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        self.strength
+                            .map(|level| strings::strength_label(level.label()))
+                            .unwrap_or_default(),
                     ),
             )
     }
 
-    fn render_recovery_step(
-        &self,
-        key: &str,
-        saved: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render_remember(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .gap(metrics::SPACE_3)
+            .id("first-run-remember-block")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_1)
             .child(
-                div()
-                    .text_size(metrics::FONT_SIZE_TITLE)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(i18n::lock::RECOVERY_TITLE),
-            )
-            .child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child(i18n::lock::RECOVERY_BODY),
-            )
-            .child(
-                div()
-                    .id("recovery-key")
-                    .test_support()
-                    .p(metrics::SPACE_3)
-                    .rounded(metrics::RADIUS_CONTROL)
-                    .bg(theme.background)
-                    .font_family(theme.mono_font_family.clone())
-                    .child(key.to_owned()),
-            )
-            .child(
-                Button::new("recovery-copy")
-                    .outline()
-                    .label(i18n::lock::COPY)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        // The core copies it and clears the clipboard after 30 s.
-                        if let Err(error) = this.state.read(cx).copy_recovery_key() {
-                            tracing::warn!(code = error.code(), "recovery key not copied");
-                        }
-                    })),
-            )
-            .child(
-                Checkbox::new("recovery-saved")
-                    .label(i18n::lock::SAVED_CHECKBOX)
-                    .checked(saved)
+                Switch::new("first-run-remember")
+                    .checked(self.remember)
+                    .label(strings::REMEMBER_DEVICE)
+                    .disabled(self.busy)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        if let Step::RecoveryKey { saved, .. } = &mut this.step {
-                            *saved = *checked;
-                        }
-                        cx.notify();
+                        this.set_remember(*checked, cx);
                     })),
             )
-            .child(
-                Button::new("first-run-finish")
-                    .primary()
-                    .label(i18n::lock::FINISH)
-                    .disabled(!saved)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        if let Step::RecoveryKey { saved: true, .. } = this.step {
-                            cx.emit(FirstRunEvent::Finished);
-                        }
-                    })),
-            )
+            .child(hint_line(
+                "first-run-remember-hint",
+                strings::REMEMBER_DEVICE_HINT,
+                cx,
+            ))
     }
 }
 
 impl Render for FirstRunScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = match &self.step {
-            Step::Password => self.render_password_step(cx).into_any_element(),
-            Step::RecoveryKey { key, saved } => {
-                let key = key.expose_secret().to_owned();
-                let saved = *saved;
-                self.render_recovery_step(&key, saved, cx)
-                    .into_any_element()
-            }
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let surface = cx.theme().secondary;
+        let archived = ArchivedDataFile::get(cx);
+        let available = self.state.read(cx).remember_available();
+        let enabled = self.can_create(cx);
+        let password_error = self.password_error(cx);
+        let repeat_error = self.repeat_error(cx);
+        let password_below = match password_error {
+            Some(error) => error_line("first-run-password-error", error, cx),
+            None => hint_line("first-run-min-length", strings::TOO_SHORT, cx),
         };
-        super::frame("first-run", content, cx)
+        let create = Button::new("first-run-create")
+            .accent_colors()
+            .large()
+            .w_full()
+            .h(metrics::HEIGHT_CONTROL)
+            .rounded(metrics::RADIUS_CONTROL)
+            .label(if self.busy {
+                strings::WORKING
+            } else {
+                strings::CREATE_VAULT
+            })
+            .focus_ring(false)
+            .focus_ring_visible(surface, cx)
+            .disabled_as_designed(!enabled, Filled::Accent, cx)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)));
+        let content = v_flex()
+            .id("first-run-form")
+            .w_full()
+            // 12 px between the blocks: the card fits a 960 x 600 window.
+            .gap(metrics::SPACE_3)
+            // A click outside the fields takes the focus from them, so their
+            // messages appear (UI 13.1).
+            .track_focus(&self.focus)
+            .child(heading(strings::FIRST_RUN_TAGLINE, cx))
+            .when_some(archived, |this, name| {
+                this.child(notice(
+                    "first-run-archived",
+                    NoticeKind::Info,
+                    strings::archived_note(&name),
+                    cx,
+                ))
+            })
+            .child(
+                password_field(
+                    strings::MASTER_PASSWORD,
+                    &self.password,
+                    "first-run-password",
+                    password_error.is_some(),
+                    self.busy,
+                    window,
+                    cx,
+                )
+                .child(self.render_strength(cx))
+                .child(password_below),
+            )
+            .child(
+                password_field(
+                    strings::REPEAT_PASSWORD,
+                    &self.repeat,
+                    "first-run-repeat",
+                    repeat_error.is_some(),
+                    self.busy,
+                    window,
+                    cx,
+                )
+                .children(
+                    repeat_error.map(|error| error_line("first-run-repeat-error", error, cx)),
+                ),
+            )
+            // Always shown, not dismissible (UI 13.1).
+            .child(notice(
+                "first-run-warning",
+                NoticeKind::Warning,
+                strings::FIRST_RUN_WARNING,
+                cx,
+            ))
+            .when(available, |this| this.child(self.render_remember(cx)))
+            .children(
+                self.error
+                    .clone()
+                    .map(|error| error_line("first-run-error", error, cx)),
+            )
+            .child(create);
+        super::frame("first-run", content, None, cx)
     }
 }

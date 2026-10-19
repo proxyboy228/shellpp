@@ -511,3 +511,101 @@ pub(crate) fn inline_row(
 pub(crate) fn divider(cx: &App) -> Div {
     div().w_full().h(px(1.)).bg(cx.theme().border)
 }
+
+/// A framed area inside a block for an inline form (the "+" forms of the
+/// SSH block): 1 px `--border-strong`, radius 6, 12 px padding, 8 px gaps.
+pub(crate) fn inset(id: impl Into<ElementId>, cx: &App) -> Hit {
+    hit(id)
+        .w_full()
+        .flex()
+        .flex_col()
+        .p(metrics::SPACE_3)
+        .gap(metrics::SPACE_2)
+        .rounded(metrics::RADIUS_CONTROL)
+        .border_1()
+        .border_color(cx.theme().input)
+}
+
+/// A linked item (identity, key, certificate): a muted icon, the type as a
+/// caption over the name, and a remove button on the right.
+pub(crate) fn linked_row(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    kind: &'static str,
+    name: impl Into<SharedString>,
+    remove: impl IntoElement,
+    cx: &App,
+) -> Hit {
+    let theme = cx.theme();
+    hit(id)
+        .w_full()
+        .min_h(metrics::HEIGHT_CONTROL)
+        .px(metrics::SPACE_2)
+        .flex()
+        .items_center()
+        .gap(metrics::SPACE_2)
+        .rounded(metrics::RADIUS_CONTROL)
+        .border_1()
+        .border_color(theme.input)
+        .child(
+            Icon::new(icon)
+                .small()
+                .flex_none()
+                .text_color(theme.muted_foreground),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .py(metrics::SPACE_1)
+                .child(
+                    div()
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .text_color(theme.muted_foreground)
+                        .child(kind),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(metrics::FONT_SIZE_BODY)
+                        .text_color(theme.foreground)
+                        .child(name.into()),
+                ),
+        )
+        .child(remove)
+}
+
+/// A neutral compact button for inline forms (Create, Import, Attach):
+/// 32 px, 1 px `--border-strong`, hover of buttons; disabled at 0.45.
+pub(crate) fn form_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    enabled: bool,
+    cx: &App,
+) -> Hit {
+    let theme = cx.theme();
+    let hover = theme.secondary_hover;
+    let pressed = theme.secondary_active;
+    hit(id)
+        .flex_none()
+        .h(px(32.))
+        .px(metrics::SPACE_3)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(metrics::RADIUS_CONTROL)
+        .border_1()
+        .border_color(theme.input)
+        .text_size(metrics::FONT_SIZE_BODY)
+        .text_color(theme.foreground)
+        .map(|this| {
+            if enabled {
+                this.cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(pressed))
+            } else {
+                this.opacity(metrics::OPACITY_DISABLED)
+            }
+        })
+        .child(label.into())
+}

@@ -1,6 +1,6 @@
 //! Pure layout and text logic of the Hosts screen (unit-tested without a
-//! window): grid columns, card width, keyboard navigation, the card subtitle
-//! and the tile icon.
+//! window): grid columns, card width, the action bar at narrow widths,
+//! keyboard navigation, the card subtitle and the tile icon.
 
 use gpui_kit::assets::IconName;
 
@@ -28,6 +28,111 @@ pub fn card_width(width: f32, columns: usize) -> f32 {
     let gap = metrics::HOST_CARD_GAP.as_f32();
     let card = (width - (columns - 1.) * gap) / columns;
     card.min(metrics::HOST_CARD_MAX_WIDTH.as_f32()).max(0.)
+}
+
+/// How the buttons on the left of the action bar show their labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarLabels {
+    /// New host, Terminal and Serial with icon and label.
+    Full,
+    /// Terminal and Serial as icon buttons (their names in tooltips).
+    LocalIcons,
+    /// New host too (the narrowest).
+    Icons,
+}
+
+impl BarLabels {
+    /// Widest first.
+    pub const ALL: [Self; 3] = [Self::Full, Self::LocalIcons, Self::Icons];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Full => 0,
+            Self::LocalIcons => 1,
+            Self::Icons => 2,
+        }
+    }
+}
+
+/// The widths the action bar is planned from (pixels).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarMeasure {
+    /// The width of the bar.
+    pub available: f32,
+    /// The left group (split New host, Terminal, Serial) for each of
+    /// [`BarLabels::ALL`].
+    pub left: [f32; 3],
+    /// The right group without chips: the view toggle, the tag button, the
+    /// sort button and the gaps between them.
+    pub right: f32,
+    /// The chips of the tags that are on, in order.
+    pub chips: Vec<f32>,
+    /// The gap between the groups and before the chips.
+    pub gap: f32,
+    /// The gap between two chips.
+    pub chip_gap: f32,
+}
+
+/// How the action bar is laid out (owner's step 1.4, lead decision 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BarPlan {
+    pub labels: BarLabels,
+    /// The right group (view, tags, sort) moved to a second row.
+    pub wrapped: bool,
+    /// How many tag chips show; the rest are in the "+N" chip.
+    pub chips: usize,
+}
+
+/// Plans the action bar so nothing overlaps or is clipped: one row with
+/// every label while it fits (the tag chips collapse into "+N" first), then
+/// Terminal and Serial as icons, then New host as an icon too; when even
+/// that does not fit, the right group wraps to a second row, and the left
+/// group keeps the widest labels that fit its row. `more(n)` is the width of
+/// the "+n" chip.
+pub fn plan_action_bar(measure: &BarMeasure, more: impl Fn(usize) -> f32) -> BarPlan {
+    use super::tag_filter::{chips_room, chips_that_fit};
+    let BarMeasure {
+        available,
+        left,
+        right,
+        chips,
+        gap,
+        chip_gap,
+    } = measure;
+    // With a tag on, at least its "+N" chip must fit.
+    let least_chips = chips_room(chips, 0, *gap, *chip_gap, &more);
+    for labels in BarLabels::ALL {
+        let room = available - left[labels.index()] - gap - right;
+        if room + 0.5 >= least_chips {
+            return BarPlan {
+                labels,
+                wrapped: false,
+                chips: chips_that_fit(chips, room, *gap, *chip_gap, &more),
+            };
+        }
+    }
+    let labels = BarLabels::ALL
+        .into_iter()
+        .find(|labels| left[labels.index()] <= available + 0.5)
+        .unwrap_or(BarLabels::Icons);
+    BarPlan {
+        labels,
+        wrapped: true,
+        chips: chips_that_fit(chips, available - right, *gap, *chip_gap, &more),
+    }
+}
+
+/// The search bar's hint that fits `available` px of text (UI 2.1, lead
+/// decision 4: nothing is cut off at the minimum window): the full hint,
+/// else the short one, else "Search". `width(text)` measures a hint.
+pub fn search_placeholder(available: f32, width: impl Fn(&str) -> f32) -> &'static str {
+    [
+        strings::SEARCH_PLACEHOLDER,
+        strings::SEARCH_PLACEHOLDER_SHORT,
+    ]
+    .into_iter()
+    .find(|text| width(text) <= available + 0.5)
+    .unwrap_or(strings::SEARCH_PLACEHOLDER_SHORTEST)
 }
 
 /// Case-insensitive match of the search text against the label, address,
@@ -83,10 +188,14 @@ pub fn arrow_target(
     Some(target.unwrap_or(current))
 }
 
-/// The card subtitle (UI 2.3): protocol(s), the username, then the group
-/// or, without a group, the tags; comma-separated.
+/// The card subtitle (UI 2.3): protocol(s) (SSH, then Telnet when the
+/// host has a Telnet block), the username, then the group or, without a
+/// group, the tags; comma-separated.
 pub fn subtitle(host: &HostItem, group_name: Option<&str>) -> String {
     let mut parts: Vec<&str> = vec![strings::PROTOCOL_SSH];
+    if host.has_telnet() {
+        parts.push(strings::PROTOCOL_TELNET);
+    }
     if let Some(user) = host.username.as_deref() {
         parts.push(user);
     }
@@ -138,6 +247,92 @@ mod tests {
     }
 
     #[test]
+    fn the_search_hint_shortens_instead_of_being_cut() {
+        // 7 px per character.
+        let width = |text: &str| text.chars().count() as f32 * 7.;
+        assert_eq!(search_placeholder(400., width), strings::SEARCH_PLACEHOLDER);
+        assert_eq!(
+            search_placeholder(200., width),
+            strings::SEARCH_PLACEHOLDER_SHORT
+        );
+        assert_eq!(
+            search_placeholder(60., width),
+            strings::SEARCH_PLACEHOLDER_SHORTEST
+        );
+    }
+
+    #[test]
+    fn the_action_bar_collapses_labels_then_wraps() {
+        let measure = |available: f32, chips: Vec<f32>| BarMeasure {
+            available,
+            left: [355., 233., 161.],
+            right: 164.,
+            chips,
+            gap: 8.,
+            chip_gap: 4.,
+        };
+        let more = |_: usize| 40.;
+        // 960 px window, no details panel (740 - 48): one row, full labels,
+        // both chips (8 + 60 + 4 + 70 = 142 <= 692 - 355 - 8 - 164 = 165).
+        assert_eq!(
+            plan_action_bar(&measure(692., vec![60., 70.]), more),
+            BarPlan {
+                labels: BarLabels::Full,
+                wrapped: false,
+                chips: 2
+            }
+        );
+        // Less room: the chips collapse before any label does.
+        assert_eq!(
+            plan_action_bar(&measure(600., vec![60., 70.]), more),
+            BarPlan {
+                labels: BarLabels::Full,
+                wrapped: false,
+                chips: 0
+            }
+        );
+        // Then Terminal and Serial lose their labels.
+        assert_eq!(
+            plan_action_bar(&measure(450., vec![]), more).labels,
+            BarLabels::LocalIcons
+        );
+        assert_eq!(
+            plan_action_bar(&measure(340., vec![]), more),
+            BarPlan {
+                labels: BarLabels::Icons,
+                wrapped: false,
+                chips: 0
+            }
+        );
+        // 960 px window with the 380 px panel (360 - 48): two rows; the left
+        // row keeps the widest labels that fit it.
+        assert_eq!(
+            plan_action_bar(&measure(312., vec![60., 70., 80.]), more),
+            BarPlan {
+                labels: BarLabels::LocalIcons,
+                wrapped: true,
+                chips: 1
+            }
+        );
+        // Every planned row fits its width.
+        for available in [200., 260., 312., 400., 500., 692., 1000.] {
+            for chips in [vec![], vec![50.], vec![50., 60., 70., 80.]] {
+                let m = measure(available, chips.clone());
+                let plan = plan_action_bar(&m, more);
+                let left = m.left[plan.labels.index()];
+                let right = m.right
+                    + crate::hosts::tag_filter::chips_room(&chips, plan.chips, 8., 4., more);
+                if plan.wrapped {
+                    assert!(left <= available.max(161.), "{available} {plan:?}");
+                    assert!(right <= available.max(164. + 48.), "{available} {plan:?}");
+                } else {
+                    assert!(left + 8. + right <= available + 0.5, "{available} {plan:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn arrows_move_across_the_grid() {
         assert_eq!(arrow_target(None, 0, 4, Arrow::Down), None);
         assert_eq!(arrow_target(None, 9, 4, Arrow::Down), Some(0));
@@ -175,6 +370,15 @@ mod tests {
         };
         assert_eq!(subtitle(&host, None), "SSH, root, prod, db");
         assert_eq!(subtitle(&host, Some("Production")), "SSH, root, Production");
+        // Add Telnet saves a `telnet` block: the card lists both protocols.
+        host.data = serde_json::json!({"address": "db.lan", "telnet": {"port": 2323}});
+        assert_eq!(
+            subtitle(&host, Some("Production")),
+            "SSH, Telnet, root, Production"
+        );
+        host.data = serde_json::json!({"address": "db.lan", "telnet": {}});
+        assert_eq!(subtitle(&host, None), "SSH, Telnet, root, prod, db");
+        host.data = Value::Null;
         host.username = None;
         host.tags.clear();
         assert_eq!(subtitle(&host, None), "SSH");

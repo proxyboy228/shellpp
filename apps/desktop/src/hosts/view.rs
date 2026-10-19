@@ -1,18 +1,28 @@
-//! Rendering of the Hosts screen: search bar, action bar, breadcrumbs, the
-//! card grid or list, the empty states and the drag preview.
+//! Rendering of the Hosts screen: search bar, action bar (with the tag
+//! filter), breadcrumbs, the card grid or list, the empty states and the
+//! drag preview.
+//!
+//! Narrow windows (owner's step 1.4): the action bar is planned from the
+//! widths of its parts, measured with the window's text system
+//! ([`layout::plan_action_bar`]): the tag chips collapse into "+N" first,
+//! then Terminal and Serial, then New host lose their labels, and at last
+//! the right group wraps to a second row. Breadcrumbs truncate, the empty
+//! state's buttons wrap, and cards narrow below 240 px only when the content
+//! area itself is narrower.
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, fill,
-    linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, ClickEvent, Context, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, TextRun, Window, canvas, div,
+    prelude::FluentBuilder as _, px, size,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
@@ -22,10 +32,11 @@ use shellpp_core::service::dto::TagColor;
 use uuid::Uuid;
 
 use super::controls::{self, ControlButton, ControlKind, ICON_SIZE};
+use super::layout::{BarLabels, BarMeasure, BarPlan};
 use super::menu::{self, CommandHandler};
 use super::{
     DraggedCards, HostsEvent, HostsScreen, Row, SessionKind, group_card_id, host_card_id, layout,
-    strings, tag_chip_id,
+    strings, tag_chip_id, tag_filter,
 };
 use crate::state::hosts_view::{HostsLayout, HostsSort};
 use crate::theme::{self, metrics, palette};
@@ -38,6 +49,31 @@ const CONTENT_PADDING: gpui::Pixels = metrics::SPACE_5;
 const LIST_TILE_SIZE: gpui::Pixels = px(28.);
 /// Height of the Connect button inside the 36 px search field.
 const INNER_BUTTON_HEIGHT: gpui::Pixels = px(28.);
+/// What a 36 px control button adds around its label: the 12 px padding on
+/// both sides, the 16 px icon and the 8 px gap (`controls::ControlButton`).
+const LABEL_BUTTON_EXTRA: f32 = 48.;
+/// The kit input's right padding (medium size): the search hint ends before it.
+const SEARCH_INPUT_PAD_RIGHT: f32 = 10.;
+
+/// The width of `text` in the window's current font with 2 % and a pixel to
+/// spare (it plans the action bar, so it errs on the wide side).
+fn text_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> f32 {
+    if text.is_empty() {
+        return 0.;
+    }
+    let mut font = window.text_style().font();
+    font.weight = weight;
+    let run = TextRun {
+        len: text.len(),
+        font,
+        ..Default::default()
+    };
+    let line =
+        window
+            .text_system()
+            .shape_line(SharedString::from(text.to_owned()), size, &[run], None);
+    (line.width().as_f32() * 1.02).ceil() + 1.
+}
 
 /// The floating label under the pointer while cards are dragged.
 pub(super) struct DragPreview {
@@ -82,6 +118,17 @@ impl HostsScreen {
     // -- Search bar (UI 2.1) --------------------------------------------------------
 
     fn render_search(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A hint that fits the measured text area (lead decision 4).
+        if let Some(area) = self.search_text_width {
+            let available = area - SEARCH_INPUT_PAD_RIGHT;
+            let hint = layout::search_placeholder(available, |text| {
+                text_width(window, text, metrics::FONT_SIZE_BODY, FontWeight::NORMAL)
+            });
+            if self.search.read(cx).presentation().placeholder().as_ref() != hint {
+                self.search
+                    .update(cx, |search, cx| search.set_placeholder(hint, window, cx));
+            }
+        }
         let theme = cx.theme();
         let tokens = theme::tokens(cx);
         let focused = self.search_focused(window, cx);
@@ -100,6 +147,24 @@ impl HostsScreen {
         .on_click(
             cx.listener(|this, _: &ClickEvent, window, cx| this.connect_from_search(window, cx)),
         );
+        let screen = cx.entity().downgrade();
+        let measure_text = canvas(
+            move |bounds, _, cx| {
+                let width = bounds.size.width.as_f32();
+                let _ = screen.update(cx, |screen, cx| {
+                    if screen
+                        .search_text_width
+                        .is_none_or(|measured| (measured - width).abs() >= 0.5)
+                    {
+                        screen.search_text_width = Some(width);
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         h_flex()
             .id("search-field")
             .test_support()
@@ -128,6 +193,7 @@ impl HostsScreen {
                     .relative()
                     .flex_1()
                     .min_w_0()
+                    .child(measure_text)
                     .child(theme::controls::muted_placeholder(&self.search, cx))
                     .child(
                         // `pl_0`: the kit pads a single-line input by 10 px,
@@ -149,12 +215,111 @@ impl HostsScreen {
 
     // -- Action bar (UI 2.2) -----------------------------------------------------------
 
-    fn render_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The display spelling of a tag that is on (`key` is lower case).
+    fn tag_name(&self, key: &str) -> String {
+        self.tag_options
+            .iter()
+            .find(|option| option.key() == key)
+            .map(|option| option.name.clone())
+            .unwrap_or_else(|| key.to_owned())
+    }
+
+    /// The widths the action bar is planned from.
+    fn measure_action_bar(&self, available: f32, window: &Window) -> BarMeasure {
+        let label = |text: &str| {
+            text_width(window, text, metrics::FONT_SIZE_BODY, FontWeight::MEDIUM)
+                + LABEL_BUTTON_EXTRA
+        };
+        let icon = metrics::HEIGHT_CONTROL.as_f32();
+        let gap = metrics::SPACE_2.as_f32();
+        // The split button: New host, the 1 px divider, the arrow.
+        let split = |new_host: f32| new_host + 1. + icon;
+        let new_host = label(strings::NEW_HOST);
+        let left = [
+            split(new_host) + gap + label(strings::TERMINAL) + gap + label(strings::SERIAL),
+            split(new_host) + gap + icon + gap + icon,
+            split(icon) + gap + icon + gap + icon,
+        ];
+        // View toggle (two buttons 4 px apart), tag button, sort.
+        let right = (icon * 2. + metrics::SPACE_1.as_f32()) + gap + icon + gap + icon;
+        let chips = self
+            .filter
+            .tags()
+            .iter()
+            .map(|key| {
+                tag_filter::selected_chip_width(text_width(
+                    window,
+                    &self.tag_name(key),
+                    metrics::FONT_SIZE_CAPTION,
+                    FontWeight::NORMAL,
+                ))
+            })
+            .collect();
+        BarMeasure {
+            available,
+            left,
+            right,
+            chips,
+            gap,
+            chip_gap: metrics::SPACE_1.as_f32(),
+        }
+    }
+
+    fn render_action_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let measure = self.measure_action_bar(self.inner_width(window), window);
+        let plan = layout::plan_action_bar(&measure, |hidden| {
+            tag_filter::more_chip_width(text_width(
+                window,
+                &strings::more_tags(hidden),
+                metrics::FONT_SIZE_CAPTION,
+                FontWeight::NORMAL,
+            ))
+        });
+        self.bar_plan = Some(plan);
+
+        let left = self.render_bar_left(plan, cx).into_any_element();
+        let right = h_flex()
+            .id("action-bar-right")
+            .test_support()
+            .flex_none()
+            .items_center()
+            .gap(metrics::SPACE_2)
+            .child(self.render_view_toggle(cx))
+            .child(self.render_tag_filter(cx))
+            .children(self.render_tag_chips(plan, cx))
+            .child(self.render_sort_menu(cx));
+        if plan.wrapped {
+            v_flex()
+                .id("action-bar")
+                .test_support()
+                .w_full()
+                .gap(metrics::SPACE_2)
+                .child(left)
+                .child(h_flex().w_full().justify_end().child(right))
+                .into_any_element()
+        } else {
+            h_flex()
+                .id("action-bar")
+                .test_support()
+                .w_full()
+                .child(left)
+                .child(div().flex_1().min_w(metrics::SPACE_2))
+                .child(right)
+                .into_any_element()
+        }
+    }
+
+    /// Split New host (▾: New Group, Import), Terminal, Serial; labels as
+    /// the plan allows (icon buttons carry their names as tooltips).
+    fn render_bar_left(&self, plan: BarPlan, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
         let new_host = ControlButton::new("new-host", ControlKind::Neutral)
             .icon(Lucide::Plus)
-            .label(strings::NEW_HOST)
+            .map(|button| match plan.labels {
+                BarLabels::Icons => button.tooltip(strings::NEW_HOST),
+                BarLabels::Full | BarLabels::LocalIcons => button.label(strings::NEW_HOST),
+            })
             .rounded_sides(true, false)
             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(HostsEvent::NewHost)));
         let new_host_menu = ControlButton::new("new-host-menu", ControlKind::Neutral)
@@ -192,31 +357,39 @@ impl HostsScreen {
             .child(new_host)
             .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
             .child(new_host_menu);
+        let local_labels = plan.labels == BarLabels::Full;
         let terminal = ControlButton::new("terminal", ControlKind::Neutral)
             .icon(Lucide::SquareTerminal)
-            .label(strings::TERMINAL)
+            .map(|button| {
+                if local_labels {
+                    button.label(strings::TERMINAL)
+                } else {
+                    button.tooltip(strings::TERMINAL)
+                }
+            })
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.open_local(SessionKind::Terminal, cx)
             }));
         let serial = ControlButton::new("serial", ControlKind::Neutral)
             .icon(Lucide::Usb)
-            .label(strings::SERIAL)
+            .map(|button| {
+                if local_labels {
+                    button.label(strings::SERIAL)
+                } else {
+                    button.tooltip(strings::SERIAL)
+                }
+            })
             .on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| this.open_local(SessionKind::Serial, cx)),
             );
-
         h_flex()
-            .id("action-bar")
+            .id("action-bar-left")
             .test_support()
-            .w_full()
+            .flex_none()
             .gap(metrics::SPACE_2)
             .child(split)
             .child(terminal)
             .child(serial)
-            .child(div().flex_1().min_w(metrics::SPACE_2))
-            .child(self.render_view_toggle(cx))
-            .children(self.render_tag_chips(cx))
-            .child(self.render_sort_menu(cx))
     }
 
     fn render_view_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -246,41 +419,62 @@ impl HostsScreen {
             ))
     }
 
-    /// The tag filter (UI 2.2, design-system 3.4): one chip per tag, the
-    /// active ones filled; the strip scrolls sideways when it is too long.
-    fn render_tag_chips(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if self.tags.is_empty() {
+    /// The tag filter (UI 2.2, lead decision 5): the tag button opens the
+    /// dropdown (`tag_filter::TagFilterMenu`); it shows the active state
+    /// while any tag is on.
+    fn render_tag_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let screen = cx.entity().downgrade();
+        let menu = self.tag_menu.clone();
+        let focus = self.tag_menu.read(cx).focus_handle(cx);
+        let active = !self.filter.tags().is_empty();
+        Popover::new("tag-filter-popover")
+            .anchor(gpui::Anchor::TopRight)
+            .trigger(
+                ControlButton::new("tag-filter", ControlKind::Ghost)
+                    .icon(Lucide::Tag)
+                    .tooltip(strings::TAG_FILTER)
+                    .selected(active),
+            )
+            .open(self.tag_menu_open)
+            .on_open_change(move |open, window, cx| {
+                let open = *open;
+                let _ = screen.update(cx, |screen, cx| screen.set_tag_menu_open(open, window, cx));
+            })
+            .track_focus(&focus)
+            .p(metrics::SPACE_2)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .shadow(theme::shadow_overlay(cx))
+            .content(move |_, _, _| menu.clone())
+    }
+
+    /// The chips of the tags that are on, then "+N" for the ones that did
+    /// not fit (it opens the dropdown). A chip's click turns its tag off.
+    fn render_tag_chips(&self, plan: BarPlan, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let selected = self.filter.tags();
+        if selected.is_empty() {
             return None;
         }
-        let chips = self.tags.iter().map(|tag| {
-            let active = self.filter.has_tag(tag);
-            let tag = tag.clone();
-            controls::tag_chip(tag_chip_id(&tag), tag.clone(), active, cx)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_tag(&tag, cx)))
+        let shown = plan.chips.min(selected.len());
+        let chips = selected[..shown].iter().map(|key| {
+            let key = key.clone();
+            tag_filter::selected_chip(tag_chip_id(&key), self.tag_name(&key), cx)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_tag(&key, cx)))
         });
-        let strip = h_flex()
-            .id("tag-filter")
-            .test_support()
-            .flex_1()
-            .min_w_0()
-            .overflow_x_scroll()
-            .track_scroll(&self.tag_scroll)
-            .gap(metrics::SPACE_1)
-            .child(
-                Icon::new(Lucide::Tag)
-                    .with_size(ICON_SIZE)
-                    .text_color(cx.theme().muted_foreground)
-                    .flex_none(),
-            )
-            .children(chips);
-        // No fixed cap: the strip takes the room the action bar has left
-        // and only scrolls (with edge fades) when that room runs out.
+        let hidden = selected.len() - shown;
+        let more = (hidden > 0).then(|| {
+            tag_filter::more_chip(hidden, cx).on_click(cx.listener(
+                |this, _: &ClickEvent, window, cx| this.set_tag_menu_open(true, window, cx),
+            ))
+        });
         Some(
             h_flex()
-                .relative()
-                .min_w_0()
-                .child(strip)
-                .child(tag_strip_fades(self.tag_scroll.clone(), cx)),
+                .id("tag-chips")
+                .test_support()
+                .flex_none()
+                .items_center()
+                .gap(metrics::SPACE_1)
+                .children(chips)
+                .children(more),
         )
     }
 
@@ -339,6 +533,8 @@ impl HostsScreen {
             div()
                 .id(id)
                 .test_support()
+                .min_w_0()
+                .truncate()
                 .px(metrics::SPACE_1)
                 .rounded(metrics::RADIUS_CONTROL)
                 .cursor_pointer()
@@ -360,6 +556,9 @@ impl HostsScreen {
         let mut crumbs = h_flex()
             .id("breadcrumbs")
             .test_support()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .pl(CONTENT_PADDING - metrics::SPACE_1)
             .pr(CONTENT_PADDING)
             .pb(metrics::SPACE_2)
@@ -369,6 +568,7 @@ impl HostsScreen {
         for (index, (id, name)) in path.into_iter().enumerate() {
             crumbs = crumbs.child(
                 div()
+                    .flex_none()
                     .text_color(secondary)
                     .child(strings::BREADCRUMB_SEPARATOR),
             );
@@ -377,6 +577,8 @@ impl HostsScreen {
                 div()
                     .id(element_id)
                     .test_support()
+                    .min_w_0()
+                    .truncate()
                     .px(metrics::SPACE_1)
                     .text_color(primary)
                     .font_weight(FontWeight::MEDIUM)
@@ -767,6 +969,8 @@ impl HostsScreen {
             };
         let actions = (vault_empty && !self.filter.is_active()).then(|| {
             h_flex()
+                .flex_wrap()
+                .justify_center()
                 .gap(metrics::SPACE_2)
                 .pt(metrics::SPACE_2)
                 .child(
@@ -818,68 +1022,42 @@ impl HostsScreen {
             .into_any_element()
     }
 
-    /// The content width for the columns: measured after the previous
-    /// layout; the first frame estimates it from the window.
-    fn content_width(&self, window: &Window) -> f32 {
+    /// The width inside the 24 px side padding (search bar, action bar,
+    /// cards): measured after the previous layout; the first frame
+    /// estimates it from the window.
+    fn inner_width(&self, window: &Window) -> f32 {
         let outer = self
             .measured_width
             .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
-        (outer - CONTENT_PADDING.as_f32() * 2.).max(metrics::HOST_CARD_MIN_WIDTH.as_f32())
+        (outer - CONTENT_PADDING.as_f32() * 2.).max(0.)
+    }
+
+    /// The content width for the columns. Below 240 px (a narrow window with
+    /// a wide details panel) the one column narrows with the area instead of
+    /// being clipped.
+    fn content_width(&self, window: &Window) -> f32 {
+        self.inner_width(window).max(1.)
+    }
+
+    /// The search hint on display and whether it fits its measured area.
+    #[cfg(test)]
+    pub(super) fn search_hint_fits(&self, window: &Window, cx: &App) -> (SharedString, bool) {
+        let hint = self.search.read(cx).presentation().placeholder().clone();
+        let fits = self.search_text_width.is_some_and(|area| {
+            text_width(window, &hint, metrics::FONT_SIZE_BODY, FontWeight::NORMAL)
+                <= area - SEARCH_INPUT_PAD_RIGHT + 0.5
+        });
+        (hint, fits)
     }
 }
 
-/// Width of the fade over a clipped edge of the tag filter strip.
-const TAG_FADE_WIDTH: gpui::Pixels = metrics::SPACE_5;
-
-/// Fades the edges of the tag filter strip where chips are cut off
-/// (`--bg-surface` over the chips), so a clipped chip reads as "scroll for
-/// more" instead of a broken border. The strip prepaints before this
-/// overlay, so its scroll handle already holds this frame's overflow.
-fn tag_strip_fades(handle: ScrollHandle, cx: &App) -> impl IntoElement {
-    let surface = cx.theme().colors.list;
-    canvas(
-        move |_, _, _| {
-            let scrolled = -handle.offset().x;
-            let hidden_right = handle.max_offset().x - scrolled;
-            (scrolled > px(0.5), hidden_right > px(0.5))
-        },
-        move |bounds, (left, right), window, _| {
-            let clear = surface.opacity(0.);
-            let height = bounds.size.height;
-            if left {
-                let area = Bounds::new(bounds.origin, size(TAG_FADE_WIDTH, height));
-                let fade = linear_gradient(
-                    270.,
-                    linear_color_stop(clear, 0.),
-                    linear_color_stop(surface, 1.),
-                );
-                window.paint_quad(fill(area, fade));
-            }
-            if right {
-                let origin = point(bounds.right() - TAG_FADE_WIDTH, bounds.origin.y);
-                let area = Bounds::new(origin, size(TAG_FADE_WIDTH, height));
-                let fade = linear_gradient(
-                    90.,
-                    linear_color_stop(clear, 0.),
-                    linear_color_stop(surface, 1.),
-                );
-                window.paint_quad(fill(area, fade));
-            }
-        },
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
-}
-
-/// A plain text menu item with a stable id.
+/// A plain text menu item with a stable id, in the kit's menu item text
+/// size (the size of every menu of the app).
 fn menu_text(id: &'static str, label: &'static str, cx: &App) -> AnyElement {
     div()
         .id(id)
         .test_support()
         .flex_1()
-        .text_size(metrics::FONT_SIZE_BODY)
         .text_color(cx.theme().foreground)
         .child(label)
         .into_any_element()
@@ -889,6 +1067,7 @@ impl Render for HostsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let width = self.content_width(window);
         self.rebuild_rows(width);
+        let action_bar = self.render_action_bar(window, cx);
         let screen = cx.entity().downgrade();
         // Measures the content area (the details panel narrows it); a new
         // width relays the grid out on the next frame.
@@ -950,7 +1129,7 @@ impl Render for HostsScreen {
                     .pt(metrics::SPACE_4)
                     .pb(metrics::SPACE_3)
                     .child(self.render_search(window, cx))
-                    .child(self.render_action_bar(cx)),
+                    .child(action_bar),
             )
             .children(self.render_breadcrumbs(cx))
             .child(

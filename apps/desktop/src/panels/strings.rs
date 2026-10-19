@@ -56,13 +56,52 @@ pub const PASSWORD: &str = "Password";
 pub const PASSWORD_SAVED: &str = "Saved password";
 pub const SHOW_PASSWORD: &str = "Show password";
 pub const HIDE_PASSWORD: &str = "Hide password";
-pub const ADD_CREDENTIAL: &str = "Add identity, key, certificate or FIDO2 key";
+pub const ADD_CREDENTIAL: &str = "Add identity, key or certificate";
 pub const CREDENTIAL_IDENTITY: &str = "Identity";
 pub const CREDENTIAL_KEY: &str = "Key";
 pub const CREDENTIAL_CERTIFICATE: &str = "Certificate";
 pub const CREDENTIAL_FIDO2: &str = "FIDO2 key";
 pub const LINKED: &str = "Linked";
 pub const UNLINK: &str = "Unlink";
+pub const REMOVE_CREDENTIAL: &str = "Remove from this host";
+pub const MISSING_ITEM: &str = "Missing item";
+pub const CHOOSE_IDENTITY: &str = "Saved identities";
+pub const NEW_IDENTITY: &str = "New identity";
+pub const IDENTITY_LABEL_PLACEHOLDER: &str = "Name, for example the login";
+pub const CREATE: &str = "Create";
+pub const SAVED_KEYS: &str = "Saved keys";
+pub const ADD_A_KEY: &str = "Add a key";
+pub const KEY_TEXT_PLACEHOLDER: &str = "Paste a private key (OpenSSH format)";
+pub const CHOOSE_FILE: &str = "Choose a file\u{2026}";
+pub const KEY_LABEL_PLACEHOLDER: &str = "From the key comment";
+pub const KEY_PASSPHRASE_NOTE: &str = "This key is protected by a passphrase.";
+pub const PASSPHRASE: &str = "Passphrase";
+pub const PASSPHRASE_STORE: &str = "Store in vault";
+pub const PASSPHRASE_ASK: &str = "Ask each time";
+pub const IMPORT: &str = "Import";
+pub const IMPORTING: &str = "Importing\u{2026}";
+pub const KEY_ALREADY_SAVED: &str = "This key was already saved; the saved key is linked.";
+pub const FILE_NOT_READ: &str = "The file could not be read.";
+pub const CERTIFICATE_PLACEHOLDER: &str =
+    "Paste an OpenSSH certificate (\u{2026}-cert-v01@openssh.com)";
+pub const CERTIFICATE_NEEDS_KEY: &str = "A certificate belongs to a key. Link a key first.";
+pub const ATTACH: &str = "Attach";
+pub const NO_SNIPPETS: &str = "No snippets yet";
+pub const MOSH: &str = "Mosh";
+pub const TELNET: &str = "Telnet";
+pub const TELNET_DEFAULT_PORT: &str = "23";
+pub const REMOVE_TELNET: &str = "Remove Telnet";
+pub const CHARSET_DEFAULT: &str = "UTF-8 (default)";
+
+/// "Certificate for deploy-key".
+pub fn certificate_for(key: &str) -> String {
+    format!("Certificate for {key}")
+}
+
+/// "Certificate of deploy-key" (the linked certificate row).
+pub fn certificate_of(key: &str) -> String {
+    format!("Certificate of {key}")
+}
 pub const SHOW_MORE: &str = "Show more";
 pub const SHOW_LESS: &str = "Show less";
 pub const AGENT_FORWARDING: &str = "Agent Forwarding";
@@ -146,8 +185,21 @@ pub fn reason(field: &str, reason: ValidationReason) -> &'static str {
             "Use an IP address or a host name without spaces, @, / or brackets."
         }
         ("name", ValidationReason::Required) => "A group needs a name.",
-        ("ssh.port" | "ssh.proxy.port", ValidationReason::Required) => "Enter a port.",
-        ("ssh.port" | "ssh.proxy.port", _) => "Use a port from 1 to 65535.",
+        ("label", ValidationReason::Required) => "Enter a name.",
+        ("private_key", ValidationReason::Required) => "Paste a key or choose a file.",
+        ("private_key", ValidationReason::NotAllowed) => "This key type or size is not supported.",
+        ("private_key", _) => "Use a private key in the OpenSSH format.",
+        ("passphrase", ValidationReason::Required) => "Enter the passphrase of this key.",
+        ("passphrase", _) => "The passphrase does not open this key.",
+        ("certificate", ValidationReason::Required) => "Paste a certificate.",
+        ("certificate", ValidationReason::NotAllowed) => {
+            "This is not a user certificate for the linked key."
+        }
+        ("certificate", _) => "Paste one OpenSSH certificate line.",
+        ("ssh.port" | "ssh.proxy.port" | "telnet.port", ValidationReason::Required) => {
+            "Enter a port."
+        }
+        ("ssh.port" | "ssh.proxy.port" | "telnet.port", _) => "Use a port from 1 to 65535.",
         ("ssh.keepalive_s", _) => "Use 0 to 3600 seconds; 0 turns keepalive off.",
         ("charset", _) => "Use an encoding label such as utf-8.",
         (_, ValidationReason::Required) => "This field is required.",

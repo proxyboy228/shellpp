@@ -207,6 +207,7 @@ fn host_panel_blocks_follow_ui_3_1(cx: &mut TestAppContext) {
         assert!(window.try_find("host-more").is_none());
         window.click("host-show-more", cx);
         window.render_frame(cx);
+        // Lead decision 2: every "Show more" field of UI 3.1, Mosh included.
         assert_top_to_bottom(
             window,
             &[
@@ -219,11 +220,11 @@ fn host_panel_blocks_follow_ui_3_1(cx: &mut TestAppContext) {
                 "host-keepalive",
                 "host-history-default",
                 "host-output-default",
+                "host-mosh",
                 "host-terminal-theme",
             ],
         );
-        // Mosh stays hidden until its stage (D3), and there is no save button.
-        assert!(window.try_find("host-mosh").is_none());
+        // There is no save button.
         assert!(window.try_find("host-save").is_none());
     })
     .unwrap();
