@@ -2,7 +2,7 @@
 //! normalization (docs/security.md, section 5.4; docs/storage-format.md,
 //! sections 3 and 6.5).
 
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{Algorithm, Argon2, Block, Params, Version};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
@@ -171,6 +171,10 @@ pub fn argon2_salt(kdf_email: Option<&str>, kdf_salt: &[u8; KDF_SALT_LEN]) -> [u
 ///
 /// This is slow by design (about 0.3-1 s at the desktop preset): never call it
 /// while holding a lock other threads wait on.
+///
+/// The Argon2id working memory (`m_kib` KiB) is wiped before it is freed: its
+/// last blocks give `master_key` without the password. `hash_password_into`
+/// would free it unwiped, so the memory is allocated here.
 pub fn derive_master_key(
     password: &SecretString,
     params: &KdfParams,
@@ -181,10 +185,16 @@ pub fn derive_master_key(
     let argon_params = Params::new(params.m_kib, params.t, params.p, Some(32))
         .map_err(|_| CryptoError::KdfParams("rejected by Argon2"))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
+    let block_count = argon.params().block_count();
+    let mut blocks: Zeroizing<Vec<Block>> = Zeroizing::new(Vec::new());
+    blocks
+        .try_reserve_exact(block_count)
+        .map_err(|_| CryptoError::Kdf)?;
+    blocks.resize(block_count, Block::default());
     let pwd = normalize_password(password);
     let mut out = Key32::zeroed();
     argon
-        .hash_password_into(&pwd, argon2_salt, out.expose_mut())
+        .hash_password_into_with_memory(&pwd, argon2_salt, out.expose_mut(), blocks.as_mut_slice())
         .map_err(|_| CryptoError::Kdf)?;
     Ok(out)
 }

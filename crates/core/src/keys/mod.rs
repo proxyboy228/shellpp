@@ -75,7 +75,19 @@ impl std::fmt::Debug for ParsedKey {
 /// The stored form of pasted or file text: surrounding whitespace removed,
 /// CRLF and CR turned into LF, trailing whitespace of each line removed.
 pub fn normalize_text(raw: &str) -> Zeroizing<String> {
-    let unified = Zeroizing::new(raw.replace("\r\n", "\n").replace('\r', "\n"));
+    // One pass into buffers of their final capacity: neither output is longer
+    // than its input, so nothing is reallocated. `str::replace` would leave
+    // unwiped copies of the key (its result and the buffers it outgrows).
+    let mut unified = Zeroizing::new(String::with_capacity(raw.len()));
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            chars.next_if_eq(&'\n');
+            unified.push('\n');
+        } else {
+            unified.push(c);
+        }
+    }
     let mut out = Zeroizing::new(String::with_capacity(unified.len()));
     for (index, line) in unified.trim().split('\n').enumerate() {
         if index > 0 {
@@ -302,6 +314,11 @@ mod tests {
         );
         assert_eq!(normalize_text("a\rb").as_str(), "a\nb");
         assert_eq!(normalize_text("   ").as_str(), "");
+        // Mixed endings, a lone CR before CRLF, non-ASCII text.
+        assert_eq!(
+            normalize_text("a\r\r\nb\n\rc\u{00e9}\r\nd").as_str(),
+            "a\n\nb\n\nc\u{00e9}\nd"
+        );
     }
 
     #[test]

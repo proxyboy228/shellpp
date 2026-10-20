@@ -227,7 +227,9 @@ impl Core {
     /// is kept and every [`Core::tick`] tries again, for up to
     /// [`crate::lock::CLIPBOARD_RETRY_FOR`] (docs/security.md, section 9.4).
     fn clear_clipboard_if_ours(&self, inner: &mut Inner) {
-        let Some(guard) = inner.clipboard_guard else {
+        // The guard stays in `inner` and is dropped there, so its hash is
+        // wiped in place (see `ClipboardGuard`).
+        let Some(guard) = inner.clipboard_guard.as_mut() else {
             return;
         };
         let cleared = match self.platform.clipboard.read_text() {
@@ -239,17 +241,14 @@ impl Core {
             Ok(None) => true,
             Err(_) => false,
         };
-        inner.clipboard_guard = if cleared {
-            None
+        if cleared {
+            inner.clipboard_guard = None;
+        } else if guard.record_failure(self.now()) {
+            tracing::warn!("clipboard could not be cleared; retrying");
         } else {
-            let retry = guard.after_failure(self.now());
-            if retry.is_some() {
-                tracing::warn!("clipboard could not be cleared; retrying");
-            } else {
-                tracing::warn!("clipboard could not be cleared; giving up");
-            }
-            retry
-        };
+            tracing::warn!("clipboard could not be cleared; giving up");
+            inner.clipboard_guard = None;
+        }
     }
 
     // ----- lock -------------------------------------------------------------
@@ -334,6 +333,7 @@ impl Core {
         self.auto_lock_if_due(inner, now);
         if inner
             .clipboard_guard
+            .as_ref()
             .is_some_and(|guard| guard.expired(now))
         {
             self.clear_clipboard_if_ours(inner);

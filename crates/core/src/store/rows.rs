@@ -75,8 +75,10 @@ impl WrapKind {
     }
 }
 
-/// A `key_wraps` row.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A `key_wraps` row. `Debug` prints the lengths of the blobs only: a `kek`
+/// wrap together with `local_auth` is enough to guess the master password
+/// offline.
+#[derive(Clone, PartialEq, Eq)]
 pub struct KeyWrapRow {
     pub vault_id: Uuid,
     /// The epoch of the wrapped key; for `chain` the newer epoch `e` whose
@@ -89,6 +91,19 @@ pub struct KeyWrapRow {
     pub hpke_enc: Option<Vec<u8>>,
     /// Wrap blob, or the HPKE ciphertext for `hpke`.
     pub wrap: Vec<u8>,
+}
+
+impl fmt::Debug for KeyWrapRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyWrapRow")
+            .field("vault_id", &self.vault_id)
+            .field("epoch", &self.epoch)
+            .field("kind", &self.kind)
+            .field("sender_user_id", &self.sender_user_id)
+            .field("hpke_enc_len", &self.hpke_enc.as_ref().map(Vec::len))
+            .field("wrap_len", &self.wrap.len())
+            .finish()
+    }
 }
 
 /// A `records` row. The envelope is authoritative; the other columns are
@@ -238,6 +253,25 @@ mod tests {
         };
         let text = format!("{row:?}");
         assert!(text.contains("envelope_len: 344"));
+        assert!(!text.contains("238")); // 0xEE
+    }
+
+    #[test]
+    fn key_wrap_debug_has_no_blob_bytes() {
+        let row = KeyWrapRow {
+            vault_id: Uuid::from_u128(1),
+            epoch: 4,
+            kind: WrapKind::Hpke,
+            sender_user_id: Some(Uuid::from_u128(3)),
+            hpke_enc: Some(vec![0xDD; 32]),
+            wrap: vec![0xEE; 73],
+        };
+        let text = format!("{row:?}");
+        assert!(text.contains("epoch: 4"));
+        assert!(text.contains("kind: Hpke"));
+        assert!(text.contains("hpke_enc_len: Some(32)"));
+        assert!(text.contains("wrap_len: 73"));
+        assert!(!text.contains("221")); // 0xDD
         assert!(!text.contains("238")); // 0xEE
     }
 }

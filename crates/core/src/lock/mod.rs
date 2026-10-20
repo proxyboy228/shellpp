@@ -36,7 +36,7 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use secrecy::SecretString;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::crypto::{self, KdfParams, Key32, PlatformClass};
 use crate::error::{CoreError, ValidationReason};
@@ -206,7 +206,11 @@ impl RecoveryGrant {
 /// Remembers a sensitive value copied to the clipboard by its SHA-256, so it
 /// is cleared after 30 seconds, on lock and on exit only if the clipboard still
 /// holds it (docs/security.md, section 9.4).
-#[derive(Clone, Copy)]
+///
+/// The unsalted hash of a weak password is a fast offline guess, so it is
+/// wiped on drop and the guard is neither `Copy` nor `Clone`: keep it in one
+/// place and drop it there (assigning `None` to an `Option` holding it drops
+/// it in place; `Option::take` would leave the hash behind in the old slot).
 pub struct ClipboardGuard {
     hash: [u8; 32],
     deadline: SystemTime,
@@ -229,25 +233,30 @@ impl ClipboardGuard {
         now >= self.deadline || self.failed_since.is_some()
     }
 
-    /// The guard after a failed attempt: retried at every tick until
-    /// [`CLIPBOARD_RETRY_FOR`] has passed since the first failure, then
-    /// `None` (given up).
-    pub fn after_failure(self, now: SystemTime) -> Option<Self> {
-        let since = self.failed_since.unwrap_or(now);
-        match now.duration_since(since) {
-            Ok(elapsed) if elapsed >= CLIPBOARD_RETRY_FOR => None,
-            _ => Some(Self {
-                failed_since: Some(since),
-                ..self
-            }),
-        }
+    /// Records a failed attempt. `true` while the guard is to be retried at
+    /// every tick, that is until [`CLIPBOARD_RETRY_FOR`] has passed since the
+    /// first failure; `false` when it is given up and should be dropped.
+    pub fn record_failure(&mut self, now: SystemTime) -> bool {
+        let since = *self.failed_since.get_or_insert(now);
+        !matches!(now.duration_since(since), Ok(elapsed) if elapsed >= CLIPBOARD_RETRY_FOR)
     }
 
     /// `true` when `current` is the copied value.
     pub fn matches(&self, current: &str) -> bool {
-        crypto::ct_eq(&crypto::sha256(current.as_bytes()), &self.hash)
+        let mut current_hash = crypto::sha256(current.as_bytes());
+        let same = crypto::ct_eq(&current_hash, &self.hash);
+        current_hash.zeroize();
+        same
     }
 }
+
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        self.hash.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for ClipboardGuard {}
 
 impl fmt::Debug for ClipboardGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -322,13 +331,20 @@ mod tests {
 
     #[test]
     fn clipboard_guard_retries_for_five_minutes_after_a_failure() {
-        let guard = ClipboardGuard::new("hunter2-canary", at(100));
+        let mut guard = ClipboardGuard::new("hunter2-canary", at(100));
         // A failed attempt on lock, before the 30 seconds: due at once.
-        let retry = guard.after_failure(at(110)).expect("retried");
-        assert!(retry.expired(at(110)));
-        assert!(retry.matches("hunter2-canary"));
-        let retry = retry.after_failure(at(111)).expect("retried");
-        let retry = retry.after_failure(at(409)).expect("still retried");
-        assert!(retry.after_failure(at(410)).is_none(), "given up");
+        assert!(guard.record_failure(at(110)), "retried");
+        assert!(guard.expired(at(110)));
+        assert!(guard.matches("hunter2-canary"));
+        assert!(guard.record_failure(at(111)), "retried");
+        // Counted from the first failure, not the latest one.
+        assert!(guard.record_failure(at(409)), "still retried");
+        assert!(!guard.record_failure(at(410)), "given up");
+    }
+
+    #[test]
+    fn clipboard_guard_wipes_its_hash_on_drop() {
+        fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+        wiped_on_drop::<ClipboardGuard>();
     }
 }
