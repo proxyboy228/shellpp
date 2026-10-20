@@ -36,6 +36,7 @@ pub mod merge;
 mod records;
 mod session;
 mod ssh_config_io;
+pub mod ssh_export;
 
 use std::fmt;
 use std::path::PathBuf;
