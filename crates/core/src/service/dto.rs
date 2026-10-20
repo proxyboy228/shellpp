@@ -1220,6 +1220,107 @@ fn default_true() -> bool {
     true
 }
 
+/// Where an `~/.ssh/config` import reads (D35): the file and the home
+/// folder for `~` and `%d`. Tests and the demo pass temporary paths.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SshConfigSource {
+    pub path: std::path::PathBuf,
+    pub home: std::path::PathBuf,
+}
+
+/// The state of one entry of an import preview (UI 2.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportStatus {
+    New,
+    Exists,
+    Error,
+}
+
+/// One host of an `~/.ssh/config` preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SshConfigHostPreview {
+    /// The first alias of its `Host` line; also the label.
+    pub alias: String,
+    pub address: String,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub status: ImportStatus,
+    /// Why it is not imported (`status = error`), for example ProxyCommand.
+    pub reason: Option<String>,
+    /// Options of this host that are not imported, and why.
+    pub notes: Vec<String>,
+    /// Its `IdentityFile` paths (after `~` and `%d`).
+    pub key_files: Vec<String>,
+    /// Its `ProxyJump` hops as written.
+    pub jump: Vec<String>,
+}
+
+/// The state of a key file of an `~/.ssh/config` preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "status", content = "reason")]
+pub enum KeyFileStatus {
+    /// A key that the import adds to the Keychain.
+    New,
+    /// The Keychain holds this key (same fingerprint).
+    Exists,
+    /// Encrypted: the import needs its passphrase.
+    NeedsPassphrase,
+    /// The file does not exist.
+    Missing,
+    /// Not a usable key, with the reason.
+    Invalid(String),
+}
+
+/// One key file of an `~/.ssh/config` preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SshConfigKeyPreview {
+    pub path: String,
+    pub status: KeyFileStatus,
+}
+
+/// The preview of an `~/.ssh/config` import (UI 2.5 step 3; D35).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SshConfigPreview {
+    pub hosts: Vec<SshConfigHostPreview>,
+    pub keys: Vec<SshConfigKeyPreview>,
+    /// Lines that could not be read (file, line, what).
+    pub problems: Vec<String>,
+    /// `Host` lines with only patterns (templates): applied, not imported.
+    pub templates: usize,
+}
+
+/// Input of `ssh_config_import`.
+#[derive(Clone, Deserialize)]
+pub struct SshConfigImportInput {
+    pub source: SshConfigSource,
+    /// The aliases chosen in the preview; `None` = every new host.
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
+    /// Passphrases of encrypted key files, by path as the preview shows it.
+    #[serde(default)]
+    pub passphrases: BTreeMap<String, SecretString>,
+    /// Store those passphrases in the vault.
+    #[serde(default)]
+    pub save_passphrases: bool,
+}
+
+redacted_debug!(SshConfigImportInput);
+
+/// Result of `ssh_config_import`: "added N, skipped M, errors K" (UI 2.5).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SshConfigImportSummary {
+    pub added: usize,
+    /// Hosts imported before (same `import_key`).
+    pub skipped: usize,
+    /// Hosts not imported, with the reason.
+    pub errors: Vec<(String, String)>,
+    pub keys_added: usize,
+    pub keys_existing: usize,
+    /// Key files left out (missing, invalid, no passphrase given).
+    pub keys_skipped: usize,
+}
+
 /// One record of an import that was not imported.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DataImportRefusal {

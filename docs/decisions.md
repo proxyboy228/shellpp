@@ -563,3 +563,21 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11;
 **For the owner:** whether importing history and the connection log should be offered as an option, and whether applying the file's settings should be on by default.
 
 **Spec impact:** the new `docs/export-format.md`; `docs/storage-format.md` 13.2 (`settings`) and 13.3 (password length); `docs/data-model.md` 18.4 (native JSON: merge by id with conflict copies).
+
+### 35. Import of `~/.ssh/config` (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 10; the points below are the lead's choices where the plan and the specification leave the details open).
+
+**Context.** The night plan asks for the `~/.ssh/config` import with Include, basic Match and Host patterns (the options of `Host *` and other patterns apply to concrete hosts, the patterns never become hosts), the field mapping (HostName, User, Port; IdentityFile into the Keychain; ProxyJump into Host Chaining; ForwardAgent; ServerAliveInterval; SetEnv/SendEnv; the forwardings), ProxyCommand hosts listed as not imported with the reason, a preview with checkboxes, no duplicates on a second import and a list of everything that could not be read. The core part is done; the dialog joins the import dialog of UI 2.5 with the Keychain screen.
+
+**Decision:**
+
+- Evaluation as `ssh` does it: every matching block in file order, the first value of a keyword wins, except the keywords that add up (IdentityFile, CertificateFile, the forwardings, SendEnv, SetEnv). Include takes files and `*`/`?` patterns in the file name, relative to the folder of the main file, at most 16 levels and never in a loop. Match takes `all`, `host` (against HostName once it is set, else the alias), `originalhost` and `user`, with `!`; a Match with another criterion (`exec`, `localuser`, `canonical`, `final`) never applies and is listed, because running a local command at import is not acceptable.
+- A host is the first concrete alias (no wildcard, no negation) of each Host line; the other aliases of that line are not separate hosts. Its label is the alias, its `import_key` is `ssh_config:<alias>` (data-model 18.4).
+- HostName may use `%h`; another token makes the host an error. IdentityFile takes `~` and `%d`; the files are imported into the Keychain under their file name as label (an encrypted one needs its passphrase in the preview, else it is skipped), and the first imported one becomes the host's key. ProxyJump hops (`[user@]host[:port]`) become the jump chain only when every hop is a host of this config or of an earlier import; ServerAliveInterval over 3600 is cut to 3600.
+- Not mapped, and named in the host's notes: SendEnv (its values come from the local environment, which the import does not read), the forwardings (forwarding rules come with stage 5), CertificateFile, and every other keyword ("Not imported: ciphers, ...").
+- Limits: 4 MiB per file, 200,000 lines, 64 KiB per key file.
+
+**For the owner:** whether SendEnv should take the current local values once at import (they may hold secrets), and whether the other aliases of a Host line should become hosts of their own.
+
+**Spec impact:** none beyond `docs/data-model.md` 18.4, which already names `ssh_config:<first alias of the Host line>`.

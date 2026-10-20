@@ -34,6 +34,7 @@ pub mod last_session;
 mod lock_ops;
 mod records;
 mod session;
+mod ssh_config_io;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -60,7 +61,8 @@ use dto::{
     KnownHostsImportSummary, LockState, LockStatus, NewNotification, Notification,
     NotificationList, OsSource, RecentConnection, RecordDeleteResult, RecordMoveInput, RecordRef,
     RecordSaveInput, RecordView, RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget,
-    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, VaultView,
+    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, SshConfigImportInput,
+    SshConfigImportSummary, SshConfigPreview, SshConfigSource, VaultView,
 };
 use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
@@ -676,6 +678,28 @@ impl Core {
     /// `invalid`). Slow when encrypted: call it off the UI thread.
     pub fn data_import(&self, input: DataImportInput) -> Result<DataImportSummary, CoreError> {
         self.data_import_impl(input)
+    }
+
+    /// The preview of an `~/.ssh/config` import (UI 2.5 step 3; D35): each
+    /// concrete host with its status (new, already imported, not
+    /// importable with the reason) and the options left out, the key files
+    /// with theirs, the lines that could not be read. Reads the files: call
+    /// it off the UI thread. `path` `invalid` when the file is missing.
+    pub fn ssh_config_preview(
+        &self,
+        source: SshConfigSource,
+    ) -> Result<SshConfigPreview, CoreError> {
+        self.ssh_config_preview_impl(source)
+    }
+
+    /// Imports the chosen hosts of an `~/.ssh/config` and their key files
+    /// (D35); idempotent by `ssh_config:<alias>`, existing hosts are never
+    /// overwritten. Slow for encrypted keys: call it off the UI thread.
+    pub fn ssh_config_import(
+        &self,
+        input: SshConfigImportInput,
+    ) -> Result<SshConfigImportSummary, CoreError> {
+        self.ssh_config_import_impl(input)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The

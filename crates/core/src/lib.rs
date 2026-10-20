@@ -23,6 +23,7 @@ pub mod crypto;
 pub mod error;
 pub mod history;
 pub mod ids;
+pub mod import;
 pub mod index;
 pub mod keys;
 pub mod known_hosts;
