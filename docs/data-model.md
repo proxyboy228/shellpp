@@ -679,7 +679,7 @@ Username plus password and/or key, reused across hosts (SPEC "Hosts", UI 7.4).
 | `import_key` | string(512)? | no | |
 
 - Derived: authentication method "password", "key", "both" or "no authentication method" (UI 7.2); the list of hosts that use it (UI 7.4), including hosts that inherit it from a group.
-- Merge hint (UI 3.1): hosts in the same vault with the same effective username and the same password, or the same effective username and the same key, are counted. Accepting creates an identity (`label` = the username, fields copied) and, on each of these hosts, sets `ssh.identity_id` and clears `ssh.username`, `ssh.password` and `ssh.key_id` (stage 0 decision).
+- Merge hint (UI 3.1): hosts in the same vault with the same effective username and the same password, or the same effective username and the same key, are counted. Accepting creates an identity (`label` = the username; the password and the key copied when every one of these hosts has the same) and, on each of these hosts, sets `ssh.identity_id` and clears `ssh.username`, and `ssh.password` and `ssh.key_id` only when the identity now holds them: a value the hosts do not share stays on its host, where it wins over the identity's (section 8.3), so no host loses a way to sign in (stage 0 decision, amended in D40).
 
 ### 9.5 Known host (`known_host`)
 

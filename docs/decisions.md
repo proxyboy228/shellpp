@@ -647,7 +647,7 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 7; 
 **Decision:**
 
 - The hint shows in the SSH block above the username for a saved host without an identity, when at least one other host without an identity has the same effective username (its own or a group's) and the same saved password, or the same effective username and key; a password match wins over a key match. The text names how many other hosts share them; "Create an identity" is one link.
-- The core creates the identity (label and username = the username; the password or the key copied) and moves every host of the hint onto it in one transaction (identity linked; username, password and key cleared, data-model 9.4). The open panel then shows its host as the core left it, so a later autosave writes the same values instead of undoing the move.
+- The core creates the identity (label and username = the username; the password and the key copied when every host of the hint has the same) and moves every host of the hint onto it in one transaction: the identity linked, the username cleared, and the password and the key cleared only when the identity now holds them (data-model 9.4). Amended after the night review: clearing all three lost a shared key when the password matched, and each host's own password when the key matched. The open panel then shows its host as the core left it, so a later autosave writes the same values instead of undoing the move.
 - Identical keys (same fingerprint) are merged by the core (data-model 18.3, `keys_merge`); since imports already match keys by fingerprint, duplicates arrive only by sync, so the Keychain's merge hint waits for stage 7.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru/`).

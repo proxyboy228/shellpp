@@ -4,9 +4,12 @@
 //! - The identity hint: hosts of the vault with the same effective username
 //!   and the same saved password, or the same effective username and the
 //!   same effective key, that use no identity yet. Accepting creates one
-//!   identity (label = the username; the password or the key copied) and
-//!   moves every one of these hosts onto it: `ssh.identity_id` is set,
-//!   `ssh.username`, `ssh.password` and `ssh.key_id` are cleared. One
+//!   identity (label = the username; the password and the key copied when
+//!   every one of these hosts has the same) and moves every one of these
+//!   hosts onto it: `ssh.identity_id` is set, `ssh.username` is cleared,
+//!   and `ssh.password` and `ssh.key_id` only when the identity now holds
+//!   them (a host's own value would win over its identity's anyway,
+//!   data-model 8.3, so nothing else changes how a host signs in). One
 //!   transaction.
 //! - Identical keys: live keys with the same SHA256 fingerprint. The one
 //!   with the smallest record id stays and takes `certificate`,
@@ -180,20 +183,32 @@ impl Core {
                     .take(identity::MAX_LABEL_CHARS)
                     .collect()
             });
+        // What every host of the hint has: the identity holds it, the hosts
+        // let go of it. The rest stays on each host.
+        let members: Vec<&Credentials> = credentials
+            .iter()
+            .filter(|entry| hint.hosts.contains(&entry.id))
+            .collect();
+        let shared_password = own.password.as_ref().filter(|password| {
+            members.iter().all(|entry| {
+                entry
+                    .password
+                    .as_deref()
+                    .is_some_and(|other| ct_eq(other.as_bytes(), password.as_bytes()))
+            })
+        });
+        let shared_key = own
+            .key
+            .filter(|key| members.iter().all(|entry| entry.key == Some(*key)));
         let mut input = Map::new();
         input.insert("label".into(), json!(label));
         input.insert("username".into(), json!(hint.username));
-        let password = match hint.kind {
-            IdentityHintKind::Password => match &own.password {
-                Some(password) => PasswordChange::Set(SecretString::from(password.clone())),
-                None => PasswordChange::Keep,
-            },
-            IdentityHintKind::Key => {
-                if let Some(key) = own.key {
-                    input.insert("key_id".into(), json!(key.to_string()));
-                }
-                PasswordChange::Keep
-            }
+        if let Some(key) = shared_key {
+            input.insert("key_id".into(), json!(key.to_string()));
+        }
+        let password = match shared_password {
+            Some(password) => PasswordChange::Set(SecretString::from(password.clone())),
+            None => PasswordChange::Keep,
         };
         let built = identity::build(&input, None, &password).map_err(CoreError::Validation)?;
         let identity_id = parts.ids.next(now);
@@ -208,11 +223,15 @@ impl Core {
                 .entry("ssh")
                 .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(ssh) = ssh {
-                if let Some(mut old) = ssh.remove("password") {
+                if shared_password.is_some()
+                    && let Some(mut old) = ssh.remove("password")
+                {
                     crate::model::wipe::wipe_value(&mut old);
                 }
+                if shared_key.is_some() {
+                    ssh.remove("key_id");
+                }
                 ssh.remove("username");
-                ssh.remove("key_id");
                 ssh.insert("identity_id".into(), json!(identity_id.to_string()));
             }
             plan.set(RecordKind::Host, *id, data.into_inner());

@@ -154,3 +154,150 @@ fn hosts_with_the_same_key_move_onto_one_identity() {
     let identities = u.core.identities_list().unwrap();
     assert_eq!(identities[0].key_id, Some(key.record_id));
 }
+
+/// The hosts of a hint and their stored `ssh` blocks and secrets.
+fn host_states(u: &common::Unlocked, ids: &[uuid::Uuid]) -> Vec<(Value, Vec<String>)> {
+    let hosts: Vec<_> = u
+        .core
+        .records_query(RecordsQuery {
+            vault_id: None,
+            types: vec![RecordType::Host],
+            scope: QueryScope::All,
+            text: None,
+            tags: Vec::new(),
+            sort: SortMode::Manual,
+        })
+        .unwrap()
+        .into_iter()
+        .map(as_host)
+        .collect();
+    ids.iter()
+        .map(|id| {
+            let host = hosts.iter().find(|host| host.record_id == *id).unwrap();
+            (
+                host.data.get("ssh").cloned().unwrap_or(Value::Null),
+                host.secrets_set.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_credential_the_hosts_share_moves_and_nothing_else_is_lost() {
+    let u = first_run();
+    let vault = u.vault_id;
+    let key = u
+        .core
+        .key_generate(KeyGenerateInput {
+            vault_id: vault,
+            label: "shared key".into(),
+            kind: KeyKind::Ed25519,
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .unwrap()
+        .key;
+    let reference = |record_id| RecordRef {
+        vault_id: vault,
+        record_id,
+    };
+    // The same username, password and key on three hosts (the servers may
+    // take only the key): the identity holds both.
+    let password = format!("pw-{}", common::random_hex());
+    let host = |address: &str, secret: &str| {
+        save(
+            &u.core,
+            vault,
+            None,
+            RecordType::Host,
+            json!({"address": address, "ssh": {"username": "app", "key_id": key.record_id.to_string()}}),
+            &[("ssh.password", Some(secret))],
+        )
+        .unwrap()
+        .record_id()
+    };
+    let shared = [
+        host("192.0.2.21", &password),
+        host("192.0.2.22", &password),
+        host("192.0.2.23", &password),
+    ];
+    let hint = u.core.identity_hint(reference(shared[0])).unwrap().unwrap();
+    assert_eq!(hint.kind, IdentityHintKind::Password);
+    let identity = u.core.identity_from_hint(reference(shared[0])).unwrap();
+    let view = u
+        .core
+        .identities_list()
+        .unwrap()
+        .into_iter()
+        .find(|view| view.record_id == identity)
+        .unwrap();
+    assert_eq!(
+        view.key_id,
+        Some(key.record_id),
+        "the shared key came along"
+    );
+    assert_eq!(
+        u.core
+            .identity_password(reference(identity))
+            .unwrap()
+            .expose_secret(),
+        password
+    );
+    for (ssh, secrets) in host_states(&u, &shared) {
+        assert!(ssh.get("key_id").is_none_or(Value::is_null));
+        assert!(secrets.is_empty());
+    }
+
+    // The same key with a password of its own on each host: the identity
+    // takes the key, every host keeps its own password.
+    let own = [
+        format!("pw-{}", common::random_hex()),
+        format!("pw-{}", common::random_hex()),
+    ];
+    let other_key = u
+        .core
+        .key_generate(KeyGenerateInput {
+            vault_id: vault,
+            label: "other key".into(),
+            kind: KeyKind::Ed25519,
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .unwrap()
+        .key;
+    let keyed: Vec<_> = own
+        .iter()
+        .enumerate()
+        .map(|(n, secret)| {
+            save(
+                &u.core,
+                vault,
+                None,
+                RecordType::Host,
+                json!({
+                    "address": format!("198.51.100.{}", n + 1),
+                    "ssh": {"username": "batch", "key_id": other_key.record_id.to_string()}
+                }),
+                &[("ssh.password", Some(secret.as_str()))],
+            )
+            .unwrap()
+            .record_id()
+        })
+        .collect();
+    let hint = u.core.identity_hint(reference(keyed[0])).unwrap().unwrap();
+    assert_eq!(hint.kind, IdentityHintKind::Key);
+    let identity = u.core.identity_from_hint(reference(keyed[0])).unwrap();
+    assert!(
+        u.core.identity_password(reference(identity)).is_err(),
+        "no password the hosts do not share"
+    );
+    for (ssh, secrets) in host_states(&u, &keyed) {
+        assert_eq!(ssh["identity_id"], json!(identity.to_string()));
+        assert!(ssh.get("key_id").is_none_or(Value::is_null));
+        assert_eq!(
+            secrets,
+            vec!["ssh.password".to_owned()],
+            "its own password stays"
+        );
+    }
+}

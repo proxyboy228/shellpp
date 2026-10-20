@@ -425,7 +425,9 @@ The same form is used for creating and editing; it opens in the details panel.
        in one place applies to all of them. Shown since stage 3 (D40): for a saved host
        without an identity, when other hosts share its effective username and saved
        password, or its effective username and key; "Create an identity" makes one
-       identity (label = the username) and moves all of them onto it; [decision]
+       identity (label = the username, plus the password and the key when all of them have
+       the same) and moves all of them onto it; a password or key the identity does not
+       hold stays on its host; [decision]
      - username;
      - password: masked, with a show/hide button;
      - a linked key is shown as a separate field with the key name from Keychain;
