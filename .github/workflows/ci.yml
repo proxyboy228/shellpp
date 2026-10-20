@@ -1,7 +1,8 @@
 name: CI
 
 # Job set of docs/architecture.md, section 9.2: lint, licenses, linux,
-# windows, macos. The gitleaks job lives in secret-scan.yml.
+# windows, macos, plus integration (OpenSSH in Docker). The gitleaks job
+# lives in secret-scan.yml.
 #
 # The toolchain comes from rust-toolchain.toml (Rust 1.99.1 with rustfmt and
 # clippy; gpui-kit's GPUI needs Rust >= 1.93). The desktop app is GPUI Kit:
@@ -11,9 +12,10 @@ name: CI
 #
 # SSH integration (docs/architecture.md, sections 9.1 and 9.3): every Rust
 # test run uses the russh test server (tests/sshd, SHELLPP_TEST_SSHD=russh);
-# the linux job also runs the shellpp-ssh suite against OpenSSH in Docker
-# (tests/openssh, SHELLPP_TEST_SSHD=openssh). The sync server and packages
-# join in later stages.
+# the integration job runs the shellpp-ssh suite and the desktop app's
+# session tests against OpenSSH in Docker (tests/openssh,
+# SHELLPP_TEST_SSHD=openssh). The sync server and packages join in later
+# stages.
 
 on:
   push:
@@ -179,23 +181,9 @@ jobs:
       - name: Rust tests (desktop, all features)
         env:
           SHELLPP_TEST: "1"
+          # The OpenSSH runs are the integration job's.
+          SHELLPP_TEST_SSHD: russh
         run: cargo test --locked -p shellpp-desktop --all-features
-
-      # OpenSSH in Docker for the shellpp-ssh suite (tests/openssh/README.md).
-      # The image is built once here; each test server container gets its own
-      # generated credentials and host keys from tests/openssh/start.sh.
-      - name: Build the OpenSSH test image
-        run: docker build --tag shellpp-test-openssh:ci tests/openssh
-
-      - name: SSH integration (OpenSSH in Docker)
-        env:
-          SHELLPP_TEST_SSHD: openssh
-          SHELLPP_OPENSSH_IMAGE: shellpp-test-openssh:ci
-        run: cargo test --locked -p shellpp-ssh
-
-      - name: Remove OpenSSH test containers
-        if: always()
-        run: bash tests/openssh/stop.sh --all
 
       # shellpp-core and shellpp-ssh stay mobile-ready (docs/architecture.md,
       # section 2.3). The C parts (bundled SQLite, ring) are compiled with the
@@ -210,6 +198,77 @@ jobs:
 
       - name: Build the app
         run: cargo build --locked -p shellpp-desktop
+
+  # OpenSSH in Docker (tests/openssh/README.md): the shellpp-ssh suite and
+  # the desktop app's session tests (password, key, keyboard-interactive,
+  # wrong password, first connection, host key change, drop and reconnect)
+  # against a real OpenSSH server. The image is built once; every test server
+  # container gets its own generated credentials and host keys from
+  # tests/openssh/start.sh. SHELLPP_TEST_SSHD=openssh makes the suites fail
+  # instead of falling back to the russh test server.
+  integration:
+    name: SSH integration (OpenSSH in Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SHELLPP_TEST: "1"
+      SHELLPP_TEST_SSHD: openssh
+      SHELLPP_OPENSSH_IMAGE: shellpp-test-openssh:ci
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_GPUI_PACKAGES
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the OpenSSH test image
+        run: docker build --tag "$SHELLPP_OPENSSH_IMAGE" tests/openssh
+
+      # The image's tools and the server-side faults of control.sh, before
+      # the suites rely on them.
+      - name: Check the OpenSSH test server and its controls
+        run: |
+          workdir="$(mktemp -d)"
+          trap 'bash tests/openssh/stop.sh "$workdir"; rm -rf "$workdir"' EXIT
+          json="$(bash tests/openssh/start.sh "$workdir")"
+          name="$(cat "$workdir/container")"
+          docker exec "$name" sh -c 'command -v htop && command -v mc && command -v seq && command -v pkill'
+          before="$(grep '"host_keys"' "$json")"
+          bash tests/openssh/control.sh "$workdir" rotate-host-key
+          after="$(grep '"host_keys"' "$json")"
+          if [ "$before" = "$after" ]; then echo 'the host keys did not change' >&2; exit 1; fi
+          bash tests/openssh/control.sh "$workdir" drop-connections
+          bash tests/openssh/control.sh "$workdir" freeze
+          bash tests/openssh/control.sh "$workdir" thaw
+          # Still serving after the faults.
+          port="$(docker port "$name" 22/tcp | head -n 1)"
+          exec 3<>"/dev/tcp/127.0.0.1/${port##*:}"
+          IFS= read -r -t 10 banner <&3
+          case "$banner" in SSH-2.0-*) ;; *) echo 'no SSH banner after the faults' >&2; exit 1 ;; esac
+
+      - name: shellpp-ssh suite (OpenSSH in Docker)
+        run: cargo test --locked -p shellpp-ssh
+
+      - name: Desktop session tests (OpenSSH in Docker)
+        run: cargo test --locked -p shellpp-desktop --test sessions -- --nocapture
+
+      - name: Remove OpenSSH test containers
+        if: always()
+        run: bash tests/openssh/stop.sh --all
 
   windows:
     name: Windows
