@@ -96,6 +96,8 @@ pub const MAX_PPK_ARGON2_KIB: u32 = 1024 * 1024;
 /// Most Argon2 passes for a `.ppk` v3 key (puttygen tunes the passes to
 /// about 100 ms, typically under 30).
 pub const MAX_PPK_ARGON2_PASSES: u32 = 64;
+/// Most Argon2 lanes for a `.ppk` v3 key (puttygen writes 1).
+pub const MAX_PPK_ARGON2_LANES: u32 = 64;
 
 /// The PEM labels this module reads.
 const PEM_RSA: &str = "RSA PRIVATE KEY";
@@ -222,24 +224,43 @@ fn ppk_algorithm(text: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Refuses `.ppk` v3 files whose Argon2 settings exceed the limits.
+/// Refuses `.ppk` v3 files whose Argon2 settings exceed the limits. The
+/// headers are read as ssh-key reads them (`Name: value` lines, the base64
+/// lines of `*-Lines` skipped), and a header given twice is refused: ssh-key
+/// keeps the last one, so a check of the first could be fooled.
 fn check_ppk_kdf(text: &str) -> Result<(), KeyProblem> {
-    let value = |name: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(name))
-            .map(|value| value.trim().parse::<u64>())
-    };
-    if let Some(memory) = value("Argon2-Memory:") {
-        let memory = memory.map_err(|_| KeyProblem::Damaged)?;
-        if memory > u64::from(MAX_PPK_ARGON2_KIB) {
-            return Err(KeyProblem::KdfTooExpensive);
+    let mut seen: Vec<&str> = Vec::new();
+    let mut memory = None;
+    let mut passes = None;
+    let mut lanes = None;
+    let mut lines = text.lines().skip(1);
+    while let Some(line) = lines.next() {
+        let Some((name, value)) = line.split_once(": ") else {
+            return Err(KeyProblem::Damaged);
+        };
+        if seen.contains(&name) {
+            return Err(KeyProblem::Damaged);
+        }
+        seen.push(name);
+        let number = || value.parse::<u32>().map_err(|_| KeyProblem::Damaged);
+        match name {
+            "Argon2-Memory" => memory = Some(number()?),
+            "Argon2-Passes" => passes = Some(number()?),
+            "Argon2-Parallelism" => lanes = Some(number()?),
+            _ if name.ends_with("-Lines") => {
+                let count = usize::try_from(number()?).map_err(|_| KeyProblem::Damaged)?;
+                for _ in 0..count {
+                    lines.next().ok_or(KeyProblem::Damaged)?;
+                }
+            }
+            _ => {}
         }
     }
-    if let Some(passes) = value("Argon2-Passes:") {
-        let passes = passes.map_err(|_| KeyProblem::Damaged)?;
-        if passes > u64::from(MAX_PPK_ARGON2_PASSES) {
-            return Err(KeyProblem::KdfTooExpensive);
-        }
+    if memory.is_some_and(|kib| kib > MAX_PPK_ARGON2_KIB)
+        || passes.is_some_and(|passes| passes > MAX_PPK_ARGON2_PASSES)
+        || lanes.is_some_and(|lanes| lanes > MAX_PPK_ARGON2_LANES)
+    {
+        return Err(KeyProblem::KdfTooExpensive);
     }
     Ok(())
 }
@@ -559,4 +580,62 @@ fn ec_keypair_sec1(
         }
         other => return Err(KeyProblem::Algorithm(format!("EC ({other})"))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The headers of a `.ppk` v3 file with these Argon2 lines (the key
+    /// lines are not read by the check).
+    fn ppk(argon: &[&str]) -> String {
+        let mut lines = vec![
+            "PuTTY-User-Key-File-3: ssh-ed25519",
+            "Encryption: aes256-cbc",
+            "Comment: test",
+            "Public-Lines: 2",
+            "AAAAC3NzaC1lZDI1NTE5AAAAI",
+            "Argon2-Passes: 1",
+            "Key-Derivation: Argon2id",
+        ];
+        lines.extend_from_slice(argon);
+        lines.extend([
+            "Argon2-Salt: 00",
+            "Private-Lines: 1",
+            "AAAA",
+            "Private-MAC: 00",
+        ]);
+        lines.join("\n")
+    }
+
+    #[test]
+    fn the_argon2_limits_of_a_ppk_cannot_be_dodged() {
+        let ok = [
+            "Argon2-Memory: 8192",
+            "Argon2-Passes: 13",
+            "Argon2-Parallelism: 1",
+        ];
+        assert_eq!(check_ppk_kdf(&ppk(&ok)), Ok(()));
+        // A line inside a base64 block (Public-Lines above) is not a header.
+        for (line, problem) in [
+            ("Argon2-Memory: 4194304", KeyProblem::KdfTooExpensive),
+            ("Argon2-Passes: 4294967295", KeyProblem::KdfTooExpensive),
+            ("Argon2-Parallelism: 1000", KeyProblem::KdfTooExpensive),
+            ("Argon2-Passes: -1", KeyProblem::Damaged),
+            ("Argon2-Passes:  13", KeyProblem::Damaged),
+        ] {
+            let mut argon = ok.to_vec();
+            argon.retain(|known| known.split(':').next() != line.split(':').next());
+            argon.push(line);
+            assert_eq!(check_ppk_kdf(&ppk(&argon)), Err(problem), "{line}");
+        }
+        // ssh-key keeps the last of two lines: a low first value fools no one.
+        let twice = [
+            "Argon2-Memory: 8192",
+            "Argon2-Passes: 8",
+            "Argon2-Passes: 4294967295",
+            "Argon2-Parallelism: 1",
+        ];
+        assert_eq!(check_ppk_kdf(&ppk(&twice)), Err(KeyProblem::Damaged));
+    }
 }
