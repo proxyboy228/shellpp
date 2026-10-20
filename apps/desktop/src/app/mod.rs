@@ -84,12 +84,15 @@ pub fn run(launch: Launch) {
                 crate::sessions::ui::install(&state, ManagerOptions::with_keys(keys), cx);
             }
 
-            if open_main_window(state.clone(), cx).is_err() {
+            let Ok((_window, _)) = open_main_window(state.clone(), cx) else {
                 tracing::error!("main window did not open");
                 state.update(cx, |state, _| state.shutdown());
                 cx.quit();
                 return;
-            }
+            };
+            // The cold start measurement (dev-tools, SHELLPP_BENCH_STARTUP=1).
+            #[cfg(feature = "dev-tools")]
+            crate::dev::startup::arm(_window, cx);
 
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {

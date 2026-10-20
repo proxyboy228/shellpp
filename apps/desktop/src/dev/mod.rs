@@ -8,6 +8,8 @@
 //!   `seq 1 3000000` throughput through our terminal and through a bare
 //!   PTY reader as the baseline, input latency;
 //!   `scripts/measure-terminal.ps1`).
+//! - [`startup`]: with `SHELLPP_BENCH_STARTUP=1` the app prints the time to
+//!   the main window's first frame and quits (`scripts/measure-startup.ps1`).
 //! - [`test_server`]: the SSH test server of the benchmarks and the
 //!   terminal screenshots (OpenSSH in Docker from `tests/openssh`, or the
 //!   russh test server as a child process); never a real host.
@@ -26,4 +28,5 @@ mod bench_run;
 pub mod demo;
 #[cfg(feature = "screenshots")]
 pub mod screenshots;
+pub mod startup;
 pub mod test_server;

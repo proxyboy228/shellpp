@@ -147,6 +147,10 @@ fn print_line(line: &str) {
 }
 
 fn main() -> ExitCode {
+    // The start of the cold start measurement (dev-tools,
+    // `SHELLPP_BENCH_STARTUP=1`, scripts/measure-startup.ps1).
+    #[cfg(feature = "dev-tools")]
+    shellpp_desktop::dev::startup::mark_start();
     // `--bench-sessions N`, `--bench-output`, `--bench-latency` (dev-tools):
     // their own arguments and run, see `shellpp_desktop::dev::bench`.
     #[cfg(feature = "dev-tools")]
