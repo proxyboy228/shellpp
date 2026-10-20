@@ -5,7 +5,7 @@
 //! not available). Scenarios: host key presentation, password (saved and
 //! prompted after a refusal), public key, keyboard-interactive with a masked
 //! question, shell output, PTY size, TERM, env, exit status, exec, agent
-//! forwarding and answered keepalives.
+//! forwarding, answered keepalives and Export to host (authorized_keys).
 
 mod support;
 
@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use shellpp_ssh::{
-    AuthMethod, AuthPlan, Connection, KeyCredential, Prompt, SessionEnd, ShellRequest, SystemAgent,
-    connect,
+    AuthMethod, AuthPlan, Connection, ExportOutcome, KeyCredential, Prompt, SessionEnd,
+    ShellRequest, SystemAgent, connect, export_public_key,
 };
 use shellpp_test_sshd::{ExecAnswer, KeyType, ServerConfig, TestServer, generate_key};
 use support::agent::TestAgent;
@@ -124,6 +124,23 @@ fn openssh_target(server: &OpenSshServer) -> Target {
         ),
         commands: &OPENSSH_COMMANDS,
     }
+}
+
+async fn key_connection(target: &Target, private_key: &str) -> Connection {
+    let plan = AuthPlan {
+        key: Some(KeyCredential {
+            label: "provider key".to_owned(),
+            private_key: secret(private_key),
+            passphrase: None,
+        }),
+        ..AuthPlan::default()
+    };
+    connect(
+        spec(target.addr, Some(&target.key_user.0), plan),
+        TestInteraction::accepting().as_dyn(),
+    )
+    .await
+    .expect("key connection")
 }
 
 async fn password_connection(target: &Target) -> Connection {
@@ -288,6 +305,103 @@ async fn exec(target: &Target) {
     connection.disconnect().await;
 }
 
+/// Export to host (UI 7.3, stage 3): the key is appended once, the modes
+/// are 700 and 600, and the key then signs in. The russh server answers
+/// every exec with exit 0, so there only the mapping of the answer runs.
+async fn export_key(target: &Target) {
+    let generated = generate_key(KeyType::Ed25519, "exported key", None).expect("key");
+    // OpenSSH: the key user (whose authorized_keys already holds its own
+    // key), so that the exported key can sign in too; the password user of
+    // the test server accepts passwords only.
+    let connection = match target.provider {
+        Provider::OpenSsh => key_connection(target, &target.key_user.1).await,
+        Provider::Russh => password_connection(target).await,
+    };
+    if target.provider == Provider::OpenSsh {
+        // A file that does not end with a line break: the key still gets a
+        // line of its own.
+        let tail = connection
+            .exec(
+                "printf %s \"# no line break at the end\" >> \"$HOME/.ssh/authorized_keys\"",
+                Duration::from_secs(10),
+                4096,
+            )
+            .await
+            .expect("printf");
+        assert_eq!(tail.exit_status, Some(0));
+    }
+    let outcome = export_public_key(&connection, &generated.public_openssh)
+        .await
+        .expect("export");
+    assert_eq!(outcome, ExportOutcome::Added);
+    if target.provider == Provider::OpenSsh {
+        let again = export_public_key(&connection, &generated.public_openssh)
+            .await
+            .expect("export again");
+        assert_eq!(again, ExportOutcome::AlreadyPresent);
+        let modes = connection
+            .exec(
+                "stat -c %a \"$HOME/.ssh\" \"$HOME/.ssh/authorized_keys\"",
+                Duration::from_secs(10),
+                4096,
+            )
+            .await
+            .expect("stat");
+        assert_eq!(String::from_utf8_lossy(&modes.stdout), "700\n600\n");
+        let count = connection
+            .exec(
+                &format!(
+                    "grep -cF {} \"$HOME/.ssh/authorized_keys\"",
+                    generated.public_openssh.split_whitespace().nth(1).unwrap()
+                ),
+                Duration::from_secs(10),
+                4096,
+            )
+            .await
+            .expect("grep");
+        assert_eq!(
+            String::from_utf8_lossy(&count.stdout),
+            "1\n",
+            "no duplicate"
+        );
+        let own_line = connection
+            .exec(
+                &format!(
+                    "grep -c \"^ssh-ed25519 {}\" \"$HOME/.ssh/authorized_keys\"",
+                    generated.public_openssh.split_whitespace().nth(1).unwrap()
+                ),
+                Duration::from_secs(10),
+                4096,
+            )
+            .await
+            .expect("grep line start");
+        assert_eq!(
+            String::from_utf8_lossy(&own_line.stdout),
+            "1\n",
+            "on its own line"
+        );
+        connection.disconnect().await;
+        let plan = AuthPlan {
+            key: Some(KeyCredential {
+                label: "exported".to_owned(),
+                private_key: generated.private_openssh.clone(),
+                passphrase: None,
+            }),
+            ..AuthPlan::default()
+        };
+        let signed_in = connect(
+            spec(target.addr, Some(&target.key_user.0), plan),
+            TestInteraction::accepting().as_dyn(),
+        )
+        .await
+        .expect("the exported key signs in");
+        assert_eq!(signed_in.auth().method, AuthMethod::PublicKey);
+        signed_in.disconnect().await;
+    } else {
+        connection.disconnect().await;
+    }
+}
+
 async fn agent_forwarding(target: &Target) {
     let generated = generate_key(KeyType::Ed25519, "forwarded", None).expect("key");
     let key = russh::keys::decode_secret_key(generated.private_openssh.expose_secret(), None)
@@ -356,6 +470,7 @@ async fn run_suite(target: &Target) {
     keyboard_interactive(target).await;
     shell_round_trip(target).await;
     exec(target).await;
+    export_key(target).await;
     agent_forwarding(target).await;
     keepalive_is_answered(target).await;
 }

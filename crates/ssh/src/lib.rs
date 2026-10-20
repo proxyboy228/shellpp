@@ -28,6 +28,7 @@
 pub mod agent;
 mod algorithms;
 mod auth;
+pub mod authorized_keys;
 pub mod client;
 pub mod error;
 mod handler;
@@ -35,6 +36,7 @@ pub mod reconnect;
 mod transport;
 
 pub use agent::{AgentLocation, SystemAgent};
+pub use authorized_keys::{ExportOutcome, export_public_key};
 pub use client::{
     AuthMethod, AuthOutcome, AuthPlan, BoxFuture, ConnectSpec, ConnectStep, Connection, ExecOutput,
     FileKey, HostKeyDecision, HostKeyInfo, Interaction, KeyCredential, Prompt, PromptAnswer,
