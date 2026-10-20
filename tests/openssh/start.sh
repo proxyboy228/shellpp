@@ -130,7 +130,11 @@ printf '%s\n' "$password_user_secret" >"$input/shellpp-input/$PASSWORD_USER.pass
 printf '%s\n' "$ki_user_secret" >"$input/shellpp-input/$KI_USER.password"
 cp "$key.pub" "$input/shellpp-input/$KEY_USER.authorized_keys"
 
+# --init: a minimal init as PID 1 reaps the processes of ended sessions
+# (sshd runs under `timeout`, which does not), so no zombies show up in `ps`
+# or htop.
 docker create \
+    --init \
     --name "$name" \
     --label "$LABEL" \
     --hostname shellpp-openssh \

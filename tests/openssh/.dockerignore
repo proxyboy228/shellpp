@@ -3,3 +3,4 @@
 !Dockerfile
 !sshd_config
 !entrypoint.sh
+!container-control.sh

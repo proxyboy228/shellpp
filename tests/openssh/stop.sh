@@ -32,6 +32,8 @@ if [ "$1" = '--all' ]; then
     containers="$(docker ps --all --quiet --filter "label=$LABEL" 2>/dev/null)" || exit 0
     while read -r id; do
         [ -n "$id" ] || continue
+        # A container frozen by control.sh freeze is resumed first.
+        docker unpause "$id" >/dev/null 2>&1 || true
         docker rm --force "$id" >/dev/null 2>&1 || true
     done <<<"$containers"
     exit 0
@@ -47,5 +49,6 @@ case "$name" in
         exit 1
         ;;
 esac
+docker unpause "$name" >/dev/null 2>&1 || true
 docker rm --force "$name" >/dev/null 2>&1 || true
 rm -f "$file"
