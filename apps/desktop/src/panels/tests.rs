@@ -758,3 +758,95 @@ fn removing_a_non_empty_group_moves_its_children_up(cx: &mut TestAppContext) {
     assert!(events.borrow().contains(&PanelEvent::Close));
     state.update(cx, |state, _| state.shutdown());
 }
+
+/// UI 3.1 (stage 3): hosts with the same username and key show the hint;
+/// "Create an identity" moves them onto one identity, and an autosave of
+/// the open host afterwards keeps it.
+#[gpui_kit::test]
+fn the_identity_hint_moves_shared_credentials_onto_one_identity(cx: &mut TestAppContext) {
+    use shellpp_core::service::dto::{KeyGenerateInput, RecordRef, RecordView};
+    let state = setup(cx);
+    let core = state.read_with(cx, |state, _| state.core().cloned().unwrap());
+    let vault_id = state.read_with(cx, |state, _| state.vault_id().unwrap());
+    let key = core
+        .key_generate(KeyGenerateInput {
+            vault_id,
+            label: "ops key".into(),
+            kind: Default::default(),
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .unwrap()
+        .key;
+    let save = |state: &mut AppState, address: &str, cx: &mut gpui::Context<AppState>| {
+        state
+            .save_host(
+                None,
+                map(json!({
+                    "address": address,
+                    "ssh": {"username": "ops", "key_id": key.record_id.to_string()}
+                })),
+                cx,
+            )
+            .unwrap()
+            .record_id
+    };
+    let first = state.update(cx, |state, cx| save(state, "192.0.2.31", cx));
+    let second = state.update(cx, |state, cx| save(state, "192.0.2.32", cx));
+    cx.run_until_parked();
+
+    let (handle, panel) = open_host_panel(cx, &state, Some(first));
+    let shown = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("host-identity-hint")
+                .is_some_and(|found| found.visible())
+        })
+        .unwrap()
+    };
+    assert!(shown(cx), "two hosts share the username and the key");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-identity-hint-create", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let identities = core.identities_list().unwrap();
+    assert_eq!(identities.len(), 1);
+    assert_eq!(identities[0].key_id, Some(key.record_id));
+    let identity = identities[0].record_id;
+    panel.read_with(cx, |panel, _| {
+        assert_eq!(panel.draft().identity_id, Some(identity));
+        assert_eq!(panel.draft().key_id, None);
+        assert!(panel.draft().username.is_empty());
+    });
+    assert!(
+        !shown(cx),
+        "no hint once the identity holds the credentials"
+    );
+
+    // An edit autosaves the open host without undoing the merge.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-label", cx);
+        window.input("Ops 1", cx);
+    })
+    .unwrap();
+    settle(cx);
+    for id in [first, second] {
+        let RecordView::Host(host) = core
+            .record_get(RecordRef {
+                vault_id,
+                record_id: id,
+            })
+            .unwrap()
+        else {
+            panic!("a host");
+        };
+        let ssh = &host.data["ssh"];
+        assert_eq!(ssh["identity_id"], json!(identity.to_string()), "{id}");
+        assert!(ssh.get("key_id").is_none_or(Value::is_null));
+        assert!(ssh.get("username").is_none_or(Value::is_null));
+    }
+}

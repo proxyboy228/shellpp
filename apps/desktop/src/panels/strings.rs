@@ -214,3 +214,28 @@ pub fn reason(field: &str, reason: ValidationReason) -> &'static str {
         (_, ValidationReason::NotAllowed | ValidationReason::Invalid) => "This value is not valid.",
     }
 }
+
+/// The identity hint of the SSH block (UI 3.1, stage 3).
+pub const IDENTITY_HINT_CREATE: &str = "Create an identity";
+pub const IDENTITY_HINT_FAILED: &str = "The identity could not be created.";
+
+/// "This username and password are also used in N other hosts."
+pub fn identity_hint_password(others: usize) -> String {
+    match others {
+        1 => "This username and password are also used in 1 other host. One identity can hold them for all of them.".to_owned(),
+        n => format!("This username and password are also used in {n} other hosts. One identity can hold them for all of them."),
+    }
+}
+
+/// "This username and key are also used in N other hosts."
+pub fn identity_hint_key(others: usize) -> String {
+    match others {
+        1 => "This username and key are also used in 1 other host. One identity can hold them for all of them.".to_owned(),
+        n => format!("This username and key are also used in {n} other hosts. One identity can hold them for all of them."),
+    }
+}
+
+/// The toast after "Create an identity".
+pub fn identity_created(hosts: usize) -> String {
+    format!("Identity created for {hosts} hosts.")
+}

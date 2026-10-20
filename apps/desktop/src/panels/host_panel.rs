@@ -1378,6 +1378,7 @@ impl HostPanel {
             .when_some(port_error, |this, error| {
                 this.child(widgets::error_text(error, cx))
             })
+            .children(self.render_identity_hint(cx))
             .child(widgets::field(
                 strings::USERNAME,
                 widgets::text_input(

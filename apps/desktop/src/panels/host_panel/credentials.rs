@@ -35,7 +35,7 @@ use gpui_kit::component::{
 use secrecy::SecretString;
 use shellpp_core::CoreError;
 use shellpp_core::ValidationReason;
-use shellpp_core::service::dto::{KeyImportResult, KeyView};
+use shellpp_core::service::dto::{KeyImportResult, KeyView, RecordRef};
 use uuid::Uuid;
 
 use super::{Dropdown, HostPanel, new_input};
@@ -71,6 +71,9 @@ pub(super) struct Credentials {
     pub key_label: Entity<InputState>,
     pub key_passphrase: Entity<InputState>,
     pub certificate_text: Entity<TextareaState>,
+    /// "N hosts use the same credentials" (UI 3.1 hint, stage 3), for a
+    /// saved host without an identity.
+    pub hint: Option<shellpp_core::service::merge::IdentityHint>,
 }
 
 impl Credentials {
@@ -92,6 +95,7 @@ impl Credentials {
                 })
             };
         Self {
+            hint: None,
             form: None,
             identity_creating: false,
             identities: Vec::new(),
@@ -201,6 +205,103 @@ impl HostPanel {
         let state = self.state.read(cx);
         self.credentials.identities = state.identities();
         self.credentials.keys = state.keys();
+        self.credentials.hint = self.record_id.and_then(|id| {
+            let vault_id = state.host(id)?.vault_id;
+            state
+                .core()?
+                .identity_hint(RecordRef {
+                    vault_id,
+                    record_id: id,
+                })
+                .ok()
+                .flatten()
+        });
+    }
+
+    /// "Create an identity" of the hint (UI 3.1): saves a pending edit, lets
+    /// the core create the identity and move every host of the hint onto it,
+    /// then shows this host as the core left it (identity linked; username,
+    /// password and key cleared), so a later autosave writes the same.
+    pub fn accept_identity_hint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(record_id) = self.record_id else {
+            return;
+        };
+        self.flush(cx);
+        let state = self.state.read(cx);
+        let (Some(core), Some(vault_id)) = (
+            state.core().cloned(),
+            state.host(record_id).map(|host| host.vault_id),
+        ) else {
+            return;
+        };
+        let hosts = self
+            .credentials
+            .hint
+            .as_ref()
+            .map_or(0, |hint| hint.hosts.len());
+        match core.identity_from_hint(RecordRef {
+            vault_id,
+            record_id,
+        }) {
+            Ok(identity_id) => {
+                self.draft.identity_id = Some(identity_id);
+                self.draft.key_id = None;
+                self.draft.username.clear();
+                self.username
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.password
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                self.password_dirty = false;
+                self.password_stored = false;
+                self.autosave.cancel();
+                self.credentials.hint = None;
+                self.refresh_keychain(cx);
+                self.refresh_placeholders(window, cx);
+                cx.emit(PanelEvent::Toast(strings::identity_created(hosts).into()));
+            }
+            Err(error) => {
+                tracing::warn!(code = error.code(), "identity not created from the hint");
+                cx.emit(PanelEvent::Toast(strings::IDENTITY_HINT_FAILED.into()));
+            }
+        }
+        cx.notify();
+    }
+
+    /// The hint above the credentials (UI 3.1), when there is one.
+    pub(super) fn render_identity_hint(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let hint = self.credentials.hint.as_ref()?;
+        let others = hint.hosts.len().saturating_sub(1);
+        let text = match hint.kind {
+            shellpp_core::service::merge::IdentityHintKind::Password => {
+                strings::identity_hint_password(others)
+            }
+            shellpp_core::service::merge::IdentityHintKind::Key => {
+                strings::identity_hint_key(others)
+            }
+        };
+        Some(
+            v_flex()
+                .id("host-identity-hint")
+                .test_support()
+                .w_full()
+                .gap(metrics::SPACE_1)
+                .p(metrics::SPACE_2)
+                .rounded(metrics::RADIUS_CONTROL)
+                .bg(cx.theme().secondary)
+                .child(widgets::caption(text, cx))
+                .child(
+                    widgets::text_button(
+                        "host-identity-hint-create",
+                        strings::IDENTITY_HINT_CREATE,
+                        true,
+                        cx,
+                    )
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| this.accept_identity_hint(window, cx),
+                    )),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Opens the "+" form of `kind` (FIDO2, which the "+" does not offer

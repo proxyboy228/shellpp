@@ -419,8 +419,10 @@ The same form is used for creating and editing; it opens in the details panel.
      - a hint above the fields if the same login with a password or key is also used
        in N other hosts: a one-link offer to merge them into an identity.
        After the identity is created, all these hosts reference it, and changing the password
-       in one place applies to all of them. The hint arrives with the Keychain (stage 3) and
-       is hidden until then (section 0); it is not part of stage 1; [decision]
+       in one place applies to all of them. Shown since stage 3 (D40): for a saved host
+       without an identity, when other hosts share its effective username and saved
+       password, or its effective username and key; "Create an identity" makes one
+       identity (label = the username) and moves all of them onto it; [decision]
      - username;
      - password: masked, with a show/hide button;
      - a linked key is shown as a separate field with the key name from Keychain;
