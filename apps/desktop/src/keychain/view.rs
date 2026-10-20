@@ -271,8 +271,15 @@ impl KeychainScreen {
     }
 
     /// New key, Certificate and FIDO2 on the left; search, view toggle and
-    /// sort on the right (7.1). In a narrow area the right group wraps below.
+    /// sort on the right (7.1). In a narrow area the right group wraps below:
+    /// it never gets narrower than the search field's minimum and its
+    /// buttons, so it cannot slide under the left group.
     fn render_action_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Search, gap, view toggle (two buttons 4 px apart), gap, sort.
+        let right_min = SEARCH_MIN_WIDTH
+            + metrics::SPACE_2 * 2.
+            + metrics::HEIGHT_CONTROL * 3.
+            + metrics::SPACE_1;
         h_flex()
             .id("kc-action-bar")
             .test_support()
@@ -286,7 +293,7 @@ impl KeychainScreen {
                     .id("kc-action-bar-right")
                     .test_support()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(right_min)
                     .justify_end()
                     .items_center()
                     .gap(metrics::SPACE_2)

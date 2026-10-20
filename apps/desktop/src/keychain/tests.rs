@@ -664,6 +664,14 @@ fn the_label_is_saved_as_in_the_saving_rule(cx: &mut TestAppContext) {
     ui.type_into(cx, "kc-key-label", "Deploy key");
     ui.click(cx, "panel-close");
     assert_eq!(saved(&ui, cx), "Deploy key");
+    // And before an auto-lock (the windows save their edits first).
+    ui.click(cx, key_card_id(deploy.record_id));
+    ui.type_into(cx, "kc-key-label", " 2");
+    ui.state.update(cx, |_, cx| {
+        cx.emit(crate::state::AppStateEvent::AutoLockDue)
+    });
+    cx.run_until_parked();
+    assert_eq!(saved(&ui, cx), "Deploy key 2");
     ui.finish(cx);
 }
 
@@ -1228,6 +1236,14 @@ fn the_section_shows_the_screen_and_leaving_it_hides_the_key(cx: &mut TestAppCon
     assert!(!app.visible(cx, "section-placeholder"));
     let deploy = app.deploy(cx);
     app.click(cx, key_card_id(deploy.record_id));
+    // With the panel open the search wraps below the buttons instead of
+    // sliding under FIDO2.
+    let fido2 = app.bounds(cx, "kc-fido2").unwrap();
+    let search = app.bounds(cx, "kc-search-field").unwrap();
+    assert!(
+        fido2.right() <= search.left() || fido2.bottom() <= search.top(),
+        "{fido2:?} {search:?}"
+    );
     app.click(cx, "kc-key-show");
     assert!(app.visible(cx, "kc-key-private"));
     let screen = app.screen(cx);
@@ -1270,11 +1286,18 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
         main.size.width >= crate::shell::details::MAIN_AREA_MIN,
         "{main:?}"
     );
-    // The action bar's buttons stay inside the main area.
+    // The action bar's buttons stay inside the main area, and the search
+    // never slides under FIDO2: it wraps below when there is no room.
     for id in ["kc-new-key", "kc-fido2", "kc-sort"] {
         let button = app.bounds(cx, id).unwrap();
         assert!(button.right() <= main.right() + px(0.5), "{id} {button:?}");
     }
+    let fido2 = app.bounds(cx, "kc-fido2").unwrap();
+    let search = app.bounds(cx, "kc-search-field").unwrap();
+    assert!(
+        fido2.right() <= search.left() || fido2.bottom() <= search.top(),
+        "{fido2:?} {search:?}"
+    );
     app.click(cx, "panel-close");
     assert_eq!(
         app.bounds(cx, "sidebar").unwrap().size.width,

@@ -233,6 +233,13 @@ impl KeyPanel {
         cx.notify();
     }
 
+    /// The lock: drops the shown key and a label edit that can no longer
+    /// be saved.
+    pub fn discard(&mut self, cx: &mut Context<Self>) {
+        self.autosave.cancel();
+        self.hide(cx);
+    }
+
     /// Asks the screen to close the panel.
     pub(super) fn close(&mut self, cx: &mut Context<Self>) {
         self.flush(cx);

@@ -492,8 +492,14 @@ impl KeychainScreen {
                 AppStateEvent::LockChanged(_) => {
                     if !this.state.read(cx).is_unlocked() {
                         // Locked: no key text, typed passphrase or list
-                        // stays on screen or in memory.
-                        this.drop_panel(cx);
+                        // stays on screen or in memory. A label edit still
+                        // waiting cannot be saved any more (the keys are
+                        // gone); the auto-lock saved it first.
+                        if let Some(PanelContent::Key(panel)) = this.panel.take() {
+                            panel.update(cx, |panel, cx| panel.discard(cx));
+                        }
+                        this.panel = None;
+                        this.panel_subscriptions.clear();
                         this.selected = None;
                         this.loading = None;
                         this.keys = Vec::new();
@@ -502,9 +508,13 @@ impl KeychainScreen {
                     }
                     this.invalidate(cx);
                 }
-                AppStateEvent::SelectionChanged
-                | AppStateEvent::LocationChanged(_)
-                | AppStateEvent::AutoLockDue => {}
+                // The windows save their pending edits before the auto-lock.
+                AppStateEvent::AutoLockDue => {
+                    if let Some(PanelContent::Key(panel)) = &this.panel {
+                        panel.update(cx, |panel, cx| panel.flush(cx));
+                    }
+                }
+                AppStateEvent::SelectionChanged | AppStateEvent::LocationChanged(_) => {}
             });
         let (layout, sort) = saved_view(state.read(cx));
         Self {
