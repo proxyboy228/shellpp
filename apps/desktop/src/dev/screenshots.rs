@@ -738,6 +738,8 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
             theme::install(Appearance::Dark, cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
+            // Never the user's ~/.ssh in the Keychain either.
+            crate::keychain::set_ssh_folder(None, cx);
             let state = cx.new(|cx| AppState::new(opened, cx));
             // The session tabs of the terminal states: never the user's
             // ~/.ssh or agent (the test server's hosts have a password).
