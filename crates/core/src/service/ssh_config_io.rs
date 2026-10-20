@@ -78,6 +78,22 @@ const COMMANDS: [&str; 4] = [
     "knownhostscommand",
 ];
 
+/// The lines of the file (Include'd files too) that hold a command, each
+/// counted once: `PermitLocalCommand no` and `ProxyCommand none` hold none.
+fn commands_in(config: &Config) -> usize {
+    config
+        .blocks
+        .iter()
+        .flat_map(|block| &block.options)
+        .filter(|directive| COMMANDS.contains(&directive.keyword.as_str()))
+        .filter(|directive| {
+            directive.args.first().is_some_and(|value| {
+                !value.eq_ignore_ascii_case("none") && !value.eq_ignore_ascii_case("no")
+            })
+        })
+        .count()
+}
+
 /// The `notes` of an imported host: what the import left out.
 fn host_notes(notes: &[String]) -> Option<String> {
     if notes.is_empty() {
@@ -134,8 +150,6 @@ struct HostPlan {
     jump_raw: Vec<String>,
     notes: Vec<String>,
     error: Option<String>,
-    /// [`COMMANDS`] keywords among the options.
-    commands: usize,
 }
 
 fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
@@ -286,10 +300,6 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         jump_raw,
         notes,
         error,
-        commands: COMMANDS
-            .iter()
-            .filter(|keyword| options.contains_key(**keyword))
-            .count(),
     }
 }
 
@@ -488,7 +498,7 @@ impl Core {
         let (config, plans) = Self::ssh_config_plans(&input.source)?;
         let mut imported = self.imported_aliases()?;
         let mut summary = SshConfigImportSummary {
-            commands_skipped: plans.iter().map(|plan| plan.commands).sum::<usize>()
+            commands_skipped: commands_in(&config)
                 + config
                     .problems
                     .iter()

@@ -669,10 +669,11 @@ fn read_file(path: &Path) -> Result<SecretString, &'static str> {
     if metadata.len() > MAX_FILE_BYTES {
         return Err(strings::FILE_TOO_LARGE);
     }
-    // One byte more than the size, so a file that grew is seen at its end
-    // without the buffer moving.
+    // Exactly the size: the text then fills its buffer, so neither the
+    // read (which probes for the end on the stack) nor the secret (which
+    // shrinks a buffer to its length) moves it and leaves a copy behind.
     let size = usize::try_from(metadata.len()).map_err(|_| strings::FILE_TOO_LARGE)?;
-    let mut bytes = Zeroizing::new(Vec::with_capacity(size + 1));
+    let mut bytes = Zeroizing::new(Vec::with_capacity(size));
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| strings::FILE_NOT_EXPORT)?;

@@ -356,7 +356,8 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
         "Host bastion\n  HostName 192.0.2.10\n\
          Host legacy\n  HostName 192.0.2.11\n  ProxyCommand nc %h %p\n\
          Host app\n  HostName 10.0.0.5\n  ProxyJump bastion\n\
-         Host old-app\n  HostName 10.0.0.6\n  ProxyJump legacy\n",
+         Host old-app\n  HostName 10.0.0.6\n  ProxyJump legacy\n\
+         Host *\n  PermitLocalCommand no\n  LocalCommand echo hi\n",
     );
     let source = SshConfigSource {
         path: ssh.join("config"),
@@ -390,7 +391,9 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
         .unwrap();
     assert_eq!(summary.added, 2);
     assert_eq!(summary.jump_chains_left_out, 2);
-    assert_eq!(summary.commands_skipped, 1);
+    // legacy's ProxyCommand and the one LocalCommand line of Host *, which
+    // applies to four hosts; "PermitLocalCommand no" holds no command.
+    assert_eq!(summary.commands_skipped, 2);
     let hosts: Vec<_> = u
         .core
         .records_query(RecordsQuery {
