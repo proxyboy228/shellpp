@@ -36,6 +36,7 @@ pub const REASON_KEY_UNUSABLE: &str = "The private key cannot be used.";
 pub const REASON_LOCKED: &str = "Shell++ is locked. Unlock it and try again.";
 pub const REASON_HOST_MISSING: &str = "The host no longer exists.";
 pub const REASON_INVALID_TARGET: &str = "The address, port or username is not valid.";
+pub const REASON_JUMP_HOSTS: &str = "This host connects through jump hosts, which Shell++ does not support yet. It is not connected directly.";
 pub const REASON_LOCAL_SHELL: &str = "The local shell could not be started.";
 pub const REASON_OTHER: &str = "Something went wrong. Try again.";
 

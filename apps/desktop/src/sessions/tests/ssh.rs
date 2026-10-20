@@ -340,6 +340,26 @@ async fn quick_connect_targets_are_validated() {
     assert_eq!(missing.err(), Some(SessionError::HostMissing));
 }
 
+/// A host with jump hosts is refused until they are supported (stage 5):
+/// it is never connected directly instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_with_jump_hosts_is_not_connected_directly() {
+    let harness = Harness::new();
+    let bastion = harness.host(2222, json!({}), None);
+    let SessionTarget::Host { record_id, .. } = bastion else {
+        panic!("a saved host");
+    };
+    let target = harness.host(
+        22,
+        json!({"ssh": {"jump_chain": [record_id.to_string()]}}),
+        None,
+    );
+    let error = harness
+        .open_with(OpenRequest::Ssh(target), Arc::new(TestTerminal::default()))
+        .err();
+    assert_eq!(error, Some(SessionError::JumpHostsUnsupported));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_key_file_passphrase_is_asked_once_and_remembered_for_the_session() {
     let harness = Harness::new();

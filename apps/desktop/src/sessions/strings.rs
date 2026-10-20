@@ -107,6 +107,9 @@ pub fn error_message(error: SessionError) -> &'static str {
         SessionError::Locked => "Shell++ is locked.",
         SessionError::HostMissing => "The host no longer exists.",
         SessionError::InvalidTarget => "The address is not valid.",
+        SessionError::JumpHostsUnsupported => {
+            "This host connects through jump hosts, which Shell++ does not support yet."
+        }
         SessionError::ShellUnavailable => "The local shell could not be started.",
         SessionError::Internal => "Something went wrong. Try again.",
     }

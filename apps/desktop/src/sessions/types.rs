@@ -308,6 +308,9 @@ pub enum SessionError {
     HostMissing,
     /// The quick-connect address, port or username is not valid.
     InvalidTarget,
+    /// The host connects through jump hosts, which arrive with stage 5; it
+    /// is never connected directly instead.
+    JumpHostsUnsupported,
     /// The local shell could not be started.
     ShellUnavailable,
     /// Something else went wrong (storage error).

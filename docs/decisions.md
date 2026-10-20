@@ -688,3 +688,15 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11:
 - Export asks for a folder; the core writes `shellpp-ssh-config` and the key files (private keys for the user only, D42). When files of the export are already in the folder, the dialog says so and writes only after "Replace" (Back returns to the form); a toast names the hosts and keys written.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).
+
+### 44. Hosts with jump hosts before stage 5 (night)
+
+Status: night decision, 2026-10-21 (second review of stage 3; D35; jump hosts are stage 5).
+
+**Decision:**
+
+- A connection to a saved host whose effective `jump_chain` (own, else inherited; `[]` stops the lookup) has hops is refused with "This host connects through jump hosts, which Shell++ does not support yet. It is not connected directly." The failure screen offers Close only.
+- Until now such a host connected directly: its credentials would go to whatever answers at that address from this machine (often another host of the local network for a private address). The `~/.ssh/config` import now fills `jump_chain` from ProxyJump, so the case is common.
+- Stage 5 replaces the refusal with Host Chaining.
+
+**Spec impact:** none (a temporary rule until stage 5).

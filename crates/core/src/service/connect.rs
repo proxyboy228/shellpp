@@ -264,6 +264,14 @@ fn distinct(ids: &[Uuid]) -> Vec<Uuid> {
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
 }
 
+/// The hops of a host's own `ssh.jump_chain`; `None` when it sets none
+/// (`[]` is set: it stops the lookup).
+fn jump_chain_len(ssh: Option<&Map<String, Value>>) -> Option<usize> {
+    ssh.and_then(|ssh| ssh.get("jump_chain"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+}
+
 /// The identity a host's own `ssh.identity_id` names (`idf(0)`,
 /// docs/data-model.md, section 8.3).
 fn own_identity<'a>(
@@ -630,6 +638,9 @@ impl Core {
                     os,
                     known_key_types: known_hosts::known_key_types(&entries, &address, port),
                     can_save_password: true,
+                    jump_hosts: jump_chain_len(ssh).unwrap_or_else(|| {
+                        inherited.jump_chain.map_or(0, |chain| chain.value.len())
+                    }),
                     address,
                 })
             }
@@ -689,6 +700,7 @@ impl Core {
                     os: None,
                     known_key_types: known_hosts::known_key_types(&entries, &address, port),
                     can_save_password: false,
+                    jump_hosts: 0,
                     address,
                 })
             }

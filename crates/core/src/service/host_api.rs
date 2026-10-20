@@ -23,7 +23,8 @@ pub struct SessionConfig {
     pub port: u16,
     /// Effective username (own, inherited); `None` = ask (UI 4.8).
     pub username: Option<String>,
-    /// Effective password (`host.ssh.password`; identities are stage 3).
+    /// Effective password (`host.ssh.password`, else the identity's,
+    /// docs/data-model.md, section 8.3).
     pub password: Option<SecretString>,
     /// Effective key (`ssh.key_id`, own or inherited). A missing key record
     /// counts as unset (docs/data-model.md, section 8.3).
@@ -54,6 +55,10 @@ pub struct SessionConfig {
     pub known_key_types: Vec<String>,
     /// A prompted password may be saved: a saved host in the personal vault.
     pub can_save_password: bool,
+    /// Hops of the effective `jump_chain` (own, else inherited; `[]` stops
+    /// the lookup). Jump hosts arrive with stage 5: until then a host with
+    /// hops is refused instead of connected directly.
+    pub jump_hosts: usize,
 }
 
 impl fmt::Debug for SessionConfig {

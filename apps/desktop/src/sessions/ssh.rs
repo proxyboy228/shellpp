@@ -427,6 +427,7 @@ impl SshTask {
             Some(Err(error)) => return Err(core_error(&error)),
             None => return Err(SessionError::Internal),
         };
+        super::refuse_jump_hosts(&config)?;
         let encoding = charset::encoding_for(&config.charset);
         let session_id = self.session.id;
         let default_theme = self.settings.default_theme.clone();

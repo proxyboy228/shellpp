@@ -90,6 +90,8 @@ pub enum Failure {
     HostMissing,
     /// The quick-connect address, port or username is not valid.
     InvalidTarget,
+    /// The host has jump hosts, which arrive with stage 5.
+    JumpHosts,
     /// The local shell could not be started.
     LocalShell,
     /// Anything else (a storage error, no session layer).
@@ -118,6 +120,7 @@ impl Failure {
             Failure::Locked => strings::REASON_LOCKED,
             Failure::HostMissing => strings::REASON_HOST_MISSING,
             Failure::InvalidTarget => strings::REASON_INVALID_TARGET,
+            Failure::JumpHosts => strings::REASON_JUMP_HOSTS,
             Failure::LocalShell => strings::REASON_LOCAL_SHELL,
             Failure::Other => strings::REASON_OTHER,
         }
@@ -129,7 +132,10 @@ impl Failure {
     pub fn can_retry(self) -> bool {
         !matches!(
             self,
-            Failure::HostKeyRevoked | Failure::HostMissing | Failure::InvalidTarget
+            Failure::HostKeyRevoked
+                | Failure::HostMissing
+                | Failure::InvalidTarget
+                | Failure::JumpHosts
         )
     }
 
@@ -154,13 +160,14 @@ impl Failure {
             Failure::Locked => "locked",
             Failure::HostMissing => "host_missing",
             Failure::InvalidTarget => "invalid_target",
+            Failure::JumpHosts => "jump_hosts",
             Failure::LocalShell => "local_shell",
             Failure::Other => "other",
         }
     }
 
     /// Every reason (tests).
-    pub const ALL: [Failure; 20] = [
+    pub const ALL: [Failure; 21] = [
         Failure::NotFound,
         Failure::Refused,
         Failure::Timeout,
@@ -179,6 +186,7 @@ impl Failure {
         Failure::Locked,
         Failure::HostMissing,
         Failure::InvalidTarget,
+        Failure::JumpHosts,
         Failure::LocalShell,
         Failure::Other,
     ];

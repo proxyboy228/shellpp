@@ -688,3 +688,25 @@ fn last_session_round_trip() {
         CoreError::Locked
     ));
 }
+
+/// The hops of the effective jump chain (own, else inherited; `[]` stops
+/// the lookup): the session layer refuses a host with hops until jump
+/// hosts are supported (stage 5).
+#[test]
+fn the_effective_jump_chain_is_counted() {
+    let u = first_run();
+    let bastion = u.host(json!({"address": "192.0.2.60"}));
+    let chain = json!([bastion.record_id.to_string()]);
+    let group = u.group(json!({"name": "behind", "ssh": {"jump_chain": chain}}));
+    let own = u.host(json!({"address": "10.0.0.5", "ssh": {"jump_chain": chain}}));
+    let inherited = u.host(json!({"address": "10.0.0.6", "group_id": group.record_id.to_string()}));
+    let stopped = u.host(json!({
+        "address": "10.0.0.7",
+        "group_id": group.record_id.to_string(),
+        "ssh": {"jump_chain": []}
+    }));
+    assert_eq!(config(&u, own.record_id).jump_hosts, 1);
+    assert_eq!(config(&u, inherited.record_id).jump_hosts, 1);
+    assert_eq!(config(&u, stopped.record_id).jump_hosts, 0);
+    assert_eq!(config(&u, bastion.record_id).jump_hosts, 0);
+}
