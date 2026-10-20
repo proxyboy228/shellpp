@@ -1349,6 +1349,10 @@ pub struct DataImportSummary {
     pub refused: Vec<DataImportRefusal>,
     /// App settings applied from the export.
     pub settings: usize,
+    /// Settings of the file an import never applies (commands, programs,
+    /// URLs and security settings, D41) whose value differs from the one
+    /// here.
+    pub settings_left_out: usize,
 }
 
 /// Result of `key_import`.

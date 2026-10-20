@@ -651,3 +651,16 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 7; 
 - Identical keys (same fingerprint) are merged by the core (data-model 18.3, `keys_merge`); since imports already match keys by fingerprint, duplicates arrive only by sync, so the Keychain's merge hint waits for stage 7.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru/`).
+
+### 41. Which settings Import Data applies (night)
+
+Status: night decision, 2026-10-21 (review of stage 3; D34, D38; security.md TB7).
+
+**Decision:**
+
+- Import Data applies only the settings of how the app and the terminal look and behave: `appearance.*`, `view.*`, `shortcuts.*`, `hints.*`, the terminal's autocomplete, autoreconnect, bell, bold as bright, copy on select, cursor, default theme, font, highlighting, keepalive, line height, minimum contrast and `TERM`, and SFTP's hidden files and parallel transfers.
+- A setting that runs or opens something (`terminal.os_detection_script` and `terminal.os_detection_enabled`, `terminal.local_shell`, `sftp.open_program`), points somewhere (`updates.manifest_url`, `updates.auto_check`) or guards the user (`security.auto_lock_minutes`, `terminal.confirm_multiline_paste`, `sftp.confirm_delete`, `sftp.name_conflict`, `terminal.record_history`, `terminal.import_shell_history`, `logs.*`) never comes from a file: a shared "host list" could otherwise run its script on every server the user opens. Keys added later are left out until they are listed.
+- The export still holds every setting (a backup); the summary counts the settings left out whose value in the file differs from the one here. "Apply the settings in the file" stays on by default, since what it can change is now harmless.
+- Conflict copies get the `import_key` `json:<exported record_id>` and a later import matches it (data-model 18.4); keys and known hosts are matched before any reference is rewritten (export-format.md, section 4).
+
+**Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).

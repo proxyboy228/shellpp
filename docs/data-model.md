@@ -1087,7 +1087,7 @@ Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, 
 |---|---|---|
 | `~/.ssh/config` | `ssh_config:<first alias of the Host line>` on the host | none |
 | PuTTY sessions | `putty:<session name>` on the host | none |
-| Native JSON (plain or encrypted) | `json:<exported record_id>` on every imported record | none |
+| Native JSON (plain or encrypted) | `json:<exported record_id>` on a conflict copy; a record added under its exported id keeps the export's own `import_key` and is matched by `record_id` | none |
 | CSV | none | (address, port, username) |
 | known_hosts | none | (`host`, `port`, `key_type`, `public_key`, `marker`) |
 | Key files (`IdentityFile`, Keychain import) | none | SHA256 fingerprint of the public key |

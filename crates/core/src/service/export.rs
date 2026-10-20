@@ -20,7 +20,11 @@
 //! - Groups, hosts, keys, identities and known hosts are imported, each
 //!   checked by the same rules as a save; history, the connection log and
 //!   device records are skipped and counted.
-//! - Existing records are never overwritten (D21).
+//! - Existing records are never overwritten (D21); a copy carries the
+//!   `import_key` `json:<exported id>`, so the next import finds it.
+//! - Only the settings of how the app looks and behaves are applied
+//!   ([`imported_setting`], D41); commands, programs, URLs and security
+//!   settings stay as they are here.
 //!
 //! Nothing here logs record content; the plain text and its copies are
 //! wiped.
@@ -59,6 +63,9 @@ use crate::model::{key, text};
 pub const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
 /// Most records one import takes.
 pub const MAX_IMPORT_RECORDS: usize = 500_000;
+/// The `import_key` prefix of an imported copy: `json:<exported id>`
+/// (docs/data-model.md, section 18.4).
+const JSON_IMPORT_KEY: &str = "json:";
 /// The suffix of an imported copy whose id exists here with other content.
 pub const CONFLICT_SUFFIX: &str = " (imported)";
 /// Groups deeper than this, or in a cycle, go to the top level.
@@ -72,6 +79,39 @@ const IMPORTED: [RecordKind; 5] = [
     RecordKind::Host,
     RecordKind::KnownHost,
 ];
+
+/// The settings an import applies (D41): how the app and the terminal look
+/// and behave. A setting that runs or opens something (the OS detection
+/// script and its switch, the local shell, the SFTP open program), points
+/// somewhere (the update manifest) or guards the user (auto-lock, the
+/// paste, delete and name-conflict questions, what is recorded or logged)
+/// never comes from a file: a shared "host list" could otherwise run its
+/// script on every server the user opens (security.md, TB7).
+pub fn imported_setting(key: &str) -> bool {
+    const TERMINAL_AND_SFTP: [&str; 17] = [
+        "terminal.autocomplete",
+        "terminal.autoreconnect",
+        "terminal.bell_sound",
+        "terminal.bold_is_bright",
+        "terminal.copy_on_select",
+        "terminal.cursor_blink",
+        "terminal.cursor_style",
+        "terminal.default_theme",
+        "terminal.font_family",
+        "terminal.font_size",
+        "terminal.highlighting_enabled",
+        "terminal.keepalive_s",
+        "terminal.line_height",
+        "terminal.min_contrast",
+        "terminal.term",
+        "sftp.parallel_transfers",
+        "sftp.show_hidden",
+    ];
+    ["appearance.", "view.", "shortcuts.", "hints."]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+        || TERMINAL_AND_SFTP.contains(&key)
+}
 
 /// Records never exported (docs/storage-format.md, section 13.2).
 fn exported(kind: RecordKind) -> bool {
@@ -87,11 +127,53 @@ fn label_member(kind: RecordKind) -> Option<&'static str> {
     }
 }
 
-/// `data` without the members that change with the place in a list.
-fn comparable(data: &Map<String, Value>) -> Map<String, Value> {
-    let mut data = data.clone();
-    data.remove("order_key");
-    data
+/// Whether `local` holds what `incoming` holds once the ids of `map` are
+/// rewritten, the members that change with the place in a list aside.
+/// Compares in place: no copy of the secrets is made.
+fn same_content(
+    local: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    map: &HashMap<Uuid, Uuid>,
+) -> bool {
+    let members = |data: &Map<String, Value>| {
+        data.iter()
+            .filter(|(name, _)| name.as_str() != "order_key")
+            .count()
+    };
+    members(local) == members(incoming)
+        && incoming.iter().all(|(name, value)| {
+            name == "order_key"
+                || local
+                    .get(name)
+                    .is_some_and(|here| same_value(here, value, map))
+        })
+}
+
+fn same_value(here: &Value, incoming: &Value, map: &HashMap<Uuid, Uuid>) -> bool {
+    match (here, incoming) {
+        (Value::String(here), Value::String(text)) => {
+            here == text
+                || Uuid::parse_str(text)
+                    .ok()
+                    .and_then(|id| map.get(&id))
+                    .is_some_and(|id| id.to_string() == *here)
+        }
+        (Value::Array(here), Value::Array(items)) => {
+            here.len() == items.len()
+                && here
+                    .iter()
+                    .zip(items)
+                    .all(|(here, item)| same_value(here, item, map))
+        }
+        (Value::Object(here), Value::Object(members)) => {
+            here.len() == members.len()
+                && members.iter().all(|(name, value)| {
+                    here.get(name)
+                        .is_some_and(|local| same_value(local, value, map))
+                })
+        }
+        _ => here == incoming,
+    }
 }
 
 /// Rewrites every string in `value` that is an id of `map`.
@@ -228,7 +310,7 @@ fn check(
 }
 
 /// The members a save never takes from its input (`host::MANAGED`,
-/// `identity::MANAGED`) come from the export here: `import_key` (so a
+/// `identity::MANAGED`, a key's `import_key`) come from the export here: `import_key` (so a
 /// later import of the original source still sees the record) and a
 /// host's detected `os`. Each is checked first; a bad value is left out.
 fn restore_managed(
@@ -238,7 +320,7 @@ fn restore_managed(
 ) {
     if matches!(
         kind,
-        RecordKind::Host | RecordKind::Group | RecordKind::Identity
+        RecordKind::Host | RecordKind::Group | RecordKind::Identity | RecordKind::Key
     ) && let Some(raw) = incoming.get("import_key").and_then(Value::as_str)
         && let Ok(Some(import_key)) = text::string(raw, MAX_IMPORT_KEY_CHARS)
     {
@@ -288,6 +370,11 @@ fn check_key(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldE
         &parsed.public_key,
         key::passphrase(data).filter(|_| parsed.encrypted),
     );
+    // A security key's `fido2` member (data-model 9.1, D37) comes from the
+    // key itself, as on a Keychain import, never from the file.
+    if let Some(fido2) = keys::fido2_member(&parsed.text) {
+        built.insert("fido2".into(), fido2);
+    }
     if let Some(certificate) = data.get("certificate").and_then(Value::as_str) {
         match crate::service::keychain::check_certificate(certificate, &built) {
             Ok(Some(line)) => {
@@ -567,17 +654,73 @@ impl Core {
                     known_host::read(record.data()).map(|entry| (entry, record.record_id))
                 })
                 .collect();
-            let mut decided: Vec<(Incoming, Option<Uuid>)> = Vec::new();
+            // Copies made by earlier imports, by the id they were copied
+            // from (`import_key` "json:<id>", data-model 18.4).
+            let copies: HashMap<(RecordKind, Uuid), Uuid> = IMPORTED
+                .iter()
+                .flat_map(|kind| parts.session.index.of_kind(*kind))
+                .filter_map(|record| {
+                    let source = record
+                        .data()
+                        .get("import_key")
+                        .and_then(Value::as_str)?
+                        .strip_prefix(JSON_IMPORT_KEY)?;
+                    let source = Uuid::parse_str(source).ok()?;
+                    Some(((record.kind, source), record.record_id))
+                })
+                .collect();
+            // Every match is decided before any reference is rewritten.
+            // First the keys and known hosts found here under another id:
+            // they stay local, and a group or host that names one of them
+            // points to the local record (export-format.md, section 4).
+            let mut rest: Vec<Incoming> = Vec::new();
             for record in incoming {
+                let local = parts.session.index.get(&record.record_id);
+                if local.is_some_and(|local| {
+                    local.kind == record.kind && same_content(local.data(), &record.data, &map)
+                }) {
+                    summary.existing += 1;
+                    continue;
+                }
+                let same = match record.kind {
+                    RecordKind::Key => keys::record_fingerprint(&record.data)
+                        .and_then(|print| fingerprints.get(&print).copied()),
+                    RecordKind::KnownHost => known_host::read(&record.data).and_then(|entry| {
+                        known
+                            .iter()
+                            .find(|(local, _)| known_host::same_natural_key(local, &entry))
+                            .map(|(_, existing)| *existing)
+                    }),
+                    _ => None,
+                };
+                if let Some(existing) = same {
+                    if existing != record.record_id {
+                        map.insert(record.record_id, existing);
+                    }
+                    summary.existing += 1;
+                } else {
+                    rest.push(record);
+                }
+            }
+            // Then the others, compared with those references rewritten: an
+            // id here with other content is a conflict, unless an earlier
+            // import of the same record made its copy already.
+            let mut decided: Vec<(Incoming, Option<Uuid>)> = Vec::new();
+            for record in rest {
                 let local = parts.session.index.get(&record.record_id);
                 match local {
                     Some(local)
                         if local.kind == record.kind
-                            && comparable(local.data()) == comparable(&record.data) =>
+                            && same_content(local.data(), &record.data, &map) =>
                     {
                         summary.existing += 1;
                     }
                     Some(_) => {
+                        if let Some(copy) = copies.get(&(record.kind, record.record_id)) {
+                            map.insert(record.record_id, *copy);
+                            summary.existing += 1;
+                            continue;
+                        }
                         let copy = parts.ids.next(now);
                         map.insert(record.record_id, copy);
                         decided.push((record, Some(copy)));
@@ -603,32 +746,19 @@ impl Core {
                         continue;
                     }
                 };
-                // The same key or known host under another id stays local.
-                if record.kind == RecordKind::Key
-                    && let Some(existing) = keys::record_fingerprint(&data)
-                        .and_then(|print| fingerprints.get(&print).copied())
-                {
-                    map.insert(record.record_id, existing);
-                    summary.existing += 1;
-                    crate::model::wipe::wipe_map(&mut data);
-                    continue;
-                }
-                if record.kind == RecordKind::KnownHost
-                    && let Some(entry) = known_host::read(&data)
-                    && let Some((_, existing)) = known
-                        .iter()
-                        .find(|(local, _)| known_host::same_natural_key(local, &entry))
-                {
-                    map.insert(record.record_id, *existing);
-                    summary.existing += 1;
-                    continue;
-                }
                 if copy.is_some() {
                     if let Some(member) = label_member(record.kind)
                         && let Some(label) = data.get(member).and_then(Value::as_str)
                     {
                         let label = suffixed(label);
                         data.insert(member.into(), Value::String(label));
+                    }
+                    // A later import of the same record finds this copy.
+                    if label_member(record.kind).is_some() {
+                        data.insert(
+                            "import_key".into(),
+                            Value::String(format!("{JSON_IMPORT_KEY}{}", record.record_id)),
+                        );
                     }
                     summary.conflicts += 1;
                 } else {
@@ -650,8 +780,17 @@ impl Core {
             }
         }
         if let Some(settings) = settings {
-            // Settings one by one: an unknown or invalid key is left out.
+            let local = self.inner().settings.values();
+            // Settings one by one: an unknown or invalid key is left out,
+            // and so is every setting D41 keeps local (counted when the
+            // file's value differs from the one here).
             for (key, value) in settings.values {
+                if !imported_setting(&key) {
+                    if local.get(&key).is_some_and(|here| *here != value) {
+                        summary.settings_left_out += 1;
+                    }
+                    continue;
+                }
                 let one = SettingsSetInput {
                     values: BTreeMap::from([(key, value)]),
                     reset: Vec::new(),

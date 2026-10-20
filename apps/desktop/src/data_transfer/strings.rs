@@ -41,6 +41,8 @@ pub const SUMMARY_CONFLICTS: &str = "Imported as copies";
 pub const SUMMARY_SKIPPED: &str = "Skipped (history, logs, device data)";
 pub const SUMMARY_ERRORS: &str = "Errors";
 pub const SUMMARY_SETTINGS: &str = "Settings applied";
+pub const SUMMARY_SETTINGS_LEFT_OUT: &str =
+    "Settings kept as they are here (programs, scripts, security)";
 
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";

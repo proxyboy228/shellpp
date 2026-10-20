@@ -2,7 +2,8 @@
 //! stage 3 item 6; docs/data-model.md, section 9.3): OpenSSH
 //! `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com`
 //! private keys (application, flags and key handle; no secret scalar) are
-//! imported with their `fido2` member. No authenticator is used: the keys
+//! imported with their `fido2` member, which Import Data keeps. No
+//! authenticator is used: the keys
 //! are built here from random public keys and key handles. Signing with
 //! them comes with the authenticator support (see the night report).
 
@@ -95,4 +96,28 @@ fn security_keys_are_imported_with_their_fido2_member() {
         fido2(ecdsa.record_id),
         serde_json::json!({"resident": false})
     );
+
+    // Import Data into another store keeps the member (it comes from the
+    // key itself).
+    let target = first_run();
+    let summary = target
+        .core
+        .data_import(shellpp_core::service::dto::DataImportInput {
+            text: export.text.clone(),
+            password: None,
+            apply_settings: false,
+        })
+        .expect("import");
+    assert_eq!(summary.added, 2);
+    let again = target.core.data_export(Default::default()).expect("export");
+    let copied: serde_json::Value =
+        serde_json::from_str(secrecy::ExposeSecret::expose_secret(&again.text)).unwrap();
+    let resident = copied["vaults"][0]["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["record_id"] == ed.record_id.to_string())
+        .unwrap()["data"]["fido2"]
+        .clone();
+    assert_eq!(resident, serde_json::json!({"resident": true}));
 }

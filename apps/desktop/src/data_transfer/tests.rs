@@ -299,3 +299,34 @@ fn a_file_that_is_not_an_export_is_refused(cx: &mut TestAppContext) {
         }
     );
 }
+
+#[gpui_kit::test]
+fn the_summary_names_the_settings_kept_here(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[]);
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let text = core
+        .data_export(Default::default())
+        .unwrap()
+        .text
+        .expose_secret()
+        .to_owned();
+    let mut document: Value = serde_json::from_str(&text).unwrap();
+    // A script for every server: never applied from a file (D41).
+    document["settings"]["terminal.os_detection_script"] = json!("echo from the file");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("shared.json");
+    std::fs::write(&file, document.to_string()).unwrap();
+    let import = ui.import(cx);
+    ui.frame(cx, |window, cx| {
+        import.update(cx, |dialog, cx| dialog.set_path(&file, window, cx))
+    });
+    ui.click(cx, "data-import-run");
+    let ImportStep::Summary(summary) = import.read_with(cx, |dialog, _| dialog.step().clone())
+    else {
+        panic!("no summary");
+    };
+    assert_eq!(summary.settings_left_out, 1);
+    assert!(ui.visible(cx, "data-import-settings-left-out"));
+}

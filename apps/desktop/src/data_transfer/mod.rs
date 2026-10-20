@@ -12,7 +12,8 @@
 //! - Import: a file (typed or chosen), "Apply the settings in the file"
 //!   (on); an encrypted file asks for its password; the import runs off the
 //!   UI thread and ends with the summary (added, already here, imported as
-//!   copies, skipped, errors, settings).
+//!   copies, skipped, errors, settings; the settings an import never
+//!   applies, D41, when the file has other values for them).
 //!
 //! Nothing here logs paths, passwords or the file's content; the text of a
 //! file is held as a secret until the import has run.
@@ -706,6 +707,15 @@ impl ImportDialog {
                 strings::SUMMARY_SETTINGS,
                 summary.settings,
             ))
+            // Settings an import never applies (D41), only when the file
+            // has other values for them.
+            .when(summary.settings_left_out > 0, |this| {
+                this.child(row(
+                    "data-import-settings-left-out",
+                    strings::SUMMARY_SETTINGS_LEFT_OUT,
+                    summary.settings_left_out,
+                ))
+            })
     }
 }
 

@@ -133,7 +133,10 @@
    Then, between separators, **Import Data…** and **Export Data…** (D38): the native JSON
    export of all data, plain or encrypted with a password, and its import (principle 4,
    [export-format.md](export-format.md)). The plain export warns first that the file holds
-   every secret in clear text and asks for "I understand". [decision]
+   every secret in clear text and asks for "I understand". The import applies only the
+   settings of how the app and the terminal look and behave; a setting that runs or opens
+   something, points somewhere or guards the user stays as it is here, and the summary
+   counts those whose value in the file differs (D41). [decision]
 7. Edit ▸: undo, redo, cut, copy, paste, select all. [decision]
 8. View ▸: interface zoom, full-screen mode, show or hide
    the sidebar. [decision]

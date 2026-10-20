@@ -133,13 +133,27 @@ merges them into the personal vault (D34):
   host with the same entry is "already exists" and skipped; references to
   it point to the local record.
 - A record whose id exists here with other content is a conflict: both
-  versions are kept. The imported one gets a new id and the suffix
-  " (imported)" on its label or name; references inside the import point
-  to it. Existing records are never overwritten (D21).
+  versions are kept. The imported one gets a new id, the suffix
+  " (imported)" on its label or name and the `import_key`
+  `json:<exported record_id>`; references inside the import point to it.
+  A later import of the same record finds that copy by its `import_key`
+  and adds no other one. Existing records are never overwritten (D21).
+- Keys and known hosts are matched first, so a record that names a key
+  found here under another id points to the local key, and is "already
+  exists" when that is its only difference.
 - Group parents that would form a cycle or a tree deeper than 32 levels are
   cleared (the group goes to the top level).
 - The settings of the file are applied, each key on its own (an unknown or
-  invalid value is left out), unless the user turns that off.
+  invalid value is left out), unless the user turns that off. Only the
+  settings of how the app and the terminal look and behave are taken
+  (`appearance.*`, `view.*`, `shortcuts.*`, `hints.*`, and the terminal's
+  font, theme, cursor, colors, `TERM`, keepalive, autoreconnect, bell,
+  copy on select and highlighting, SFTP's hidden files and parallel
+  transfers). The OS detection script and its switch, the local shell, the
+  SFTP open program, the update settings, auto-lock, the paste, delete and
+  name-conflict questions, history recording and the logs stay as they
+  are here (D41; security.md, TB7); the summary counts those whose value in
+  the file differs.
 - A file over 64 MiB or with more than 500,000 records is refused.
 
 The summary reads "added N, existing M, conflicts C, skipped S, errors K"
