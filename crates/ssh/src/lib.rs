@@ -32,8 +32,10 @@ pub mod authorized_keys;
 pub mod client;
 pub mod error;
 mod handler;
+pub mod local_names;
 pub mod reconnect;
 pub mod sftp;
+pub mod transfer_queue;
 mod transport;
 
 pub use agent::{AgentLocation, SystemAgent};
