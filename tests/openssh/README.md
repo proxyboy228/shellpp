@@ -1,11 +1,20 @@
 # OpenSSH test server
 
-An OpenSSH server in Docker for the `shellpp-ssh` integration suite
-(`SHELLPP_TEST_SSHD=openssh`; `docs/architecture.md`, sections 9.1 and 9.3).
-The same suite runs against the built-in russh server (`tests/sshd`,
+An OpenSSH server in Docker for:
+
+- the `shellpp-ssh` integration suite (`SHELLPP_TEST_SSHD=openssh`;
+  `docs/architecture.md`, sections 9.1 and 9.3);
+- the session tests of the desktop app (`apps/desktop/tests/sessions.rs`),
+  which pick this server automatically when Docker is running and the
+  built-in russh server otherwise;
+- the terminal screenshots and benchmarks of the desktop app
+  (`scripts/ui-screens.ps1`, `scripts/measure-terminal.ps1`; their default
+  `-Server auto` picks this server when Docker runs): a real bash with
+  `ls --color`, `htop`, `mc` and `seq`.
+
+The same suites run against the built-in russh server (`tests/sshd`,
 `shellpp-test-sshd`) on every platform; this server checks the client against
-a real OpenSSH on Linux CI (`docs/decisions.md`, decision 6). The UI e2e suite
-does not use it.
+a real OpenSSH on Linux CI (`docs/decisions.md`, decision 6).
 
 Test use only; nothing here is shipped.
 
@@ -13,18 +22,24 @@ Test use only; nothing here is shipped.
 
 | File | Purpose |
 |---|---|
-| `Dockerfile` | Debian slim, pinned by digest, with `openssh-server`; no users, passwords or keys |
+| `Dockerfile` | Debian slim, pinned by digest, with `openssh-server`, `htop`, `mc` and `procps`; no users, passwords or keys |
 | `sshd_config` | the server configuration (below) |
 | `entrypoint.sh` | runs at container start: creates the users, generates the host keys, starts `sshd` |
+| `container-control.sh` | in the image as `shellpp-openssh-control`: new host keys, dropped connections (run by `control.sh`) |
 | `start.sh <workdir>` | builds the image, generates the run's credentials, starts a container, writes `<workdir>/server.json` |
+| `control.sh <workdir> <command>` | server-side faults on that container: `rotate-host-key`, `drop-connections`, `freeze`, `thaw` (below) |
 | `stop.sh <workdir>` | removes that container; `stop.sh --all` removes every container started by `start.sh` |
 
 ## Requirements
 
-Docker (a running daemon: `docker info` must succeed), bash and `ssh-keygen`
-on the host. Linux and macOS (Docker Desktop) work; on Windows use WSL. When
-Docker is not available, `start.sh` exits with status 3 and the openssh
-provider of the suite skips its tests with a message.
+Docker (a running daemon for Linux containers: `docker info` must succeed),
+bash and `ssh-keygen` on the host. Linux and macOS (Docker Desktop) work; on
+Windows the scripts run in Git for Windows' bash (the desktop app's tests and
+scripts find it next to `git`, or take `SHELLPP_BASH`; WSL's `bash.exe`
+cannot read Windows paths). When Docker is not available, `start.sh` exits
+with status 3; the desktop app's session tests and scripts then use the
+russh test server and say so, and the openssh provider of the `shellpp-ssh`
+suite skips its tests with a message.
 
 ## Usage
 
@@ -53,7 +68,9 @@ SHELLPP_TEST_SSHD=openssh cargo test -p shellpp-ssh
    `client_ed25519.pub`). Tests that need an encrypted key or other key types
    generate their own and use the key user only through its authorized key;
 3. creates a container that publishes port 22 on `127.0.0.1:<random port>`
-   only, copies the credentials into it as a tar stream and starts it;
+   only, with a minimal init as PID 1 (`docker create --init`: it reaps the
+   processes of ended sessions, so `ps` and `htop` show no zombies), copies
+   the credentials into it as a tar stream and starts it;
 4. waits until the server sends its SSH identification line, reads the host
    key fingerprints and writes `<workdir>/server.json` (mode 0600 through the
    script's umask), then prints its path.
@@ -122,13 +139,34 @@ failure the container is removed again.
   container has new keys.
 - Logs go to the container output (`docker logs <container>`); they contain
   user names and addresses of the test run only.
+- Sessions: bash with `LANG=C.UTF-8` (from `/etc/default/locale` through
+  PAM), Debian's `.bashrc` (`ls` is `ls --color=auto`) with a colored prompt
+  for every `TERM`, and a few fictional files in every home directory
+  (directories, an executable script, a symlink, a broken symlink, an archive
+  and an image name) so that `ls --color` shows its colors. `htop` and `mc`
+  are installed; `seq` comes with coreutils.
 
 The suite cannot use the deterministic shell of `shellpp-test-sshd` here; the
 users have bash. Portable equivalents of its commands: `stty size` (rows and
 columns), `echo "$TERM"`, `printenv NAME`, `ssh-add -l` (forwarded agent),
-`exit <n>`. Server-side faults (`rotate_host_key`, `drop_connections`,
-refusing connections) exist only in `shellpp-test-sshd`; the openssh provider
-skips the tests that need them.
+`exit <n>`, `seq 1 <n>` (for `lines <n>`).
+
+## Server-side faults
+
+`control.sh <workdir> <command>` acts on the container of `start.sh
+<workdir>`:
+
+| Command | Effect | Output |
+|---|---|---|
+| `rotate-host-key` | new host keys of every type; the listening `sshd` restarts with them (SIGHUP), sessions already open keep running; returns once the server offers the new Ed25519 key | `server.json` is updated (`host_keys`), its path is printed |
+| `drop-connections` | every connection process (`sshd-session`, `sshd-auth`) is killed: clients see the connection closed without an exit status; the listener keeps accepting | the number of processes killed |
+| `freeze` | `docker pause`: open connections stop answering without being closed (keepalive timeouts), new connections hang | nothing |
+| `thaw` | `docker unpause` | nothing |
+
+Exit status: 0 done, 1 failed, 2 usage, 3 Docker is not available.
+`stop.sh` also removes a frozen container. Refusing connections for a while
+(as `shellpp-test-sshd`'s `accept off` does) has no equivalent here; tests
+that need it run against `shellpp-test-sshd` only.
 
 ## Secrets
 
