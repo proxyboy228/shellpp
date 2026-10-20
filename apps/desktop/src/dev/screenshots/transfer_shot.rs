@@ -1,7 +1,7 @@
 //! The data transfer states of the screenshot run (night plan, stage 3,
 //! items 5-6; UI 1.4 and 2.5): Export Data with encryption turned off (the
-//! clear-text warning), the summary of Import Data and the preview of an
-//! OpenSSH config in the import dialog.
+//! clear-text warning), Export Data as OpenSSH files (D43), the summary of
+//! Import Data and the preview of an OpenSSH config in the import dialog.
 //!
 //! The files are written into a temporary folder (inside `TEMP`, which the
 //! scripts point at their temporary folder) and deleted as soon as the
@@ -79,6 +79,7 @@ pub async fn reach(
 ) -> Result<(), ScreenshotError> {
     match shot_state {
         ShotState::ExportData => export_plain(cx, handle, state).await,
+        ShotState::ExportOpenSsh => export_openssh(cx, handle, state).await,
         ShotState::ImportData => import_summary(cx, handle, state).await,
         ShotState::ImportSshConfig => config_preview(cx, handle, state).await,
         _ => Err(ScreenshotError::state(
@@ -101,6 +102,23 @@ async fn export_plain(
     .map_err(|_| ScreenshotError::WindowClosed)?;
     settle(cx, handle).await?;
     click(cx, handle, EXPORT_ENCRYPT)
+}
+
+/// Export Data with the format "OpenSSH files": the key files and their
+/// passphrase fields.
+async fn export_openssh(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    state: &Entity<AppState>,
+) -> Result<(), ScreenshotError> {
+    cx.update_window(handle, |_, window, cx| {
+        let dialog = data_transfer::open_export(state.clone(), window, cx);
+        dialog.update(cx, |dialog, cx| {
+            dialog.set_format(data_transfer::ExportFormat::OpenSsh, cx)
+        });
+    })
+    .map_err(|_| ScreenshotError::WindowClosed)?;
+    settle(cx, handle).await
 }
 
 /// Import Data of a plain export of the demo itself, up to its summary.

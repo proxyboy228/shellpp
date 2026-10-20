@@ -133,7 +133,11 @@
    Then, between separators, **Import Data…** and **Export Data…** (D38): the native JSON
    export of all data, plain or encrypted with a password, and its import (principle 4,
    [export-format.md](export-format.md)). The plain export warns first that the file holds
-   every secret in clear text and asks for "I understand". The import applies only the
+   every secret in clear text and asks for "I understand". Export Data also writes
+   OpenSSH files (D43): a `shellpp-ssh-config` and, optionally, the key files into a
+   folder the user chooses, with a passphrase offered for the keys that have none (off
+   asks for "I understand"); files that are already there are replaced only after
+   "Replace". The import applies only the
    settings of how the app and the terminal look and behave; a setting that runs or opens
    something, points somewhere or guards the user stays as it is here, and the summary
    counts those whose value in the file differs (D41). [decision]

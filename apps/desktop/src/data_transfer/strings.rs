@@ -1,6 +1,19 @@
 //! Interface strings of Export Data and Import Data (en; D38).
 
 pub const EXPORT_TITLE: &str = "Export Data";
+pub const FORMAT_DATA: &str = "Shell++ data (JSON): every record and the settings";
+pub const FORMAT_OPENSSH: &str = "OpenSSH files: an ssh config and the key files";
+pub const OPENSSH_HINT: &str = "Writes shellpp-ssh-config and the key files into the folder you choose. A key with a passphrase of its own keeps it.";
+pub const OPENSSH_KEYS: &str = "Include the key files";
+pub const OPENSSH_PROTECT: &str = "Protect the key files with a passphrase";
+pub const OPENSSH_PASSPHRASE: &str = "Passphrase";
+pub const OPENSSH_REPEAT: &str = "Repeat passphrase";
+pub const OPENSSH_PLAIN_WARNING: &str = "Keys without a passphrase of their own will be written in clear text. Anyone who gets the files can use them.";
+pub const OPENSSH_REPLACE: &str =
+    "Some files of the export are already in this folder. Replace them?";
+pub const OPENSSH_REPLACE_RUN: &str = "Replace";
+pub const OPENSSH_CHOOSE: &str = "Export";
+pub const BACK: &str = "Back";
 pub const EXPORT_ENCRYPT: &str = "Encrypt with a password";
 pub const EXPORT_ENCRYPT_HINT: &str =
     "Recommended. Without the password nobody can read the file, and nobody can recover it.";
@@ -15,6 +28,7 @@ pub const EXPORT_WRITE_FAILED: &str = "The file could not be written.";
 
 pub const PASSWORD_TOO_SHORT: &str = "At least 8 characters.";
 pub const PASSWORD_MISMATCH: &str = "The passwords do not match.";
+pub const PASSPHRASE_MISMATCH: &str = "The passphrases do not match.";
 
 pub const IMPORT_TITLE: &str = "Import Data";
 pub const IMPORT_FILE: &str = "File";
@@ -46,6 +60,19 @@ pub const SUMMARY_SETTINGS_LEFT_OUT: &str =
 
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
+
+/// The toast after an export of OpenSSH files.
+pub fn exported_openssh(hosts: usize, keys: usize) -> String {
+    let hosts = match hosts {
+        1 => "1 host".to_owned(),
+        n => format!("{n} hosts"),
+    };
+    match keys {
+        0 => format!("Exported {hosts}."),
+        1 => format!("Exported {hosts} and 1 key."),
+        n => format!("Exported {hosts} and {n} keys."),
+    }
+}
 
 /// The toast after an export.
 pub fn exported(records: usize) -> String {

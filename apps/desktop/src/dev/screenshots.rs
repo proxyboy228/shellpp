@@ -218,6 +218,9 @@ pub enum ShotState {
     /// Export Data with "Encrypt with a password" off: the clear-text
     /// warning and "I understand" (UI 1.4).
     ExportData,
+    /// Export Data with the format "OpenSSH files" (D43): key files and
+    /// their passphrase.
+    ExportOpenSsh,
     /// The summary of Import Data after a plain export of the demo itself:
     /// every record already here.
     ImportData,
@@ -310,7 +313,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 40] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -323,6 +326,7 @@ impl ShotState {
         Self::ListView,
         Self::NewHost,
         Self::ExportData,
+        Self::ExportOpenSsh,
         Self::ImportData,
         Self::ImportSshConfig,
         Self::TagFilter,
@@ -410,6 +414,7 @@ impl ShotState {
             Self::ListView => "list-view",
             Self::NewHost => "new-host",
             Self::ExportData => "export-data",
+            Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
             Self::QuickConnectToast => "quick-connect-toast",
@@ -1259,9 +1264,10 @@ pub async fn reach_state(
         }
         ShotState::ListView => click(cx, handle, VIEW_LIST),
         ShotState::NewHost => click(cx, handle, NEW_HOST),
-        ShotState::ExportData | ShotState::ImportData | ShotState::ImportSshConfig => {
-            transfer_shot::reach(cx, handle, state, shot_state).await
-        }
+        ShotState::ExportData
+        | ShotState::ExportOpenSsh
+        | ShotState::ImportData
+        | ShotState::ImportSshConfig => transfer_shot::reach(cx, handle, state, shot_state).await,
         ShotState::TagFilter => {
             // The dropdown open with two tags checked (they also show as
             // chips next to the button); both are on the first demo host.
@@ -1407,6 +1413,10 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::ExportData => {
                 need(visible("data-export-dialog"), "no Export Data dialog")?;
                 need(visible("data-export-warning"), "no clear-text warning")
+            }
+            ShotState::ExportOpenSsh => {
+                need(visible("data-export-keys"), "no OpenSSH files form")?;
+                need(visible("data-export-password"), "no passphrase field")
             }
             ShotState::ImportData => need(visible("data-import-summary"), "no import summary"),
             ShotState::ImportSshConfig => need(visible("import-preview"), "no import preview"),

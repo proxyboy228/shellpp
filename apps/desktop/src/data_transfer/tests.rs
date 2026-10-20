@@ -374,3 +374,100 @@ fn the_format_is_read_without_the_rest_of_the_file() {
     std::fs::write(&file, [0xff, 0xfe, 0x00, 0x7b]).unwrap();
     assert_eq!(read_file(&file).err(), Some(strings::FILE_NOT_EXPORT));
 }
+
+/// OpenSSH files (D43): the config and the key file land in the chosen
+/// folder, the key encrypted with the passphrase and readable by the user
+/// only; a second export into the same folder asks before replacing.
+#[gpui_kit::test]
+fn openssh_files_are_written_into_the_chosen_folder(cx: &mut TestAppContext) {
+    use shellpp_core::service::dto::KeyGenerateInput;
+    let ui = Ui::open(cx, &[json!({"address": "web.example.com", "label": "web"})]);
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let vault_id = ui.state.read_with(cx, |state, _| state.vault_id().unwrap());
+    core.key_generate(KeyGenerateInput {
+        vault_id,
+        label: "deploy".into(),
+        kind: Default::default(),
+        passphrase: None,
+        save_passphrase: false,
+    })
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let passphrase = password();
+
+    let export = ui.export(cx);
+    export.update(cx, |dialog, cx| {
+        dialog.set_format(ExportFormat::OpenSsh, cx)
+    });
+    assert!(ui.visible(cx, "data-export-keys"));
+    // A passphrase that is too short is refused before any folder is asked.
+    ui.frame(cx, |window, cx| {
+        export.update(cx, |dialog, cx| {
+            dialog.set_passwords("short", "short", window, cx)
+        })
+    });
+    ui.click(cx, "data-export-run");
+    assert_eq!(
+        export.read_with(cx, |dialog, _| dialog.step()),
+        ExportStep::Form
+    );
+    assert!(!cx.did_prompt_for_paths());
+    let typed = passphrase.clone();
+    ui.frame(cx, |window, cx| {
+        export.update(cx, |dialog, cx| {
+            dialog.set_passwords(&typed, &typed, window, cx)
+        })
+    });
+    ui.click(cx, "data-export-run");
+    let chosen = dir.path().to_path_buf();
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files);
+        Some(vec![chosen])
+    });
+    cx.run_until_parked();
+    ui.frame(cx, |_, _| {});
+    assert!(
+        !ui.visible(cx, "data-export-dialog"),
+        "closed after writing"
+    );
+    let config = std::fs::read_to_string(dir.path().join("shellpp-ssh-config")).unwrap();
+    assert!(config.contains("HostName web.example.com"), "{config}");
+    let key_file = dir.path().join("shellpp_deploy");
+    let key = ssh_key::PrivateKey::from_openssh(std::fs::read(&key_file).unwrap()).unwrap();
+    assert!(key.is_encrypted(), "the passphrase protects the key file");
+    assert!(key.decrypt(passphrase.as_bytes()).is_ok());
+    assert!(shellpp_private_file::is_private(&key_file).unwrap());
+
+    // The same folder again: nothing is replaced before "Replace".
+    std::fs::write(dir.path().join("shellpp-ssh-config"), "# mine\n").unwrap();
+    let export = ui.export(cx);
+    export.update(cx, |dialog, cx| {
+        dialog.set_format(ExportFormat::OpenSsh, cx);
+        dialog.set_include_keys(false, cx);
+    });
+    assert!(
+        !ui.visible(cx, "data-export-encrypt"),
+        "no passphrase without key files"
+    );
+    ui.click(cx, "data-export-run");
+    let chosen = dir.path().to_path_buf();
+    cx.simulate_path_prompt_response(move |_| Some(vec![chosen]));
+    cx.run_until_parked();
+    assert_eq!(
+        export.read_with(cx, |dialog, _| dialog.step()),
+        ExportStep::Replace
+    );
+    assert!(ui.visible(cx, "data-export-replace-text"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("shellpp-ssh-config")).unwrap(),
+        "# mine\n"
+    );
+    ui.click(cx, "data-export-replace");
+    cx.run_until_parked();
+    ui.frame(cx, |_, _| {});
+    let config = std::fs::read_to_string(dir.path().join("shellpp-ssh-config")).unwrap();
+    assert!(config.contains("HostName web.example.com"));
+    assert!(!ui.visible(cx, "data-export-dialog"));
+}

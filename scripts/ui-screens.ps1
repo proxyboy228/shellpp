@@ -50,6 +50,7 @@
   Stage 3, the data transfer dialogs (1280x800, after new-host; temporary
   files only, deleted as soon as the dialog has read them):
   - export-data: Export Data with encryption off, the clear-text warning;
+  - export-openssh: Export Data as OpenSSH files (key files, passphrase);
   - import-data: the summary of Import Data after a plain export of the
     demo itself (every record already here, nothing added);
   - import-ssh-config: the import dialog's preview of a sample OpenSSH
@@ -77,7 +78,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (90 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (92 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -166,7 +167,7 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the two
 # imports, captured after new-host).
-$allStates += @('export-data', 'import-data', 'import-ssh-config')
+$allStates += @('export-data', 'export-openssh', 'import-data', 'import-ssh-config')
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
 # htop in the light theme after the contrast change and the drop's dot).
 $stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'split-picker', 'tab-menu',

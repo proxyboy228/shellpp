@@ -2,9 +2,16 @@
 //! decisions D34 and D38): the native JSON export of `shellpp_core`, plain
 //! or encrypted, and its import.
 //!
-//! - Export: "Encrypt with a password" is on by default (password and
-//!   repeat, at least 8 characters); turning it off shows the warning that
-//!   the file holds every secret in clear text and asks for "I understand".
+//! - Export, format "Shell++ data": "Encrypt with a password" is on by
+//!   default (password and repeat, at least 8 characters); turning it off
+//!   shows the warning that the file holds every secret in clear text and
+//!   asks for "I understand".
+//! - Export, format "OpenSSH files" (night plan, stage 3 item 11; D43):
+//!   the core writes `shellpp-ssh-config` and, when "Include the key files"
+//!   is on, the key files into a folder the user chooses; "Protect the key
+//!   files with a passphrase" (on) encrypts the keys that have none, and
+//!   off asks for "I understand". Files that are there already are
+//!   replaced only after "Replace".
 //!   The core builds the file off the UI thread (Argon2id for the encrypted
 //!   one), then the save dialog suggests the core's file name; the file is
 //!   written for the user only (mode 0600 on Unix, a protected DACL on
@@ -36,10 +43,12 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::radio::Radio;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::{ExposeSecret, SecretString};
 use shellpp_core::service::dto::{DataExportInput, DataImportInput, DataImportSummary};
+use shellpp_core::service::ssh_export::SshFilesExportInput;
 use shellpp_core::{CoreError, ValidationReason};
 
 use crate::hosts::controls::{ControlButton, ControlKind};
@@ -68,10 +77,27 @@ fn chars(text: &str) -> usize {
 pub enum ExportStep {
     Form,
     Running,
+    /// OpenSSH files: files of the export exist in the chosen folder.
+    Replace,
+}
+
+/// What Export Data writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// The native JSON of every record and the settings.
+    Data,
+    /// `shellpp-ssh-config` and the key files (storage-format 13.4–13.5).
+    OpenSsh,
 }
 
 pub struct ExportDialog {
     state: Entity<AppState>,
+    format: ExportFormat,
+    /// OpenSSH files: the key files too.
+    include_keys: bool,
+    /// OpenSSH files: the folder waiting for "Replace".
+    folder: Option<PathBuf>,
+    /// The JSON's encryption, or the key files' passphrase.
     encrypt: bool,
     understood: bool,
     password: Entity<InputState>,
@@ -88,6 +114,7 @@ impl std::fmt::Debug for ExportDialog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExportDialog")
             .field("step", &self.step)
+            .field("format", &self.format)
             .field("encrypt", &self.encrypt)
             .finish_non_exhaustive()
     }
@@ -116,6 +143,9 @@ impl ExportDialog {
         password.update(cx, |input, cx| input.focus(window, cx));
         Self {
             state,
+            format: ExportFormat::Data,
+            include_keys: true,
+            folder: None,
             encrypt: true,
             understood: false,
             password,
@@ -131,6 +161,33 @@ impl ExportDialog {
 
     pub fn step(&self) -> ExportStep {
         self.step
+    }
+
+    pub fn format(&self) -> ExportFormat {
+        self.format
+    }
+
+    pub fn set_format(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+        if self.step != ExportStep::Form {
+            return;
+        }
+        self.format = format;
+        self.understood = false;
+        self.error = None;
+        self.password_error = None;
+        self.repeat_error = None;
+        cx.notify();
+    }
+
+    pub fn set_include_keys(&mut self, include: bool, cx: &mut Context<Self>) {
+        self.include_keys = include;
+        self.understood = false;
+        cx.notify();
+    }
+
+    /// Whether the form asks for a password or passphrase at all.
+    fn secret_asked(&self) -> bool {
+        self.format == ExportFormat::Data || self.include_keys
     }
 
     pub fn set_encrypt(&mut self, encrypt: bool, cx: &mut Context<Self>) {
@@ -160,9 +217,36 @@ impl ExportDialog {
             .update(cx, |input, cx| input.set_value(repeat, window, cx));
     }
 
-    /// Export is enabled: not running, and "I understand" for a plain file.
+    /// Export is enabled: not running, and "I understand" for a plain file
+    /// (or plain key files).
     pub fn can_run(&self) -> bool {
-        self.step == ExportStep::Form && (self.encrypt || self.understood)
+        match self.step {
+            ExportStep::Form => !self.secret_asked() || self.encrypt || self.understood,
+            ExportStep::Replace => true,
+            ExportStep::Running => false,
+        }
+    }
+
+    /// The typed password (or passphrase) when the form asks for one and
+    /// both fields agree; `Err` after showing what is wrong.
+    fn checked_secret(&mut self, cx: &mut Context<Self>) -> Result<Option<SecretString>, ()> {
+        if !(self.secret_asked() && self.encrypt) {
+            return Ok(None);
+        }
+        let first = self.password.read(cx).value().to_string();
+        let second = self.repeat.read(cx).value().to_string();
+        let mismatch = match self.format {
+            ExportFormat::Data => strings::PASSWORD_MISMATCH,
+            ExportFormat::OpenSsh => strings::PASSPHRASE_MISMATCH,
+        };
+        self.password_error =
+            (chars(&first) < MIN_PASSWORD_CHARS).then_some(strings::PASSWORD_TOO_SHORT);
+        self.repeat_error = (self.password_error.is_none() && first != second).then_some(mismatch);
+        if self.password_error.is_some() || self.repeat_error.is_some() {
+            cx.notify();
+            return Err(());
+        }
+        Ok(Some(SecretString::from(first)))
     }
 
     /// Checks the form, builds the file off the UI thread, then asks where
@@ -171,20 +255,12 @@ impl ExportDialog {
         if !self.can_run() {
             return;
         }
-        let password = if self.encrypt {
-            let first = self.password.read(cx).value().to_string();
-            let second = self.repeat.read(cx).value().to_string();
-            self.password_error =
-                (chars(&first) < MIN_PASSWORD_CHARS).then_some(strings::PASSWORD_TOO_SHORT);
-            self.repeat_error = (self.password_error.is_none() && first != second)
-                .then_some(strings::PASSWORD_MISMATCH);
-            if self.password_error.is_some() || self.repeat_error.is_some() {
-                cx.notify();
-                return;
-            }
-            Some(SecretString::from(first))
-        } else {
-            None
+        if self.format == ExportFormat::OpenSsh {
+            self.run_openssh(window, cx);
+            return;
+        }
+        let Ok(password) = self.checked_secret(cx) else {
+            return;
         };
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
@@ -230,8 +306,81 @@ impl ExportDialog {
         }));
     }
 
+    /// OpenSSH files: the folder (asked for first, or the one waiting for
+    /// "Replace"), then the core writes the files off the UI thread.
+    fn run_openssh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(passphrase) = self.checked_secret(cx) else {
+            return;
+        };
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let keys = self.include_keys;
+        let replace = self.folder.take();
+        self.step = ExportStep::Running;
+        self.error = None;
+        cx.notify();
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let overwrite = replace.is_some();
+            let dir = match replace {
+                Some(dir) => dir,
+                None => {
+                    let Ok(chosen) = this.update(cx, |_, cx| {
+                        cx.prompt_for_paths(PathPromptOptions {
+                            files: false,
+                            directories: true,
+                            multiple: false,
+                            prompt: Some(strings::OPENSSH_CHOOSE.into()),
+                        })
+                    }) else {
+                        return;
+                    };
+                    match chosen.await {
+                        Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
+                        // Cancelled: back to the form, nothing written.
+                        _ => {
+                            let _ = this.update(cx, |dialog, cx| dialog.back(cx));
+                            return;
+                        }
+                    }
+                }
+            };
+            let input = SshFilesExportInput {
+                dir: dir.clone(),
+                keys,
+                passphrase,
+                overwrite,
+            };
+            let written = cx
+                .background_spawn(async move { core.ssh_files_export(input) })
+                .await;
+            let _ = this.update_in(cx, |dialog, window, cx| match written {
+                Ok(summary) => {
+                    window.close_dialog(cx);
+                    let text = strings::exported_openssh(summary.hosts, summary.keys);
+                    crate::shell::show_toast(text, window, cx);
+                }
+                Err(CoreError::Validation(errors))
+                    if errors.iter().any(|error| {
+                        error.field == "files" && error.reason == ValidationReason::Duplicate
+                    }) =>
+                {
+                    dialog.folder = Some(dir);
+                    dialog.step = ExportStep::Replace;
+                    dialog.task = None;
+                    cx.notify();
+                }
+                Err(error) => {
+                    tracing::warn!(code = error.code(), "openssh files not exported");
+                    dialog.fail(strings::EXPORT_WRITE_FAILED, cx);
+                }
+            });
+        }));
+    }
+
     fn back(&mut self, cx: &mut Context<Self>) {
         self.step = ExportStep::Form;
+        self.folder = None;
         self.task = None;
         cx.notify();
     }
@@ -260,24 +409,94 @@ impl Render for ExportDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let running = self.step == ExportStep::Running;
-        let mut body = v_flex().w_full().gap(metrics::SPACE_3).child(
+        if self.step == ExportStep::Replace {
+            return div()
+                .id("data-export-dialog")
+                .test_support()
+                .w_full()
+                .child(
+                    div()
+                        .id("data-export-replace-text")
+                        .test_support()
+                        .text_size(metrics::FONT_SIZE_BODY)
+                        .child(strings::OPENSSH_REPLACE),
+                );
+        }
+        let openssh = self.format == ExportFormat::OpenSsh;
+        let format =
             v_flex()
                 .gap(metrics::SPACE_1)
                 .child(
-                    Switch::new("data-export-encrypt")
-                        .checked(self.encrypt)
-                        .label(strings::EXPORT_ENCRYPT)
+                    Radio::new("data-export-format-data")
+                        .label(strings::FORMAT_DATA)
+                        .checked(!openssh)
                         .disabled(running)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.set_encrypt(*checked, cx);
+                        .on_click(cx.listener(|this, _: &bool, _, cx| {
+                            this.set_format(ExportFormat::Data, cx)
                         })),
                 )
-                .child(widgets::caption(strings::EXPORT_ENCRYPT_HINT, cx)),
-        );
-        if self.encrypt {
+                .child(
+                    Radio::new("data-export-format-openssh")
+                        .label(strings::FORMAT_OPENSSH)
+                        .checked(openssh)
+                        .disabled(running)
+                        .on_click(cx.listener(|this, _: &bool, _, cx| {
+                            this.set_format(ExportFormat::OpenSsh, cx)
+                        })),
+                );
+        let mut body = v_flex().w_full().gap(metrics::SPACE_3).child(format);
+        if openssh {
+            body = body
+                .child(widgets::caption(strings::OPENSSH_HINT, cx))
+                .child(
+                    Checkbox::new("data-export-keys")
+                        .label(strings::OPENSSH_KEYS)
+                        .checked(self.include_keys)
+                        .disabled(running)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_include_keys(*checked, cx)
+                        })),
+                );
+        }
+        if self.secret_asked() {
+            let (label, hint) = if openssh {
+                (strings::OPENSSH_PROTECT, None)
+            } else {
+                (strings::EXPORT_ENCRYPT, Some(strings::EXPORT_ENCRYPT_HINT))
+            };
+            body = body.child(
+                v_flex()
+                    .gap(metrics::SPACE_1)
+                    .child(
+                        Switch::new("data-export-encrypt")
+                            .checked(self.encrypt)
+                            .label(label)
+                            .disabled(running)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.set_encrypt(*checked, cx);
+                            })),
+                    )
+                    .when_some(hint, |this, hint| this.child(widgets::caption(hint, cx))),
+            );
+        }
+        let (password_label, repeat_label, plain_warning) = if openssh {
+            (
+                strings::OPENSSH_PASSPHRASE,
+                strings::OPENSSH_REPEAT,
+                strings::OPENSSH_PLAIN_WARNING,
+            )
+        } else {
+            (
+                strings::EXPORT_PASSWORD,
+                strings::EXPORT_REPEAT,
+                strings::EXPORT_PLAIN_WARNING,
+            )
+        };
+        // No key files: nothing secret is written, nothing is asked.
+        if self.secret_asked() && self.encrypt {
             body = body
                 .child(crate::lock::password_field(
-                    strings::EXPORT_PASSWORD,
+                    password_label,
                     &self.password,
                     "data-export-password",
                     self.password_error.is_some(),
@@ -289,7 +508,7 @@ impl Render for ExportDialog {
                     this.child(widgets::error_text(error, cx))
                 })
                 .child(crate::lock::password_field(
-                    strings::EXPORT_REPEAT,
+                    repeat_label,
                     &self.repeat,
                     "data-export-repeat",
                     self.repeat_error.is_some(),
@@ -300,7 +519,7 @@ impl Render for ExportDialog {
                 .when_some(self.repeat_error, |this, error| {
                     this.child(widgets::error_text(error, cx))
                 });
-        } else {
+        } else if self.secret_asked() {
             body = body
                 .child(
                     div()
@@ -308,7 +527,7 @@ impl Render for ExportDialog {
                         .test_support()
                         .text_size(metrics::FONT_SIZE_BODY)
                         .text_color(theme.danger)
-                        .child(strings::EXPORT_PLAIN_WARNING),
+                        .child(plain_warning),
                 )
                 .child(
                     Checkbox::new("data-export-understand")
@@ -332,30 +551,45 @@ impl Render for ExportDialog {
 }
 
 fn export_footer(dialog: &Entity<ExportDialog>, cx: &App) -> impl IntoElement {
-    let running = dialog.read(cx).step == ExportStep::Running;
+    let step = dialog.read(cx).step;
+    let running = step == ExportStep::Running;
     let enabled = dialog.read(cx).can_run();
     let run = dialog.downgrade();
-    h_flex()
-        .w_full()
-        .justify_end()
-        .gap(metrics::SPACE_2)
-        .child(
-            ControlButton::new("data-export-cancel", ControlKind::Neutral)
-                .label(strings::CANCEL)
-                .on_click(|_, window, cx| window.close_dialog(cx)),
-        )
-        .child(
-            ControlButton::new("data-export-run", ControlKind::Accent)
-                .label(if running {
-                    strings::EXPORT_RUNNING
-                } else {
-                    strings::EXPORT_RUN
-                })
-                .disabled(!enabled)
-                .on_click(move |_, window, cx| {
-                    let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
-                }),
-        )
+    let row = h_flex().w_full().justify_end().gap(metrics::SPACE_2).child(
+        ControlButton::new("data-export-cancel", ControlKind::Neutral)
+            .label(strings::CANCEL)
+            .on_click(|_, window, cx| window.close_dialog(cx)),
+    );
+    if step == ExportStep::Replace {
+        let back = dialog.downgrade();
+        return row
+            .child(
+                ControlButton::new("data-export-back", ControlKind::Neutral)
+                    .label(strings::BACK)
+                    .on_click(move |_, _, cx| {
+                        let _ = back.update(cx, |dialog, cx| dialog.back(cx));
+                    }),
+            )
+            .child(
+                ControlButton::new("data-export-replace", ControlKind::Danger)
+                    .label(strings::OPENSSH_REPLACE_RUN)
+                    .on_click(move |_, window, cx| {
+                        let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
+                    }),
+            );
+    }
+    row.child(
+        ControlButton::new("data-export-run", ControlKind::Accent)
+            .label(if running {
+                strings::EXPORT_RUNNING
+            } else {
+                strings::EXPORT_RUN
+            })
+            .disabled(!enabled)
+            .on_click(move |_, window, cx| {
+                let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
+            }),
+    )
 }
 
 /// Opens Export Data over the current window. Returns its entity.
