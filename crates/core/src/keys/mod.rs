@@ -81,7 +81,9 @@ impl std::fmt::Debug for ParsedKey {
 }
 
 /// The stored form of pasted or file text: surrounding whitespace removed,
-/// CRLF and CR turned into LF, trailing whitespace of each line removed.
+/// CRLF and CR turned into LF, trailing whitespace of each line removed,
+/// except in a PuTTY `.ppk`: its `Comment: ` header may be empty and its MAC
+/// covers the comment, so its lines are kept as they are.
 pub fn normalize_text(raw: &str) -> Zeroizing<String> {
     // One pass into buffers of their final capacity: neither output is longer
     // than its input, so nothing is reallocated. `str::replace` would leave
@@ -97,11 +99,13 @@ pub fn normalize_text(raw: &str) -> Zeroizing<String> {
         }
     }
     let mut out = Zeroizing::new(String::with_capacity(unified.len()));
-    for (index, line) in unified.trim().split('\n').enumerate() {
+    let text = unified.trim();
+    let ppk = text.starts_with("PuTTY-User-Key-File-");
+    for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
             out.push('\n');
         }
-        out.push_str(line.trim_end());
+        out.push_str(if ppk { line } else { line.trim_end() });
     }
     out
 }
@@ -406,6 +410,12 @@ mod tests {
             "-----BEGIN X-----\nabc\n-----END X-----"
         );
         assert_eq!(normalize_text("a\rb").as_str(), "a\nb");
+        // A .ppk keeps its lines: an empty comment, trailing spaces.
+        assert_eq!(
+            normalize_text("PuTTY-User-Key-File-3: ssh-ed25519\r\nComment: \r\nX: a  \r\n")
+                .as_str(),
+            "PuTTY-User-Key-File-3: ssh-ed25519\nComment: \nX: a"
+        );
         assert_eq!(normalize_text("   ").as_str(), "");
         // Mixed endings, a lone CR before CRLF, non-ASCII text.
         assert_eq!(

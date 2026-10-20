@@ -126,6 +126,13 @@ fn ppk_keys_from_puttygen_are_imported() {
         }
     }
 
+    // An empty comment and one with trailing spaces (the MAC covers it).
+    let no_comment = read(&dir, "no-comment.v3.ppk");
+    assert!(no_comment.contains("Comment: \n") || no_comment.contains("Comment: \r\n"));
+    import(&no_comment, None).expect("ppk without a comment");
+    import(&read(&dir, "spaced-comment.v3.enc.ppk"), Some(&pass))
+        .expect("ppk whose comment ends with spaces");
+
     // An encrypted key imported first is stored encrypted again.
     let fresh = first_run();
     let encrypted = read(&dir, "ed25519.v3.enc.ppk");

@@ -30,4 +30,8 @@ for spec in ed25519 ecdsa:256 ecdsa:384 ecdsa:521 rsa:2048; do
     puttygen "$base.v3.ppk" -P -O private --new-passphrase "$out/passphrase" -o "$base.v3.enc.ppk" -q
     puttygen "$base.v3.ppk" -P -O private --ppk-param version=2 --new-passphrase "$out/passphrase" -o "$base.v2.enc.ppk" -q
 done
+# Comments a careless normalization breaks: none at all (the header line is
+# "Comment: "), and trailing spaces, which the MAC covers.
+puttygen -t ed25519 -C "" --new-passphrase "$empty" -o "$out/no-comment.v3.ppk" -q
+puttygen -t ed25519 -C "spaced  " --new-passphrase "$out/passphrase" -o "$out/spaced-comment.v3.enc.ppk" -q
 rm -f "$empty"
