@@ -423,3 +423,58 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
         assert!(notes.contains("no jump hosts are set"), "{label}: {notes}");
     }
 }
+
+/// A jump host that its own rules refuse is not written, and no imported
+/// host points at it: the host behind it gets no chain and a note.
+#[test]
+fn no_jump_chain_points_at_a_host_that_was_refused() {
+    let u = first_run();
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    write(
+        &ssh.join("config"),
+        &[
+            "Host jump",
+            "  HostName 192.0.2.70",
+            "  SetEnv FOO-BAR=1",
+            "Host app",
+            "  HostName 10.0.0.8",
+            "  ProxyJump jump",
+            "",
+        ]
+        .join("\n"),
+    );
+    let summary = u
+        .core
+        .ssh_config_import(SshConfigImportInput {
+            source: SshConfigSource {
+                path: ssh.join("config"),
+                home: home.path().to_path_buf(),
+            },
+            aliases: None,
+            passphrases: BTreeMap::new(),
+            save_passphrases: false,
+        })
+        .unwrap();
+    assert_eq!(summary.added, 1, "{summary:?}");
+    assert_eq!(summary.errors.len(), 1);
+    assert_eq!(summary.errors[0].0, "jump");
+    assert_eq!(summary.jump_chains_left_out, 1);
+    let hosts: Vec<_> = u
+        .core
+        .records_query(RecordsQuery {
+            vault_id: None,
+            types: vec![RecordType::Host],
+            scope: QueryScope::All,
+            text: None,
+            tags: Vec::new(),
+            sort: SortMode::Manual,
+        })
+        .unwrap()
+        .into_iter()
+        .map(as_host)
+        .collect();
+    let app = &hosts[0].data;
+    assert_eq!(app["label"], "app");
+    assert!(app["ssh"].get("jump_chain").is_none_or(Value::is_null));
+}

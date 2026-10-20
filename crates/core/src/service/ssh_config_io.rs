@@ -575,7 +575,19 @@ impl Core {
         let mut parts = parts(&mut guard)?;
         let ids: Vec<Uuid> = selected.iter().map(|_| parts.ids.next(now)).collect();
         for (plan, id) in selected.iter().zip(&ids) {
-            imported.insert(plan.alias.to_lowercase(), *id);
+            // A host its own rules refuse is not written, so no jump chain
+            // may point at it: its build is tried first, without a chain.
+            let mut data = Map::new();
+            data.insert("label".into(), json!(plan.alias));
+            data.insert("address".into(), json!(plan.address));
+            data.insert("ssh".into(), Value::Object(plan.ssh.clone()));
+            let rules = HostRules {
+                record_id: Some(*id),
+                personal_vault: true,
+            };
+            if host::build(&data, None, &BTreeMap::new(), &rules).is_ok() {
+                imported.insert(plan.alias.to_lowercase(), *id);
+            }
         }
         let mut plan_writes = Plan::default();
         let mut writes = 0usize;
