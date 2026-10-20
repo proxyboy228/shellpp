@@ -1,6 +1,6 @@
-//! Unix: mode 0600, set when the file is opened and again on an existing
-//! file before it is written; `O_NOFOLLOW` refuses a symbolic link that
-//! appears after the check in [`crate::write`].
+//! Unix: mode 0600 when the file is created (and set again, in case of an
+//! odd umask); `O_NOFOLLOW` refuses a symbolic link that appears after the
+//! check in [`crate::write`].
 
 use std::fs::{File, OpenOptions, Permissions};
 use std::io;

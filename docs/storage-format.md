@@ -696,7 +696,7 @@ Host bastion
 | `shellpp_<key alias>.pub` | one line: algorithm, base64 public key, comment = key label (`shellpp:<email>` for the SSH ID, D13) | `0644` |
 | `shellpp_<key alias>-cert.pub` | the certificate, when the key has one | `0644` |
 
-- The private key file is readable by the user only before a byte of it is written: mode `0600` (also on a file that existed) and no symbolic link followed on Unix; on Windows a protected DACL with one entry, full control for the current user, and no inherited entries (D42). The plain Export Data file is written the same way.
+- The private key file is readable by the user only before a byte of it is written, and an existing file is replaced by a new one (a temporary file renamed over it): mode `0600` and no symbolic link followed on Unix; on Windows a protected DACL with one entry, full control for the current user, and no inherited entries (D42). The plain Export Data file is written the same way.
 - Key aliases are unique over the three file names, so no key's file has the name of another key's file (the labels `work` and `work.pub` give `shellpp_work` and `shellpp_work.pub-2`).
 - Keys imported from PEM or PuTTY `.ppk` are written in the OpenSSH format.
 - FIDO2 keys (`sk-ssh-ed25519`, `sk-ecdsa`) are written in the OpenSSH security-key format, which holds the key handle, not a secret.

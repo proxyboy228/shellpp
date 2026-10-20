@@ -28,9 +28,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// The handle needs WRITE_DAC to set the DACL.
+/// The handle needs WRITE_DAC to set the DACL; no sharing, so nobody can
+/// open the new file before its DACL is set.
 pub fn prepare(options: &mut OpenOptions) {
-    options.access_mode(FILE_GENERIC_WRITE | WRITE_DAC | READ_CONTROL);
+    options
+        .access_mode(FILE_GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
+        .share_mode(0);
 }
 
 /// A process token, closed on drop.
