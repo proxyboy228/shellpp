@@ -16,7 +16,7 @@
 //! dropped) and open kit dialogs (Settings, confirmations) are closed. After
 //! unlock the same shell comes back with its tabs, the open group and the
 //! details panel of the same record. A new vault ("Forgot password?") or a
-//! first run drops the shell.
+//! first run drops the shell and ends its sessions.
 
 use gpui::{
     App, AppContext as _, Context, DispatchPhase, Entity, IntoElement, MouseDownEvent,
@@ -34,6 +34,7 @@ use crate::theme::{self, metrics};
 /// Registers the key bindings of every view.
 pub fn bind_keys(cx: &mut App) {
     shell::bind_keys(cx);
+    crate::session_ui::bind_keys(cx);
 }
 
 /// What the window shows.
@@ -144,7 +145,10 @@ impl RootView {
         }
         match state.lock_state() {
             LockState::FirstRun => {
-                self.shell = None;
+                if let Some(shell) = self.shell.take() {
+                    // A new vault: the sessions of the old one end.
+                    shell.update(cx, |shell, cx| shell.shutdown_sessions(cx));
+                }
                 self.unlock = None;
                 if self.first_run.is_none() {
                     self.first_run =

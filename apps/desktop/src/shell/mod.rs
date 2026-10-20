@@ -3,12 +3,27 @@
 //!
 //! - Vaults: the sidebar (UI 1.2), the main area with the toasts at its
 //!   bottom center, and the details panel on the right (UI 1.3);
-//! - SFTP and session tabs: the "In development" placeholder (the SFTP
-//!   manager and terminals are later stages; audit decisions 1 and 6).
+//! - SSH and local terminal tabs: their [`SessionPane`] (connection screen,
+//!   dialogs, terminal, end and drop overlays; `crate::session_ui`);
+//! - SFTP (and the tabs of later stages): the "In development" placeholder
+//!   (audit decisions 1 and 6; D30).
+//!
+//! Session tabs (UI 1.1, 4.6, 12.5; stage 2a lead decision 9): a session
+//! opens from a double click or Enter on a card, Quick Connect, the host
+//! panel's Connect and the search bar's quick connect; the Terminal button,
+//! New Local Terminal and Ctrl+L (outside a terminal) open a local terminal.
+//! A tab shows the host's OS icon (the server icon until the OS is known)
+//! and its name, with a close button. Ctrl+1..9, Alt+Left/Right and
+//! Ctrl+Shift+W work everywhere, a terminal included. When the active tab
+//! closes, the left neighbor (else the right one, else Vaults) becomes
+//! active (UI 4.6). Tabs that do not fit scroll sideways: the wheel scrolls
+//! the strip, and the active tab always scrolls into view (UI 1.1). The "+"
+//! button and the terminal sidebar button lead to stage 2b and are shown
+//! disabled (D30).
 //!
 //! Other modules talk to the shell through events (`HostsEvent`,
-//! `HostsRequest`, `PanelEvent`, `PanelRequest`) or the window-level
-//! functions [`show_toast`], [`notify`], [`in_development`] and
+//! `HostsRequest`, `PanelEvent`, `PanelRequest`, `SessionPaneEvent`) or the
+//! window-level functions [`show_toast`], [`notify`], [`in_development`] and
 //! [`open_session_tab`].
 
 pub mod actions;
@@ -24,7 +39,8 @@ pub mod toasts;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, AppContext as _, ClickEvent, Context,
     DragMoveEvent, Entity, FocusHandle, Global, IntoElement, ParentElement as _, Pixels, Render,
-    SharedString, Styled as _, Subscription, WeakEntity, Window, WindowId, div, prelude::*, px,
+    ScrollHandle, SharedString, Styled as _, Subscription, WeakEntity, Window, WindowId, div,
+    prelude::*, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -37,6 +53,8 @@ use uuid::Uuid;
 use crate::hosts::{self, HostsEvent, HostsRequest, HostsScreen};
 use crate::i18n;
 use crate::panels::{GroupPanel, HostPanel, PanelEvent, PanelRequest};
+use crate::session_ui::{Phase, SessionPane, SessionPaneEvent, TabInfo};
+use crate::sessions::OpenRequest;
 use crate::state::AppState;
 use crate::theme::{self, metrics, motion};
 
@@ -154,6 +172,25 @@ pub fn flush_all_panels(cx: &mut App) {
     }
 }
 
+/// The app quits: every window's sessions end (their connection log
+/// entries close), the tabs let go of them, and the session layer shuts
+/// down and is dropped, so the core can close its files afterwards (a
+/// temporary profile can only be deleted then). Call it before
+/// `AppState::shutdown`.
+pub fn release_all_sessions(cx: &mut App) {
+    for shell in all_shells(cx) {
+        shell.update(cx, |shell, cx| {
+            for (_, pane, _) in &shell.panes {
+                pane.update(cx, |pane, cx| pane.release(cx));
+            }
+        });
+    }
+    crate::sessions::ui::shutdown(cx);
+    if cx.has_global::<crate::sessions::ui::Sessions>() {
+        drop(cx.remove_global::<crate::sessions::ui::Sessions>());
+    }
+}
+
 /// Locks the app (UI 13.3) from outside a shell: Ctrl+Shift+L that no view
 /// handled, and a due auto-lock. Every window's details panel saves its
 /// pending edits and closes first, then the core locks once. Does nothing
@@ -210,6 +247,20 @@ pub struct Shell {
     sftp_focus: FocusHandle,
     nav_focus: [FocusHandle; 6],
     session_focus: Vec<(SessionId, FocusHandle)>,
+    /// The sideways scroll of the session tab strip (more tabs than fit).
+    tab_scroll: ScrollHandle,
+    /// Reveal the active tab once more after the next frame (see
+    /// [`Shell::reveal_active_tab`]).
+    reveal_after_frame: bool,
+    /// The content of SSH and local terminal tabs, with the subscription to
+    /// each pane's events.
+    panes: Vec<(SessionId, Entity<SessionPane>, Subscription)>,
+    /// Panes whose session starts at the next render (the terminal needs
+    /// the window).
+    unstarted: Vec<Entity<SessionPane>>,
+    /// Give the keyboard focus back to the shell at the next render (the
+    /// active tab changed to one without a terminal).
+    focus_shell: bool,
     _subscriptions: Vec<Subscription>,
     /// Subscriptions to the open details panel (replaced with the panel).
     panel_subscriptions: Vec<Subscription>,
@@ -242,7 +293,7 @@ impl Shell {
         registry.0.retain(|(_, shell)| shell.upgrade().is_some());
         registry.0.push((window.window_handle().window_id(), this));
 
-        // Closing the window while sessions are open asks first (UI 4.6).
+        // Closing the window while sessions are active asks first (UI 4.6).
         // An edit still waiting for the autosave is saved before the window
         // (and the panel with it) goes.
         let this = cx.weak_entity();
@@ -250,14 +301,30 @@ impl Shell {
             let Some(shell) = this.upgrade() else {
                 return true;
             };
-            if shell.read(cx).sessions.is_empty() {
-                shell.update(cx, |shell, cx| shell.flush_panel(cx));
+            let sessions = shell.read(cx).active_sessions(cx);
+            if sessions == 0 {
+                shell.update(cx, |shell, cx| {
+                    shell.flush_panel(cx);
+                    shell.shutdown_sessions(cx);
+                });
                 return true;
             }
-            let sessions = shell.read(cx).sessions.len();
             confirm_exit(sessions, false, window, cx);
             false
         });
+
+        // Session tabs start through the session layer (`crate::sessions`,
+        // installed at startup); tests install their own launcher first.
+        if !cx.has_global::<crate::session_ui::Launcher>() {
+            cx.set_global(crate::session_ui::Launcher(std::rc::Rc::new(
+                crate::session_ui::bridge::Bridge,
+            )));
+        }
+        // The terminals follow the `terminal.*` settings (Settings >
+        // Terminal replaces the global after each change).
+        if let Some(core) = state.read(cx).core().cloned() {
+            crate::settings::terminal::TerminalPrefs::refresh(&core, cx);
+        }
 
         // Shortcuts live in the shell's key context: keep the focus inside
         // the shell from the start (not in the search bar, UI 2.1). The
@@ -282,6 +349,11 @@ impl Shell {
             sftp_focus: cx.focus_handle().tab_stop(true),
             nav_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             session_focus: Vec::new(),
+            tab_scroll: ScrollHandle::new(),
+            reveal_after_frame: false,
+            panes: Vec::new(),
+            unstarted: Vec::new(),
+            focus_shell: false,
             _subscriptions: subscriptions,
             panel_subscriptions: Vec::new(),
             panel_before_lock: None,
@@ -331,8 +403,78 @@ impl Shell {
         {
             return;
         }
+        let previous = self.top_tab;
         self.top_tab = tab;
+        self.reveal_active_tab();
+        // Into a session tab, or out of one whose terminal had the focus.
+        let session = |tab: TopTab| matches!(tab, TopTab::Session(_));
+        if previous != tab && (session(tab) || session(previous)) {
+            self.focus_active_tab(cx);
+        }
         cx.notify();
+    }
+
+    /// Scrolls the session tab strip so that the active session tab is
+    /// fully in view. Only when the active tab changes or is clicked, so the
+    /// wheel can still scroll the strip away from it. GPUI scrolls with the
+    /// strip's bounds of the frame before, and the bar changes with the
+    /// active tab (the terminal sidebar button), so the reveal runs once
+    /// more after the next frame.
+    fn reveal_active_tab(&mut self) {
+        self.scroll_to_active_tab();
+        self.reveal_after_frame = true;
+    }
+
+    fn scroll_to_active_tab(&self) {
+        if let TopTab::Session(id) = self.top_tab
+            && let Some(index) = self.sessions.tabs().iter().position(|tab| tab.id() == id)
+        {
+            self.tab_scroll.scroll_to_item(index);
+        }
+    }
+
+    /// After a tab change: the keyboard focus goes into the session tab's
+    /// terminal or dialog (UI 4.1), else back to the shell, so that the
+    /// shortcuts keep working when the focused terminal is no longer shown.
+    fn focus_active_tab(&mut self, cx: &mut Context<Self>) {
+        match self.top_tab {
+            TopTab::Session(id) => match self.pane(id).cloned() {
+                Some(pane) => pane.update(cx, |pane, cx| pane.request_focus(cx)),
+                None => self.focus_shell = true,
+            },
+            TopTab::Vaults | TopTab::Sftp => self.focus_shell = true,
+        }
+    }
+
+    /// The content of session tab `id` (SSH and local terminal tabs).
+    pub fn pane(&self, id: SessionId) -> Option<&Entity<SessionPane>> {
+        self.panes
+            .iter()
+            .find(|(session, _, _)| *session == id)
+            .map(|(_, pane, _)| pane)
+    }
+
+    /// Sessions that count for the exit confirmation (UI 4.6): connecting,
+    /// connected, reconnecting, or dropped with automatic attempts ahead.
+    pub fn active_sessions(&self, cx: &App) -> usize {
+        self.panes
+            .iter()
+            .filter(|(_, pane, _)| {
+                let pane = pane.read(cx);
+                match pane.phase() {
+                    Phase::Connecting(_) | Phase::Running | Phase::Reconnecting(_) => true,
+                    Phase::Dropped(_) => pane.reconnect_info().is_some(),
+                    Phase::Failed(_) | Phase::Ended(_) | Phase::Closed => false,
+                }
+            })
+            .count()
+    }
+
+    /// Ends every session of this window (it closes).
+    pub fn shutdown_sessions(&mut self, cx: &mut Context<Self>) {
+        for (_, pane, _) in &self.panes {
+            pane.update(cx, |pane, cx| pane.shutdown(cx));
+        }
     }
 
     pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
@@ -375,25 +517,157 @@ impl Shell {
         self.toast(i18n::placeholder::feature(feature), cx);
     }
 
-    /// Opens a session tab and makes it active. Until terminals exist the
-    /// tab shows the "In development" placeholder.
+    /// Opens a session tab and makes it active. SSH and local terminal tabs
+    /// get a [`SessionPane`] whose session starts at the next render; the
+    /// tabs of later stages (SFTP, serial, the new tab page) show the "In
+    /// development" placeholder.
     pub fn open_session(&mut self, request: SessionRequest, cx: &mut Context<Self>) -> SessionId {
+        let pane = self.pane_for(&request, cx);
+        let request = match &pane {
+            Some((info, _)) => request.title(info.title().clone()).icon(info.icon()),
+            None => request,
+        };
+        // A quick connect (UI 2.1) offers to save the host once it connects.
+        let quick = request.quick_target().cloned();
         let id = self.sessions.open(request);
+        if let Some((info, open)) = pane {
+            let pane = cx.new(|cx| SessionPane::new(info, open, cx));
+            let subscription = cx.subscribe(&pane, move |this, pane, event, cx| {
+                this.on_pane_event(id, &pane, event, quick.as_ref(), cx)
+            });
+            self.unstarted.push(pane.clone());
+            self.panes.push((id, pane, subscription));
+        }
         self.session_focus
             .push((id, cx.focus_handle().tab_stop(true)));
         self.top_tab = TopTab::Session(id);
+        self.reveal_active_tab();
+        self.focus_active_tab(cx);
         cx.notify();
         id
     }
 
-    /// Closes a session tab; when it was active, the neighbor of UI 4.6
-    /// becomes active (left, else right, else Vaults).
+    /// What an SSH or local terminal tab shows first and what it opens;
+    /// `None` for the tabs of later stages.
+    fn pane_for(&self, request: &SessionRequest, cx: &App) -> Option<(TabInfo, OpenRequest)> {
+        use shellpp_core::service::dto::SessionTarget;
+        match request.kind() {
+            SessionKind::Ssh => {
+                let state = self.state.read(cx);
+                if let Some(id) = request.host_id() {
+                    let Some(host) = state.host(id) else {
+                        // Gone meanwhile: the session layer reports it.
+                        let title = request
+                            .requested_title()
+                            .cloned()
+                            .unwrap_or_else(|| SessionKind::Ssh.default_title().into());
+                        let target = SessionTarget::Host {
+                            vault_id: state.vault_id()?,
+                            record_id: id,
+                        };
+                        let icon = crate::session_ui::bridge::initial_icon(None, false);
+                        return Some((TabInfo::remote(title, "", icon), OpenRequest::Ssh(target)));
+                    };
+                    let info = TabInfo::remote(
+                        host.title().to_owned(),
+                        display_address(host.username.as_deref(), &host.address, host.port),
+                        crate::session_ui::bridge::initial_icon(host.os_family.as_deref(), false),
+                    );
+                    let target = SessionTarget::Host {
+                        vault_id: host.vault_id,
+                        record_id: host.record_id,
+                    };
+                    return Some((info, OpenRequest::Ssh(target)));
+                }
+                let quick = request.quick_target()?;
+                let title = request
+                    .requested_title()
+                    .cloned()
+                    .unwrap_or_else(|| quick.title().into());
+                let info = TabInfo::remote(
+                    title,
+                    display_address(quick.username.as_deref(), &quick.host, quick.port),
+                    crate::session_ui::bridge::initial_icon(None, false),
+                );
+                let target = SessionTarget::Quick {
+                    address: quick.host.clone(),
+                    port: quick.port,
+                    username: quick.username.clone(),
+                };
+                Some((info, OpenRequest::Ssh(target)))
+            }
+            SessionKind::Local => {
+                let title = request
+                    .requested_title()
+                    .cloned()
+                    .unwrap_or_else(|| SessionKind::Local.default_title().into());
+                let info = TabInfo::local(title, SessionKind::Local.default_icon());
+                Some((info, OpenRequest::Local { shell_id: None }))
+            }
+            SessionKind::Sftp | SessionKind::Serial | SessionKind::NewTab => None,
+        }
+    }
+
+    fn on_pane_event(
+        &mut self,
+        id: SessionId,
+        pane: &Entity<SessionPane>,
+        event: &SessionPaneEvent,
+        quick: Option<&hosts::QuickTarget>,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // Exit status 0 or Close (UI 4.6): the neighbor rule applies.
+            SessionPaneEvent::Close => self.close_session(id, cx),
+            SessionPaneEvent::Connected => {
+                if let Some(target) = quick {
+                    self.offer_to_save(target.clone(), cx);
+                }
+            }
+            SessionPaneEvent::Retitled => {
+                let info = pane.read(cx).info();
+                let (title, icon) = (info.title().clone(), info.icon());
+                if self.sessions.retitle(id, title, icon) {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// The unobtrusive offer to save the host after a successful quick
+    /// connect (UI 2.1): "Save" creates it like the Hosts screen's "Save as
+    /// host" and opens its panel.
+    fn offer_to_save(&mut self, target: hosts::QuickTarget, cx: &mut Context<Self>) {
+        let screen = self.hosts.downgrade();
+        self.push_toast(
+            Toast::new(hosts::strings::SAVE_HOST_OFFER).action_with_id(
+                "toast-save-host",
+                hosts::strings::SAVE_HOST_ACTION,
+                move |_, cx| {
+                    let _ = screen.update(cx, |screen, cx| screen.save_quick_target(&target, cx));
+                },
+            ),
+            cx,
+        );
+    }
+
+    /// Closes a session tab and ends its session; when it was active, the
+    /// neighbor of UI 4.6 becomes active (left, else right, else Vaults).
     pub fn close_session(&mut self, id: SessionId, cx: &mut Context<Self>) {
         let was_active = self.top_tab == TopTab::Session(id);
+        if let Some(index) = self.panes.iter().position(|(session, _, _)| *session == id) {
+            let (_, pane, _subscription) = self.panes.remove(index);
+            self.unstarted.retain(|unstarted| *unstarted != pane);
+            // Ends the session and lets go of it, so that nothing keeps the
+            // core open if the pane outlives its tab.
+            pane.update(cx, |pane, cx| pane.release(cx));
+        }
         let next = self.sessions.close(id);
         self.session_focus.retain(|(session, _)| *session != id);
         if was_active {
             self.top_tab = next.map_or(TopTab::Vaults, TopTab::Session);
+            self.reveal_active_tab();
+            self.focus_active_tab(cx);
         }
         cx.notify();
     }
@@ -432,14 +706,27 @@ impl Shell {
         }
     }
 
-    /// Exit (UI 1.4): asks first while session tabs are open (UI 4.6).
+    /// Exit (UI 1.4): asks first while sessions are active (UI 4.6).
     /// Pending panel edits are saved first.
     pub fn request_exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() {
+        let sessions = all_shells(cx)
+            .iter()
+            .filter(|shell| shell.entity_id() != cx.entity_id())
+            .map(|shell| shell.read(cx).active_sessions(cx))
+            .sum::<usize>()
+            + self.active_sessions(cx);
+        if sessions == 0 {
             self.flush_panel(cx);
+            self.shutdown_sessions(cx);
+            let me = cx.entity_id();
+            for shell in all_shells(cx) {
+                if shell.entity_id() != me {
+                    shell.update(cx, |shell, cx| shell.shutdown_sessions(cx));
+                }
+            }
             cx.quit();
         } else {
-            confirm_exit(self.sessions.len(), true, window, cx);
+            confirm_exit(sessions, true, window, cx);
         }
     }
 
@@ -528,8 +815,10 @@ impl Shell {
     }
 
     /// After unlock: reopens the panel [`Shell::suspend_panel`] closed when
-    /// its record still exists; the top-bar tab stays as it was (UI 13.3).
+    /// its record still exists; the top-bar tab stays as it was (UI 13.3)
+    /// and gets the focus back (a session tab: its terminal or dialog).
     pub fn resume_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_active_tab(cx);
         let tab = self.top_tab;
         match self.panel_before_lock.take() {
             Some(PanelTarget::Host(id)) if self.state.read(cx).host(id).is_some() => {
@@ -600,6 +889,10 @@ impl Shell {
                 let mut session = SessionRequest::new(kind).title(request.title.clone());
                 if let Some(host) = request.host {
                     session = session.host(host);
+                }
+                // The search bar's quick connect (UI 2.1).
+                if let Some(target) = request.target.clone() {
+                    session = session.quick(target);
                 }
                 self.open_session(session, cx);
             }
@@ -685,7 +978,7 @@ impl Shell {
         }
     }
 
-    fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.clone();
         let menu = title_bar::icon_button("app-menu", IconName::Menu, cx)
             .tooltip(i18n::top_bar::APP_MENU)
@@ -721,10 +1014,10 @@ impl Shell {
             .map(|tab| {
                 let id = tab.id();
                 let close = title_bar::session_tab_close(tab, cx).on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| {
+                    move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.close_session(id, cx);
-                        window.focus(&this.focus, cx);
+                        this.focus_active_tab(cx);
                     },
                 ));
                 let focus = self
@@ -735,16 +1028,19 @@ impl Shell {
                     .unwrap_or_else(|| self.focus.clone());
                 title_bar::session_tab(tab, &focus, self.top_tab == TopTab::Session(id), close, cx)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.set_top_tab(TopTab::Session(id), cx)
+                        this.set_top_tab(TopTab::Session(id), cx);
+                        // A click on the active tab gives its terminal the
+                        // focus back.
+                        this.focus_active_tab(cx);
                     }))
                     .into_any_element()
             })
             .collect();
-        let new_tab = title_bar::icon_button("tab-new", IconName::Plus, cx)
-            .tooltip(i18n::top_bar::NEW_TAB)
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.open_session(SessionRequest::new(SessionKind::NewTab), cx);
-            }));
+        // The new tab page is stage 2b: "+" is shown disabled (D30).
+        let new_tab = title_bar::disabled(
+            title_bar::icon_button("tab-new", IconName::Plus, cx).tooltip(i18n::top_bar::NEW_TAB),
+            cx,
+        );
 
         let unread = self.notifications.read(cx).unread();
         let list = self.notifications.clone();
@@ -762,21 +1058,27 @@ impl Shell {
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_overlay(cx))
             .content(move |_, _, cx| render_notification_list(&list, cx));
+        // The terminal sidebar is stage 2b: shown disabled on session tabs (D30).
         let terminal_sidebar = matches!(self.top_tab, TopTab::Session(_)).then(|| {
-            title_bar::icon_button("terminal-sidebar", IconName::PanelRight, cx)
-                .tooltip(i18n::top_bar::TERMINAL_SIDEBAR)
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.placeholder_toast(i18n::top_bar::TERMINAL_SIDEBAR, cx)
-                }))
+            title_bar::disabled(
+                title_bar::icon_button("terminal-sidebar", IconName::PanelRight, cx)
+                    .tooltip(i18n::top_bar::TERMINAL_SIDEBAR),
+                cx,
+            )
         });
 
         title_bar::bare_title_bar(cx).child(
             h_flex()
                 .id("top-bar")
                 .test_support()
-                .h_full()
-                .flex_1()
-                .min_w_0()
+                // Fills the kit's bar without sizing it: the bar keeps an
+                // automatic minimum width (its content's min-content), so a
+                // long tab strip in the flow would widen the bar past the
+                // window instead of scrolling. The bar's own padding (12 px
+                // in full screen) does not apply to an absolute child.
+                .absolute()
+                .inset_0()
+                .when(window.is_fullscreen(), |bar| bar.left(metrics::SPACE_3))
                 .gap(metrics::SPACE_2)
                 .justify_between()
                 .child(
@@ -796,13 +1098,18 @@ impl Shell {
                         )
                         .child(sftp)
                         .child(
+                            // Tabs that do not fit scroll sideways (a vertical
+                            // wheel too). The strip occludes the drag area as
+                            // a whole; its tabs let the wheel through to it.
                             h_flex()
                                 .id("session-tabs")
                                 .test_support()
+                                .occlude()
                                 .min_w_0()
                                 .gap(metrics::SPACE_1)
                                 .items_center()
-                                .overflow_hidden()
+                                .overflow_x_scroll()
+                                .track_scroll(&self.tab_scroll)
                                 .children(session_tabs),
                         )
                         .child(div().occlude().child(new_tab)),
@@ -870,9 +1177,11 @@ impl Shell {
             .into_any_element()
         };
         let handle_hover = theme.drag_border;
-        // The main area keeps its minimum width (lead decision 4).
+        // The main area keeps its minimum width (lead decision 4), next to
+        // the sidebar as it is drawn (full or the strip of icons).
         let sidebar = if self.sidebar_visible {
-            metrics::WIDTH_SIDEBAR
+            let viewport = window.viewport_size().width;
+            sidebar::width(sidebar::is_collapsed(viewport, Some(self.details_width)))
         } else {
             px(0.)
         };
@@ -915,20 +1224,42 @@ impl Shell {
         )
     }
 
+    /// A session tab: its pane (SSH and local terminals, UI 4.1) or the "In
+    /// development" placeholder (the tabs of later stages).
     fn render_session(&self, id: SessionId, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self
-            .sessions
-            .get(id)
-            .map(|tab| tab.title().clone())
-            .unwrap_or_default();
+        let content = match self.pane(id) {
+            Some(pane) => pane.clone().into_any_element(),
+            None => {
+                let title = self
+                    .sessions
+                    .get(id)
+                    .map(|tab| tab.title().clone())
+                    .unwrap_or_default();
+                placeholder::placeholder("session-placeholder", title, cx).into_any_element()
+            }
+        };
         div()
             .id("session-area")
             .test_support()
             .relative()
             .size_full()
             .bg(cx.theme().colors.list)
-            .child(placeholder::placeholder("session-placeholder", title, cx))
+            .child(content)
             .child(self.render_toast_host())
+    }
+}
+
+/// `user@host:port` as known before connecting (the port only when it is
+/// not 22, IPv6 in brackets with a port), for the connection screen.
+pub fn display_address(username: Option<&str>, host: &str, port: Option<u16>) -> String {
+    let host = match port {
+        Some(port) if port != 22 && host.contains(':') => format!("[{host}]:{port}"),
+        Some(port) if port != 22 => format!("{host}:{port}"),
+        _ => host.to_owned(),
+    };
+    match username.filter(|user| !user.is_empty()) {
+        Some(user) => format!("{user}@{host}"),
+        None => host,
     }
 }
 
@@ -953,9 +1284,18 @@ fn confirm_exit(sessions: usize, quit: bool, window: &mut Window, cx: &mut App) 
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_modal(cx))
             .on_ok(move |_, window, cx| {
-                // Pending panel edits are saved before the window goes.
+                // Pending panel edits are saved before the window goes; its
+                // sessions (every window's on Exit) end.
                 if let Some(shell) = shell_for(window, cx) {
                     shell.update(cx, |shell, cx| shell.flush_panel(cx));
+                }
+                let ending = if quit {
+                    all_shells(cx)
+                } else {
+                    shell_for(window, cx).into_iter().collect()
+                };
+                for shell in ending {
+                    shell.update(cx, |shell, cx| shell.shutdown_sessions(cx));
                 }
                 if quit {
                     cx.quit();
@@ -1011,6 +1351,28 @@ fn render_notification_list(list: &Entity<Notifications>, cx: &App) -> AnyElemen
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // New session tabs start now: their terminal needs the window. A
+        // tab in the background connects all the same.
+        for pane in std::mem::take(&mut self.unstarted) {
+            window.defer(cx, move |window, cx| {
+                pane.update(cx, |pane, cx| pane.start(window, cx));
+            });
+        }
+        if self.focus_shell && !window.has_active_dialog(cx) {
+            self.focus_shell = false;
+            let focus = self.focus.clone();
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
+        if std::mem::take(&mut self.reveal_after_frame) {
+            // This frame lays the bar out anew; the next one scrolls with it.
+            let shell = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.scroll_to_active_tab();
+                    cx.notify();
+                });
+            });
+        }
         let body = match self.top_tab {
             TopTab::Vaults => h_flex()
                 .size_full()
@@ -1018,6 +1380,11 @@ impl Render for Shell {
                     body.child(sidebar::sidebar(
                         self.section,
                         &self.nav_focus,
+                        // The strip of icons below a 600 px main area.
+                        sidebar::is_collapsed(
+                            window.viewport_size().width,
+                            self.panel.as_ref().map(|_| self.details_width),
+                        ),
                         {
                             let shell = cx.weak_entity();
                             move |section, _, cx| {
@@ -1075,9 +1442,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewSerialConnection, _, cx| {
                 this.open_session(SessionRequest::new(SessionKind::Serial), cx);
             }))
-            .on_action(cx.listener(|this, _: &NewTab, _, cx| {
-                this.open_session(SessionRequest::new(SessionKind::NewTab), cx);
-            }))
+            // The new tab page and the terminal sidebar are stage 2b: their
+            // entry points are disabled and the actions do nothing (D30).
+            .on_action(cx.listener(|_, _: &NewTab, _, _| {}))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.placeholder_toast(i18n::menu::INTERFACE_ZOOM, cx)
             }))
@@ -1094,10 +1461,10 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
-            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+            // The focus goes to the next active tab (`close_session`).
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
                 if let TopTab::Session(id) = this.top_tab {
                     this.close_session(id, cx);
-                    window.focus(&this.focus, cx);
                 }
             }))
             .on_action(cx.listener(|_, _: &OpenDocumentation, _, cx| {
@@ -1114,10 +1481,8 @@ impl Render for Shell {
             )
             .on_action(cx.listener(|this, _: &LockApp, _, cx| this.lock_app(cx)))
             .on_action(cx.listener(|this, _: &Exit, window, cx| this.request_exit(window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleTerminalSidebar, _, cx| {
-                this.placeholder_toast(i18n::top_bar::TERMINAL_SIDEBAR, cx)
-            }))
-            .child(self.render_title_bar(cx))
+            .on_action(cx.listener(|_, _: &ToggleTerminalSidebar, _, _| {}))
+            .child(self.render_title_bar(window, cx))
             .child(div().flex_1().min_h_0().child(body))
     }
 }

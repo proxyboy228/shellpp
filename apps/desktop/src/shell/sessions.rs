@@ -1,13 +1,16 @@
-//! Session tabs of the top bar (UI 1.1, 4.6): the model only. Terminals and
-//! SFTP sessions are not built yet, so every session tab shows the "In
-//! development" placeholder (audit decision 6); the tab itself already
-//! behaves as specified: OS icon + name, close button on the active and the
-//! hovered tab, type icon on the right, the neighbor rule of 4.6 on close.
+//! Session tabs of the top bar (UI 1.1, 4.6): the model only. A tab shows
+//! the host OS icon (the server icon until the OS is known; a monitor for a
+//! local terminal) and its name, the close button on the active and the
+//! hovered tab, the type icon on the right; closing the active tab applies
+//! the neighbor rule of 4.6. The content of SSH and local terminal tabs is
+//! their `crate::session_ui::SessionPane` (owned by the shell); SFTP,
+//! serial and new tab page tabs show the "In development" placeholder.
 
 use gpui::SharedString;
 use gpui_kit::assets::IconName as Lucide;
 use uuid::Uuid;
 
+use crate::hosts::QuickTarget;
 use crate::i18n;
 
 /// Identity of a session tab (unique per window, never reused).
@@ -70,6 +73,8 @@ pub struct SessionRequest {
     kind: SessionKind,
     title: Option<SharedString>,
     host: Option<Uuid>,
+    /// A quick-connect address of the search bar (no saved host).
+    quick: Option<QuickTarget>,
     icon: Option<Lucide>,
 }
 
@@ -79,6 +84,7 @@ impl SessionRequest {
             kind,
             title: None,
             host: None,
+            quick: None,
             icon: None,
         }
     }
@@ -96,6 +102,12 @@ impl SessionRequest {
         self
     }
 
+    /// A quick connect without a saved host (UI 2.1).
+    pub fn quick(mut self, target: QuickTarget) -> Self {
+        self.quick = Some(target);
+        self
+    }
+
     /// The host OS icon (neutral server icon when not set).
     pub fn icon(mut self, icon: Lucide) -> Self {
         self.icon = Some(icon);
@@ -104,6 +116,21 @@ impl SessionRequest {
 
     pub fn kind(&self) -> SessionKind {
         self.kind
+    }
+
+    /// The saved host, if any.
+    pub fn host_id(&self) -> Option<Uuid> {
+        self.host
+    }
+
+    /// The quick-connect address, if any.
+    pub fn quick_target(&self) -> Option<&QuickTarget> {
+        self.quick.as_ref()
+    }
+
+    /// The tab title asked for, if any.
+    pub fn requested_title(&self) -> Option<&SharedString> {
+        self.title.as_ref()
     }
 }
 
@@ -209,6 +236,19 @@ impl SessionTabs {
     /// The tab at `index` (0-based among session tabs).
     pub fn at(&self, index: usize) -> Option<&SessionTab> {
         self.tabs.get(index)
+    }
+
+    /// Changes a tab's title and icon (a local terminal's shell name, the
+    /// host OS detected on connect). Returns whether anything changed.
+    pub fn retitle(&mut self, id: SessionId, title: SharedString, icon: Lucide) -> bool {
+        match self.tabs.iter_mut().find(|tab| tab.id == id) {
+            Some(tab) if tab.title != title || tab.icon != icon => {
+                tab.title = title;
+                tab.icon = icon;
+                true
+            }
+            _ => false,
+        }
     }
 }
 

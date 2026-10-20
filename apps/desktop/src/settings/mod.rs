@@ -4,13 +4,15 @@
 //! left, the section on the right; both scroll on their own. Changes apply
 //! at once; there is no Save button.
 //!
-//! Built: Security (UI 13.4, decision D29): the auto-lock interval (Never,
+//! Built: Terminal (UI 12.4, stage 2a lead decision 12; [`terminal`]) and
+//! Security (UI 13.4, decision D29): the auto-lock interval (Never,
 //! 5, 15, 30 or 60 minutes; Never by default) and "Remember on this device"
 //! (hidden without an OS keychain). Every other section shows the "In
 //! development" placeholder (audit decision 1). Change master password and
 //! the recovery key of 13.4 are not part of this stage.
 
 pub mod strings;
+pub mod terminal;
 
 #[cfg(test)]
 mod tests;
@@ -94,9 +96,9 @@ impl Section {
         }
     }
 
-    /// Only Security is built in this stage.
+    /// Security and Terminal are built in this stage.
     pub fn is_built(self) -> bool {
-        self == Section::Security
+        matches!(self, Section::Security | Section::Terminal)
     }
 }
 
@@ -106,7 +108,7 @@ pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     if !state.read(cx).is_unlocked() {
         return;
     }
-    let view = cx.new(|cx| SettingsView::new(state, cx));
+    let view = cx.new(|cx| SettingsView::new(state, window, cx));
     window.open_dialog(cx, move |dialog, _, cx| {
         let theme = cx.theme();
         dialog
@@ -138,6 +140,8 @@ pub struct SettingsView {
     remember_turned_on: bool,
     error: Option<SharedString>,
     work: Option<Task<()>>,
+    /// The Terminal section (UI 12.4).
+    terminal: Entity<terminal::TerminalSection>,
 }
 
 impl std::fmt::Debug for SettingsView {
@@ -149,8 +153,9 @@ impl std::fmt::Debug for SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        let terminal = cx.new(|cx| terminal::TerminalSection::new(state.clone(), window, cx));
         Self {
             state,
             section: Section::Security,
@@ -159,11 +164,17 @@ impl SettingsView {
             remember_turned_on: false,
             error: None,
             work: None,
+            terminal,
         }
     }
 
     pub fn section(&self) -> Section {
         self.section
+    }
+
+    /// The Terminal section (UI 12.4).
+    pub fn terminal(&self) -> &Entity<terminal::TerminalSection> {
+        &self.terminal
     }
 
     pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
@@ -397,7 +408,9 @@ fn label(text: &'static str, cx: &App) -> impl IntoElement {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let section = if self.section.is_built() {
+        let section = if self.section == Section::Terminal {
+            self.terminal.clone().into_any_element()
+        } else if self.section.is_built() {
             self.render_security(cx).into_any_element()
         } else {
             placeholder::placeholder("settings-placeholder", self.section.label(), cx)
@@ -414,6 +427,7 @@ impl Render for SettingsView {
             .child(
                 div()
                     .id("settings-section")
+                    .test_support()
                     .flex_1()
                     .min_w_0()
                     .h_full()

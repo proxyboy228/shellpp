@@ -13,6 +13,9 @@
 //! Windows: gpui-kit's `TitleBar` makes the whole bar a drag region
 //! (`HTCAPTION`), including whatever sits on top of it. Every interactive
 //! child occludes it (`.occlude()`), or real clicks start a window drag.
+//! The session tab strip occludes it as a whole, and its tabs block the
+//! mouse except the wheel (`.block_mouse_except_scroll()`), so the wheel
+//! over a tab scrolls the strip.
 
 use gpui::prelude::*;
 use gpui::{
@@ -33,8 +36,8 @@ use crate::theme::{self, controls, metrics};
 
 /// Height of a tab and of the icon buttons in the bar.
 const TAB_HEIGHT: gpui::Pixels = metrics::HEIGHT_CONTROL;
-/// Width limits of a session tab.
-const SESSION_TAB_MIN_WIDTH: gpui::Pixels = px(96.);
+/// Width limits of a session tab (below the minimum the strip scrolls).
+pub(super) const SESSION_TAB_MIN_WIDTH: gpui::Pixels = px(96.);
 const SESSION_TAB_MAX_WIDTH: gpui::Pixels = px(220.);
 /// The icon size in tabs and bar buttons.
 const ICON_SIZE: gpui::Pixels = px(16.);
@@ -150,6 +153,8 @@ pub fn session_tab(
                 .child(close),
         );
     tab_base(tab.element_id(), focus, active, cx)
+        // Inside the occluding strip: the wheel reaches the strip's scroll.
+        .block_mouse_except_scroll()
         .group(group)
         .flex_shrink(1.)
         .min_w(SESSION_TAB_MIN_WIDTH)
@@ -202,6 +207,18 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl Into<Icon>, cx: &App) ->
         .rounded(metrics::RADIUS_CONTROL)
         .focus_ring(false)
         .focus_ring_visible(theme.title_bar, cx)
+}
+
+/// A bar button of a later stage, shown disabled (D30; design-system 6): no
+/// clicks, no hover, the whole button once at `--opacity-disabled`. The
+/// icon keeps its normal color (the kit's own disabled style would fade it
+/// a second time).
+pub fn disabled(button: Button, cx: &App) -> Button {
+    use gpui_kit::component::Disableable as _;
+    button
+        .disabled(true)
+        .text_color(cx.theme().muted_foreground)
+        .opacity(metrics::OPACITY_DISABLED)
 }
 
 /// The vault switcher arrow next to the Vaults tab (narrow button).

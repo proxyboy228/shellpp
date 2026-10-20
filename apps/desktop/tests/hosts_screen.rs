@@ -172,8 +172,11 @@ fn connect_follows_address_recognition(cx: &mut TestAppContext) {
 }
 
 /// UI 2.1, 2.4: Enter in the search bar with an address quick-connects
-/// (a session tab, placeholder in this stage) without saving a host, and
-/// offers to save it in a toast; a non-address does nothing.
+/// (a session tab) without saving a host; a non-address does nothing. The
+/// offer to save the host waits until the session has connected (UI 2.1:
+/// "after a successful quick connect"; session_ui's
+/// `a_quick_connect_offers_to_save_the_host_once_connected`), so it is not
+/// shown on Enter.
 #[gpui_kit::test]
 fn quick_connect_opens_a_session_without_saving(cx: &mut TestAppContext) {
     let (ui, _) = Ui::open(cx, &[json!({"address": "web1.example.com"})]);
@@ -189,7 +192,10 @@ fn quick_connect_opens_a_session_without_saving(cx: &mut TestAppContext) {
     ui.settle(cx);
     ui.frame(cx, |window, _| {
         assert_eq!(session_tabs(window), 1);
-        assert!(!toasts(window).is_empty(), "the save-host offer");
+        assert!(
+            toasts(window).is_empty(),
+            "no save-host offer before connecting"
+        );
     });
     assert_eq!(ui.hosts(cx).len(), before, "nothing is saved");
     ui.finish(cx);

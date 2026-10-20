@@ -27,10 +27,13 @@ struct Ui {
 
 impl Ui {
     fn open(cx: &mut TestAppContext) -> Self {
+        // Session tabs have terminals that parse on their own threads.
+        cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_kit::init(cx);
             theme::install(Appearance::Dark, cx);
             app::root::bind_keys(cx);
+            crate::terminal::init(cx);
         });
         let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
         let options = WindowOptions {
@@ -60,6 +63,16 @@ impl Ui {
         cx.run_until_parked();
         cx.update_window(self.handle, |_, window, cx| window.render_frame(cx))
             .unwrap();
+    }
+
+    /// Delivers the next frame (tests have no frame loop): what the views
+    /// asked to run after the last frame runs, then a frame is drawn.
+    fn next_frame(&self, cx: &mut TestAppContext) {
+        cx.update_window(self.handle, |_, window, cx| {
+            window.simulate_next_frame(cx);
+        })
+        .unwrap();
+        self.frame(cx);
     }
 
     fn click(&self, id: &str, cx: &mut TestAppContext) {
@@ -169,48 +182,164 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// UI 1.1, 4.6: "+", Terminal and Serial open placeholder session tabs; the
+/// UI 1.1, 4.6, 12.5 (D30): "+" is shown disabled and opens nothing;
+/// Ctrl+L outside a terminal opens a local terminal tab and Ctrl+Alt+S a
+/// serial placeholder; Alt+Left/Right and Ctrl+N move between tabs; the
 /// active tab closes to its neighbor; the last one closes to Vaults.
 #[gpui_kit::test]
 fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
-    ui.click("tab-new", cx);
     let shell = ui.shell(cx);
-    let first = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
-    assert_eq!(first.kind(), SessionKind::NewTab);
-    assert_eq!(ui.top_tab(cx), TopTab::Session(first.id()));
-    assert!(ui.visible(first.element_id().as_ref(), cx));
-    assert!(ui.visible("session-placeholder", cx));
-    // No sidebar on a session tab (UI 4.1); the terminal sidebar button is there.
+    assert!(ui.visible("tab-new", cx));
+    ui.click("tab-new", cx);
+    assert!(
+        cx.update(|cx| shell.read(cx).sessions().is_empty()),
+        "+ is disabled"
+    );
+
+    // Ctrl+L: a local terminal tab, Ctrl+Alt+S: serial (placeholder).
+    ui.press("ctrl-l", cx);
+    let local = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
+    assert_eq!(local.kind(), SessionKind::Local);
+    assert!(cx.update(|cx| shell.read(cx).pane(local.id()).is_some()));
+    // No sidebar on a session tab (UI 4.1); the terminal sidebar button is
+    // there, disabled (stage 2b).
     assert!(!ui.visible("sidebar", cx));
     assert!(ui.visible("terminal-sidebar", cx));
-
-    // Ctrl+L: a local terminal tab (placeholder), Ctrl+Alt+S: serial.
+    assert!(ui.visible("session-pane", cx));
+    // Back on Vaults, so that Ctrl+L and Ctrl+Alt+S reach the shell.
+    ui.press("ctrl-1", cx);
     ui.press("ctrl-l", cx);
     ui.press("ctrl-alt-s", cx);
     let tabs = cx.update(|cx| shell.read(cx).sessions().tabs().to_vec());
     assert_eq!(
         tabs.iter().map(SessionTab::kind).collect::<Vec<_>>(),
-        [SessionKind::NewTab, SessionKind::Local, SessionKind::Serial]
+        [SessionKind::Local, SessionKind::Local, SessionKind::Serial]
     );
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[2].id()));
+    assert!(ui.visible("session-placeholder", cx));
 
     // Alt+Left / Alt+Right move between tabs; Ctrl+3 is the first session tab.
     ui.press("alt-left", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[1].id()));
+    ui.press("alt-right", cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[2].id()));
     ui.press("ctrl-3", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[0].id()));
+    ui.press("ctrl-2", cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Sftp);
+    ui.press("ctrl-3", cx);
 
     // Closing the active middle tab activates its left neighbor.
     ui.click(tabs[1].element_id().as_ref(), cx);
     ui.click(tabs[1].close_element_id().as_ref(), cx);
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[0].id()));
+    assert!(cx.update(|cx| shell.read(cx).pane(tabs[1].id()).is_none()));
     // Ctrl+Shift+W closes the active tab: no left neighbor, the right one.
     ui.press("ctrl-shift-w", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[2].id()));
     ui.press("ctrl-shift-w", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Vaults);
     assert!(cx.update(|cx| shell.read(cx).sessions().is_empty()));
+    ui.finish(cx);
+}
+
+/// UI 1.1 [decision]: more session tabs than fit (ten sessions and more)
+/// are not clipped away: the strip scrolls sideways, the active tab always
+/// scrolls into view (opened, Ctrl+N, Alt+Left/Right, closed to a
+/// neighbor), the wheel over a tab scrolls the strip, the tabs keep their
+/// minimum width and "+" stays in the bar.
+#[gpui_kit::test]
+fn many_session_tabs_scroll_into_view(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let shell = ui.shell(cx);
+    // Serial tabs show the placeholder: no terminals to start. The first
+    // one comes from Vaults: the bar changes (the terminal sidebar button).
+    for _ in 0..12 {
+        shell.update(cx, |shell, cx| {
+            shell.open_session(SessionRequest::new(SessionKind::Serial), cx);
+        });
+    }
+    ui.next_frame(cx);
+    let tabs = cx.update(|cx| shell.read(cx).sessions().tabs().to_vec());
+    let strip = ui.bounds("session-tabs", cx).expect("tab strip");
+    // A tab wholly inside the strip (half a pixel for rounding).
+    let in_view = |tab: &SessionTab, cx: &mut TestAppContext| {
+        ui.bounds(tab.element_id().as_ref(), cx)
+            .is_some_and(|bounds| {
+                bounds.left() >= strip.left() - px(0.5) && bounds.right() <= strip.right() + px(0.5)
+            })
+    };
+    let left = |tab: &SessionTab, cx: &mut TestAppContext| {
+        ui.bounds(tab.element_id().as_ref(), cx)
+            .expect("tab in view")
+            .left()
+    };
+
+    // The newest tab is active and in view; the first one is scrolled away.
+    assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[11].id()));
+    assert!(in_view(&tabs[11], cx), "the active tab is in view");
+    assert!(!in_view(&tabs[0], cx), "more tabs than fit");
+    let width = ui
+        .bounds(tabs[11].element_id().as_ref(), cx)
+        .unwrap()
+        .size
+        .width;
+    assert!(
+        width >= title_bar::SESSION_TAB_MIN_WIDTH - px(0.5),
+        "{width:?}"
+    );
+    // "+" stays in the bar, right of the strip, left of the bell.
+    let new_tab = ui.bounds("tab-new", cx).expect("+ in view");
+    let bell = ui.bounds("top-bar-notifications", cx).expect("bell");
+    assert!(new_tab.left() >= strip.right() && new_tab.right() <= bell.left());
+
+    // Ctrl+3: the first session tab scrolls into view.
+    ui.press("ctrl-3", cx);
+    ui.next_frame(cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[0].id()));
+    assert!(in_view(&tabs[0], cx));
+    assert!(!in_view(&tabs[11], cx));
+    // Alt+Left from Vaults wraps to the last tab, which scrolls into view
+    // although the strip is narrower than on Vaults.
+    ui.press("ctrl-1", cx);
+    ui.next_frame(cx);
+    ui.press("alt-left", cx);
+    ui.next_frame(cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[11].id()));
+    assert!(in_view(&tabs[11], cx));
+    assert!(!in_view(&tabs[0], cx));
+
+    // The wheel over a tab scrolls the strip (a vertical wheel sideways),
+    // and the active tab stays where the wheel left it: partly hidden.
+    let before = left(&tabs[11], cx);
+    let target = tabs[11].element_id();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        window.scroll(
+            target.clone(),
+            gpui::ScrollDelta::Pixels(point(px(0.), px(30.))),
+            cx,
+        );
+    })
+    .unwrap();
+    ui.frame(cx);
+    let after = left(&tabs[11], cx);
+    assert!(
+        after > before,
+        "wheel scrolled the strip: {before:?} -> {after:?}"
+    );
+    assert!(!in_view(&tabs[11], cx), "scrolled partly out of view");
+
+    // A click on the partly hidden active tab scrolls it back into view.
+    ui.click(tabs[11].element_id().as_ref(), cx);
+    ui.next_frame(cx);
+    assert!(in_view(&tabs[11], cx));
+
+    // Closing the active tab: its left neighbor is active and in view.
+    ui.press("ctrl-shift-w", cx);
+    ui.next_frame(cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[10].id()));
+    assert!(in_view(&tabs[10], cx));
     ui.finish(cx);
 }
 
@@ -369,23 +498,154 @@ fn details_panel_leaves_the_main_area_its_minimum() {
     );
 }
 
-/// UI 1.4, 4.6: Exit asks first while session tabs are open.
+/// UI 1.4, 4.6: Exit asks first while sessions are active (connecting,
+/// connected, or dropped with automatic attempts ahead); a failed or ended
+/// session does not count.
 #[gpui_kit::test]
-fn exit_asks_while_sessions_are_open(cx: &mut TestAppContext) {
+fn exit_asks_while_sessions_are_active(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
+    let record = crate::session_ui::fake::FakeLauncher::install(cx);
     let shell = ui.shell(cx);
-    shell.update(cx, |shell, cx| {
-        shell.open_session(SessionRequest::new(SessionKind::Local), cx);
+    let id = shell.update(cx, |shell, cx| {
+        shell.open_session(SessionRequest::new(SessionKind::Local), cx)
     });
-    cx.update_window(ui.handle, |_, window, cx| {
-        shell.update(cx, |shell, cx| shell.request_exit(window, cx));
+    ui.frame(cx);
+    assert_eq!(record.panes().len(), 1, "the session started");
+    assert_eq!(cx.update(|cx| shell.read(cx).active_sessions(cx)), 1);
+    let exit_asks = |cx: &mut TestAppContext| {
+        cx.update_window(ui.handle, |_, window, cx| {
+            shell.update(cx, |shell, cx| shell.request_exit(window, cx));
+        })
+        .unwrap();
+        ui.frame(cx);
+        cx.update_window(ui.handle, |_, window, cx| {
+            let open = window.has_active_dialog(cx);
+            window.close_all_dialogs(cx);
+            open
+        })
+        .unwrap()
+    };
+    assert!(exit_asks(cx), "the exit confirmation is open");
+
+    // An ended session is not active.
+    let pane = cx.update(|cx| shell.read(cx).pane(id).cloned().unwrap());
+    pane.update(cx, |pane, cx| {
+        pane.set_phase(
+            crate::session_ui::Phase::Ended(crate::session_ui::ExitStatus::Code(1)),
+            None,
+            cx,
+        )
+    });
+    assert_eq!(cx.update(|cx| shell.read(cx).active_sessions(cx)), 0);
+    ui.finish(cx);
+}
+
+/// UI 2.1, 2.4, 3: a double click on a card, the host panel's Connect and
+/// the search bar's quick connect open SSH session tabs; the tab shows the
+/// host name and its OS icon (the server icon until the OS is known).
+#[gpui_kit::test]
+fn sessions_open_from_cards_the_panel_and_the_search(cx: &mut TestAppContext) {
+    use crate::session_ui::fake::Call;
+    use crate::sessions::OpenRequest;
+    use shellpp_core::service::dto::SessionTarget;
+
+    let ui = Ui::open(cx);
+    let record = crate::session_ui::fake::FakeLauncher::install(cx);
+    let host = ui.state.update(cx, |state, cx| {
+        state
+            .save_host(
+                None,
+                json!({"label": "web", "address": "192.0.2.10"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+                cx,
+            )
+            .unwrap()
+            .record_id
+    });
+    ui.frame(cx);
+    // The OS detected on an earlier connection gives the tab its icon.
+    let core = cx.update(|cx| ui.state.read(cx).core().cloned().unwrap());
+    let vault_id = cx.update(|cx| ui.state.read(cx).vault_id().unwrap());
+    core.host_os_detected(
+        shellpp_core::service::dto::RecordRef {
+            vault_id,
+            record_id: host,
+        },
+        shellpp_core::os_detect::DetectedOs {
+            family: shellpp_core::service::dto::OsFamily::Linux,
+            distro: None,
+            version: None,
+        },
+        shellpp_core::service::dto::OsSource::Script,
+    )
+    .unwrap();
+    // The core closes (and its temporary profile goes) at the end.
+    drop(core);
+    ui.frame(cx);
+    let card = SharedString::from(format!("host-card-{host}"));
+    let shell = ui.shell(cx);
+    cx.update_window(ui.handle, move |_, window, cx| {
+        window.render_frame(cx);
+        window.double_click(card.clone(), cx);
     })
     .unwrap();
     ui.frame(cx);
-    let asked = cx
-        .update_window(ui.handle, |_, window, cx| window.has_active_dialog(cx))
-        .unwrap();
-    assert!(asked, "the exit confirmation is open");
+    let tab = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
+    assert_eq!(tab.kind(), SessionKind::Ssh);
+    assert_eq!(tab.title().as_ref(), "web");
+    assert_eq!(tab.host(), Some(host));
+    assert_eq!(tab.icon(), crate::hosts::layout::os_icon(Some("linux")));
+    assert!(matches!(
+        &record.calls()[0],
+        Call::Launch(OpenRequest::Ssh(SessionTarget::Host { record_id, .. })) if *record_id == host
+    ));
+
+    // The host panel's Connect.
+    ui.press("ctrl-1", cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_host_panel(Some(host), window, cx)
+        });
+    })
+    .unwrap();
+    ui.frame(cx);
+    ui.click("host-connect", cx);
+    assert_eq!(cx.update(|cx| shell.read(cx).sessions().len()), 2);
+
+    // The search bar's quick connect.
+    ui.press("ctrl-1", cx);
+    ui.click("search", cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.input("admin@192.0.2.30:2200", cx)
+    })
+    .unwrap();
+    ui.frame(cx);
+    ui.click("quick-connect", cx);
+    let calls = record.calls();
+    let quick = calls
+        .iter()
+        .filter_map(|call| match call {
+            Call::Launch(OpenRequest::Ssh(SessionTarget::Quick {
+                address,
+                port,
+                username,
+            })) => Some((address.clone(), *port, username.clone())),
+            _ => None,
+        })
+        .next();
+    assert_eq!(
+        quick,
+        Some((
+            "192.0.2.30".to_owned(),
+            Some(2200),
+            Some("admin".to_owned())
+        ))
+    );
+    let tabs = cx.update(|cx| shell.read(cx).sessions().tabs().to_vec());
+    assert_eq!(tabs.len(), 3);
+    assert_eq!(tabs[2].icon(), crate::hosts::layout::os_icon(None));
     ui.finish(cx);
 }
 

@@ -2,8 +2,10 @@
 //!
 //! [`run`] takes an already opened core (or the reason it did not open),
 //! starts GPUI with gpui-kit, installs the theme, creates the [`AppState`]
-//! entity and the main window (1280x800, frameless, our own title bar), and
-//! hooks shutdown: closing the last window quits, and quitting runs
+//! entity, the session layer (`crate::sessions::ui::install`; the user's
+//! `~/.ssh` keys and SSH agent, none for `--demo` and test runs) and the main
+//! window (1280x800, frameless, our own title bar), and hooks shutdown:
+//! closing the last window quits, and quitting ends the sessions and runs
 //! [`AppState::shutdown`] (which also deletes a `--demo` profile).
 
 pub mod assets;
@@ -16,6 +18,7 @@ use gpui::{
 use gpui_kit::component::TitleBar;
 
 use crate::i18n;
+use crate::sessions::{KeySources, ManagerOptions};
 use crate::state::{AppState, OpenedCore};
 use crate::theme::{self, Appearance};
 
@@ -50,7 +53,16 @@ pub fn run(launch: Launch) {
             gpui_kit::init(cx);
             theme::install(appearance, cx);
             root::bind_keys(cx);
+            crate::terminal::init(cx);
 
+            // A temporary profile (`--demo`) or a test run never uses the
+            // user's ~/.ssh keys or SSH agent.
+            let keys = match &opened {
+                Ok(opened) if opened.temp_profile.is_none() && !crate::dirs::is_test_run() => {
+                    KeySources::system()
+                }
+                _ => KeySources::none(),
+            };
             let state = cx.new(|cx| match opened {
                 Ok(opened) => {
                     let mut state = AppState::new(opened, cx);
@@ -59,6 +71,11 @@ pub fn run(launch: Launch) {
                 }
                 Err(message) => AppState::failed(message),
             });
+            // The session layer (its own Tokio runtime) over the core: the
+            // session tabs connect through it. Nothing to start without a core.
+            if state.read(cx).core().is_some() {
+                crate::sessions::ui::install(&state, ManagerOptions::with_keys(keys), cx);
+            }
 
             if open_main_window(state.clone(), cx).is_err() {
                 tracing::error!("main window did not open");
@@ -78,6 +95,9 @@ pub fn run(launch: Launch) {
                 // The windows are still open here: edits waiting for the
                 // autosave are saved before the core closes.
                 crate::shell::flush_all_panels(cx);
+                // Sessions end (their connection log entries close) and let
+                // go of the core before it closes.
+                crate::shell::release_all_sessions(cx);
                 quit_state.update(cx, |state, _| state.shutdown());
                 async {}
             })

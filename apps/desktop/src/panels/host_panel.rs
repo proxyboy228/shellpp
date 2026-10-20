@@ -23,6 +23,9 @@
 //! 7. Connect (`host-connect`), pinned to the bottom, disabled until the
 //!    address is valid. It is the screen's one accent button unless the
 //!    search bar holds a recognized address ([`HostPanel::set_search_has_address`]).
+//!    It saves a pending edit first, then asks the shell for an SSH session
+//!    tab of this host (`PanelRequest::Connect`; the tab connects with the
+//!    saved settings, UI 4.8).
 //!
 //! Saving (UI 1.3, 3.2): no save button. A new host is a draft until its
 //! address is valid; then it is created (and selected) and every later valid

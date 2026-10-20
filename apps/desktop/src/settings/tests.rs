@@ -198,11 +198,169 @@ fn sections_and_a_missing_keychain(cx: &mut TestAppContext) {
     for section in super::Section::ALL {
         assert!(ui.visible(section.nav_id(), cx), "{section:?}");
     }
-    ui.click("settings-nav-terminal", cx);
+    ui.click("settings-nav-sftp", cx);
     assert!(ui.visible("settings-placeholder", cx));
     assert!(!ui.visible("settings-security", cx));
     ui.click("settings-nav-security", cx);
     assert!(ui.visible("settings-security", cx));
     ui.finish(cx);
     drop(profile);
+}
+
+/// Scrolls the settings section until `id` is on screen (the section is
+/// 420 px tall and scrolls); top first.
+fn reveal(ui: &Ui, id: &str, cx: &mut TestAppContext) -> bool {
+    use gpui::{ScrollDelta, point};
+    // Wholly inside the scrolling section (or outside it, like the nav).
+    let on_screen =
+        |cx: &mut TestAppContext| match (ui.bounds(id, cx), ui.bounds("settings-section", cx)) {
+            (Some(target), Some(section)) => {
+                !section.intersects(&target)
+                    || (target.top() >= section.top() && target.bottom() <= section.bottom())
+            }
+            _ => false,
+        };
+    for delta in [2000., -60.] {
+        for _ in 0..80 {
+            if on_screen(cx) {
+                return true;
+            }
+            cx.update_window(ui.handle, move |_, window, cx| {
+                window.scroll(
+                    "settings-section",
+                    ScrollDelta::Pixels(point(px(0.), px(delta))),
+                    cx,
+                )
+            })
+            .unwrap();
+            ui.settle(cx);
+            if delta > 0. {
+                break;
+            }
+        }
+    }
+    on_screen(cx)
+}
+
+/// Types `text` into the field with element id `id` (its text replaced).
+fn type_into(ui: &Ui, id: &str, text: &str, cx: &mut TestAppContext) {
+    click(ui, id, cx);
+    ui.press("ctrl-a", cx);
+    let text = text.to_owned();
+    cx.update_window(ui.handle, move |_, window, cx| window.input(&text, cx))
+        .unwrap();
+    ui.settle(cx);
+}
+
+fn stored(ui: &Ui, key: &str, cx: &mut TestAppContext) -> serde_json::Value {
+    cx.update(|cx| ui.state.read(cx).core().unwrap().settings_get().unwrap()[key].clone())
+}
+
+/// UI 12.4 (lead decision 12): the Terminal section shows the defaults and
+/// writes each change to the core at once; the global prefs follow.
+#[gpui::test]
+fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
+    use super::terminal::{BuiltinTheme, TerminalPrefs};
+    use serde_json::json;
+
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    click(&ui, "settings-nav-terminal", cx);
+    assert!(ui.visible("settings-terminal", cx));
+    for id in [
+        "settings-autoreconnect",
+        "settings-copy-on-select",
+        "settings-bell-sound",
+        "settings-bold-bright",
+        "settings-term",
+        "settings-font",
+        "settings-font-size",
+        "settings-font-size-minus",
+        "settings-font-size-plus",
+        "settings-theme-graphite",
+        "settings-theme-paper",
+        "settings-keepalive",
+    ] {
+        assert!(reveal(&ui, id, cx), "{id}");
+    }
+    // The blocks this stage does not use stay hidden.
+    assert!(!ui.visible("settings-cursor-style", cx));
+    let prefs = cx.update(|cx| TerminalPrefs::load(ui.state.read(cx).core().unwrap()));
+    assert_eq!(prefs, TerminalPrefs::default());
+    assert!(prefs.autoreconnect && !prefs.bell_sound);
+
+    // Toggles.
+    click(&ui, "settings-autoreconnect", cx);
+    assert_eq!(stored(&ui, "terminal.autoreconnect", cx), json!(false));
+    // The open terminals follow at once (their settings global).
+    let terminals =
+        |cx: &mut TestAppContext| cx.update(|cx| crate::terminal::settings::settings(cx));
+    click(&ui, "settings-bell-sound", cx);
+    assert_eq!(stored(&ui, "terminal.bell_sound", cx), json!(true));
+    click(&ui, "settings-copy-on-select", cx);
+    assert_eq!(stored(&ui, "terminal.copy_on_select", cx), json!(true));
+    assert!(terminals(cx).copy_on_select);
+    assert!(terminals(cx).bell_sound);
+
+    // TERM: the four choices, xterm-256color by default.
+    click(&ui, "settings-term", cx);
+    for term in ["xterm", "xterm-256color", "vt100", "linux"] {
+        assert!(reveal(&ui, &format!("settings-term-{term}"), cx), "{term}");
+    }
+    click(&ui, "settings-term-vt100", cx);
+    assert!(!ui.visible("settings-term-list", cx));
+    assert_eq!(stored(&ui, "terminal.term", cx), json!("vt100"));
+
+    // Font: the bundled font is listed (the test platform has no fonts).
+    click(&ui, "settings-font", cx);
+    assert!(reveal(&ui, "settings-font-JetBrains Mono", cx));
+    click(&ui, "settings-font-JetBrains Mono", cx);
+    assert_eq!(
+        stored(&ui, "terminal.font_family", cx),
+        json!("JetBrains Mono")
+    );
+
+    // Font size: -/+ steps, a typed value, an invalid one is not saved.
+    click(&ui, "settings-font-size-plus", cx);
+    assert_eq!(stored(&ui, "terminal.font_size", cx), json!(15));
+    click(&ui, "settings-font-size-minus", cx);
+    click(&ui, "settings-font-size-minus", cx);
+    assert_eq!(stored(&ui, "terminal.font_size", cx), json!(13));
+    type_into(&ui, "settings-font-size", "18", cx);
+    assert_eq!(stored(&ui, "terminal.font_size", cx), json!(18));
+    assert_eq!(terminals(cx).font_size, 18.);
+    type_into(&ui, "settings-font-size", "200", cx);
+    assert!(ui.visible("settings-font-size-error", cx));
+    assert_eq!(stored(&ui, "terminal.font_size", cx), json!(18));
+
+    // Theme.
+    click(&ui, "settings-theme-paper", cx);
+    assert_eq!(
+        stored(&ui, "terminal.default_theme", cx),
+        json!({"builtin": "paper"})
+    );
+    assert_eq!(terminals(cx).default_theme.name, "Paper");
+
+    // Keepalive: 0 turns it off; a negative or too large value is refused.
+    type_into(&ui, "settings-keepalive", "0", cx);
+    assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(0));
+    assert!(!ui.visible("settings-keepalive-error", cx));
+    type_into(&ui, "settings-keepalive", "-5", cx);
+    assert!(ui.visible("settings-keepalive-error", cx));
+    type_into(&ui, "settings-keepalive", "99999", cx);
+    assert!(ui.visible("settings-keepalive-error", cx));
+    assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(0));
+    type_into(&ui, "settings-keepalive", "45", cx);
+    assert!(!ui.visible("settings-keepalive-error", cx));
+    assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(45));
+    let prefs = cx.update(|cx| TerminalPrefs::load(ui.state.read(cx).core().unwrap()));
+    assert_eq!(prefs.keepalive_s, 45);
+    assert_eq!(prefs.default_theme, BuiltinTheme::Paper);
+    ui.finish(cx);
+}
+
+/// Clicks `id` after scrolling it into view.
+fn click(ui: &Ui, id: &str, cx: &mut TestAppContext) {
+    assert!(reveal(ui, id, cx), "{id} on screen");
+    ui.click(id, cx);
 }

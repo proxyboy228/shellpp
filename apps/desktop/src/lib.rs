@@ -8,7 +8,9 @@
 //! - [`state`]: [`state::AppState`], the one entity that owns the core facade,
 //!   the lock state, the loaded hosts and groups and the selection. Views
 //!   read and write records only through it (there is no IPC layer).
-//! - [`shell`]: title bar, sidebar, "In development" placeholder, toasts.
+//! - [`shell`]: title bar, sidebar, session tabs, "In development"
+//!   placeholder, toasts. [`session_ui`]: the content of a session tab
+//!   (connection screen, prompts, host key dialogs, end and drop overlays).
 //! - [`hosts`]: the Hosts screen. [`panels`]: the host and group panels.
 //! - [`lock`]: the first-run and unlock screens. [`settings`]: the
 //!   Settings window (Security section).
@@ -19,6 +21,11 @@
 //!   the platform services handed to the core.
 //! - [`profile`]: temporary profiles (tests, `--demo`); [`testing`]: the test
 //!   helper that opens a core in a fresh temporary profile.
+//! - [`terminal`]: the terminal emulator view (alacritty_terminal and our
+//!   own GPUI element), fed by the session layer.
+//! - [`sessions`]: the session layer: SSH sessions and local terminals on a
+//!   Tokio runtime of its own (connecting, prompts, host keys, exit and
+//!   drop, automatic reconnection, the connection log, flow control).
 //! - [`i18n`]: English interface strings. `dev` (feature `dev-tools`): demo data.
 
 // gpui-kit re-exports GPUI. Aliasing the kit as `gpui` lets GPUI's derive
@@ -37,9 +44,12 @@ pub mod logging;
 pub mod panels;
 pub mod platform;
 pub mod profile;
+pub mod session_ui;
+pub mod sessions;
 pub mod settings;
 pub mod shell;
 pub mod state;
+pub mod terminal;
 pub mod testing;
 pub mod theme;
 
