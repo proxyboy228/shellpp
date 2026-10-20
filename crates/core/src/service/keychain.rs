@@ -296,6 +296,80 @@ impl Core {
         ))
     }
 
+    /// What the key panel shows of a key's certificate (UI 7.3 block 5;
+    /// stage 3): principals, the validity window, the CA fingerprint and the
+    /// status at this moment; `None` when the key has no certificate.
+    pub fn key_certificate_info(
+        &self,
+        key: RecordRef,
+    ) -> Result<Option<keys::certificate::CertificateInfo>, CoreError> {
+        let now = self
+            .now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(key.vault_id))?;
+        let record = session
+            .index
+            .get_kind(&key.record_id, RecordKind::Key)
+            .ok_or(CoreError::NotFound)?;
+        Ok(record
+            .data()
+            .get("certificate")
+            .and_then(Value::as_str)
+            .and_then(|line| keys::certificate::certificate_info(line, now)))
+    }
+
+    /// The Certificate action (UI 7.1; docs/data-model.md, 9.2): stores the
+    /// certificate (`*-cert.pub` text) on the key of `vault_id` whose public
+    /// key it certifies. `certificate` `missing_ref` when no key matches (the
+    /// private key would be needed), the errors of [`check_certificate`]
+    /// otherwise.
+    pub fn certificate_import(&self, vault_id: Uuid, text: &str) -> Result<KeyView, CoreError> {
+        let line = text
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let certificate = Certificate::from_openssh(&line).map_err(|_| {
+            CoreError::Validation(vec![FieldError::new(
+                "certificate",
+                ValidationReason::Invalid,
+            )])
+        })?;
+        let target = {
+            let inner = self.inner();
+            let session = Self::require_session(&inner)?;
+            check_vault(session, Some(vault_id))?;
+            let mut ids: Vec<Uuid> = session
+                .index
+                .of_kind(RecordKind::Key)
+                .filter(|record| {
+                    key_public_data(record.data()).as_ref() == Some(certificate.public_key())
+                })
+                .map(|record| record.record_id)
+                .collect();
+            ids.sort();
+            ids.first().copied()
+        };
+        let Some(record_id) = target else {
+            return Err(CoreError::Validation(vec![FieldError::new(
+                "certificate",
+                ValidationReason::MissingRef,
+            )]));
+        };
+        self.key_certificate_set(KeyCertificateInput {
+            key: RecordRef {
+                vault_id,
+                record_id,
+            },
+            certificate: line,
+        })
+    }
+
     /// Whether a key holds a certificate (the host panel's certificate row).
     pub fn key_has_certificate(&self, key: RecordRef) -> Result<bool, CoreError> {
         let inner = self.inner();

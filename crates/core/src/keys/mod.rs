@@ -30,6 +30,7 @@ use crate::model::text;
 use crate::model::time::{format_unix_ms, uuid_v7_timestamp};
 use crate::service::dto::KeyView;
 
+pub mod certificate;
 pub mod convert;
 pub mod generate;
 
