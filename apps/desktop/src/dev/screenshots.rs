@@ -45,6 +45,7 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollDelta, Size, Window,
     WindowBounds, point, px, size,
 };
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use uuid::Uuid;
 
@@ -213,6 +214,16 @@ pub enum ShotState {
     ListView,
     /// New host: the empty panel, the focus in Address.
     NewHost,
+    // Stage 3 (night plan, items 5-6): `transfer_shot`.
+    /// Export Data with "Encrypt with a password" off: the clear-text
+    /// warning and "I understand" (UI 1.4).
+    ExportData,
+    /// The summary of Import Data after a plain export of the demo itself:
+    /// every record already here.
+    ImportData,
+    /// The import dialog's preview of an OpenSSH config (UI 2.5): new
+    /// hosts, a key file with a passphrase, a missing one, an error.
+    ImportSshConfig,
     /// A quick connect from the search bar to the SSH test server: once the
     /// session runs, the offer to save the host ("Save host?", UI 2.1).
     QuickConnectToast,
@@ -299,7 +310,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 39] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -311,6 +322,9 @@ impl ShotState {
         Self::Empty,
         Self::ListView,
         Self::NewHost,
+        Self::ExportData,
+        Self::ImportData,
+        Self::ImportSshConfig,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
@@ -395,6 +409,9 @@ impl ShotState {
             Self::Empty => "empty",
             Self::ListView => "list-view",
             Self::NewHost => "new-host",
+            Self::ExportData => "export-data",
+            Self::ImportData => "import-data",
+            Self::ImportSshConfig => "import-ssh-config",
             Self::QuickConnectToast => "quick-connect-toast",
             Self::TagFilter => "tag-filter",
             Self::TagChips => "tag-chips",
@@ -1095,6 +1112,8 @@ pub async fn reset_demo(
         window.render_frame(cx);
         window.press("escape", cx);
         window.press("escape", cx);
+        // The dialogs of the data transfer states.
+        window.close_all_dialogs(cx);
     })
     .map_err(|_| ScreenshotError::WindowClosed)?;
     let screen = cx.update(|cx| shell.read(cx).hosts_screen().clone());
@@ -1240,6 +1259,9 @@ pub async fn reach_state(
         }
         ShotState::ListView => click(cx, handle, VIEW_LIST),
         ShotState::NewHost => click(cx, handle, NEW_HOST),
+        ShotState::ExportData | ShotState::ImportData | ShotState::ImportSshConfig => {
+            transfer_shot::reach(cx, handle, state, shot_state).await
+        }
         ShotState::TagFilter => {
             // The dropdown open with two tags checked (they also show as
             // chips next to the button); both are on the first demo host.
@@ -1381,6 +1403,13 @@ impl<V: Fn(&str) -> bool> Facts<V> {
                 need(self.address_empty, "Address is not empty")?;
                 need(self.address_focused, "Address has no focus")
             }
+            // `transfer_shot::reach` checked the dialog's content.
+            ShotState::ExportData => {
+                need(visible("data-export-dialog"), "no Export Data dialog")?;
+                need(visible("data-export-warning"), "no clear-text warning")
+            }
+            ShotState::ImportData => need(visible("data-import-summary"), "no import summary"),
+            ShotState::ImportSshConfig => need(visible("import-preview"), "no import preview"),
             ShotState::TagFilter => {
                 need(visible(TAG_FILTER_MENU), "no tag filter dropdown")?;
                 need(
@@ -1675,6 +1704,7 @@ fn capture(
 
 mod known_hosts_shot;
 mod terminal;
+mod transfer_shot;
 
 #[cfg(test)]
 mod tests;

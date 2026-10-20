@@ -47,6 +47,15 @@
   - 960x600 (the minimum window size): root, host-panel, first-run;
   - any other size: root, group, host-panel.
 
+  Stage 3, the data transfer dialogs (1280x800, after new-host; temporary
+  files only, deleted as soon as the dialog has read them):
+  - export-data: Export Data with encryption off, the clear-text warning;
+  - import-data: the summary of Import Data after a plain export of the
+    demo itself (every record already here, nothing added);
+  - import-ssh-config: the import dialog's preview of a sample OpenSSH
+    config (never ~/.ssh/config): new hosts, a key file with a passphrase,
+    a missing one, a ProxyCommand that is not imported.
+
   Stage 2b, step 5.1 (-Stage2b selects these states, both themes, 1280x800):
   - known-hosts: the Known Hosts screen after an import of a temporary
     known_hosts file (plain, [host]:port, hashed and revoked entries; never
@@ -68,7 +77,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (84 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (90 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -155,6 +164,9 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
     'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets',
     'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed')
+# Stage 3, the data transfer dialogs (ShotState::ExportData and the two
+# imports, captured after new-host).
+$allStates += @('export-data', 'import-data', 'import-ssh-config')
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
 # htop in the light theme after the contrast change and the drop's dot).
 $stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'split-picker', 'tab-menu',
