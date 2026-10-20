@@ -3,7 +3,8 @@
 //! and fictional data written through `shellpp-core`: 5 groups (one nested)
 //! and 300 hosts on documentation addresses (`example.com`, `192.0.2.0/24`,
 //! `198.51.100.0/24`). About a third of the hosts have tags, about a quarter
-//! a tile color other than graphite, and about half live in groups.
+//! a tile color other than graphite, and about half live in groups. The
+//! Keychain gets three keys generated at seeding time and two identities.
 //! The profile is deleted when the app exits.
 //!
 //! [`open_fresh`] opens an empty temporary profile at a chosen lock stage
@@ -15,11 +16,15 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use shellpp_core::lock::FirstRunOptions;
+use shellpp_core::service::dto::KeyGenerateInput;
 use shellpp_core::service::dto::{
     LockState, RecordSaveInput, RecordType, RecordView, TagColor, VaultKind,
 };
+use shellpp_core::service::keychain::IdentitySaveInput;
 use shellpp_core::{Core, CoreConfig, CoreError};
 use uuid::Uuid;
+
+use crate::state::records_edit::{KeyKind, PasswordChange};
 
 use crate::platform::{self, events::event_channel};
 use crate::profile::TempProfile;
@@ -31,6 +36,13 @@ use crate::theme::palette::TAG_COLORS;
 pub const DEMO_PREFIX: &str = "shellpp-demo";
 pub const DEMO_GROUPS: usize = 5;
 pub const DEMO_HOSTS: usize = 300;
+/// The demo keys of the Keychain: label and type.
+pub const DEMO_KEYS: [(&str, KeyKind); 3] = [
+    ("deploy@web-01", KeyKind::Ed25519),
+    ("CI runner", KeyKind::EcdsaP256),
+    ("Backup server", KeyKind::Ed25519),
+];
+pub const DEMO_IDENTITIES: usize = 2;
 
 /// Why the demo could not start.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +61,8 @@ pub struct SeedSummary {
     pub hosts_with_tags: usize,
     pub hosts_with_color: usize,
     pub hosts_in_groups: usize,
+    pub keys: usize,
+    pub identities: usize,
 }
 
 /// Creates the temporary demo profile directory.
@@ -224,6 +238,8 @@ pub fn seed(core: &Core) -> Result<SeedSummary, CoreError> {
         hosts_with_tags: 0,
         hosts_with_color: 0,
         hosts_in_groups: 0,
+        keys: 0,
+        identities: 0,
     };
     for index in 0..DEMO_HOSTS {
         let role = ROLES[index % ROLES.len()];
@@ -277,7 +293,40 @@ pub fn seed(core: &Core) -> Result<SeedSummary, CoreError> {
         save(core, vault_id, RecordType::Host, data)?;
         summary.hosts += 1;
     }
+    seed_keychain(core, vault_id, &mut summary)?;
     Ok(summary)
+}
+
+/// The demo keys (generated now, from the OS random source; none is ever
+/// used for a connection) and two identities for the Keychain screen (UI
+/// 7.2). Keys without a passphrase and no RSA, so the seeding stays fast.
+fn seed_keychain(core: &Core, vault_id: Uuid, summary: &mut SeedSummary) -> Result<(), CoreError> {
+    let mut deploy = None;
+    for (label, kind) in DEMO_KEYS {
+        let key = core
+            .key_generate(KeyGenerateInput {
+                vault_id,
+                label: label.to_owned(),
+                kind,
+                passphrase: None,
+                save_passphrase: false,
+            })?
+            .key;
+        deploy.get_or_insert(key.record_id);
+        summary.keys += 1;
+    }
+    for (label, username, key_id) in [("Operations", "ops", deploy), ("Backups", "backup", None)] {
+        core.identity_save(IdentitySaveInput {
+            vault_id,
+            record_id: None,
+            label: label.to_owned(),
+            username: username.to_owned(),
+            key_id,
+            password: PasswordChange::Keep,
+        })?;
+        summary.identities += 1;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -297,6 +346,21 @@ mod tests {
         assert_eq!(summary.hosts_with_tags, DEMO_HOSTS / 3);
         assert_eq!(summary.hosts_with_color, DEMO_HOSTS / 4);
         assert_eq!(summary.hosts_in_groups, DEMO_HOSTS / 2);
+        // The Keychain: the demo keys and identities.
+        assert_eq!(summary.keys, DEMO_KEYS.len());
+        assert_eq!(summary.identities, DEMO_IDENTITIES);
+        let keys = opened.core.keys_list().unwrap();
+        for (label, kind) in DEMO_KEYS {
+            assert!(
+                keys.iter()
+                    .any(|key| key.label == label && key.algorithm == kind.algorithm_name()),
+                "{label}"
+            );
+        }
+        assert_eq!(
+            opened.core.identities_list().unwrap().len(),
+            DEMO_IDENTITIES
+        );
 
         let views = opened
             .core

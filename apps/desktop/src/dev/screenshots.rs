@@ -280,6 +280,18 @@ pub enum ShotState {
     SidebarAppearance,
     /// The terminal sidebar's Appearance: the Font page.
     SidebarFont,
+    // Stage 3 (night plan, items 1-4): `keychain_shot`.
+    /// The Keychain screen (UI 7.2) with the demo keys and identities.
+    Keychain,
+    /// The key panel of the first key (UI 7.3), the private key hidden.
+    KeychainPanel,
+    /// The Generate key form (UI 7.1) with a label typed.
+    KeychainGenerate,
+    /// The import form with a text that is not a private key: the type
+    /// "unknown" with its reason (UI 7.2).
+    KeychainImportUnknown,
+    /// The Keychain of an empty profile (UI 7.2, empty state).
+    KeychainEmpty,
 }
 
 /// Which app state a screen state is shown on.
@@ -299,7 +311,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 41] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -315,6 +327,11 @@ impl ShotState {
         Self::TagChips,
         Self::ShowMore,
         Self::KnownHosts,
+        Self::Keychain,
+        Self::KeychainPanel,
+        Self::KeychainGenerate,
+        Self::KeychainImportUnknown,
+        Self::KeychainEmpty,
         Self::FirstRun,
         Self::Unlock,
         Self::TerminalTofu,
@@ -378,6 +395,14 @@ impl ShotState {
         Self::SidebarAppearance,
         Self::SidebarFont,
     ];
+    /// The Keychain states of stage 3 (night plan, items 1-4).
+    pub const STAGE_3: [Self; 5] = [
+        Self::Keychain,
+        Self::KeychainPanel,
+        Self::KeychainGenerate,
+        Self::KeychainImportUnknown,
+        Self::KeychainEmpty,
+    ];
     /// The states at the minimum window size: the Hosts screen without and
     /// with the details panel, and the tallest lock screen.
     pub const MINIMUM: [Self; 3] = [Self::Root, Self::HostPanel, Self::FirstRun];
@@ -420,6 +445,11 @@ impl ShotState {
             Self::SidebarHistory => "sidebar-history",
             Self::SidebarAppearance => "sidebar-appearance",
             Self::SidebarFont => "sidebar-font",
+            Self::Keychain => "keychain",
+            Self::KeychainPanel => "keychain-key-panel",
+            Self::KeychainGenerate => "keychain-generate",
+            Self::KeychainImportUnknown => "keychain-import-unknown",
+            Self::KeychainEmpty => "keychain-empty",
         }
     }
 
@@ -445,7 +475,7 @@ impl ShotState {
 
     fn scene(self) -> Scene {
         match self {
-            Self::Empty => Scene::Fresh(FreshStage::Unlocked),
+            Self::Empty | Self::KeychainEmpty => Scene::Fresh(FreshStage::Unlocked),
             Self::FirstRun => Scene::Fresh(FreshStage::FirstRun),
             Self::Unlock => Scene::Fresh(FreshStage::Locked),
             Self::TerminalTofu
@@ -937,6 +967,7 @@ impl Run {
                     let file = file_name(size, theme_name, state);
                     let ready = async {
                         set_theme(cx, handle, appearance)?;
+                        reach_fresh_state(cx, handle, state).await?;
                         settle(cx, handle).await?;
                         check_state(cx, handle, &root, state)
                     }
@@ -992,6 +1023,19 @@ impl Run {
         let finished = rig.finish(cx, &self.demo);
         drop(rig);
         reset.and(finished)
+    }
+}
+
+/// The steps of a state on a fresh profile after its window opened: the
+/// Keychain's empty state is one click away from the empty Hosts screen.
+pub async fn reach_fresh_state(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    shot_state: ShotState,
+) -> Result<(), ScreenshotError> {
+    match shot_state {
+        ShotState::KeychainEmpty => keychain_shot::reach_empty(cx, handle).await,
+        _ => Ok(()),
     }
 }
 
@@ -1122,6 +1166,9 @@ pub async fn reset_demo(
                 screen.toggle_tag(&tag, cx);
             }
         });
+        // The Keychain's own panel (its states open one).
+        let keychain = shell.read(cx).keychain_screen().clone();
+        keychain.update(cx, |keychain, cx| keychain.close_panel(cx));
         state.update(cx, |state, cx| {
             state.clear_selection(cx);
             state.set_location(None, cx);
@@ -1267,7 +1314,13 @@ pub async fn reach_state(
             scroll_to_bottom(cx, handle, HOST_PANEL_BODY)
         }
         ShotState::KnownHosts => known_hosts_shot::reach(cx, handle, root, state).await,
-        ShotState::Empty | ShotState::FirstRun | ShotState::Unlock => {
+        ShotState::Keychain
+        | ShotState::KeychainPanel
+        | ShotState::KeychainGenerate
+        | ShotState::KeychainImportUnknown => {
+            keychain_shot::reach(cx, handle, root, shot_state).await
+        }
+        ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
         ShotState::TerminalTofu
@@ -1304,6 +1357,9 @@ pub fn check_state(
     let failed = |reason: &str| Err(ScreenshotError::state(shot_state, reason));
     if shot_state == ShotState::KnownHosts {
         return known_hosts_shot::check(cx, handle, root);
+    }
+    if ShotState::STAGE_3.contains(&shot_state) {
+        return keychain_shot::check(cx, handle, root, shot_state);
     }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
@@ -1412,6 +1468,12 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::Unlock => need(visible(UNLOCK), "no unlock screen"),
             // Checked by `known_hosts_shot::check`.
             ShotState::KnownHosts => Err("checked with the Known Hosts screen"),
+            // Checked by `keychain_shot::check`.
+            ShotState::Keychain
+            | ShotState::KeychainPanel
+            | ShotState::KeychainGenerate
+            | ShotState::KeychainImportUnknown
+            | ShotState::KeychainEmpty => Err("checked with the Keychain screen"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -1673,6 +1735,7 @@ fn capture(
     .map_err(|_| ScreenshotError::WindowClosed)?
 }
 
+mod keychain_shot;
 mod known_hosts_shot;
 mod terminal;
 

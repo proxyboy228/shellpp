@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Screenshots of the Shell++ window (owner's stage 1, step 5.2, and stages 2a
-  and 2b, step 5.1).
+  Screenshots of the Shell++ window (owner's stage 1, step 5.2, stages 2a
+  and 2b, step 5.1, and the Keychain of stage 3).
 
 .DESCRIPTION
   Builds shellpp with the `screenshots` feature and launches it ONCE for all
@@ -43,7 +43,9 @@
     terminal-host-key-changed, terminal-drop, terminal-local, terminal-tabs,
     and those of stage 2b: terminal-connecting, terminal-splits,
     split-picker, tab-menu, new-tab, new-tab-search, sidebar-tools,
-    sidebar-snippets, sidebar-history, sidebar-appearance, sidebar-font;
+    sidebar-snippets, sidebar-history, sidebar-appearance, sidebar-font,
+    and those of stage 3: keychain, keychain-key-panel, keychain-generate,
+    keychain-import-unknown, keychain-empty;
   - 960x600 (the minimum window size): root, host-panel, first-run;
   - any other size: root, group, host-panel.
 
@@ -63,12 +65,24 @@
     (the theme list), sidebar-font (the Font page);
   - terminal-htop: in the light theme, after the minimum contrast change.
 
+  Stage 3, the Keychain (-Stage3 selects these states, both themes,
+  1280x800; the demo profile's keys are generated when it is seeded, and
+  ~/.ssh is never read):
+  - keychain: the Keys and Identities sections with the demo keys;
+  - keychain-key-panel: the key panel of the first key, the private key
+    hidden (type, SHA256 fingerprint and the note instead);
+  - keychain-generate: the Generate key form with a label typed;
+  - keychain-import-unknown: the import form with a public key pasted: the
+    type "unknown" with its reason;
+  - keychain-empty: the Keychain of an empty profile (Generate, Import,
+    Import from ~/.ssh).
+
   -States limits a run to some states (a smoke run; the app gets them as
   SHELLPP_SCREENSHOT_STATES): each listed state at the sizes that have it,
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (84 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (94 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -80,6 +94,9 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -Stage2b -Server openssh
   (the screenshots of stage 2b, step 5.1)
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -Stage3
+  (the Keychain screenshots of stage 3)
 #>
 [CmdletBinding()]
 param(
@@ -96,6 +113,8 @@ param(
     [string[]] $States = @(),
     # The states of stage 2b, step 5.1 (added to -States).
     [switch] $Stage2b,
+    # The Keychain states of stage 3 (added to -States).
+    [switch] $Stage3,
     # Use the existing debug binaries.
     [switch] $NoBuild
 )
@@ -151,7 +170,8 @@ function Test-DockerLinux {
 # terminal states named as on OpenSSH.
 $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 'search-results',
     'search-no-results', 'three-selected', 'empty', 'list-view', 'new-host', 'tag-filter', 'tag-chips',
-    'show-more', 'known-hosts', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
+    'show-more', 'known-hosts', 'keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
+    'keychain-empty', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
     'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
     'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets',
     'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed')
@@ -160,6 +180,9 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
 $stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'split-picker', 'tab-menu',
     'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets', 'sidebar-history', 'sidebar-appearance',
     'sidebar-font', 'terminal-htop', 'terminal-drop')
+# Stage 3, the Keychain (src/dev/screenshots.rs, ShotState::STAGE_3).
+$stage3States = @('keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
+    'keychain-empty')
 function Get-SizeStates([string] $size) {
     if ($size -eq '1280x800') { return $allStates }
     if ($size -eq '960x600') { return @('root', 'host-panel', 'first-run') }
@@ -175,6 +198,7 @@ foreach ($size in $Sizes) {
 }
 if (@($Sizes | Select-Object -Unique).Count -ne $Sizes.Count) { Fail 'a size is listed twice' }
 if ($Stage2b) { $States = @($States) + $stage2bStates }
+if ($Stage3) { $States = @($States) + $stage3States }
 $States = @($States | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 foreach ($state in $States) {
     $known = $allStates + @($russhLabels.Values)
@@ -342,7 +366,7 @@ foreach ($entry in $saved) {
 # host-panel in both themes, the default size every terminal state. A run
 # limited by -States has exactly its states at the sizes that have them.
 $terminalStates = @('terminal-tofu', 'terminal-host-key-changed', 'terminal-drop', 'terminal-local', 'terminal-tabs',
-    'terminal-ls-color', 'terminal-htop') + $stage2bStates
+    'terminal-ls-color', 'terminal-htop') + $stage2bStates + $stage3States
 # (PowerShell names ignore case: a `$states` here would overwrite -States.)
 $expectedCount = 0
 foreach ($size in $Sizes) {
