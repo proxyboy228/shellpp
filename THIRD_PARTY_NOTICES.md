@@ -700,7 +700,7 @@ define) are ours.
 | Dracula | Dracula Theme | MIT | Copyright (c) 2023 Dracula Theme | <https://draculatheme.com/spec>; license: <https://github.com/dracula/dracula-theme> |
 | Nord | Sven Greb | MIT | Copyright (c) 2016-present Sven Greb <development@svengreb.de> (https://www.svengreb.de) | <https://github.com/nordtheme/alacritty> (`src/nord.yaml`); <https://github.com/nordtheme/nord> |
 | Solarized Dark, Solarized Light | Ethan Schoonover | MIT | Copyright (c) 2011 Ethan Schoonover | <https://github.com/altercation/solarized> |
-| Gruvbox Dark | morhetz | MIT (declared as "MIT/X11" in the README) | none published: the repository has no LICENSE file or copyright line; the author is "morhetz" | <https://github.com/morhetz/gruvbox> (`colors/gruvbox.vim`) |
+| Gruvbox Dark | morhetz | MIT: the author declares the license as "MIT/X11" in the README (<https://github.com/morhetz/gruvbox/blob/master/README.md>); the repository has no LICENSE file | none published: the repository has no copyright line; the author is "morhetz" | <https://github.com/morhetz/gruvbox> (`colors/gruvbox.vim`) |
 | Tokyo Night | folke (Neovim port); enkia (original Visual Studio Code theme) | Apache-2.0 (port); MIT (original theme) | port: none published; original: Copyright (c) 2018-present Enkia | <https://github.com/folke/tokyonight.nvim> (`extras/windows_terminal/tokyonight_night.json`); <https://github.com/enkia/tokyo-night-vscode-theme> |
 | Catppuccin Mocha, Catppuccin Latte | Catppuccin | MIT | Copyright (c) 2021 Catppuccin | <https://github.com/catppuccin/palette> (`palette.json` 1.8.0); <https://github.com/catppuccin/catppuccin> (style guide) |
 
