@@ -316,6 +316,9 @@ fn network_paths_are_never_opened() {
             "Host two",
             "  HostName 192.0.2.2",
             "  IdentityFile //files.example.invalid/keys/id2",
+            "Host three",
+            "  HostName 192.0.2.3",
+            r"  IdentityFile \??\UNC\files.example.invalid\keys\id3",
             "",
         ]
         .join("\n"),
@@ -331,8 +334,8 @@ fn network_paths_are_never_opened() {
         .filter(|problem| problem.contains("network path"))
         .collect();
     assert_eq!(network.len(), 2, "{:?}", preview.problems);
-    assert_eq!(preview.hosts.len(), 2);
-    assert_eq!(preview.keys.len(), 2);
+    assert_eq!(preview.hosts.len(), 3);
+    assert_eq!(preview.keys.len(), 3);
     for key in &preview.keys {
         assert_eq!(
             key.status,

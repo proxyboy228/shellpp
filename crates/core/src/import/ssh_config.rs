@@ -165,21 +165,24 @@ fn words(line: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// `~/` and `~` at the start become the home folder.
 /// A path that names another machine: `\\server\share`, `//server/share`
-/// (and the `\\?\UNC\` and `\\.\` forms, which start the same way). An
+/// (and the `\\?\UNC\` and `\\.\` forms, which start the same way), and the
+/// NT form `\??\UNC\server\share`, which Windows passes on as it is. An
 /// import never opens one: on Windows that alone connects to the server
 /// and offers it the user's NTLM credentials (security.md 13.5, "Include
-/// follows only local files").
+/// follows only local files"). A config whose home folder is itself on a
+/// share therefore has its key files listed as not read.
 pub fn is_network_path(path: &Path) -> bool {
     let text = path.to_string_lossy();
     let mut start = text.chars().take(2);
     matches!(
         (start.next(), start.next()),
         (Some('\\' | '/'), Some('\\' | '/'))
-    )
+    ) || text.starts_with("\\??\\")
+        || text.starts_with("/??/")
 }
 
+/// `~/` and `~` at the start become the home folder.
 pub fn expand_home(path: &str, home: &Path) -> PathBuf {
     if path == "~" {
         return home.to_path_buf();
