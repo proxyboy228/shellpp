@@ -675,6 +675,38 @@ fn the_label_is_saved_as_in_the_saving_rule(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// The arrows move the selection over the key cards (the panel follows,
+/// the shown key hidden again); Esc closes the panel.
+#[gpui_kit::test]
+fn the_arrows_move_over_the_keys(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, sample);
+    let shown = ui.screen.read_with(cx, |screen, _| screen.shown_key_ids());
+    assert_eq!(shown.len(), 3);
+    let selected =
+        |ui: &Ui, cx: &mut TestAppContext| ui.screen.read_with(cx, |screen, _| screen.selected());
+    ui.click(cx, key_card_id(shown[0]));
+    ui.click(cx, "kc-key-show");
+    let first = ui.panel(cx);
+    // The click on Show moved the focus; back to the cards.
+    ui.click(cx, key_card_id(shown[0]));
+    ui.frame(cx, |window, cx| window.press("right", cx));
+    assert_eq!(selected(&ui, cx), Some(shown[1]));
+    assert!(!first.read_with(cx, |panel, _| panel.is_revealed()));
+    assert_eq!(
+        ui.panel(cx).read_with(cx, |panel, _| panel.key_id()),
+        shown[1]
+    );
+    ui.frame(cx, |window, cx| window.press("right", cx));
+    ui.frame(cx, |window, cx| window.press("right", cx));
+    assert_eq!(selected(&ui, cx), Some(shown[2]), "stops at the last key");
+    ui.frame(cx, |window, cx| window.press("left", cx));
+    assert_eq!(selected(&ui, cx), Some(shown[1]));
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert_eq!(selected(&ui, cx), None);
+    assert!(!ui.visible(cx, "kc-panel"));
+    ui.finish(cx);
+}
+
 // -- Generate key (7.1) -----------------------------------------------------------------
 
 #[gpui_kit::test]
@@ -890,6 +922,16 @@ fn import_explains_an_unknown_key(cx: &mut TestAppContext) {
     let ui = Ui::open(cx, |_, _| {});
     ui.click(cx, "kc-new-key");
     let form = ui.import_form(cx);
+    // While `inspect` runs (on a background thread), Import waits.
+    let text = key_text(KeyKind::Ed25519, "checking@test", None);
+    cx.update_window(ui.handle, |_, window, cx| {
+        form.update(cx, |form, cx| form.set_text(&text, window, cx));
+        assert_eq!(form.read(cx).inspection(), &Inspection::Checking);
+        assert!(!form.read(cx).can_import(cx));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(form.read_with(cx, |form, cx| form.can_import(cx)));
     // A public key line instead of a private key.
     let private = key_text(KeyKind::Ed25519, "pub@test", None);
     let parsed = ssh_key::PrivateKey::from_openssh(private.as_bytes()).unwrap();
