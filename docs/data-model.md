@@ -640,7 +640,7 @@ Rules:
 - `public_key` must match the private key; an empty field is filled from the private key on save (UI 7.3).
 - `passphrase` is allowed only when the private key is encrypted, and must open it.
 - Supported algorithms: `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521`, `ssh-rsa` (signatures `rsa-sha2-256` and `rsa-sha2-512`), `sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`. Anything else is kept and shown as "unknown".
-- Generate key (UI 7.1): Ed25519 by default; ECDSA P-256, P-384 or P-521; RSA 2048, 3072 or 4096 bits (3072 by default).
+- Generate key (UI 7.1): Ed25519 by default; ECDSA P-256, P-384 or P-521; RSA 3072 or 4096 bits (3072 by default). RSA 2048 is not offered (D32); imported RSA keys of 2048 bits and more are accepted.
 - The private key leaves the record only through an explicit action: show or copy (UI 7.3), export to file, plain export.
 - Users of a key (derived): hosts and groups (`key_id`, `certificate_key_id`, `fido2_key_id`), identities, credential bindings.
 

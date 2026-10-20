@@ -39,7 +39,9 @@ hkdf = "0.13.0"
 # "zeroize": SHA-256 states (also inside HMAC and HKDF, via digest/zeroize)
 # are wiped on drop; they hold key material (docs/security.md, section 5.3).
 sha2 = { version = "0.11.1", default-features = false, features = ["zeroize"] }
-getrandom = "0.4.3"
+# "sys_rng": the OS random source as a rand_core RNG for ssh-key (key
+# generation and key encryption, docs/data-model.md, section 9.1).
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 subtle = "2.6.1"
 zeroize = { version = "1.9.1", features = ["derive"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
@@ -51,7 +53,22 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 russh = { version = "0.64.1", default-features = false, features = ["ring", "flate2", "rsa"] }
 # The exact ssh-key version russh 0.64.1 pins, so that shellpp-core parses keys
 # with the same crate (key import, fingerprints, known_hosts blobs).
-ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521", "rsa", "encryption"] }
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521", "rsa", "encryption", "ppk"] }
+# Key import formats besides OpenSSH (stage 3, docs/data-model.md, section
+# 9.1; D5): PEM PKCS#1, PKCS#8 (PBES2-encrypted too), SEC1 and the legacy
+# OpenSSL PEM encryption (MD5 key derivation, AES-CBC). The exact versions
+# that ssh-key and russh already build, so no new crates ship.
+pkcs8 = { version = "0.11.0", default-features = false, features = ["encryption", "std"] }
+pkcs1 = { version = "=0.8.0-rc.4", default-features = false }
+sec1 = { version = "0.8.1", default-features = false, features = ["der"] }
+rsa = { version = "=0.10.0-rc.18", default-features = false }
+p256 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
+p384 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
+p521 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8"] }
+md5 = "0.8.1"
+aes = "0.9.3"
+cbc = "0.2.1"
 # HMAC-SHA1 matching of hashed known_hosts entries (docs/data-model.md, section 9.5; D21).
 hmac = "0.13.0"
 sha1 = { version = "0.11.0", default-features = false }
@@ -138,4 +155,14 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.sha2]
+opt-level = 3
+
+# RSA key generation (3072 and 4096 bits, stage 3) takes minutes unoptimized.
+[profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
+[profile.dev.package.crypto-primes]
 opt-level = 3

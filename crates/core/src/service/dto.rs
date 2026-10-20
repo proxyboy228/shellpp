@@ -1149,6 +1149,24 @@ pub struct KeyImportInput {
 
 redacted_debug!(KeyImportInput);
 
+/// Input of `key_generate` (UI 7.1 "Generate key"; night decision D32).
+#[derive(Clone, Deserialize)]
+pub struct KeyGenerateInput {
+    pub vault_id: Uuid,
+    /// Required (UI 7.3); also the key comment.
+    pub label: String,
+    #[serde(default)]
+    pub kind: crate::keys::generate::KeyKind,
+    /// Optional: the new key is encrypted with it.
+    #[serde(default)]
+    pub passphrase: Option<SecretString>,
+    /// Store the passphrase in the vault (UI 7.3); otherwise it is asked on every connection.
+    #[serde(default)]
+    pub save_passphrase: bool,
+}
+
+redacted_debug!(KeyGenerateInput);
+
 /// Result of `key_import`.
 #[derive(Clone, Debug, Serialize)]
 pub struct KeyImportResult {

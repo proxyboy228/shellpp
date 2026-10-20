@@ -54,7 +54,7 @@ use crate::settings::Settings;
 use crate::store::{OpenOutcome, Store, StoreError, WrapKind};
 use dto::{
     CoreEvent, CoreEventKind, CoreSnapshot, HistoryClearInput, HistoryClearResult,
-    HistoryEntryView, HistoryListInput, KeyImportInput, KeyImportResult, KeyView,
+    HistoryEntryView, HistoryListInput, KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView,
     KnownHostAddInput, KnownHostView, KnownHostsImportSummary, LockState, LockStatus,
     NewNotification, Notification, NotificationList, OsSource, RecentConnection,
     RecordDeleteResult, RecordMoveInput, RecordRef, RecordSaveInput, RecordView, RecordsQuery,
@@ -650,10 +650,47 @@ impl Core {
         self.keys_list_impl()
     }
 
-    /// "+ -> Key": parses and stores an OpenSSH private key (rules and errors:
-    /// stage 2 plan, sections 4.4 and 5.1).
+    /// "+ -> Key" and the Keychain's New key: parses and stores a private
+    /// key (rules and errors: stage 2 plan, sections 4.4 and 5.1). OpenSSH,
+    /// PEM (PKCS#1, PKCS#8, SEC1) and PuTTY `.ppk` keys are accepted; the
+    /// stored form is OpenSSH (`crate::keys::prepare`).
     pub fn key_import(&self, input: KeyImportInput) -> Result<KeyImportResult, CoreError> {
         self.key_import_impl(input)
+    }
+
+    /// Generate key (UI 7.1): a new key pair stored like an import. The
+    /// label is required (`label` `required`, `too_long`). Slow for RSA:
+    /// call it off the UI thread.
+    pub fn key_generate(&self, input: KeyGenerateInput) -> Result<KeyImportResult, CoreError> {
+        let label =
+            match crate::model::text::string(&input.label, crate::model::key::MAX_LABEL_CHARS) {
+                Ok(Some(label)) => label,
+                Ok(None) => {
+                    return Err(CoreError::Validation(vec![crate::error::FieldError::new(
+                        "label",
+                        crate::error::ValidationReason::Required,
+                    )]));
+                }
+                Err(reason) => {
+                    return Err(CoreError::Validation(vec![crate::error::FieldError::new(
+                        "label", reason,
+                    )]));
+                }
+            };
+        {
+            let inner = self.inner();
+            let session = Self::require_session(&inner)?;
+            records::check_vault(session, Some(input.vault_id))?;
+        }
+        let text = crate::keys::generate::generate(input.kind, &label, input.passphrase.as_ref())
+            .map_err(CoreError::Crypto)?;
+        self.key_import_impl(KeyImportInput {
+            vault_id: input.vault_id,
+            label: Some(label),
+            private_key: SecretString::from(text.as_str().to_owned()),
+            passphrase: input.passphrase,
+            save_passphrase: input.save_passphrase,
+        })
     }
 
     /// A password typed at a prompt with "Save" checked: `host.ssh.password`

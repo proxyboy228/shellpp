@@ -522,3 +522,25 @@ Superseded parts of earlier decisions:
 - D30: "Settings → Terminal shows only the Terminal block with ...": "Adjust indistinguishable colors", line spacing and "Record command history" are added.
 
 **Spec impact:** `docs/ui-behavior-spec.md`, sections 0, 1.1, 1.4, 2.3, 2.4, 3.1, 4.2, 4.4, 4.6, 4.7, 6, 10.1, 10.2, 12.4 and 12.5; `docs/security.md` 10.1; `docs/data-model.md` (`terminal.min_contrast`, `terminal.line_height`, `terminal.local_shell`, `history_hint_state` and the Restore set); `docs/design-system.md` (the bundled terminal themes); `THIRD_PARTY_NOTICES.md` (terminal themes).
+
+## Night of 2026-10-21
+
+The decisions below were taken during the owner's night run (night plan, section 1.1): the lead chose where the specification leaves the details open, marked each one "night", and lists the disputable ones for the owner in the night report.
+
+### 32. Keychain keys: generation and import formats (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, items 3 and 4; the points below are the lead's choices where the plan and the specification leave the details open).
+
+**Context.** The night plan asks for Generate key with Ed25519 (default), ECDSA P-256/384/521 and RSA 3072 and 4096 "(2048 not offered)", and for the import of OpenSSH, PEM PKCS#1 and PKCS#8 (encrypted too) and PuTTY `.ppk` v2 and v3 keys, with a type "unknown" and a clear reason for an unrecognized file. `docs/data-model.md` 9.1 listed RSA 2048 among the generated sizes and says that unsupported keys are "kept and shown as unknown".
+
+**Decision:**
+
+- Generate key offers Ed25519 (default), ECDSA P-256, P-384, P-521, RSA 3072 (the default RSA length) and RSA 4096. RSA 2048 is not offered; imported RSA keys of 2048 bits or more stay accepted. The key comment is the label; a passphrase, when given, encrypts the new key in the OpenSSH format (aes256-ctr, bcrypt-pbkdf, 16 rounds), and "save in the vault" works as for an import.
+- Import reads OpenSSH, PEM PKCS#1 (`RSA PRIVATE KEY`), PKCS#8 (`PRIVATE KEY`, and `ENCRYPTED PRIVATE KEY` with PBES2: PBKDF2 or scrypt with AES-CBC), SEC1 (`EC PRIVATE KEY`), the legacy OpenSSL encryption of PKCS#1 and SEC1 (`Proc-Type: 4,ENCRYPTED`, `DEK-Info` AES-128/192/256-CBC; DES-based ciphers are refused with the reason) and PuTTY `.ppk` v2 and v3. Every key is stored in the OpenSSH format; one that came encrypted is encrypted again with the same passphrase, so it is never stored unencrypted.
+- Against hostile files the key derivations an imported file asks for are bounded before anything is derived, as the bcrypt-pbkdf rounds are (1024): PBKDF2 at most 10,000,000 iterations, scrypt at most 256 MiB, the Argon2 of `.ppk` v3 at most 1 GiB and 64 passes.
+- A text that is not a usable key is not saved: the key panel shows the type "unknown" and the reason (not a private key, damaged, unsupported key type, RSA under 2048 bits, unsupported encryption, too expensive key derivation, passphrase needed, wrong passphrase) before the user saves. A stored record that this client cannot parse (for example one synced from a newer client) is still kept and shown as "unknown" (data-model 9.1).
+- Tests generate every key at run time: in the test with the crates that define each format; against PuTTY's own puttygen (`tests/putty`, a Docker image, also run by the CI integration job); and against the `openssl` command when it is on the PATH.
+
+**For the owner:** whether an unrecognized file should rather be saved as an "unknown" key record (the literal reading of data-model 9.1) instead of being refused with its reason.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 7.1 (generation parameters); `docs/data-model.md` 9.1 (RSA sizes).

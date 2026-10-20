@@ -988,8 +988,8 @@ On the left:
   for adding an existing key: paste text, choose a file, or drag a
   file into the form. [decision on drag & drop] The arrow opens a menu:
   1. **Generate key**: generate a new pair. Parameters: type (Ed25519
-     by default, ECDSA, RSA with a choice of length), label, optional
-     passphrase. [decision on parameters]
+     by default, ECDSA P-256, P-384 or P-521, RSA 3072 (the default length) or 4096;
+     RSA 2048 is not offered, D32), label, optional passphrase. [decision on parameters]
   2. **New Identity**: create an identity.
 - **Certificate**: add an SSH certificate.
 - **FIDO2**: add a hardware key (`sk-ssh-ed25519`, `sk-ecdsa`). [decision on types]

@@ -173,7 +173,7 @@ fn import_errors() {
         ),
         vec![("passphrase".into(), ValidationReason::NotAllowed)]
     );
-    // PEM (stage 3), public keys and garbage are not OpenSSH private keys.
+    // A damaged PEM key, public keys and garbage are refused.
     let pem = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n";
     let public = key.public_key().to_openssh().unwrap();
     let truncated = plain[..plain.len() / 2].to_owned();

@@ -981,9 +981,12 @@ impl Core {
             let session = Self::require_session(&inner)?;
             check_vault(session, Some(input.vault_id))?;
         }
-        // Parse and check the passphrase without the mutex (bcrypt-pbkdf).
+        // Convert, parse and check the passphrase without the mutex (the
+        // source's key derivation, bcrypt-pbkdf). PEM and `.ppk` keys become
+        // OpenSSH keys, encrypted again with their passphrase (stage 3).
         let mut errors: Vec<FieldError> = Vec::new();
-        let parsed = match keys::parse(input.private_key.expose_secret()) {
+        let prepared = keys::prepare(input.private_key.expose_secret(), input.passphrase.as_ref());
+        let parsed = match prepared.and_then(|text| keys::parse(&text)) {
             Ok(parsed) => Some(parsed),
             Err(error) => {
                 errors.push(error);

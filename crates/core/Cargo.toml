@@ -42,10 +42,31 @@ hmac.workspace = true
 sha1.workspace = true
 regex.workspace = true
 
+# Stage 3: key import formats and key generation (src/keys/convert.rs,
+# src/keys/generate.rs).
+pkcs8.workspace = true
+pkcs1.workspace = true
+sec1.workspace = true
+rsa.workspace = true
+p256.workspace = true
+p384.workspace = true
+p521.workspace = true
+ed25519-dalek.workspace = true
+md5.workspace = true
+aes.workspace = true
+cbc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 # Canary test: captured log output must not contain secrets (docs/security.md, section 7).
 tracing-subscriber.workspace = true
+# Key format tests (tests/key_formats.rs): keys generated at run time are
+# written as PKCS#1, PKCS#8 and SEC1 by the crates that define them.
+rsa = { workspace = true, features = ["encoding"] }
+p256 = { workspace = true, features = ["pkcs8", "alloc"] }
+p384 = { workspace = true, features = ["pkcs8", "alloc"] }
+p521 = { workspace = true, features = ["pkcs8", "alloc"] }
+ed25519-dalek = { workspace = true, features = ["pkcs8", "alloc"] }
 
 [lints]
 workspace = true

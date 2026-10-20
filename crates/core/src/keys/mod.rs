@@ -1,12 +1,14 @@
-//! Keys for the short "+ -> Key" path of the host panel (D3; UI 3.1;
-//! docs/data-model.md, section 9.1): parsing OpenSSH private keys (Ed25519,
-//! ECDSA P-256/P-384/P-521, RSA; encrypted with a passphrase or not) with
-//! `ssh-key`, fingerprints, the derived public key, and `key` records.
+//! Keys of the Keychain and of the short "+ -> Key" path of the host panel
+//! (UI 3.1, 7; docs/data-model.md, section 9.1): parsing OpenSSH private
+//! keys (Ed25519, ECDSA P-256/P-384/P-521, RSA; encrypted with a passphrase
+//! or not) with `ssh-key`, fingerprints, the derived public key, and `key`
+//! records.
 //!
-//! Stage 2 accepts the OpenSSH format only; PEM (PKCS#1, PKCS#8, SEC1) and
-//! PuTTY `.ppk` conversion arrive with the Keychain import in stage 3. A key
-//! is matched by its SHA256 fingerprint (natural key, docs/data-model.md,
-//! section 18.6): importing an existing key returns the existing record.
+//! The stored form is the OpenSSH format. PEM (PKCS#1, PKCS#8, SEC1) and
+//! PuTTY `.ppk` are converted on import ([`convert`], [`prepare`]); new keys
+//! come from [`generate`]. A key is matched by its SHA256 fingerprint
+//! (natural key, docs/data-model.md, section 18.6): importing an existing
+//! key returns the existing record.
 //!
 //! Decrypting an encrypted key runs bcrypt-pbkdf with the rounds stored in
 //! the key: the facade calls [`passphrase_opens`] without holding the core
@@ -27,6 +29,9 @@ use crate::model::key::{self, MAX_LABEL_CHARS, MAX_PASSPHRASE_BYTES, MAX_PRIVATE
 use crate::model::text;
 use crate::model::time::{format_unix_ms, uuid_v7_timestamp};
 use crate::service::dto::KeyView;
+
+pub mod convert;
+pub mod generate;
 
 /// The first line of an OpenSSH private key.
 pub const OPENSSH_BEGIN: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
@@ -169,6 +174,74 @@ pub fn parse(raw: &str) -> Result<ParsedKey, FieldError> {
         comment,
         text,
     })
+}
+
+/// The stored OpenSSH form of a pasted or chosen key in any supported format
+/// ([`convert`]): an OpenSSH key as it is, a PEM or `.ppk` key converted
+/// (and, when it came encrypted, encrypted again with `passphrase`). The
+/// errors are those of [`parse`] and of the passphrase (`passphrase`
+/// `required` or `invalid`). Slow for encrypted sources: call without the
+/// core mutex.
+pub fn prepare(
+    raw: &str,
+    passphrase: Option<&SecretString>,
+) -> Result<Zeroizing<String>, FieldError> {
+    let text = normalize_text(raw);
+    if text.is_empty() {
+        return Err(FieldError::new("private_key", ValidationReason::Required));
+    }
+    if text.len() > MAX_PRIVATE_KEY_BYTES {
+        return Err(FieldError::new("private_key", ValidationReason::TooLong));
+    }
+    convert::to_openssh(&text, passphrase).map_err(problem_field)
+}
+
+/// The field error of a [`convert::KeyProblem`].
+pub fn problem_field(problem: convert::KeyProblem) -> FieldError {
+    use convert::KeyProblem;
+    match problem {
+        KeyProblem::NotAKey | KeyProblem::Damaged => {
+            FieldError::new("private_key", ValidationReason::Invalid)
+        }
+        KeyProblem::Algorithm(_)
+        | KeyProblem::RsaTooSmall
+        | KeyProblem::Cipher(_)
+        | KeyProblem::KdfTooExpensive => {
+            FieldError::new("private_key", ValidationReason::NotAllowed)
+        }
+        KeyProblem::PassphraseNeeded => refuse_passphrase(ValidationReason::Required),
+        KeyProblem::WrongPassphrase => refuse_passphrase(ValidationReason::Invalid),
+    }
+}
+
+/// What the key panel shows for a pasted or chosen text before it is saved
+/// (UI 7.2, 7.3): the source format and whether it needs a passphrase, or
+/// why it is not a usable key (the type "unknown" with the reason).
+pub fn inspect(raw: &str) -> Result<(convert::Format, bool), convert::KeyProblem> {
+    let text = normalize_text(raw);
+    let (format, encrypted) = convert::detect(&text).ok_or(convert::KeyProblem::NotAKey)?;
+    if !encrypted {
+        // Reads the whole key: damaged keys and refused algorithms show now.
+        convert::to_openssh(&text, None).and_then(|openssh| {
+            parse(&openssh)
+                .map(drop)
+                .map_err(|error| match error.reason {
+                    ValidationReason::NotAllowed => match openssh_algorithm(&openssh).as_str() {
+                        "ssh-rsa" => convert::KeyProblem::RsaTooSmall,
+                        other => convert::KeyProblem::Algorithm(other.to_owned()),
+                    },
+                    _ => convert::KeyProblem::Damaged,
+                })
+        })?;
+    }
+    Ok((format, encrypted))
+}
+
+/// The algorithm of an OpenSSH private key text (for the "unknown" reason).
+fn openssh_algorithm(text: &str) -> String {
+    PrivateKey::from_openssh(text.as_bytes())
+        .map(|private| private.algorithm().as_str().to_owned())
+        .unwrap_or_default()
 }
 
 /// Why a passphrase was refused (field `passphrase`).
