@@ -246,6 +246,43 @@
 | Debug | `#A38FD9` | `#6B55B0` |
 | IP и MAC | `#D883A6` | `#A84B70` |
 
+### 4.4 Встроенные открытые темы [решение]
+
+- Кроме Graphite и Paper, приложение содержит популярные открытые цветовые
+  схемы. Лицензия каждой проверена в её официальном репозитории или на сайте;
+  в `THIRD_PARTY_NOTICES.md` (раздел «Terminal themes») указаны автор, лицензия,
+  строка копирайта и источник. Те же данные хранит реестр
+  `apps/desktop/src/theme/terminal.rs`: id (имя файла), тёмная или светлая,
+  отметка «новая», лицензия и источник.
+- В списках тем сначала идут Graphite и Paper, затем встроенные схемы в порядке
+  таблицы. Темы, добавленные в выпуске, в этом выпуске отмечены «новая» (UI 4.2).
+- Тёмная или светлая — по правилу фона из 4.3.
+- Цвета взяты из источника без изменений. Пары контраста из 7.3 для этих схем не
+  проверяются; где у схемы есть малоконтрастные пары, помогает настройка
+  «Подстройка неразличимых цветов» (UI 12.4). Наши значения там, где у источника
+  их нет:
+  - `searchMatch` и `searchMatchActive`: ANSI `yellow` поверх `background`
+    с непрозрачностью 25 % и 40 %, каждый канал округлён;
+  - `cursor` = `foreground`, если источник не задаёт цвет курсора (Dracula),
+    `cursorText` = `background`, если не задаёт цвет текста под курсором
+    (Dracula, Tokyo Night).
+- Выделение — цвет выделения из источника. Solarized использует свою пару
+  подсветки (`base02` с текстом `base1` в тёмном режиме, `base2` с `base01`
+  в светлом) как `selection` и `selectionForeground`; Catppuccin — Overlay 2
+  с непрозрачностью 30 % (его руководство по стилю даёт 20–30 %); Gruvbox — `bg3`
+  без инверсии из его схемы для Vim.
+
+| Тема | Id | Фон | Лицензия | Источник |
+|---|---|---|---|---|
+| Dracula | `dracula` | тёмный | MIT | draculatheme.com/spec, Dracula Classic |
+| Nord | `nord` | тёмный | MIT | nordtheme/alacritty, `src/nord.yaml` |
+| Solarized Dark | `solarized-dark` | тёмный | MIT | altercation/solarized, README и `vim-colors-solarized` |
+| Solarized Light | `solarized-light` | светлый | MIT | altercation/solarized, README и `vim-colors-solarized` |
+| Gruvbox Dark | `gruvbox-dark` | тёмный | MIT | morhetz/gruvbox, `colors/gruvbox.vim` |
+| Tokyo Night | `tokyo-night` | тёмный | Apache-2.0 (исходная тема для VS Code: MIT) | folke/tokyonight.nvim, `extras/windows_terminal/tokyonight_night.json` |
+| Catppuccin Mocha | `catppuccin-mocha` | тёмный | MIT | catppuccin/palette, `palette.json` 1.8.0, и руководство по стилю Catppuccin |
+| Catppuccin Latte | `catppuccin-latte` | светлый | MIT | catppuccin/palette, `palette.json` 1.8.0, и руководство по стилю Catppuccin |
+
 ---
 
 ## 5. Типографика
@@ -367,6 +404,9 @@
   файлу на тему. Импортированные темы хранятся записями и синхронизируются;
   файлы `.itermcolors` и схемы Windows Terminal при импорте переводятся в этот
   формат.
+- Встроенные файлы — обычный JSON без комментариев; их перечисляет реестр
+  `apps/desktop/src/theme/terminal.rs`, там же записан источник встроенной
+  открытой схемы (4.4). [решение]
 - Тема — JSON-объект в UTF-8 со следующими полями:
 
 | Поле | Значение | Обязательное | Смысл |
@@ -454,7 +494,8 @@
 | Иконки на плитках | `--text-on-tag` | все восемь `--tag-*` | 3 |
 | Прогресс | `--accent` | `--border-subtle` | 3 |
 
-Пары терминала, проверяются для каждой встроенной темы:
+Пары терминала, проверяются для Graphite и Paper (встроенные открытые схемы из
+4.4 сохраняют исходные цвета):
 
 | Группа | Передний план | Фон | Порог |
 |---|---|---|---|
@@ -476,7 +517,8 @@
     используются (6);
   - ANSI `black`, `white` и `brightWhite` тем терминала, а также цвета ANSI на
     выделении и на совпадениях поиска;
-  - импортированные темы и цвета, выбранные пользователем.
+  - встроенные открытые схемы (4.4), импортированные темы и цвета, выбранные
+    пользователем.
 
 ### 7.4 Токены и поля `ThemeColor`
 

@@ -248,6 +248,43 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 | Debug | `#A38FD9` | `#6B55B0` |
 | IP and MAC | `#D883A6` | `#A84B70` |
 
+### 4.4 Bundled open themes [decision]
+
+- Besides Graphite and Paper, the app bundles popular open color schemes. The
+  license of each was checked in its official repository or site;
+  `THIRD_PARTY_NOTICES.md` ("Terminal themes") gives the author, license,
+  copyright line and source. The registry `apps/desktop/src/theme/terminal.rs`
+  holds the same data: id (the file name), dark or light, the "new" mark,
+  license and source.
+- Theme lists show Graphite and Paper first, then the bundled schemes in table
+  order. Themes added in a release are marked "new" in that release (UI 4.2).
+- Dark or light follows the background rule of 4.3.
+- The colors are those of the source, unchanged. The schemes are not checked
+  against the contrast pairs of 7.3; where a scheme has low-contrast pairs, the
+  "Adjust indistinguishable colors" setting (UI 12.4) helps. Ours, where the
+  source has no value:
+  - `searchMatch` and `searchMatchActive`: ANSI `yellow` drawn over
+    `background` at 25 % and 40 %, each channel rounded;
+  - `cursor` = `foreground` where the source names no cursor color (Dracula),
+    `cursorText` = `background` where it names no cursor text (Dracula,
+    Tokyo Night).
+- Selection: the source's selection color. Solarized uses its highlight pair
+  (`base02` with `base1` text in the dark mode, `base2` with `base01` in the
+  light mode) as `selection` and `selectionForeground`; Catppuccin uses
+  Overlay 2 at 30 % (its style guide gives 20–30 %); Gruvbox uses `bg3`
+  without the inversion of its Vim scheme.
+
+| Theme | Id | Background | License | Source |
+|---|---|---|---|---|
+| Dracula | `dracula` | dark | MIT | draculatheme.com/spec, Dracula Classic |
+| Nord | `nord` | dark | MIT | nordtheme/alacritty, `src/nord.yaml` |
+| Solarized Dark | `solarized-dark` | dark | MIT | altercation/solarized, README and `vim-colors-solarized` |
+| Solarized Light | `solarized-light` | light | MIT | altercation/solarized, README and `vim-colors-solarized` |
+| Gruvbox Dark | `gruvbox-dark` | dark | MIT | morhetz/gruvbox, `colors/gruvbox.vim` |
+| Tokyo Night | `tokyo-night` | dark | Apache-2.0 (the original VS Code theme: MIT) | folke/tokyonight.nvim, `extras/windows_terminal/tokyonight_night.json` |
+| Catppuccin Mocha | `catppuccin-mocha` | dark | MIT | catppuccin/palette, `palette.json` 1.8.0, and the Catppuccin style guide |
+| Catppuccin Latte | `catppuccin-latte` | light | MIT | catppuccin/palette, `palette.json` 1.8.0, and the Catppuccin style guide |
+
 ---
 
 ## 5. Typography
@@ -364,6 +401,9 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
   file per theme. Imported themes are stored as records and synced;
   `.itermcolors` files and Windows Terminal schemes are converted to this format
   on import.
+- The built-in files are plain JSON without comments; the registry
+  `apps/desktop/src/theme/terminal.rs` lists them, and the source of a bundled
+  open scheme (4.4) is recorded there. [decision]
 - A theme is a UTF-8 JSON object with these fields:
 
 | Field | Value | Required | Meaning |
@@ -451,7 +491,8 @@ Interface pairs, checked in both themes:
 | Tile icons | `--text-on-tag` | all eight `--tag-*` | 3 |
 | Progress | `--accent` | `--border-subtle` | 3 |
 
-Terminal pairs, checked for every built-in theme:
+Terminal pairs, checked for Graphite and Paper (the bundled open schemes of 4.4
+keep their original colors):
 
 | Group | Foreground | Background | Threshold |
 |---|---|---|---|
@@ -472,7 +513,8 @@ Terminal pairs, checked for every built-in theme:
     used (6);
   - ANSI `black`, `white` and `brightWhite` of terminal themes, and ANSI colors
     on the selection or on search matches;
-  - imported themes and colors chosen by the user.
+  - the bundled open schemes (4.4), imported themes and colors chosen by the
+    user.
 
 ### 7.4 Tokens and `ThemeColor` fields
 

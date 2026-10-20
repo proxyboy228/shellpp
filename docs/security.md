@@ -378,7 +378,7 @@ Notes:
 | Unlock pauses after 5 wrong passwords in a row, also across restarts | D29, UI 13.2 | section 8 | unit tests of the counter in `crates/core` |
 | Clipboard cleared after copying a password or key | SPEC "Security", UI 7.3, 13.5 | section 9.4 | e2e with the clipboard mock (D6) |
 | Strict CSP, minimal set of commands | SPEC "Security" | sections 13.1, 13.2 | CI check of the CSP string and snapshot test of the capability files (stage 0 decision) |
-| No history during password prompts, control sequences stripped, no secret-like snippet hints | UI 4.2 | sections 10.1, 10.2 | unit tests in `crates/core` (SPEC "Quality": "secret filter in history") with a corpus of prompts and commands; the corpus includes snippet runs and inserts whose variable holds a low-entropy password the detector does not match, for example `htpasswd -b users alice {{pw}}` with `pw = summer2024`, which must not be recorded (stage 0 decision) |
+| No history during password prompts, control sequences stripped, no secret-like snippet hints | UI 4.2 | sections 10.1, 10.2 | unit tests in `crates/core` (SPEC "Quality": "secret filter in history") with a corpus of prompts and commands; the corpus includes snippet runs and inserts whose variable holds a low-entropy password the detector does not match, for example `htpasswd -b users alice {{pw}}` with `pw = summer2024`, which must not be recorded (stage 0 decision); terminal-level tests that feed the server's bytes, echo included, through a real terminal model and the core: `su`, a bracketed paste of a password, `sudo -S`, `passwd`, `ssh-keygen`, `mysql -p` and `mysql -p<value>`, secret-looking lines, the alternate screen, a leading space, injected input and recording off (`apps/desktop/src/terminal/history_capture/tests.rs`, stage 2b); the same through the session layer against the russh test server's shell and, when `SHELLPP_OPENSSH_SERVER_JSON` names a server of `tests/openssh/start.sh`, a real bash over OpenSSH in Docker (`su`, `passwd`, `ssh-keygen`, bash's bracketed paste, `read -s`; `apps/desktop/src/sessions/tests/history.rs`, ignored by default) |
 | Private key hidden, shown only via an explicit button | UI 7.3 | section 9.5 | e2e |
 | Port forwarding listens only on 127.0.0.1 by default | UI 8.4 | section 11.3 | unit test of defaults; integration test against OpenSSH in Docker |
 | Host key change blocks until explicit confirmation | UI 10.2 | section 11.1 | integration test against OpenSSH in Docker (D6); e2e |
@@ -512,19 +512,26 @@ History is the class `history` in the personal vault, encrypted like everything 
 
 ### 10.1 Capture rules
 
-The client sees keystrokes and output, not commands, so capture is a heuristic with known limits (D16). OSC 133 is not used in the MVP.
+The client sees keystrokes and output, not commands, so capture is a heuristic with known limits (D16). OSC 133 is not used in the MVP. History is captured only in sessions to saved hosts, not in quick connects or local terminals (stage 2b decision). The terminal applies rules 1-4 (`apps/desktop/src/terminal/history_capture.rs`); the core applies rule 4 and the secret detector again before it writes (`crates/core/src/history`), so a candidate the terminal lets through can still be dropped, never the reverse.
 
-1. Prompt boundary: the cursor position in the normal screen buffer when the user types the first character after an Enter (or after the session starts).
-2. At Enter, the command is the text of the logical line (wrapped rows joined) from the boundary to the end of the line, with trailing whitespace removed.
-3. Cleaning: C0 and C1 control characters, leftover escape sequences and bracketed paste markers (`ESC[200~`, `ESC[201~`) are removed (UI 4.2).
+The capture never keeps what the user typed. Typed input is only classified (a printable character, Enter, Ctrl+C, a bracketed paste marker, another key), and the command is read from the screen, so input the server does not echo never reaches it (stage 2b decision).
+
+1. Prompt boundary: the cursor position in the normal screen buffer when the user types the first character after an Enter (or after the session starts). It is kept as a row offset inside the cursor's logical line (wrapped rows joined) and a column, so it follows the line when the screen scrolls or the shell redraws the line elsewhere (`Ctrl+L`) (stage 2b decision).
+2. At Enter, the command is the text of the logical line from the boundary to the end of the line, with trailing whitespace removed. The text is read at Enter and again after every piece of output, until the cursor leaves the line: the shell echoes the Enter as a line feed, or a terminal renderer moves the cursor to another row. The last text read while the cursor was still on the line is the command. Waiting for that moment takes in the echo of keys typed just before Enter on a slow link. A line the cursor has not left after 5 seconds is not recorded (stage 2b decision).
+3. Cleaning: C0 and C1 control characters, leftover escape sequences and bracketed paste markers (`ESC[200~`, `ESC[201~`, also in the caret form `^[[200~` a shell without bracketed paste echoes) are removed (UI 4.2). Pasted input reaches the session with its markers (that is the protocol); the capture keeps no typed or pasted text, so no marker is stored anywhere.
 4. The command is not recorded if any of these holds:
    - the alternate screen was active when typing started or at Enter;
-   - echo is off: the user typed at least one printable character after the boundary, but at Enter the text after the boundary is empty or consists only of mask characters such as `*` or `•` (stage 0 decision for the mask rule);
-   - the prompt looks like a password prompt: the text before the boundary on the same line, or the last non-empty line above it when that is empty, matches the pattern below;
+   - echo is off (see "Detecting input without echo" below);
+   - the prompt looks like a password prompt: the text before the boundary on the same line, or the last non-empty line above it when that is empty, matches the pattern below; or the captured line itself contains a match of the in-line pattern below followed by `:` on the line, which is a prompt the program printed after the boundary (input typed before `sudo` showed `[sudo] password for ...:`, or before `su` showed `Password:`, which runs into the input: `hunter2Password:`) (stage 2b decision for the second form; it fails closed: `echo "password: x"` is not recorded either);
+   - a line with nothing before its boundary on its own rows (no shell prompt there: input typed ahead, such as a password typed with its Enter before `su` turned echo off, which the terminal echoes on a row of its own) is held back after it ends, until the next key or for at most 5 seconds; it is dropped when the row the output is on looks like a password prompt meanwhile (the pattern below, without the `:` condition), or when the alternate screen comes on (stage 2b decision). A line with the shell's prompt before its boundary is not held;
+   - a key was typed (or the app sent input) after the Enter but before the line ended on screen: the echo of that key can land on the line, so the line is dropped (stage 2b decision);
+   - the boundary is not known: the line was started while the previous line was still waiting for its end (keys typed ahead on a slow link), after an Enter in the same write (the second and later lines of a multi-line paste), or it received a line break inside a bracketed paste (the shell keeps such a line open over several screen lines) (stage 2b decision);
+   - keys typed in a full-screen program that has ended (`q` in a pager) do not start the next line: a line that started on the alternate screen is abandoned when the next key arrives on the normal screen (stage 2b decision);
+   - `Ctrl+C` abandoned the line;
    - the command is empty, starts with a space (the shell convention for "do not keep") or is longer than 4096 characters (stage 0 decision);
    - the secret detector matches (section 10.2);
-   - history recording is off for the host or globally (UI 4.2, D20);
-   - the line contains input injected by the app: any byte the app itself sent to the session between the prompt boundary and the Enter that ends the line, including an Enter the app sent. Injected input is a snippet insert or run (UI 4.2, 9.3), a run on several hosts (UI 9.4) and the startup snippet. The webview sends such input with its own command, `session_inject`, never with the typed-input command `session_write`, and the core sends the startup snippet through the same injected path ([architecture.md](architecture.md), section 4.2). So the core marks every injected write, and a command line built from a snippet is never recorded, with or without `{{ variable }}` values typed at run time. OS detection never writes to the session: it runs in a separate exec channel (section 11.4) (stage 0 decision).
+   - history recording is off for the host or globally (UI 4.2, D20). The terminal keeps a copy of the flag, read when the session starts and again whenever hosts, the settings or the lock change; while it is off, a captured line does not leave the terminal. The core checks the current values again at every command, so a running session follows a change at its next command, and a session whose saved host was removed records nothing more (stage 2b decision);
+   - the line contains input injected by the app: any byte the app itself sent to the session between the prompt boundary and the Enter that ends the line, including an Enter the app sent. Injected input is a History insert (UI 4.2), a snippet insert or run (UI 4.2, 9.3), a run on several hosts (UI 9.4) and the startup snippet. The app sends such input only through the terminal's injected path (`TerminalHandle::inject_input`), never through the typed-input path, so the terminal marks the line, and a command line built from a snippet or a History entry is never recorded, with or without `{{ variable }}` values typed at run time. OS detection never writes to the session: it runs in a separate exec channel (section 11.4) (stage 0 decision; stage 2b for the injected path of the GPUI app).
 
 Password prompt pattern, case-insensitive (stage 0 decision; the list lives in code with tests):
 
@@ -533,10 +540,36 @@ Password prompt pattern, case-insensitive (stage 0 decision; the list lives in c
 (passwort|kennwort|mot de passe|contraseña|senha|parola|wachtwoord|hasło|heslo|пароль|密码|パスワード|비밀번호)
 ```
 
-Known limits (documented for users):
+In-line pattern, for a prompt inside the captured line (stage 2b decision): the long words without the word boundaries, since typed input runs into the prompt; the short words keep them, so `ping:` or `tokens:` are not prompts.
 
-- Tab completion, history recall and `Ctrl+R` are captured as the shell displays the final line; a redrawn or multi-line prompt, a right-side prompt or input typed before the prompt appears can shift the boundary and capture the wrong text.
-- Programs that hide input without turning off echo, or prompts in other words, are not recognized.
+```text
+(password|passwd|passphrase|passcode|verification code|authenticator)
+\b(pin|otp|one[- ]time|token|2fa|secret)\b
+(passwort|kennwort|mot de passe|contraseña|senha|parola|wachtwoord|hasło|heslo|пароль|密码|パスワード|비밀번호)
+```
+
+**Detecting input without echo** (stage 2b decision). A terminal client cannot read the server's `ECHO` flag: SSH carries the terminal modes only once, in the PTY request, and the server's `tcsetattr` calls (`getpass`, `su`, `sudo`, `passwd`, `ssh-keygen`, `mysql -p`) change the remote terminal without telling the client. Echo is therefore inferred from the screen, by comparing what was typed with what appeared:
+
+- the capture counts whether at least one printable character was typed after the boundary (keys, a paste or IME text; control keys, arrows and other escape sequences do not count, and the characters themselves are not kept);
+- when the line ends, it reads the screen from the boundary to the end of the logical line;
+- echo is taken to be off when printable characters were typed but that text is empty or consists only of mask characters (`*`, `•`, `●`).
+
+A password typed at `su`'s `Password:` prompt leaves the line empty (the program prints only the line feed after reading it), so it is dropped by this rule, and also by the password prompt rule. A password the terminal does echo (`sudo -S` reads standard input with echo on) is dropped by the password prompt rule, since `[sudo] password for ...:` stands before the boundary.
+
+Limits of this method:
+
+- It looks at the screen, not at the terminal modes. A program that reads input with echo off and then prints other text on the same line before the cursor leaves it (for example the next shell prompt after `read -s`, which prints no line feed) is not detected as echo-off; the first key of the next command or the 5-second limit of rule 2 drops such a line, and since the hidden input never reached the screen, it cannot be recorded in any case.
+- A program that echoes something other than the input or mask characters (random characters, a fixed word, a moving cursor) is not detected; only the prompt rule and the secret detector apply.
+- A program that hides input without a prompt the pattern knows (a prompt in a language or wording that is not listed, or no prompt at all) and echoes the input is not recognized: what it shows is recorded unless the secret detector matches.
+- When keys are typed while the previous line is still waiting for its line feed (a fast typist on a slow link, a pasted line break), neither line is recorded: the previous line could take in their echo, and their boundary is unknown. Nothing typed this way can leak, but commands are lost (fail closed).
+- A password typed ahead with its Enter, before the program turned echo off, is caught only when its password prompt appears before the next key and within 5 seconds (the held-line rule): a prompt that comes later, or after the user typed on, is not seen, and only the secret detector applies to that line. A shell with an empty prompt has every command held this way; such a command is recorded at the next key, or dropped when the output after it holds one of the pattern's words.
+- Synchronized output updates (mode 2026) are applied at once at their end, so the line can be read slightly late; at worst a few trailing characters are missed or the line is dropped.
+
+Other known limits (documented for users):
+
+- Tab completion, history recall and `Ctrl+R` are captured as the shell displays the final line; a redrawn or multi-line prompt, a right-side prompt or input typed before the prompt appears can shift the boundary and capture the wrong text (a prompt printed after the boundary is caught by the second form of the password prompt rule only when it is a password prompt).
+- Answers to program questions that are not password prompts (the file name `ssh-keygen` asks for) are recorded like commands.
+- A multi-line command (an open quote, a `\` continuation) is recorded line by line, as the shell shows each line.
 - Commands typed in a nested `ssh` session are recorded under the outer host.
 - The rules fail closed: some harmless commands are not recorded.
 

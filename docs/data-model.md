@@ -104,6 +104,7 @@ Type code = u16 `class << 8 | kind`, inside the ciphertext. Kind `0x00` and `0xF
 | `0x0901` | `terminal_theme` | 1 | personal | 14.1 |
 | `0x0902` | `highlight_rule` | 1 | personal | 14.2 |
 | `0x0A01` | `workspace` | 1 | personal | 12 |
+| `0x0A02` | `last_session` | 1 | personal | 16.3 |
 | `0xNNFF` | `conflict` | 1 | as the original | 15 |
 
 ## 3. Common fields and references
@@ -151,7 +152,7 @@ These are computed when needed and never stored (stage 0 decision):
 | `tag` | string(64) without commas. Compared case-insensitively (Unicode simple case folding) for filtering and de-duplication; the first spelling seen is shown. A tag list holds at most 32 unique tags. |
 | `tag_color` | enum: `graphite` (default), `jade`, `amber`, `coral`, `plum`, `moss`, `ocean`, `rose`. Shown with the token `--tag-<name>` ([design-system.md](design-system.md), 3.1). |
 | `order_key` | manual order key (section 18.1) |
-| `theme_ref` | `{"builtin": "<slug>"}` or `{"record_id": "<uuid>"}`, exactly one member. Built-in slugs are the file names in `apps/desktop/src/theme/terminal/` without `.json`: `graphite` (default dark) and `paper` (light), more as themes are bundled. A `record_id` names a `terminal_theme` in the personal vault. |
+| `theme_ref` | `{"builtin": "<slug>"}` or `{"record_id": "<uuid>"}`, exactly one member. Built-in slugs are the file names in `apps/desktop/src/theme/terminal/` without `.json`: `graphite` (default dark) and `paper` (light), then the bundled open schemes of [design-system.md](design-system.md), 4.4: `dracula`, `nord`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `tokyo-night`, `catppuccin-mocha`, `catppuccin-latte`. A `record_id` names a `terminal_theme` in the personal vault. |
 | `env_var` | `{"name": string, "value": secret(1024)}`; `name` matches `[A-Za-z_][A-Za-z0-9_]{0,255}` |
 | `record_link` | `{"vault_id": uuid, "record_id": uuid}` naming any record; `host_link` is a `record_link` to a host |
 
@@ -190,7 +191,7 @@ These are computed when needed and never stored (stage 0 decision):
 | Conflict record | `conflict` | the original's | as the original | with its class | 2.3, 12.2, 13.6 |
 | Settings | `local_settings` | none | none | never synced (D15) | 12.1–12.7, 13.4 |
 | SyncSettings | `local_settings` | none | none | per device | 12.2, 12.3 |
-| Last session | `local_settings` | none | none | never synced | 6 |
+| Last session | `last_session` (16.3) | `workspaces` | personal | never synced | 4.7, 6 |
 | Notification | memory | none | none | never stored | 1.5, 5.4 |
 
 ## 5. Entity-relationship overview
@@ -693,11 +694,11 @@ The app's own known hosts store; connections check only this store (UI 10.1, D21
 
 Rules:
 
-- One record per pattern and key. A plain imported line with several comma-separated patterns becomes one record per pattern. Negated (`!`) patterns are skipped and counted together with `@cert-authority` lines (D21).
+- One record per pattern and key. A plain imported line with several comma-separated patterns becomes one record per pattern. Negated (`!`) patterns are skipped and counted together with `@cert-authority` lines (D21). An import reads at most 256 patterns per line and gives at most 200,000 records holding at most 64 MiB of text per file; lines past these limits count as invalid (D31, UI 10.1).
 - Matching on connect: a plain entry matches the host name or address (case-insensitive) and port; a pattern entry uses OpenSSH wildcard matching; a hashed entry matches when HMAC-SHA1(salt, name) equals the hash, where name is `host` for port 22 and `[host]:port` otherwise (the OpenSSH hashing), compared in constant time.
 - A `revoked` record blocks any connection that presents its key, whatever the host pattern (UI 10.2).
 - "Accept and save" creates a record with `source = tofu`. "Connect once" stores nothing. "Replace saved key" updates the matching record in place (`key_type`, `public_key`, `source = replaced`).
-- Display address (UI 10.1): `host` for port 22, `[host]:port` otherwise; hashed entries show "Hashed entry" and the key type.
+- Display address (UI 10.1): `host` for port 22, `[host]:port` otherwise; hashed entries show "Hashed host" and the key type (the owner's wording, stage 2b).
 - Derived: SHA256 fingerprint, date added (section 3.2), saved hosts with this address (UI 10.1).
 
 ## 10. Snippets
@@ -936,18 +937,19 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `terminal.copy_on_select` | bool | `false` | 12.4 | |
 | `terminal.bell_sound` | bool | `false` | 12.4 | UI 12.4 |
 | `terminal.bold_is_bright` | bool | `true` | 12.4 | |
+| `terminal.min_contrast` | enum `off`, `palette`, `always` | `palette` | 12.4 | owner's stage 2b step 0.4: "Adjust indistinguishable colors"; `palette` moves text in palette colors (16 ANSI, the 256-color table, the default colors) to 4.5:1 against its background, `always` also truecolor text, `off` nothing |
 | `terminal.cursor_style` | enum `block`, `bar`, `underline` | `block` | 12.4 | UI 12.4 |
 | `terminal.cursor_blink` | bool | `false` | 12.4 | UI 12.4 |
 | `terminal.term` | enum `xterm`, `xterm-256color`, `vt100`, `linux` | `xterm-256color` | 12.4 | UI 12.4 |
 | `terminal.font_family` | string | `JetBrains Mono` | 4.2, 12.4 | design-system §5 |
 | `terminal.font_size` | int 6–72 | 14 | 4.2, 12.4 | UI 12.4 |
-| `terminal.line_height` | number 1.0–2.0 | 1.2 | 4.2 | design-system §5 |
+| `terminal.line_height` | number 1.0–2.0, stored with two decimals | 1.2 | 4.2, 12.4 | design-system §5 |
 | `terminal.confirm_multiline_paste` | bool | `true` | 4.3 | SPEC "Terminal" |
 | `terminal.default_theme` | theme_ref | `{"builtin": "graphite"}` | 12.4 | design-system §4.1 |
 | `terminal.highlighting_enabled` | bool | `true` | 12.4 | UI 12.4 |
 | `terminal.os_detection_enabled` | bool | `true` | 12.4 | UI 12.4 |
 | `terminal.os_detection_script` | string or null | null (the built-in script) | 12.4 | app configuration, not user command history |
-| `terminal.local_shell` | string or null | null (PowerShell on Windows, the login shell elsewhere) | 2.2, 12.4 | |
+| `terminal.local_shell` | string or null | null (PowerShell 7 on Windows when it is installed, else Windows PowerShell; the login shell elsewhere) | 2.2, 12.4 | owner's stage 2b step 0.5 |
 | `terminal.keepalive_s` | int 0–3600 | 30 | 12.4 | UI 12.4 |
 | `sftp.show_hidden` | bool | `false` | 12.6 | D19 |
 | `sftp.confirm_delete` | bool | `true` | 12.6 | D19 |
@@ -983,7 +985,22 @@ Per device (D15, UI 12.2, 12.3). The bound account itself is the `server_account
 
 ### 16.3 Last session
 
-`local_settings` key `session.last`: the tabs open at the last exit, for Restore (UI 6). Value: `{"saved_at": timestamp, "tabs": [tab]}` with the tab and pane shapes of section 12, but without `title`, so that only ids and layout are stored. Written when the set of tabs or their layout changes (debounced 2 s) and at exit. Restore is disabled when the value is absent or has no tabs (stage 0 decision).
+Record type `last_session` (`0x0A02`, class `workspaces`, personal vault): the windows, tabs and splits open at the last exit, for Restore (UI 6, 4.7). It holds quick-connect addresses and usernames, so it is an encrypted record and not a `local_settings` value (plaintext, [storage-format.md](storage-format.md), section 4.3). At most one per vault. It is device-local: sync never pushes it and ignores pulled copies, whatever the Workspaces toggle (section 17), and removing it needs no tombstone. [decision, stage 2b]
+
+| Field | Type | Req | Notes |
+|---|---|---|---|
+| `saved_at` | timestamp | yes | set by the core |
+| `windows` | list<window>[16] | yes | the first window first; windows without tabs are not kept |
+
+| Object | Shape | Rules |
+|---|---|---|
+| window | `{"tabs": [tab]}` | 1 to 32 tabs, left to right |
+| tab | `{"title": string(256)?, "root": pane}` | `title`: the title set with Rename (UI 4.4); absent = the host's title |
+| pane | as in section 12 | at most 16 leaves and split depth 4 per tab; at most 512 leaves in all |
+| session | `{"kind": "ssh", "host": host_link}`, `{"kind": "ssh", "address": string(255), "port": int?, "username": string(255)?}` or `{"kind": "local", "shell": string(128)?}` | a saved host, a quick connect (UI 2.1) or a local terminal (`shell`: a detected shell's id, absent = the default shell of the device) |
+
+- Written when the app exits, when its last window closes and before it locks (the record needs the keys; a quit while locked keeps what the lock wrote). Tabs without a session (the new tab page, SFTP, serial) and panes still choosing a host are not saved; nothing open removes the record. Never secrets or terminal content.
+- Read once at the first unlock of a run: Restore offers that set (the saves of the run do not change it) and can run once per run. Restore is disabled when there is no record or it has no tabs. A record that does not pass these rules counts as none.
 
 ### 16.4 Notification
 
@@ -1003,7 +1020,7 @@ A toast shows for 5 seconds. At most 200 notifications are kept; the oldest are 
 
 ### 16.5 Other runtime state
 
-Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, split layout and broadcast state (UI 4.7), forwarding rule status, the transfer queue (UI 5.6), "Connect once" host keys (UI 10.2), the decrypted record index, VaultMember lists (section 6.2) and OS detection results for read-only hosts (section 7.6).
+Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, split layout and broadcast state (UI 4.7; only their structure and targets are saved for Restore, section 16.3), forwarding rule status, the transfer queue (UI 5.6), "Connect once" host keys (UI 10.2), the decrypted record index, VaultMember lists (section 6.2) and OS detection results for read-only hosts (section 7.6).
 
 ## 17. Sync classes and toggles
 
@@ -1024,6 +1041,7 @@ Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, 
 | none | none | class `vault` | always |
 
 - Toggles are per device and apply to push and pull. Turning one off stops syncing and deletes nothing, locally or on the server (D15).
+- `last_session` (section 16.3) is device-local: it is never pushed and pulled copies are ignored, whatever the Workspaces toggle.
 - They apply only to the personal vault. Team vaults always sync every class they may hold, including connection log copies (D15).
 - A toggle that covers a whole class works through the class filter. The two `appearance` toggles share class `0x09`: the class is pulled while either is on; records of a type whose toggle is off are not pushed and their pulled versions are not applied; turning that toggle on again schedules a class-limited resync of `appearance` (stage 0 decision; UI 12.2 has two toggles for one class). Conflicts of class `appearance` follow the toggle of their `original_type`.
 - Local changes in a disabled class or type stay pending and are not counted as unsynced in the UI.

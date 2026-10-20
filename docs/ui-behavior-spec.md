@@ -28,6 +28,13 @@
   and later (splits, the terminal sidebar, the new tab page and its "+" button, Ctrl+K
   search, the Known Hosts screen, SFTP and port forwarding) are shown disabled and do
   nothing. The sidebar sections and the SFTP tab keep their placeholders.
+  Stage 2b turns on the splits, the terminal sidebar, the new tab page with its "+"
+  button, Ctrl+K search, several windows and the Known Hosts screen (D31). Items of later
+  stages inside them follow the D30 rule and are shown disabled: Broadcast input (4.4,
+  stage 9), Create a workspace (6, stage 9) and the "Save" button of the history hint
+  (4.2, stage 5). The Snippets tab of the terminal sidebar shows an empty state until
+  stage 5. Start multiplayer (4.4) and Autocomplete (4.2) are not shown at all, as the
+  owner asked. [decision]
 - The interface is in English. Interface strings in this document define the meaning; the final
   texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
@@ -49,24 +56,42 @@
   2. Persistent **Vaults** tab: the data management workspace.
      Next to it is an arrow switcher for the current vault (personal, team).
   3. Persistent **SFTP** tab: the SFTP manager for manual work (section 5). [decision]
-  4. Open session tabs: host OS icon + host name.
+  4. Open session tabs: from left to right, the host's OS icon, the title, the state dot
+     and the session type icon. [decision on the icons and the dot]
+     - The left icon is the host's OS icon, as on the host card (2.3); while the OS is not
+       known, it is the neutral server icon, and a local terminal has the monitor icon. It
+       is never the terminal glyph, so it cannot be mistaken for the session type icon.
+       [decision]
+     - The title is the host name: the label, or the address if the label is empty. A local
+       terminal tab shows its shell's display name (12.4). A title set with Rename (4.4)
+       replaces it, and a tab with splits shows its active pane's host (4.7). [decision]
+     - The state dot, 8 px (`docs/design-system.md`, 3.3), stands right after the title:
+       connecting and reconnecting `--warning`, connected `--success`, a connection drop
+       or a failed connection `--danger`. A session that ended with a non-zero exit code
+       (4.6) is inactive, `--text-muted`. [decision]
+     - While a session is dropped (4.6), its terminal is dimmed with the disabled opacity
+       (`--opacity-disabled`, `docs/design-system.md`, 6) and its cursor is hidden. Both
+       come back when the session reconnects. [decision]
      - On the active tab (and on any tab on hover), a close button
        appears in place of the OS icon.
      - The active tab is marked with an `--accent` bar. The colors of the host's terminal
        theme are not used for it. [decision]
-     - On the right side of the tab, a session type icon: terminal or SFTP. An SFTP session
-       tab is opened by "Connect via SFTP" (see 5.1). [decision]
+     - On the right side of the tab, a session type icon: terminal (SSH sessions and local
+       terminals) or SFTP. An SFTP session tab is opened by "Connect via SFTP" (see 5.1).
+       [decision]
+     - Right-click opens the tab menu (4.4).
      - Tabs that do not fit [decision]: session tabs shrink down to a minimum width, and
        beyond that the row of session tabs scrolls sideways (the mouse wheel over it,
        vertical or horizontal). The active tab always scrolls fully into view when it
        becomes active (a new session, a click, Ctrl+1…9, Alt+←/→, the neighbor rule of
        4.6). The "+" button stays right after the row.
-  5. "+" button: a new tab with the start page (see section 6).
+  5. "+" button: a new tab with the start page (see section 6; Ctrl+T and Ctrl+Shift+T,
+     see 12.5).
 - On the right:
   - update button (visible only when a check has found an update, see 12.7);
   - notification center (see 1.5);
   - button to show and hide the terminal sidebar (only when a session
-    tab is active, see 4.2);
+    tab is active, see 4.2); it is shown selected while the sidebar is open; [decision]
   - window buttons.
 
 ### 1.2 Sidebar (inside the Vaults tab)
@@ -125,6 +150,17 @@ Additionally:
   menu. [decision]
 - All windows are equal: each window has its own tabs, and changes to data and settings
   appear in all windows at once. Moving tabs between windows is not in the MVP. [decision]
+  Details [decision]:
+  - every window has its own top bar, Vaults and SFTP tabs, session tabs, details panel
+    and terminal sidebar (4.2). The data, the settings, the running sessions and the lock
+    belong to the app and are shared by all windows;
+  - a new window opens with Window ▸ New window, with Duplicate in a new window (4.4) and
+    with Alt held on a connect action (2.4). It has the size of the current window and is
+    placed with an offset of `--space-6` from it;
+  - locking covers every window at once (13.3);
+  - closing a window with active sessions asks for confirmation first (4.6); the dialog
+    says how many sessions of that window are open and will be closed. The app quits when
+    its last window closes.
 
 ### 1.5 Notification center [decision]
 
@@ -225,6 +261,10 @@ On the right:
     (see 12.4, block "OS detection"). Until then, a neutral icon is shown.
     OS icons are taken from a set with a suitable license, taking into account
     the trademark policies of the distributions;
+    - Linux has the app's own simple penguin drawn on the Lucide grid (not a logo), and
+      Windows and macOS the monitor icon; any other or unknown OS has the neutral server
+      icon. No OS icon is the terminal glyph, which marks the session type on tabs (1.1);
+      [decision]
   - title: the label, or the address if the label is empty;
   - subtitle in the secondary color, comma-separated: protocol(s), username,
     then the group or tags;
@@ -282,8 +322,10 @@ On the right:
        (see 5.1); [decision]
      - separator;
      - "in a new window" hint: if Alt is held while choosing any option,
-       the session opens in a new app window. Alt + double click on
-       a card works the same way. [decision for double click]
+       the session opens in a new app window (1.4). Alt + double click on
+       a card, Alt held while choosing Quick Connect and Alt + Connect in the host panel
+       (3.1) work the same way. [decision for double click, Quick Connect and the host
+       panel]
   3. **Add to Workspace ▸**: add to a saved workspace
      (details in the "Terminal" section).
   4. **Edit Host Details** (E).
@@ -406,6 +448,7 @@ The same form is used for creating and editing; it opens in the details panel.
    block (port 23 by default) that can be removed again. Its values are saved; Telnet
    connections come in stage 9 (D29).
 7. The **Connect** button is pinned to the bottom of the panel. Disabled until the address is filled in.
+   Alt + Connect opens the session in a new window (2.4). [decision]
 
 ### 3.2 Behavior
 
@@ -458,36 +501,89 @@ The same form is used for creating and editing; it opens in the details panel.
 
 - Opened and hidden with a button in the top bar (see 1.1). The sidebar is on the right;
   the terminal narrows rather than being overlapped.
+- Each window has one terminal sidebar. It acts on the session of the active pane (4.7)
+  of the active session tab, and follows when another tab or pane becomes active.
+  [decision]
+- The sidebar is 320 px wide (`--width-details-min`, `docs/design-system.md`, 6).
+  [decision]
 - At the top there is a row of icon tabs: Tools, Snippets, History, Appearance.
+  The name of each tab is in its tooltip. [decision on the tooltip]
 
 **Tools tab:**
 
 - search in terminal output (Ctrl+Shift+F) with "previous" and
   "next match" buttons. Matches are highlighted in the terminal;
+  - Ctrl+Shift+F opens the sidebar on the Tools tab and puts focus in the search field.
+    [decision]
+  - The search is for plain text, case-insensitive, over the screen and the scrollback.
+    All matches are highlighted with the theme's `searchMatch` color and the current one
+    with `searchMatchActive` (`docs/design-system.md`, 7.2). A counter shows "N of M".
+    Enter goes to the next match and Shift+Enter to the previous one, like the buttons;
+    the current match is scrolled into view. [decision]
+  - The search runs as you type, and the buttons wrap around at the first and the last
+    match. At most 10,000 matches are kept; beyond that the counter shows "10000+". A word
+    broken by a line wrap is found; text hidden by the program (SGR 8) is not. Esc in the
+    field returns focus to the terminal, and hiding the sidebar removes the highlights.
+    [decision]
+  - While the search is open, new output is searched again at most every 250 ms, and the
+    counter follows. The current match stays on its text: when the scrollback is full and
+    its oldest lines drop off, its number goes down instead of the highlight moving to
+    newer text; when its own line drops off, the oldest match left becomes current. When
+    the terminal changes size (a resize, the sidebar, a split), the lines rewrap: the
+    search runs again at once and then at most every 250 ms while the size keeps
+    changing, the current match keeps its number, and until that search the highlights
+    are hidden rather than shown on the moved text. [decision]
 - Autocomplete: a dropdown of modes, off by default.
   Command suggestions are built from the local history of this host. **Later stage**,
-  marked as beta in the UI. [decision on the suggestion source]
+  marked as beta in the UI. Until that stage it is not shown (section 0). [decision on
+  the suggestion source]
 
 **Snippets tab** [decision]:
 
 - list of snippets with search;
 - clicking inserts the snippet into the terminal without executing it;
 - the "run" button inserts the snippet and immediately sends Enter.
+- Until snippets arrive (stage 5), the tab shows only the empty state "Snippets will be
+  available in stage 5." (section 0).
 
 **History tab:**
 
 - history search;
 - list of entered commands, newest first. Clicking inserts the command into the terminal
   without executing it; [decision]
+  - the inserted text is marked as injected input and is never recorded in history again
+    (`docs/security.md`, 10.1); [decision]
+  - each entry can be deleted on its own, and "Clear history" removes the whole history
+    of the host after a confirmation; [decision]
 - a hint card: the three most frequent commands with an offer to save them
   as snippets. Commands can be edited before saving; there are "Close"
   and "Save" buttons. A dismissed hint is no longer shown for this
   host; [decision]
+  - each of the three commands is checked again by the secret filter below before it is
+    offered; [decision]
+  - until snippets arrive (stage 5), "Save" is disabled, and its tooltip says that
+    snippets come in stage 5. "Close" works and is remembered for the host; [decision]
+- layout and states of the tab [decision]:
+  - the trash button next to the heading is "Clear history" (inactive while the list is
+    empty or filtered by a search). Each row shows the command on one line in the terminal
+    font, with its own delete button. The list shows the newest 500 entries; the search
+    filters them as you type (plain text, case-insensitive);
+  - the hint card is above the search field. It appears when the host has at least one
+    command; commands are ranked by how often they were run and, at equal counts, by the
+    latest use;
+  - for a quick connect or a local terminal the tab says that history is kept for saved
+    hosts only. When recording is off for the host (12.4, 3.1), a line says so and the
+    stored entries can still be inserted and deleted;
+  - a command is read when the cursor leaves its line after Enter, so the echo of keys
+    typed just before Enter on a slow link is included. When keys are typed before the
+    previous line ended on screen, neither line is recorded (`docs/security.md`, 10.1);
 - **Mandatory security requirements:**
   - a command is the logical line in the terminal buffer at the moment Enter is pressed,
     without the prompt. The prompt ends at the cursor position where the first character of
     the command was typed; [decision]
   - nothing is recorded in history [decision]:
+    - in a session without a saved host (a quick connect, 2.1) and in a local terminal:
+      history is kept only for saved hosts;
     - in the alternate screen (full-screen programs such as vim or htop);
     - while the server does not echo the typed characters;
     - after a line of output that looks like a prompt for a password, passphrase, PIN or
@@ -515,14 +611,24 @@ The same form is used for creating and editing; it opens in the details panel.
 
 - the Font row with an arrow leads to font settings: family, size,
   line spacing; [decision]
+  - the family list has the bundled JetBrains Mono and the installed monospace fonts;
+    line spacing is 1.2 by default. These are the same settings as the Font block of
+    Settings → Terminal (12.4), and a change applies to every terminal; [decision]
 - Themes list: each theme has a preview thumbnail in its colors and a name.
   The current theme is highlighted. Clicking immediately applies the theme to the session and saves it
   in the host settings. Imported themes (see 12.4) are in the same list; [decision]
+  - a quick connect and a local terminal have no host record, so for them the click
+    applies the theme to that session only; [decision]
 - there are no theme popularity counters, because they would require telemetry.
   Themes added in the latest update are marked "new"; [decision]
 - theme set: our own dark and light defaults plus popular
   open color schemes with compatible licenses. Check the license of each scheme
   and list it in THIRD_PARTY_NOTICES.
+  - The list shows Graphite and Paper first, then the bundled schemes: Dracula, Nord,
+    Solarized Dark, Solarized Light, Gruvbox Dark, Tokyo Night, Catppuccin Mocha and
+    Catppuccin Latte (`docs/design-system.md`, 4.4). [decision]
+  - The bundled schemes keep their original colors; the "Adjust indistinguishable colors"
+    setting (12.4) helps where a scheme has low-contrast pairs. [decision]
 
 ### 4.3 Mouse in the terminal
 
@@ -533,17 +639,38 @@ The same form is used for creating and editing; it opens in the details panel.
 ### 4.4 Session tab context menu
 
 1. Duplicate: a new session to the same host in a new tab.
-2. Duplicate in a new window: the same, but in a new application window.
+   On a tab with splits, the host is the active pane's host. A local terminal is
+   duplicated as a new local terminal with the same shell, and a quick connect as a new
+   connection to the same `user@host:port`. The new tab opens right after the
+   duplicated one. [decision]
+2. Duplicate in a new window: the same, but in a new application window (1.4).
 3. Start multiplayer: real-time collaboration in a session.
    **Later stage.** Works via a self-hosted server, with E2E encryption,
    by invitation. The invitee sees the output and can enter commands only
    with the session owner's permission. [decision]
+   Until that stage the item is not shown (section 0). [decision]
 4. Rename: rename the tab. The host itself is not renamed.
+   The title is edited in place on the tab: Enter saves, Esc cancels, and an empty title
+   brings back the host name. Leaving the field (a click elsewhere) saves like Enter. The
+   title stays for the lifetime of the tab and is saved for Restore (6). [decision]
+   The field takes at most 256 characters and no control characters (a pasted tab).
+   Saving the title unchanged gives the tab no title of its own: it keeps showing the
+   host of its active pane (4.7). Enter and Esc put the focus back into the tab's pane; a
+   click elsewhere leaves it where the click put it. While the field is open, a pane does
+   not take the focus on its own (a session that connects meanwhile): it does so after
+   the field closes. [decision]
 5. Split horizontally: a new pane below the current one (Ctrl+Shift+E, see 4.7). [decision]
 6. Split vertically: a new pane to the right of the current one (Ctrl+Shift+D,
    see 4.7). [decision]
 7. Broadcast input: shown only on a tab with splits (see 4.7). [decision]
-8. Close.
+   Until stage 9 it is shown disabled (section 0). [decision]
+8. Close: closes the tab with all its panes. The next active tab follows 4.6. [decision]
+
+Items that do not apply stay in place, disabled: Duplicate, Duplicate in a new window
+and the splits while the active pane has no session target (the new tab page, a pane
+still choosing a host, SFTP), and a split that the limits of 4.7 do not allow. [decision]
+The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases either.
+[decision]
 
 ### 4.5 Workspaces
 
@@ -569,6 +696,8 @@ The same form is used for creating and editing; it opens in the details panel.
 - **Unexpected drop**: only a transport error, such as a network failure, a keepalive
   timeout, or a connection closed without an exit code [decision]:
   - the tab does not close, and the output is preserved;
+  - the terminal is dimmed and its cursor is hidden until the session reconnects (1.1);
+    [decision]
   - a message with the reason and "Reconnect"
     and "Close" buttons is shown over the terminal;
   - if Autoreconnect is on (see 12.4, on by default), reconnection attempts start
@@ -581,6 +710,10 @@ The same form is used for creating and editing; it opens in the details panel.
   session tab becomes active: the one on the left, or, if there is none, the one on the
   right. The persistent Vaults and SFTP tabs do not count as neighbors. If no session tabs
   remain, Vaults opens.
+- **Splits** [decision]: on a tab with splits, these rules apply to each pane (4.7). A
+  normal termination closes the pane, and the message of a non-zero exit code or a drop
+  is shown over that pane's terminal. The tab closes, by the rule above, when its last
+  pane closes.
 - **Exit confirmation** [decision]: Exit (1.4) and closing a window while sessions, port
   forwards or file transfers are active ask for confirmation first.
 
@@ -589,14 +722,50 @@ The same form is used for creating and editing; it opens in the details panel.
 - A tab can be split into panes horizontally (a new pane below, Ctrl+Shift+E) and
   vertically (a new pane to the right, Ctrl+Shift+D): via the tab menu (4.4) or with
   keyboard shortcuts (configurable, see 12.5). [decision on the shortcuts]
+  - A split divides the active pane into two equal parts, and the new pane becomes
+    active. Any pane can be split again in either direction, so a tab holds a tree of
+    panes. [decision]
 - A new pane shows host selection as on the new tab page (section 6): a search field and
   Recent connections. Choosing a host connects in that pane. [decision]
+  - It is a compact version of the page: a search field with focus in it and one list.
+    The first row is the host of the pane that was split, so Enter opens another session
+    to it; for a quick connect it is the same address, and for a local terminal a new
+    local terminal with the same shell. The first row is not repeated among Recent
+    connections below it. Typing filters the list as the page's search does, without open
+    tabs, since the pane needs a new session. Esc closes the new pane, which undoes the
+    split. [decision]
+  - Alt held while choosing (2.4) opens the session in this pane as well, not in a new
+    window: the pane is waiting for a session. [decision]
 - The border between panes can be dragged. The active pane is highlighted.
   Focus is switched by clicking or with Ctrl+Alt+arrows (see 12.5).
+  - Ctrl+Alt+arrow moves focus to the nearest pane in that direction on screen. At the
+    edge of the tab it does nothing. [decision]
+  - The border is a 1 px `--border-subtle` line that can be grabbed within `--space-2`
+    around it. Each pane keeps at least 128 px in width and in height (four times
+    `--space-6`; `docs/design-system.md` names no pane size). [decision]
+  - With more than one pane, the active pane has a 2 px `--accent` bar along its top
+    edge (`--size-tab-indicator`, as on the active tab). [decision]
+  - A tab holds at most 16 panes, and a pane is split only while both halves keep the
+    minimum size and the pane tree stays within the four levels of nesting that Restore
+    keeps (`docs/data-model.md`, 16.3; up to four panes side by side in one direction count
+    as one level). [decision]
 - Each pane has its own session, to the same host or to a different one.
+- **Closing panes** [decision]:
+  - when a pane's session ends normally (exit code 0), the pane closes and its neighbors
+    take its space. A non-zero exit code and a drop show their message inside the pane
+    and keep it open (4.6). The "Close" button of that message closes the pane;
+  - Ctrl+Shift+W closes the active pane when the tab has more than one pane, and the tab
+    otherwise. Close in the tab menu closes the whole tab (4.4);
+  - when the last pane closes, the tab closes as described in 4.6.
+- **A tab with splits** [decision]: its title is the host of the active pane, unless the
+  tab was renamed (4.4). Its state dot (1.1) shows the worst state of its panes: a drop
+  first, then connecting, then an ended session, then connected.
+- Restore (section 6) brings the panes back with their sizes; the first pane of each tab
+  is active. [decision]
 - **Broadcast input** [decision]: turned on and off with the "Broadcast input" item in the
   tab menu (4.4). While it is on, keyboard input in the active pane is also sent to all
-  other panes of the tab, and these receiving panes are marked with a border.
+  other panes of the tab, and these receiving panes are marked with a border. Until
+  stage 9 the item is shown disabled (section 0).
 
 ### 4.8 Connecting and authentication [decision]
 
@@ -741,23 +910,71 @@ In the local panel on Windows, the Edit Permissions item is hidden. [decision]
 
 ## 6. New tab page
 
-- Opened with the "+" button in the top bar.
+- Opened with the "+" button in the top bar, with Ctrl+T outside the terminal and with
+  Ctrl+Shift+T everywhere (see 12.5). [decision on the shortcuts]
 - Until a host is selected, the tab is named "New Tab". After selection, the session
   opens in the same tab. [decision]
 - At the top center, a search field for hosts and open tabs with a hint for the
   Ctrl+K key; focus is placed in it immediately. Ctrl+K from anywhere in the app
   opens the same search; when the terminal has focus, Ctrl+Shift+K does (see 12.5).
   [decision on the global Ctrl+K and on Ctrl+Shift+K]
+  - Ctrl+K and Ctrl+Shift+K open the search as an overlay over the current window, not
+    as a new tab. Esc or a click outside it closes it, and the focus goes back where it
+    was; arrow keys and Enter choose a result. [decision]
+  - The search covers the open tabs of all windows and the saved hosts. Choosing an
+    open tab brings its window to the front and activates that tab. [decision]
+  - Choosing a host or an address in the overlay opens the session in a new tab. With an
+    empty field the overlay lists Recent connections. [decision]
 - Below it, the Recent connections block:
   - row: OS icon, host name (or address), and on the right the path "vault / group";
   - clicking connects in this tab;
   - arrow keys and Enter work the same as a click. [decision]
+  - The rows come from the connection log (section 11): SSH connections, newest first,
+    one row per target (a saved host, or the address and port of a quick connect), at
+    most 10. A row whose host has been removed connects to its address like a quick
+    connect. While the log is empty, the block says that the hosts you connect to appear
+    there. [decision]
 - The block header has two buttons:
   - Create a workspace: save the currently open tabs as a workspace;
+    until stage 9 it is shown disabled, with a tooltip (section 0); [decision]
   - Restore: restore the tabs from the previous app launch. Disabled
     if there is nothing to restore. [decision based on meaning]
+    - Restore brings back the windows of the previous launch with their tabs, panes
+      (4.7) and titles set with Rename (4.4), and connects their sessions. The first saved
+      window is restored into the current window, and the others open as new windows.
+      A saved host that has been removed since is not opened; when nothing can be
+      opened, a notification says so. Restore works once per launch, and the "New Tab"
+      tab it was chosen on gives way to the restored tabs. [decision]
+    - The app saves this set when it exits, when its last window closes and before it
+      locks (the set is encrypted with the vault's keys, so a quit while locked keeps the
+      set saved at the lock). It holds
+      only the structure and the targets: host record ids, `user@host:port` of quick
+      connects, local shell ids, tab titles, and the pane tree with its sizes. Secrets and
+      terminal content are never saved. The set is stored encrypted on this device and is
+      not synced (`docs/data-model.md`). [decision]
 - When typing in the search, the list is replaced with results: open tabs first,
   then hosts. [decision]
+  - Open tabs match by their title or by their host's name, address, username or tags;
+    hosts match by the same fields as the Hosts search (2.1). A host whose label or
+    address is exactly the text comes first among the hosts. [decision]
+  - When the text is recognized as a connection address by the rules of 2.1 and no host
+    has exactly that label or address, the last row connects to it without saving the
+    host. [decision]
+  - Alt held while choosing a host or an address opens the session in a new window
+    (2.4). Choosing an open tab only brings it to the front. [decision]
+- Layout [decision]:
+  - the page's column, the pane picker (4.7) and the overlay are at most 560 px wide
+    (`--width-details-max`); the page starts `--space-6` below the tab row, and the
+    overlay `--space-6` below the top bar over the `--scrim` dimming, with at most 10 rows
+    visible before the list scrolls;
+  - a row is 44 px (`--height-row`): a 28 px tile in the host's color (as in the Hosts list
+    layout), the name and, on the right, "vault / group". A Recent connections row
+    without a saved host shows its address on the right, without the port when it is 22.
+    The selected row has the `--accent-subtle` fill. Section headings ("Recent
+    connections", "Open tabs", "Hosts") are 28 px rows with a 12 px caption;
+  - arrow keys stop at the first and the last row. When the data changes (a new
+    connection log entry, a host edited elsewhere), the selection stays on its row only
+    if the user moved it; otherwise the first row is selected.
 
 ---
 
@@ -989,10 +1206,15 @@ Blocks from top to bottom:
 - Action bar: the **Import** button opens the import dialog (2.5) with the known_hosts
   source; `~/.ssh/known_hosts` is suggested by default. On the right: search,
   view toggle, sorting. [decision]
+  - The **Export** button stands next to Import. The view toggle switches between tiles
+    and a list with the columns Address, Key type, Fingerprint and Date added. Sorting is
+    by address, by date added or by key type. [decision]
+  - With no entries, the screen shows an empty state with an "Import known_hosts"
+    button. [decision]
 - Grid of cards: fingerprint icon and address in OpenSSH format. For port 22
   it is `host`, for others `[host]:port`.
 - Hashed entries (`|1|…`) are stored as they are, because their address cannot be
-  recovered. Their card shows "Hashed entry" and the key type instead of the address. On
+  recovered. Their card shows "Hashed host" and the key type instead of the address. On
   connect, the address is hashed (HMAC) and compared with these entries. [decision]
 - `@revoked` entries are imported as revoked keys and marked with a "revoked" badge.
   `@cert-authority` entries are skipped, and the import summary shows how many were
@@ -1000,8 +1222,45 @@ Blocks from top to bottom:
 - A click opens the details panel [decision]: address, port, key type, SHA256
   fingerprint with a copy button, date added, saved hosts with this
   address, Remove button.
+  - The panel also shows the comment of an imported line. For a hashed entry the port is
+    "in the hash", and a note says that the address is stored as a hash and is still
+    checked on every connection. For a revoked entry a note says that every connection
+    that presents this key is blocked. [decision]
 - Right-click [decision]: copy fingerprint, Remove.
+- Keyboard and search [decision]: the arrows move the selection between cards (up and
+  down by a row of the grid; in the list layout by one row), Delete or Backspace on the
+  selected card opens the Remove confirmation, and Esc closes the details panel. The
+  search matches the card title (the address, or "Hashed host"), the key type, the
+  SHA256 fingerprint and the comment, case-insensitive. The details panel is 380 px wide
+  and can be resized from 320 to 560 px, as the details panel of 1.3.
+- Remove asks for confirmation, and the removal can be undone for a few seconds, as for
+  hosts (2.4). The confirmation says that the next connection to this address will ask
+  again whether to trust its key; for a revoked entry, that the key will no longer be
+  blocked. [decision]
+- The import summary shows four numbers: imported entries, duplicates of entries already
+  in the list, skipped entries (`@cert-authority` lines and negated `!` host patterns) and
+  invalid lines. A line with several comma-separated host patterns gives one entry per
+  pattern. Comments and blank lines are not counted. A file larger than 16 MiB is refused.
+  [decision]
+  - A line longer than 64 KiB is invalid, and so is a line with a malformed host pattern
+    (the whole line). An entry that appears twice in the file is imported once and then
+    counted as a duplicate. The comment of a line is kept, cut to 256 characters, for the
+    details panel and is not exported. [decision]
+  - Limits against hostile files: a line with more than 256 host patterns is invalid; a
+    host pattern repeated on its line counts as a duplicate; one file gives at most
+    200,000 entries, holding at most 64 MiB of text (host, key type, key and comment of
+    each entry, since every pattern of a line copies its key); a line past either limit
+    is invalid. [decision]
+  - Until the full import dialog of 2.5 arrives (stage 3), Import on this screen opens a
+    dialog with the File step and the Summary only, without the Source and Preview steps.
+    [decision]
+- The view toggle is remembered (`view.known_hosts.layout`, `docs/data-model.md`); the
+  sort is not, and the screen opens sorted by address. In the list layout the Key type
+  column is 200 px and the Date added column 148 px wide. The date added is shown as
+  `YYYY-MM-DD HH:MM UTC`. Remove in the details panel is a neutral button with text in the
+  danger color. [decision]
 - Export to the known_hosts format. Hashed entries are exported as they are. [decision]
+  Revoked entries are exported with the `@revoked` marker. [decision]
 - Connections check host keys only against this list. The system `~/.ssh/known_hosts` is
   not read when connecting; it can only be imported. [decision]
 
@@ -1014,6 +1273,9 @@ Blocks from top to bottom:
   - the connection is blocked, a warning is shown in the danger color;
   - the old and new fingerprints and an explanation about a possible attack are shown;
   - continuing is possible only via the explicit "Replace saved key" button;
+  - the dialog opens with the keyboard focus on "Cancel", and Enter and Esc press
+    "Cancel". "Replace saved key" works only with a mouse click, or with Space after Tab
+    has moved the focus to it; Enter on it does nothing; [decision]
   - there are no checkboxes like "don't ask again".
 - If the host key is in the list as revoked (10.1), the connection is blocked with a warning
   in the danger color. There is no button to continue. [decision]
@@ -1160,6 +1422,7 @@ Also:
 - Autocomplete (beta): dropdown, off by default. Later stage.
 - Autoreconnect: toggle, on by default (see 4.6).
 - Record command history: toggle, on by default. A host can override it (see 3.1). [decision]
+  History is kept only for saved hosts (4.2). [decision]
 - Import shell history: pull history from the server's `~/.bash_history` and
   `~/.zsh_history` into the History panel. **Off** by default,
   because such files often contain secrets. On import, the same
@@ -1167,6 +1430,20 @@ Also:
 - Copy on select: toggle. Right-click always pastes text (see 4.3). [decision]
 - Bell sound: off by default.
 - Bright colors for bold text: toggle.
+- Adjust indistinguishable colors: Off / Palette only / Always, Palette only by default.
+  [decision]
+  - When the contrast of a cell's text and background colors is below 4.5:1 (WCAG), the
+    text color is moved toward white or toward black until the pair reaches 4.5:1. It
+    moves away from the background (lighter text toward white, darker text toward
+    black); when that direction cannot reach 4.5:1, it moves the other way. The color
+    moves by the smallest step that reaches 4.5:1, so its hue stays as close to the
+    original as possible. Only the display changes, not the terminal data.
+  - Palette only: colors from the theme palette are adjusted, that is the 16 ANSI colors,
+    the 256-color table and the default foreground and background, also when a program
+    redefines them. Truecolor (24-bit) colors are never changed. Always: truecolor colors
+    are adjusted too. Off: all colors are shown as they are.
+  - The selection and the cursor keep their own colors, and text hidden by the program
+    (SGR 8) stays hidden.
 - Cursor style: block / bar / underline, block by default; Blinking: toggle, off by
   default. [decision]
 - Terminal emulation type: the TERM value, `xterm-256color` by default.
@@ -1176,7 +1453,9 @@ Also:
 
 - font selection: search across installed monospace fonts and bundled
   open-source fonts;
-- text size: −/+ buttons and a number field, 14 by default.
+- text size: −/+ buttons and a number field, 14 by default;
+- line spacing: 1.2 by default, from 1.0 to 2.0. The same font settings open from the
+  Appearance tab of the terminal sidebar (4.2). [decision]
 
 **"Terminal theme" block:**
 
@@ -1213,6 +1492,9 @@ shells plus a custom path.
 
 - Windows: PowerShell, PowerShell 7, cmd, WSL distributions, Git Bash.
 - macOS and Linux: shells from `/etc/shells`.
+- Until a shell is chosen here, Windows uses PowerShell 7 (`pwsh`) when it is installed,
+  and Windows PowerShell otherwise. A local terminal tab is titled with the shell's
+  display name, for example "PowerShell 7" (1.1). [decision]
 
 **"Keepalive" block:**
 
@@ -1245,19 +1527,21 @@ Default set for Windows/Linux:
 | Ctrl+L | new local terminal |
 | Ctrl+Shift+L | lock the app (13.3) |
 | Ctrl+Alt+S | new serial connection |
-| Ctrl+Shift+W | close tab |
+| Ctrl+T, Ctrl+Shift+T | new tab (section 6) [decision] |
+| Ctrl+Shift+W | close tab; on a tab with splits, close the active pane (4.7) [decision on splits] |
 | Alt+→ | next tab |
 | Alt+← | previous tab |
 | Ctrl+P, Ctrl+Shift+P | open Port Forwarding [decision on Ctrl+Shift+P] |
 | Ctrl+K, Ctrl+Shift+K | search hosts and tabs [decision] |
-| Ctrl+Shift+F | search in the terminal |
+| Ctrl+Shift+F | search in the terminal (the Tools tab of the terminal sidebar, 4.2) |
 | Ctrl+, | settings |
 
-**Important** [decision]: shortcuts without Shift (Ctrl+L, Ctrl+P, Ctrl+K) coincide
-with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous
-command, `Ctrl+K` deletes to the end of the line. When focus is in the terminal, such
-shortcuts go to the shell, not to the application. Application actions from the terminal
-are available via Ctrl+Shift shortcuts: Ctrl+Shift+P and Ctrl+Shift+K work everywhere.
+**Important** [decision]: shortcuts without Shift (Ctrl+L, Ctrl+P, Ctrl+K, Ctrl+T)
+coincide with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous
+command, `Ctrl+K` deletes to the end of the line, `Ctrl+T` swaps two characters. When
+focus is in the terminal, such shortcuts go to the shell, not to the application.
+Application actions from the terminal are available via Ctrl+Shift shortcuts:
+Ctrl+Shift+P, Ctrl+Shift+K and Ctrl+Shift+T work everywhere.
 Ctrl+Shift+L locks the app (13.3) and also works everywhere; from the terminal, a new local
 terminal is opened with the "+" button or the app menu (D29).
 
