@@ -714,3 +714,17 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 1; 
 - Measured (`SHELLPP_SFTP_BENCH=1`, 200 MB, release build): to the dev server over a ~50 ms link, upload 9.4 MB/s and download 8.1 MB/s against 8.2 and 8.5 MB/s for OpenSSH's `sftp` with the same key (115 % and 95 %; with russh-sftp's default of 16 requests the upload was 3.9 MB/s); to OpenSSH in local Docker, 158–177 and 135–145 MB/s against 108–120 and 138–148 MB/s.
 
 **Spec impact:** none yet (UI 5 is unchanged; the engine has no UI tonight).
+
+### 46. The transfer queue logic and local file names (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, items 3 and 8; UI 5).
+
+**Decision:**
+
+- The queue is a state machine without I/O (`shellpp_ssh::transfer_queue`): queued, running, waiting for a conflict answer, paused, failed with its reason (Retry queues it again, and the runner resumes from the `.part`), done, skipped, cancelled. At most `sftp.parallel_transfers` run at once (1 to 10, default 3), the oldest queued first; a lower limit lets the running ones finish. A transfer waiting for an answer holds no running slot.
+- A name conflict follows `sftp.name_conflict` (ask, replace, skip, rename). An answer can apply to all: it also decides the transfers waiting now and every later conflict of the queue.
+- "Rename" picks `name (2).ext`, `name (3).ext`, … with the extension after the last dot (`archive.tar (2).gz`); a leading dot is part of the name (`.bashrc (2)`).
+- Speed is the progress of the last 5 seconds; the time left follows from it; a paused transfer shows neither.
+- A downloaded name Windows cannot hold (`< > : " / \ | ? *`, control characters, a trailing dot or space, a reserved device name such as `CON` or `com1.txt`) is suggested in the rename dialog with each such character as `_` and a reserved name with a leading `_` (`shellpp_ssh::local_names`). An absolute Windows path of 260 characters or more is used with the `\\?\` prefix (`\\?\UNC\` for a share).
+
+**Spec impact:** none yet (the panels and the queue UI come next).
