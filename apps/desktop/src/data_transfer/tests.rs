@@ -354,3 +354,23 @@ fn the_summary_names_the_settings_kept_here(cx: &mut TestAppContext) {
     assert_eq!(summary.settings_left_out, 1);
     assert!(ui.visible(cx, "data-import-settings-left-out"));
 }
+
+#[test]
+fn the_format_is_read_without_the_rest_of_the_file() {
+    assert_eq!(
+        encrypted(r#"{"vaults":[{"records":[]}],"format":"shellpp.export.v1"}"#),
+        Some(false)
+    );
+    assert_eq!(
+        encrypted(r#"{"format":"shellpp.export.encrypted.v1","kdf":{}}"#),
+        Some(true)
+    );
+    assert_eq!(encrypted(r#"{"format":"other"}"#), None);
+    assert_eq!(encrypted(r#"{"vaults":[]}"#), None);
+    assert_eq!(encrypted("not json"), None);
+    // A file that is not UTF-8 is not an export.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("binary.json");
+    std::fs::write(&file, [0xff, 0xfe, 0x00, 0x7b]).unwrap();
+    assert_eq!(read_file(&file).err(), Some(strings::FILE_NOT_EXPORT));
+}

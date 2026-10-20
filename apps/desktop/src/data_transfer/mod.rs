@@ -24,7 +24,9 @@ pub mod strings;
 mod tests;
 
 use std::io::Read as _;
+
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, FontWeight, InteractiveElement as _,
@@ -417,8 +419,11 @@ impl std::fmt::Debug for ImportDialog {
     }
 }
 
-/// Reads an export file within the limit; `Err` is the message.
-fn read_file(path: &Path) -> Result<String, &'static str> {
+/// Reads an export file within the limit; `Err` is the message. The bytes
+/// land in one buffer of the file's size (no copies left behind by a
+/// growing buffer) and become the secret without another copy; a file that
+/// is not UTF-8 is wiped before it is dropped.
+fn read_file(path: &Path) -> Result<SecretString, &'static str> {
     let file = std::fs::File::open(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => strings::FILE_NOT_FOUND,
         _ => strings::FILE_UNREADABLE,
@@ -430,18 +435,35 @@ fn read_file(path: &Path) -> Result<String, &'static str> {
     if metadata.len() > MAX_FILE_BYTES {
         return Err(strings::FILE_TOO_LARGE);
     }
-    let mut text = String::new();
+    // One byte more than the size, so a file that grew is seen at its end
+    // without the buffer moving.
+    let size = usize::try_from(metadata.len()).map_err(|_| strings::FILE_TOO_LARGE)?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(size + 1));
     file.take(MAX_FILE_BYTES + 1)
-        .read_to_string(&mut text)
+        .read_to_end(&mut bytes)
         .map_err(|_| strings::FILE_NOT_EXPORT)?;
-    Ok(text)
+    match String::from_utf8(std::mem::take(&mut *bytes)) {
+        Ok(text) => Ok(SecretString::from(text)),
+        Err(error) => {
+            drop(Zeroizing::new(error.into_bytes()));
+            Err(strings::FILE_NOT_EXPORT)
+        }
+    }
+}
+
+/// The `format` member of a file, read without keeping the rest: the other
+/// members are skipped, so no copy of a plain export's secrets is made.
+#[derive(serde::Deserialize)]
+struct Head<'a> {
+    #[serde(borrow)]
+    format: Option<std::borrow::Cow<'a, str>>,
 }
 
 /// Whether a file's JSON names the encrypted format; `None` when it is not
 /// an export at all.
 fn encrypted(text: &str) -> Option<bool> {
-    let value: serde_json::Value = serde_json::from_str(text).ok()?;
-    match value.get("format")?.as_str()? {
+    let head: Head<'_> = serde_json::from_str(text).ok()?;
+    match head.format?.as_ref() {
         shellpp_core::ids::EXPORT_FORMAT_V1 => Some(false),
         shellpp_core::ids::EXPORT_FORMAT_ENCRYPTED_V1 => Some(true),
         _ => None,
@@ -561,8 +583,8 @@ impl ImportDialog {
         cx.notify();
         let work = cx.background_spawn(async move {
             let text = read_file(&path)?;
-            let encrypted = encrypted(&text).ok_or(strings::FILE_NOT_EXPORT)?;
-            Ok::<_, &'static str>((SecretString::from(text), encrypted))
+            let encrypted = encrypted(text.expose_secret()).ok_or(strings::FILE_NOT_EXPORT)?;
+            Ok::<_, &'static str>((text, encrypted))
         });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
