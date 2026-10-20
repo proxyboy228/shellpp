@@ -1,9 +1,13 @@
 //! Authentication (stage 2 plan, decision 23; docs/data-model.md, section
 //! 8.6): a missing username is asked first, then, while the server offers
 //! the method: the effective key (decrypted with its saved passphrase or a
-//! `Passphrase` prompt), the system agent's keys, the password (saved or
-//! prompted, asked again after a refusal), keyboard-interactive (one prompt
-//! per question). A cancelled prompt ends the attempt with `Cancelled`.
+//! `Passphrase` prompt), the system agent's keys, the user's key files
+//! (offered by their public key; decrypted, with a `FileKeyPassphrase`
+//! prompt when needed, only after the server accepted the key), the password
+//! (saved or prompted, asked again after a refusal), keyboard-interactive
+//! (one prompt per question). A cancelled prompt ends the attempt with
+//! `Cancelled`. A public key already offered (the same key in the agent and
+//! in a file) is not offered again.
 //!
 //! Partial success (several required methods) is followed: after a method
 //! succeeds partially, the remaining methods that were not tried yet run.
@@ -13,14 +17,16 @@ use std::time::Duration;
 
 use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
-use russh::keys::ssh_key::{Algorithm, HashAlg, Kdf, PrivateKey, PublicKey};
+use russh::keys::ssh_encoding::Encode as _;
+use russh::keys::ssh_key::private::KeypairData;
+use russh::keys::ssh_key::{Algorithm, HashAlg, Kdf, PrivateKey, PublicKey, Signature};
 use russh::keys::{PrivateKeyWithHashAlg, decode_secret_key};
 use russh::{MethodKind, MethodSet};
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::agent::SystemAgent;
 use crate::client::{
-    AuthMethod, AuthOutcome, AuthPlan, Interaction, KeyCredential, Prompt, PromptAnswer,
+    AuthMethod, AuthOutcome, AuthPlan, FileKey, Interaction, KeyCredential, Prompt, PromptAnswer,
     PromptedSecrets,
 };
 use crate::error::FailureKind;
@@ -88,19 +94,26 @@ struct Progress {
     methods: MethodSet,
     tried_key: bool,
     tried_agent: bool,
+    tried_file_keys: bool,
     tried_password: bool,
     tried_keyboard_interactive: bool,
     /// The effective key could not be decoded.
     key_unusable: bool,
     /// The server refused at least one credential.
     refused_any: bool,
-    /// The public key already offered from [`AuthPlan::key`].
-    offered_key: Option<PublicKey>,
+    /// Public keys already offered (the effective key, agent keys, key files).
+    offered: Vec<PublicKey>,
 }
 
 impl Progress {
     fn offers(&self, kind: MethodKind) -> bool {
         self.methods.contains(&kind)
+    }
+
+    fn was_offered(&self, key: &PublicKey) -> bool {
+        self.offered
+            .iter()
+            .any(|offered| offered.key_data() == key.key_data())
     }
 
     /// The server answered a failure. Returns the error to stop with when the
@@ -201,11 +214,12 @@ pub(crate) async fn authenticate(
         methods,
         tried_key: false,
         tried_agent: false,
+        tried_file_keys: false,
         tried_password: false,
         tried_keyboard_interactive: false,
         key_unusable: false,
         refused_any: false,
-        offered_key: None,
+        offered: Vec::new(),
     };
 
     loop {
@@ -224,6 +238,12 @@ pub(crate) async fn authenticate(
         }) {
             progress.tried_agent = true;
             try_agent(handle, context, &mut progress, agent).await?
+        } else if !progress.tried_file_keys
+            && !context.plan.file_keys.is_empty()
+            && progress.offers(MethodKind::PublicKey)
+        {
+            progress.tried_file_keys = true;
+            try_file_keys(handle, context, &mut progress).await?
         } else if !progress.tried_password && progress.offers(MethodKind::Password) {
             progress.tried_password = true;
             try_password(handle, context, &mut progress).await?
@@ -313,7 +333,7 @@ async fn try_key(
             return Ok(Step::Next);
         }
     };
-    progress.offered_key = Some(key.public_key().clone());
+    progress.offered.push(key.public_key().clone());
     let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
         tracing::debug!("rsa key skipped: the server accepts only sha-1 signatures");
         return Ok(Step::Next);
@@ -458,12 +478,13 @@ async fn try_agent(
         let AgentIdentity::PublicKey { key, .. } = identity else {
             continue;
         };
-        if progress.offered_key.as_ref().map(PublicKey::key_data) == Some(key.key_data()) {
+        if progress.was_offered(&key) {
             continue;
         }
         if !progress.offers(MethodKind::PublicKey) {
             break;
         }
+        progress.offered.push(key.clone());
         let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
             continue;
         };
@@ -498,6 +519,195 @@ async fn try_agent(
                 if handle.is_closed() {
                     return Err(progress.closed());
                 }
+            }
+        }
+    }
+    Ok(Step::Next)
+}
+
+/// The public key of a key file without decrypting it: from the OpenSSH
+/// private key text (which carries it in the clear), else from the `.pub`
+/// line, else from the decoded text of an unencrypted legacy key. `None`
+/// for an encrypted legacy key without a `.pub` file (it is skipped).
+async fn file_public_key(file: &FileKey) -> Option<PublicKey> {
+    if let Ok(key) = PrivateKey::from_openssh(file.private_key.expose_secret()) {
+        return Some(key.public_key().clone());
+    }
+    if let Some(key) = file
+        .public_key
+        .as_deref()
+        .and_then(|line| PublicKey::from_openssh(line.trim()).ok())
+    {
+        return Some(key);
+    }
+    decode_blocking(&file.private_key, None)
+        .await
+        .ok()
+        .map(|key| key.public_key().clone())
+}
+
+/// Why a key file did not sign after the server accepted its public key.
+#[derive(Debug)]
+enum FileSignError {
+    /// The transport is gone.
+    Send,
+    /// The passphrase prompt was cancelled.
+    Cancelled,
+    /// The text could not be decoded, or it is not the key that was offered.
+    Unusable,
+}
+
+impl From<russh::SendError> for FileSignError {
+    fn from(_: russh::SendError) -> Self {
+        Self::Send
+    }
+}
+
+/// Signs for one key file once the server accepted its public key: opens the
+/// key (plain, with the remembered passphrase, or with prompted ones until
+/// one works or the prompt is cancelled) and signs.
+struct FileKeySigner<'a> {
+    file: &'a FileKey,
+    public: &'a PublicKey,
+    interaction: &'a dyn Interaction,
+    /// The passphrase typed at the prompt that opened the key.
+    prompted: Option<PromptAnswer>,
+}
+
+impl FileKeySigner<'_> {
+    async fn open(&mut self) -> Result<PrivateKey, FileSignError> {
+        match decode_blocking(&self.file.private_key, None).await {
+            Ok(key) => return Ok(key),
+            Err(KeyDecode::Invalid) => return Err(FileSignError::Unusable),
+            Err(KeyDecode::Encrypted) => {}
+        }
+        let mut error = false;
+        if let Some(remembered) = self.file.passphrase.as_ref() {
+            match decode_blocking(&self.file.private_key, Some(remembered)).await {
+                Ok(key) => return Ok(key),
+                Err(KeyDecode::Invalid) => return Err(FileSignError::Unusable),
+                Err(KeyDecode::Encrypted) => error = true,
+            }
+        }
+        loop {
+            let answer = self
+                .interaction
+                .prompt(Prompt::FileKeyPassphrase {
+                    key_label: self.file.label.clone(),
+                    error,
+                })
+                .await
+                .ok_or(FileSignError::Cancelled)?;
+            match decode_blocking(&self.file.private_key, Some(&answer.value)).await {
+                Ok(key) => {
+                    self.prompted = Some(answer);
+                    return Ok(key);
+                }
+                Err(KeyDecode::Invalid) => return Err(FileSignError::Unusable),
+                Err(KeyDecode::Encrypted) => error = true,
+            }
+        }
+    }
+}
+
+/// The SSH signature blob of `data` (algorithm name and signature).
+fn signature_blob(key: &PrivateKey, hash: Option<HashAlg>, data: &[u8]) -> Option<Vec<u8>> {
+    use russh::keys::signature::Signer as _;
+    let signature: Signature = match key.key_data() {
+        KeypairData::Rsa(rsa) => (rsa, hash).try_sign(data).ok()?,
+        other => other.try_sign(data).ok()?,
+    };
+    let mut blob = Vec::new();
+    signature.encode(&mut blob).ok()?;
+    Some(blob)
+}
+
+impl russh::Signer for FileKeySigner<'_> {
+    type Error = FileSignError;
+
+    async fn auth_sign(
+        &mut self,
+        _key: &AgentIdentity,
+        hash_alg: Option<HashAlg>,
+        mut to_sign: Vec<u8>,
+    ) -> Result<Vec<u8>, Self::Error> {
+        let key = self.open().await?;
+        if key.public_key().key_data() != self.public.key_data() {
+            tracing::debug!("key file does not match its public key");
+            return Err(FileSignError::Unusable);
+        }
+        let blob = signature_blob(&key, hash_alg, &to_sign).ok_or(FileSignError::Unusable)?;
+        blob.encode(&mut to_sign)
+            .map_err(|_| FileSignError::Unusable)?;
+        Ok(to_sign)
+    }
+}
+
+async fn try_file_keys(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+) -> Result<Step, AuthError> {
+    for (index, file) in context.plan.file_keys.iter().enumerate() {
+        if !progress.offers(MethodKind::PublicKey) {
+            break;
+        }
+        let Some(public) = file_public_key(file).await else {
+            tracing::debug!("key file skipped: no public key");
+            continue;
+        };
+        if progress.was_offered(&public) {
+            continue;
+        }
+        progress.offered.push(public.clone());
+        let Ok(hash) = hash_for(handle, &public.algorithm(), context.timeout).await else {
+            tracing::debug!("rsa key file skipped: the server accepts only sha-1 signatures");
+            continue;
+        };
+        let mut signer = FileKeySigner {
+            file,
+            public: &public,
+            interaction: context.interaction,
+            prompted: None,
+        };
+        // The passphrase prompt runs inside this call: the limit is the
+        // long one of answers that wait for the user.
+        let result = tokio::time::timeout(
+            context.timeout.max(AUTH_REPLY_TIMEOUT),
+            handle.authenticate_publickey_with(
+                progress.username.clone(),
+                public.clone(),
+                hash,
+                &mut signer,
+            ),
+        )
+        .await
+        .map_err(|_| AuthError::Failed(FailureKind::Timeout))?;
+        match result {
+            Ok(AuthResult::Success) => {
+                let mut authenticated = progress.outcome(AuthMethod::PublicKey);
+                authenticated.prompted.file_passphrase =
+                    signer.prompted.take().map(|answer| (index, answer));
+                return Ok(Step::Success(authenticated));
+            }
+            Ok(AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            }) => {
+                tracing::debug!(method = "publickey", "key file refused");
+                progress.refused(handle, remaining_methods)?;
+                if partial_success {
+                    return Ok(Step::Next);
+                }
+            }
+            Err(FileSignError::Send) => return Err(progress.closed()),
+            Err(FileSignError::Cancelled) => {
+                return Err(AuthError::Failed(FailureKind::Cancelled));
+            }
+            // The server waits for a signature that cannot be made: this
+            // attempt cannot go on.
+            Err(FileSignError::Unusable) => {
+                return Err(AuthError::Failed(FailureKind::KeyUnusable));
             }
         }
     }

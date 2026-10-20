@@ -7,8 +7,10 @@
 //! before it returns `Accept`) -> authentication (step `Authenticating`) in
 //! the order of docs/data-model.md, section 8.6: the effective key
 //! ([`AuthPlan::key`], decrypted with its passphrase or a `Passphrase`
-//! prompt), the system agent's keys, the password (or a `Password` prompt),
-//! keyboard-interactive (each question a `KeyboardInteractive` prompt). A
+//! prompt), the system agent's keys, the user's key files ([`FileKey`],
+//! decrypted only after the server accepted the public key), the password
+//! (or a `Password` prompt), keyboard-interactive (each question a
+//! `KeyboardInteractive` prompt). A
 //! missing username is asked first (`Username` prompt). The desktop host then
 //! calls [`Connection::open_shell`] (step `OpeningSession` is the host's) and,
 //! for OS detection, [`Connection::exec`].
@@ -66,6 +68,9 @@ pub struct AuthPlan {
     pub can_save_password: bool,
     /// Prompts may offer "Save" for the key passphrase (writable key).
     pub can_save_passphrase: bool,
+    /// The user's key files (`~/.ssh/id_*`), tried after the agent's keys
+    /// and before the password, in this order (see [`FileKey`]).
+    pub file_keys: Vec<FileKey>,
 }
 
 impl std::fmt::Debug for AuthPlan {
@@ -75,6 +80,32 @@ impl std::fmt::Debug for AuthPlan {
             .field("use_agent", &self.use_agent)
             .field("password", &self.password.is_some())
             .field("keyboard_interactive", &self.keyboard_interactive)
+            .field("file_keys", &self.file_keys.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A private key file of the user (`~/.ssh/id_*`). It is offered by its
+/// public key first and decrypted only after the server accepted that key,
+/// so a passphrase is asked only for a key the server would take (the
+/// `FileKeyPassphrase` prompt; a wrong passphrase is asked again).
+#[derive(Clone)]
+pub struct FileKey {
+    /// Shown in the passphrase prompt: the file name, for example `id_ed25519`.
+    pub label: String,
+    /// The private key text, possibly encrypted.
+    pub private_key: SecretString,
+    /// The public key line of the `.pub` file next to it, if any. Used when
+    /// the private key text does not carry its public key (legacy PEM keys).
+    pub public_key: Option<String>,
+    /// A passphrase remembered earlier, tried before asking.
+    pub passphrase: Option<SecretString>,
+}
+
+impl std::fmt::Debug for FileKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileKey")
+            .field("passphrase", &self.passphrase.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -169,6 +200,13 @@ pub enum Prompt {
         error: bool,
         can_save: bool,
     },
+    /// The passphrase of a [`FileKey`] the server accepted. `error`: the
+    /// previous passphrase did not open it. The answer's `save` means
+    /// "remember while the app runs" (key files have no record to save to).
+    FileKeyPassphrase {
+        key_label: String,
+        error: bool,
+    },
     /// One keyboard-interactive question (asked one at a time).
     KeyboardInteractive {
         name: String,
@@ -248,6 +286,10 @@ pub struct PromptedSecrets {
     /// A passphrase typed at a prompt that opened the key whose signature
     /// the server accepted.
     pub passphrase: Option<PromptAnswer>,
+    /// A passphrase typed at a `FileKeyPassphrase` prompt that opened the
+    /// file key at this index of [`AuthPlan::file_keys`], whose signature
+    /// the server accepted.
+    pub file_passphrase: Option<(usize, PromptAnswer)>,
 }
 
 impl std::fmt::Debug for PromptedSecrets {
@@ -255,6 +297,10 @@ impl std::fmt::Debug for PromptedSecrets {
         f.debug_struct("PromptedSecrets")
             .field("password", &self.password.is_some())
             .field("passphrase", &self.passphrase.is_some())
+            .field(
+                "file_passphrase",
+                &self.file_passphrase.as_ref().map(|(index, _)| *index),
+            )
             .finish()
     }
 }
@@ -605,14 +651,26 @@ pub struct ExecOutput {
     pub exit_status: Option<u32>,
 }
 
+/// Most bytes of channel data (stdout and stderr) a server may send on a
+/// channel before it answers the requests that set the channel up (pty,
+/// agent forwarding, shell, exec). Real servers send none. Until the shell
+/// is open nothing reads this data, and russh widens the window as data
+/// arrives, so without a cap a server could fill memory at link speed.
+const MAX_EARLY_DATA: usize = 1024 * 1024;
+/// Most messages kept while waiting for those answers (the same reason).
+const MAX_EARLY_MESSAGES: usize = 4096;
+
 /// Waits for the reply to a channel request sent with `want_reply`. Other
-/// messages that arrive meanwhile are kept in `pending`, in order.
+/// messages that arrive meanwhile are kept in `pending`, in order. More
+/// than [`MAX_EARLY_DATA`] bytes of data or [`MAX_EARLY_MESSAGES`]
+/// messages in `pending` close the channel with [`FailureKind::Protocol`].
 async fn wait_reply(
     channel: &mut russh::Channel<Msg>,
     pending: &mut VecDeque<ChannelMsg>,
     timeout: Duration,
 ) -> Result<bool, FailureKind> {
     let deadline = Instant::now() + timeout;
+    let mut data_bytes: usize = pending.iter().map(data_len).sum();
     loop {
         match tokio::time::timeout_at(deadline, channel.wait()).await {
             Err(_) => return Err(FailureKind::Timeout),
@@ -620,8 +678,24 @@ async fn wait_reply(
             Ok(Some(ChannelMsg::Success)) => return Ok(true),
             Ok(Some(ChannelMsg::Failure)) => return Ok(false),
             Ok(Some(ChannelMsg::Close)) => return Err(FailureKind::ChannelFailed),
-            Ok(Some(other)) => pending.push_back(other),
+            Ok(Some(other)) => {
+                data_bytes = data_bytes.saturating_add(data_len(&other));
+                if data_bytes > MAX_EARLY_DATA || pending.len() >= MAX_EARLY_MESSAGES {
+                    tracing::debug!("too much channel output before the reply");
+                    let _ = channel.close().await;
+                    return Err(FailureKind::Protocol);
+                }
+                pending.push_back(other);
+            }
         }
+    }
+}
+
+/// The payload size of a data message (0 for other messages).
+fn data_len(message: &ChannelMsg) -> usize {
+    match message {
+        ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => data.len(),
+        _ => 0,
     }
 }
 
@@ -705,8 +779,8 @@ impl Connection {
                     tracing::debug!("agent forwarding refused by the server");
                     core.shared.set_forwarding_requested(false);
                 }
-                Err(FailureKind::Disconnected) => {
-                    return Err(SshError::new(FailureKind::Disconnected));
+                Err(kind @ (FailureKind::Disconnected | FailureKind::Protocol)) => {
+                    return Err(SshError::new(kind));
                 }
                 Err(kind) => {
                     tracing::debug!(kind = kind.reason(), "agent forwarding not confirmed");

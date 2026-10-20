@@ -1,7 +1,8 @@
 //! System agent tests with a test agent on a temporary socket (Unix) or a
 //! uniquely named pipe (Windows): identities, unreachable agents, discovery
 //! that never hangs, and agent forwarding through the russh test server's
-//! `agent-keys` command.
+//! `agent-keys` command. No test probes the machine's real agent
+//! (`SystemAgent::discover` itself is never called here).
 
 mod support;
 
@@ -47,34 +48,62 @@ async fn identities_lists_the_agent_keys_as_openssh_lines() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unreachable_agent_is_an_error() {
-    let missing = if cfg!(windows) {
+/// A socket or pipe path where no agent listens.
+fn missing_agent_path(dir: &tempfile::TempDir) -> PathBuf {
+    if cfg!(windows) {
         PathBuf::from(format!(
             r"\\.\pipe\shellpp-no-agent-{:016x}",
             rand::random::<u64>()
         ))
     } else {
-        tempfile::tempdir()
-            .expect("dir")
-            .path()
-            .join("missing.sock")
-    };
-    let result = SystemAgent::at(AgentLocation::Path(missing))
+        dir.path()
+            .join(format!("missing-{:016x}.sock", rand::random::<u64>()))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreachable_agent_is_an_error() {
+    let dir = tempfile::tempdir().expect("dir");
+    let result = SystemAgent::at(AgentLocation::Path(missing_agent_path(&dir)))
         .identities()
         .await;
     assert!(result.is_err());
 }
 
+/// Discovery skips locations where no agent answers, in bounded time, and
+/// returns the first that does. Only the test's own agent and missing paths
+/// are probed, never the machine's real agent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn discovery_returns_in_bounded_time() {
-    // Whatever agent this machine has (or none): discovery must not hang.
-    let found = tokio::time::timeout(Duration::from_secs(20), SystemAgent::discover())
-        .await
-        .expect("discovery finishes");
-    if let Some(agent) = found {
-        assert!(agent.identities().await.is_ok());
-    }
+async fn discovery_skips_unreachable_candidates_in_bounded_time() {
+    let (keys, _) = agent_keys(1);
+    let agent = TestAgent::start(keys).await;
+    let dir = tempfile::tempdir().expect("dir");
+    let candidates = vec![
+        AgentLocation::Path(missing_agent_path(&dir)),
+        AgentLocation::Path(missing_agent_path(&dir)),
+        agent.location(),
+    ];
+    let found = tokio::time::timeout(
+        Duration::from_secs(20),
+        SystemAgent::discover_from(candidates),
+    )
+    .await
+    .expect("discovery finishes")
+    .expect("the test agent is found");
+    assert_eq!(found.location(), &agent.location());
+    assert_eq!(found.identities().await.expect("identities").len(), 1);
+
+    let none = tokio::time::timeout(
+        Duration::from_secs(20),
+        SystemAgent::discover_from(vec![AgentLocation::Path(missing_agent_path(&dir))]),
+    )
+    .await
+    .expect("discovery finishes");
+    assert!(none.is_none());
+    assert!(
+        SystemAgent::discover_from(Vec::new()).await.is_none(),
+        "no candidates, no agent"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

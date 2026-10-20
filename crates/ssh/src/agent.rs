@@ -67,7 +67,14 @@ impl SystemAgent {
     /// The first reachable agent: `SSH_AUTH_SOCK`; on Windows then the
     /// OpenSSH agent pipe, then Pageant. `None` when no agent answers.
     pub async fn discover() -> Option<SystemAgent> {
-        for location in candidate_locations() {
+        Self::discover_from(candidate_locations()).await
+    }
+
+    /// The first of `candidates` that answers an identity listing within
+    /// the probe timeout; `None` when none does. [`Self::discover`] with
+    /// the system's locations; tests pass their own agent's.
+    pub async fn discover_from(candidates: Vec<AgentLocation>) -> Option<SystemAgent> {
+        for location in candidates {
             let agent = SystemAgent::at(location);
             match tokio::time::timeout(AGENT_PROBE_TIMEOUT, agent.identities_raw()).await {
                 Ok(Ok(_)) => {

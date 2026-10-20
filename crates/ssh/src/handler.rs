@@ -385,22 +385,26 @@ impl russh::client::Handler for ClientHandler {
                     kind = crate::FailureKind::from_russh(&error).reason(),
                     "transport closed"
                 );
-                // A socket error (reset, unreachable, timed out) is a network
-                // failure; an end of stream or a protocol error is shown as
-                // "disconnected".
-                match &error {
-                    russh::Error::IO(io) if io.kind() != std::io::ErrorKind::UnexpectedEof => {
-                        match crate::transport::io_failure(io) {
-                            crate::FailureKind::Timeout => crate::FailureKind::Timeout,
-                            _ => crate::FailureKind::Network,
-                        }
-                    }
-                    _ => crate::FailureKind::Disconnected,
-                }
+                drop_kind(&error)
             }
         };
         self.shared.mark_lost_with(kind);
         Ok(())
+    }
+}
+
+/// Why a transport error ended the connection. A socket error (reset,
+/// unreachable, and an OS-level timeout on a dead link) is a network
+/// failure; an end of stream or a protocol error is shown as
+/// "disconnected". `Timeout` is left to the keepalive loop, whose reason
+/// wins because it marks the loss first: only it means "the server stopped
+/// answering keepalives", which must not show when keepalive is off.
+fn drop_kind(error: &russh::Error) -> crate::FailureKind {
+    match error {
+        russh::Error::IO(io) if io.kind() != std::io::ErrorKind::UnexpectedEof => {
+            crate::FailureKind::Network
+        }
+        _ => crate::FailureKind::Disconnected,
     }
 }
 
@@ -416,5 +420,31 @@ mod tests {
         );
         assert_eq!(sanitize_ident(b"SSH-2.0-x\x1b[31m"), "SSH-2.0-x[31m");
         assert_eq!(sanitize_ident(&[b'a'; 1000]).len(), 255);
+    }
+
+    #[test]
+    fn socket_errors_are_network_drops_never_keepalive_timeouts() {
+        use std::io::{Error, ErrorKind};
+        let io = |kind| russh::Error::IO(Error::from(kind));
+        for kind in [
+            ErrorKind::TimedOut,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::BrokenPipe,
+        ] {
+            assert_eq!(
+                drop_kind(&io(kind)),
+                crate::FailureKind::Network,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            drop_kind(&io(ErrorKind::UnexpectedEof)),
+            crate::FailureKind::Disconnected
+        );
+        assert_eq!(
+            drop_kind(&russh::Error::HUP),
+            crate::FailureKind::Disconnected
+        );
     }
 }

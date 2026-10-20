@@ -2,7 +2,8 @@
 //! once the shell starts it tries to open channels to the client
 //! (docs/security.md, section 11.4: only `auth-agent@openssh.com`, and only
 //! after forwarding was requested, may be accepted), then writes stderr and
-//! stdout and ends the shell with an exit signal.
+//! stdout and ends the shell with an exit signal. In its flooding mode it
+//! streams output instead of answering the pty request.
 
 mod support;
 
@@ -11,15 +12,20 @@ use std::sync::{Arc, Mutex};
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId, Pty, Sig};
 use secrecy::ExposeSecret;
-use shellpp_ssh::{SessionEnd, ShellEvent, ShellRequest, SystemAgent, connect};
+use shellpp_ssh::{FailureKind, SessionEnd, ShellEvent, ShellRequest, SystemAgent, connect};
 use shellpp_test_sshd::{KeyType, generate_key};
 use support::agent::TestAgent;
 use support::*;
 
 type Outcomes = Arc<Mutex<Vec<(&'static str, bool)>>>;
 
+/// Output the flooding server streams before (never) answering pty-req.
+const FLOOD_BYTES: usize = 16 * 1024 * 1024;
+
 struct Hostile {
     outcomes: Outcomes,
+    /// Stream output instead of answering the pty request.
+    flood: bool,
 }
 
 impl russh::server::Handler for Hostile {
@@ -52,7 +58,26 @@ impl russh::server::Handler for Hostile {
         _modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        session.channel_success(channel)?;
+        if !self.flood {
+            session.channel_success(channel)?;
+            return Ok(());
+        }
+        let handle = session.handle();
+        let outcomes = Arc::clone(&self.outcomes);
+        tokio::spawn(async move {
+            let chunk = vec![b'x'; 32 * 1024];
+            let mut sent = 0;
+            while sent < FLOOD_BYTES {
+                if handle.data(channel, chunk.clone()).await.is_err() {
+                    break;
+                }
+                sent += chunk.len();
+            }
+            outcomes
+                .lock()
+                .unwrap()
+                .push(("flood finished", sent >= FLOOD_BYTES));
+        });
         Ok(())
     }
 
@@ -110,6 +135,12 @@ impl russh::server::Handler for Hostile {
 
 /// Starts the hostile server; returns its address and the channel outcomes.
 async fn start_hostile() -> (std::net::SocketAddr, Outcomes, tokio::task::JoinHandle<()>) {
+    start_hostile_with(false).await
+}
+
+async fn start_hostile_with(
+    flood: bool,
+) -> (std::net::SocketAddr, Outcomes, tokio::task::JoinHandle<()>) {
     let generated = generate_key(KeyType::Ed25519, "hostile-host", None).expect("host key");
     let host_key = russh::keys::decode_secret_key(generated.private_openssh.expose_secret(), None)
         .expect("decodes");
@@ -128,6 +159,7 @@ async fn start_hostile() -> (std::net::SocketAddr, Outcomes, tokio::task::JoinHa
             while let Ok((stream, _)) = listener.accept().await {
                 let handler = Hostile {
                     outcomes: Arc::clone(&outcomes),
+                    flood,
                 };
                 let config = Arc::clone(&config);
                 tokio::spawn(async move {
@@ -214,6 +246,36 @@ async fn the_agent_channel_is_accepted_only_after_forwarding_was_requested() {
             ("x11", false),
             ("auth-agent", true),
         ]
+    );
+    connection.disconnect().await;
+    task.abort();
+}
+
+/// A server that streams output before it answers the pty request: the
+/// client keeps at most a bounded amount of it and gives up with a protocol
+/// error long before the server's flood (or the request timeout) ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn output_before_the_pty_reply_is_bounded() {
+    let (addr, outcomes, task) = start_hostile_with(true).await;
+    let connection = connect(
+        spec(addr, Some("mallory"), password_plan("anything")),
+        TestInteraction::accepting().as_dyn(),
+    )
+    .await
+    .expect("connects");
+    let started = std::time::Instant::now();
+    let error = connection
+        .open_shell(shell_request())
+        .await
+        .expect_err("no shell");
+    assert_eq!(error.kind, FailureKind::Protocol);
+    assert!(
+        started.elapsed() < SHORT,
+        "failed before the request timeout"
+    );
+    assert!(
+        !outcomes.lock().unwrap().contains(&("flood finished", true)),
+        "the client stopped reading before the whole flood arrived"
     );
     connection.disconnect().await;
     task.abort();

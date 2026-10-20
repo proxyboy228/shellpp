@@ -37,7 +37,7 @@ mod transport;
 pub use agent::{AgentLocation, SystemAgent};
 pub use client::{
     AuthMethod, AuthOutcome, AuthPlan, BoxFuture, ConnectSpec, ConnectStep, Connection, ExecOutput,
-    HostKeyDecision, HostKeyInfo, Interaction, KeyCredential, Prompt, PromptAnswer,
+    FileKey, HostKeyDecision, HostKeyInfo, Interaction, KeyCredential, Prompt, PromptAnswer,
     PromptedSecrets, SessionEnd, Shell, ShellEvent, ShellRequest, ShellWriter, connect,
 };
 pub use error::{FailureKind, SshError};
