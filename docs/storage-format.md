@@ -607,6 +607,7 @@ Exports are available at any time, also offline and for archived vaults (princip
 | `vaults[].vault_id`, `kind` | as in the `vaults` table (`personal` or `team`) |
 | `vaults[].name` | the vault name from its `vault_meta` record, for convenience |
 | `vaults[].records[]` | the decrypted payload object of each record (section 5.5) plus `record_id` and `revision`, sorted by `record_id` |
+| `settings` | the app settings by key ([data-model.md](data-model.md), section 16.1); optional (D34) |
 
 - `data` of each type, and the references between records, are defined in [data-model.md](data-model.md); the export uses exactly those shapes.
 - Included: live records of all types, conflict copies included. Excluded: tombstones, `user_keypair`, `recovery_key`, `member_pin` and `roster_entry`. Recordings are not embedded; a log entry keeps its `file_id`.
@@ -627,7 +628,7 @@ Exports are available at any time, also offline and for archived vaults (princip
 
 | Item | Value |
 |---|---|
-| Export password | chosen at export time, separate from the master password; NFC, UTF-8; at least 10 characters, like the master password (stage 0 decision) |
+| Export password | chosen at export time, separate from the master password; NFC, UTF-8; at least 8 characters, like the master password (D29, D34) |
 | `kdf` | the KDF JSON of section 6.5 with the preset of the exporting platform; a reader refuses values outside the bounds of section 6.5 |
 | `salt` | 16 random bytes |
 | Key | `export_key` = HKDF-SHA256(IKM = Argon2id(export password, `salt`, `m_kib`, `t`, `p`, output 32 bytes), salt = empty, info = `"shellpp/v1/export"`, L = 32) |

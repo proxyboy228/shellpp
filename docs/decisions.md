@@ -544,3 +544,22 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, items 3 
 **For the owner:** whether an unrecognized file should rather be saved as an "unknown" key record (the literal reading of data-model 9.1) instead of being refused with its reason.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 7.1 (generation parameters); `docs/data-model.md` 9.1 (RSA sizes).
+
+### 34. Export and import of all data in JSON (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11; the points below are the lead's choices where the plan and the specification leave the details open).
+
+**Context.** The night plan asks for the JSON export with a schema in `docs/export-format.md`, plain or encrypted with a password (Argon2id + XChaCha20-Poly1305, already defined in `docs/storage-format.md` 13.2–13.3), a warning before the plain export, and an import of our JSON that merges by id and, on a conflict, keeps both versions with a suffix on the imported one; a round trip into an empty store must give the same hosts, groups, tags, keys, identities, known hosts, forwarding rules and settings. Until now the specification said that a matching record is "already exists" and skipped (`docs/data-model.md` 18.4), and the export held records only.
+
+**Decision:**
+
+- The export holds every live record of the personal vault except the recovery key (storage-format 13.2), plus the app settings as an optional `settings` member (allowed within v1). `docs/export-format.md` gives the JSON Schemas of both files and the import rules.
+- The export password follows the master password: at least 8 characters after NFC (D29), instead of the 10 of storage-format 13.3 written before D29.
+- Import merges by record id into the personal vault. A new id is added under that id, so references between imported records stay valid. The same id with the same content (the manual order key aside), a key with the same fingerprint and a known host with the same entry are "already exists" and skipped. The same id with other content is a conflict: the local record stays as it is, the imported one is added with a new id and " (imported)" on its label or name, and references inside the import point to the copy. Existing records are never overwritten (D21).
+- Import takes groups, hosts, keys, identities and known hosts, each checked by the rules of a save; command history, the connection log and device and vault records are skipped and counted, so a backup never mixes another device's log into this one. Forwarding rules join with stage 5, which defines their record.
+- Settings from the file are applied key by key unless the user turns that off; an unknown or invalid value is left out.
+- Limits: 64 MiB per file, 500,000 records; KDF parameters outside storage-format 6.5 are refused before deriving.
+
+**For the owner:** whether importing history and the connection log should be offered as an option, and whether applying the file's settings should be on by default.
+
+**Spec impact:** the new `docs/export-format.md`; `docs/storage-format.md` 13.2 (`settings`) and 13.3 (password length); `docs/data-model.md` 18.4 (native JSON: merge by id with conflict copies).

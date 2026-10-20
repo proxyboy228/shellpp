@@ -9,6 +9,7 @@
 //! Owner: W1. Public API: see the stage 1 plan, section "crypto".
 
 mod envelope;
+mod export;
 mod hkdf;
 mod kdf;
 mod keys;
@@ -22,6 +23,10 @@ pub use envelope::{
     MAX_PAYLOAD_LEN, RECORD_AAD_LEN, open_envelope, pad, padded_len, record_aad, seal_envelope,
     unpad,
 };
+pub use export::{
+    EXPORT_AAD_LEN, EXPORT_NONCE_LEN, EXPORT_SALT_LEN, SealedExport, export_aad, open_export,
+    seal_export,
+};
 pub use hkdf::{
     derive_auth_key, derive_chain_key, derive_device_wrap_key, derive_epoch_commit,
     derive_export_key, derive_kek, derive_local_secrets_key, derive_record_key,
@@ -29,7 +34,7 @@ pub use hkdf::{
 };
 pub use kdf::{
     ALG_ARGON2ID, KDF_SALT_LEN, KDF_VERSION_1, KdfParams, MIN_PASSWORD_CHARS, argon2_salt,
-    derive_master_key, normalize_email, normalize_password, password_length_ok,
+    derive_master_key, derive_with_salt, normalize_email, normalize_password, password_length_ok,
 };
 pub use keys::Key32;
 pub use random::{ct_eq, random_array, sha256, sha256_parts};

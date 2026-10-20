@@ -1167,6 +1167,89 @@ pub struct KeyGenerateInput {
 
 redacted_debug!(KeyGenerateInput);
 
+/// Input of `data_export` (SPEC principle 4; docs/storage-format.md,
+/// sections 13.2 and 13.3; night decision D34).
+#[derive(Clone, Default, Deserialize)]
+pub struct DataExportInput {
+    /// `Some`: the encrypted export with this password (at least 8
+    /// characters, as the master password); `None`: the plain export, whose
+    /// secrets are in clear text (the UI warns first).
+    #[serde(default)]
+    pub password: Option<SecretString>,
+}
+
+redacted_debug!(DataExportInput);
+
+/// Result of `data_export`: the file content and what it holds.
+pub struct DataExport {
+    /// UTF-8 JSON, LF line endings. Holds secrets in the plain format.
+    pub text: SecretString,
+    pub encrypted: bool,
+    /// Exported records by type name.
+    pub counts: BTreeMap<String, usize>,
+    /// The suggested file name (`shellpp-export-<UTC>.json` or
+    /// `.encrypted.json`, docs/storage-format.md, section 13.1).
+    pub file_name: String,
+}
+
+impl std::fmt::Debug for DataExport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataExport")
+            .field("encrypted", &self.encrypted)
+            .field("counts", &self.counts)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Input of `data_import` (night decision D34).
+#[derive(Clone, Deserialize)]
+pub struct DataImportInput {
+    /// The file content (a plain or an encrypted export).
+    pub text: SecretString,
+    /// The password of an encrypted export.
+    #[serde(default)]
+    pub password: Option<SecretString>,
+    /// Apply the app settings the export holds (the default).
+    #[serde(default = "default_true")]
+    pub apply_settings: bool,
+}
+
+redacted_debug!(DataImportInput);
+
+fn default_true() -> bool {
+    true
+}
+
+/// One record of an import that was not imported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DataImportRefusal {
+    pub record_id: Uuid,
+    #[serde(rename = "type")]
+    pub record_type: String,
+    pub errors: Vec<crate::error::FieldError>,
+}
+
+/// Result of `data_import`: "added N, skipped M, errors K" (UI 2.5) and the
+/// details.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct DataImportSummary {
+    /// New records (under their exported ids).
+    pub added: usize,
+    /// Records that already exist with the same content (same id, or the
+    /// same key fingerprint or known host).
+    pub existing: usize,
+    /// Records whose id exists here with other content: imported as a copy
+    /// with a new id and an " (imported)" suffix; the local one stays.
+    pub conflicts: usize,
+    /// Records of types this import does not take (device records, the
+    /// connection log, history, types of later versions).
+    pub skipped: usize,
+    /// Records refused with their errors.
+    pub refused: Vec<DataImportRefusal>,
+    /// App settings applied from the export.
+    pub settings: usize,
+}
+
 /// Result of `key_import`.
 #[derive(Clone, Debug, Serialize)]
 pub struct KeyImportResult {

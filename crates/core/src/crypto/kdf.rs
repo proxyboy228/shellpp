@@ -181,6 +181,18 @@ pub fn derive_master_key(
     argon2_salt: &[u8; 32],
     platform: PlatformClass,
 ) -> Result<Key32, CryptoError> {
+    derive_with_salt(password, params, argon2_salt, platform)
+}
+
+/// [`derive_master_key`] with a salt of any length: the Argon2id output of
+/// the encrypted export, whose salt is 16 bytes (docs/storage-format.md,
+/// section 13.3). The same bounds, the same wiping.
+pub fn derive_with_salt(
+    password: &SecretString,
+    params: &KdfParams,
+    salt: &[u8],
+    platform: PlatformClass,
+) -> Result<Key32, CryptoError> {
     params.check(platform)?;
     let argon_params = Params::new(params.m_kib, params.t, params.p, Some(32))
         .map_err(|_| CryptoError::KdfParams("rejected by Argon2"))?;
@@ -194,7 +206,7 @@ pub fn derive_master_key(
     let pwd = normalize_password(password);
     let mut out = Key32::zeroed();
     argon
-        .hash_password_into_with_memory(&pwd, argon2_salt, out.expose_mut(), blocks.as_mut_slice())
+        .hash_password_into_with_memory(&pwd, salt, out.expose_mut(), blocks.as_mut_slice())
         .map_err(|_| CryptoError::Kdf)?;
     Ok(out)
 }

@@ -372,7 +372,7 @@ impl Core {
     /// Loads a lazy class on its first use in this unlocked session. Rows of
     /// older key epochs found there are re-sealed like the eager classes at
     /// unlock (best effort: they stay readable through the chain).
-    fn load_lazy(
+    pub(super) fn load_lazy(
         &self,
         parts: &mut Parts<'_>,
         class: u8,

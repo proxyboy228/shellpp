@@ -25,6 +25,7 @@
 
 mod connect;
 pub mod dto;
+mod export;
 pub mod host_api;
 pub mod keychain;
 mod known_hosts_io;
@@ -53,13 +54,13 @@ use crate::platform::{Availability, Platform};
 use crate::settings::Settings;
 use crate::store::{OpenOutcome, Store, StoreError, WrapKind};
 use dto::{
-    CoreEvent, CoreEventKind, CoreSnapshot, HistoryClearInput, HistoryClearResult,
-    HistoryEntryView, HistoryListInput, KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView,
-    KnownHostAddInput, KnownHostView, KnownHostsImportSummary, LockState, LockStatus,
-    NewNotification, Notification, NotificationList, OsSource, RecentConnection,
-    RecordDeleteResult, RecordMoveInput, RecordRef, RecordSaveInput, RecordView, RecordsQuery,
-    RecordsRef, RecoveryKeyResult, SecretCopyTarget, SecretFieldRef, SessionTarget,
-    SettingsSetInput, SettingsValues, VaultView,
+    CoreEvent, CoreEventKind, CoreSnapshot, DataExport, DataExportInput, DataImportInput,
+    DataImportSummary, HistoryClearInput, HistoryClearResult, HistoryEntryView, HistoryListInput,
+    KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView, KnownHostAddInput, KnownHostView,
+    KnownHostsImportSummary, LockState, LockStatus, NewNotification, Notification,
+    NotificationList, OsSource, RecentConnection, RecordDeleteResult, RecordMoveInput, RecordRef,
+    RecordSaveInput, RecordView, RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget,
+    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, VaultView,
 };
 use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
@@ -656,6 +657,25 @@ impl Core {
     /// stored form is OpenSSH (`crate::keys::prepare`).
     pub fn key_import(&self, input: KeyImportInput) -> Result<KeyImportResult, CoreError> {
         self.key_import_impl(input)
+    }
+
+    /// Export data (SPEC principle 4; docs/storage-format.md, sections 13.2
+    /// and 13.3; D34): every record of the personal vault but the recovery
+    /// key, and the app settings, as plain JSON (secrets in clear text; the
+    /// UI warns first) or encrypted with `password`. Slow when encrypted
+    /// (Argon2id): call it off the UI thread.
+    pub fn data_export(&self, input: DataExportInput) -> Result<DataExport, CoreError> {
+        self.data_export_impl(input)
+    }
+
+    /// Import data from a plain or encrypted export (D34): merged by record
+    /// id; a record whose id exists with other content is kept as a copy
+    /// with an " (imported)" suffix; existing records are never
+    /// overwritten. Errors: `text` (`invalid`, `too_long`, `too_many`,
+    /// `not_allowed` for refused KDF parameters), `password` (`required`,
+    /// `invalid`). Slow when encrypted: call it off the UI thread.
+    pub fn data_import(&self, input: DataImportInput) -> Result<DataImportSummary, CoreError> {
+        self.data_import_impl(input)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The

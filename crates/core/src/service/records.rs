@@ -167,7 +167,7 @@ type Container = (Option<Uuid>, RecordKind);
 /// written once with a new HLC. Data still held when the plan is dropped (a
 /// command that failed) is wiped: it may hold decrypted secrets.
 #[derive(Default)]
-struct Plan {
+pub(super) struct Plan {
     order: Vec<Uuid>,
     data: HashMap<Uuid, (RecordKind, Map<String, Value>)>,
 }
@@ -199,7 +199,7 @@ impl Plan {
             .1
     }
 
-    fn set(&mut self, kind: RecordKind, id: Uuid, data: Map<String, Value>) {
+    pub(super) fn set(&mut self, kind: RecordKind, id: Uuid, data: Map<String, Value>) {
         if self.data.insert(id, (kind, data)).is_none() {
             self.order.push(id);
         }
@@ -213,7 +213,7 @@ impl Plan {
         }
     }
 
-    fn prepare(
+    pub(super) fn prepare(
         mut self,
         parts: &mut Parts<'_>,
         now: SystemTime,
