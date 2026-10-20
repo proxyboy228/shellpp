@@ -945,7 +945,7 @@ impl Core {
         Ok(views)
     }
 
-    fn key_view_of(session: &Session, record_id: &Uuid) -> Result<KeyView, CoreError> {
+    pub(super) fn key_view_of(session: &Session, record_id: &Uuid) -> Result<KeyView, CoreError> {
         let record = session
             .index
             .get_kind(record_id, RecordKind::Key)

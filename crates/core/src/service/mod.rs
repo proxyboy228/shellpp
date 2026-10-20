@@ -32,6 +32,7 @@ mod known_hosts_io;
 /// The last session of Restore (UI 6; stage 2b).
 pub mod last_session;
 mod lock_ops;
+pub mod merge;
 mod records;
 mod session;
 mod ssh_config_io;
