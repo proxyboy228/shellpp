@@ -132,9 +132,8 @@ fn words(line: &str) -> Option<Vec<String>> {
     // spaces around it (`Port=22`, `Port = 22`).
     let mut equals_used = false;
     for c in line.chars() {
-        let keyword_separator = c == '='
-            && !equals_used
-            && (out.is_empty() || (out.len() == 1 && !started));
+        let keyword_separator =
+            c == '=' && !equals_used && (out.is_empty() || (out.len() == 1 && !started));
         if keyword_separator && !quoted {
             equals_used = true;
         }
