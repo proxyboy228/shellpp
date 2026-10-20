@@ -270,6 +270,17 @@ jobs:
       - name: Desktop known_hosts import tests (OpenSSH in Docker)
         run: cargo test --locked -p shellpp-desktop --test known_hosts -- --nocapture
 
+      # PuTTY .ppk import against keys that PuTTY's own puttygen generates in
+      # a container at test time (tests/putty; stage 3, D32).
+      - name: Build the puttygen test image
+        run: docker build --tag shellpp-test-putty:ci tests/putty
+
+      - name: Key import tests against puttygen (Docker)
+        env:
+          SHELLPP_TEST_PUTTYGEN: docker
+          SHELLPP_PUTTY_IMAGE: shellpp-test-putty:ci
+        run: cargo test --locked -p shellpp-core --test key_formats_putty -- --nocapture
+
       - name: Remove OpenSSH test containers
         if: always()
         run: bash tests/openssh/stop.sh --all
@@ -317,6 +328,16 @@ jobs:
         env:
           SHELLPP_TEST: "1"
         run: ./scripts/measure-idle.ps1
+
+      # Informational, like the idle memory: the cold start to the first
+      # frame of the main window (SPEC.md, "Performance": under 1 s).
+      - name: Cold start, release (informational)
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: pwsh
+        env:
+          SHELLPP_TEST: "1"
+        run: ./scripts/measure-startup.ps1 -Scenario first-run
 
   macos:
     name: macOS
