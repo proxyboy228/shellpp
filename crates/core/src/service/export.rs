@@ -687,19 +687,25 @@ impl Core {
                 .collect();
             // Copies made by earlier imports, by the id they were copied
             // from (`import_key` "json:<id>", data-model 18.4).
-            let copies: HashMap<(RecordKind, Uuid), Uuid> = IMPORTED
+            // A record copied twice (two versions) has two copies.
+            let mut copies: HashMap<(RecordKind, Uuid), Vec<Uuid>> = HashMap::new();
+            for record in IMPORTED
                 .iter()
                 .flat_map(|kind| parts.session.index.of_kind(*kind))
-                .filter_map(|record| {
-                    let source = record
-                        .data()
-                        .get("import_key")
-                        .and_then(Value::as_str)?
-                        .strip_prefix(JSON_IMPORT_KEY)?;
-                    let source = Uuid::parse_str(source).ok()?;
-                    Some(((record.kind, source), record.record_id))
-                })
-                .collect();
+            {
+                let source = record
+                    .data()
+                    .get("import_key")
+                    .and_then(Value::as_str)
+                    .and_then(|key| key.strip_prefix(JSON_IMPORT_KEY))
+                    .and_then(|source| Uuid::parse_str(source).ok());
+                if let Some(source) = source {
+                    copies
+                        .entry((record.kind, source))
+                        .or_default()
+                        .push(record.record_id);
+                }
+            }
             // Every match is decided before any reference is rewritten.
             // First the keys and known hosts found here under another id:
             // they stay local, and a group or host that names one of them
@@ -749,10 +755,15 @@ impl Core {
                         {
                             return None;
                         }
-                        let copy = *copies.get(&(record.kind, record.record_id))?;
-                        let held = index.get_kind(&copy, record.kind)?;
-                        same_copy(record.kind, held.data(), &record.data, &map)
-                            .then_some((at, copy))
+                        copies
+                            .get(&(record.kind, record.record_id))?
+                            .iter()
+                            .find(|copy| {
+                                index.get_kind(copy, record.kind).is_some_and(|held| {
+                                    same_copy(record.kind, held.data(), &record.data, &map)
+                                })
+                            })
+                            .map(|copy| (at, *copy))
                     })
                     .collect();
                 if found.is_empty() {
