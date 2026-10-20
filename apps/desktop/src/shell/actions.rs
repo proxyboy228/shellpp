@@ -20,6 +20,10 @@ gpui_kit::actions!(
         NewLocalTerminal,
         /// Ctrl+Alt+S: new serial connection tab.
         NewSerialConnection,
+        /// Import Data… of the app menu (D38): a Shell++ export.
+        ImportData,
+        /// Export Data… of the app menu (D38): all data as JSON.
+        ExportData,
         /// "+" of the top bar, Ctrl+T (outside a terminal) and Ctrl+Shift+T:
         /// the new tab page (UI 6).
         NewTab,

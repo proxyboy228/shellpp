@@ -92,6 +92,14 @@ pub fn entries() -> Vec<MenuEntry> {
         MenuEntry::item("menu-new-serial", text::NEW_SERIAL_CONNECTION, || {
             Box::new(NewSerialConnection)
         }),
+        Separator,
+        MenuEntry::item("menu-import-data", text::IMPORT_DATA, || {
+            Box::new(ImportData)
+        }),
+        MenuEntry::item("menu-export-data", text::EXPORT_DATA, || {
+            Box::new(ExportData)
+        }),
+        Separator,
         Submenu {
             id: "menu-edit",
             label: text::EDIT,
@@ -230,7 +238,8 @@ mod tests {
             .unwrap_or_else(|| panic!("{id} missing"))
     }
 
-    /// UI 1.4, items 1-13 in order.
+    /// UI 1.4, items 1-13 in order, with Import Data and Export Data after
+    /// the new connections (D38).
     #[test]
     fn app_menu_has_the_spec_items_in_order() {
         let entries = entries();
@@ -243,6 +252,10 @@ mod tests {
                 "—",
                 "menu-new-local-terminal",
                 "menu-new-serial",
+                "—",
+                "menu-import-data",
+                "menu-export-data",
+                "—",
                 "menu-edit",
                 "menu-view",
                 "menu-window",
@@ -267,6 +280,8 @@ mod tests {
                 "Settings",
                 "New Local Terminal",
                 "New Serial Connection",
+                "Import Data…",
+                "Export Data…",
                 "Edit",
                 "View",
                 "Window",
@@ -344,6 +359,8 @@ mod tests {
         assert!(action_of("menu-vaults").partial_eq(&ShowVaults));
         assert!(action_of("menu-sftp").partial_eq(&ShowSftp));
         assert!(action_of("menu-settings").partial_eq(&OpenSettings));
+        assert!(action_of("menu-import-data").partial_eq(&ImportData));
+        assert!(action_of("menu-export-data").partial_eq(&ExportData));
         assert!(action_of("menu-lock").partial_eq(&LockApp));
         assert!(action_of("menu-exit").partial_eq(&Exit));
     }

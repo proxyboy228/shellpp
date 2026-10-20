@@ -613,3 +613,16 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 6).
 **For the owner:** the choice of the authenticator path (WebAuthn API on Windows, CTAP2 elsewhere) before signing and generation are built.
 
 **Spec impact:** `docs/data-model.md` 9.3 already describes the record; nothing changes.
+
+### 38. Export Data and Import Data in the app menu (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11: "Export data…" and "Import data…" in the app menu, marked [decision] in the specification).
+
+**Decision:**
+
+- The app menu (UI 1.4) gets Import Data… and Export Data… after New Serial Connection, between separators (the menu's Title Case, as its other items).
+- Export Data: "Encrypt with a password" is on by default, with the password typed twice (at least 8 characters, D34). Turned off, the dialog says in `--danger` that the file holds the passwords and private keys in clear text and enables Export only after "I understand". The core builds the file off the UI thread; then the save dialog suggests the core's file name in the Documents folder; the file gets mode 0600 on Unix; a toast says how many records it holds. Cancelling the save dialog writes nothing and keeps the form.
+- Import Data: a file (typed or chosen) and "Apply the settings in the file" (on). An encrypted file asks for its password next (a wrong one is asked again); the summary lists added, already here, imported as copies, skipped, errors and settings applied.
+- New host ▸ Import keeps the "In development" placeholder until the sources dialog of UI 2.5 is built; its native JSON source will open the same import.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).

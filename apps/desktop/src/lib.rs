@@ -40,6 +40,7 @@
 extern crate gpui_kit as gpui;
 
 pub mod app;
+pub mod data_transfer;
 #[cfg(feature = "dev-tools")]
 pub mod dev;
 pub mod dirs;

@@ -45,6 +45,8 @@ pub mod menu {
     pub const SETTINGS: &str = "Settings";
     pub const NEW_LOCAL_TERMINAL: &str = "New Local Terminal";
     pub const NEW_SERIAL_CONNECTION: &str = "New Serial Connection";
+    pub const IMPORT_DATA: &str = "Import Data…";
+    pub const EXPORT_DATA: &str = "Export Data…";
     pub const EDIT: &str = "Edit";
     pub const UNDO: &str = "Undo";
     pub const REDO: &str = "Redo";

@@ -2347,6 +2347,12 @@ impl Render for Shell {
             .on_action(cx.listener(|_, _: &ReportIssue, _, cx| {
                 cx.open_url(&format!("{}/issues", env!("CARGO_PKG_REPOSITORY")));
             }))
+            .on_action(cx.listener(|this, _: &ImportData, window, cx| {
+                crate::data_transfer::open_import(this.state.clone(), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ExportData, window, cx| {
+                crate::data_transfer::open_export(this.state.clone(), window, cx);
+            }))
             .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
                 this.placeholder_toast(i18n::menu::CHECK_FOR_UPDATES, cx)
             }))
