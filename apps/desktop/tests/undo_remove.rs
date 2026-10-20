@@ -47,6 +47,9 @@ fn top_level(ui: &Ui, cx: &mut TestAppContext) -> Vec<Uuid> {
 
 /// Right-click on the card `card`, Remove, confirm in the dialog.
 fn remove_through_the_menu(ui: &Ui, cx: &mut TestAppContext, card: gpui_kit::SharedString) {
+    // The dialog animates on the real clock, so with motion on the confirm
+    // button's position depends on timing and the click can miss it.
+    ui.reduce_motion(cx);
     ui.frame(cx, |window, cx| window.right_click(card, cx));
     ui.settle(cx);
     ui.frame(cx, |window, cx| window.click(ids::REMOVE, cx));
