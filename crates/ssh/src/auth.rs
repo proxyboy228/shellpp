@@ -350,6 +350,17 @@ async fn try_key(
             return Ok(Step::Next);
         }
     };
+    // A security key (FIDO2) signs on its authenticator, which the SSH layer
+    // does not reach yet (stage 3 keeps it in the Keychain only): unusable
+    // here, the next method runs.
+    if matches!(
+        key.algorithm(),
+        Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256
+    ) {
+        tracing::debug!("security key skipped: no authenticator support yet");
+        progress.key_unusable = true;
+        return Ok(Step::Next);
+    }
     progress.offered.push(key.public_key().clone());
     let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
         tracing::debug!("rsa key skipped: the server accepts only sha-1 signatures");

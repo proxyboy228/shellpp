@@ -48,13 +48,15 @@ pub const MIN_RSA_BITS: u32 = 2048;
 pub const MAX_KDF_ROUNDS: u32 = 1024;
 
 /// Algorithm names of keys this app can use (docs/data-model.md, section
-/// 9.1; FIDO2 keys arrive in stage 3).
+/// 9.1; the security keys since stage 3).
 pub const SUPPORTED_ALGORITHMS: &[&str] = &[
     "ssh-ed25519",
     "ecdsa-sha2-nistp256",
     "ecdsa-sha2-nistp384",
     "ecdsa-sha2-nistp521",
     "ssh-rsa",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
 ];
 
 /// A parsed private key: everything the import needs, without decrypting.
@@ -119,6 +121,9 @@ fn allowed(private: &PrivateKey) -> bool {
         Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256 | EcdsaCurve::NistP384 | EcdsaCurve::NistP521,
         } => true,
+        // Security keys (FIDO2, stage 3): imported and stored; signing goes
+        // through the authenticator, which the SSH layer does not reach yet.
+        Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256 => true,
         Algorithm::Rsa { .. } => private
             .public_key()
             .key_data()
@@ -374,6 +379,20 @@ pub fn view(vault_id: Uuid, record_id: Uuid, hlc_ms: u64, data: &Map<String, Val
             .is_some_and(PrivateKey::is_encrypted),
         passphrase_saved: key::passphrase(data).is_some(),
     }
+}
+
+/// The `fido2` member of a security key record (docs/data-model.md, 9.3):
+/// `{"resident": bool}` from the key's flags (OpenSSH's `SSH_SK_RESIDENT_KEY`
+/// = 0x20); `None` for other keys.
+pub fn fido2_member(text: &str) -> Option<Value> {
+    const RESIDENT: u8 = 0x20;
+    let private = PrivateKey::from_openssh(text.as_bytes()).ok()?;
+    let flags = match private.key_data() {
+        ssh_key::private::KeypairData::SkEd25519(sk) => sk.flags(),
+        ssh_key::private::KeypairData::SkEcdsaSha2NistP256(sk) => sk.flags(),
+        _ => return None,
+    };
+    Some(serde_json::json!({"resident": flags & RESIDENT != 0}))
 }
 
 #[cfg(test)]

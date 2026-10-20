@@ -767,3 +767,46 @@ async fn at_most_four_public_keys_are_offered_before_the_password() {
     connection.disconnect().await;
     server.shutdown().await;
 }
+
+/// A security key (FIDO2) as the effective key: never offered (no
+/// authenticator support yet), the next method runs (stage 3, D32).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_security_key_is_skipped_until_authenticators_are_supported() {
+    use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData, SkEd25519};
+    use russh::keys::ssh_key::{LineEnding, PrivateKey};
+    let seed = [7u8; 32];
+    let public = russh::keys::ssh_key::public::SkEd25519::new(
+        Ed25519Keypair::from_seed(&seed).public,
+        "ssh:",
+    );
+    let sk = SkEd25519::new(public, 0x01, vec![3u8; 64]).expect("sk key");
+    let text = PrivateKey::new(KeypairData::SkEd25519(sk), "")
+        .expect("key")
+        .to_openssh(LineEnding::LF)
+        .expect("openssh")
+        .to_string();
+    let password = random_secret("pw");
+    let other = generate_key(KeyType::Ed25519, "other", None).expect("key");
+    let server = start_server(vec![UserConfig {
+        password: Some(secret(&password)),
+        authorized_keys: vec![other.public_openssh.clone()],
+        ..user("sam")
+    }])
+    .await;
+    let interaction = TestInteraction::answering(vec![support::text(&password)]);
+    let connection = connect(
+        spec(server.addr(), Some("sam"), key_plan(&text, None)),
+        interaction.as_dyn(),
+    )
+    .await
+    .expect("the prompted password works");
+    assert_eq!(connection.auth().method, AuthMethod::Password);
+    let offered = server
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, ServerEvent::Auth { method, .. } if method == "publickey"))
+        .count();
+    assert_eq!(offered, 0, "the security key is never offered");
+    connection.disconnect().await;
+    server.shutdown().await;
+}

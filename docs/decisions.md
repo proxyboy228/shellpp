@@ -597,3 +597,19 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 8).
 **For the owner:** whether 4 is right, or whether the limit should be a setting.
 
 **Spec impact:** `docs/data-model.md` 8.6.
+
+### 37. FIDO2 security keys at the format level (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 6).
+
+**Context.** The plan asks for the import of `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` keys with signing through the authenticator by the system's mechanism (WebAuthn on Windows), for generation only when a reliable library with a permissive license exists, and, without hardware tonight, tests at the format level and a manual check in the morning list.
+
+**Decision:**
+
+- Import: OpenSSH security-key private keys (application, flags and key handle, no secret scalar) are accepted and stored like other keys, with `fido2` = `{"resident": bool}` from the key's flags (OpenSSH's `SSH_SK_RESIDENT_KEY`, 0x20). The fingerprint and the type show in the Keychain.
+- Signing is not there yet: the SSH layer treats a security key as unusable and goes on with the next method (never offers it), so a host linked to one still signs in with a password or another key. The key files `~/.ssh/*_sk` stay out of the default key files, as before.
+- Generation is left out tonight: it needs the authenticator (CTAP2 over HID, or Windows `webauthn.dll`), and no crate was checked tonight for reliability and license. Candidates for the owner: Windows WebAuthn through the `windows` crate (MIT/Apache-2.0, needs `unsafe` FFI in a platform module), `ctap-hid-fido2` (MIT), libfido2 (BSD-2-Clause, a C library).
+
+**For the owner:** the choice of the authenticator path (WebAuthn API on Windows, CTAP2 elsewhere) before signing and generation are built.
+
+**Spec impact:** `docs/data-model.md` 9.3 already describes the record; nothing changes.

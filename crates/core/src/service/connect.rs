@@ -1038,12 +1038,16 @@ impl Core {
             match Self::key_by_fingerprint(parts.session, &parsed.fingerprint) {
                 None => {
                     let record_id = parts.ids.next(now);
-                    let data = WipeOnDrop::new(key::new_stored(
+                    let mut data = WipeOnDrop::new(key::new_stored(
                         &label,
                         &parsed.text,
                         &parsed.public_key,
                         save.as_ref().map(|value| value.expose_secret()),
                     ));
+                    // A security key carries its FIDO2 member (data-model 9.3).
+                    if let Some(fido2) = keys::fido2_member(&parsed.text) {
+                        data.insert("fido2".into(), fido2);
+                    }
                     self.write_record(
                         &mut parts,
                         RecordKind::Key,
