@@ -7,10 +7,10 @@
 //! A reference to a missing record counts as set, and `jump_chain: []` stops
 //! the lookup.
 //!
-//! Stage 1 note: identities do not exist yet, so the identity term of the
-//! resolution (`username = first(L.username ?? idf(L).username)` and the same
-//! for `key_id`) is not resolved; only the levels' own values are used. The
-//! identity stage adds `idf(L)` here.
+//! The identity term of the resolution (section 8.3, stage 3):
+//! `username = first(L.username ?? idf(L).username)` and the same for
+//! `key_id`, where `idf(L)` is the identity the level names
+//! ([`resolve_with`]). A level naming a missing identity adds nothing.
 
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -20,16 +20,29 @@ use crate::service::dto::{Inherited, InheritedValues};
 /// Maximum number of group levels in the lookup chain.
 pub const MAX_LEVELS: usize = 32;
 
-/// Resolves inherited values from group data objects, nearest group first.
+/// Resolves inherited values from group data objects, nearest group first,
+/// without identities.
 pub fn resolve<'a, I>(levels: I) -> InheritedValues
 where
     I: IntoIterator<Item = (Uuid, &'a Map<String, Value>)>,
+{
+    resolve_with(levels, |_| None)
+}
+
+/// [`resolve`] with the identity term: at each level its own `username` and
+/// `key_id`, else those of the identity it names (`identity` reads the
+/// identity's data by id).
+pub fn resolve_with<'a, I, F>(levels: I, identity: F) -> InheritedValues
+where
+    I: IntoIterator<Item = (Uuid, &'a Map<String, Value>)>,
+    F: Fn(&Uuid) -> Option<&'a Map<String, Value>>,
 {
     let mut out = InheritedValues::default();
     for (group_id, data) in levels.into_iter().take(MAX_LEVELS) {
         let Some(ssh) = data.get("ssh").and_then(Value::as_object) else {
             continue;
         };
+        let idf = uuid_member(ssh, "identity_id").and_then(|id| identity(&id));
         if out.port.is_none()
             && let Some(port) = ssh
                 .get("port")
@@ -47,6 +60,7 @@ where
                 .get("username")
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())
+                .or_else(|| idf.and_then(super::identity::username))
         {
             out.username = Some(Inherited {
                 value: username.to_owned(),
@@ -62,7 +76,8 @@ where
             });
         }
         if out.key_id.is_none()
-            && let Some(id) = uuid_member(ssh, "key_id")
+            && let Some(id) =
+                uuid_member(ssh, "key_id").or_else(|| idf.and_then(super::identity::key_id))
         {
             out.key_id = Some(Inherited {
                 value: id,

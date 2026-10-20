@@ -43,6 +43,7 @@ use crate::model::fields::{self, BUILTIN_THEMES};
 use crate::model::group;
 use crate::model::history_entry;
 use crate::model::host;
+use crate::model::identity;
 use crate::model::key;
 use crate::model::known_host::{self, Entry, EntryInput};
 use crate::model::text::{self, fold};
@@ -263,17 +264,31 @@ fn distinct(ids: &[Uuid]) -> Vec<Uuid> {
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
 }
 
-/// The effective key of a host: own `ssh.key_id`, else the inherited one; a
+/// The identity a host's own `ssh.identity_id` names (`idf(0)`,
+/// docs/data-model.md, section 8.3).
+fn own_identity<'a>(
+    session: &'a Session,
+    data: &Map<String, Value>,
+) -> Option<&'a Map<String, Value>> {
+    uuid_member(ssh_block(data), "identity_id")
+        .and_then(|id| session.index.get_kind(&id, RecordKind::Identity))
+        .map(|record| record.data())
+}
+
+/// The effective key of a host (data-model 8.3): own `ssh.key_id`, else its
+/// own identity's, else the inherited one (a group's or its identity's); a
 /// reference to a missing (or unusable) key counts as unset at connect time.
 fn session_key(session: &Session, data: &Map<String, Value>) -> Option<SessionKey> {
     let index = &session.index;
-    let key_id = uuid_member(ssh_block(data), "key_id").or_else(|| {
-        let tree = index.tree();
-        index
-            .inherited_for_host(&tree, data)
-            .key_id
-            .map(|key| key.value)
-    })?;
+    let key_id = uuid_member(ssh_block(data), "key_id")
+        .or_else(|| own_identity(session, data).and_then(identity::key_id))
+        .or_else(|| {
+            let tree = index.tree();
+            index
+                .inherited_for_host(&tree, data)
+                .key_id
+                .map(|key| key.value)
+        })?;
     let record = index.get_kind(&key_id, RecordKind::Key)?;
     let key_data = record.data();
     if key::source(key_data) != "stored" {
@@ -561,8 +576,24 @@ impl Core {
                 let port = port_member(ssh)
                     .or_else(|| inherited.port.as_ref().map(|port| port.value))
                     .unwrap_or(22);
-                let username =
-                    username_member(ssh).or_else(|| inherited.username.map(|name| name.value));
+                // Data-model 8.3: the host's own value, else its own
+                // identity's, else the groups' (each level with its identity).
+                let own_identity = own_identity(session, data);
+                let username = username_member(ssh)
+                    .or_else(|| own_identity.and_then(identity::username).map(str::to_owned))
+                    .or_else(|| inherited.username.map(|name| name.value));
+                // password = host.ssh.password ?? identity.password, where
+                // identity = first(identity_id).
+                let linked = own_identity.or_else(|| {
+                    inherited
+                        .identity_id
+                        .as_ref()
+                        .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
+                        .map(|record| record.data())
+                });
+                let password = host::secret_value(data, "ssh.password")
+                    .or_else(|| linked.and_then(identity::password))
+                    .map(|password| SecretString::from(password.to_owned()));
                 let os = host_os(data);
                 let os_detection_script = (defaults.os_detection_enabled && os.is_none())
                     .then(|| defaults.os_detection_script.clone());
@@ -574,8 +605,7 @@ impl Core {
                     title: host::title(data).to_owned(),
                     port,
                     username,
-                    password: host::secret_value(data, "ssh.password")
-                        .map(|password| SecretString::from(password.to_owned())),
+                    password,
                     key: session_key(session, data),
                     keepalive_s: ssh
                         .and_then(|ssh| ssh.get("keepalive_s"))

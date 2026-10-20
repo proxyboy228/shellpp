@@ -647,7 +647,7 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 7; 
 **Decision:**
 
 - The hint shows in the SSH block above the username for a saved host without an identity, when at least one other host without an identity has the same effective username (its own or a group's) and the same saved password, or the same effective username and key; a password match wins over a key match. The text names how many other hosts share them; "Create an identity" is one link.
-- The core creates the identity (label and username = the username; the password and the key copied when every host of the hint has the same) and moves every host of the hint onto it in one transaction: the identity linked, the username cleared, and the password and the key cleared only when the identity now holds them (data-model 9.4). Amended after the night review: clearing all three lost a shared key when the password matched, and each host's own password when the key matched. The open panel then shows its host as the core left it, so a later autosave writes the same values instead of undoing the move.
+- The core creates the identity (label and username = the username; the password and the key copied when every host of the hint has the same) and moves every host of the hint onto it in one transaction: the identity linked, the username cleared, and the password and the key cleared only when the identity now holds them (data-model 9.4). Amended after the night review: clearing all three lost a shared key when the password matched, and each host's own password when the key matched. The second night review found that a connection did not read identities at all (the stage 1 resolution left `idf(L)` out), so moved hosts lost their username and password: connections now resolve data-model 8.3 in full (`username` and `key` from each level or the identity it names, `password = host.ssh.password ?? identity.password`). The open panel then shows its host as the core left it, so a later autosave writes the same values instead of undoing the move.
 - Identical keys (same fingerprint) are merged by the core (data-model 18.3, `keys_merge`); since imports already match keys by fingerprint, duplicates arrive only by sync, so the Keychain's merge hint waits for stage 7.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru/`).
@@ -676,3 +676,15 @@ Status: night decision, 2026-10-21 (review of stage 3; the owner's night plan fo
 - The data folder itself is unchanged (storage-format section 1: the per-user profile ACLs apply).
 
 **Spec impact:** `docs/storage-format.md` 13.5.
+
+### 43. OpenSSH files from Export Data (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11: "export of the ssh config and the keys in the OpenSSH format into a chosen folder, with an offer to set a passphrase"; storage-format 13.4–13.5; UI 7.3).
+
+**Decision:**
+
+- Export Data has a format choice: "Shell++ data (JSON)" (D34, D38) or "OpenSSH files". No other menu item: one place to export.
+- OpenSSH files: "Include the key files" (on) and "Protect the key files with a passphrase" (on; passphrase and repeat, at least 8 characters, as the export password). The keys that already have a passphrase keep theirs. Turned off, the dialog says in `--danger` that keys without a passphrase are written in clear text and enables Export only after "I understand". Without key files no passphrase is asked.
+- Export asks for a folder; the core writes `shellpp-ssh-config` and the key files (private keys for the user only, D42). When files of the export are already in the folder, the dialog says so and writes only after "Replace" (Back returns to the form); a toast names the hosts and keys written.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).

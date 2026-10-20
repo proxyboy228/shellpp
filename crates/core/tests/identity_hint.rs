@@ -9,9 +9,12 @@ use common::{as_host, first_run, save};
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use shellpp_core::keys::generate::KeyKind;
+use shellpp_core::model::identity::PasswordChange;
+use shellpp_core::service::dto::SessionTarget;
 use shellpp_core::service::dto::{
     KeyGenerateInput, QueryScope, RecordRef, RecordType, RecordsQuery, SortMode,
 };
+use shellpp_core::service::keychain::IdentitySaveInput;
 use shellpp_core::service::merge::IdentityHintKind;
 
 #[test]
@@ -300,4 +303,131 @@ fn every_credential_the_hosts_share_moves_and_nothing_else_is_lost() {
             "its own password stays"
         );
     }
+}
+
+/// A connection reads what the identity holds (data-model 8.3): after the
+/// hint, the hosts still sign in with the username, password and key they
+/// had.
+#[test]
+fn hosts_moved_onto_an_identity_still_sign_in() {
+    let u = first_run();
+    let vault = u.vault_id;
+    let key = u
+        .core
+        .key_generate(KeyGenerateInput {
+            vault_id: vault,
+            label: "app key".into(),
+            kind: KeyKind::Ed25519,
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .unwrap()
+        .key;
+    let password = format!("pw-{}", common::random_hex());
+    let ids: Vec<_> = ["192.0.2.31", "192.0.2.32"]
+        .iter()
+        .map(|address| {
+            save(
+                &u.core,
+                vault,
+                None,
+                RecordType::Host,
+                json!({"address": address, "ssh": {"username": "app", "key_id": key.record_id.to_string()}}),
+                &[("ssh.password", Some(password.as_str()))],
+            )
+            .unwrap()
+            .record_id()
+        })
+        .collect();
+    let target = |record_id| SessionTarget::Host {
+        vault_id: vault,
+        record_id,
+    };
+    let before = u.core.session_config(&target(ids[0])).unwrap();
+    u.core
+        .identity_from_hint(RecordRef {
+            vault_id: vault,
+            record_id: ids[0],
+        })
+        .unwrap();
+    for id in &ids {
+        let config = u.core.session_config(&target(*id)).unwrap();
+        assert_eq!(config.username.as_deref(), Some("app"));
+        assert_eq!(
+            config
+                .password
+                .as_ref()
+                .map(|value| value.expose_secret().to_owned()),
+            Some(password.clone())
+        );
+        assert_eq!(
+            config.key.as_ref().map(|key| key.label.clone()),
+            before.key.as_ref().map(|key| key.label.clone())
+        );
+    }
+}
+
+/// The identity of a group is inherited with it; a host's own value wins
+/// over every identity (data-model 8.3).
+#[test]
+fn a_group_identity_supplies_its_hosts_and_own_values_win() {
+    let u = first_run();
+    let vault = u.vault_id;
+    let secret = format!("pw-{}", common::random_hex());
+    let identity = u
+        .core
+        .identity_save(IdentitySaveInput {
+            vault_id: vault,
+            record_id: None,
+            label: "ops".into(),
+            username: "ops".into(),
+            key_id: None,
+            password: PasswordChange::Set(secrecy::SecretString::from(secret.clone())),
+        })
+        .unwrap();
+    let group = save(
+        &u.core,
+        vault,
+        None,
+        RecordType::Group,
+        json!({"name": "prod", "ssh": {"identity_id": identity.record_id.to_string()}}),
+        &[],
+    )
+    .unwrap();
+    let in_group = |data: serde_json::Value, secrets: &[(&str, Option<&str>)]| {
+        let mut data = data;
+        data["group_id"] = json!(group.record_id().to_string());
+        save(&u.core, vault, None, RecordType::Host, data, secrets)
+            .unwrap()
+            .record_id()
+    };
+    let plain = in_group(json!({"address": "192.0.2.41"}), &[]);
+    let own = in_group(
+        json!({"address": "192.0.2.42", "ssh": {"username": "root"}}),
+        &[("ssh.password", Some("own password"))],
+    );
+    let config = |record_id| {
+        u.core
+            .session_config(&SessionTarget::Host {
+                vault_id: vault,
+                record_id,
+            })
+            .unwrap()
+    };
+    let inherited = config(plain);
+    assert_eq!(inherited.username.as_deref(), Some("ops"));
+    assert_eq!(
+        inherited
+            .password
+            .map(|value| value.expose_secret().to_owned()),
+        Some(secret)
+    );
+    let overridden = config(own);
+    assert_eq!(overridden.username.as_deref(), Some("root"));
+    assert_eq!(
+        overridden
+            .password
+            .map(|value| value.expose_secret().to_owned()),
+        Some("own password".to_owned())
+    );
 }

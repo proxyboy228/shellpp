@@ -262,10 +262,16 @@ impl Index {
 
     fn inherited_from(&self, tree: &Tree, first: Uuid) -> InheritedValues {
         let chain = tree.chain(first, inherit::MAX_LEVELS);
-        inherit::resolve(chain.into_iter().filter_map(|id| {
-            self.get_kind(&id, RecordKind::Group)
-                .map(|record| (id, record.data()))
-        }))
+        inherit::resolve_with(
+            chain.into_iter().filter_map(|id| {
+                self.get_kind(&id, RecordKind::Group)
+                    .map(|record| (id, record.data()))
+            }),
+            |id| {
+                self.get_kind(id, RecordKind::Identity)
+                    .map(|record| record.data())
+            },
+        )
     }
 
     fn context(&self) -> Context {
