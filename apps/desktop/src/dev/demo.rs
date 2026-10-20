@@ -150,6 +150,10 @@ const USERS: [&str; 6] = ["root", "admin", "deploy", "ubuntu", "ops", "backup"];
 const TAGS: [&str; 8] = [
     "prod", "staging", "linux", "windows", "critical", "eu", "us", "legacy",
 ];
+/// The tags of the first host (the others have one or two): with all four
+/// on and the host panel open, more chips are on than fit in the action bar
+/// (the screenshot state tag-chips shows some chips and "+N").
+pub const FIRST_HOST_TAGS: [&str; 4] = ["prod", "linux", "critical", "eu"];
 
 fn save(
     core: &Core,
@@ -240,8 +244,11 @@ pub fn seed(core: &Core) -> Result<SeedSummary, CoreError> {
         }
         data["ssh"] = ssh;
         if index % 3 == 0 {
-            let tags = [TAGS[index % TAGS.len()], TAGS[(index / 3 + 2) % TAGS.len()]];
-            let mut tags: Vec<&str> = tags.to_vec();
+            let mut tags: Vec<&str> = if index == 0 {
+                FIRST_HOST_TAGS.to_vec()
+            } else {
+                vec![TAGS[index % TAGS.len()], TAGS[(index / 3 + 2) % TAGS.len()]]
+            };
             tags.dedup();
             data["tags"] = json!(tags);
             summary.hosts_with_tags += 1;

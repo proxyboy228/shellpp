@@ -30,6 +30,9 @@
 //!   ([`check_state`]) before the capture.
 //! - Exit code 0 when every PNG was written with the expected size, 1 on any
 //!   failure; a watchdog ends a run that hangs after [`WATCHDOG`].
+//! - Smoke runs: `SHELLPP_SCREENSHOT_STATES=<name>[,<name>...]` ([`STATES_ENV`],
+//!   `scripts/ui-screens.ps1 -States`) captures only those states (their
+//!   [`ShotState::name`]s) at the sizes that have them, both themes.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -155,6 +158,10 @@ const SETTLE: Duration = Duration::from_millis(700);
 /// Device-pixel tolerance when comparing the PNG with the requested size.
 const SIZE_TOLERANCE: i64 = 2;
 
+/// Names of the only states to capture, comma-separated (smoke runs);
+/// unset or empty: every state of each size.
+pub const STATES_ENV: &str = "SHELLPP_SCREENSHOT_STATES";
+
 /// The text typed for the address states (owner's step 5.2).
 pub const QUICK_CONNECT_TEXT: &str = "root@10.0.0.5:2222";
 /// A search that matches some demo hosts (the "web" role).
@@ -163,6 +170,9 @@ pub const SEARCH_WITH_RESULTS: &str = "web";
 pub const SEARCH_WITHOUT_RESULTS: &str = "no-such-host";
 /// The tags checked in the tag filter state (the first demo host has both).
 pub const TAG_FILTER_EXAMPLE: [&str; 2] = ["prod", "linux"];
+/// The tags checked in the tag chips state: every tag of the first demo
+/// host, more than fit next to the host panel.
+pub const TAG_CHIPS_EXAMPLE: [&str; 4] = demo::FIRST_HOST_TAGS;
 
 /// The command-line options of a screenshot run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,7 +210,8 @@ pub enum ShotState {
     ListView,
     /// New host: the empty panel, the focus in Address.
     NewHost,
-    /// The toast after a quick connect ("Save host?").
+    /// A quick connect from the search bar to the SSH test server: once the
+    /// session runs, the offer to save the host ("Save host?", UI 2.1).
     QuickConnectToast,
     /// The tag filter dropdown open (UI 2.2).
     TagFilter,
@@ -213,6 +224,26 @@ pub enum ShotState {
     FirstRun,
     /// The unlock screen (UI 13.2).
     Unlock,
+    /// The first connection to the test server: the host key dialog of
+    /// UI 10.2 (TOFU) over the connection screen.
+    TerminalTofu,
+    /// An SSH session after `ls --color` and `ls -l --color` (OpenSSH; the
+    /// russh test server's shell prints its color sample instead).
+    TerminalLsColor,
+    /// `htop` in an SSH session: the alternate screen (OpenSSH; the russh
+    /// test server's `alt-screen` instead).
+    TerminalHtop,
+    /// A dropped connection: the output stays, the reason with Reconnect
+    /// and Close over it (UI 4.6; Autoreconnect off for the picture, so no
+    /// attempt replaces the overlay).
+    TerminalDrop,
+    /// A local terminal (Windows PowerShell on Windows).
+    TerminalLocal,
+    /// Four session tabs (three SSH, one local), the first one active.
+    TerminalTabs,
+    /// The test server's host key changed: the blocking warning of UI 10.2
+    /// with both fingerprints. Last: it rotates the server's host key.
+    TerminalHostKeyChanged,
 }
 
 /// Which app state a screen state is shown on.
@@ -222,13 +253,17 @@ enum Scene {
     Demo,
     /// A fresh empty profile at this lock stage, in its own window.
     Fresh(FreshStage),
+    /// The demo profile with session tabs to the SSH test server
+    /// ([`terminal`]).
+    Terminal,
 }
 
 impl ShotState {
     /// The original three states (every size but the minimum).
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
-    /// Every state, in capture order.
-    pub const ALL: [Self; 17] = [
+    /// Every state, in capture order (the terminal states last: they run
+    /// against the SSH test server, the host key change last of all).
+    pub const ALL: [Self; 24] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -240,12 +275,32 @@ impl ShotState {
         Self::Empty,
         Self::ListView,
         Self::NewHost,
-        Self::QuickConnectToast,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
         Self::FirstRun,
         Self::Unlock,
+        Self::TerminalTofu,
+        Self::TerminalLsColor,
+        Self::TerminalHtop,
+        Self::TerminalDrop,
+        Self::TerminalLocal,
+        Self::TerminalTabs,
+        Self::QuickConnectToast,
+        Self::TerminalHostKeyChanged,
+    ];
+    /// The states with sessions to the SSH test server: the terminal states
+    /// (owner's stage 2a, step 5.1) and the offer to save a quick-connect
+    /// host, which needs a session that connected.
+    pub const TERMINAL: [Self; 8] = [
+        Self::TerminalTofu,
+        Self::TerminalLsColor,
+        Self::TerminalHtop,
+        Self::TerminalDrop,
+        Self::TerminalLocal,
+        Self::TerminalTabs,
+        Self::QuickConnectToast,
+        Self::TerminalHostKeyChanged,
     ];
     /// The states at the minimum window size: the Hosts screen without and
     /// with the details panel, and the tallest lock screen.
@@ -270,6 +325,33 @@ impl ShotState {
             Self::ShowMore => "show-more",
             Self::FirstRun => "first-run",
             Self::Unlock => "unlock",
+            Self::TerminalTofu => "terminal-tofu",
+            Self::TerminalLsColor => "terminal-ls-color",
+            Self::TerminalHtop => "terminal-htop",
+            Self::TerminalDrop => "terminal-drop",
+            Self::TerminalLocal => "terminal-local",
+            Self::TerminalTabs => "terminal-tabs",
+            Self::TerminalHostKeyChanged => "terminal-host-key-changed",
+        }
+    }
+
+    /// The state named `name`: [`Self::name`], or the file label of a state
+    /// on the russh test server ([`Self::file_label`]).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|state| state.name() == name || state.file_label(false) == name)
+    }
+
+    /// The name in file names: [`Self::name`], except the two states whose
+    /// content differs on the russh test server (`real_shell` false: no
+    /// bash, no `ls`, no `htop`).
+    pub fn file_label(self, real_shell: bool) -> &'static str {
+        match self {
+            Self::TerminalLsColor if !real_shell => "terminal-colors",
+            Self::TerminalHtop if !real_shell => "terminal-alt-screen",
+            _ => self.name(),
         }
     }
 
@@ -278,6 +360,14 @@ impl ShotState {
             Self::Empty => Scene::Fresh(FreshStage::Unlocked),
             Self::FirstRun => Scene::Fresh(FreshStage::FirstRun),
             Self::Unlock => Scene::Fresh(FreshStage::Locked),
+            Self::TerminalTofu
+            | Self::TerminalLsColor
+            | Self::TerminalHtop
+            | Self::TerminalDrop
+            | Self::TerminalLocal
+            | Self::TerminalTabs
+            | Self::QuickConnectToast
+            | Self::TerminalHostKeyChanged => Scene::Terminal,
             _ => Scene::Demo,
         }
     }
@@ -296,18 +386,66 @@ pub fn states_for(size: WindowSize) -> &'static [ShotState] {
     }
 }
 
-/// `<W>x<H>-<theme>-<state>.png`.
-pub fn file_name(size: WindowSize, theme: &str, state: ShotState) -> String {
-    format!("{}-{theme}-{}.png", size.label(), state.name())
+/// The states of [`STATES_ENV`]: `None` for every state, or the listed
+/// ones (distinct, known names).
+pub fn parse_states(value: &str) -> Result<Option<Vec<ShotState>>, String> {
+    let names: Vec<&str> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let mut states = Vec::new();
+    for name in names {
+        let state = ShotState::from_name(name).ok_or_else(|| format!("unknown state {name}"))?;
+        if !states.contains(&state) {
+            states.push(state);
+        }
+    }
+    Ok(Some(states))
 }
 
-/// Every file a run writes, in capture order (size, state, theme).
+/// The states captured at `size`: [`states_for`], only those of `only`
+/// when given (in capture order).
+pub fn selected_states(size: WindowSize, only: Option<&[ShotState]>) -> Vec<ShotState> {
+    states_for(size)
+        .iter()
+        .copied()
+        .filter(|state| only.is_none_or(|only| only.contains(state)))
+        .collect()
+}
+
+/// `<W>x<H>-<theme>-<state>.png` (the terminal states as on OpenSSH).
+pub fn file_name(size: WindowSize, theme: &str, state: ShotState) -> String {
+    file_name_on(size, theme, state, true)
+}
+
+/// [`file_name`] for a run on OpenSSH (`real_shell`) or on the russh test
+/// server ([`ShotState::file_label`]).
+pub fn file_name_on(size: WindowSize, theme: &str, state: ShotState, real_shell: bool) -> String {
+    format!(
+        "{}-{theme}-{}.png",
+        size.label(),
+        state.file_label(real_shell)
+    )
+}
+
+/// Every file a run on OpenSSH writes, in capture order (size, state,
+/// theme).
 pub fn expected_files(sizes: &ShotSize) -> Vec<String> {
+    expected_files_on(sizes, true)
+}
+
+/// [`expected_files`] for a run on OpenSSH (`real_shell`) or on the russh
+/// test server.
+pub fn expected_files_on(sizes: &ShotSize, real_shell: bool) -> Vec<String> {
     let mut files = Vec::new();
     for size in sizes.sizes() {
         for state in states_for(*size) {
             for (_, theme) in THEMES {
-                files.push(file_name(*size, theme, *state));
+                files.push(file_name_on(*size, theme, *state, real_shell));
             }
         }
     }
@@ -345,6 +483,10 @@ pub enum ScreenshotError {
     },
     #[error("the run ended before all screenshots were taken")]
     Incomplete,
+    #[error("the SSH test server: {0}")]
+    TestServer(String),
+    #[error("{STATES_ENV}: {0}")]
+    States(String),
 }
 
 impl ScreenshotError {
@@ -426,6 +568,12 @@ fn start_watchdog(profile_path: PathBuf) {
 }
 
 fn run_inner(options: ScreenshotOptions) -> Outcome {
+    let only = parse_states(&std::env::var(STATES_ENV).unwrap_or_default())
+        .map_err(|error| vec![ScreenshotError::States(error)])?;
+    if let Some(only) = &only {
+        let names: Vec<&str> = only.iter().map(|state| state.name()).collect();
+        say(&format!("States: {} ({STATES_ENV})", names.join(", ")));
+    }
     std::fs::create_dir_all(&options.out_dir)
         .map_err(|error| vec![ScreenshotError::OutDir(error)])?;
     let out_dir = std::path::absolute(&options.out_dir).unwrap_or(options.out_dir.clone());
@@ -441,6 +589,18 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
     let outcome: Rc<RefCell<Option<Outcome>>> = Rc::new(RefCell::new(None));
     let outcome_in_app = outcome.clone();
     let sizes = options.size;
+    let server_json = terminal::server_json();
+    let real_shell = server_json.is_some();
+    if sizes.sizes().iter().any(|size| {
+        selected_states(*size, only.as_deref())
+            .iter()
+            .any(|state| state.scene() == Scene::Terminal)
+    }) {
+        say(&format!(
+            "Terminal states: server = {}",
+            terminal::server_label(real_shell)
+        ));
+    }
 
     gpui_kit::application()
         .with_assets(app::assets::AppAssets)
@@ -448,10 +608,27 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
             gpui_kit::init(cx);
             theme::install(Appearance::Dark, cx);
             app::root::bind_keys(cx);
+            crate::terminal::init(cx);
             let state = cx.new(|cx| AppState::new(opened, cx));
+            // The session tabs of the terminal states: never the user's
+            // ~/.ssh or agent (the test server's hosts have a password).
+            let sessions = crate::sessions::ui::install(
+                &state,
+                crate::sessions::ManagerOptions::with_keys(crate::sessions::KeySources::none()),
+                cx,
+            );
+            if !sessions {
+                complain("the session layer did not start; the terminal states will fail");
+            }
 
             let quit_state = state.clone();
             cx.on_app_quit(move |cx| {
+                // Sessions end (their connection log entries need the core)
+                // and let go of the core before it closes.
+                crate::sessions::ui::shutdown(cx);
+                if cx.has_global::<crate::sessions::ui::Sessions>() {
+                    drop(cx.remove_global::<crate::sessions::ui::Sessions>());
+                }
                 quit_state.update(cx, |state, _| state.shutdown());
                 async {}
             })
@@ -463,6 +640,10 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
                 first_group,
                 parent,
                 out_dir,
+                server_json,
+                real_shell,
+                rig: RefCell::new(None),
+                only,
             };
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let result = run.capture_all(cx, &sizes).await;
@@ -510,6 +691,16 @@ struct Run {
     /// Where the fresh profiles go (next to the demo profile).
     parent: PathBuf,
     out_dir: PathBuf,
+    /// `server.json` of the OpenSSH test server, else the russh test server
+    /// runs as a child process ([`terminal::server_json`]).
+    server_json: Option<PathBuf>,
+    /// The terminal states run on OpenSSH (bash, `ls`, `htop`).
+    real_shell: bool,
+    /// The test server and its hosts, from the first terminal state of a
+    /// window size to the end of its states.
+    rig: RefCell<Option<Rc<terminal::Rig>>>,
+    /// The only states to capture ([`STATES_ENV`]); `None`: every state.
+    only: Option<Vec<ShotState>>,
 }
 
 impl Run {
@@ -519,6 +710,10 @@ impl Run {
         let mut errors = Vec::new();
         let mut previous: Option<AnyWindowHandle> = None;
         for size in sizes.sizes().iter().copied() {
+            let states = selected_states(size, self.only.as_deref());
+            if states.is_empty() {
+                continue;
+            }
             // The next window opens before the previous one closes: on some
             // platforms closing the last window ends the app.
             let opened = open_window(cx, &self.demo, size);
@@ -537,9 +732,9 @@ impl Run {
                 errors.push(error);
                 continue;
             }
-            for state in states_for(size).iter().copied() {
+            for state in states {
                 let result = match state.scene() {
-                    Scene::Demo => {
+                    Scene::Demo | Scene::Terminal => {
                         self.capture_demo_state(cx, handle, &root, size, state)
                             .await
                     }
@@ -549,6 +744,11 @@ impl Run {
                     Ok(mut saved) => shots.append(&mut saved),
                     Err(mut failed) => errors.append(&mut failed),
                 }
+            }
+            // The session tabs close, the test server's hosts and settings
+            // go, the server stops: the next size starts from the demo data.
+            if let Err(error) = self.finish_terminal(cx, handle, &root).await {
+                errors.push(error);
             }
         }
         if let Some(previous) = previous {
@@ -572,13 +772,30 @@ impl Run {
     ) -> Outcome {
         let mut shots = Vec::new();
         let mut errors = Vec::new();
+        let terminal = state.scene() == Scene::Terminal;
+        if terminal {
+            self.start_terminal(cx).map_err(|error| vec![error])?;
+        }
         for (appearance, theme_name) in THEMES {
             set_theme(cx, handle, appearance).map_err(|error| vec![error])?;
-            let file = file_name(size, theme_name, state);
+            let file = file_name_on(size, theme_name, state, self.real_shell);
             let reached = async {
-                reach_state(cx, handle, root, &self.demo, self.first_group, state).await?;
-                settle(cx, handle).await?;
-                check_state(cx, handle, root, state)
+                if terminal {
+                    let rig = self
+                        .rig
+                        .borrow()
+                        .clone()
+                        .ok_or_else(|| ScreenshotError::state(state, "no test server"))?;
+                    terminal::set_terminal_theme(cx, &self.demo, appearance)?;
+                    reset_demo(cx, handle, root, &self.demo).await?;
+                    terminal::reach(cx, handle, root, &self.demo, &rig, state).await?;
+                    settle(cx, handle).await?;
+                    terminal::check(cx, handle, root, &rig, state)
+                } else {
+                    reach_state(cx, handle, root, &self.demo, self.first_group, state).await?;
+                    settle(cx, handle).await?;
+                    check_state(cx, handle, root, state)
+                }
             }
             .await;
             if let Err(error) = reached {
@@ -648,6 +865,34 @@ impl Run {
         .await;
         cx.update(|cx| fresh.update(cx, |fresh, _| fresh.shutdown()));
         result
+    }
+
+    /// Starts the test server and saves its hosts in the demo profile,
+    /// once per window size (the first terminal state).
+    fn start_terminal(&self, cx: &mut AsyncApp) -> Result<(), ScreenshotError> {
+        if self.rig.borrow().is_some() {
+            return Ok(());
+        }
+        let rig = terminal::Rig::start(cx, &self.demo, self.server_json.as_deref())?;
+        *self.rig.borrow_mut() = Some(Rc::new(rig));
+        Ok(())
+    }
+
+    /// After the states of a window size: closes the session tabs, removes
+    /// the test server's hosts, known hosts and settings, stops the server.
+    async fn finish_terminal(
+        &self,
+        cx: &mut AsyncApp,
+        handle: AnyWindowHandle,
+        root: &Entity<RootView>,
+    ) -> Result<(), ScreenshotError> {
+        let Some(rig) = self.rig.borrow_mut().take() else {
+            return Ok(());
+        };
+        let reset = reset_demo(cx, handle, root, &self.demo).await;
+        let finished = rig.finish(cx, &self.demo);
+        drop(rig);
+        reset.and(finished)
     }
 }
 
@@ -819,8 +1064,6 @@ pub mod ids {
     pub const UNLOCK: &str = "unlock";
     /// Host cards: `host-card-<uuid>`.
     pub const HOST_CARD_PREFIX: &str = "host-card-";
-    /// Toasts: `toast-<n>`.
-    pub const TOAST_PREFIX: &str = "toast-";
 }
 
 use ids::*;
@@ -885,20 +1128,17 @@ pub async fn reach_state(
         }
         ShotState::ListView => click(cx, handle, VIEW_LIST),
         ShotState::NewHost => click(cx, handle, NEW_HOST),
-        ShotState::QuickConnectToast => {
-            type_into(cx, handle, SEARCH, QUICK_CONNECT_TEXT)?;
-            press(cx, handle, "enter")
-        }
         ShotState::TagFilter => {
             // The dropdown open with two tags checked (they also show as
             // chips next to the button); both are on the first demo host.
-            check_example_tags(cx, handle).await?;
+            check_example_tags(cx, handle, &TAG_FILTER_EXAMPLE).await?;
             open_tag_filter(cx, handle)
         }
         ShotState::TagChips => {
-            // The same two tags, the dropdown closed, then the first match's
-            // panel: the bar narrows and the chips collapse into "+2".
-            check_example_tags(cx, handle).await?;
+            // The first demo host's four tags, the dropdown closed, then its
+            // panel: the bar narrows, the chips that fit stay and the rest
+            // collapse into "+N" (stage 2a step 0.1).
+            check_example_tags(cx, handle, &TAG_CHIPS_EXAMPLE).await?;
             press(cx, handle, "escape")?;
             settle(cx, handle).await?;
             click_first_card(cx, handle, shot_state, ClickKind::Left)
@@ -916,6 +1156,16 @@ pub async fn reach_state(
         }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
+        }
+        ShotState::TerminalTofu
+        | ShotState::TerminalLsColor
+        | ShotState::TerminalHtop
+        | ShotState::TerminalDrop
+        | ShotState::TerminalLocal
+        | ShotState::TerminalTabs
+        | ShotState::QuickConnectToast
+        | ShotState::TerminalHostKeyChanged => {
+            Err(not_reached("needs the SSH test server (terminal::reach)"))
         }
     }
 }
@@ -940,7 +1190,6 @@ pub fn check_state(
             Facts {
                 visible: |id: &str| visible(window, id),
                 cards: visible_cards(window).len(),
-                toasts: visible_with_prefix(window, TOAST_PREFIX),
                 selected: root.read(cx).state().read(cx).selection().ids().len(),
                 active_tags: screen
                     .as_ref()
@@ -973,7 +1222,6 @@ pub fn check_state(
 struct Facts<V: Fn(&str) -> bool> {
     visible: V,
     cards: usize,
-    toasts: usize,
     selected: usize,
     active_tags: usize,
     list_layout: bool,
@@ -1008,7 +1256,6 @@ impl<V: Fn(&str) -> bool> Facts<V> {
                 need(self.address_empty, "Address is not empty")?;
                 need(self.address_focused, "Address has no focus")
             }
-            ShotState::QuickConnectToast => need(self.toasts > 0, "no toast"),
             ShotState::TagFilter => {
                 need(visible(TAG_FILTER_MENU), "no tag filter dropdown")?;
                 need(
@@ -1019,18 +1266,34 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::TagChips => {
                 need(visible(HOST_PANEL), "no host panel")?;
                 need(
-                    self.active_tags == TAG_FILTER_EXAMPLE.len(),
+                    self.active_tags == TAG_CHIPS_EXAMPLE.len(),
                     "the example tags are not on",
                 )?;
                 need(!visible(TAG_FILTER_MENU), "the tag filter dropdown is open")?;
                 need(
                     visible(TAG_CHIP_MORE),
                     "the chips did not collapse into \"+N\"",
+                )?;
+                // Step 0.1: the chips that fit stay, "+N" is not alone.
+                need(
+                    TAG_CHIPS_EXAMPLE
+                        .iter()
+                        .any(|tag| visible(crate::hosts::tag_chip_id(tag).as_ref())),
+                    "no chip is shown next to \"+N\"",
                 )
             }
             ShotState::ShowMore => need(visible(HOST_MORE), "\"Show more\" is not expanded"),
             ShotState::FirstRun => need(visible(FIRST_RUN), "no first-run screen"),
             ShotState::Unlock => need(visible(UNLOCK), "no unlock screen"),
+            // Checked with their session (`terminal::check`).
+            ShotState::TerminalTofu
+            | ShotState::TerminalLsColor
+            | ShotState::TerminalHtop
+            | ShotState::TerminalDrop
+            | ShotState::TerminalLocal
+            | ShotState::TerminalTabs
+            | ShotState::QuickConnectToast
+            | ShotState::TerminalHostKeyChanged => Err("a terminal state needs its session"),
         }
     }
 }
@@ -1074,12 +1337,13 @@ fn click(cx: &mut AsyncApp, handle: AnyWindowHandle, id: &str) -> Result<(), Scr
     .map_err(|_| ScreenshotError::WindowClosed)?
 }
 
-/// Checks the example tags in the tag filter dropdown, one at a time.
+/// Checks `tags` in the tag filter dropdown, one at a time.
 async fn check_example_tags(
     cx: &mut AsyncApp,
     handle: AnyWindowHandle,
+    tags: &[&str],
 ) -> Result<(), ScreenshotError> {
-    for tag in TAG_FILTER_EXAMPLE {
+    for tag in tags.iter().copied() {
         open_tag_filter(cx, handle)?;
         settle(cx, handle).await?;
         click(cx, handle, &tag_option_id(tag))?;
@@ -1145,20 +1409,6 @@ fn visible(window: &Window, id: &str) -> bool {
     window
         .try_find(gpui::SharedString::from(id.to_owned()))
         .is_some_and(|snapshot| snapshot.visible())
-}
-
-/// The number of visible elements whose id is `prefix` and a number.
-fn visible_with_prefix(window: &Window, prefix: &str) -> usize {
-    gpui_kit::base::test_support::snapshots(window)
-        .into_iter()
-        .filter(|snapshot| snapshot.visible())
-        .filter_map(|snapshot| snapshot.path().last().map(|id| id.to_string()))
-        .filter(|id| {
-            id.strip_prefix(prefix)
-                .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
 }
 
 /// The ids of the host cards on screen, top to bottom, then left to right.
@@ -1284,6 +1534,8 @@ fn capture(
     })
     .map_err(|_| ScreenshotError::WindowClosed)?
 }
+
+mod terminal;
 
 #[cfg(test)]
 mod tests;

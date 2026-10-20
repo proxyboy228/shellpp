@@ -86,6 +86,13 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "show-more",
         "first-run",
         "unlock",
+        "terminal-tofu",
+        "terminal-ls-color",
+        "terminal-htop",
+        "terminal-drop",
+        "terminal-local",
+        "terminal-tabs",
+        "terminal-host-key-changed",
     ] {
         for theme in ["dark", "light"] {
             let name = format!("1280x800-{theme}-{state}.png");
@@ -98,9 +105,37 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(files.len(), 6 + 34 + 6);
+    assert_eq!(files.len(), 6 + 34 + 14 + 6);
     let unique: std::collections::BTreeSet<_> = files.iter().collect();
     assert_eq!(unique.len(), files.len(), "no file is written twice");
+    // On the russh test server two terminal states are named after what
+    // its shell shows instead of ls and htop.
+    let russh = expected_files_on(&FULL_SET, false);
+    assert_eq!(russh.len(), files.len());
+    for name in [
+        "1280x800-dark-terminal-colors.png",
+        "1280x800-light-terminal-alt-screen.png",
+    ] {
+        assert!(russh.contains(&name.to_owned()), "{name}");
+    }
+    assert!(
+        !russh
+            .iter()
+            .any(|name| name.contains("ls-color") || name.contains("htop"))
+    );
+    // The terminal states run last at 1280x800, the host key change last
+    // of all (it rotates the server's key).
+    let states = states_for(MAIN_SIZE);
+    assert_eq!(
+        states[states.len() - ShotState::TERMINAL.len()..],
+        ShotState::TERMINAL
+    );
+    assert_eq!(states.last(), Some(&ShotState::TerminalHostKeyChanged));
+    assert!(
+        ShotState::TERMINAL
+            .iter()
+            .all(|state| state.scene() == Scene::Terminal)
+    );
     // One size: the original three states.
     assert_eq!(
         expected_files(&ShotSize::parse("1600x900").unwrap()),
@@ -113,6 +148,40 @@ fn the_full_set_covers_every_state_in_both_themes() {
             "1600x900-light-host-panel.png",
         ]
     );
+}
+
+/// `SHELLPP_SCREENSHOT_STATES` of a smoke run: known names (also the russh
+/// file labels), in capture order per size, only at the sizes that have
+/// them.
+#[test]
+fn a_run_can_be_limited_to_some_states() {
+    assert_eq!(parse_states(""), Ok(None));
+    assert_eq!(parse_states(" , "), Ok(None));
+    assert_eq!(
+        parse_states("terminal-drop, root,terminal-drop"),
+        Ok(Some(vec![ShotState::TerminalDrop, ShotState::Root]))
+    );
+    assert_eq!(
+        parse_states("terminal-colors,terminal-alt-screen"),
+        Ok(Some(vec![
+            ShotState::TerminalLsColor,
+            ShotState::TerminalHtop
+        ]))
+    );
+    assert!(parse_states("root,no-such-state").is_err());
+    for state in ShotState::ALL {
+        assert_eq!(ShotState::from_name(state.name()), Some(state));
+    }
+
+    let only = [ShotState::TerminalDrop, ShotState::Root];
+    assert_eq!(
+        selected_states(MAIN_SIZE, Some(&only)),
+        [ShotState::Root, ShotState::TerminalDrop],
+        "capture order"
+    );
+    assert_eq!(selected_states(MIN_SIZE, Some(&only)), [ShotState::Root]);
+    assert!(selected_states(MIN_SIZE, Some(&[ShotState::TerminalDrop])).is_empty());
+    assert_eq!(selected_states(MAIN_SIZE, None), states_for(MAIN_SIZE));
 }
 
 #[test]

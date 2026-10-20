@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Screenshots of the Shell++ window (owner's stage 1, step 5.2).
+  Screenshots of the Shell++ window (owner's stage 1, step 5.2, and stage 2a,
+  step 5.1).
 
 .DESCRIPTION
   Builds shellpp with the `screenshots` feature and launches it ONCE for all
@@ -14,23 +15,49 @@
   and the light theme, saves PNGs and quits. Nothing is read from the screen:
   other windows never appear.
 
+  The terminal states (stage 2a) need an SSH test server, never a real host
+  (-Server):
+  - auto (default): OpenSSH in Docker (tests/openssh: bash with
+    `ls --color`, htop, mc), started with Git's bash and removed afterwards,
+    when a Docker daemon for Linux containers answers; else the russh test
+    server (tests/sshd), which the app starts as a child process;
+  - openssh: OpenSSH in Docker, required;
+  - russh: the russh test server.
+  The app gets the OpenSSH server's description through
+  SHELLPP_TEST_SERVER_JSON. The line "server: ..." says which one ran. The
+  session layer of the run has no key files and no agent (the test hosts
+  have a password); the local terminal state runs the default shell with
+  APPDATA, LOCALAPPDATA, TEMP and TMP in the temporary folder, so its
+  commands never reach the user's PowerShell history.
+
   States per size (src/dev/screenshots.rs, `states_for`):
   - 1920x1200: root, group, host-panel;
   - 1280x800: root, group, host-panel, context-menu, search-address
     (root@10.0.0.5:2222, Connect active), search-results, search-no-results,
     three-selected, empty, list-view, new-host, quick-connect-toast,
     tag-filter, tag-chips (two tags on and the host panel open: the chips
-    collapse into "+N"), show-more, first-run, unlock;
+    collapse into "+N"), show-more, first-run, unlock, and the terminal
+    states: terminal-ls-color (OpenSSH; terminal-colors on the russh server,
+    whose shell has no ls), terminal-htop (OpenSSH; terminal-alt-screen on
+    the russh server), terminal-tofu, terminal-host-key-changed,
+    terminal-drop, terminal-local, terminal-tabs;
   - 960x600 (the minimum window size): root, host-panel, first-run;
   - any other size: root, group, host-panel.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (46 files for the
+  -States limits a run to some states (a smoke run; the app gets them as
+  SHELLPP_SCREENSHOT_STATES): each listed state at the sizes that have it,
+  both themes. Only the PNGs of those states at the run's sizes are
+  replaced in the output folder.
+
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (60 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -NoBuild
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -States terminal-ls-color,terminal-drop
 #>
 [CmdletBinding()]
 param(
@@ -40,7 +67,12 @@ param(
     [string] $OutDir,
     # A launch that takes longer is killed and counts as a failure.
     [int] $TimeoutSeconds = 900,
-    # Use the existing debug binary.
+    # SSH test server of the terminal states.
+    [ValidateSet('auto', 'openssh', 'russh')]
+    [string] $Server = 'auto',
+    # Only these states (names as in the file names, e.g. terminal-drop).
+    [string[]] $States = @(),
+    # Use the existing debug binaries.
     [switch] $NoBuild
 )
 
@@ -51,6 +83,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\ui-screens' }
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
 $exe = Join-Path $targetDir 'debug\shellpp.exe'
+$sshdExe = Join-Path $targetDir 'debug\shellpp-test-sshd.exe'
 
 function Fail([string] $message) {
     Write-Host "ui-screens: $message" -ForegroundColor Red
@@ -68,18 +101,65 @@ function Get-PngSize([string] $path) {
     return @($width, $height)
 }
 
+# Git's bash (never WSL's bash.exe, which cannot read Windows paths).
+function Find-GitBash {
+    if ($env:SHELLPP_BASH) { return $env:SHELLPP_BASH }
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $git) { return $null }
+    $execPath = (& git --exec-path).Trim()
+    $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $execPath))
+    $bash = Join-Path $root 'bin\bash.exe'
+    if (Test-Path -LiteralPath $bash) { return $bash }
+    return $null
+}
+
+# $null when a Docker daemon for Linux containers answers, else the reason.
+function Test-DockerLinux {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) { return 'Docker is not installed' }
+    $os = & docker info --format '{{.OSType}}' 2>$null
+    if ($LASTEXITCODE -ne 0) { return 'Docker is not running (docker info failed)' }
+    if ("$os".Trim() -ne 'linux') { return "the Docker daemon runs $os containers" }
+    return $null
+}
+
+# The states of a size (src/dev/screenshots.rs, `states_for`), with the
+# terminal states named as on OpenSSH.
+$allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 'search-results',
+    'search-no-results', 'three-selected', 'empty', 'list-view', 'new-host', 'tag-filter', 'tag-chips',
+    'show-more', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
+    'terminal-drop', 'terminal-local', 'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed')
+function Get-SizeStates([string] $size) {
+    if ($size -eq '1280x800') { return $allStates }
+    if ($size -eq '960x600') { return @('root', 'host-panel', 'first-run') }
+    return @('root', 'group', 'host-panel')
+}
+# The file label of a state on the russh test server (no ls, no htop).
+$russhLabels = @{ 'terminal-ls-color' = 'terminal-colors'; 'terminal-htop' = 'terminal-alt-screen' }
+
 # Accept "-Sizes 1920x1200,1280x800" as well as separate values.
 $Sizes = @($Sizes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($size in $Sizes) {
     if ($size -notmatch '^\d{3,4}x\d{3,4}$') { Fail "bad size '$size' (expected WxH, e.g. 1920x1200)" }
 }
 if (@($Sizes | Select-Object -Unique).Count -ne $Sizes.Count) { Fail 'a size is listed twice' }
+$States = @($States | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+foreach ($state in $States) {
+    $known = $allStates + @($russhLabels.Values)
+    if ($state -notin $known) { Fail "unknown state '$state'" }
+}
+# A russh file label names the same state.
+$States = @($States | ForEach-Object {
+        $name = $_
+        $original = $russhLabels.Keys | Where-Object { $russhLabels[$_] -eq $name }
+        if ($original) { $original } else { $name }
+    } | Select-Object -Unique)
 
 Push-Location $repo
 try {
     if (-not $NoBuild) {
-        Write-Host 'ui-screens: building shellpp (features: screenshots)...'
-        & cargo build -p shellpp-desktop --features screenshots
+        Write-Host 'ui-screens: building shellpp (features: screenshots) and shellpp-test-sshd...'
+        & cargo build -p shellpp-desktop --features screenshots -p shellpp-test-sshd
         if ($LASTEXITCODE -ne 0) { Fail 'cargo build failed' }
     }
 }
@@ -87,10 +167,25 @@ finally {
     Pop-Location
 }
 if (-not (Test-Path -LiteralPath $exe)) { Fail "binary not found: $exe" }
+if (-not (Test-Path -LiteralPath $sshdExe)) { Fail "binary not found: $sshdExe" }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
-Get-ChildItem -LiteralPath $OutDir -Filter '*.png' -File | Remove-Item -Force
+if ($States.Count -gt 0) {
+    # A smoke run replaces only the PNGs of its states at its sizes.
+    foreach ($state in $States) {
+        $labels = @($state)
+        if ($russhLabels.ContainsKey($state)) { $labels += $russhLabels[$state] }
+        foreach ($label in $labels) {
+            foreach ($size in $Sizes) {
+                Get-ChildItem -LiteralPath $OutDir -Filter "$size-*-$label.png" -File | Remove-Item -Force
+            }
+        }
+    }
+}
+else {
+    Get-ChildItem -LiteralPath $OutDir -Filter '*.png' -File | Remove-Item -Force
+}
 
 $failures = @()
 $saved = @()
@@ -98,7 +193,38 @@ $saved = @()
 $dataDir = Join-Path ([System.IO.Path]::GetTempPath()) ('shellpp-ui-screens-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $dataDir | Out-Null
 $process = $null
+$bash = $null
+$opensshDir = $null
+$serverJson = $null
 try {
+    $reason = $null
+    # A run limited to states without sessions needs no test server.
+    $terminalOnly = @('terminal-tofu', 'terminal-ls-color', 'terminal-htop', 'terminal-drop', 'terminal-local',
+        'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed')
+    $needsServer = ($States.Count -eq 0) -or (@($States | Where-Object { $_ -in $terminalOnly }).Count -gt 0)
+    if (-not $needsServer) {
+        Write-Host 'ui-screens: server: none (no terminal state)'
+    }
+    elseif ($Server -ne 'russh') {
+        $reason = Test-DockerLinux
+        if (-not $reason) {
+            $bash = Find-GitBash
+            if (-not $bash) { $reason = "Git's bash was not found" }
+        }
+        if ($reason -and $Server -eq 'openssh') { Fail "OpenSSH needs Docker and Git's bash: $reason" }
+    }
+    if ($needsServer -and $Server -ne 'russh' -and -not $reason) {
+        $opensshDir = Join-Path $dataDir 'openssh'
+        New-Item -ItemType Directory -Path $opensshDir | Out-Null
+        $serverJson = (& $bash (Join-Path $repo 'tests\openssh\start.sh') $opensshDir | Select-Object -Last 1)
+        if ($LASTEXITCODE -ne 0 -or -not $serverJson) { Fail "tests/openssh/start.sh failed (exit $LASTEXITCODE)" }
+        $serverJson = $serverJson.Trim()
+        Write-Host 'ui-screens: server: OpenSSH in Docker (tests/openssh)'
+    }
+    elseif ($needsServer) {
+        $note = if ($reason) { " - $reason" } else { '' }
+        Write-Host "ui-screens: server: russh test server (tests/sshd)$note"
+    }
     $sizeList = $Sizes -join ','
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $exe
@@ -107,6 +233,20 @@ try {
     $info.WorkingDirectory = $repo
     $info.EnvironmentVariables['SHELLPP_DATA_DIR'] = $dataDir
     $info.EnvironmentVariables['SHELLPP_TEST'] = '1'
+    $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
+    if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
+    if ($serverJson) { $info.EnvironmentVariables['SHELLPP_TEST_SERVER_JSON'] = $serverJson }
+    if ($States.Count -gt 0) { $info.EnvironmentVariables['SHELLPP_SCREENSHOT_STATES'] = ($States -join ',') }
+    # The local terminal state types commands into Windows PowerShell, which
+    # keeps its history (PSReadLine) under APPDATA: they go to the temporary
+    # folder, never into the user's history.
+    foreach ($name in @('appdata', 'localappdata', 'tmp')) {
+        New-Item -ItemType Directory -Path (Join-Path $dataDir $name) | Out-Null
+    }
+    $info.EnvironmentVariables['APPDATA'] = (Join-Path $dataDir 'appdata')
+    $info.EnvironmentVariables['LOCALAPPDATA'] = (Join-Path $dataDir 'localappdata')
+    $info.EnvironmentVariables['TEMP'] = (Join-Path $dataDir 'tmp')
+    $info.EnvironmentVariables['TMP'] = (Join-Path $dataDir 'tmp')
     $info.RedirectStandardOutput = $true
     # Debug builds log every core event to stderr; only warnings, errors and
     # the tool's own messages are shown below.
@@ -140,6 +280,7 @@ try {
 }
 finally {
     if ($process -and -not $process.HasExited) { $process.Kill() }
+    if ($opensshDir) { & $bash (Join-Path $repo 'tests\openssh\stop.sh') $opensshDir }
     for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $dataDir); $attempt++) {
         Remove-Item -LiteralPath $dataDir -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $dataDir) { Start-Sleep -Milliseconds 250 }
@@ -164,14 +305,33 @@ foreach ($entry in $saved) {
     }
 }
 # One file per size, state and theme; each size has at least root and
-# host-panel in both themes.
+# host-panel in both themes, the default size every terminal state. A run
+# limited by -States has exactly its states at the sizes that have them.
+$terminalStates = @('terminal-tofu', 'terminal-host-key-changed', 'terminal-drop', 'terminal-local', 'terminal-tabs',
+    'terminal-ls-color', 'terminal-htop')
+# (PowerShell names ignore case: a `$states` here would overwrite -States.)
+$expectedCount = 0
 foreach ($size in $Sizes) {
+    if ($States.Count -gt 0) {
+        $sizeStates = @(Get-SizeStates $size | Where-Object { $_ -in $States })
+        $expectedCount += 2 * $sizeStates.Count
+    }
+    else {
+        $sizeStates = @('root', 'host-panel')
+        if ($size -eq '1280x800') { $sizeStates += $terminalStates }
+    }
     foreach ($theme in @('dark', 'light')) {
-        foreach ($state in @('root', 'host-panel')) {
-            $file = Join-Path $OutDir "$size-$theme-$state.png"
+        foreach ($state in $sizeStates) {
+            $label = $state
+            if (-not $serverJson -and $russhLabels.ContainsKey($state)) { $label = $russhLabels[$state] }
+            $file = Join-Path $OutDir "$size-$theme-$label.png"
             if (-not (Test-Path -LiteralPath $file)) { $failures += "missing $file" }
         }
     }
+}
+if ($States.Count -gt 0) {
+    if ($expectedCount -eq 0) { $failures += "no size of '$($Sizes -join ',')' has the states '$($States -join ',')'" }
+    elseif ($saved.Count -ne $expectedCount) { $failures += "$($saved.Count) screenshots saved, expected $expectedCount" }
 }
 
 if ($failures.Count -gt 0) {

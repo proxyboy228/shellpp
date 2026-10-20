@@ -44,6 +44,10 @@ Developer options (builds with the dev-tools feature):
                      data, dark and light, the screen states, then quit
   --size <WxH[,WxH]> window size(s) for --screenshots, a comma-separated
                      list of up to 8 sizes (default 1280x800)
+  --bench-sessions <N> | --bench-output | --bench-latency
+                     terminal benchmarks on a temporary demo profile against
+                     a test server (scripts/measure-terminal.ps1); options
+                     --test-server <server.json>, --theme <mode>
 
 Environment:
   SHELLPP_DATA_DIR   data directory to use instead of the permanent profile
@@ -143,6 +147,18 @@ fn print_line(line: &str) {
 }
 
 fn main() -> ExitCode {
+    // `--bench-sessions N`, `--bench-output`, `--bench-latency` (dev-tools):
+    // their own arguments and run, see `shellpp_desktop::dev::bench`.
+    #[cfg(feature = "dev-tools")]
+    {
+        let raw: Vec<String> = std::env::args_os()
+            .skip(1)
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        if let Some(code) = shellpp_desktop::dev::bench::main(&raw) {
+            return code;
+        }
+    }
     let args = match parse_args(std::env::args_os().skip(1)) {
         Ok(args) => args,
         Err(error) => {
