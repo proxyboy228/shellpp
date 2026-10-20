@@ -28,13 +28,14 @@ use std::path::{Path, PathBuf};
 use gpui::{
     App, AppContext as _, ClickEvent, Context, ElementId, Entity, FontWeight, Global,
     InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::radio::Radio;
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::SecretString;
 use shellpp_core::service::dto::{
@@ -84,6 +85,18 @@ fn home_for(path: &Path) -> PathBuf {
             dir.parent().map(Path::to_path_buf).unwrap_or_default()
         }
         _ => ::dirs::home_dir().unwrap_or_default(),
+    }
+}
+
+/// `path` with the config's home folder written as `~` (`~/.ssh/id_web`),
+/// so a key file fits on its row; other paths as they are.
+fn tilde(path: &str, home: &Path) -> String {
+    let home = home.display().to_string();
+    match path.strip_prefix(home.as_str()) {
+        Some(rest) if !home.is_empty() && (rest.starts_with('/') || rest.starts_with('\\')) => {
+            format!("~{}", rest.replace('\\', "/"))
+        }
+        _ => path.to_owned(),
     }
 }
 
@@ -161,6 +174,9 @@ pub struct ImportSourcesDialog {
     /// The passphrase field of each encrypted key file, by its path.
     passphrases: Vec<(String, Entity<InputState>)>,
     save_passphrases: bool,
+    /// The preview scrolls (with a scrollbar) when it is taller than
+    /// [`PREVIEW_HEIGHT`].
+    preview_scroll: ScrollHandle,
     task: Option<Task<()>>,
 }
 
@@ -188,6 +204,7 @@ impl ImportSourcesDialog {
             chosen: HashSet::new(),
             passphrases: Vec::new(),
             save_passphrases: false,
+            preview_scroll: ScrollHandle::new(),
             task: None,
         }
     }
@@ -555,6 +572,7 @@ impl ImportSourcesDialog {
             body = body.child(widgets::caption(strings::templates(preview.templates), cx));
         }
         if !preview.keys.is_empty() {
+            let home = home_for(Path::new(self.path.read(cx).value().as_ref()));
             let mut keys = v_flex().gap(metrics::SPACE_2);
             for key in &preview.keys {
                 let status = match &key.status {
@@ -574,7 +592,7 @@ impl ImportSourcesDialog {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(metrics::FONT_SIZE_BODY)
-                                .child(key.path.clone()),
+                                .child(tilde(&key.path, &home)),
                         )
                         .child(
                             div()
@@ -623,13 +641,21 @@ impl ImportSourcesDialog {
                 .child(section(strings::PREVIEW_PROBLEMS, cx))
                 .child(problems);
         }
-        v_flex()
-            .id("import-preview")
-            .test_support()
+        div()
+            .relative()
             .w_full()
-            .max_h(px(PREVIEW_HEIGHT))
-            .overflow_y_scroll()
-            .child(body)
+            .child(
+                v_flex()
+                    .id("import-preview")
+                    .test_support()
+                    .w_full()
+                    .max_h(px(PREVIEW_HEIGHT))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.preview_scroll)
+                    .pr(metrics::SPACE_3)
+                    .child(body),
+            )
+            .child(Scrollbar::vertical(&self.preview_scroll))
             .into_any_element()
     }
 

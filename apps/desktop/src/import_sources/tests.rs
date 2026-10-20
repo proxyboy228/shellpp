@@ -227,3 +227,19 @@ fn a_missing_file_is_reported(cx: &mut TestAppContext) {
         Step::Source
     );
 }
+
+#[test]
+fn key_paths_under_the_home_folder_are_written_with_a_tilde() {
+    let home = std::path::Path::new(if cfg!(windows) {
+        r"C:\Users\someone"
+    } else {
+        "/home/someone"
+    });
+    let sep = std::path::MAIN_SEPARATOR;
+    let inside = format!("{}{sep}.ssh/id_web", home.display());
+    assert_eq!(tilde(&inside, home), "~/.ssh/id_web");
+    // Another folder that only starts with the same text stays whole.
+    let beside = format!("{}2{sep}.ssh/id_web", home.display());
+    assert_eq!(tilde(&beside, home), beside);
+    assert_eq!(tilde("/etc/ssh/key", home), "/etc/ssh/key");
+}
