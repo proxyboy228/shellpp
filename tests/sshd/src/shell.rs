@@ -20,9 +20,10 @@
 //!
 //! Commands (first word; output lines end with `\r\n`):
 //! `echo <text>`, `exit [n]`, `read-secret`, `alt-screen`, `size`, `term`,
-//! `env <NAME>`, `agent-keys`, `lines <n>`, `bell`, `url`, `title <text>`,
-//! `unicode`, `color`, `sleep <s>`, `later <s> <text>`, `drop`; anything else
-//! prints `<cmd>: command not found`.
+//! `env <NAME>`, `agent-keys`, `lines <n>`, `seq [<first>] <last>`, `bell`,
+//! `url`, `title <text>`, `unicode`, `color`, `sleep <s>`,
+//! `later <s> <text>`, `drop`; anything else prints
+//! `<cmd>: command not found`.
 
 use std::time::Duration;
 
@@ -65,6 +66,13 @@ pub const AGENT_ERROR: &str = "agent: error";
 
 /// Largest count accepted by `lines`.
 pub const MAX_LINES: u32 = 10_000;
+
+/// Largest number accepted by `seq` (the terminal throughput benchmark of
+/// the desktop app prints `seq 1 3000000`, about 23 MB).
+pub const MAX_SEQ: u64 = 10_000_000;
+
+/// `seq` output is sent in chunks of about this many bytes.
+const SEQ_CHUNK: usize = 64 * 1024;
 
 /// Longest delay accepted by `sleep` and `later`, in seconds.
 pub const MAX_DELAY_SECS: f64 = 60.0;
@@ -276,6 +284,25 @@ impl Shell {
     fn println(&mut self, text: &str) {
         self.out(text.as_bytes());
         self.out(b"\r\n");
+    }
+
+    /// `seq`: the numbers `first..=last`, one per line like coreutils `seq`
+    /// on a PTY, in separate output chunks of about [`SEQ_CHUNK`] bytes.
+    fn seq(&mut self, first: u64, last: u64) {
+        use std::io::Write as _;
+        let mut chunk = Vec::with_capacity(SEQ_CHUNK + 32);
+        for number in first..=last {
+            let _ = write!(chunk, "{number}\r\n");
+            if chunk.len() >= SEQ_CHUNK {
+                self.actions.push(Action::Output(std::mem::replace(
+                    &mut chunk,
+                    Vec::with_capacity(SEQ_CHUNK + 32),
+                )));
+            }
+        }
+        if !chunk.is_empty() {
+            self.actions.push(Action::Output(chunk));
+        }
     }
 
     fn print_prompt(&mut self) {
@@ -520,6 +547,10 @@ impl Shell {
                 }
                 _ => self.println("lines: invalid count"),
             },
+            "seq" => match parse_seq(rest) {
+                Some((first, last)) => self.seq(first, last),
+                None => self.println("seq: invalid range"),
+            },
             "bell" => self.out(b"\x07"),
             "url" => self.println(URL_TEXT),
             "title" => self.out(format!("\x1b]0;{rest}\x07").as_bytes()),
@@ -552,6 +583,19 @@ impl Shell {
         }
         self.print_prompt();
     }
+}
+
+/// `seq` arguments: `<last>` (from 1) or `<first> <last>`, both between 1
+/// and [`MAX_SEQ`]; an empty range (`first > last`) prints nothing.
+fn parse_seq(text: &str) -> Option<(u64, u64)> {
+    let mut numbers = text.split_whitespace().map(str::parse::<u64>);
+    let (first, last) = match (numbers.next(), numbers.next(), numbers.next()) {
+        (Some(Ok(last)), None, None) => (1, last),
+        (Some(Ok(first)), Some(Ok(last)), None) => (first, last),
+        _ => return None,
+    };
+    let valid = 1..=MAX_SEQ;
+    (valid.contains(&first) && valid.contains(&last)).then_some((first, last))
 }
 
 /// Seconds (decimal allowed) between 0 and [`MAX_DELAY_SECS`].
@@ -841,6 +885,58 @@ mod tests {
             run(&mut shell, "env MISSING\r").0,
             "env MISSING\r\n\r\nalice@shellpp-test:~$ "
         );
+    }
+
+    #[test]
+    fn seq_prints_numbers_in_chunks_with_a_limit() {
+        let mut shell = started("alice");
+        assert_eq!(
+            run(&mut shell, "seq 3\r").0,
+            "seq 3\r\n1\r\n2\r\n3\r\nalice@shellpp-test:~$ "
+        );
+        assert_eq!(
+            run(&mut shell, "seq 9 11\r").0,
+            "seq 9 11\r\n9\r\n10\r\n11\r\nalice@shellpp-test:~$ "
+        );
+        assert_eq!(
+            run(&mut shell, "seq 5 4\r").0,
+            "seq 5 4\r\nalice@shellpp-test:~$ "
+        );
+        for bad in [
+            "seq\r",
+            "seq 0\r",
+            "seq x\r",
+            "seq 1 2 3\r",
+            "seq 1 10000001\r",
+        ] {
+            assert!(
+                run(&mut shell, bad).0.contains("seq: invalid range\r\n"),
+                "{bad:?}"
+            );
+        }
+        // 300,000 numbers: every one in order, in chunks of about 64 KiB.
+        let actions = shell.input(b"seq 1 300000\r");
+        let chunks: Vec<&Vec<u8>> = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Output(bytes) => Some(bytes),
+                _ => None,
+            })
+            .collect();
+        assert!(chunks.len() > 20, "{} chunks", chunks.len());
+        assert!(chunks.iter().all(|chunk| chunk.len() <= SEQ_CHUNK + 32));
+        let text: String = chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk))
+            .collect();
+        let numbers: Vec<&str> = text
+            .trim_start_matches("seq 1 300000\r\n")
+            .trim_end_matches("alice@shellpp-test:~$ ")
+            .split_terminator("\r\n")
+            .collect();
+        assert_eq!(numbers.len(), 300_000);
+        assert_eq!(numbers.first(), Some(&"1"));
+        assert_eq!(numbers.last(), Some(&"300000"));
     }
 
     #[test]

@@ -21,7 +21,8 @@
 //! Owner: S1. The public API is the S1/S2/S5/S8 contract of the stage 2 plan,
 //! section 4.1. Extensions beyond the plan: [`TestServer::freeze_connections`],
 //! [`TestServer::connection_count`], [`TestServer::host_public_key`], the
-//! `UserConfig`/`KiQuestion` constructors and the `freeze` CLI command.
+//! `UserConfig`/`KiQuestion` constructors, the `freeze` CLI command and the
+//! `seq` shell command (terminal throughput benchmark of the desktop app).
 
 mod conn;
 
