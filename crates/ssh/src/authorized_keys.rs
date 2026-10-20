@@ -106,7 +106,7 @@ pub fn command(key: &KeyLine) -> String {
          d=\"$HOME/.ssh\"; f=\"$d/authorized_keys\"; \
          mkdir -p \"$d\" || exit 10; chmod 700 \"$d\" || exit 11; \
          [ -f \"$f\" ] || : > \"$f\" || exit 12; chmod 600 \"$f\" || exit 13; \
-         if grep -qF \"{blob}\" \"$f\"; then exit {present}; fi; \
+         if grep -v \"^[[:space:]]*#\" \"$f\" | grep -qF \"{blob}\"; then exit {present}; fi; \
          if [ -s \"$f\" ] && [ -n \"$(tail -c 1 \"$f\")\" ]; then echo >> \"$f\" || exit 14; fi; \
          printf '%s\\n' \"{line}\" >> \"$f\" || exit 14",
         blob = key.blob,
@@ -177,5 +177,35 @@ mod tests {
         // The only single quotes inside are the escaped printf format.
         let inner = &command["exec sh -c '".len()..command.len() - 1];
         assert_eq!(inner.matches("'\\''").count(), 2);
+    }
+
+    /// The script itself, run by `sh` in a temporary home folder: a key
+    /// that is only in a comment is added, a key that is there is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_commented_out_copy_does_not_count_as_present() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        let file = ssh.join("authorized_keys");
+        std::fs::write(&file, format!("# ssh-ed25519 {BLOB} old\n")).unwrap();
+        let key = KeyLine::parse(&format!("ssh-ed25519 {BLOB} test")).unwrap();
+        let run = || {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(command(&key))
+                .env("HOME", home.path())
+                .status()
+                .unwrap()
+                .code()
+        };
+        assert_eq!(run(), Some(0), "added");
+        assert_eq!(run(), Some(ALREADY_PRESENT as i32), "now present");
+        let text = std::fs::read_to_string(&file).unwrap();
+        let keys = text
+            .lines()
+            .filter(|line| line.starts_with("ssh-ed25519"))
+            .count();
+        assert_eq!(keys, 1, "{text}");
     }
 }
