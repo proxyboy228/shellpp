@@ -472,3 +472,25 @@ Superseded parts of earlier decisions:
 - `docs/security.md` 5.4: the minimum length of 10 characters becomes 8.
 
 **Spec impact:** `docs/ui-behavior-spec.md`, sections 0, 1, 1.4, 2.2, 2.4, 3.1, 12.2, 12.5 and 13; `docs/design-system.md` 6; `SPEC.md`, "Default stack", "Sync and team access" (recovery key) and "Work order"; `docs/security.md`; `docs/data-model.md` 7.3 (Mosh) and 16.1 (auto-lock default); `docs/architecture.md` 3.3 (auto-lock default); `docs/storage-format.md` 2.3 and 6.3 (keychain default); the new `docs/data-format.md`, which describes the implemented on-disk format.
+
+### 30. Stage 2a: the SSH terminal
+
+Status: accepted, 2026-10-20 (owner's task for stage 2a; the points below are the lead's choices where the specification leaves the details open).
+
+**Context.** The owner split stage 2 (`SPEC.md`, "Work order") into 2a, the SSH terminal (UI 4.1, 4.3, 4.6, 4.8, 10.2, 12.4 "Terminal" and "Keepalive", 12.5), and 2b and later stages: splits, the terminal sidebar, the new tab page, Ctrl+K search, the Known Hosts screen, SFTP and port forwarding. The specification does not say how the terminal runs next to GPUI's executor, where the bundled font comes from, which keys a session can use before the Keychain screen (stage 3), how the entry points of 2b features look in the meantime, or which settings 2a shows.
+
+**Decision:**
+
+- Runtime: the session layer owns a small Tokio runtime on background threads for russh. Network I/O and terminal parsing (alacritty_terminal behind a fair mutex) never run on the UI thread; results reach GPUI through async channels, repaints are coalesced to at most one frame per display refresh, and output has flow control, so a flood such as `seq 1 3000000` neither freezes the UI nor grows memory without bound.
+- Font: JetBrains Mono (OFL-1.1) Regular, Bold, Italic and Bold Italic, TTF files taken only from the official release of JetBrains/JetBrainsMono on GitHub, embedded with `include_bytes!`, listed under "Fonts" in `THIRD_PARTY_NOTICES.md` and shipped with the OFL text.
+- Keys until stage 3: the files `~/.ssh/id_*` and the system agent (`SSH_AUTH_SOCK`, Pageant, the Windows OpenSSH agent pipe). An encrypted key asks for its passphrase in a dialog; the passphrase can be kept in memory for the rest of the app session and is never written to storage (the "Save" checkbox of UI 4.8 comes with the Keychain). The key directory and the agent are injected, so tests use a temporary directory with keys generated at run time and their own agent, never the real `~/.ssh` or agent.
+- Entry points of 2b and later features (menu items, the "+" new-tab button) are shown disabled (`docs/design-system.md` 6) and do nothing, instead of being hidden or opening a placeholder. The "In development" placeholders of the sidebar sections and the SFTP tab stay (D28). From a session tab, a new local terminal is opened from the app menu until the "+" button works (UI 12.5).
+- Settings → Terminal shows only the "Terminal" block with Autoreconnect (on), Copy on select, Bell sound (off), Bright colors for bold text and the TERM type (`xterm-256color`); the "Font" block (the bundled JetBrains Mono and the installed monospace fonts, size 14 with −/+); the default terminal theme (Graphite or Paper); and "Keepalive" (30 s, 0 = off). The other items and blocks of UI 12.4 stay hidden until their stages.
+
+Superseded parts of earlier decisions and documents:
+
+- D3 and D28: the menu items and buttons of 2b features are shown disabled instead of hidden.
+- `SPEC.md`, "Work order", stage 2: "autoreconnect, keepalive, and TERM are stored without a settings screen".
+- `docs/design-system.md` 5: "Stage 0 does not bundle Inter and JetBrains Mono yet", as far as JetBrains Mono goes.
+
+**Spec impact:** `SPEC.md`, "Work order"; `docs/ui-behavior-spec.md`, section 0; `docs/design-system.md` 5.

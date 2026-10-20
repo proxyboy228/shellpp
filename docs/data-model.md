@@ -963,6 +963,9 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `view.<screen>.layout` | enum `grid`, `list` | `grid` | 2.2, 7.1, 8.1, 9.1, 10.1 | |
 | `view.<screen>.sort` | enum `manual`, `name`, `created`, `modified` | `manual` on Hosts, else `name` | 2.2, 7.1 | D23 |
 | `view.details_panel_width` | int 320–560 | 380 | 1.3 | design-system §6 |
+| `view.hosts.column_width.name` | int 64–2000 (px) | 220 | 2.3 (list layout) | owner's stage 2a step 0.4 |
+| `view.hosts.column_width.address` | int 64–2000 (px) | 200 | 2.3 (list layout) | owner's stage 2a step 0.4 |
+| `view.hosts.column_width.user` | int 64–2000 (px) | 120 | 2.3 (list layout) | owner's stage 2a step 0.4 |
 | `hints.dismissed` | list of hint ids | `[]` | 9.3 | |
 
 - `<screen>` is `hosts`, `keychain`, `forwarding`, `snippets` or `known_hosts`.

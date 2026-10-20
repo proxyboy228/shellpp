@@ -306,9 +306,11 @@ sidebar sections are always shown, and one whose screen is not implemented yet
 opens an "In development" placeholder. D29 adds two more: every field of the
 host panel (UI spec, 3.1, including Mosh and Add Telnet) is shown and its value
 is saved before the feature works in sessions, and "Restore from sync" on the
-unlock screen is shown disabled until sync exists. The UI tests of a feature are
-written in the stage that implements it, and every stage report lists what is
-still hidden or shown as a placeholder. [decision]
+unlock screen is shown disabled until sync exists. D30 adds one for stage 2a:
+menu items and buttons that lead to features of stage 2b and later are shown
+disabled. The UI tests of a feature are written in the stage that implements
+it, and every stage report lists what is still hidden or shown as a
+placeholder. [decision]
 
 Stages 0–2 were first built on Tauri + React; their UI is rebuilt on GPUI Kit
 (`docs/decisions.md`, 27). [decision]
@@ -326,8 +328,9 @@ Stages 0–2 were first built on Tauri + React; their UI is rebuilt on GPUI Kit
    tabs, splits, themes, terminal sidebar, new tab page
    (sections 4, 6, 10). Also: local terminal, system ssh-agent / Pageant,
    agent forwarding, OS detection with the default script, and a short path
-   for adding a key in the host panel; autoreconnect, keepalive, and TERM are
-   stored without a settings screen. [decision]
+   for adding a key in the host panel. The stage has two parts: 2a, the SSH
+   terminal, which also shows the Terminal section of the settings with the
+   blocks listed in `docs/decisions.md`, 30; and 2b, the rest. [decision]
 3. Keychain, import (the dialog with all formats from the "Import" section),
    the built-in agent, export to JSON and ssh config (section 7). [decision]
 4. SFTP (section 5).

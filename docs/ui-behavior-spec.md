@@ -24,6 +24,10 @@
   Two more exceptions (D29): every field of the host panel (3.1) is shown and its value is
   saved before the feature works in sessions, and "Restore from sync" (13.2) is shown
   disabled until sync exists.
+  Stage 2a adds one more (D30): menu items and buttons that lead to features of stage 2b
+  and later (splits, the terminal sidebar, the new tab page and its "+" button, Ctrl+K
+  search, the Known Hosts screen, SFTP and port forwarding) are shown disabled and do
+  nothing. The sidebar sections and the SFTP tab keep their placeholders.
 - The interface is in English. Interface strings in this document define the meaning; the final
   texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
@@ -52,6 +56,11 @@
        theme are not used for it. [decision]
      - On the right side of the tab, a session type icon: terminal or SFTP. An SFTP session
        tab is opened by "Connect via SFTP" (see 5.1). [decision]
+     - Tabs that do not fit [decision]: session tabs shrink down to a minimum width, and
+       beyond that the row of session tabs scrolls sideways (the mouse wheel over it,
+       vertical or horizontal). The active tab always scrolls fully into view when it
+       becomes active (a new session, a click, Ctrl+1…9, Alt+←/→, the neighbor rule of
+       4.6). The "+" button stays right after the row.
   5. "+" button: a new tab with the start page (see section 6).
 - On the right:
   - update button (visible only when a check has found an update, see 12.7);
@@ -65,6 +74,13 @@
 - Sections from top to bottom: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
   **Known Hosts**, **Logs**.
 - The active section is highlighted. Each section opens its own screen in the main area.
+- Narrow window [decision]: when the main area would be narrower than 600 px next to the
+  full sidebar (for example, a small window with the details panel open), the sidebar
+  collapses into a 56 px strip with only the section icons. Hovering an icon shows the
+  section name in a tooltip; the active section stays highlighted, and a click opens the
+  section as before. When the main area would again be at least 600 px wide next to the
+  full sidebar (a wider window or a closed details panel), the sidebar expands back. The
+  width is always measured as if the sidebar were full, so it does not flicker at 600 px.
 
 ### 1.3 Details panel
 
@@ -142,6 +158,12 @@ Additionally:
 - If the string has no username and the host does not set one, the username is asked for
   while connecting (see 4.8). [decision]
 - While the string is not an address, the Connect button is disabled.
+- If the string is recognized as an address and no group or host matches the search, the
+  content area shows "Press Enter to connect to <address>" instead of "No hosts match the
+  search", with a "Save as host" button. <address> is the recognized address in the
+  `user@host:port` form, without the parts the string does not give. Enter or Connect
+  connects as described above; "Save as host" opens the details panel with a new host whose
+  address, port and username come from the string (1.3). [decision]
 - After a successful quick connect, an unobtrusive offer to save the host is shown. [decision]
 
 ### 2.2 Action bar
@@ -208,6 +230,20 @@ On the right:
     then the group or tags;
   - long text is truncated with an ellipsis.
 - The grid is adaptive: the number of columns depends on the width of the main area.
+- List view (the view toggle, 2.2) [decision]:
+  - hosts are table rows with the columns Name | Address | User | Tags under a header row.
+    Name is the OS icon and the title (as on the card), Address is the host's address, User
+    is the username (empty when none is set), Tags are the host's tags, comma-separated.
+    A host without tags shows its group in the Tags column instead: the folder icon and
+    the group name (empty for a host without tags at the top level). The card subtitle is
+    not repeated in a row;
+  - groups stay above the hosts as rows with the icon, the name and the number of hosts;
+  - column widths change by dragging the border between two column headers. Each column
+    keeps a minimum width that fits its header, long text is truncated with an ellipsis,
+    and the chosen widths are saved in the settings and kept after a restart;
+  - selection, double click, Enter, the context menu, dragging and the keyboard arrows
+    work on rows as on cards. A click on a header does not sort; sorting is in the sort
+    menu (2.2).
 - The selected card is visually highlighted.
 - A card of an object with an unresolved sync conflict shows a conflict badge
   (see 13.6). [decision]
@@ -226,6 +262,10 @@ On the right:
 - Empty state (no hosts): a short explanation and the buttons "Create host"
   and "Import from ~/.ssh/config". The second one opens the import dialog (2.5) with the
   `~/.ssh/config` source selected. [decision]
+  - "Create host" is the screen's primary button, in the accent style. While the details
+    panel (a host or group panel, 1.3) is open, the primary action is in the panel, so
+    "Create host" takes the neutral style: a screen has one accent button
+    (`docs/design-system.md`, 1). [decision]
 
 ### 2.4 Host card actions
 
