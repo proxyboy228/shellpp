@@ -450,7 +450,7 @@ Allowed: event names, error codes, record, vault and device ids, counts, duratio
 
 Enforcement (stage 0 decision):
 
-- Secret values live in `secrecy` types whose `Debug` prints a placeholder; types that carry host data implement `Debug` without addresses or usernames.
+- Secret values live in `secrecy` types whose `Debug` prints a placeholder; types that carry host data implement `Debug` without addresses or usernames; database rows that carry envelopes or key wraps print their lengths, not their bytes.
 - Log calls use explicit structured fields; whole records, requests or responses are never formatted into a log line.
 - The canary test of section 7.
 - Logs stay on the device: no upload and no telemetry. "Report a Bug" opens the issue page without attaching logs or system data.
@@ -499,6 +499,7 @@ Rules:
 ### 9.5 Memory and the webview
 
 - Rust holds secrets in `zeroize` / `secrecy` types and wipes them on lock.
+- Intermediate buffers are wiped before they are freed as well: the Argon2id working memory (its last blocks give `master_key` without the password), the normalized copies of passwords and private keys, and the hash of a value copied to the clipboard (section 9.4). Buffers that grow are allocated once at their final size, because a reallocation leaves an unwiped copy behind. (stage 2 review, storage)
 - Secret fields (passwords, passphrases, private keys, the recovery key) are not part of the data sent to the webview. The webview gets a "set / not set" flag, and for keys the type and SHA256 fingerprint (UI 7.3). The plaintext is sent only for an explicit reveal: the password show button (UI 3.1), the private key show button (UI 7.3), the recovery key view after password re-entry (UI 13.4). Leaving the panel drops it again (UI 7.3). (stage 0 decision)
 - New secret values typed in the webview are sent to the core and are not kept in frontend state after saving. (stage 0 decision)
 - JavaScript strings cannot be wiped; whatever was revealed stays in webview memory until it is garbage-collected (RR11).
@@ -640,6 +641,7 @@ S11 algorithm (stage 0 decision; thresholds are tuned in stage 2 against the tes
 - Remote file names are untrusted. Before a downloaded file is written, names that contain `/`, `\`, NUL or other control characters, names `.` and `..`, and absolute paths are rejected; on Windows, names the file system does not allow are handled as in [storage-format.md](storage-format.md), "Temporary files". Recursive transfers do not follow symbolic links; links are skipped and reported. Names are displayed with control and bidirectional override characters made visible. (stage 0 decision)
 - "Open" on a file type the OS would execute (executables, scripts, shortcuts, installers, for example `.exe`, `.bat`, `.cmd`, `.ps1`, `.lnk`, `.msi`, `.app`, `.command`, `.sh`, `.desktop`, `.AppImage`) asks for confirmation naming the type. Where the platform supports it, temporary files get its downloaded-file mark (Windows Mark of the Web, macOS quarantine attribute), so OS checks apply. (stage 0 decision)
 - OS detection runs in a separate exec channel and is not recorded (UI 12.4); its output is mapped to a fixed set of OS identifiers, anything else shows the generic icon. (stage 0 decision for the mapping)
+- Channel data that arrives before the server answers the requests that set up a channel (pty, agent forwarding, shell, exec) is kept only up to 1 MiB (and 4096 messages); beyond that the channel is closed and the attempt fails as a protocol error. Real servers send nothing there, and nothing reads it yet, so without the cap a server could fill memory before the terminal's flow control starts. (stage 2a review)
 - Terminal output is handled by section 12; imported history by section 10.3.
 
 ## 12. Terminal escape sequences
@@ -655,6 +657,7 @@ Terminal output from any host is untrusted. xterm.js renders it in its own rende
 | Reports and window operations (title report, window manipulation) | the reply is injected as input | xterm.js `windowOptions` stay disabled; title reporting is never enabled (stage 0 decision) |
 | Bracketed paste | pasted text containing `ESC[201~` ends paste mode early and runs the rest | `ESC[200~`, `ESC[201~`, ESC and other control characters except tab, CR and LF are removed from pasted text and inserted snippets; multi-line paste needs confirmation (SPEC "Terminal") (stage 0 decision for the filter) |
 | Images (Sixel and similar) | parser attack surface | not supported: no image addon |
+| Output that becomes emulator state (an OSC string without an end, endless combining marks on one cell) | memory grows at link speed until the app runs out of it; every frame gets slower | the queue in front of the parser is bounded (flow control); an OSC string keeps at most 4 KiB of payload and the rest is dropped up to its terminator; a cell keeps at most 16 zero-width characters (`apps/desktop/src/terminal/limits.rs`) (stage 2a review) |
 | History capture | escape codes stored as commands | removed (section 10.1, UI 4.2) |
 | Keyword highlighting | slow user-defined regular expressions | display only and off in the alternate screen (UI 12.4); rules come only from the user's own vault |
 
