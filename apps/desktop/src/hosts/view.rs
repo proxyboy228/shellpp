@@ -344,13 +344,8 @@ impl HostsScreen {
                     .item(
                         PopupMenuItem::element(|_, cx| menu_text("import", strings::IMPORT, cx))
                             .on_click(move |_, window, cx| {
-                                let _ = import.update(cx, |_, cx| {
-                                    super::dialogs::open_placeholder(
-                                        "import-dialog",
-                                        strings::IMPORT_TITLE,
-                                        window,
-                                        cx,
-                                    )
+                                let _ = import.update(cx, |screen, cx| {
+                                    crate::import_sources::open(screen.state.clone(), window, cx);
                                 });
                             }),
                     )
@@ -1218,13 +1213,8 @@ impl HostsScreen {
                         .child(
                             ControlButton::new("import-ssh-config", ControlKind::Neutral)
                                 .label(strings::IMPORT_SSH_CONFIG)
-                                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
-                                    super::dialogs::open_placeholder(
-                                        "import-dialog",
-                                        strings::IMPORT_TITLE,
-                                        window,
-                                        cx,
-                                    )
+                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    crate::import_sources::open(this.state.clone(), window, cx);
                                 })),
                         ),
                 )

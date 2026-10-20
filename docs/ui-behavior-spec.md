@@ -367,6 +367,13 @@ On the right:
 - `~/.ssh/config`: keys referenced by `IdentityFile` are imported into the Keychain. An
   encrypted key asks for its passphrase (as in 7.3).
 - known_hosts: hashed entries and markers are handled as described in 10.1.
+- Until all sources exist (D39): PuTTY sessions and CSV are shown disabled; the native JSON
+  source goes on in Import Data (1.4, D38) and known_hosts in the import of the Known Hosts
+  screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
+  hosts are checked), its status, the reason when it is not imported (ProxyCommand) and the
+  options that are not imported; then the key files with their status and, for an encrypted
+  one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
+  not be read. [decision]
 
 ### 2.6 Move or copy to a vault [decision]
 

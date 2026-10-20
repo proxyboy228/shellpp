@@ -1228,10 +1228,10 @@ fn empty_state_and_action_bar(cx: &mut TestAppContext) {
     let kinds: Vec<SessionKind> = ui.sessions().iter().map(|session| session.kind).collect();
     assert_eq!(kinds, vec![SessionKind::Terminal, SessionKind::Serial]);
 
-    // Import (empty state) opens the placeholder dialog.
+    // Import (empty state) opens the import dialog (UI 2.5).
     ui.frame(cx, |window, cx| window.click("import-ssh-config", cx));
     assert!(ui.visible(cx, "import-dialog"));
-    ui.frame(cx, |window, cx| window.click("placeholder-close", cx));
+    ui.frame(cx, |window, cx| window.click("import-cancel", cx));
     assert!(!ui.visible(cx, "import-dialog"));
 
     // New host ▸ New Group.

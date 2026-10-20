@@ -623,6 +623,19 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11:
 - The app menu (UI 1.4) gets Import Data… and Export Data… after New Serial Connection, between separators (the menu's Title Case, as its other items).
 - Export Data: "Encrypt with a password" is on by default, with the password typed twice (at least 8 characters, D34). Turned off, the dialog says in `--danger` that the file holds the passwords and private keys in clear text and enables Export only after "I understand". The core builds the file off the UI thread; then the save dialog suggests the core's file name in the Documents folder; the file gets mode 0600 on Unix; a toast says how many records it holds. Cancelling the save dialog writes nothing and keeps the form.
 - Import Data: a file (typed or chosen) and "Apply the settings in the file" (on). An encrypted file asks for its password next (a wrong one is asked again); the summary lists added, already here, imported as copies, skipped, errors and settings applied.
-- New host ▸ Import keeps the "In development" placeholder until the sources dialog of UI 2.5 is built; its native JSON source will open the same import.
+- New host ▸ Import opens the import dialog of UI 2.5 (D39), whose Shell++ export source goes on in the same Import Data.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).
+
+### 39. The import dialog of the Hosts screen (night)
+
+Status: night decision, 2026-10-21 (stage 3, the import dialog of UI 2.5 over the core's `~/.ssh/config` import, D35).
+
+**Decision:**
+
+- New host ▸ Import and the empty state's "Import from ~/.ssh/config" open the import dialog instead of the "In development" placeholder. Step 1 lists the sources: the OpenSSH config (selected), a Shell++ export, known_hosts, PuTTY sessions (Windows only) and CSV; the last two are shown disabled with "Arrives in a later version" (D30 rule).
+- A Shell++ export goes on in Import Data (D38); known_hosts goes on in the import of the Known Hosts screen (its File step and summary, D31). Both close the sources dialog first.
+- `~/.ssh/config`: the file step suggests `~/.ssh/config` (tests and the demo set their own file; a test run never reads the real one); the preview, read off the UI thread, lists each host with a checkbox (new hosts checked; existing and refused ones disabled), its status, the reason of a refusal and the options left out; the key files with their status, a passphrase field for each encrypted one and "Save the passphrases in the vault"; the lines that could not be read; the count of pattern Host lines. Import runs off the UI thread and ends with "added, skipped, errors" plus the keys.
+- `~` in the config means the parent of the file's `.ssh` folder, else the user's home folder.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 2.5 (and `docs/ru/`).

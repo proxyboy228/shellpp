@@ -67,6 +67,8 @@ pub fn run(launch: Launch) {
                 }
                 _ => {
                     crate::known_hosts::set_import_source(None, cx);
+                    // Neither the import dialog (UI 2.5) suggests ~/.ssh/config.
+                    crate::import_sources::set_default_path(None, cx);
                     KeySources::none()
                 }
             };

@@ -47,6 +47,7 @@ pub mod dirs;
 pub mod hardening;
 pub mod hosts;
 pub mod i18n;
+pub mod import_sources;
 pub mod known_hosts;
 pub mod lock;
 pub mod logging;

@@ -73,6 +73,14 @@ pub fn set_import_source(path: Option<PathBuf>, cx: &mut App) {
     cx.set_global(ImportSource(path));
 }
 
+/// Opens the known_hosts import dialog over the current window: the import
+/// dialog of UI 2.5 hands its known_hosts source over to it (D39).
+pub fn open_import_dialog(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
+    let path = default_import_path(cx);
+    let dialog = cx.new(|cx| ImportDialog::new(state, path, window, cx));
+    import::open(dialog, window, cx);
+}
+
 /// The suggested import file: the override of [`set_import_source`], else
 /// nothing in a test run (a test build, or `SHELLPP_TEST=1`), else
 /// `~/.ssh/known_hosts`.
