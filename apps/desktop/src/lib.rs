@@ -12,7 +12,8 @@
 //!   placeholder, toasts. [`session_ui`]: the content of a session tab
 //!   (connection screen, prompts, host key dialogs, end and drop overlays).
 //! - [`hosts`]: the Hosts screen. [`panels`]: the host and group panels.
-//!   [`known_hosts`]: the Known Hosts screen (UI 10.1).
+//!   [`known_hosts`]: the Known Hosts screen (UI 10.1). [`keychain`]: the
+//!   Keychain screen (UI 7.1-7.3).
 //! - [`lock`]: the first-run and unlock screens. [`settings`]: the
 //!   Settings window (Security section).
 //! - [`theme`]: `themes/graphite.json` in gpui-kit's theme registry (dark and
@@ -46,6 +47,7 @@ pub mod dirs;
 pub mod hardening;
 pub mod hosts;
 pub mod i18n;
+pub mod keychain;
 pub mod known_hosts;
 pub mod lock;
 pub mod logging;

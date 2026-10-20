@@ -332,6 +332,8 @@ pub struct Shell {
     hosts: Entity<HostsScreen>,
     /// The Known Hosts section (UI 10.1), with its own details panel.
     known_hosts: Entity<crate::known_hosts::KnownHostsScreen>,
+    /// The Keychain section (UI 7), with its own details panel.
+    keychain: Entity<crate::keychain::KeychainScreen>,
     panel: Option<Panel>,
     details_width: Pixels,
     /// The search bar holds a connectable address (lead decision 3: the
@@ -387,6 +389,7 @@ impl Shell {
         let hosts = cx.new(|cx| HostsScreen::new(state.clone(), window, cx));
         let known_hosts =
             cx.new(|cx| crate::known_hosts::KnownHostsScreen::new(state.clone(), window, cx));
+        let keychain = cx.new(|cx| crate::keychain::KeychainScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
         let notifications = Notifications::global(cx);
         let subscriptions = vec![
@@ -441,6 +444,7 @@ impl Shell {
             sidebar_visible: true,
             hosts,
             known_hosts,
+            keychain,
             panel: None,
             details_width: metrics::WIDTH_DETAILS,
             search_has_address: false,
@@ -483,6 +487,10 @@ impl Shell {
 
     pub fn known_hosts_screen(&self) -> &Entity<crate::known_hosts::KnownHostsScreen> {
         &self.known_hosts
+    }
+
+    pub fn keychain_screen(&self) -> &Entity<crate::keychain::KeychainScreen> {
+        &self.keychain
     }
 
     pub fn toasts(&self) -> &Entity<Toasts> {
@@ -1442,6 +1450,7 @@ impl Shell {
         let content = match self.section {
             Section::Hosts => self.hosts.clone().into_any_element(),
             Section::KnownHosts => self.known_hosts.clone().into_any_element(),
+            Section::Keychain => self.keychain.clone().into_any_element(),
             _ => placeholder::placeholder("section-placeholder", self.section.label(), cx)
                 .into_any_element(),
         };
@@ -2220,6 +2229,11 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The terminal sidebar acts on the active pane's session (UI 4.2).
         self.sync_sidebar_target(window, cx);
+        // A private key shown in the Keychain is hidden again once the
+        // window shows anything else (UI 7.3).
+        let keychain_shown = self.top_tab == TopTab::Vaults && self.section == Section::Keychain;
+        self.keychain
+            .update(cx, |screen, cx| screen.set_shown(keychain_shown, cx));
         // New tab pages need the window; the active one and the search
         // get the open tabs and the Restore flag.
         self.prepare_new_tab_pages(window, cx);
@@ -2254,10 +2268,15 @@ impl Render for Shell {
                         sidebar::is_collapsed(
                             window.viewport_size().width,
                             self.panel.as_ref().map(|_| self.details_width).or_else(|| {
-                                // Known Hosts draws its own details panel.
-                                (self.section == Section::KnownHosts)
-                                    .then(|| self.known_hosts.read(cx).open_panel_width())
-                                    .flatten()
+                                // Known Hosts and the Keychain draw their own
+                                // details panel.
+                                match self.section {
+                                    Section::KnownHosts => {
+                                        self.known_hosts.read(cx).open_panel_width()
+                                    }
+                                    Section::Keychain => self.keychain.read(cx).open_panel_width(),
+                                    _ => None,
+                                }
                             }),
                         ),
                         {

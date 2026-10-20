@@ -24,14 +24,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use gpui::{AppContext as _, Context, Task};
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
+pub use shellpp_core::keys::generate::KeyKind;
 pub use shellpp_core::model::identity::PasswordChange;
 use shellpp_core::model::{fields, text};
 use shellpp_core::service::dto::{
-    KeyImportInput, KeyImportResult, KeyView, RecordRef, RecordSaveInput, RecordType, RecordView,
-    TagColor,
+    KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView, RecordRef, RecordSaveInput,
+    RecordType, RecordView, SecretCopyTarget, SecretFieldRef, TagColor,
 };
 pub use shellpp_core::service::keychain::IdentityView;
-use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput};
+use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput, KeyLabelInput};
 use shellpp_core::{CoreError, FieldError, ValidationReason};
 use uuid::Uuid;
 
@@ -1115,7 +1116,7 @@ impl AppState {
         }
     }
 
-    // -- Keychain records of the "+" in the host panel (UI 3.1) ------------------
+    // -- Keychain records: the host panel's "+" and the Keychain (UI 3.1, 7) -----
 
     /// Every identity of the personal vault, by label (empty while locked).
     pub fn identities(&self) -> Vec<IdentityView> {
@@ -1196,15 +1197,101 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             match &result {
-                Ok(imported) => tracing::info!(
-                    created = imported.created,
-                    "key imported from the host panel"
-                ),
+                Ok(imported) => tracing::info!(created = imported.created, "key imported"),
                 Err(error) => tracing::info!(code = error.code(), "key not imported"),
             }
             let _ = this.update(cx, |_, cx| cx.notify());
             result
         })
+    }
+
+    /// Generate key (UI 7.1, D32): a new key pair of `kind` labelled
+    /// `label`, encrypted with `passphrase` when one is given and stored like
+    /// an import (`save_passphrase` as there). RSA takes seconds: the work
+    /// runs on the background executor.
+    pub fn generate_key(
+        &mut self,
+        label: String,
+        kind: KeyKind,
+        passphrase: Option<SecretString>,
+        save_passphrase: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<KeyImportResult, CoreError>> {
+        let (core, vault_id) = match (self.require_core(), self.require_vault()) {
+            (Ok(core), Ok(vault_id)) => (core.clone(), vault_id),
+            (Err(error), _) | (_, Err(error)) => return Task::ready(Err(error)),
+        };
+        let work = cx.background_spawn(async move {
+            core.key_generate(KeyGenerateInput {
+                vault_id,
+                label,
+                kind,
+                passphrase,
+                save_passphrase,
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            match &result {
+                Ok(_) => tracing::info!(kind = kind.algorithm_name(), "key generated"),
+                Err(error) => tracing::info!(code = error.code(), "key not generated"),
+            }
+            let _ = this.update(cx, |_, cx| cx.notify());
+            result
+        })
+    }
+
+    fn key_ref(&self, key_id: Uuid) -> Result<RecordRef, CoreError> {
+        Ok(RecordRef {
+            vault_id: self.require_vault()?,
+            record_id: key_id,
+        })
+    }
+
+    /// Renames a key (the key panel's Label, saved as in UI 1.3).
+    pub fn rename_key(
+        &mut self,
+        key_id: Uuid,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<KeyView, CoreError> {
+        let key = self.key_ref(key_id)?;
+        let view = self.require_core()?.key_label_set(KeyLabelInput {
+            key,
+            label: label.to_owned(),
+        })?;
+        cx.notify();
+        Ok(view)
+    }
+
+    /// The one-line public key of a key (not a secret, UI 7.3).
+    pub fn key_public_key(&self, key_id: Uuid) -> Result<String, CoreError> {
+        let key = self.key_ref(key_id)?;
+        self.require_core()?.key_public_key(key)
+    }
+
+    /// The private key text, for the key panel's explicit Show (UI 7.3).
+    /// The caller keeps it only while it is shown.
+    pub fn reveal_private_key(&self, key_id: Uuid) -> Result<SecretString, CoreError> {
+        let key = self.key_ref(key_id)?;
+        self.require_core()?.secret_reveal(SecretFieldRef {
+            vault_id: key.vault_id,
+            record_id: key.record_id,
+            path: "private_key".to_owned(),
+        })
+    }
+
+    /// Copy private key (UI 7.3): the core writes it to the OS clipboard as
+    /// a sensitive value and clears it after 30 seconds if the clipboard
+    /// still holds it (docs/security.md, section 9.4).
+    pub fn copy_private_key(&self, key_id: Uuid) -> Result<(), CoreError> {
+        let key = self.key_ref(key_id)?;
+        self.require_core()?
+            .secret_copy(SecretCopyTarget::RecordField {
+                vault_id: key.vault_id,
+                record_id: key.record_id,
+                path: "private_key".to_owned(),
+            })
     }
 
     /// Stores the OpenSSH user certificate of a key (UI 3.1 "+ ->
