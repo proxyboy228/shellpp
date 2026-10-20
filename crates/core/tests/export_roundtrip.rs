@@ -98,7 +98,7 @@ fn populated() -> common::Unlocked {
         })
         .expect("identity");
     let password = format!("pw-{}", common::random_hex());
-    save(
+    let web1 = save(
         &u.core,
         vault,
         None,
@@ -115,6 +115,21 @@ fn populated() -> common::Unlocked {
         &[("ssh.password", Some(password.as_str()))],
     )
     .expect("host with password");
+    // A detected OS (a member a save never takes from its input).
+    let detected =
+        shellpp_core::os_detect::from_banner("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13").expect("os");
+    assert!(
+        u.core
+            .host_os_detected(
+                shellpp_core::service::dto::RecordRef {
+                    vault_id: vault,
+                    record_id: web1.record_id(),
+                },
+                detected,
+                shellpp_core::service::dto::OsSource::Banner,
+            )
+            .expect("os saved")
+    );
     save(
         &u.core,
         vault,

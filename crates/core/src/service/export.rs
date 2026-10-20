@@ -223,8 +223,43 @@ fn check(
     {
         built.insert("order_key".into(), Value::String(order_key));
     }
+    restore_managed(kind, data, &mut built);
     Ok(built)
 }
+
+/// The members a save never takes from its input (`host::MANAGED`,
+/// `identity::MANAGED`) come from the export here: `import_key` (so a
+/// later import of the original source still sees the record) and a
+/// host's detected `os`. Each is checked first; a bad value is left out.
+fn restore_managed(
+    kind: RecordKind,
+    incoming: &Map<String, Value>,
+    built: &mut Map<String, Value>,
+) {
+    if matches!(
+        kind,
+        RecordKind::Host | RecordKind::Group | RecordKind::Identity
+    ) && let Some(raw) = incoming.get("import_key").and_then(Value::as_str)
+        && let Ok(Some(import_key)) = text::string(raw, MAX_IMPORT_KEY_CHARS)
+    {
+        built.insert("import_key".into(), Value::String(import_key));
+    }
+    if kind == RecordKind::Host
+        && let Some(Value::Object(os)) = incoming.get("os")
+        && os.values().all(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.chars().count() <= 64)
+                || value.is_null()
+        })
+        && os.len() <= 8
+    {
+        built.insert("os".into(), Value::Object(os.clone()));
+    }
+}
+
+/// `import_key` is a string(512) (docs/data-model.md, section 18.4).
+const MAX_IMPORT_KEY_CHARS: usize = 512;
 
 /// A stored key: its private key parses (OpenSSH, the stored form), the
 /// label is valid, a certificate fits the key.
