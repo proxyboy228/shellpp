@@ -181,6 +181,14 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
         );
     }
     add("view.details_panel_width", Kind::Int(320, 560), json!(380));
+    // Column widths of the Hosts list layout, px (UI 2.3).
+    for (column, width) in [("name", 220), ("address", 200), ("user", 120)] {
+        add(
+            &format!("view.hosts.column_width.{column}"),
+            Kind::Int(64, 2000),
+            json!(width),
+        );
+    }
     add("hints.dismissed", Kind::HintList, json!([]));
     add(SESSION_LAST_KEY, Kind::SessionLast, Value::Null);
     defs

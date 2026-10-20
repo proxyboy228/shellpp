@@ -17,6 +17,14 @@ pub const CONNECT: &str = "Connect";
 pub const SAVE_HOST_OFFER: &str = "Save host?";
 pub const SAVE_HOST_ACTION: &str = "Save";
 pub const HOST_SAVED: &str = "Host saved";
+/// The button of an empty search result whose text is an address.
+pub const SAVE_AS_HOST: &str = "Save as host";
+
+/// An empty search result whose text is an address (owner's step 0.2):
+/// `"Press Enter to connect to root@db.lan:2222"`.
+pub fn press_enter_to_connect(address: &str) -> String {
+    format!("Press Enter to connect to {address}")
+}
 
 // 2.2 Action bar.
 pub const NEW_HOST: &str = "New host";
@@ -61,6 +69,11 @@ pub const CREATE_HOST: &str = "Create host";
 pub const IMPORT_SSH_CONFIG: &str = "Import from ~/.ssh/config";
 pub const EMPTY_GROUP: &str = "This group is empty";
 pub const NO_MATCHES: &str = "No hosts match the search";
+// The column headers of the list layout (owner's step 0.4).
+pub const COLUMN_NAME: &str = "Name";
+pub const COLUMN_ADDRESS: &str = "Address";
+pub const COLUMN_USER: &str = "User";
+pub const COLUMN_TAGS: &str = "Tags";
 
 /// `"1 host"` / `"{n} hosts"` (group card subtitle, UI 2.3).
 pub fn host_count(count: usize) -> String {

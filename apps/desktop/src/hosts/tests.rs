@@ -24,6 +24,7 @@ use crate::state::hosts_view::{HostsLayout, HostsSort};
 use crate::state::{AppState, OpenedCore};
 use crate::testing::TestProfile;
 use crate::theme::{self, Appearance, metrics};
+use columns::{Column, ListColumns};
 
 /// What the screen emitted, in order.
 #[derive(Default)]
@@ -309,7 +310,7 @@ fn search_filters_and_drives_connect(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn quick_connect_offers_to_save_the_host(cx: &mut TestAppContext) {
+fn quick_connect_opens_a_session_and_its_target_can_be_saved(cx: &mut TestAppContext) {
     let (ui, _) = Screen::open(cx, 1280., &[json!({"address": "web1.example.com"})]);
     ui.type_search(cx, "prod");
     ui.frame(cx, |window, cx| window.press("enter", cx));
@@ -336,21 +337,22 @@ fn quick_connect_offers_to_save_the_host(cx: &mut TestAppContext) {
             port: Some(2222),
         })
     );
-    let action = requests
-        .iter()
-        .find_map(|request| match request {
-            HostsRequest::ToastWithAction { message, action } => {
-                assert_eq!(message.as_ref(), strings::SAVE_HOST_OFFER);
-                Some(action.clone())
-            }
-            _ => None,
-        })
-        .expect("the save-host offer");
+    // The offer to save the host waits for the session to connect: the
+    // shell shows it then (session_ui tests), not the screen at once.
+    assert!(
+        !requests
+            .iter()
+            .any(|request| matches!(request, HostsRequest::ToastWithAction { .. })),
+        "no offer before the connection"
+    );
     assert_eq!(ui.state.read_with(cx, |state, _| state.hosts().len()), 1);
 
-    // "Save" creates the host with the user and the port, selects it and
-    // opens its panel.
-    ui.frame(cx, |window, cx| (action.run)(window, cx));
+    // "Save" of that offer creates the host with the user and the port,
+    // selects it and opens its panel.
+    let target = session.target.clone().expect("a quick target");
+    ui.screen
+        .update(cx, |screen, cx| screen.save_quick_target(&target, cx));
+    ui.frame(cx, |_, _| {});
     let hosts = ui.state.read_with(cx, |state, _| state.hosts());
     assert_eq!(hosts.len(), 2);
     let saved = hosts
@@ -923,14 +925,30 @@ fn open_app(
     Entity<crate::app::RootView>,
     Vec<Uuid>,
 ) {
+    let mut records = hosts_with_eight_tags();
+    records.push(json!({"name": "Production"}));
+    open_app_with(cx, width, height, &records)
+}
+
+/// The whole app in a window of `width` x `height` over a profile holding
+/// `records` (a group when it has a `name`).
+fn open_app_with(
+    cx: &mut TestAppContext,
+    width: f32,
+    height: f32,
+    records: &[Value],
+) -> (
+    Entity<AppState>,
+    AnyWindowHandle,
+    Entity<crate::app::RootView>,
+    Vec<Uuid>,
+) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         theme::install(Appearance::Dark, cx);
         crate::app::root::bind_keys(cx);
     });
     let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
-    let mut records = hosts_with_eight_tags();
-    records.push(json!({"name": "Production"}));
     let ids = state.update(cx, |state, cx| {
         records
             .iter()
@@ -989,8 +1007,12 @@ fn check_min_window(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&s
         assert_inside(&[("hosts-screen".to_owned(), screen)], main);
         let mut bar = bounds_of(window, &action_bar_ids(tags));
         assert!(bar.len() >= 8, "{bar:?}");
+        // Never "+N" alone while a chip fits (owner's step 0.1).
         assert!(
-            tags.is_empty() || bar.iter().any(|(id, _)| id.starts_with("tag-chip-")),
+            tags.is_empty()
+                || bar
+                    .iter()
+                    .any(|(id, _)| id.starts_with("tag-chip-") && id != "tag-chip-more"),
             "{bar:?}"
         );
         bar.extend(bounds_of(window, &["search-field".into()]));
@@ -1064,7 +1086,8 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
     check_min_window(cx, handle, &["prod", "staging", "critical"]);
     screen.update(cx, |screen, cx| screen.clear_tags(cx));
 
-    // With the details panel: the bar wraps, labels collapse as needed.
+    // With the details panel: the sidebar collapses into the strip of icons
+    // (owner's step 0.5), labels collapse as needed.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click(host_card_id(ids[0]), cx);
@@ -1085,6 +1108,16 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
         .unwrap()
         .expect("the details panel");
     assert_eq!(panel.size.width, metrics::WIDTH_DETAILS);
+    let (sidebar, main) = cx
+        .update_window(handle, |_, window, _| {
+            (
+                window.find("sidebar").bounds(),
+                window.find("main-area").bounds(),
+            )
+        })
+        .unwrap();
+    assert_eq!(sidebar.size.width, crate::shell::sidebar::WIDTH_COLLAPSED);
+    assert_eq!(main.size.width, px(960. - 56. - 380.));
     check_min_window(cx, handle, &[]);
     // The search hint shortens instead of being cut off.
     let (hint, fits) = search_hint(cx);
@@ -1095,8 +1128,10 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
         }
     });
     check_min_window(cx, handle, &["prod", "staging", "critical", "legacy"]);
+    // The panel open showed "+4" alone before (owner's step 0.1): now a
+    // chip, the rest in "+N".
     let plan = screen.read_with(cx, |screen, _| screen.bar_plan()).unwrap();
-    assert!(plan.wrapped, "{plan:?}");
+    assert!(plan.chips >= 1, "{plan:?}");
 
     // A panel dragged to its widest keeps the main area at 360 px.
     let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
@@ -1118,6 +1153,9 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
     assert_eq!(main.size.width, crate::shell::details::MAIN_AREA_MIN);
     let (hint, fits) = search_hint(cx);
     assert!(fits, "{hint}");
+    // 360 px: the right group wraps to a row of its own, with a chip.
+    let plan = screen.read_with(cx, |screen, _| screen.bar_plan()).unwrap();
+    assert!(plan.wrapped && plan.chips >= 1, "{plan:?}");
 
     let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     cx.run_until_parked();
@@ -1499,4 +1537,446 @@ fn undo_window_of_remove(cx: &mut TestAppContext) {
     });
     ui.finish(cx);
     drop(profile);
+}
+
+/// The solid fill painted exactly under the element `id` (its own
+/// background), if any.
+fn fill_of(window: &Window, id: impl Into<ElementId>) -> Option<gpui::Hsla> {
+    let bounds = window.find(id).bounds();
+    let scale = window.scale_factor();
+    let near =
+        |a: gpui::ScaledPixels, b: gpui::Pixels| (a.as_f32() - b.as_f32() * scale).abs() < 0.5;
+    window
+        .painted_quads()
+        .into_iter()
+        .filter(|quad| {
+            near(quad.bounds.origin.x, bounds.origin.x)
+                && near(quad.bounds.origin.y, bounds.origin.y)
+                && near(quad.bounds.size.width, bounds.size.width)
+                && near(quad.bounds.size.height, bounds.size.height)
+        })
+        .filter_map(|quad| quad.background.as_solid())
+        .rfind(|color| color.a > 0.)
+}
+
+/// Owner's step 0.3: "Create host" is the empty screen's accent-filled
+/// button; Import stays neutral.
+#[gpui_kit::test]
+fn create_host_is_the_accent_button_of_the_empty_screen(cx: &mut TestAppContext) {
+    let (ui, _) = Screen::open(cx, 1280., &[]);
+    let (create, import, primary, neutral) = ui.frame(cx, |window, cx| {
+        let theme = gpui_kit::component::ActiveTheme::theme(cx);
+        (
+            fill_of(window, "create-host"),
+            fill_of(window, "import-ssh-config"),
+            theme.primary,
+            theme.secondary,
+        )
+    });
+    assert_eq!(create, Some(primary));
+    assert_eq!(import, Some(neutral));
+    // The search bar's Connect is neutral (disabled) meanwhile: one accent.
+    assert!(
+        !ui.screen
+            .read_with(cx, |screen, _| screen.connect_enabled())
+    );
+    ui.finish(cx);
+}
+
+/// Design-system 1 (one accent button per screen) with the owner's step
+/// 0.3: in an empty vault "Create host" is accent-filled while no details
+/// panel is open. It opens the New host panel, whose Connect is the accent
+/// button, so "Create host" turns neutral until the panel closes; the group
+/// panel does the same.
+#[gpui_kit::test]
+fn create_host_gives_the_accent_to_an_open_panel(cx: &mut TestAppContext) {
+    let (state, handle, root, _) = open_app_with(cx, 1280., 800., &[]);
+    let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
+    let frame = |cx: &mut TestAppContext| {
+        for _ in 0..2 {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+    };
+    // Create host's fill, the accent and neutral fills, and whether the
+    // details panel is on screen.
+    let look = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let theme = gpui_kit::component::ActiveTheme::theme(cx);
+            (
+                fill_of(window, "create-host"),
+                theme.primary,
+                theme.secondary,
+                window
+                    .try_find("right-panel")
+                    .is_some_and(|panel| panel.visible()),
+            )
+        })
+        .unwrap()
+    };
+    let (create, accent, neutral, panel) = look(cx);
+    assert!(!panel);
+    assert_eq!(create, Some(accent));
+
+    // Create host opens the New host panel; the empty state stays. The
+    // pointer then leaves the button, so its fill is not the hover state.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("create-host", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    frame(cx);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover("hosts-empty-title", cx);
+    })
+    .unwrap();
+    frame(cx);
+    let (create, _, _, panel) = look(cx);
+    assert!(panel);
+    assert_eq!(create, Some(neutral));
+    // The panel's Connect is the screen's accent button (disabled until the
+    // address is valid).
+    let connect_is_accent = shell.read_with(cx, |shell, cx| match shell.panel() {
+        Some(crate::shell::Panel::Host(panel)) => panel.read(cx).connect_is_accent(),
+        _ => false,
+    });
+    assert!(connect_is_accent);
+
+    // Closed: "Create host" takes the accent back.
+    shell.update(cx, |shell, cx| shell.close_panel(cx));
+    frame(cx);
+    let (create, _, _, panel) = look(cx);
+    assert!(!panel);
+    assert_eq!(create, Some(accent));
+
+    // The group panel (New host ▸ New Group) holds the primary action too.
+    cx.update_window(handle, |_, window, cx| {
+        shell.update(cx, |shell, cx| shell.open_group_panel(None, window, cx))
+    })
+    .unwrap();
+    frame(cx);
+    let (create, _, _, panel) = look(cx);
+    assert!(panel);
+    assert_eq!(create, Some(neutral));
+
+    let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    cx.run_until_parked();
+    state.update(cx, |state, _| state.shutdown());
+}
+
+/// Owner's step 0.2: a search that is an address and matches nothing says
+/// Enter connects to it and offers "Save as host", which creates the host
+/// with the address, user and port in the group on screen, empties the
+/// search and opens the host's panel.
+#[gpui_kit::test]
+fn an_address_without_matches_offers_to_connect_or_save(cx: &mut TestAppContext) {
+    let (ui, ids) = Screen::open(cx, 1280., &hosts_with_group());
+    let databases = ids[3];
+    ui.state
+        .update(cx, |state, cx| state.set_location(Some(databases), cx));
+    ui.type_search(cx, "no-such-word");
+    assert!(ui.visible(cx, "hosts-no-matches"));
+    assert!(!ui.visible(cx, "save-as-host"));
+
+    ui.type_search(cx, "ssh admin@192.0.2.55 -p 2200");
+    assert!(ui.visible(cx, "hosts-quick-connect"));
+    assert!(!ui.visible(cx, "hosts-no-matches"));
+    assert!(ui.visible(cx, "save-as-host"));
+    // The text names the whole address; it stays inside the screen.
+    let (title, screen_bounds) = ui.frame(cx, |window, _| {
+        (
+            window.find("hosts-empty-title").bounds(),
+            window.find("hosts-screen").bounds(),
+        )
+    });
+    assert_inside(&[("title".to_owned(), title)], screen_bounds);
+    assert_eq!(
+        strings::press_enter_to_connect("admin@192.0.2.55:2200"),
+        "Press Enter to connect to admin@192.0.2.55:2200"
+    );
+    // Connect (the accent button) and Enter still connect.
+    assert!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.connect_enabled())
+    );
+
+    ui.take_events();
+    ui.frame(cx, |window, cx| window.click("save-as-host", cx));
+    let hosts = ui.state.read_with(cx, |state, _| state.hosts());
+    let saved = hosts
+        .iter()
+        .find(|host| host.address == "192.0.2.55")
+        .expect("the saved host");
+    assert_eq!(saved.username.as_deref(), Some("admin"));
+    assert_eq!(saved.port, Some(2200));
+    assert_eq!(saved.group_id, Some(databases), "the group on screen");
+    assert!(
+        ui.take_events()
+            .contains(&HostsEvent::OpenHost(saved.record_id))
+    );
+    // The search is empty again: the group shows the new host, selected.
+    let id = saved.record_id;
+    let search = ui.screen.read_with(cx, |screen, _| screen.search().clone());
+    assert_eq!(
+        search.read_with(cx, |search, _| search.value().to_string()),
+        ""
+    );
+    assert!(
+        !ui.screen
+            .read_with(cx, |screen, _| screen.filter().is_active())
+    );
+    assert!(ui.visible(cx, host_card_id(id)));
+    assert!(!ui.visible(cx, "hosts-quick-connect"));
+    assert_eq!(ui.selected(cx), vec![id]);
+    ui.finish(cx);
+}
+
+/// Owner's step 0.1: with every tag on in a narrow screen, the chips that
+/// fit show, the rest collapse into "+N", and hovering "+N" lists them.
+#[gpui_kit::test]
+fn more_chip_lists_the_hidden_tags(cx: &mut TestAppContext) {
+    let (ui, _) = Screen::open(cx, 700., &hosts_with_eight_tags());
+    ui.screen.update(cx, |screen, cx| {
+        for tag in EIGHT_TAGS {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    ui.frame(cx, |_, _| {});
+    let plan = ui
+        .screen
+        .read_with(cx, |screen, _| screen.bar_plan())
+        .unwrap();
+    assert!(plan.chips >= 1 && plan.chips < EIGHT_TAGS.len(), "{plan:?}");
+    assert!(ui.visible(cx, tag_chip_id(EIGHT_TAGS[0])));
+    let hidden = ui.screen.read_with(cx, |screen, _| screen.hidden_tags());
+    assert_eq!(hidden, EIGHT_TAGS[plan.chips..]);
+
+    assert!(!ui.visible(cx, "tag-chip-more-tooltip"));
+    ui.frame(cx, |window, cx| window.hover("tag-chip-more", cx));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(ui.visible(cx, "tag-chip-more-tooltip"));
+    let height = ui.frame(cx, |window, _| {
+        window.find("tag-chip-more-tooltip").bounds().size.height
+    });
+    assert!(
+        height > metrics::FONT_SIZE_BODY * (hidden.len() as f32 - 1.),
+        "one line per hidden tag: {height:?}"
+    );
+    ui.finish(cx);
+}
+
+/// Owner's step 0.4: the list layout has a header with Name | Address |
+/// User | Tags over aligned columns; dragging a divider resizes the column
+/// on its left, and the widths are remembered across a restart.
+#[gpui_kit::test]
+fn list_columns_resize_and_are_remembered(cx: &mut TestAppContext) {
+    setup(cx);
+    let mut profile = TestProfile::new();
+    let (ui, ids) = Screen::open_on(cx, 1280., profile.open_unlocked(), &hosts_with_group());
+    let web = ids[0];
+    ui.frame(cx, |window, cx| window.click("view-list", cx));
+    ui.frame(cx, |_, _| {});
+    for id in [
+        "hosts-list-header",
+        "list-header-name",
+        "list-header-address",
+        "list-header-user",
+        "list-header-tags",
+    ] {
+        assert!(ui.visible(cx, id), "{id}");
+    }
+    // The header's columns sit over the row's cells, at the chosen widths.
+    let fitted = ui.screen.read_with(cx, |screen, _| screen.fitted_columns());
+    assert_eq!(&fitted[..3], &[220., 200., 120.]);
+    let (header, cells) = ui.frame(cx, |window, _| {
+        let header: Vec<_> = ["address", "user", "tags"]
+            .iter()
+            .map(|column| {
+                window
+                    .find(SharedString::from(format!("list-header-{column}")))
+                    .bounds()
+            })
+            .collect();
+        let cells: Vec<_> = ["address", "user", "tags"]
+            .iter()
+            .map(|column| window.find(list_cell_id(web, column)).bounds())
+            .collect();
+        (header, cells)
+    });
+    for (head, cell) in header.iter().zip(&cells) {
+        assert!(
+            (head.left() - cell.left()).abs() < px(0.5),
+            "{head:?} {cell:?}"
+        );
+        assert!(
+            (head.right() - cell.right()).abs() < px(0.5),
+            "{head:?} {cell:?}"
+        );
+    }
+    assert_eq!(cells[0].size.width, px(200.));
+    assert!(ui.visible(cx, list_cell_id(web, "name")));
+
+    // Drag the divider right of Name 80 px to the right.
+    let from = ui.frame(cx, |window, _| {
+        window.find(Column::Name.divider_id()).bounds().center()
+    });
+    ui.frame(cx, |window, cx| {
+        window.drag(from, gpui::point(from.x + px(80.), from.y), cx)
+    });
+    let chosen = ui.screen.read_with(cx, |screen, _| screen.list_columns());
+    assert_eq!(chosen.width(Column::Name), 300.);
+    assert_eq!(chosen.width(Column::Address), 200.);
+    let name = ui.frame(cx, |window, _| {
+        window.find(list_cell_id(web, "name")).bounds()
+    });
+    assert_eq!(name.size.width, px(300.));
+    // Saved when the button went up.
+    assert_eq!(
+        ui.state
+            .read_with(cx, |state, _| state.hosts_list_columns()),
+        chosen
+    );
+    ui.finish(cx);
+
+    let (ui, _) = Screen::open_on(cx, 1280., profile.open_unlocked(), &[]);
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.list_columns().width(Column::Name)),
+        300.
+    );
+    ui.finish(cx);
+    drop(profile);
+}
+
+/// The defaults of the desktop's column widths are the core's defaults.
+#[gpui_kit::test]
+fn list_column_defaults_match_the_core_settings(cx: &mut TestAppContext) {
+    let (ui, _) = Screen::open(cx, 1280., &[]);
+    assert_eq!(
+        ui.state
+            .read_with(cx, |state, _| state.hosts_list_columns()),
+        ListColumns::default()
+    );
+    ui.finish(cx);
+}
+
+/// Owner's step 0.5: below a 600 px main area the sidebar collapses into a
+/// 56 px strip of the same items (icons with tooltips, the same active
+/// state) and expands again when the window grows.
+#[gpui_kit::test]
+fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
+    use crate::shell::Section;
+    use crate::shell::sidebar::WIDTH_COLLAPSED;
+    let (state, handle, root, ids) = open_app(cx, 960., 700.);
+    let frame = |cx: &mut TestAppContext| {
+        for _ in 0..2 {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+    };
+    let sidebar_width = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("sidebar").bounds().size.width
+        })
+        .unwrap()
+    };
+    let click = |cx: &mut TestAppContext, id: SharedString| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(id, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    // 960 - 220 = 740 px of main area: the full sidebar.
+    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+
+    // The details panel leaves 360 px: the strip of icons.
+    click(cx, host_card_id(ids[0]));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
+    let (items, active, accent) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let sidebar = window.find("sidebar").bounds();
+            let items: Vec<_> = Section::ALL
+                .iter()
+                .map(|section| {
+                    let item = window.find(section.element_id()).bounds();
+                    assert!(
+                        item.left() >= sidebar.left() && item.right() <= sidebar.right(),
+                        "{section:?} inside the strip"
+                    );
+                    item
+                })
+                .collect();
+            (
+                items,
+                fill_of(window, Section::Hosts.element_id()),
+                theme::tokens(cx).accent_subtle.hsla(),
+            )
+        })
+        .unwrap();
+    assert_eq!(items.len(), 6);
+    // The strip inside its padding and its 1 px border: icons only.
+    let item_width = WIDTH_COLLAPSED - metrics::SPACE_2 * 2. - px(1.);
+    assert!(
+        items.iter().all(|item| item.size.width == item_width),
+        "{items:?}"
+    );
+    assert_eq!(active, Some(accent), "the active section keeps its state");
+    // The name of an item shows as its tooltip.
+    cx.update_window(handle, |_, window, cx| window.hover("nav-keychain", cx))
+        .unwrap();
+    cx.executor().advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
+    frame(cx);
+    let tooltip = cx
+        .update_window(handle, |_, window, _| {
+            window
+                .try_find(Section::Keychain.tooltip_id())
+                .is_some_and(|tooltip| tooltip.visible())
+        })
+        .unwrap();
+    assert!(tooltip, "a tooltip over the collapsed item");
+    // The items still switch sections.
+    click(cx, "nav-keychain".into());
+    frame(cx);
+    let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Keychain);
+    click(cx, "nav-hosts".into());
+    frame(cx);
+    click(cx, host_card_id(ids[0]));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
+
+    // 1199 px: 599 px next to the full sidebar; 1200 px: expanded.
+    cx.simulate_window_resize(handle, size(px(1199.), px(700.)));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
+    cx.simulate_window_resize(handle, size(px(1200.), px(700.)));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+    let main = cx
+        .update_window(handle, |_, window, _| window.find("main-area").bounds())
+        .unwrap();
+    assert_eq!(main.size.width, px(600.));
+    // Narrow again, then the panel closes: expanded.
+    cx.simulate_window_resize(handle, size(px(960.), px(700.)));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
+    shell.update(cx, |shell, cx| shell.close_panel(cx));
+    frame(cx);
+    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+
+    let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    cx.run_until_parked();
+    state.update(cx, |state, _| state.shutdown());
 }

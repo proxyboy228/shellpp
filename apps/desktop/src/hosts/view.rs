@@ -1,22 +1,24 @@
 //! Rendering of the Hosts screen: search bar, action bar (with the tag
-//! filter), breadcrumbs, the card grid or list, the empty states and the
-//! drag preview.
+//! filter), breadcrumbs, the card grid or the list (a header with resizable
+//! columns over the rows, [`super::columns`]), the empty states and the drag
+//! preview.
 //!
-//! Narrow windows (owner's step 1.4): the action bar is planned from the
-//! widths of its parts, measured with the window's text system
-//! ([`layout::plan_action_bar`]): the tag chips collapse into "+N" first,
-//! then Terminal and Serial, then New host lose their labels, and at last
-//! the right group wraps to a second row. Breadcrumbs truncate, the empty
+//! Narrow windows (owner's step 1.4, stage 2a step 0.1): the action bar is
+//! planned from the widths of its parts, measured with the window's text
+//! system ([`layout::plan_action_bar`]): the tag chips collapse into "+N"
+//! first, down to one chip; then Terminal and Serial, then New host lose
+//! their labels, and at last the right group wraps to a second row. "+N"
+//! lists the hidden tags in its tooltip. Breadcrumbs truncate, the empty
 //! state's buttons wrap, and cards narrow below 240 px only when the content
 //! area itself is narrower.
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, ClickEvent, Context, Focusable as _, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement, Pixels, Render,
-    SharedString, StatefulInteractiveElement, Styled, TextRun, Window, canvas, div,
-    prelude::FluentBuilder as _, px, size,
+    AnyElement, App, AppContext as _, ClickEvent, Context, DispatchPhase, DragMoveEvent,
+    Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseUpEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
+    TextRun, Window, canvas, div, prelude::FluentBuilder as _, px, size,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -31,12 +33,13 @@ use gpui_kit::component::{
 use shellpp_core::service::dto::TagColor;
 use uuid::Uuid;
 
+use super::columns::{self, Column, ListColumns, ResizeColumn};
 use super::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use super::layout::{BarLabels, BarMeasure, BarPlan};
 use super::menu::{self, CommandHandler};
 use super::{
-    DraggedCards, HostsEvent, HostsScreen, Row, SessionKind, group_card_id, host_card_id, layout,
-    strings, tag_chip_id, tag_filter,
+    DraggedCards, HostsEvent, HostsScreen, Row, SearchTarget, SessionKind, group_card_id,
+    host_card_id, layout, list_cell_id, strings, tag_chip_id, tag_filter,
 };
 use crate::state::hosts_view::{HostsLayout, HostsSort};
 use crate::theme::{self, metrics, palette};
@@ -216,7 +219,7 @@ impl HostsScreen {
     // -- Action bar (UI 2.2) -----------------------------------------------------------
 
     /// The display spelling of a tag that is on (`key` is lower case).
-    fn tag_name(&self, key: &str) -> String {
+    pub(super) fn tag_name(&self, key: &str) -> String {
         self.tag_options
             .iter()
             .find(|option| option.key() == key)
@@ -460,8 +463,11 @@ impl HostsScreen {
             tag_filter::selected_chip(tag_chip_id(&key), self.tag_name(&key), cx)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_tag(&key, cx)))
         });
-        let hidden = selected.len() - shown;
-        let more = (hidden > 0).then(|| {
+        let hidden: Vec<String> = selected[shown..]
+            .iter()
+            .map(|key| self.tag_name(key))
+            .collect();
+        let more = (!hidden.is_empty()).then(|| {
             tag_filter::more_chip(hidden, cx).on_click(cx.listener(
                 |this, _: &ClickEvent, window, cx| this.set_tag_menu_open(true, window, cx),
             ))
@@ -733,53 +739,220 @@ impl HostsScreen {
         })
     }
 
+    /// The title and the subtitle of a grid card.
     fn render_texts(&self, title: String, subtitle: String, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        match self.layout {
-            HostsLayout::Tiles => v_flex()
-                .flex_1()
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .gap(px(2.))
+            .child(
+                div()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.foreground)
+                    .truncate()
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .truncate()
+                    .child(subtitle),
+            )
+            .into_any_element()
+    }
+
+    /// The cells of a list row (owner's step 0.4), in the widths of the
+    /// header: the tile and the title (Name), then Address, User and the
+    /// last column, in `--text-secondary`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_cells(
+        &self,
+        record: Uuid,
+        tile: AnyElement,
+        title: String,
+        address: String,
+        user: String,
+        last: AnyElement,
+        cx: &App,
+    ) -> Vec<AnyElement> {
+        let theme = cx.theme();
+        let [name_width, address_width, user_width, _] = self.fitted_columns;
+        let secondary = |column: &str, width: f32, text: String| {
+            div()
+                .id(list_cell_id(record, column))
+                .test_support()
+                .flex_none()
+                .w(px(width))
                 .min_w_0()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(metrics::FONT_SIZE_BODY)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground)
-                        .truncate()
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(metrics::FONT_SIZE_CAPTION)
-                        .text_color(theme.muted_foreground)
-                        .truncate()
-                        .child(subtitle),
-                )
-                .into_any_element(),
-            HostsLayout::List => h_flex()
-                .flex_1()
+                .truncate()
+                .text_color(theme.muted_foreground)
+                .child(text)
+                .into_any_element()
+        };
+        vec![
+            h_flex()
+                .id(list_cell_id(record, "name"))
+                .test_support()
+                .flex_none()
+                .w(px(name_width))
                 .min_w_0()
                 .gap(metrics::SPACE_3)
-                .text_size(metrics::FONT_SIZE_DENSE)
+                .items_center()
+                .child(tile)
                 .child(
                     div()
-                        .w_2_5()
                         .min_w_0()
+                        .truncate()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.foreground)
-                        .truncate()
                         .child(title),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_color(theme.muted_foreground)
-                        .truncate()
-                        .child(subtitle),
-                )
                 .into_any_element(),
+            secondary("address", address_width, address),
+            secondary("user", user_width, user),
+            h_flex()
+                .id(list_cell_id(record, "tags"))
+                .test_support()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .text_color(theme.muted_foreground)
+                .child(last)
+                .into_any_element(),
+        ]
+    }
+
+    /// The last list column of a host: its tags, or its group (with the
+    /// folder icon) when it has no tags.
+    fn host_last_cell(&self, host: &crate::state::HostItem, cx: &App) -> AnyElement {
+        let group = host
+            .group_id
+            .and_then(|group| self.group(group))
+            .map(|group| group.name.as_str());
+        match layout::last_column(host, group) {
+            layout::LastColumn::Tags(tags) => {
+                div().min_w_0().truncate().child(tags).into_any_element()
+            }
+            layout::LastColumn::Group(name) => h_flex()
+                .min_w_0()
+                .gap(metrics::SPACE_1)
+                .child(
+                    Icon::new(Lucide::Folder)
+                        .with_size(ICON_SIZE)
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(div().min_w_0().truncate().child(name))
+                .into_any_element(),
+            layout::LastColumn::Empty => div().into_any_element(),
         }
+    }
+
+    /// The header row of the list layout: the column names and, between
+    /// them, the dividers that resize the column on their left. It is
+    /// aligned with the rows (same padding and widths) and does not scroll.
+    fn render_list_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let fitted = self.fitted_columns;
+        let line = theme.border;
+        let handle_hover = theme.drag_border;
+        let pad = metrics::SPACE_3.as_f32();
+        let cell = |id: &'static str, label: &'static str, width: Option<f32>| {
+            div()
+                .id(id)
+                .test_support()
+                .min_w_0()
+                .truncate()
+                .map(|this| match width {
+                    Some(width) => this.flex_none().w(px(width)),
+                    None => this.flex_1(),
+                })
+                .child(label)
+        };
+        let dividers = Column::ALL.map(|column| {
+            let x = pad + ListColumns::divider_x(&fitted, column);
+            div()
+                .id(column.divider_id())
+                .test_support()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(x - columns::DIVIDER_HIT / 2.))
+                .w(px(columns::DIVIDER_HIT))
+                .flex()
+                .justify_center()
+                .items_center()
+                .cursor_col_resize()
+                .hover(move |style| style.bg(handle_hover.opacity(0.5)))
+                .on_drag(ResizeColumn(column), |_, _, _, cx| {
+                    cx.new(|_| crate::shell::details::ResizePreview)
+                })
+                .child(div().w(px(1.)).h(metrics::SPACE_4).bg(line))
+        });
+        let screen = cx.entity().downgrade();
+        // While a divider is dragged: the button going up anywhere ends it.
+        let release = self.column_resizing.then(|| {
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    let screen = screen.clone();
+                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Bubble {
+                            let _ = screen.update(cx, |screen, cx| screen.finish_column_resize(cx));
+                        }
+                    });
+                },
+            )
+            .absolute()
+            .size_0()
+        });
+        h_flex()
+            .id("hosts-list-header")
+            .test_support()
+            .relative()
+            .flex_none()
+            .w_full()
+            .h(metrics::HEIGHT_CONTROL)
+            .px(metrics::SPACE_3)
+            .gap(metrics::SPACE_3)
+            .items_center()
+            .border_b_1()
+            .border_color(line)
+            .text_size(metrics::FONT_SIZE_CAPTION)
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.muted_foreground)
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<ResizeColumn>, _, cx| {
+                    let ResizeColumn(column) = *event.drag(cx);
+                    let x = event.event.position.x - event.bounds.left() - metrics::SPACE_3;
+                    this.drag_column(column, x.as_f32(), cx);
+                }),
+            )
+            .child(
+                // The label sits over the titles, after the tiles.
+                cell("list-header-name", strings::COLUMN_NAME, Some(fitted[0]))
+                    .pl(LIST_TILE_SIZE + metrics::SPACE_3),
+            )
+            .child(cell(
+                "list-header-address",
+                strings::COLUMN_ADDRESS,
+                Some(fitted[1]),
+            ))
+            .child(cell(
+                "list-header-user",
+                strings::COLUMN_USER,
+                Some(fitted[2]),
+            ))
+            .child(cell("list-header-tags", strings::COLUMN_TAGS, None))
+            .children(dividers)
+            .children(release)
+    }
+
+    /// The width of a list row's content (inside its 12 px padding).
+    pub(super) fn list_row_inner_width(&self) -> f32 {
+        (self.card_width - 2. * metrics::SPACE_3.as_f32()).max(0.)
     }
 
     fn tile_size(&self) -> gpui::Pixels {
@@ -811,8 +984,28 @@ impl HostsScreen {
         } else {
             None
         };
-        let subtitle = layout::subtitle(host, group_name.as_deref());
         let title = host.title().to_owned();
+        let host_tile = tile(
+            host.color,
+            layout::os_icon(host.os_family.as_deref()),
+            self.tile_size(),
+        )
+        .into_any_element();
+        let body = match self.layout {
+            HostsLayout::Tiles => vec![
+                host_tile,
+                self.render_texts(title, layout::subtitle(host, group_name.as_deref()), cx),
+            ],
+            HostsLayout::List => self.render_cells(
+                id,
+                host_tile,
+                title,
+                host.address.clone(),
+                host.username.clone().unwrap_or_default(),
+                self.host_last_cell(host, cx),
+                cx,
+            ),
+        };
         let screen = cx.entity().downgrade();
         let drag = self.drag_value(id, cx);
         let drop_bg = cx.theme().drop_target;
@@ -838,12 +1031,7 @@ impl HostsScreen {
             .on_drop(cx.listener(move |this, dragged: &DraggedCards, _, cx| {
                 this.drop_on_host(dragged, id, cx)
             }))
-            .child(tile(
-                host.color,
-                layout::os_icon(host.os_family.as_deref()),
-                self.tile_size(),
-            ))
-            .child(self.render_texts(title, subtitle, cx))
+            .children(body)
             .context_menu(move |menu, window, cx| {
                 let Some(screen) = screen.upgrade() else {
                     return menu;
@@ -864,6 +1052,24 @@ impl HostsScreen {
     fn render_group_card(&self, ix: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let group = &self.groups[ix];
         let id = group.record_id;
+        let group_tile = tile(group.color, Lucide::Folder, self.tile_size()).into_any_element();
+        let count = strings::host_count(group.host_count as usize);
+        let body = match self.layout {
+            HostsLayout::Tiles => {
+                vec![group_tile, self.render_texts(group.name.clone(), count, cx)]
+            }
+            // A group has no address, user or tags: its host count stands
+            // in the Address column.
+            HostsLayout::List => self.render_cells(
+                id,
+                group_tile,
+                group.name.clone(),
+                count,
+                String::new(),
+                div().into_any_element(),
+                cx,
+            ),
+        };
         let screen = cx.entity().downgrade();
         let drop_screen = cx.entity().downgrade();
         let drag = self.drag_value(id, cx);
@@ -890,12 +1096,7 @@ impl HostsScreen {
             .on_drop(cx.listener(move |this, dragged: &DraggedCards, _, cx| {
                 this.drop_into(dragged, Some(id), cx)
             }))
-            .child(tile(group.color, Lucide::Folder, self.tile_size()))
-            .child(self.render_texts(
-                group.name.clone(),
-                strings::host_count(group.host_count as usize),
-                cx,
-            ))
+            .children(body)
             .context_menu(move |menu, window, cx| {
                 let Some(screen) = screen.upgrade() else {
                     return menu;
@@ -952,48 +1153,84 @@ impl HostsScreen {
 
     // -- Empty states (UI 2.3) ---------------------------------------------------------
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The empty states (UI 2.3): no hosts at all ("Create host", the
+    /// screen's accent button, and Import; owner's step 0.3), an empty
+    /// group, no search results, and no results for a search that is an
+    /// address: Enter connects to it, "Save as host" saves it (owner's step
+    /// 0.2; the search bar's Connect is the accent button meanwhile).
+    /// While `panel_open` (a host or group panel), the panel holds the
+    /// screen's one accent button and "Create host" is neutral.
+    fn render_empty(&self, panel_open: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let vault_empty = self.hosts.is_empty() && self.groups.is_empty();
-        let (id, title, body): (&'static str, &'static str, Option<&'static str>) =
-            if self.filter.is_active() {
-                ("hosts-no-matches", strings::NO_MATCHES, None)
+        let quick = match &self.search_target {
+            SearchTarget::Quick(target) if self.filter.is_active() => Some(target.clone()),
+            _ => None,
+        };
+        let (id, title, body): (&'static str, SharedString, Option<&'static str>) =
+            if let Some(target) = &quick {
+                (
+                    "hosts-quick-connect",
+                    strings::press_enter_to_connect(&target.display()).into(),
+                    None,
+                )
+            } else if self.filter.is_active() {
+                ("hosts-no-matches", strings::NO_MATCHES.into(), None)
             } else if vault_empty {
                 (
                     "hosts-empty",
-                    strings::EMPTY_TITLE,
+                    strings::EMPTY_TITLE.into(),
                     Some(strings::EMPTY_BODY),
                 )
             } else {
-                ("group-empty", strings::EMPTY_GROUP, None)
+                ("group-empty", strings::EMPTY_GROUP.into(), None)
             };
-        let actions = (vault_empty && !self.filter.is_active()).then(|| {
+        let buttons = || {
             h_flex()
                 .flex_wrap()
                 .justify_center()
                 .gap(metrics::SPACE_2)
                 .pt(metrics::SPACE_2)
-                .child(
-                    ControlButton::new("create-host", ControlKind::Neutral)
-                        .icon(Lucide::Plus)
-                        .label(strings::CREATE_HOST)
-                        .on_click(
-                            cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(HostsEvent::NewHost)),
+        };
+        let actions =
+            if let Some(target) = quick {
+                Some(
+                    buttons().child(
+                        ControlButton::new("save-as-host", ControlKind::Neutral)
+                            .icon(Lucide::Plus)
+                            .label(strings::SAVE_AS_HOST)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.save_search_address(&target, window, cx)
+                            })),
+                    ),
+                )
+            } else if vault_empty && !self.filter.is_active() {
+                Some(
+                    buttons()
+                        .child(
+                            ControlButton::new("create-host", create_host_kind(panel_open))
+                                .icon(Lucide::Plus)
+                                .label(strings::CREATE_HOST)
+                                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
+                                    cx.emit(HostsEvent::NewHost)
+                                })),
+                        )
+                        .child(
+                            ControlButton::new("import-ssh-config", ControlKind::Neutral)
+                                .label(strings::IMPORT_SSH_CONFIG)
+                                .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
+                                    super::dialogs::open_placeholder(
+                                        "import-dialog",
+                                        strings::IMPORT_TITLE,
+                                        window,
+                                        cx,
+                                    )
+                                })),
                         ),
                 )
-                .child(
-                    ControlButton::new("import-ssh-config", ControlKind::Neutral)
-                        .label(strings::IMPORT_SSH_CONFIG)
-                        .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
-                            super::dialogs::open_placeholder(
-                                "import-dialog",
-                                strings::IMPORT_TITLE,
-                                window,
-                                cx,
-                            )
-                        })),
-                )
-        });
+            } else {
+                None
+            };
         v_flex()
             .id(id)
             .test_support()
@@ -1003,7 +1240,12 @@ impl HostsScreen {
             .gap(metrics::SPACE_2)
             .px(CONTENT_PADDING)
             .child(
+                // A long address wraps instead of leaving the screen.
                 div()
+                    .id("hosts-empty-title")
+                    .test_support()
+                    .max_w_full()
+                    .text_center()
                     .text_size(metrics::FONT_SIZE_HEADING)
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.foreground)
@@ -1063,10 +1305,30 @@ fn menu_text(id: &'static str, label: &'static str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// Whether the window's details panel shows a host or group panel (UI 1.3).
+/// The shell owns the panel; without a shell (the screen alone) there is
+/// none.
+fn details_panel_open(window: &Window, cx: &App) -> bool {
+    crate::shell::shell_for(window, cx).is_some_and(|shell| shell.read(cx).panel().is_some())
+}
+
+/// The style of the empty vault's "Create host" (owner's step 0.3): the
+/// screen's primary button, unless an open details panel holds the
+/// primary action (`docs/design-system.md` 1: one accent button per screen).
+fn create_host_kind(panel_open: bool) -> ControlKind {
+    if panel_open {
+        ControlKind::Neutral
+    } else {
+        ControlKind::Accent
+    }
+}
+
 impl Render for HostsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let width = self.content_width(window);
         self.rebuild_rows(width);
+        self.reveal_pending();
+        self.fitted_columns = self.list_columns.fit(self.list_row_inner_width());
         let action_bar = self.render_action_bar(window, cx);
         let screen = cx.entity().downgrade();
         // Measures the content area (the details panel narrows it); a new
@@ -1090,7 +1352,7 @@ impl Render for HostsScreen {
         .size_full();
 
         let content = if self.rows.is_empty() {
-            self.render_empty(cx)
+            self.render_empty(details_panel_open(window, cx), cx)
         } else {
             div()
                 .size_full()
@@ -1114,6 +1376,23 @@ impl Render for HostsScreen {
                 )
                 .into_any_element()
         };
+        // The list layout's column header stays above the scrolling rows.
+        let header = (self.layout == HostsLayout::List && !self.rows.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .w_full()
+                .px(CONTENT_PADDING)
+                .child(self.render_list_header(cx))
+        });
+        let rows = v_flex()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(content)
+            .when(!self.rows.is_empty(), |this| {
+                this.child(Scrollbar::vertical(&self.scroll))
+            });
 
         v_flex()
             .id("hosts-screen")
@@ -1154,10 +1433,8 @@ impl Render for HostsScreen {
                         }),
                     )
                     .child(measure)
-                    .child(content)
-                    .when(!self.rows.is_empty(), |this| {
-                        this.child(Scrollbar::vertical(&self.scroll))
-                    }),
+                    .children(header)
+                    .child(rows),
             )
     }
 }

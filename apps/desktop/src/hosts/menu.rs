@@ -250,11 +250,13 @@ pub fn host_menu(count: usize, move_targets: &[MoveTarget]) -> Vec<MenuEntry> {
                     strings::MENU_VIA_SSH,
                     MenuCommand::ConnectSsh,
                 ),
+                // SFTP session tabs are stage 2b: shown disabled (D30).
                 MenuEntry::command(
                     "menu-connect-sftp",
                     strings::MENU_VIA_SFTP,
                     MenuCommand::ConnectSftp,
-                ),
+                )
+                .enabled(false),
                 MenuEntry::Separator,
                 MenuEntry::note("menu-connect-alt-hint", strings::MENU_NEW_WINDOW_HINT),
             ],
@@ -578,6 +580,11 @@ mod tests {
             ]
         );
         assert_eq!(connect[2], MenuEntry::Separator);
+        // SFTP is stage 2b (D30): shown, disabled.
+        assert!(matches!(
+            &connect[1],
+            MenuEntry::Command { enabled: false, .. }
+        ));
         // Move to ▸: the groups, a separator, another vault.
         assert_eq!(
             entry_ids(submenu(&entries, "menu-move-to")),

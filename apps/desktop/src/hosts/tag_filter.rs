@@ -3,7 +3,9 @@
 //! and its host count, a search field and a checkbox per tag (several tags
 //! can be on), plus "Clear". The tags that are on show as chips next to the
 //! button; the chips that do not fit collapse into a "+N" chip, which opens
-//! the dropdown. The button shows the active state while any tag is on.
+//! the dropdown and lists the hidden tags in its tooltip; "+N" never stands
+//! alone while a chip fits (stage 2a step 0.1, [`super::layout::plan_action_bar`]).
+//! The button shows the active state while any tag is on.
 //!
 //! [`TagFilterMenu`] is the dropdown's content (its own entity: the search
 //! field keeps its text and focus); the Hosts screen owns the filter and
@@ -11,15 +13,18 @@
 //! and unit-tested; the chip and button widths it works with are measured
 //! with the window's text system (`hosts::view`).
 
+use std::rc::Rc;
+
 use gpui::{
-    App, AppContext as _, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Global,
-    InteractiveElement as _, IntoElement, KeyBinding, NoAction, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement, Styled as _, Subscription, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, AppContext as _, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    Focusable, Global, InteractiveElement as _, IntoElement, KeyBinding, NoAction,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement, Styled as _,
+    Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
 use gpui_kit::component::{h_flex, v_flex};
 
@@ -412,11 +417,28 @@ pub fn selected_chip(
         )
 }
 
-/// The "+N" chip for the tags that are on but did not fit; a click opens
-/// the dropdown. It stands for selected tags, so it has the active filter
-/// style of their chips (UI 2.2, design-system 3.4).
-pub fn more_chip(hidden: usize, cx: &App) -> impl StatefulInteractiveElement + IntoElement {
-    super::controls::tag_chip("tag-chip-more", strings::more_tags(hidden), true, cx)
+/// The "+N" chip for the tags that are on but did not fit (`hidden`, their
+/// display names in selection order); a click opens the dropdown. It stands
+/// for selected tags, so it has the active filter style of their chips (UI
+/// 2.2, design-system 3.4). Hovering it shows the hidden tags, one per line
+/// (owner's step 0.1).
+pub fn more_chip(hidden: Vec<String>, cx: &App) -> impl StatefulInteractiveElement + IntoElement {
+    let label = strings::more_tags(hidden.len());
+    let hidden: Rc<[String]> = hidden.into();
+    super::controls::tag_chip("tag-chip-more", label, true, cx).tooltip(move |window, cx| {
+        let hidden = hidden.clone();
+        Tooltip::element(move |_, _| hidden_tags_list(&hidden)).build(window, cx)
+    })
+}
+
+/// The content of the "+N" tooltip: the hidden tags, one per line.
+fn hidden_tags_list(hidden: &[String]) -> AnyElement {
+    v_flex()
+        .id("tag-chip-more-tooltip")
+        .test_support()
+        .py(metrics::SPACE_1)
+        .children(hidden.iter().map(|name| div().child(name.clone())))
+        .into_any_element()
 }
 
 #[cfg(test)]

@@ -23,6 +23,18 @@ impl QuickTarget {
     pub fn title(&self) -> String {
         super::strings::session_title(self.username.as_deref(), &self.host)
     }
+
+    /// The whole target as one address: `user@host:port`, with an IPv6
+    /// address in brackets when a port follows (the "Press Enter to connect
+    /// to ..." hint of an empty search result).
+    pub fn display(&self) -> String {
+        let host = match self.port {
+            Some(port) if self.host.contains(':') => format!("[{}]:{port}", self.host),
+            Some(port) => format!("{}:{port}", self.host),
+            None => self.host.clone(),
+        };
+        super::strings::session_title(self.username.as_deref(), &host)
+    }
 }
 
 /// Parses `input` as a connection address; `None` when it is a search query.
@@ -254,5 +266,18 @@ mod tests {
     fn titles() {
         assert_eq!(parse_address("root@db.lan").unwrap().title(), "root@db.lan");
         assert_eq!(parse_address("db.lan").unwrap().title(), "db.lan");
+    }
+
+    #[test]
+    fn display_keeps_the_user_and_the_port() {
+        let display = |input: &str| parse_address(input).unwrap().display();
+        assert_eq!(display("ssh root@db.lan -p 2222"), "root@db.lan:2222");
+        assert_eq!(display("db.lan"), "db.lan");
+        assert_eq!(
+            display("admin@[2001:db8::1]:2222"),
+            "admin@[2001:db8::1]:2222"
+        );
+        assert_eq!(display("::1"), "::1");
+        assert_eq!(display("ssh -l admin 192.0.2.7"), "admin@192.0.2.7");
     }
 }

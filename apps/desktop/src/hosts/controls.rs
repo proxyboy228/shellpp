@@ -25,7 +25,8 @@ pub const ICON_SIZE: Pixels = px(16.);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlKind {
     /// `--bg-raised`, hover `--bg-raised-hover`, pressed `--bg-pressed`,
-    /// text `--text-primary` (New host, Terminal, Serial, Create host).
+    /// text `--text-primary` (New host, Terminal, Serial; Create host while
+    /// a details panel is open).
     Neutral,
     /// The one primary action of the screen: `--accent`, hover
     /// `--accent-hover`, pressed `--accent-pressed`, text `--text-on-accent`.

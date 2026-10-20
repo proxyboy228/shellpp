@@ -3,15 +3,23 @@
 //! grid or the list (2.3), and the card actions: clicks, keys, the context
 //! menu, multiple selection and drag and drop (2.3, 2.4).
 //!
+//! Stage 2a step 0: the list layout has columns Name | Address | User |
+//! Tags (or the group) under a header whose dividers resize them (widths
+//! remembered); a search that is an address and matches nothing offers
+//! "Press Enter to connect to ..." and "Save as host"; the empty vault's
+//! "Create host" is the accent button while no details panel is open (an
+//! open host or group panel holds the screen's one accent button).
+//!
 //! The screen talks to the shell through two event types:
 //! - [`HostsEvent`]: open the host or group panel, show a plain toast;
 //! - [`HostsRequest`]: open a session tab (a placeholder until terminals
 //!   exist), open the host panel focused on Address (E), a toast with an
-//!   action button ("Save host?", Undo), and whether the search text is a
+//!   action button (Undo), and whether the search text is a
 //!   recognized address (then the host panel's Connect is not the accent
 //!   button: one accent-filled button per screen, lead decision 3).
 //!
-//! Module map: [`address`] (quick-connect parser), [`layout`] (columns,
+//! Module map: [`address`] (quick-connect parser), [`columns`] (the list
+//! layout's column widths and their settings), [`layout`] (grid columns,
 //! the action bar at narrow widths, keyboard navigation, subtitle, tile
 //! icon), [`menu`] (context menu model and builder), [`tag_filter`] (the tag
 //! dropdown and its chips), [`controls`] (buttons and chips per
@@ -25,6 +33,7 @@
 //! Copy to a group.
 
 pub mod address;
+pub mod columns;
 pub mod controls;
 mod dialogs;
 pub mod layout;
@@ -53,6 +62,7 @@ use crate::state::hosts_view::{
     self, HostsFilter, HostsLayout, HostsListing, HostsSort, TagCount, group_tree, subtree_of,
 };
 use crate::state::{AppState, AppStateEvent, GroupItem, HostItem, SelectMode};
+use columns::{Column, ListColumns};
 use layout::BarPlan;
 use tag_filter::{TagFilterEvent, TagFilterMenu};
 
@@ -105,7 +115,7 @@ pub struct SessionRequest {
 /// The action button of a toast.
 #[derive(Clone)]
 pub struct ToastAction {
-    /// Element id of the button (`toast-save-host`, `toast-undo`).
+    /// Element id of the button (`toast-undo`).
     pub id: SharedString,
     pub label: SharedString,
     pub run: ToastHandler,
@@ -132,8 +142,8 @@ pub enum HostsRequest {
     /// Open the host panel with the focus in Address (E, Edit Host Details;
     /// lead decision 8).
     EditHost(Uuid),
-    /// A toast with one action button, shown for 5 seconds ("Save host?"
-    /// after a quick connect, Undo after Remove).
+    /// A toast with one action button, shown for 5 seconds (Undo after
+    /// Remove).
     ToastWithAction {
         message: SharedString,
         action: ToastAction,
@@ -179,6 +189,12 @@ pub fn group_card_id(id: Uuid) -> SharedString {
     format!("group-card-{id}").into()
 }
 
+/// Stable element id of a cell of a list row: `column` is `name`,
+/// `address`, `user` or `tags`.
+pub fn list_cell_id(record: Uuid, column: &str) -> SharedString {
+    format!("list-cell-{column}-{record}").into()
+}
+
 /// Stable element id of the chip of a tag that is on (the tag filter).
 pub fn tag_chip_id(tag: &str) -> SharedString {
     format!("tag-chip-{}", tag.to_lowercase()).into()
@@ -221,6 +237,13 @@ pub struct HostsScreen {
     layout_key: (usize, usize, i32),
     columns: usize,
     card_width: f32,
+    /// The chosen widths of the list layout's columns (remembered).
+    list_columns: ListColumns,
+    /// The widths on display in the last frame: Name, Address, User, Tags.
+    fitted_columns: [f32; 4],
+    /// A header divider is being dragged: the widths are saved when the
+    /// mouse button goes up.
+    column_resizing: bool,
     /// Width of the content area, measured after layout (the details panel
     /// narrows it).
     measured_width: Option<f32>,
@@ -233,6 +256,8 @@ pub struct HostsScreen {
     /// The card of the last single click: a second click counts as a double
     /// click only on the same card.
     last_click: Option<Uuid>,
+    /// A card to scroll into view once its row exists (the next layout).
+    reveal: Option<Uuid>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -291,9 +316,13 @@ impl HostsScreen {
                 TagFilterEvent::Clear => this.clear_tags(cx),
             },
         );
-        let (layout, sort) = {
+        let (layout, sort, list_columns) = {
             let state = state.read(cx);
-            (state.hosts_layout(), state.hosts_sort())
+            (
+                state.hosts_layout(),
+                state.hosts_sort(),
+                state.hosts_list_columns(),
+            )
         };
         let mut this = Self {
             state,
@@ -315,12 +344,16 @@ impl HostsScreen {
             layout_key: (0, 0, 0),
             columns: 1,
             card_width: 0.,
+            list_columns,
+            fitted_columns: [0.; 4],
+            column_resizing: false,
             measured_width: None,
             search_text_width: None,
             scroll: VirtualListScrollHandle::new(),
             // The cards are one tab stop; the arrows move inside them.
             focus: cx.focus_handle().tab_stop(true),
             last_click: None,
+            reveal: None,
             _subscriptions: vec![search_subscription, state_subscription, tag_subscription],
         };
         this.refresh(cx);
@@ -429,6 +462,18 @@ impl HostsScreen {
         self.bar_plan
     }
 
+    /// The tags that are on but collapsed into "+N" in the last frame (their
+    /// display names, in selection order): the "+N" tooltip lists them.
+    pub fn hidden_tags(&self) -> Vec<String> {
+        let shown = self.bar_plan.map_or(0, |plan| plan.chips);
+        self.filter
+            .tags()
+            .iter()
+            .skip(shown)
+            .map(|key| self.tag_name(key))
+            .collect()
+    }
+
     /// Card columns of the last layout (1 in the list layout).
     pub fn columns(&self) -> usize {
         self.columns
@@ -437,6 +482,17 @@ impl HostsScreen {
     /// The width of one card column of the last layout, in pixels.
     pub fn card_width(&self) -> f32 {
         self.card_width
+    }
+
+    /// The chosen column widths of the list layout.
+    pub fn list_columns(&self) -> ListColumns {
+        self.list_columns
+    }
+
+    /// The column widths of the list layout on display in the last frame:
+    /// Name, Address, User, Tags.
+    pub fn fitted_columns(&self) -> [f32; 4] {
+        self.fitted_columns
     }
 
     /// The context menu a right click on `card` would show (the model).
@@ -465,6 +521,36 @@ impl HostsScreen {
             tracing::warn!(code = error.code(), "hosts layout not saved");
         }
         self.layout_key = (0, 0, 0);
+        cx.notify();
+    }
+
+    /// A header divider of the list layout dragged to `x` px from the start
+    /// of the rows' content: the column on its left follows the pointer.
+    fn drag_column(&mut self, column: Column, x: f32, cx: &mut Context<Self>) {
+        let next = self
+            .list_columns
+            .dragged(column, x, self.list_row_inner_width());
+        self.column_resizing = true;
+        if next != self.list_columns {
+            self.list_columns = next;
+            self.fitted_columns = next.fit(self.list_row_inner_width());
+            cx.notify();
+        }
+    }
+
+    /// The end of a divider drag: the widths are remembered.
+    fn finish_column_resize(&mut self, cx: &mut Context<Self>) {
+        if !self.column_resizing {
+            return;
+        }
+        self.column_resizing = false;
+        let columns = self.list_columns;
+        if let Err(error) = self
+            .state
+            .update(cx, |state, _| state.set_hosts_list_columns(columns))
+        {
+            tracing::warn!(code = error.code(), "list column widths not saved");
+        }
         cx.notify();
     }
 
@@ -746,6 +832,23 @@ impl HostsScreen {
         cx.notify();
     }
 
+    /// Scrolls the card waiting in `reveal` into view (after the rows were
+    /// rebuilt for the frame).
+    fn reveal_pending(&mut self) {
+        let Some(id) = self.reveal.take() else {
+            return;
+        };
+        if let Some(row) = self
+            .visible_ids()
+            .iter()
+            .position(|visible| *visible == id)
+            .and_then(|index| self.row_of(index))
+        {
+            self.scroll
+                .scroll_to_item(row, gpui::ScrollStrategy::Nearest);
+        }
+    }
+
     /// The virtual-list row that shows item `index` of `visible_ids`.
     fn row_of(&self, index: usize) -> Option<usize> {
         let groups = self.listing.groups.len();
@@ -765,37 +868,33 @@ impl HostsScreen {
         match self.search_target.clone() {
             SearchTarget::None => {}
             SearchTarget::Saved(id) => self.connect_hosts(&[id], SessionKind::Ssh, false, cx),
+            // The offer to save the host (2.1) comes from the shell once the
+            // session has connected, not here.
             SearchTarget::Quick(target) => {
                 cx.emit(HostsRequest::OpenSession(SessionRequest {
                     kind: SessionKind::Ssh,
                     host: None,
                     title: target.title().into(),
-                    target: Some(target.clone()),
+                    target: Some(target),
                     new_window: false,
                 }));
-                // The offer to save the host after a quick connect (2.1).
-                let screen = cx.entity().downgrade();
-                cx.emit(HostsRequest::ToastWithAction {
-                    message: strings::SAVE_HOST_OFFER.into(),
-                    action: ToastAction {
-                        id: "toast-save-host".into(),
-                        label: strings::SAVE_HOST_ACTION.into(),
-                        run: Rc::new(move |_, cx| {
-                            let target = target.clone();
-                            let _ = screen
-                                .update(cx, |screen, cx| screen.save_quick_target(&target, cx));
-                        }),
-                    },
-                });
             }
         }
     }
 
     /// "Save host?" accepted: creates the host from the quick-connect
-    /// target, selects it and opens its panel.
-    pub fn save_quick_target(&mut self, target: &QuickTarget, cx: &mut Context<Self>) {
+    /// target in the group on screen (like New host), selects it and opens
+    /// its panel. Returns its id.
+    pub fn save_quick_target(
+        &mut self,
+        target: &QuickTarget,
+        cx: &mut Context<Self>,
+    ) -> Option<Uuid> {
         let mut data = Map::new();
         data.insert("address".to_owned(), Value::from(target.host.clone()));
+        if let Some(group) = self.state.read(cx).location() {
+            data.insert("group_id".to_owned(), json!(group));
+        }
         let mut ssh = Map::new();
         if let Some(user) = &target.username {
             ssh.insert("username".to_owned(), Value::from(user.clone()));
@@ -817,12 +916,33 @@ impl HostsScreen {
                     state.select(id, SelectMode::Replace, &order, cx)
                 });
                 cx.emit(HostsEvent::OpenHost(id));
+                Some(id)
             }
             Err(error) => {
                 tracing::warn!(code = error.code(), "quick-connect host not saved");
                 cx.emit(HostsEvent::Toast(strings::FAILED.into()));
+                None
             }
         }
+    }
+
+    /// "Save as host" of an empty search result (owner's step 0.2): saves
+    /// the address like "Save host?", then empties the search, so the group
+    /// on screen shows the new host, selected and scrolled into view.
+    fn save_search_address(
+        &mut self,
+        target: &QuickTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.save_quick_target(target, cx) else {
+            return;
+        };
+        self.search
+            .update(cx, |search, cx| search.set_value("", window, cx));
+        self.filter.set_text("");
+        self.refilter(cx);
+        self.reveal = Some(id);
     }
 
     /// Opens one session tab per host.

@@ -83,12 +83,15 @@ pub struct BarPlan {
     pub chips: usize,
 }
 
-/// Plans the action bar so nothing overlaps or is clipped: one row with
-/// every label while it fits (the tag chips collapse into "+N" first), then
-/// Terminal and Serial as icons, then New host as an icon too; when even
-/// that does not fit, the right group wraps to a second row, and the left
-/// group keeps the widest labels that fit its row. `more(n)` is the width of
-/// the "+n" chip.
+/// Plans the action bar so nothing overlaps or is clipped (owner's step 0.1):
+/// one row with every label while it fits, the tag chips that do not fit
+/// collapsing into "+N" but at least one chip staying; then Terminal and
+/// Serial as icons, then New host as an icon too; when even that leaves no
+/// room for one chip, the right group wraps to a second row (the left group
+/// keeps the widest labels that fit its row) and shows the chips that fit
+/// that row. "+N" stands alone only when not even one chip fits the second
+/// row; the bar then stays one row if "+N" fits it. `more(n)` is the width
+/// of the "+n" chip.
 pub fn plan_action_bar(measure: &BarMeasure, more: impl Fn(usize) -> f32) -> BarPlan {
     use super::tag_filter::{chips_room, chips_that_fit};
     let BarMeasure {
@@ -99,17 +102,27 @@ pub fn plan_action_bar(measure: &BarMeasure, more: impl Fn(usize) -> f32) -> Bar
         gap,
         chip_gap,
     } = measure;
-    // With a tag on, at least its "+N" chip must fit.
-    let least_chips = chips_room(chips, 0, *gap, *chip_gap, &more);
-    for labels in BarLabels::ALL {
-        let room = available - left[labels.index()] - gap - right;
-        if room + 0.5 >= least_chips {
-            return BarPlan {
+    let one_row = |least: f32| {
+        BarLabels::ALL.into_iter().find_map(|labels| {
+            let room = available - left[labels.index()] - gap - right;
+            (room + 0.5 >= least).then(|| BarPlan {
                 labels,
                 wrapped: false,
                 chips: chips_that_fit(chips, room, *gap, *chip_gap, &more),
-            };
-        }
+            })
+        })
+    };
+    // With a tag on, its first chip (and "+N" for the others) should fit.
+    let one_chip = chips_room(chips, 1, *gap, *chip_gap, &more);
+    if let Some(plan) = one_row(one_chip) {
+        return plan;
+    }
+    let wrapped_chips = chips_that_fit(chips, available - right, *gap, *chip_gap, &more);
+    if wrapped_chips == 0
+        && !chips.is_empty()
+        && let Some(plan) = one_row(chips_room(chips, 0, *gap, *chip_gap, &more))
+    {
+        return plan;
     }
     let labels = BarLabels::ALL
         .into_iter()
@@ -118,7 +131,7 @@ pub fn plan_action_bar(measure: &BarMeasure, more: impl Fn(usize) -> f32) -> Bar
     BarPlan {
         labels,
         wrapped: true,
-        chips: chips_that_fit(chips, available - right, *gap, *chip_gap, &more),
+        chips: wrapped_chips,
     }
 }
 
@@ -206,6 +219,29 @@ pub fn subtitle(host: &HostItem, group_name: Option<&str>) -> String {
     parts.join(", ")
 }
 
+/// What the last column of the list layout shows for a host (owner's step
+/// 0.4): its tags, or, when it has none, its group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LastColumn {
+    /// The tags, comma-separated.
+    Tags(String),
+    /// The name of the host's group (shown with the folder icon).
+    Group(String),
+    /// No tags and no group.
+    Empty,
+}
+
+/// The last list column of `host`; `group_name` is its group's name.
+pub fn last_column(host: &HostItem, group_name: Option<&str>) -> LastColumn {
+    if !host.tags.is_empty() {
+        LastColumn::Tags(host.tags.join(", "))
+    } else if let Some(group) = group_name {
+        LastColumn::Group(group.to_owned())
+    } else {
+        LastColumn::Empty
+    }
+}
+
 /// The white monochrome tile icon (UI 2.3, design-system 3.1): an OS icon
 /// once the OS is detected, else the neutral server icon. Never a letter.
 ///
@@ -282,12 +318,50 @@ mod tests {
                 chips: 2
             }
         );
-        // Less room: the chips collapse before any label does.
+        // Less room: the chips collapse into "+N" first, down to one chip.
         assert_eq!(
-            plan_action_bar(&measure(600., vec![60., 70.]), more),
+            plan_action_bar(&measure(640., vec![60., 70.]), more),
             BarPlan {
                 labels: BarLabels::Full,
                 wrapped: false,
+                chips: 1
+            }
+        );
+        // Then Terminal and Serial lose their labels before the last chip
+        // goes: never "+N" alone while a chip fits (owner's step 0.1).
+        assert_eq!(
+            plan_action_bar(&measure(600., vec![60., 70.]), more),
+            BarPlan {
+                labels: BarLabels::LocalIcons,
+                wrapped: false,
+                chips: 2
+            }
+        );
+        // The minimum window with the details panel (524 - 48 px): New host
+        // too, then one chip and "+1" (it showed "+2" alone before).
+        assert_eq!(
+            plan_action_bar(&measure(476., vec![67., 80.]), more),
+            BarPlan {
+                labels: BarLabels::Icons,
+                wrapped: false,
+                chips: 1
+            }
+        );
+        // A chip too wide even for a row of its own: "+N" alone, in one row
+        // while it fits.
+        assert_eq!(
+            plan_action_bar(&measure(700., vec![600.]), more),
+            BarPlan {
+                labels: BarLabels::Full,
+                wrapped: false,
+                chips: 0
+            }
+        );
+        assert_eq!(
+            plan_action_bar(&measure(300., vec![400., 50.]), more),
+            BarPlan {
+                labels: BarLabels::LocalIcons,
+                wrapped: true,
                 chips: 0
             }
         );
@@ -382,6 +456,16 @@ mod tests {
         host.username = None;
         host.tags.clear();
         assert_eq!(subtitle(&host, None), "SSH");
+        assert_eq!(last_column(&host, None), LastColumn::Empty);
+        assert_eq!(
+            last_column(&host, Some("Production")),
+            LastColumn::Group("Production".to_owned())
+        );
+        host.tags = vec!["prod".to_owned(), "db".to_owned()];
+        assert_eq!(
+            last_column(&host, Some("Production")),
+            LastColumn::Tags("prod, db".to_owned())
+        );
         assert_eq!(os_icon(None), IconName::Server);
         assert_eq!(os_icon(Some("linux")), IconName::SquareTerminal);
         assert_eq!(os_icon(Some("other")), IconName::Server);
