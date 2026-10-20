@@ -108,6 +108,8 @@ pub enum ProblemKind {
     IncludeMissing,
     /// `Include` deeper than [`MAX_INCLUDE_DEPTH`] or in a loop.
     IncludeLoop,
+    /// An `Include` of a network path ([`is_network_path`]), not followed.
+    IncludeNetwork,
     /// A file over [`MAX_FILE_BYTES`], or too many lines.
     TooLarge,
     /// A `Match` criterion this import does not evaluate; the block never applies.
@@ -164,6 +166,20 @@ fn words(line: &str) -> Option<Vec<String>> {
 }
 
 /// `~/` and `~` at the start become the home folder.
+/// A path that names another machine: `\\server\share`, `//server/share`
+/// (and the `\\?\UNC\` and `\\.\` forms, which start the same way). An
+/// import never opens one: on Windows that alone connects to the server
+/// and offers it the user's NTLM credentials (security.md 13.5, "Include
+/// follows only local files").
+pub fn is_network_path(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    let mut start = text.chars().take(2);
+    matches!(
+        (start.next(), start.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    )
+}
+
 pub fn expand_home(path: &str, home: &Path) -> PathBuf {
     if path == "~" {
         return home.to_path_buf();
@@ -413,6 +429,12 @@ impl Reader<'_> {
                 }
                 "include" => {
                     for argument in &parts {
+                        if is_network_path(&expand_home(argument, self.home)) {
+                            self.config
+                                .problems
+                                .push(problem(ProblemKind::IncludeNetwork, Some(location(number))));
+                            continue;
+                        }
                         let files = include_files(argument, &self.base, self.home);
                         if files.is_empty() && !argument.contains(['*', '?']) {
                             self.config

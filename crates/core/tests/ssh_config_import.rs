@@ -282,3 +282,47 @@ fn a_missing_file_and_include_loops_are_reported() {
         .unwrap();
     assert_eq!(summary.added, 1, "only the chosen host");
 }
+
+#[test]
+fn network_paths_are_never_opened() {
+    let u = first_run();
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    // Documentation names only (RFC 2606); neither path is ever opened.
+    write(
+        &ssh.join("config"),
+        &[
+            r"Include \\files.example.invalid\share\more",
+            "Include //files.example.invalid/share/other",
+            "Host one",
+            "  HostName 192.0.2.1",
+            r"  IdentityFile \\files.example.invalid\keys\id",
+            "Host two",
+            "  HostName 192.0.2.2",
+            "  IdentityFile //files.example.invalid/keys/id2",
+            "",
+        ]
+        .join("\n"),
+    );
+    let source = SshConfigSource {
+        path: ssh.join("config"),
+        home: home.path().to_path_buf(),
+    };
+    let preview = u.core.ssh_config_preview(source).unwrap();
+    let network: Vec<&String> = preview
+        .problems
+        .iter()
+        .filter(|problem| problem.contains("network path"))
+        .collect();
+    assert_eq!(network.len(), 2, "{:?}", preview.problems);
+    assert_eq!(preview.hosts.len(), 2);
+    assert_eq!(preview.keys.len(), 2);
+    for key in &preview.keys {
+        assert_eq!(
+            key.status,
+            KeyFileStatus::Invalid("a network path is not read".to_owned()),
+            "{}",
+            key.path
+        );
+    }
+}

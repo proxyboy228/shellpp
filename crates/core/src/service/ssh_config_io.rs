@@ -257,6 +257,7 @@ fn problem_text(problem: &ssh_config::Problem) -> String {
         ProblemKind::Malformed => "a line that cannot be read".to_owned(),
         ProblemKind::IncludeMissing => "Include matches no readable file".to_owned(),
         ProblemKind::IncludeLoop => "Include loops or nests too deep".to_owned(),
+        ProblemKind::IncludeNetwork => "Include of a network path is not followed".to_owned(),
         ProblemKind::TooLarge => "the file is too large".to_owned(),
         ProblemKind::MatchUnsupported(name) => {
             format!("Match {name} is not supported; the block is ignored")
@@ -271,8 +272,14 @@ fn problem_text(problem: &ssh_config::Problem) -> String {
     format!("{file}:{}: {what}", problem.line.line)
 }
 
-/// Reads a key file within the size limit.
+/// Reads a key file within the size limit; a network path is never opened
+/// ([`ssh_config::is_network_path`]).
 fn read_key_file(path: &Path) -> Result<String, KeyFileStatus> {
+    if ssh_config::is_network_path(path) {
+        return Err(KeyFileStatus::Invalid(
+            "a network path is not read".to_owned(),
+        ));
+    }
     match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_KEY_FILE_BYTES => {
             Err(KeyFileStatus::Invalid("the file is too large".to_owned()))
