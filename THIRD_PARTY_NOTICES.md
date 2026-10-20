@@ -144,6 +144,7 @@ means the crate is available under either license.
 | ctutils | 0.4.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/utils> |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib | <https://github.com/rust-windowing/cursor-icon> |
 | curve25519-dalek | 5.0.0 | BSD-3-Clause | <https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek> |
+| dashmap | 6.2.1 | MIT | <https://github.com/xacrimon/dashmap> |
 | data-encoding | 2.11.1 | MIT | <https://github.com/ia0/data-encoding> |
 | data-url | 0.3.2 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
 | der | 0.8.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
@@ -464,6 +465,7 @@ means the crate is available under either license.
 | rusqlite | 0.40.2 | MIT | <https://github.com/rusqlite/rusqlite> |
 | russh | 0.64.1 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | russh-cryptovec | 0.62.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
+| russh-sftp | 3.0.1 | Apache-2.0 | <https://github.com/AspectUnk/russh-sftp> |
 | russh-util | 0.52.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | rust-embed | 8.13.0 | MIT | <https://pyrossh.dev/repos/rust-embed> |
 | rust-embed-utils | 8.13.0 | MIT | <https://pyrossh.dev/repos/rust-embed> |
@@ -556,6 +558,7 @@ means the crate is available under either license.
 | tinystr | 0.8.4 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | <https://github.com/Lokathor/tinyvec> |
 | tokio | 1.53.3 | MIT | <https://github.com/tokio-rs/tokio> |
+| tokio-util | 0.7.20 | MIT | <https://github.com/tokio-rs/tokio> |
 | tracing | 0.1.44 | MIT | <https://github.com/tokio-rs/tracing> |
 | tracing-core | 0.1.36 | MIT | <https://github.com/tokio-rs/tracing> |
 | tracing-subscriber | 0.3.23 | MIT | <https://github.com/tokio-rs/tracing> |

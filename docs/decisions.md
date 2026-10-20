@@ -700,3 +700,17 @@ Status: night decision, 2026-10-21 (second review of stage 3; D35; jump hosts ar
 - Stage 5 replaces the refusal with Host Chaining.
 
 **Spec impact:** none (a temporary rule until stage 5).
+
+### 45. The SFTP engine (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 1; UI 5).
+
+**Decision:**
+
+- SFTP is `russh-sftp` 3.0.1 (Apache-2.0; with `dashmap`, MIT) over a new channel of the existing `Connection` (`Connection::open_sftp`, the `sftp` subsystem): a host with an open terminal tab needs no second login. Up to 64 reads and 64 writes of 32 KiB are in flight per file, as OpenSSH's `sftp -R 64`.
+- `shellpp_ssh::sftp::Sftp`: list (a symbolic link is shown as a link with its target and whether that is a folder), stat, create and remove folders, remove files, rename, set permissions, a recursive delete that removes a link itself and never enters it, and download and upload through `<name>.part`, renamed when complete; `resume` continues a `.part` from its length. The modification time is kept; an upload's permissions follow the server's umask (the "keep permissions" option comes with the transfer queue). SFTP v3 cannot rename over a file: the old one is removed right before the rename.
+- Errors are `not found`, `permission denied`, `the connection was lost`, `timeout`, a local file error, or the server's own message (SFTP v3 has no code for a full disk).
+- Names that are not UTF-8 on the server are shown with U+FFFD (russh-sftp decodes them lossily) and cannot be opened; Windows long paths, invalid Windows names and the queue, panels and Open with come with the next parts of stage 4.
+- Measured (`SHELLPP_SFTP_BENCH=1`, 200 MB, release build): to the dev server over a ~50 ms link, upload 9.4 MB/s and download 8.1 MB/s against 8.2 and 8.5 MB/s for OpenSSH's `sftp` with the same key (115 % and 95 %; with russh-sftp's default of 16 requests the upload was 3.9 MB/s); to OpenSSH in local Docker, 158–177 and 135–145 MB/s against 108–120 and 138–148 MB/s.
+
+**Spec impact:** none yet (UI 5 is unchanged; the engine has no UI tonight).

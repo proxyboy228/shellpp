@@ -895,6 +895,30 @@ impl Connection {
         Ok(output)
     }
 
+    /// Starts SFTP on a new channel of this connection (stage 4, D45): the
+    /// `sftp` subsystem, then the protocol's version exchange. A server
+    /// without SFTP refuses the subsystem (`ChannelFailed`).
+    pub async fn open_sftp(&self) -> Result<crate::sftp::Sftp, SshError> {
+        let core = &self.core;
+        let mut channel = core.open_session_channel().await?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|_| core.failure(FailureKind::ChannelFailed))?;
+        let mut pending = VecDeque::new();
+        match wait_reply(&mut channel, &mut pending, core.request_timeout).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = channel.close().await;
+                return Err(SshError::new(FailureKind::ChannelFailed));
+            }
+            Err(kind) => return Err(core.failure(kind)),
+        }
+        crate::sftp::Sftp::start(channel.into_stream(), core.request_timeout)
+            .await
+            .map_err(|_| core.failure(FailureKind::ChannelFailed))
+    }
+
     /// `true` once the transport is gone.
     pub fn is_closed(&self) -> bool {
         self.core.is_closed()

@@ -16,7 +16,8 @@ publish.workspace = true
 # section 4.2).
 [dependencies]
 russh.workspace = true
-tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time"] }
+russh-sftp.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time", "fs"] }
 secrecy.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
@@ -28,6 +29,7 @@ shellpp-test-sshd.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 tempfile.workspace = true
 rand.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

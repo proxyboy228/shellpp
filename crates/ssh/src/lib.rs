@@ -33,6 +33,7 @@ pub mod client;
 pub mod error;
 mod handler;
 pub mod reconnect;
+pub mod sftp;
 mod transport;
 
 pub use agent::{AgentLocation, SystemAgent};
@@ -44,3 +45,4 @@ pub use client::{
 };
 pub use error::{FailureKind, SshError};
 pub use reconnect::{Backoff, RECONNECT_DELAYS_S, RECONNECT_STEADY_S};
+pub use sftp::{EntryKind, RemoteEntry, Sftp, SftpError};
