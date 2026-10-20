@@ -648,7 +648,8 @@ impl Core {
             .ok_or(CoreError::Internal("duplicate missing"))
     }
 
-    /// The value of a secret field (reveal and copy).
+    /// The value of a secret field (reveal and copy): a host's passwords, a
+    /// key's private key and saved passphrase (UI 3.1, 7.3).
     fn secret_text(
         session: &Session,
         vault_id: Uuid,
@@ -659,12 +660,21 @@ impl Core {
         let record = session
             .index
             .get(&record_id)
-            .filter(|record| matches!(record.kind, RecordKind::Host | RecordKind::Group))
+            .filter(|record| {
+                matches!(
+                    record.kind,
+                    RecordKind::Host | RecordKind::Group | RecordKind::Key
+                )
+            })
             .ok_or(CoreError::NotFound)?;
         if !record.kind.secret_paths().contains(&path) {
             return Err(CoreError::field("path", ValidationReason::NotAllowed));
         }
-        host::secret_value(record.data(), path)
+        let value = match record.kind {
+            RecordKind::Key => crate::model::key::secret_value(record.data(), path),
+            _ => host::secret_value(record.data(), path),
+        };
+        value
             .map(|value| SecretString::from(value.to_owned()))
             .ok_or(CoreError::NotFound)
     }

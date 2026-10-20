@@ -89,6 +89,16 @@ pub fn passphrase(data: &Map<String, Value>) -> Option<&str> {
     non_empty(data, "passphrase")
 }
 
+/// The value of a secret path ([`SECRET_PATHS`]), if set: the Keychain's
+/// Show and Copy private key buttons (UI 7.3) read `private_key`.
+pub fn secret_value<'a>(data: &'a Map<String, Value>, path: &str) -> Option<&'a str> {
+    match path {
+        "private_key" => private_key(data),
+        "passphrase" => passphrase(data),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +132,17 @@ mod tests {
         set_passphrase(&mut data, None);
         assert_eq!(passphrase(&data), None);
         assert!(!data.contains_key("passphrase"));
+    }
+
+    #[test]
+    fn secret_values_by_path() {
+        let data = new_stored("k", "PRIVATE", "ssh-ed25519 AAAA", Some("pp"));
+        assert_eq!(secret_value(&data, "private_key"), Some("PRIVATE"));
+        assert_eq!(secret_value(&data, "passphrase"), Some("pp"));
+        assert_eq!(secret_value(&data, "public_key"), None);
+        assert_eq!(secret_value(&data, "label"), None);
+        let without = new_stored("k", "PRIVATE", "ssh-ed25519 AAAA", None);
+        assert_eq!(secret_value(&without, "passphrase"), None);
     }
 
     #[test]
