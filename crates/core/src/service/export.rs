@@ -135,17 +135,48 @@ fn same_content(
     incoming: &Map<String, Value>,
     map: &HashMap<Uuid, Uuid>,
 ) -> bool {
-    let members = |data: &Map<String, Value>| {
-        data.iter()
-            .filter(|(name, _)| name.as_str() != "order_key")
-            .count()
-    };
+    same_content_except(local, incoming, map, &[])
+}
+
+/// [`same_content`], the `ignored` members aside too.
+fn same_content_except(
+    local: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    map: &HashMap<Uuid, Uuid>,
+    ignored: &[&str],
+) -> bool {
+    let kept = |name: &str| name != "order_key" && !ignored.contains(&name);
+    let members = |data: &Map<String, Value>| data.keys().filter(|name| kept(name)).count();
     members(local) == members(incoming)
         && incoming.iter().all(|(name, value)| {
-            name == "order_key"
+            !kept(name)
                 || local
                     .get(name)
                     .is_some_and(|here| same_value(here, value, map))
+        })
+}
+
+/// Whether `copy`, a copy an earlier import made of a record, still holds
+/// what `incoming` holds: the same content apart from its import key and
+/// the suffix on its label. A copy the user changed, or an export of a
+/// newer version of the record, does not match.
+fn same_copy(
+    kind: RecordKind,
+    copy: &Map<String, Value>,
+    incoming: &Map<String, Value>,
+    map: &HashMap<Uuid, Uuid>,
+) -> bool {
+    let label = label_member(kind);
+    let mut ignored = vec!["import_key"];
+    ignored.extend(label);
+    same_content_except(copy, incoming, map, &ignored)
+        && label.is_none_or(|member| {
+            copy.get(member).and_then(Value::as_str)
+                == incoming
+                    .get(member)
+                    .and_then(Value::as_str)
+                    .map(suffixed)
+                    .as_deref()
         })
 }
 
@@ -702,9 +733,39 @@ impl Core {
                     rest.push(record);
                 }
             }
+            // Then the copies earlier imports made of these records, while
+            // they still hold the same: until no other one is found, since a
+            // copy that names another copied record matches only once that
+            // one is mapped.
+            loop {
+                let index = &parts.session.index;
+                let found: Vec<(usize, Uuid)> = rest
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, record)| {
+                        let local = index.get(&record.record_id)?;
+                        if local.kind == record.kind
+                            && same_content(local.data(), &record.data, &map)
+                        {
+                            return None;
+                        }
+                        let copy = *copies.get(&(record.kind, record.record_id))?;
+                        let held = index.get_kind(&copy, record.kind)?;
+                        same_copy(record.kind, held.data(), &record.data, &map)
+                            .then_some((at, copy))
+                    })
+                    .collect();
+                if found.is_empty() {
+                    break;
+                }
+                for (at, copy) in found.into_iter().rev() {
+                    let record = rest.remove(at);
+                    map.insert(record.record_id, copy);
+                    summary.existing += 1;
+                }
+            }
             // Then the others, compared with those references rewritten: an
-            // id here with other content is a conflict, unless an earlier
-            // import of the same record made its copy already.
+            // id here with other content is a conflict.
             let mut decided: Vec<(Incoming, Option<Uuid>)> = Vec::new();
             for record in rest {
                 let local = parts.session.index.get(&record.record_id);
@@ -716,11 +777,6 @@ impl Core {
                         summary.existing += 1;
                     }
                     Some(_) => {
-                        if let Some(copy) = copies.get(&(record.kind, record.record_id)) {
-                            map.insert(record.record_id, *copy);
-                            summary.existing += 1;
-                            continue;
-                        }
                         let copy = parts.ids.next(now);
                         map.insert(record.record_id, copy);
                         decided.push((record, Some(copy)));

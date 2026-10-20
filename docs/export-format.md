@@ -137,7 +137,9 @@ merges them into the personal vault (D34):
   " (imported)" on its label or name and the `import_key`
   `json:<exported record_id>`; references inside the import point to it.
   A later import of the same record finds that copy by its `import_key`
-  and adds no other one. Existing records are never overwritten (D21).
+  and adds no other one while the copy holds the same (its label suffix
+  and `import_key` aside); a newer version of the record becomes another
+  copy. Existing records are never overwritten (D21).
 - Keys and known hosts are matched first, so a record that names a key
   found here under another id points to the local key, and is "already
   exists" when that is its only difference.

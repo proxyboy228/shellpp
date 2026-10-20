@@ -12,9 +12,10 @@
 //! - A private key that is not encrypted is encrypted with the passphrase
 //!   given for the export, when one is given (UI 7.3 offers it); an
 //!   encrypted one is written as it is. A saved passphrase is never written.
-//! - Private key files get mode 0600 and the others 0644 on Unix; on
-//!   Windows the files inherit the folder's access list (a profile folder
-//!   allows only the user, SYSTEM and Administrators).
+//! - Private key files are for the user only before a byte is written
+//!   (`shellpp_private_file`, D42: mode 0600 on Unix, a protected DACL with
+//!   the user alone on Windows); the others get 0644 on Unix and the
+//!   folder's access list on Windows.
 //! - Existing files are never replaced unless `overwrite` is set; without
 //!   it the export lists them and writes nothing.
 

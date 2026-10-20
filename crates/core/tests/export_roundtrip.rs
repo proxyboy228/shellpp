@@ -489,3 +489,111 @@ fn wrong_passwords_and_hostile_files_are_refused() {
     assert_eq!(summary.settings, 0, "settings left alone on request");
     assert!(summary.added >= 6);
 }
+
+/// A copy from an earlier import is matched only while it holds the same
+/// (D41): a newer version of the record in a later export is imported as
+/// another copy instead of being taken for the old one.
+#[test]
+fn a_newer_version_of_a_copied_record_is_not_dropped() {
+    let source = populated();
+    let first = source.core.data_export(DataExportInput::default()).unwrap();
+    let target = first_run();
+    import(&target.core, &first.text, None);
+    let db_id = |core: &Core| {
+        content(core)
+            .0
+            .into_iter()
+            .find(|((kind, _), data)| kind == "host" && data["label"] == "db")
+            .map(|((_, id), data)| (Uuid::parse_str(&id).unwrap(), data))
+            .unwrap()
+    };
+    // Changed on both sides: the first copy.
+    let (id, mut data) = db_id(&target.core);
+    data["notes"] = json!("changed here");
+    save(
+        &target.core,
+        target.vault_id,
+        Some(id),
+        RecordType::Host,
+        data,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(import(&target.core, &first.text, None).conflicts, 1);
+    // The source changes it again: its next export is not the old copy.
+    let (id, mut data) = db_id(&source.core);
+    data["address"] = json!("192.0.2.45");
+    save(
+        &source.core,
+        source.vault_id,
+        Some(id),
+        RecordType::Host,
+        data,
+        &[],
+    )
+    .unwrap();
+    let second = source.core.data_export(DataExportInput::default()).unwrap();
+    let summary = import(&target.core, &second.text, None);
+    assert_eq!(summary.conflicts, 1, "the newer version is kept as a copy");
+    let addresses: Vec<String> = content(&target.core)
+        .0
+        .into_iter()
+        .filter(|((kind, _), _)| kind == "host")
+        .filter_map(|(_, data)| data["address"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        addresses.contains(&"192.0.2.45".to_owned()),
+        "{addresses:?}"
+    );
+    // And that file once more adds nothing.
+    assert_eq!(import(&target.core, &second.text, None).conflicts, 0);
+}
+
+/// A record that names a record copied by an earlier import is the same
+/// once that copy is found, whatever the order of their types: no copy of
+/// it on the next import of the same file.
+#[test]
+fn records_that_name_a_copied_record_are_not_copied_again() {
+    let source = populated();
+    let first = source.core.data_export(DataExportInput::default()).unwrap();
+    let target = first_run();
+    import(&target.core, &first.text, None);
+    // The identity changes here, then the source adds a group that names it.
+    let identity = target.core.identities_list().unwrap()[0].clone();
+    target
+        .core
+        .identity_save(IdentitySaveInput {
+            vault_id: target.vault_id,
+            record_id: Some(identity.record_id),
+            label: "ops here".to_owned(),
+            username: "ops".to_owned(),
+            key_id: identity.key_id,
+            password: PasswordChange::Keep,
+        })
+        .unwrap();
+    save(
+        &source.core,
+        source.vault_id,
+        None,
+        RecordType::Group,
+        json!({"name": "by identity", "ssh": {"identity_id": identity.record_id.to_string()}}),
+        &[],
+    )
+    .unwrap();
+    let second = source.core.data_export(DataExportInput::default()).unwrap();
+    let summary = import(&target.core, &second.text, None);
+    assert_eq!(summary.conflicts, 1, "the identity");
+    assert_eq!(
+        summary.added, 1,
+        "the group, pointing to the identity's copy"
+    );
+    let again = import(&target.core, &second.text, None);
+    assert_eq!(again.conflicts, 0, "{again:?}");
+    assert_eq!(again.added, 0);
+    let groups = content(&target.core)
+        .0
+        .into_iter()
+        .filter(|((kind, _), data)| kind == "group" && data["name"] == "by identity (imported)")
+        .count();
+    assert_eq!(groups, 0);
+}
