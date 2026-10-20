@@ -1319,6 +1319,13 @@ pub struct SshConfigImportSummary {
     pub keys_existing: usize,
     /// Key files left out (missing, invalid, no passphrase given).
     pub keys_skipped: usize,
+    /// Imported hosts whose `ProxyJump` names a host that was not imported:
+    /// no jump chain is set (their notes say so).
+    pub jump_chains_left_out: usize,
+    /// Commands of the file that were neither run nor stored
+    /// (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,
+    /// `KnownHostsCommand`, `Match exec`; security.md 13.5).
+    pub commands_skipped: usize,
 }
 
 /// One record of an import that was not imported.

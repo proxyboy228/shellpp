@@ -376,7 +376,11 @@ On the right:
   hosts are checked), its status, the reason when it is not imported (ProxyCommand) and the
   options that are not imported; then the key files with their status and, for an encrypted
   one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
-  not be read. [decision]
+  not be read. An imported host keeps what was left out in its notes; a host whose ProxyJump
+  names a host that is not imported gets no jump hosts and a note that says so, never a
+  silent direct connection. The summary adds, when there are any, the hosts left without
+  their jump hosts and the commands of the file that were neither run nor imported
+  (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec). [decision]
 
 ### 2.6 Move or copy to a vault [decision]
 

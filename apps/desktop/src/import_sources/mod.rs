@@ -719,6 +719,22 @@ impl ImportSourcesDialog {
                 strings::SUMMARY_KEYS_SKIPPED,
                 summary.keys_skipped,
             ))
+            // Only when they happened: hosts left without their jump hosts
+            // (their notes say why) and the commands of the file.
+            .when(summary.jump_chains_left_out > 0, |this| {
+                this.child(row(
+                    "import-jump-left-out",
+                    strings::SUMMARY_JUMP_LEFT_OUT,
+                    summary.jump_chains_left_out,
+                ))
+            })
+            .when(summary.commands_skipped > 0, |this| {
+                this.child(row(
+                    "import-commands-skipped",
+                    strings::SUMMARY_COMMANDS_SKIPPED,
+                    summary.commands_skipped,
+                ))
+            })
     }
 }
 

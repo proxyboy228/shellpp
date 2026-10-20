@@ -172,6 +172,11 @@ fn hosts_keys_and_links_are_imported_once() {
     );
     assert_eq!(summary.keys_added, 2);
     assert_eq!(summary.keys_skipped, 1, "id_default is missing");
+    assert_eq!(
+        summary.commands_skipped, 2,
+        "legacy's ProxyCommand and the Match exec, neither run nor stored"
+    );
+    assert_eq!(summary.jump_chains_left_out, 0);
 
     let hosts: Vec<_> = u
         .core
@@ -217,6 +222,17 @@ fn hosts_keys_and_links_are_imported_once() {
         json!([bastion.record_id.to_string()])
     );
     assert_eq!(data("web-1")["ssh"]["agent_forwarding"], true);
+    // What the import left out is in the host's own notes (D35).
+    let notes = data("web-1")["notes"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(notes.contains("SendEnv"), "{notes}");
+    assert!(notes.contains("ciphers"), "{notes}");
+    assert!(
+        notes.contains("the user and port of the hop are not kept"),
+        "{notes}"
+    );
     assert_eq!(
         data("web-1")["ssh"]["env"],
         json!([{"name": "LANG", "value": "en_US.UTF-8"}, {"name": "TZ", "value": "UTC"}])
@@ -324,5 +340,80 @@ fn network_paths_are_never_opened() {
             "{}",
             key.path
         );
+    }
+}
+
+#[test]
+fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
+    let u = first_run();
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    write(
+        &ssh.join("config"),
+        "Host bastion\n  HostName 192.0.2.10\n\
+         Host legacy\n  HostName 192.0.2.11\n  ProxyCommand nc %h %p\n\
+         Host app\n  HostName 10.0.0.5\n  ProxyJump bastion\n\
+         Host old-app\n  HostName 10.0.0.6\n  ProxyJump legacy\n",
+    );
+    let source = SshConfigSource {
+        path: ssh.join("config"),
+        home: home.path().to_path_buf(),
+    };
+    // The preview names the refused hop.
+    let preview = u.core.ssh_config_preview(source.clone()).unwrap();
+    let old_app = preview
+        .hosts
+        .iter()
+        .find(|host| host.alias == "old-app")
+        .unwrap();
+    assert!(
+        old_app
+            .notes
+            .iter()
+            .any(|note| note.contains("ProxyJump legacy is not imported")),
+        "{:?}",
+        old_app.notes
+    );
+    // bastion left unchecked, legacy refused: neither app gets a chain,
+    // both say why, and the summary counts them.
+    let summary = u
+        .core
+        .ssh_config_import(SshConfigImportInput {
+            source,
+            aliases: Some(vec!["app".to_owned(), "old-app".to_owned()]),
+            passphrases: BTreeMap::new(),
+            save_passphrases: false,
+        })
+        .unwrap();
+    assert_eq!(summary.added, 2);
+    assert_eq!(summary.jump_chains_left_out, 2);
+    assert_eq!(summary.commands_skipped, 1);
+    let hosts: Vec<_> = u
+        .core
+        .records_query(RecordsQuery {
+            vault_id: None,
+            types: vec![RecordType::Host],
+            scope: QueryScope::All,
+            text: None,
+            tags: Vec::new(),
+            sort: SortMode::Manual,
+        })
+        .unwrap()
+        .into_iter()
+        .map(as_host)
+        .collect();
+    for label in ["app", "old-app"] {
+        let host = hosts
+            .iter()
+            .find(|host| host.data["label"] == label)
+            .unwrap();
+        assert!(
+            host.data["ssh"]
+                .get("jump_chain")
+                .is_none_or(Value::is_null),
+            "{label}"
+        );
+        let notes = host.data["notes"].as_str().unwrap_or_default();
+        assert!(notes.contains("no jump hosts are set"), "{label}: {notes}");
     }
 }

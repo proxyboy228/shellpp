@@ -168,6 +168,10 @@ fn a_config_is_previewed_chosen_and_imported(cx: &mut TestAppContext) {
     assert_eq!(summary.added, 1);
     assert_eq!(summary.keys_added, 1);
     assert!(ui.visible(cx, "import-summary"));
+    // legacy's ProxyCommand: counted, never run.
+    assert_eq!(summary.commands_skipped, 1);
+    assert!(ui.visible(cx, "import-commands-skipped"));
+    assert!(!ui.visible(cx, "import-jump-left-out"));
 
     // The core holds "web" with its key; "db" and "legacy" are not there.
     let core = ui

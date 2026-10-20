@@ -10,11 +10,16 @@
 //!   and the first one is linked as `ssh.key_id`;
 //! - `ProxyJump` → `ssh.jump_chain` when every hop is a host of this
 //!   config or of an earlier import (Host Chaining works from stage 5);
+//!   otherwise no chain is set, the host's notes say so and the summary
+//!   counts it, so a host never silently connects directly;
 //! - `ForwardAgent` → `ssh.agent_forwarding`, `ServerAliveInterval` →
 //!   `ssh.keepalive_s` (at most 3600), `SetEnv` → `ssh.env`;
 //! - `ProxyCommand` → the host is not imported ("not supported");
 //! - `SendEnv`, the forwardings (stage 5), `CertificateFile` and every
-//!   other keyword are listed in the host's notes as not imported.
+//!   other keyword are listed in the host's notes as not imported;
+//! - commands (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,
+//!   `KnownHostsCommand`, `Match exec`) are never run or stored, and the
+//!   summary counts them (security.md 13.5).
 //!
 //! Idempotent: a host carries `import_key` = `ssh_config:<alias>`
 //! (docs/data-model.md, section 18.4); a host with that key is "already
@@ -64,6 +69,31 @@ const MAPPED: &[&str] = &[
     "identitiesonly",
 ];
 
+/// Keywords that hold or allow a local command: never run or stored, and
+/// counted in the summary (security.md 13.5).
+const COMMANDS: [&str; 4] = [
+    "proxycommand",
+    "localcommand",
+    "permitlocalcommand",
+    "knownhostscommand",
+];
+
+/// The `notes` of an imported host: what the import left out.
+fn host_notes(notes: &[String]) -> Option<String> {
+    if notes.is_empty() {
+        return None;
+    }
+    let mut text = String::from("Imported from an OpenSSH config.");
+    for note in notes {
+        let line = format!("\n- {note}");
+        if text.len() + line.len() > host::MAX_NOTES_BYTES {
+            break;
+        }
+        text.push_str(&line);
+    }
+    Some(text)
+}
+
 /// The import key of a host from `~/.ssh/config`.
 pub fn import_key(alias: &str) -> String {
     format!("ssh_config:{alias}")
@@ -104,6 +134,8 @@ struct HostPlan {
     jump_raw: Vec<String>,
     notes: Vec<String>,
     error: Option<String>,
+    /// [`COMMANDS`] keywords among the options.
+    commands: usize,
 }
 
 fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
@@ -219,6 +251,12 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
                 Some(rest) => rest.split(']').next().unwrap_or(rest),
                 None => host.split(':').next().unwrap_or(host),
             };
+            if host != hop {
+                notes.push(format!(
+                    "ProxyJump {hop}: the user and port of the hop are not kept; \
+                     the jump host's own are used"
+                ));
+            }
             jump.push(host.to_owned());
         }
         if jump.len() > MAX_JUMP_HOPS {
@@ -248,6 +286,10 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         jump_raw,
         notes,
         error,
+        commands: COMMANDS
+            .iter()
+            .filter(|keyword| options.contains_key(**keyword))
+            .count(),
     }
 }
 
@@ -342,6 +384,14 @@ impl Core {
             .filter_map(|key| key.fingerprint)
             .collect();
         let aliases: HashSet<String> = plans.iter().map(|plan| plan.alias.to_lowercase()).collect();
+        let refused: HashMap<String, String> = plans
+            .iter()
+            .filter_map(|plan| {
+                plan.error
+                    .clone()
+                    .map(|reason| (plan.alias.to_lowercase(), reason))
+            })
+            .collect();
         let mut keys: Vec<SshConfigKeyPreview> = Vec::new();
         let mut seen_keys = HashSet::new();
         let mut hosts = Vec::new();
@@ -349,9 +399,16 @@ impl Core {
             let mut notes = plan.notes.clone();
             for hop in &plan.jump {
                 let hop = hop.to_lowercase();
-                if !aliases.contains(&hop) && !imported.contains_key(&hop) {
+                if imported.contains_key(&hop) {
+                    continue;
+                }
+                if !aliases.contains(&hop) {
                     notes.push(format!(
                         "ProxyJump {hop} is not a host of this config; the chain is not imported"
+                    ));
+                } else if let Some(reason) = refused.get(&hop) {
+                    notes.push(format!(
+                        "ProxyJump {hop} is not imported ({reason}); the chain is not imported"
                     ));
                 }
             }
@@ -428,13 +485,24 @@ impl Core {
             let inner = self.inner();
             Self::require_session(&inner)?.ring.vault_id()
         };
-        let (_, plans) = Self::ssh_config_plans(&input.source)?;
+        let (config, plans) = Self::ssh_config_plans(&input.source)?;
         let mut imported = self.imported_aliases()?;
+        let mut summary = SshConfigImportSummary {
+            commands_skipped: plans.iter().map(|plan| plan.commands).sum::<usize>()
+                + config
+                    .problems
+                    .iter()
+                    .filter(|problem| {
+                        matches!(&problem.kind, ProblemKind::MatchUnsupported(name)
+                            if name.eq_ignore_ascii_case("exec"))
+                    })
+                    .count(),
+            ..SshConfigImportSummary::default()
+        };
         let chosen: Option<HashSet<String>> = input
             .aliases
             .as_ref()
             .map(|aliases| aliases.iter().map(|alias| alias.to_lowercase()).collect());
-        let mut summary = SshConfigImportSummary::default();
         let mut selected: Vec<HostPlan> = Vec::new();
         for plan in plans {
             let alias = plan.alias.to_lowercase();
@@ -506,18 +574,41 @@ impl Core {
             if let Some(key_id) = plan.key_files.iter().find_map(|path| key_ids.get(path)) {
                 ssh.insert("key_id".into(), json!(key_id.to_string()));
             }
+            let mut notes = plan.notes.clone();
             let chain: Option<Vec<String>> = plan
                 .jump
                 .iter()
                 .map(|hop| imported.get(&hop.to_lowercase()).map(Uuid::to_string))
                 .collect();
-            if let Some(chain) = chain.filter(|chain| !chain.is_empty()) {
-                ssh.insert("jump_chain".into(), json!(chain));
+            match chain {
+                Some(chain) if !chain.is_empty() => {
+                    ssh.insert("jump_chain".into(), json!(chain));
+                }
+                Some(_) => {}
+                None => {
+                    // A hop that is neither imported now nor before: no
+                    // chain, and the host says so instead of connecting
+                    // directly without a word.
+                    let missing: Vec<&str> = plan
+                        .jump
+                        .iter()
+                        .filter(|hop| !imported.contains_key(&hop.to_lowercase()))
+                        .map(String::as_str)
+                        .collect();
+                    notes.push(format!(
+                        "ProxyJump {} was not imported, so no jump hosts are set",
+                        missing.join(", ")
+                    ));
+                    summary.jump_chains_left_out += 1;
+                }
             }
             let mut data = Map::new();
             data.insert("label".into(), json!(plan.alias));
             data.insert("address".into(), json!(plan.address));
             data.insert("ssh".into(), Value::Object(ssh));
+            if let Some(notes) = host_notes(&notes) {
+                data.insert("notes".into(), json!(notes));
+            }
             match host::build(
                 &data,
                 None,
