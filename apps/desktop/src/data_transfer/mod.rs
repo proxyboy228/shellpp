@@ -7,8 +7,8 @@
 //!   the file holds every secret in clear text and asks for "I understand".
 //!   The core builds the file off the UI thread (Argon2id for the encrypted
 //!   one), then the save dialog suggests the core's file name; the file is
-//!   written with mode 0600 on Unix and a toast says how many records it
-//!   holds.
+//!   written for the user only (mode 0600 on Unix, a protected DACL on
+//!   Windows, D42) and a toast says how many records it holds.
 //! - Import: a file (typed or chosen), "Apply the settings in the file"
 //!   (on); an encrypted file asks for its password; the import runs off the
 //!   UI thread and ends with the summary (added, already here, imported as
@@ -242,18 +242,16 @@ impl ExportDialog {
     }
 }
 
-/// Writes `text` to `path`, readable by the owner only on Unix.
+/// Writes `text` to `path`, readable by the user only before a byte of it
+/// is written (Unix mode 0600, Windows a protected DACL for the user, also
+/// when the save dialog replaces an existing file; D42).
 fn write_private(path: &Path, text: &str) -> Result<(), ()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|_| ())?;
-    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|_| ())?;
-    file.sync_all().map_err(|_| ())
+    shellpp_private_file::write(
+        path,
+        text.as_bytes(),
+        shellpp_private_file::Existing::Replace,
+    )
+    .map_err(|_| ())
 }
 
 impl Render for ExportDialog {

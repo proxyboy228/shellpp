@@ -220,6 +220,30 @@ fn a_plain_export_needs_i_understand(cx: &mut TestAppContext) {
     let written = std::fs::read_to_string(&file).expect("written");
     assert!(written.contains("shellpp.export.v1"));
     assert!(written.contains("db.example.com"));
+    assert!(
+        shellpp_private_file::is_private(&file).unwrap(),
+        "only the user can read the clear-text file"
+    );
+
+    // Saving over an existing file that others can read makes it private
+    // too (D42).
+    std::fs::remove_file(&file).unwrap();
+    std::fs::write(&file, "an older file").unwrap();
+    assert!(!shellpp_private_file::is_private(&file).unwrap());
+    let export = ui.export(cx);
+    export.update(cx, |dialog, cx| dialog.set_encrypt(false, cx));
+    export.update(cx, |dialog, cx| dialog.set_understood(true, cx));
+    ui.click(cx, "data-export-run");
+    let chosen = file.clone();
+    cx.simulate_new_path_selection(move |_| Some(chosen));
+    cx.run_until_parked();
+    ui.frame(cx, |_, _| {});
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("db.example.com")
+    );
+    assert!(shellpp_private_file::is_private(&file).unwrap());
 }
 
 #[gpui_kit::test]

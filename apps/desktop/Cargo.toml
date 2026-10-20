@@ -32,6 +32,7 @@ screenshots = ["dev-tools", "gpui-kit/test-support"]
 
 [dependencies]
 shellpp-core.workspace = true
+shellpp-private-file.workspace = true
 
 # GPUI Kit re-exports GPUI (`gpui_kit::*`), gpui-component and the icons.
 gpui-kit.workspace = true

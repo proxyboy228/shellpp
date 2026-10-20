@@ -171,6 +171,9 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
         assert_eq!(mode("shellpp_deploy-key"), 0o600);
         assert_eq!(mode("shellpp_deploy-key.pub"), 0o644);
     }
+    // Only the user can read the private key, on every platform (Windows: a
+    // protected DACL with the user alone, D42).
+    assert!(shellpp_private_file::is_private(&ssh_dir.join("shellpp_deploy-key")).unwrap());
 
     // Existing files are not replaced without the user's yes.
     assert!(u.core.ssh_files_export(input.clone()).is_err());
@@ -230,4 +233,52 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
         prints
     };
     assert_eq!(fingerprints(&target.core), fingerprints(&u.core));
+}
+
+#[test]
+fn key_files_never_share_a_name() {
+    let u = first_run();
+    // "work.pub" would write shellpp_work.pub, the public key of "work";
+    // "work-cert" would write shellpp_work-cert.pub, its certificate name.
+    let mut fingerprints = Vec::new();
+    for label in ["work", "work.pub", "work-cert"] {
+        let key = u
+            .core
+            .key_generate(KeyGenerateInput {
+                vault_id: u.vault_id,
+                label: label.into(),
+                kind: KeyKind::Ed25519,
+                passphrase: None,
+                save_passphrase: false,
+            })
+            .unwrap()
+            .key;
+        fingerprints.push(key.fingerprint.unwrap());
+    }
+    let home = tempfile::tempdir().unwrap();
+    let summary = u
+        .core
+        .ssh_files_export(SshFilesExportInput {
+            dir: home.path().to_path_buf(),
+            keys: true,
+            passphrase: None,
+            overwrite: false,
+        })
+        .expect("export");
+    assert_eq!(summary.keys, 3);
+    let names: std::collections::HashSet<_> = summary.files.iter().collect();
+    assert_eq!(names.len(), summary.files.len(), "{:?}", summary.files);
+    // Every private key file holds another key.
+    let mut written = Vec::new();
+    for path in &summary.files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("shellpp_") && !name.ends_with(".pub") {
+            let text = std::fs::read_to_string(path).unwrap();
+            let key = ssh_key::PrivateKey::from_openssh(text.as_bytes()).unwrap();
+            written.push(key.fingerprint(ssh_key::HashAlg::Sha256).to_string());
+        }
+    }
+    written.sort();
+    fingerprints.sort();
+    assert_eq!(written, fingerprints);
 }

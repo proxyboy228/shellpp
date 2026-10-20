@@ -7,6 +7,7 @@ members = [
     "crates/sync-api",
     "crates/ssh",
     "crates/term-local",
+    "crates/private-file",
     "tests/sshd",
     "apps/desktop",
 ]
@@ -30,6 +31,7 @@ shellpp-core = { path = "crates/core" }
 shellpp-sync-api = { path = "crates/sync-api" }
 shellpp-ssh = { path = "crates/ssh" }
 shellpp-term-local = { path = "crates/term-local" }
+shellpp-private-file = { path = "crates/private-file" }
 shellpp-test-sshd = { path = "tests/sshd" }
 
 # Cryptography (docs/security.md, section 5.1; docs/architecture.md, section 8.2).
@@ -124,6 +126,9 @@ dirs = "7.0.0"
 # from clipboard history, docs/security.md, section 9.4).
 arboard = { version = "3.7.0", default-features = false }
 libc = "0.2.191"
+# Windows: the DACL of private files (crates/private-file, D42); already in
+# the lockfile through other crates.
+windows-sys = { version = "0.61.2", default-features = false }
 # Master password strength indicator of the first-run screen (UI 13.1), MIT.
 # Without the default "builder" feature (derive_builder is not needed).
 zxcvbn = { version = "3.1.1", default-features = false }

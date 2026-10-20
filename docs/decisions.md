@@ -664,3 +664,15 @@ Status: night decision, 2026-10-21 (review of stage 3; D34, D38; security.md TB7
 - Conflict copies get the `import_key` `json:<exported record_id>` and a later import matches it (data-model 18.4); keys and known hosts are matched before any reference is rewritten (export-format.md, section 4).
 
 **Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru/`).
+
+### 42. Private files outside the data folder (night)
+
+Status: night decision, 2026-10-21 (review of stage 3; the owner's night plan for stage 3, item 11, asks for "on Windows, the current user's ACL"; storage-format 13.5; D38).
+
+**Decision:**
+
+- The private key files of the SSH files export and the plain Export Data file are written by one helper, the new workspace crate `shellpp-private-file` (`crates/private-file`): a symbolic link at the path is refused; on Unix the file is opened with mode `0600` and `O_NOFOLLOW`, and an existing file gets `0600` before it is emptied and written; on Windows the file gets a protected DACL with one entry (full control for the user of the process token, nothing inherited) before a byte is written. A folder that every local user can read, or a file the save dialog replaces, no longer exposes the secrets.
+- The core keeps `#![forbid(unsafe_code)]`; the advapi32 calls are the only `unsafe` code of the new crate, in `src/windows.rs`, each with its safety comment. The crate uses `windows-sys` 0.61.2 and `libc`, both already in the lockfile and in THIRD_PARTY_NOTICES.md: no new third-party package.
+- The data folder itself is unchanged (storage-format section 1: the per-user profile ACLs apply).
+
+**Spec impact:** `docs/storage-format.md` 13.5.

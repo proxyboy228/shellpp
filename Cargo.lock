@@ -7552,6 +7552,7 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.1",
+ "shellpp-private-file",
  "shellpp-sync-api",
  "ssh-key",
  "subtle",
@@ -7585,6 +7586,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shellpp-core",
+ "shellpp-private-file",
  "shellpp-ssh",
  "shellpp-term-local",
  "shellpp-test-sshd",
@@ -7598,6 +7600,15 @@ dependencies = [
  "uuid",
  "zeroize",
  "zxcvbn",
+]
+
+[[package]]
+name = "shellpp-private-file"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

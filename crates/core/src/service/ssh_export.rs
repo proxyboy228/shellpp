@@ -18,7 +18,7 @@
 //! - Existing files are never replaced unless `overwrite` is set; without
 //!   it the export lists them and writes nothing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -114,6 +114,35 @@ fn unique(bases: Vec<(Uuid, String)>) -> HashMap<Uuid, String> {
     out
 }
 
+/// The files of a key alias: the private key, the public key and the
+/// certificate.
+fn key_files(alias: &str) -> [String; 3] {
+    [
+        format!("shellpp_{alias}"),
+        format!("shellpp_{alias}.pub"),
+        format!("shellpp_{alias}-cert.pub"),
+    ]
+}
+
+/// Unique key aliases in the given order, as [`unique`], where no file of
+/// one key has the name of a file of another: the labels "work" and
+/// "work.pub" would otherwise both write `shellpp_work.pub`.
+fn unique_key_aliases(bases: Vec<(Uuid, String)>) -> HashMap<Uuid, String> {
+    let mut used: HashSet<String> = HashSet::new();
+    let mut out = HashMap::new();
+    for (id, base) in bases {
+        let mut alias = base.clone();
+        let mut n = 1;
+        while key_files(&alias).iter().any(|name| used.contains(name)) {
+            n += 1;
+            alias = format!("{base}-{n}");
+        }
+        used.extend(key_files(&alias));
+        out.insert(id, alias);
+    }
+    out
+}
+
 /// A `SetEnv` value: double-quoted when it has spaces; `None` when it
 /// holds a quote or a line break (then the line is a comment).
 fn env_value(value: &str) -> Option<String> {
@@ -137,16 +166,19 @@ fn ssh_uuid(data: &Map<String, Value>, member: &str) -> Option<Uuid> {
     ssh_str(data, member).and_then(|raw| Uuid::parse_str(raw).ok())
 }
 
+/// A private key file is readable by the user only before a byte of it is
+/// written (Unix mode 0600, Windows a protected DACL for the user, D42);
+/// the other files get mode 0644 on Unix.
 fn write_file(path: &Path, text: &[u8], private: bool) -> std::io::Result<()> {
+    if private {
+        return shellpp_private_file::write(path, text, shellpp_private_file::Existing::Replace);
+    }
     std::fs::write(path, text)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = if private { 0o600 } else { 0o644 };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
     }
-    #[cfg(not(unix))]
-    let _ = private;
     Ok(())
 }
 
@@ -199,7 +231,7 @@ impl Core {
                 .map(|record| (record.record_id, key::label(record.data()).to_owned()))
                 .collect();
             keys.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
-            let key_alias = unique(
+            let key_alias = unique_key_aliases(
                 keys.iter()
                     .map(|(id, label)| (*id, alias_base(label, id)))
                     .collect(),
