@@ -120,7 +120,8 @@
   - after that, changes are saved automatically; there is no save button;
   - an invalid value is highlighted, with the reason under the field, and is not saved. The
     last valid value stays in effect;
-  - wizards with an explicit "Create" button (8.3) are the only exception.
+  - wizards with an explicit "Create" button (8.3) and the Keychain's forms that add a
+    key (New key and Generate key, 7.3, D33) are the only exceptions.
 
 ### 1.4 App menu (the button with three bars)
 
@@ -1011,7 +1012,8 @@ on the Hosts screen. [decision]
 - Identical keys (matching fingerprint) are detected automatically. A hint
   appears offering to merge them into one key; references from hosts are carried over. [decision]
 - Empty state: buttons "Generate", "Import" and
-  "Import from ~/.ssh". [decision]
+  "Import from ~/.ssh". [decision] "Import from ~/.ssh" opens the New key form with the
+  private key files found in `~/.ssh`; a click on one puts its text into the form (D33).
 
 ### 7.3 Key panel (creation and editing)
 
@@ -1029,8 +1031,10 @@ Blocks from top to bottom:
 The "…" menu in the header: Duplicate, copy public key, export
 to file, Remove. [decision]
 
-The saving rule from 1.3 applies: the key is created once Label and Private key are
-valid. [decision]
+The saving rule from 1.3 applies, except for the creation: a new key is created with the
+form's Import or Generate button once Label and Private key are valid, because creating
+a key runs a key derivation or a key generation and settles the passphrase choice
+(D33). After that, Label is saved as in 1.3. [decision]
 
 **Mandatory security requirements:**
 
