@@ -50,6 +50,17 @@ dirs.workspace = true
 # Strength indicator of the master password (lock::strength).
 zxcvbn.workspace = true
 arboard.workspace = true
+# The terminal view (src/terminal): emulator and the parser thread's queue.
+alacritty_terminal.workspace = true
+unicode-width.workspace = true
+async-channel.workspace = true
+# Sessions (src/sessions): SSH and local terminals on a Tokio runtime of
+# their own (GPUI has its own executor), the remote charset.
+shellpp-ssh.workspace = true
+shellpp-term-local.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+encoding_rs.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # Version guard only (see the workspace Cargo.toml).
@@ -79,6 +90,12 @@ gpui-kit = { workspace = true, features = ["test-support"] }
 # "+ -> Key" and "+ -> Certificate" flows (already in the tree via shellpp-core).
 ssh-key.workspace = true
 getrandom.workspace = true
+# Session integration tests (tests/sessions.rs, tests/servers): the russh
+# test server in process on its own Tokio runtime when Docker is not
+# running, otherwise the OpenSSH container of tests/openssh.
+shellpp-test-sshd.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "sync", "macros"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

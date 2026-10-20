@@ -57,6 +57,19 @@ hmac = "0.13.0"
 sha1 = { version = "0.11.0", default-features = false }
 # Local terminal (desktop only, decision 5).
 portable-pty = "0.9.0"
+# Terminal emulation for the desktop terminal view (decision 30): VT parser,
+# grid and scrollback; our own GPUI element draws it. Without "serde".
+alacritty_terminal = { version = "0.26.0", default-features = false }
+# Character widths for the terminal's zero-width cap: the same crate (and,
+# through semver unification, the same version) alacritty_terminal measures
+# with, so both agree which characters are zero-width.
+unicode-width = "0.2.0"
+# Bounded byte queue from the session layer (any thread or runtime) to a
+# terminal's parser thread (flow control, decision 30).
+async-channel = "2.5.0"
+# Remote charset of SSH sessions (host `charset`, WHATWG labels; already in
+# the tree through GPUI).
+encoding_rs = "0.8.35"
 # History secret detector and password prompt patterns (docs/security.md, section 10).
 regex = "1.13.1"
 # Test-only key generation in the russh test server.
