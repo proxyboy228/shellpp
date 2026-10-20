@@ -35,6 +35,7 @@ mod handler;
 pub mod local_names;
 pub mod reconnect;
 pub mod sftp;
+pub mod transfer;
 pub mod transfer_queue;
 mod transport;
 

@@ -728,3 +728,16 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, items 3 
 - A downloaded name Windows cannot hold (`< > : " / \ | ? *`, control characters, a trailing dot or space, a reserved device name such as `CON` or `com1.txt`) is suggested in the rename dialog with each such character as `_` and a reserved name with a leading `_` (`shellpp_ssh::local_names`). An absolute Windows path of 260 characters or more is used with the `\\?\` prefix (`\\?\UNC\` for a share).
 
 **Spec impact:** none yet (the panels and the queue UI come next).
+
+### 47. Folder transfers and links (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, items 3 and 4; UI 5).
+
+**Decision:**
+
+- A folder transfer (`shellpp_ssh::transfer::{download_tree, upload_tree}`) creates the folders first, then sends each file through the engine (`.part`, modification time); the progress is the bytes of the whole folder.
+- A symbolic link inside a copied folder is never followed, to a folder or to a file: it is left out and counted, so a link can neither pull in what lies outside the folder nor loop. (A link the user selects on its own is a later question of the panels.) Recursive delete removes links themselves (D45).
+- Downloaded names that Windows cannot hold take the suggested name of D46 inside a folder transfer (no dialog per file); long paths get the `\\?\` prefix.
+- Remote ↔ remote (`copy_between`): the bytes pass from one session's read to the other's write through this machine, without a local file, into `<target>.part` renamed when complete.
+
+**Spec impact:** none yet.

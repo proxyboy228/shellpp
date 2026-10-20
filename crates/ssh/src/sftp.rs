@@ -92,7 +92,7 @@ impl From<LibError> for SftpError {
 }
 
 /// An I/O error of a remote file (russh-sftp reports them as `io::Error`).
-fn remote_io(error: std::io::Error) -> SftpError {
+pub(crate) fn remote_io(error: std::io::Error) -> SftpError {
     match error.kind() {
         std::io::ErrorKind::NotFound => SftpError::NotFound,
         std::io::ErrorKind::PermissionDenied => SftpError::PermissionDenied,
@@ -471,14 +471,37 @@ impl Sftp {
             };
             self.session.set_metadata(part.as_str(), attrs).await?;
         }
-        // SFTP v3 does not rename over an existing file.
-        if self.session.rename(part.as_str(), remote).await.is_err() {
-            if self.session.symlink_metadata(remote).await.is_ok() {
-                self.session.remove_file(remote).await?;
-            }
-            self.session.rename(part.as_str(), remote).await?;
-        }
+        self.replace(&part, remote).await?;
         Ok(done)
+    }
+
+    /// Renames the complete `part` to `target`, over an existing `target`
+    /// (SFTP v3 does not rename over a file: the old one is removed first).
+    pub(crate) async fn replace(&self, part: &str, target: &str) -> Result<(), SftpError> {
+        if self.session.rename(part, target).await.is_err() {
+            if self.session.symlink_metadata(target).await.is_ok() {
+                self.session.remove_file(target).await?;
+            }
+            self.session.rename(part, target).await?;
+        }
+        Ok(())
+    }
+
+    /// The file `path` open for reading (pipelined reads).
+    pub(crate) async fn open_read(
+        &self,
+        path: &str,
+    ) -> Result<russh_sftp::client::fs::File, SftpError> {
+        Ok(self.session.open(path).await?)
+    }
+
+    /// The file `path` created or emptied for writing (pipelined writes).
+    pub(crate) async fn open_write(
+        &self,
+        path: &str,
+    ) -> Result<russh_sftp::client::fs::File, SftpError> {
+        let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE;
+        Ok(self.session.open_with_flags(path, flags).await?)
     }
 
     /// Ends the session (the channel closes; the connection stays).

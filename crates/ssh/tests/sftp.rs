@@ -4,7 +4,9 @@
 //! otherwise): SFTP on the connection a shell already uses, upload and
 //! download with a SHA-256 check, resume from a `.part` file, Cyrillic,
 //! spaces and emoji in names, a tree of small files, permissions, rename,
-//! and a recursive delete that leaves the target of a symbolic link alone.
+//! a recursive delete that leaves the target of a symbolic link alone,
+//! folder transfers of 2000 files that leave links out, and a copy from
+//! one session to another (remote ↔ remote).
 //! Every file is made of random bytes at run time.
 
 mod support;
@@ -218,6 +220,71 @@ async fn a_recursive_delete_leaves_link_targets_alone(
     assert_eq!(kept.map(|entry| entry.size), Ok(5));
 }
 
+/// Files of the tree transfer (the plan's 2000 small files).
+const TREE_FILES: usize = 2000;
+
+async fn trees_and_remote_to_remote(
+    connection: &Connection,
+    sftp: &Sftp,
+    other: &Sftp,
+    dir: &str,
+    local: &Path,
+) {
+    use shellpp_ssh::transfer::{copy_between, download_tree, upload_tree};
+    // A local tree of small files in three folders.
+    let tree = local.join("tree-up");
+    for (n, folder) in ["", "a", "a/b"].iter().cycle().take(TREE_FILES).enumerate() {
+        let folder = tree.join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("f{n:04}.txt")), format!("file {n}")).unwrap();
+    }
+    let remote = shellpp_ssh::sftp::join(dir, "tree-2000");
+    let mut last = 0;
+    let up = upload_tree(sftp, &tree, &remote, &mut |done| last = done)
+        .await
+        .expect("upload tree");
+    assert_eq!(up.files, TREE_FILES);
+    assert_eq!(up.folders, 3);
+    assert_eq!(last, up.bytes);
+    // A link in the remote tree to a folder outside it is left out.
+    let outside = shellpp_ssh::sftp::join(dir, "outside-tree");
+    let script = format!(
+        "mkdir -p '{outside}' && echo secret > '{outside}/s.txt' && ln -s '{outside}' '{remote}/a/link'"
+    );
+    let output = connection
+        .exec(&script, std::time::Duration::from_secs(10), 4096)
+        .await
+        .expect("exec");
+    assert_eq!(output.exit_status, Some(0));
+    let back = local.join("tree-down");
+    let down = download_tree(sftp, &remote, &back, &mut |_| {})
+        .await
+        .expect("download tree");
+    assert_eq!(down.files, TREE_FILES);
+    assert_eq!(down.links, 1);
+    assert_eq!(down.bytes, up.bytes);
+    assert!(
+        !back.join("a").join("link").exists(),
+        "the link is not followed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(back.join("a").join("b").join("f0002.txt")).unwrap(),
+        "file 2"
+    );
+    // Remote to remote: from one session to another.
+    let source = shellpp_ssh::sftp::join(&remote, "f0000.txt");
+    let target = shellpp_ssh::sftp::join(dir, "copied.txt");
+    let size = copy_between(sftp, &source, other, &target, &mut |_| {})
+        .await
+        .expect("remote to remote");
+    assert_eq!(size, "file 0".len() as u64);
+    let check = local.join("copied.txt");
+    sftp.download(&target, &check, false, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&check).unwrap(), "file 0");
+}
+
 #[allow(clippy::print_stderr)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sftp_against_openssh() {
@@ -239,6 +306,12 @@ async fn sftp_against_openssh() {
     names_and_many_small_files(&sftp, &dir, local.path()).await;
     permissions_rename_and_errors(&sftp, &dir).await;
     a_recursive_delete_leaves_link_targets_alone(&connection, &sftp, &dir).await;
+    // A second connection, as a second remote panel.
+    let second = key_connection(&server).await;
+    let other = second.open_sftp().await.expect("second sftp");
+    trees_and_remote_to_remote(&connection, &sftp, &other, &dir, local.path()).await;
+    other.close().await;
+    second.disconnect().await;
     sftp.remove_tree(&dir).await.expect("clean up");
     sftp.close().await;
     connection.disconnect().await;
