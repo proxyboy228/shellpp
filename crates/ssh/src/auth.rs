@@ -1,11 +1,16 @@
 //! Authentication (stage 2 plan, decision 23; docs/data-model.md, section
-//! 8.6): a missing username is asked first, then, while the server offers
-//! the method: the effective key (decrypted with its saved passphrase or a
-//! `Passphrase` prompt), the system agent's keys, the user's key files
-//! (offered by their public key; decrypted, with a `FileKeyPassphrase`
-//! prompt when needed, only after the server accepted the key), the password
-//! (saved or prompted, asked again after a refusal), keyboard-interactive
-//! (one prompt per question). A cancelled prompt ends the attempt with
+//! 8.6; night decision D36): a missing username is asked first, then, while
+//! the server offers the method: the effective key (decrypted with its saved
+//! passphrase or a `Passphrase` prompt), the saved password, the system
+//! agent's keys, the user's key files (offered by their public key;
+//! decrypted, with a `FileKeyPassphrase` prompt when needed, only after the
+//! server accepted the key), the password when none is saved (prompted),
+//! keyboard-interactive (one prompt per question). A refused saved password
+//! is asked again at once.
+//!
+//! At most [`MAX_PUBLIC_KEY_OFFERS`] public keys are offered in all: servers
+//! close the connection after `MaxAuthTries` failures (6 by default in
+//! OpenSSH), so the password and keyboard-interactive keep their turn. A cancelled prompt ends the attempt with
 //! `Cancelled`. A public key already offered (the same key in the agent and
 //! in a file) is not offered again.
 //!
@@ -32,6 +37,11 @@ use crate::client::{
 use crate::error::FailureKind;
 use crate::handler::ClientHandler;
 
+/// Most public keys offered in one authentication: the effective key, the
+/// agent's keys and the key files together (D36). Each refused key counts
+/// against the server's `MaxAuthTries` (OpenSSH: 6); four leave room for
+/// the password and keyboard-interactive.
+pub(crate) const MAX_PUBLIC_KEY_OFFERS: usize = 4;
 /// Time allowed for an agent to sign (it may ask its user for confirmation).
 const AGENT_SIGN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Time allowed for the server's answer to a password or to
@@ -231,6 +241,13 @@ pub(crate) async fn authenticate(
         {
             progress.tried_key = true;
             try_key(handle, context, &mut progress, key).await?
+        } else if context.plan.password.is_some()
+            && !progress.tried_password
+            && progress.offers(MethodKind::Password)
+        {
+            // A saved password comes before the agent and the key files (D36).
+            progress.tried_password = true;
+            try_password(handle, context, &mut progress).await?
         } else if let Some(agent) = context.agent.filter(|_| {
             context.plan.use_agent
                 && !progress.tried_agent
@@ -484,6 +501,10 @@ async fn try_agent(
         if !progress.offers(MethodKind::PublicKey) {
             break;
         }
+        if progress.offered.len() >= MAX_PUBLIC_KEY_OFFERS {
+            tracing::debug!("public key limit reached: agent keys skipped");
+            break;
+        }
         progress.offered.push(key.clone());
         let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
             continue;
@@ -658,6 +679,10 @@ async fn try_file_keys(
         };
         if progress.was_offered(&public) {
             continue;
+        }
+        if progress.offered.len() >= MAX_PUBLIC_KEY_OFFERS {
+            tracing::debug!("public key limit reached: key files skipped");
+            break;
         }
         progress.offered.push(public.clone());
         let Ok(hash) = hash_for(handle, &public.algorithm(), context.timeout).await else {

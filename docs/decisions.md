@@ -581,3 +581,19 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 10;
 **For the owner:** whether SendEnv should take the current local values once at import (they may hold secrets), and whether the other aliases of a Host line should become hosts of their own.
 
 **Spec impact:** none beyond `docs/data-model.md` 18.4, which already names `ssh_config:<first alias of the Host line>`.
+
+### 36. Authentication order and the public key limit (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 8).
+
+**Context.** The plan asks for the order "the host's key or certificate or its identity, the password, the agent, `~/.ssh/id_*`; keyboard-interactive is supported" and for not trying every key in a row, because the server drops the connection after `MaxAuthTries` (usually 6). The SSH layer tried the effective key, the agent, the key files, then the password (saved or prompted), then keyboard-interactive, with no limit on the keys offered.
+
+**Decision:**
+
+- Order: the effective key (certificate and FIDO2 keys join it with their stages), then the saved password, then the agent's keys, then the key files, then a password prompt when none is saved, then keyboard-interactive. A refused saved password is asked again at once (as before).
+- A prompted password stays after the keys: asking for a password before trying the agent would ask every agent user for a password they do not need.
+- At most 4 public keys are offered in one authentication, the effective key included (`MAX_PUBLIC_KEY_OFFERS`); the next agent keys and key files are skipped. With OpenSSH's default of 6 this leaves room for the password and keyboard-interactive. A host that needs a later key gets it linked as its key.
+
+**For the owner:** whether 4 is right, or whether the limit should be a setting.
+
+**Spec impact:** `docs/data-model.md` 8.6.

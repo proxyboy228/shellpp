@@ -691,3 +691,79 @@ async fn an_answer_that_never_comes_can_be_bounded_by_the_caller() {
     assert!(result.is_err(), "still waiting for the password");
     server.shutdown().await;
 }
+
+/// D36: a saved password comes right after the effective key, before the
+/// agent's keys and the key files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_password_comes_before_the_agent() {
+    let key = generate_key(KeyType::Ed25519, "agent", None).expect("key");
+    let private =
+        russh::keys::decode_secret_key(key.private_openssh.expose_secret(), None).expect("decodes");
+    let agent = TestAgent::start(vec![private]).await;
+    let password = random_secret("pw");
+    let server = start_server(vec![UserConfig {
+        password: Some(secret(&password)),
+        authorized_keys: vec![key.public_openssh.clone()],
+        ..user("dana")
+    }])
+    .await;
+    let mut plan = password_plan(&password);
+    plan.use_agent = true;
+    let mut spec = spec(server.addr(), Some("dana"), plan);
+    spec.agent = Some(SystemAgent::at(agent.location()));
+    let connection = connect(spec, TestInteraction::accepting().as_dyn())
+        .await
+        .expect("connects");
+    assert_eq!(connection.auth().method, AuthMethod::Password);
+    assert_eq!(agent.signatures(), 0, "the agent was not needed");
+    connection.disconnect().await;
+    server.shutdown().await;
+}
+
+/// D36: at most four public keys are offered, so that a server with
+/// `MaxAuthTries` 6 still takes the prompted password afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn at_most_four_public_keys_are_offered_before_the_password() {
+    let mut keys = Vec::new();
+    for index in 0..6 {
+        let generated =
+            generate_key(KeyType::Ed25519, &format!("agent {index}"), None).expect("key");
+        keys.push(
+            russh::keys::decode_secret_key(generated.private_openssh.expose_secret(), None)
+                .expect("decodes"),
+        );
+    }
+    let agent = TestAgent::start(keys).await;
+    let password = random_secret("pw");
+    // An authorized key that is not in the agent: the server offers
+    // publickey and password.
+    let other = generate_key(KeyType::Ed25519, "not in the agent", None).expect("key");
+    let server = start_server(vec![UserConfig {
+        password: Some(secret(&password)),
+        authorized_keys: vec![other.public_openssh.clone()],
+        ..user("eve")
+    }])
+    .await;
+    let interaction = TestInteraction::answering(vec![text(&password)]);
+    let mut spec = spec(
+        server.addr(),
+        Some("eve"),
+        AuthPlan {
+            use_agent: true,
+            ..AuthPlan::default()
+        },
+    );
+    spec.agent = Some(SystemAgent::at(agent.location()));
+    let connection = connect(spec, interaction.as_dyn())
+        .await
+        .expect("connects with the prompted password");
+    assert_eq!(connection.auth().method, AuthMethod::Password);
+    let offered = server
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, ServerEvent::Auth { method, .. } if method == "publickey"))
+        .count();
+    assert_eq!(offered, 4, "four of the six agent keys, then the password");
+    connection.disconnect().await;
+    server.shutdown().await;
+}

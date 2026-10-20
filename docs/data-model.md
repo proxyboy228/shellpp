@@ -609,9 +609,12 @@ Without a binding, the team host's own and inherited credentials are used as sto
 (stage 0 decision; the SSH layer in [architecture.md](architecture.md) may refine it)
 
 1. Public key with the certificate key (`certificate_key`), then the FIDO2 key, then the effective `key`.
-2. Keys offered by the system agent, when one is available (stage 2, D3).
-3. Password, when an effective password exists.
-4. keyboard-interactive.
+2. Password, when an effective (saved) password exists (D36: before the agent, so that a host with a saved password never spends its attempts on unrelated keys).
+3. Keys offered by the system agent, when one is available (stage 2, D3), then the user's key files `~/.ssh/id_*` (D30).
+4. Password from a prompt, when none is saved.
+5. keyboard-interactive.
+
+At most 4 public keys are offered in all (D36): servers close the connection after `MaxAuthTries` failures (6 by default in OpenSSH).
 
 Anything still missing (username, password, passphrase) is prompted as in UI 4.8.
 

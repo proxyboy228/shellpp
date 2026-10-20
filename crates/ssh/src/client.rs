@@ -7,9 +7,9 @@
 //! before it returns `Accept`) -> authentication (step `Authenticating`) in
 //! the order of docs/data-model.md, section 8.6: the effective key
 //! ([`AuthPlan::key`], decrypted with its passphrase or a `Passphrase`
-//! prompt), the system agent's keys, the user's key files ([`FileKey`],
-//! decrypted only after the server accepted the public key), the password
-//! (or a `Password` prompt), keyboard-interactive (each question a
+//! prompt), the saved password, the system agent's keys, the user's key
+//! files ([`FileKey`], decrypted only after the server accepted the public
+//! key), a `Password` prompt when no password is saved, keyboard-interactive (each question a
 //! `KeyboardInteractive` prompt). A
 //! missing username is asked first (`Username` prompt). The desktop host then
 //! calls [`Connection::open_shell`] (step `OpeningSession` is the host's) and,
@@ -69,7 +69,8 @@ pub struct AuthPlan {
     /// Prompts may offer "Save" for the key passphrase (writable key).
     pub can_save_passphrase: bool,
     /// The user's key files (`~/.ssh/id_*`), tried after the agent's keys
-    /// and before the password, in this order (see [`FileKey`]).
+    /// and before a prompted password (a saved one comes before the agent,
+    /// D36), in this order (see [`FileKey`]).
     pub file_keys: Vec<FileKey>,
 }
 
