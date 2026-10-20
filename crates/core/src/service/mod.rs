@@ -27,6 +27,9 @@ mod connect;
 pub mod dto;
 pub mod host_api;
 pub mod keychain;
+mod known_hosts_io;
+/// The last session of Restore (UI 6; stage 2b).
+pub mod last_session;
 mod lock_ops;
 mod records;
 mod session;
@@ -52,10 +55,11 @@ use crate::store::{OpenOutcome, Store, StoreError, WrapKind};
 use dto::{
     CoreEvent, CoreEventKind, CoreSnapshot, HistoryClearInput, HistoryClearResult,
     HistoryEntryView, HistoryListInput, KeyImportInput, KeyImportResult, KeyView,
-    KnownHostAddInput, KnownHostView, LockState, LockStatus, NewNotification, Notification,
-    NotificationList, OsSource, RecentConnection, RecordDeleteResult, RecordMoveInput, RecordRef,
-    RecordSaveInput, RecordView, RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget,
-    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, VaultView,
+    KnownHostAddInput, KnownHostView, KnownHostsImportSummary, LockState, LockStatus,
+    NewNotification, Notification, NotificationList, OsSource, RecentConnection,
+    RecordDeleteResult, RecordMoveInput, RecordRef, RecordSaveInput, RecordView, RecordsQuery,
+    RecordsRef, RecoveryKeyResult, SecretCopyTarget, SecretFieldRef, SessionTarget,
+    SettingsSetInput, SettingsValues, VaultView,
 };
 use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
@@ -612,9 +616,33 @@ impl Core {
         self.known_hosts_list_impl()
     }
 
-    /// Removes known host entries (UI 10.1 Remove).
+    /// Removes known host entries (UI 10.1 Remove). The removal can be undone
+    /// with [`Core::known_host_restore`] for 60 s.
     pub fn known_host_remove(&self, input: RecordsRef) -> Result<(), CoreError> {
         self.known_host_remove_impl(input)
+    }
+
+    /// Undo of [`Core::known_host_remove`] (UI 10.1, 2.4): the entries come
+    /// back under their record ids. `not_found` once the undo window (60 s)
+    /// has passed or for an id that was not a removed known host.
+    pub fn known_host_restore(&self, input: RecordsRef) -> Result<Vec<KnownHostView>, CoreError> {
+        self.known_host_restore_impl(input)
+    }
+
+    /// Imports a known_hosts file in the OpenSSH format (UI 10.1, D21;
+    /// `crate::known_hosts::openssh`): one entry per host pattern, hashed
+    /// entries as they are, `@revoked` as revoked keys, `@cert-authority`
+    /// lines and negated patterns skipped. Entries equal to existing ones
+    /// are duplicates; nothing existing is changed. `validation_failed`
+    /// (`file`, `too_long`) for more than 16 MiB.
+    pub fn known_hosts_import(&self, input: &[u8]) -> Result<KnownHostsImportSummary, CoreError> {
+        self.known_hosts_import_impl(input)
+    }
+
+    /// Every entry as a known_hosts file (docs/storage-format.md, section
+    /// 13.6): hashed entries as stored, revoked ones with `@revoked`.
+    pub fn known_hosts_export(&self) -> Result<String, CoreError> {
+        self.known_hosts_export_impl()
     }
 
     /// Every key of the personal vault, by label.
@@ -666,7 +694,8 @@ impl Core {
 
     /// Whether a session linked to `host` (`None`: quick connect or local
     /// terminal) records history now: the host's `record_history` override,
-    /// else `terminal.record_history`. Running sessions refresh their flag
+    /// else `terminal.record_history`; `false` for a host of the personal
+    /// vault that no longer exists. Running sessions refresh their flag
     /// with it when hosts or settings change.
     pub fn record_history_now(&self, host: Option<RecordRef>) -> Result<bool, CoreError> {
         self.record_history_now_impl(host)

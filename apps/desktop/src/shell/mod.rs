@@ -3,26 +3,37 @@
 //!
 //! - Vaults: the sidebar (UI 1.2), the main area with the toasts at its
 //!   bottom center, and the details panel on the right (UI 1.3);
-//! - SSH and local terminal tabs: their [`SessionPane`] (connection screen,
-//!   dialogs, terminal, end and drop overlays; `crate::session_ui`);
+//! - SSH and local terminal tabs: their panes ([`PaneGroup`], UI 4.7), each
+//!   with its session (`crate::session_ui`), and the terminal sidebar on the
+//!   right when it is shown (UI 4.2; `crate::terminal_sidebar`);
 //! - SFTP (and the tabs of later stages): the "In development" placeholder
 //!   (audit decisions 1 and 6; D30).
 //!
-//! Session tabs (UI 1.1, 4.6, 12.5; stage 2a lead decision 9): a session
-//! opens from a double click or Enter on a card, Quick Connect, the host
-//! panel's Connect and the search bar's quick connect; the Terminal button,
-//! New Local Terminal and Ctrl+L (outside a terminal) open a local terminal.
-//! A tab shows the host's OS icon (the server icon until the OS is known)
-//! and its name, with a close button. Ctrl+1..9, Alt+Left/Right and
-//! Ctrl+Shift+W work everywhere, a terminal included. When the active tab
-//! closes, the left neighbor (else the right one, else Vaults) becomes
-//! active (UI 4.6). Tabs that do not fit scroll sideways: the wheel scrolls
-//! the strip, and the active tab always scrolls into view (UI 1.1). The "+"
-//! button and the terminal sidebar button lead to stage 2b and are shown
-//! disabled (D30).
+//! Session tabs (UI 1.1, 4.4, 4.6, 4.7, 12.5): a session opens from a
+//! double click or Enter on a card, Quick Connect, the host panel's Connect
+//! and the search bar's quick connect; the Terminal button, New Local
+//! Terminal and Ctrl+L (outside a terminal) open a local terminal. Alt held
+//! on these opens the session in a new window (UI 2.4). A tab shows the
+//! active pane's OS icon (the server icon until the OS is known), its title
+//! (or the one set with Rename), the state dot (the worst state of its
+//! panes) and the type icon; the close button replaces the OS icon on the
+//! active and the hovered tab; a right click opens the tab menu
+//! ([`tab_menu`]). Ctrl+1..9, Alt+Left/Right, Ctrl+Shift+T, Ctrl+Shift+K and
+//! Ctrl+Shift+W work everywhere, a terminal included; Ctrl+T and Ctrl+K
+//! only outside a terminal. Ctrl+Shift+W closes the active pane of a tab
+//! with splits, else the tab. When the active tab closes, the left neighbor
+//! (else the right one, else Vaults) becomes active (UI 4.6). Tabs that do
+//! not fit scroll sideways: the wheel scrolls the strip, and the active tab
+//! always scrolls into view (UI 1.1).
+//!
+//! Windows (UI 1.4; lead decision L3): every window has its own shell; the
+//! app state, the session layer and the lock are shared. Window > New
+//! Window, Duplicate in a New Window and Alt on a connect action open
+//! another window at the size of the current one, offset by `--space-6`
+//! ([`windows`]). Restore (UI 6; lead decision L5) is in [`restore`].
 //!
 //! Other modules talk to the shell through events (`HostsEvent`,
-//! `HostsRequest`, `PanelEvent`, `PanelRequest`, `SessionPaneEvent`) or the
+//! `HostsRequest`, `PanelEvent`, `PanelRequest`, `PaneGroupEvent`) or the
 //! window-level functions [`show_toast`], [`notify`], [`in_development`] and
 //! [`open_session_tab`].
 
@@ -31,31 +42,40 @@ pub mod app_menu;
 pub mod details;
 pub mod notifications;
 pub mod placeholder;
+pub mod restore;
 pub mod sessions;
 pub mod sidebar;
+pub mod strings;
+pub mod tab_menu;
 pub mod title_bar;
 pub mod toasts;
+pub mod windows;
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, AppContext as _, ClickEvent, Context,
-    DragMoveEvent, Entity, FocusHandle, Global, IntoElement, ParentElement as _, Pixels, Render,
-    ScrollHandle, SharedString, Styled as _, Subscription, WeakEntity, Window, WindowId, div,
-    prelude::*, px,
+    Animation, AnimationExt as _, AnyElement, AnyWindowHandle, App, AppContext as _, ClickEvent,
+    Context, DragMoveEvent, Entity, FocusHandle, Global, IntoElement, KeyDownEvent,
+    ParentElement as _, Pixels, Render, ScrollHandle, SharedString, Styled as _, Subscription,
+    WeakEntity, WeakFocusHandle, Window, div, prelude::*, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::ButtonVariant;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme as _, IconName, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, IconName, Selectable as _, WindowExt as _, h_flex, v_flex,
+};
 use uuid::Uuid;
 
 use crate::hosts::{self, HostsEvent, HostsRequest, HostsScreen};
 use crate::i18n;
+use crate::new_tab::{NewTabEvent, NewTabPage, OpenTab, SearchOverlay};
 use crate::panels::{GroupPanel, HostPanel, PanelEvent, PanelRequest};
-use crate::session_ui::{Phase, SessionPane, SessionPaneEvent, TabInfo};
-use crate::sessions::OpenRequest;
+use crate::panes::{Direction, Layout, PaneGroup, PaneGroupEvent, PaneStatus, PaneTarget};
+use crate::session_ui::{Phase, SessionPane};
 use crate::state::AppState;
+use crate::terminal_sidebar::{FindInTerminal, SidebarTarget, TerminalSidebar};
 use crate::theme::{self, metrics, motion};
 
 pub use actions::{KEY_CONTEXT, ShowSftp, ShowVaults, bind_keys};
@@ -93,7 +113,7 @@ enum PanelTarget {
 
 /// The shell of each open window, so window-level calls find it.
 #[derive(Default)]
-struct ShellRegistry(Vec<(WindowId, WeakEntity<Shell>)>);
+struct ShellRegistry(Vec<(AnyWindowHandle, WeakEntity<Shell>)>);
 
 impl Global for ShellRegistry {}
 
@@ -104,8 +124,42 @@ pub fn shell_for(window: &Window, cx: &App) -> Option<Entity<Shell>> {
         .0
         .iter()
         .rev()
-        .find(|(window_id, _)| *window_id == id)
+        .find(|(handle, _)| handle.window_id() == id)
         .and_then(|(_, shell)| shell.upgrade())
+}
+
+/// Text fields of the window chrome that automatic focus requests of panes
+/// must not take the focus from (the Rename field of a tab, UI 4.4): such a
+/// request waits until the field has closed, or the field would end its
+/// edit on the blur.
+#[derive(Default)]
+struct HeldFocus(Vec<WeakFocusHandle>);
+
+impl Global for HeldFocus {}
+
+/// Whether the focused element of `window` is a field that panes leave
+/// alone ([`HeldFocus`]): their automatic focus requests wait meanwhile.
+pub fn pane_focus_held(window: &Window, cx: &App) -> bool {
+    cx.try_global::<HeldFocus>().is_some_and(|held| {
+        held.0
+            .iter()
+            .filter_map(WeakFocusHandle::upgrade)
+            .any(|handle| handle.is_focused(window))
+    })
+}
+
+fn hold_focus(handle: &FocusHandle, cx: &mut App) {
+    let held = cx.default_global::<HeldFocus>();
+    held.0.retain(|weak| weak.upgrade().is_some());
+    held.0.push(handle.downgrade());
+}
+
+fn release_focus(handle: &FocusHandle, cx: &mut App) {
+    if cx.has_global::<HeldFocus>() {
+        cx.global_mut::<HeldFocus>()
+            .0
+            .retain(|weak| weak.upgrade().is_some_and(|held| held != *handle));
+    }
 }
 
 /// Runs `f` on the window's shell after the current update, when no view is
@@ -150,6 +204,19 @@ pub fn in_development(feature: &str, window: &mut Window, cx: &mut App) {
     show_toast(i18n::placeholder::feature(feature), window, cx);
 }
 
+/// The window of every open shell, with the shell.
+fn all_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Shell>)> {
+    cx.try_global::<ShellRegistry>()
+        .map(|registry| {
+            registry
+                .0
+                .iter()
+                .filter_map(|(handle, shell)| Some((*handle, shell.upgrade()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The shell of every open window.
 fn all_shells(cx: &App) -> Vec<Entity<Shell>> {
     cx.try_global::<ShellRegistry>()
@@ -180,8 +247,8 @@ pub fn flush_all_panels(cx: &mut App) {
 pub fn release_all_sessions(cx: &mut App) {
     for shell in all_shells(cx) {
         shell.update(cx, |shell, cx| {
-            for (_, pane, _) in &shell.panes {
-                pane.update(cx, |pane, cx| pane.release(cx));
+            for group in shell.groups() {
+                group.update(cx, |group, cx| group.release(cx));
             }
         });
     }
@@ -192,13 +259,15 @@ pub fn release_all_sessions(cx: &mut App) {
 }
 
 /// Locks the app (UI 13.3) from outside a shell: Ctrl+Shift+L that no view
-/// handled, and a due auto-lock. Every window's details panel saves its
-/// pending edits and closes first, then the core locks once. Does nothing
-/// while locked.
+/// handled, and a due auto-lock. The open tabs are saved for Restore while
+/// the keys are there ([`restore::save_last_session`]); every window's
+/// details panel saves its pending edits and closes first, then the core
+/// locks once. Does nothing while locked.
 pub fn lock_all(state: &Entity<AppState>, cx: &mut App) {
     if !state.read(cx).is_unlocked() {
         return;
     }
+    restore::save_last_session(state, None, cx);
     for shell in all_shells(cx) {
         shell.update(cx, |shell, cx| shell.suspend_panel(cx));
     }
@@ -226,6 +295,34 @@ pub fn open_session_tab(request: SessionRequest, window: &mut Window, cx: &mut A
     });
 }
 
+/// What a session tab shows.
+enum TabContent {
+    /// SSH and local terminal tabs: their panes (UI 4.1, 4.7).
+    Panes {
+        group: Entity<PaneGroup>,
+        /// The active pane's session, kept for [`Shell::pane`] (refreshed
+        /// whenever the group changes).
+        active: Option<Entity<SessionPane>>,
+        _subscriptions: [Subscription; 2],
+    },
+    /// The new tab page (UI 6) until a target is chosen; created at the
+    /// next render (it needs the window).
+    NewTab {
+        page: Option<(Entity<NewTabPage>, Subscription)>,
+    },
+    /// The tabs of later stages (SFTP, serial).
+    Placeholder,
+}
+
+/// The inline Rename of a tab (UI 4.4): its field and the field's events.
+struct Rename {
+    tab: SessionId,
+    input: Entity<InputState>,
+    /// The field's focus, held from the panes while it is open.
+    focus: FocusHandle,
+    _subscription: Subscription,
+}
+
 pub struct Shell {
     state: Entity<AppState>,
     top_tab: TopTab,
@@ -233,6 +330,8 @@ pub struct Shell {
     section: Section,
     sidebar_visible: bool,
     hosts: Entity<HostsScreen>,
+    /// The Known Hosts section (UI 10.1), with its own details panel.
+    known_hosts: Entity<crate::known_hosts::KnownHostsScreen>,
     panel: Option<Panel>,
     details_width: Pixels,
     /// The search bar holds a connectable address (lead decision 3: the
@@ -252,15 +351,21 @@ pub struct Shell {
     /// Reveal the active tab once more after the next frame (see
     /// [`Shell::reveal_active_tab`]).
     reveal_after_frame: bool,
-    /// The content of SSH and local terminal tabs, with the subscription to
-    /// each pane's events.
-    panes: Vec<(SessionId, Entity<SessionPane>, Subscription)>,
-    /// Panes whose session starts at the next render (the terminal needs
-    /// the window).
-    unstarted: Vec<Entity<SessionPane>>,
+    /// The content of every session tab.
+    contents: Vec<(SessionId, TabContent)>,
+    /// The terminal sidebar of this window (UI 4.2), shown on the right of
+    /// a session tab.
+    terminal_sidebar: Entity<TerminalSidebar>,
+    /// The tab being renamed in place, if any.
+    renaming: Option<Rename>,
+    /// The Ctrl+K search over this window (UI 6), while open.
+    search: Option<(Entity<SearchOverlay>, Subscription)>,
     /// Give the keyboard focus back to the shell at the next render (the
     /// active tab changed to one without a terminal).
     focus_shell: bool,
+    /// Put the keyboard focus in the active new tab page's search at the
+    /// next render.
+    focus_page: bool,
     _subscriptions: Vec<Subscription>,
     /// Subscriptions to the open details panel (replaced with the panel).
     panel_subscriptions: Vec<Subscription>,
@@ -280,6 +385,8 @@ impl std::fmt::Debug for Shell {
 impl Shell {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let hosts = cx.new(|cx| HostsScreen::new(state.clone(), window, cx));
+        let known_hosts =
+            cx.new(|cx| crate::known_hosts::KnownHostsScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
         let notifications = Notifications::global(cx);
         let subscriptions = vec![
@@ -291,26 +398,16 @@ impl Shell {
         let this = cx.weak_entity();
         let registry = cx.default_global::<ShellRegistry>();
         registry.0.retain(|(_, shell)| shell.upgrade().is_some());
-        registry.0.push((window.window_handle().window_id(), this));
+        registry.0.push((window.window_handle(), this));
 
-        // Closing the window while sessions are active asks first (UI 4.6).
-        // An edit still waiting for the autosave is saved before the window
-        // (and the panel with it) goes.
+        // Closing the window while sessions are active asks first (UI 1.4,
+        // 4.6). An edit still waiting for the autosave is saved before the
+        // window (and the panel with it) goes; the last window saves the
+        // open tabs for Restore (UI 6).
         let this = cx.weak_entity();
-        window.on_window_should_close(cx, move |window, cx| {
-            let Some(shell) = this.upgrade() else {
-                return true;
-            };
-            let sessions = shell.read(cx).active_sessions(cx);
-            if sessions == 0 {
-                shell.update(cx, |shell, cx| {
-                    shell.flush_panel(cx);
-                    shell.shutdown_sessions(cx);
-                });
-                return true;
-            }
-            confirm_exit(sessions, false, window, cx);
-            false
+        window.on_window_should_close(cx, move |window, cx| match this.upgrade() {
+            Some(shell) => window_may_close(&shell, window, cx),
+            None => true,
         });
 
         // Session tabs start through the session layer (`crate::sessions`,
@@ -325,6 +422,10 @@ impl Shell {
         if let Some(core) = state.read(cx).core().cloned() {
             crate::settings::terminal::TerminalPrefs::refresh(&core, cx);
         }
+        // What Restore offers: the tabs of the previous launch, read once
+        // at the first unlock (UI 6).
+        restore::load_previous_launch(&state, cx);
+        let terminal_sidebar = cx.new(|cx| TerminalSidebar::new(state.clone(), window, cx));
 
         // Shortcuts live in the shell's key context: keep the focus inside
         // the shell from the start (not in the search bar, UI 2.1). The
@@ -339,6 +440,7 @@ impl Shell {
             section: Section::Hosts,
             sidebar_visible: true,
             hosts,
+            known_hosts,
             panel: None,
             details_width: metrics::WIDTH_DETAILS,
             search_has_address: false,
@@ -351,9 +453,12 @@ impl Shell {
             session_focus: Vec::new(),
             tab_scroll: ScrollHandle::new(),
             reveal_after_frame: false,
-            panes: Vec::new(),
-            unstarted: Vec::new(),
+            contents: Vec::new(),
+            terminal_sidebar,
+            renaming: None,
+            search: None,
             focus_shell: false,
+            focus_page: false,
             _subscriptions: subscriptions,
             panel_subscriptions: Vec::new(),
             panel_before_lock: None,
@@ -374,6 +479,10 @@ impl Shell {
 
     pub fn hosts_screen(&self) -> &Entity<HostsScreen> {
         &self.hosts
+    }
+
+    pub fn known_hosts_screen(&self) -> &Entity<crate::known_hosts::KnownHostsScreen> {
+        &self.known_hosts
     }
 
     pub fn toasts(&self) -> &Entity<Toasts> {
@@ -434,32 +543,71 @@ impl Shell {
     }
 
     /// After a tab change: the keyboard focus goes into the session tab's
-    /// terminal or dialog (UI 4.1), else back to the shell, so that the
-    /// shortcuts keep working when the focused terminal is no longer shown.
+    /// active pane (its terminal, dialog or host picker; UI 4.1, 4.7), else
+    /// back to the shell, so that the shortcuts keep working when the
+    /// focused terminal is no longer shown.
     fn focus_active_tab(&mut self, cx: &mut Context<Self>) {
         match self.top_tab {
-            TopTab::Session(id) => match self.pane(id).cloned() {
-                Some(pane) => pane.update(cx, |pane, cx| pane.request_focus(cx)),
-                None => self.focus_shell = true,
+            TopTab::Session(id) => match (self.group(id).cloned(), self.content(id)) {
+                (Some(group), _) => group.update(cx, |group, cx| group.request_focus(cx)),
+                (None, Some(TabContent::NewTab { .. })) => self.focus_page = true,
+                (None, _) => self.focus_shell = true,
             },
             TopTab::Vaults | TopTab::Sftp => self.focus_shell = true,
         }
     }
 
-    /// The content of session tab `id` (SSH and local terminal tabs).
+    /// The panes of session tab `id` (SSH and local terminal tabs).
+    pub fn group(&self, id: SessionId) -> Option<&Entity<PaneGroup>> {
+        match self.content(id)? {
+            TabContent::Panes { group, .. } => Some(group),
+            TabContent::NewTab { .. } | TabContent::Placeholder => None,
+        }
+    }
+
+    /// The session of tab `id`'s active pane; `None` while that pane
+    /// chooses a host, and for tabs without panes.
     pub fn pane(&self, id: SessionId) -> Option<&Entity<SessionPane>> {
-        self.panes
+        match self.content(id)? {
+            TabContent::Panes { active, .. } => active.as_ref(),
+            TabContent::NewTab { .. } | TabContent::Placeholder => None,
+        }
+    }
+
+    fn content(&self, id: SessionId) -> Option<&TabContent> {
+        self.contents
             .iter()
-            .find(|(session, _, _)| *session == id)
-            .map(|(_, pane, _)| pane)
+            .find(|(tab, _)| *tab == id)
+            .map(|(_, content)| content)
+    }
+
+    /// Every pane group of this window, in tab order.
+    fn groups(&self) -> Vec<Entity<PaneGroup>> {
+        self.sessions
+            .tabs()
+            .iter()
+            .filter_map(|tab| self.group(tab.id()).cloned())
+            .collect()
+    }
+
+    /// The terminal sidebar of this window (UI 4.2).
+    pub fn terminal_sidebar(&self) -> &Entity<TerminalSidebar> {
+        &self.terminal_sidebar
+    }
+
+    /// The state dot of tab `id` (UI 1.1, 4.7): the worst state of its
+    /// panes; `None` without a live or dropped session.
+    pub fn tab_status(&self, id: SessionId, cx: &App) -> Option<PaneStatus> {
+        self.group(id)?.read(cx).worst_status(cx)
     }
 
     /// Sessions that count for the exit confirmation (UI 4.6): connecting,
     /// connected, reconnecting, or dropped with automatic attempts ahead.
     pub fn active_sessions(&self, cx: &App) -> usize {
-        self.panes
+        self.groups()
             .iter()
-            .filter(|(_, pane, _)| {
+            .flat_map(|group| group.read(cx).sessions().into_iter().cloned())
+            .filter(|pane| {
                 let pane = pane.read(cx);
                 match pane.phase() {
                     Phase::Connecting(_) | Phase::Running | Phase::Reconnecting(_) => true,
@@ -472,8 +620,8 @@ impl Shell {
 
     /// Ends every session of this window (it closes).
     pub fn shutdown_sessions(&mut self, cx: &mut Context<Self>) {
-        for (_, pane, _) in &self.panes {
-            pane.update(cx, |pane, cx| pane.shutdown(cx));
+        for group in self.groups() {
+            group.update(cx, |group, cx| group.shutdown(cx));
         }
     }
 
@@ -518,120 +666,182 @@ impl Shell {
     }
 
     /// Opens a session tab and makes it active. SSH and local terminal tabs
-    /// get a [`SessionPane`] whose session starts at the next render; the
-    /// tabs of later stages (SFTP, serial, the new tab page) show the "In
-    /// development" placeholder.
+    /// get a [`PaneGroup`] whose first pane connects at the next render;
+    /// the tabs of later stages (SFTP, serial) and the new tab page show
+    /// the "In development" placeholder.
     pub fn open_session(&mut self, request: SessionRequest, cx: &mut Context<Self>) -> SessionId {
-        let pane = self.pane_for(&request, cx);
-        let request = match &pane {
-            Some((info, _)) => request.title(info.title().clone()).icon(info.icon()),
-            None => request,
-        };
-        // A quick connect (UI 2.1) offers to save the host once it connects.
-        let quick = request.quick_target().cloned();
-        let id = self.sessions.open(request);
-        if let Some((info, open)) = pane {
-            let pane = cx.new(|cx| SessionPane::new(info, open, cx));
-            let subscription = cx.subscribe(&pane, move |this, pane, event, cx| {
-                this.on_pane_event(id, &pane, event, quick.as_ref(), cx)
-            });
-            self.unstarted.push(pane.clone());
-            self.panes.push((id, pane, subscription));
+        if let Some(target) = PaneTarget::from_request(&request, self.state.read(cx)) {
+            return self.open_tab(TabSeed::Target(target), None, None, cx);
         }
+        let content = match request.kind() {
+            SessionKind::NewTab => TabContent::NewTab { page: None },
+            _ => TabContent::Placeholder,
+        };
+        let id = self.sessions.open(request);
+        self.contents.push((id, content));
+        self.after_open(id, cx);
+        id
+    }
+
+    /// Opens a session tab for `seed` (a target, or the pane tree of
+    /// Restore), right after tab `after` when given (Duplicate), with the
+    /// title set with Rename when given (Restore).
+    fn open_tab(
+        &mut self,
+        seed: TabSeed,
+        after: Option<SessionId>,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> SessionId {
+        self.place_tab(seed, TabPlace::New(after), title, cx)
+    }
+
+    /// Opens `seed` in a new tab (`TabPlace::New`) or in place of the new
+    /// tab page of tab `id` (`TabPlace::Replace`; UI 6: the session opens
+    /// in the same tab).
+    fn place_tab(
+        &mut self,
+        seed: TabSeed,
+        place: TabPlace,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> SessionId {
+        let state = self.state.clone();
+        let first = match &seed {
+            TabSeed::Target(target) => Some(target.clone()),
+            TabSeed::Snapshot(layout) => layout.leaves().first().map(|target| (*target).clone()),
+        };
+        let group = cx.new(|cx| match seed {
+            TabSeed::Target(target) => PaneGroup::open(state, &target, cx),
+            TabSeed::Snapshot(layout) => PaneGroup::restore(state, &layout, cx),
+        });
+        let mut request = SessionRequest::new(first.as_ref().map_or(SessionKind::Ssh, target_kind));
+        if let Some(info) = group.read(cx).info(cx) {
+            request = request.title(info.title().clone()).icon(info.icon());
+        }
+        if let Some(host) = first.as_ref().and_then(PaneTarget::host_id) {
+            request = request.host(host);
+        }
+        let id = match place {
+            TabPlace::New(Some(after)) => self.sessions.open_after(after, request),
+            TabPlace::New(None) => self.sessions.open(request),
+            TabPlace::Replace(id) => {
+                self.sessions.replace(id, request);
+                self.contents.retain(|(tab, _)| *tab != id);
+                id
+            }
+        };
+        if let Some(title) = title {
+            self.sessions.rename(id, Some(&title));
+        }
+        let active = group.read(cx).active_session().cloned();
+        let subscriptions = [
+            cx.subscribe(&group, move |this, group, event, cx| {
+                this.on_group_event(id, &group, event, cx)
+            }),
+            cx.observe(&group, move |this, group, cx| {
+                this.on_group_changed(id, &group, cx)
+            }),
+        ];
+        self.contents.push((
+            id,
+            TabContent::Panes {
+                group,
+                active,
+                _subscriptions: subscriptions,
+            },
+        ));
+        match place {
+            TabPlace::New(_) => self.after_open(id, cx),
+            TabPlace::Replace(_) => {
+                self.set_top_tab(TopTab::Session(id), cx);
+                self.focus_active_tab(cx);
+            }
+        }
+        id
+    }
+
+    /// A new tab becomes active, with its focus stop.
+    fn after_open(&mut self, id: SessionId, cx: &mut Context<Self>) {
         self.session_focus
             .push((id, cx.focus_handle().tab_stop(true)));
         self.top_tab = TopTab::Session(id);
         self.reveal_active_tab();
         self.focus_active_tab(cx);
         cx.notify();
-        id
     }
 
-    /// What an SSH or local terminal tab shows first and what it opens;
-    /// `None` for the tabs of later stages.
-    fn pane_for(&self, request: &SessionRequest, cx: &App) -> Option<(TabInfo, OpenRequest)> {
-        use shellpp_core::service::dto::SessionTarget;
-        match request.kind() {
-            SessionKind::Ssh => {
-                let state = self.state.read(cx);
-                if let Some(id) = request.host_id() {
-                    let Some(host) = state.host(id) else {
-                        // Gone meanwhile: the session layer reports it.
-                        let title = request
-                            .requested_title()
-                            .cloned()
-                            .unwrap_or_else(|| SessionKind::Ssh.default_title().into());
-                        let target = SessionTarget::Host {
-                            vault_id: state.vault_id()?,
-                            record_id: id,
-                        };
-                        let icon = crate::session_ui::bridge::initial_icon(None, false);
-                        return Some((TabInfo::remote(title, "", icon), OpenRequest::Ssh(target)));
-                    };
-                    let info = TabInfo::remote(
-                        host.title().to_owned(),
-                        display_address(host.username.as_deref(), &host.address, host.port),
-                        crate::session_ui::bridge::initial_icon(host.os_family.as_deref(), false),
-                    );
-                    let target = SessionTarget::Host {
-                        vault_id: host.vault_id,
-                        record_id: host.record_id,
-                    };
-                    return Some((info, OpenRequest::Ssh(target)));
-                }
-                let quick = request.quick_target()?;
-                let title = request
-                    .requested_title()
-                    .cloned()
-                    .unwrap_or_else(|| quick.title().into());
-                let info = TabInfo::remote(
-                    title,
-                    display_address(quick.username.as_deref(), &quick.host, quick.port),
-                    crate::session_ui::bridge::initial_icon(None, false),
-                );
-                let target = SessionTarget::Quick {
-                    address: quick.host.clone(),
-                    port: quick.port,
-                    username: quick.username.clone(),
-                };
-                Some((info, OpenRequest::Ssh(target)))
-            }
-            SessionKind::Local => {
-                let title = request
-                    .requested_title()
-                    .cloned()
-                    .unwrap_or_else(|| SessionKind::Local.default_title().into());
-                let info = TabInfo::local(title, SessionKind::Local.default_icon());
-                Some((info, OpenRequest::Local { shell_id: None }))
-            }
-            SessionKind::Sftp | SessionKind::Serial | SessionKind::NewTab => None,
-        }
+    /// Opens a session to `target` in a new tab (Duplicate, a new window);
+    /// `after` puts it right after that tab.
+    pub fn open_target(
+        &mut self,
+        target: PaneTarget,
+        after: Option<SessionId>,
+        cx: &mut Context<Self>,
+    ) -> SessionId {
+        self.open_tab(TabSeed::Target(target), after, None, cx)
     }
 
-    fn on_pane_event(
+    /// Opens a tab with the panes of a Restore snapshot and the title set
+    /// with Rename, if any.
+    pub fn open_snapshot(
+        &mut self,
+        layout: Layout<PaneTarget>,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> SessionId {
+        self.open_tab(TabSeed::Snapshot(layout), None, title, cx)
+    }
+
+    fn on_group_event(
         &mut self,
         id: SessionId,
-        pane: &Entity<SessionPane>,
-        event: &SessionPaneEvent,
-        quick: Option<&hosts::QuickTarget>,
+        group: &Entity<PaneGroup>,
+        event: &PaneGroupEvent,
         cx: &mut Context<Self>,
     ) {
         match event {
-            // Exit status 0 or Close (UI 4.6): the neighbor rule applies.
-            SessionPaneEvent::Close => self.close_session(id, cx),
-            SessionPaneEvent::Connected => {
-                if let Some(target) = quick {
-                    self.offer_to_save(target.clone(), cx);
-                }
+            // The last pane closed (UI 4.6, 4.7): the neighbor rule applies.
+            PaneGroupEvent::Empty => self.close_session(id, cx),
+            PaneGroupEvent::Changed => self.on_group_changed(id, group, cx),
+            // A quick connect (UI 2.1) offers to save the host.
+            PaneGroupEvent::Connected(PaneTarget::Quick(target)) => {
+                self.offer_to_save(target.clone(), cx)
             }
-            SessionPaneEvent::Retitled => {
-                let info = pane.read(cx).info();
-                let (title, icon) = (info.title().clone(), info.icon());
-                if self.sessions.retitle(id, title, icon) {
-                    cx.notify();
-                }
-            }
+            PaneGroupEvent::Connected(_) => {}
         }
+    }
+
+    /// The group changed (active pane, title, icon, state): the tab follows
+    /// its active pane (UI 4.7).
+    fn on_group_changed(
+        &mut self,
+        id: SessionId,
+        group: &Entity<PaneGroup>,
+        cx: &mut Context<Self>,
+    ) {
+        let (info, active, host) = {
+            let group = group.read(cx);
+            (
+                group.info(cx),
+                group.active_session().cloned(),
+                group.active_target(cx).map(|target| target.host_id()),
+            )
+        };
+        if let Some((_, TabContent::Panes { active: slot, .. })) =
+            self.contents.iter_mut().find(|(tab, _)| *tab == id)
+        {
+            *slot = active;
+        }
+        if let Some(info) = info {
+            self.sessions.retitle(id, info.title().clone(), info.icon());
+        }
+        // While the active pane chooses a host, the tab keeps the host of
+        // the pane it shows.
+        if let Some(host) = host {
+            self.sessions.set_host(id, host);
+        }
+        cx.notify();
     }
 
     /// The unobtrusive offer to save the host after a successful quick
@@ -651,16 +861,24 @@ impl Shell {
         );
     }
 
-    /// Closes a session tab and ends its session; when it was active, the
+    /// Closes a session tab and ends its sessions; when it was active, the
     /// neighbor of UI 4.6 becomes active (left, else right, else Vaults).
     pub fn close_session(&mut self, id: SessionId, cx: &mut Context<Self>) {
         let was_active = self.top_tab == TopTab::Session(id);
-        if let Some(index) = self.panes.iter().position(|(session, _, _)| *session == id) {
-            let (_, pane, _subscription) = self.panes.remove(index);
-            self.unstarted.retain(|unstarted| *unstarted != pane);
-            // Ends the session and lets go of it, so that nothing keeps the
-            // core open if the pane outlives its tab.
-            pane.update(cx, |pane, cx| pane.release(cx));
+        if let Some(index) = self.contents.iter().position(|(tab, _)| *tab == id) {
+            let (_, content) = self.contents.remove(index);
+            if let TabContent::Panes { group, .. } = content {
+                // Ends the sessions and lets go of them, so that nothing
+                // keeps the core open if the group outlives its tab.
+                group.update(cx, |group, cx| group.release(cx));
+            }
+        }
+        if self
+            .renaming
+            .as_ref()
+            .is_some_and(|rename| rename.tab == id)
+        {
+            self.take_rename(cx);
         }
         let next = self.sessions.close(id);
         self.session_focus.retain(|(session, _)| *session != id);
@@ -670,6 +888,22 @@ impl Shell {
             self.focus_active_tab(cx);
         }
         cx.notify();
+    }
+
+    /// Ctrl+Shift+W (UI 4.7, 12.5): the active pane of a tab with splits,
+    /// else the active tab.
+    pub fn close_active(&mut self, cx: &mut Context<Self>) {
+        let TopTab::Session(id) = self.top_tab else {
+            return;
+        };
+        match self.group(id).cloned() {
+            Some(group) if group.read(cx).has_splits() => {
+                group.update(cx, |group, cx| {
+                    group.close_active_pane(cx);
+                });
+            }
+            _ => self.close_session(id, cx),
+        }
     }
 
     /// The top-bar tabs in order: Vaults, SFTP, then the session tabs.
@@ -726,7 +960,7 @@ impl Shell {
             }
             cx.quit();
         } else {
-            confirm_exit(sessions, true, window, cx);
+            confirm_exit(sessions, window, cx);
         }
     }
 
@@ -786,6 +1020,10 @@ impl Shell {
         if !self.state.read(cx).is_unlocked() {
             return;
         }
+        // The open tabs are saved for Restore while the keys are there
+        // (this shell's tabs from here, the others' through their
+        // entities).
+        restore::save_from(self, cx);
         // This shell is being updated: its own panel here, the others'
         // through their entities.
         self.suspend_panel(cx);
@@ -800,11 +1038,13 @@ impl Shell {
         }
     }
 
-    /// On lock: closes the details panel (its record data goes with the
-    /// keys; pending edits are saved first while they still can be) and
-    /// remembers its record for [`Shell::resume_panel`]. Without an open
-    /// panel it keeps what an earlier call remembered.
+    /// On lock: closes the Ctrl+K search (it lists hosts) and the details
+    /// panel (its record data goes with the keys; pending edits are saved
+    /// first while they still can be) and remembers the panel's record for
+    /// [`Shell::resume_panel`]. Without an open panel it keeps what an
+    /// earlier call remembered.
     pub fn suspend_panel(&mut self, cx: &mut Context<Self>) {
+        self.close_search(cx);
         let target = match &self.panel {
             Some(Panel::Host(panel)) => panel.read(cx).record_id().map(PanelTarget::Host),
             Some(Panel::Group(panel)) => panel.read(cx).record_id().map(PanelTarget::Group),
@@ -877,9 +1117,6 @@ impl Shell {
     ) {
         match request {
             HostsRequest::OpenSession(request) => {
-                if request.new_window {
-                    self.placeholder_toast(i18n::menu::NEW_WINDOW, cx);
-                }
                 let kind = match request.kind {
                     hosts::SessionKind::Ssh => SessionKind::Ssh,
                     hosts::SessionKind::Sftp => SessionKind::Sftp,
@@ -894,7 +1131,19 @@ impl Shell {
                 if let Some(target) = request.target.clone() {
                     session = session.quick(target);
                 }
-                self.open_session(session, cx);
+                // Alt held (UI 2.4): in a new window.
+                if request.new_window {
+                    windows::open_in_new_window(
+                        self.state.clone(),
+                        window,
+                        cx,
+                        move |shell, _, cx| {
+                            shell.open_session(session, cx);
+                        },
+                    );
+                } else {
+                    self.open_session(session, cx);
+                }
             }
             HostsRequest::EditHost(id) => {
                 self.open_host_panel(Some(*id), window, cx);
@@ -952,7 +1201,21 @@ impl Shell {
                 if let Some(host) = host {
                     session = session.title(host.title().to_owned());
                 }
-                self.open_session(session, cx);
+                // Alt + Connect (UI 2.4): in a new window. The click (or the
+                // menu item) is still being handled, so the window's
+                // modifiers are the ones it came with.
+                if window.modifiers().alt {
+                    windows::open_in_new_window(
+                        self.state.clone(),
+                        window,
+                        cx,
+                        move |shell, _, cx| {
+                            shell.open_session(session, cx);
+                        },
+                    );
+                } else {
+                    self.open_session(session, cx);
+                }
             }
             PanelRequest::OpenHost(id) => self.open_host_panel(Some(*id), window, cx),
             PanelRequest::OpenGroup(id) => self.open_group_panel(Some(*id), window, cx),
@@ -1007,6 +1270,11 @@ impl Shell {
             cx,
         )
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_top_tab(TopTab::Sftp, cx)));
+        // The tab being renamed shows its field in place of the title.
+        let mut rename_field = self.renaming.as_ref().and_then(|rename| {
+            let tab = self.sessions.get(rename.tab)?;
+            Some((rename.tab, self.render_rename(tab, rename, cx)))
+        });
         let session_tabs: Vec<AnyElement> = self
             .sessions
             .tabs()
@@ -1026,21 +1294,50 @@ impl Shell {
                     .find(|(session, _)| *session == id)
                     .map(|(_, focus)| focus.clone())
                     .unwrap_or_else(|| self.focus.clone());
-                title_bar::session_tab(tab, &focus, self.top_tab == TopTab::Session(id), close, cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.set_top_tab(TopTab::Session(id), cx);
-                        // A click on the active tab gives its terminal the
-                        // focus back.
-                        this.focus_active_tab(cx);
-                    }))
-                    .into_any_element()
+                let rename = rename_field
+                    .take_if(|(tab, _)| *tab == id)
+                    .map(|(_, field)| field);
+                let shell = cx.weak_entity();
+                title_bar::session_tab(
+                    tab,
+                    self.tab_status(id, cx),
+                    rename,
+                    &focus,
+                    self.top_tab == TopTab::Session(id),
+                    close,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.set_top_tab(TopTab::Session(id), cx);
+                    // A click on the active tab gives its terminal the
+                    // focus back.
+                    this.focus_active_tab(cx);
+                }))
+                // Right click: the tab menu (UI 4.4).
+                .context_menu(move |menu, window, cx| {
+                    let Some(shell) = shell.upgrade() else {
+                        return menu;
+                    };
+                    let facts = shell.read(cx).tab_facts(id, cx);
+                    let handler: tab_menu::TabCommandHandler = {
+                        let shell = shell.downgrade();
+                        std::rc::Rc::new(move |command, window, cx| {
+                            let _ = shell.update(cx, |shell, cx| {
+                                shell.run_tab_command(id, command, window, cx)
+                            });
+                        })
+                    };
+                    tab_menu::build(menu, tab_menu::entries(facts), handler, window, cx)
+                })
+                .into_any_element()
             })
             .collect();
-        // The new tab page is stage 2b: "+" is shown disabled (D30).
-        let new_tab = title_bar::disabled(
-            title_bar::icon_button("tab-new", IconName::Plus, cx).tooltip(i18n::top_bar::NEW_TAB),
-            cx,
-        );
+        // "+": the new tab page (UI 1.1, 6).
+        let new_tab = title_bar::icon_button("tab-new", IconName::Plus, cx)
+            .tooltip(i18n::top_bar::NEW_TAB)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.new_tab(window, cx);
+            }));
 
         let unread = self.notifications.read(cx).unread();
         let list = self.notifications.clone();
@@ -1058,13 +1355,15 @@ impl Shell {
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_overlay(cx))
             .content(move |_, _, cx| render_notification_list(&list, cx));
-        // The terminal sidebar is stage 2b: shown disabled on session tabs (D30).
+        // The terminal sidebar button, on session tabs only (UI 1.1, 4.2).
+        let sidebar_shown = self.terminal_sidebar.read(cx).is_visible();
         let terminal_sidebar = matches!(self.top_tab, TopTab::Session(_)).then(|| {
-            title_bar::disabled(
-                title_bar::icon_button("terminal-sidebar", IconName::PanelRight, cx)
-                    .tooltip(i18n::top_bar::TERMINAL_SIDEBAR),
-                cx,
-            )
+            title_bar::icon_button("top-bar-terminal-sidebar", IconName::PanelRight, cx)
+                .tooltip(i18n::top_bar::TERMINAL_SIDEBAR)
+                .selected(sidebar_shown)
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.toggle_terminal_sidebar(window, cx)
+                }))
         });
 
         title_bar::bare_title_bar(cx).child(
@@ -1140,11 +1439,11 @@ impl Shell {
     }
 
     fn render_main(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = if self.section.is_built() {
-            self.hosts.clone().into_any_element()
-        } else {
-            placeholder::placeholder("section-placeholder", self.section.label(), cx)
-                .into_any_element()
+        let content = match self.section {
+            Section::Hosts => self.hosts.clone().into_any_element(),
+            Section::KnownHosts => self.known_hosts.clone().into_any_element(),
+            _ => placeholder::placeholder("section-placeholder", self.section.label(), cx)
+                .into_any_element(),
         };
         div()
             .id("main-area")
@@ -1224,12 +1523,26 @@ impl Shell {
         )
     }
 
-    /// A session tab: its pane (SSH and local terminals, UI 4.1) or the "In
-    /// development" placeholder (the tabs of later stages).
-    fn render_session(&self, id: SessionId, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = match self.pane(id) {
-            Some(pane) => pane.clone().into_any_element(),
-            None => {
+    /// A session tab: its panes (SSH and local terminals, UI 4.1, 4.7) or
+    /// the "In development" placeholder (the new tab page and the tabs of
+    /// later stages), with the terminal sidebar on the right when it is
+    /// shown (UI 4.2: the terminal narrows instead of being covered).
+    fn render_session(
+        &self,
+        id: SessionId,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let page = match self.content(id) {
+            Some(TabContent::NewTab {
+                page: Some((page, _)),
+            }) => Some(page.clone()),
+            _ => None,
+        };
+        let content = match (self.group(id), page) {
+            (Some(group), _) => group.clone().into_any_element(),
+            (None, Some(page)) => page.into_any_element(),
+            (None, None) => {
                 let title = self
                     .sessions
                     .get(id)
@@ -1238,14 +1551,492 @@ impl Shell {
                 placeholder::placeholder("session-placeholder", title, cx).into_any_element()
             }
         };
-        div()
-            .id("session-area")
-            .test_support()
-            .relative()
+        let sidebar = self.terminal_sidebar.read(cx).is_visible();
+        h_flex()
             .size_full()
-            .bg(cx.theme().colors.list)
-            .child(content)
-            .child(self.render_toast_host())
+            .child(
+                div()
+                    .id("session-area")
+                    .test_support()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .bg(cx.theme().colors.list)
+                    .child(content)
+                    .child(self.render_toast_host()),
+            )
+            .when(sidebar, |area| area.child(self.terminal_sidebar.clone()))
+    }
+
+    // -- New tab, search, new window --------------------------------------------
+
+    /// "+", Ctrl+T and Ctrl+Shift+T (UI 6): a "New Tab" tab with the new tab
+    /// page.
+    pub fn new_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> SessionId {
+        self.open_session(SessionRequest::new(SessionKind::NewTab), cx)
+    }
+
+    /// Ctrl+K and Ctrl+Shift+K (UI 6): the search over open tabs and hosts,
+    /// as an overlay over this window; Esc closes it. Again while open:
+    /// nothing.
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() {
+            return;
+        }
+        let tabs = self.open_tabs(None, window, cx);
+        let state = self.state.clone();
+        let overlay = cx.new(|cx| SearchOverlay::new(state, tabs, window, cx));
+        let subscription = cx.subscribe_in(&overlay, window, |this, _, event, window, cx| {
+            this.on_new_tab_event(None, event, window, cx)
+        });
+        self.search = Some((overlay, subscription));
+        cx.notify();
+    }
+
+    /// The search overlay, while open (tests).
+    pub fn search_overlay(&self) -> Option<&Entity<SearchOverlay>> {
+        self.search.as_ref().map(|(overlay, _)| overlay)
+    }
+
+    /// The new tab page of tab `id`, once rendered.
+    pub fn new_tab_page(&self, id: SessionId) -> Option<&Entity<NewTabPage>> {
+        match self.content(id)? {
+            TabContent::NewTab {
+                page: Some((page, _)),
+            } => Some(page),
+            _ => None,
+        }
+    }
+
+    /// The open session tabs of every window for the search (UI 6), this
+    /// window's first; `except` is left out (the page's own tab).
+    fn open_tabs(&self, except: Option<SessionId>, window: &Window, cx: &App) -> Vec<OpenTab> {
+        let own = window.window_handle();
+        let mut tabs = self.own_open_tabs(own, except);
+        for (handle, shell) in all_windows(cx) {
+            if handle.window_id() != own.window_id() {
+                tabs.extend(shell.read(cx).own_open_tabs(handle, None));
+            }
+        }
+        tabs
+    }
+
+    /// This window's session tabs (not the new tab pages) as the search
+    /// offers them.
+    fn own_open_tabs(&self, handle: AnyWindowHandle, except: Option<SessionId>) -> Vec<OpenTab> {
+        self.sessions
+            .tabs()
+            .iter()
+            .filter(|tab| Some(tab.id()) != except && tab.kind() != SessionKind::NewTab)
+            .map(|tab| {
+                OpenTab::new(handle, tab.id(), tab.title().clone())
+                    .icon(tab.icon())
+                    .host(tab.host())
+            })
+            .collect()
+    }
+
+    /// Creates the new tab pages that wait for the window, and hands the
+    /// active page and the search the open tabs and the Restore flag.
+    fn prepare_new_tab_pages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let waiting: Vec<SessionId> = self
+            .contents
+            .iter()
+            .filter(|(_, content)| matches!(content, TabContent::NewTab { page: None }))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in waiting {
+            let state = self.state.clone();
+            let page = cx.new(|cx| NewTabPage::new(state, window, cx));
+            let subscription = cx.subscribe_in(&page, window, move |this, _, event, window, cx| {
+                this.on_new_tab_event(Some(id), event, window, cx)
+            });
+            if let Some((_, TabContent::NewTab { page: slot })) =
+                self.contents.iter_mut().find(|(tab, _)| *tab == id)
+            {
+                *slot = Some((page, subscription));
+            }
+        }
+        let restore = restore::can_restore(cx);
+        if let TopTab::Session(id) = self.top_tab
+            && let Some(page) = self.new_tab_page(id).cloned()
+        {
+            let tabs = self.open_tabs(Some(id), window, cx);
+            page.update(cx, |page, cx| {
+                page.set_open_tabs(tabs, cx);
+                page.set_restore_available(restore, cx);
+            });
+            if std::mem::take(&mut self.focus_page) {
+                window.defer(cx, move |window, cx| {
+                    page.update(cx, |page, cx| page.focus_search(window, cx));
+                });
+            }
+        }
+        if let Some((overlay, _)) = &self.search {
+            let overlay = overlay.clone();
+            let tabs = self.open_tabs(None, window, cx);
+            overlay.update(cx, |overlay, cx| overlay.set_open_tabs(tabs, cx));
+        }
+    }
+
+    /// A choice on the new tab page of tab `page` (UI 6: the session opens
+    /// in that tab), or in the search overlay (`page` is `None`: a new
+    /// tab). `new_window`: in a new window instead (Alt, UI 2.4).
+    fn on_new_tab_event(
+        &mut self,
+        page: Option<SessionId>,
+        event: &NewTabEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (target, new_window) = match event {
+            NewTabEvent::OpenHost {
+                host_id,
+                new_window,
+            } => {
+                let request = SessionRequest::new(SessionKind::Ssh).host(*host_id);
+                (
+                    PaneTarget::from_request(&request, self.state.read(cx)),
+                    *new_window,
+                )
+            }
+            NewTabEvent::QuickConnect { target, new_window } => {
+                (Some(PaneTarget::Quick(target.clone())), *new_window)
+            }
+            NewTabEvent::OpenLocal {
+                shell_id,
+                new_window,
+            } => (
+                Some(PaneTarget::Local {
+                    shell_id: shell_id.clone(),
+                }),
+                *new_window,
+            ),
+            NewTabEvent::ActivateTab {
+                window: handle,
+                tab,
+            } => {
+                self.close_search(cx);
+                self.activate_open_tab(*handle, *tab, window, cx);
+                return;
+            }
+            NewTabEvent::Restore => {
+                self.close_search(cx);
+                let opened = restore::restore_previous_launch(self, window, cx);
+                // The page served its purpose: the restored tabs replace it
+                // [decision].
+                if let Some(page) = page.filter(|_| opened > 0) {
+                    self.close_session(page, cx);
+                }
+                return;
+            }
+            NewTabEvent::Dismissed => {
+                if page.is_none() {
+                    self.close_search(cx);
+                }
+                return;
+            }
+        };
+        self.close_search(cx);
+        let Some(target) = target else {
+            return;
+        };
+        if new_window {
+            windows::open_in_new_window(self.state.clone(), window, cx, move |shell, _, cx| {
+                shell.open_target(target, None, cx);
+            });
+            return;
+        }
+        match page {
+            Some(page) => {
+                self.place_tab(TabSeed::Target(target), TabPlace::Replace(page), None, cx);
+            }
+            None => {
+                self.open_target(target, None, cx);
+            }
+        }
+    }
+
+    /// Closes the search overlay.
+    fn close_search(&mut self, cx: &mut Context<Self>) {
+        if self.search.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Activates tab `tab` of window `handle`: this window's directly, another
+    /// window's after this update, with that window brought to the front
+    /// (UI 6).
+    fn activate_open_tab(
+        &mut self,
+        handle: AnyWindowHandle,
+        tab: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if handle.window_id() == window.window_handle().window_id() {
+            self.set_top_tab(TopTab::Session(tab), cx);
+            self.focus_active_tab(cx);
+            return;
+        }
+        cx.defer(move |cx| windows::activate_tab_in(handle, tab, cx));
+    }
+
+    // -- Terminal sidebar ------------------------------------------------------------
+
+    /// The top bar button (UI 4.2): shows or hides the terminal sidebar of
+    /// this window; only on a session tab.
+    pub fn toggle_terminal_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.top_tab, TopTab::Session(_)) {
+            return;
+        }
+        let visible = !self.terminal_sidebar.read(cx).is_visible();
+        self.terminal_sidebar
+            .update(cx, |sidebar, cx| sidebar.set_visible(visible, cx));
+        self.sync_sidebar_target(window, cx);
+        if !visible {
+            // The focus may have been in the sidebar: back to the pane.
+            self.focus_active_tab(cx);
+        }
+        cx.notify();
+    }
+
+    /// Ctrl+Shift+F (UI 4.2, 12.5): the sidebar opens on Tools with the
+    /// search field focused; only on a session tab.
+    pub fn find_in_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.top_tab, TopTab::Session(_)) {
+            return;
+        }
+        self.sync_sidebar_target(window, cx);
+        self.terminal_sidebar
+            .update(cx, |sidebar, cx| sidebar.find_in_terminal(window, cx));
+        cx.notify();
+    }
+
+    /// What the terminal sidebar acts on: the terminal of the active tab's
+    /// active pane, its saved host and the tab; `None` on other tabs and
+    /// while the active pane chooses a host.
+    fn sidebar_target(&self, cx: &App) -> Option<SidebarTarget> {
+        let TopTab::Session(id) = self.top_tab else {
+            return None;
+        };
+        let group = self.group(id)?.read(cx);
+        let terminal = group.active_terminal(cx)?;
+        let host = group.active_target(cx).and_then(|target| target.host_id());
+        Some(SidebarTarget::new(&terminal).host(host).session(Some(id)))
+    }
+
+    /// Hands the sidebar its target when it changed (a tab or pane became
+    /// active, a session started its terminal).
+    fn sync_sidebar_target(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.sidebar_target(cx);
+        if self.terminal_sidebar.read(cx).target() == target.as_ref() {
+            return;
+        }
+        let sidebar = self.terminal_sidebar.clone();
+        window.defer(cx, move |window, cx| {
+            sidebar.update(cx, |sidebar, cx| sidebar.set_target(target, window, cx));
+        });
+    }
+
+    // -- Tab menu (UI 4.4) ---------------------------------------------------------
+
+    /// What the menu of tab `id` offers.
+    fn tab_facts(&self, id: SessionId, cx: &App) -> tab_menu::TabFacts {
+        let Some(group) = self.group(id) else {
+            return tab_menu::TabFacts::default();
+        };
+        let group = group.read(cx);
+        let active = group.active_pane();
+        // UI 4.4: Duplicate and the splits stay disabled while the active
+        // pane has no session target (a pane still choosing a host).
+        let has_target = group.active_target(cx).is_some();
+        tab_menu::TabFacts {
+            has_target,
+            can_split_down: has_target && group.can_split(active, Direction::Column),
+            can_split_right: has_target && group.can_split(active, Direction::Row),
+            has_splits: group.has_splits(),
+        }
+    }
+
+    /// Runs a command of tab `id`'s menu.
+    pub fn run_tab_command(
+        &mut self,
+        id: SessionId,
+        command: tab_menu::TabCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use tab_menu::TabCommand;
+        let group = self.group(id).cloned();
+        match command {
+            TabCommand::Duplicate => {
+                if let Some(target) = group.and_then(|group| group.read(cx).active_target(cx)) {
+                    self.open_target(target, Some(id), cx);
+                }
+            }
+            TabCommand::DuplicateInNewWindow => {
+                if let Some(target) = group.and_then(|group| group.read(cx).active_target(cx)) {
+                    windows::open_in_new_window(
+                        self.state.clone(),
+                        window,
+                        cx,
+                        move |shell, _, cx| {
+                            shell.open_target(target, None, cx);
+                        },
+                    );
+                }
+            }
+            TabCommand::Rename => self.start_rename(id, window, cx),
+            TabCommand::SplitHorizontally | TabCommand::SplitVertically => {
+                let direction = if command == TabCommand::SplitHorizontally {
+                    Direction::Column
+                } else {
+                    Direction::Row
+                };
+                if let Some(group) = group {
+                    self.set_top_tab(TopTab::Session(id), cx);
+                    group.update(cx, |group, cx| {
+                        group.split(direction, cx);
+                    });
+                }
+            }
+            // Stage 9 (D30): shown disabled.
+            TabCommand::BroadcastInput => {}
+            TabCommand::Close => {
+                self.close_session(id, cx);
+                self.focus_active_tab(cx);
+            }
+        }
+    }
+
+    // -- Rename (UI 4.4) -------------------------------------------------------------
+
+    /// Starts editing tab `id`'s title in place: the field holds the title
+    /// on display, selected. Enter or leaving the field saves, Esc cancels,
+    /// and an empty title brings back the host's.
+    pub fn start_rename(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = self.sessions.get(id).map(|tab| tab.title().clone()) else {
+            return;
+        };
+        self.take_rename(cx);
+        // Into the tab without a focus request for its pane: the field takes
+        // the focus, and a pane taking it back would end the edit.
+        self.top_tab = TopTab::Session(id);
+        self.reveal_active_tab();
+        self.focus_page = false;
+        // At most the length Restore keeps, without control characters
+        // (a pasted tab): sessions::MAX_TITLE_CHARS.
+        let input =
+            cx.new(|cx| InputState::new(window, cx).validate(|text, _| sessions::title_ok(text)));
+        input.update(cx, |input, cx| {
+            input.set_value(title, window, cx);
+            input.select_all(window, cx);
+            input.focus(window, cx);
+        });
+        let focus = gpui::Focusable::focus_handle(input.read(cx), cx);
+        hold_focus(&focus, cx);
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            move |this: &mut Self, _, event: &InputEvent, _, cx| match event {
+                InputEvent::PressEnter { .. } => this.finish_rename(true, true, cx),
+                // A click elsewhere saves and leaves the focus where it went.
+                InputEvent::Blur => this.finish_rename(true, false, cx),
+                InputEvent::Change | InputEvent::Focus => {}
+            },
+        );
+        self.renaming = Some(Rename {
+            tab: id,
+            input,
+            focus,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Ends the inline Rename: `save` keeps the field's text as the tab's
+    /// title when it was changed (empty: the host's title again), else
+    /// nothing changes; `refocus` moves the focus back into the tab's pane
+    /// (Enter and Esc, not a click elsewhere).
+    pub fn finish_rename(&mut self, save: bool, refocus: bool, cx: &mut Context<Self>) {
+        let Some(rename) = self.take_rename(cx) else {
+            return;
+        };
+        if save {
+            let text = rename.input.read(cx).value().to_string();
+            // The title on display, unchanged, stays the host's: the tab
+            // keeps following the active pane (UI 4.7).
+            let changed = self
+                .sessions
+                .get(rename.tab)
+                .is_none_or(|tab| tab.title().as_ref() != text.trim());
+            if changed {
+                self.sessions.rename(rename.tab, Some(&text));
+            }
+        }
+        if refocus {
+            self.focus_active_tab(cx);
+        }
+        cx.notify();
+    }
+
+    /// Closes the Rename field without saving and lets the panes take the
+    /// focus again.
+    fn take_rename(&mut self, cx: &mut Context<Self>) -> Option<Rename> {
+        let rename = self.renaming.take()?;
+        release_focus(&rename.focus, cx);
+        Some(rename)
+    }
+
+    /// The tab being renamed (tests).
+    pub fn renaming(&self) -> Option<(SessionId, &Entity<InputState>)> {
+        self.renaming
+            .as_ref()
+            .map(|rename| (rename.tab, &rename.input))
+    }
+
+    /// The Rename field in place of the tab title: Esc cancels.
+    fn render_rename(
+        &self,
+        tab: &SessionTab,
+        rename: &Rename,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(tab.rename_element_id())
+            .test_support()
+            .w_full()
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    this.finish_rename(false, true, cx);
+                }
+            }))
+            .child(
+                Input::new(&rename.input)
+                    .appearance(false)
+                    .px_0()
+                    .text_size(metrics::FONT_SIZE_BODY),
+            )
+            .into_any_element()
+    }
+
+    // -- Restore (UI 6) ----------------------------------------------------------------
+
+    /// This window's tabs for Restore (lead decision L5): their pane trees
+    /// with each session's target and the titles set with Rename. Tabs
+    /// without a session (the new tab page, SFTP, serial) are left out.
+    pub fn snapshot(&self, cx: &App) -> restore::WindowSnapshot {
+        self.sessions
+            .tabs()
+            .iter()
+            .filter_map(|tab| {
+                let layout = self.group(tab.id())?.read(cx).snapshot(cx)?;
+                Some((layout, tab.custom_title().map(|title| title.to_string())))
+            })
+            .collect()
     }
 }
 
@@ -1263,9 +2054,94 @@ pub fn display_address(username: Option<&str>, host: &str, port: Option<u16>) ->
     }
 }
 
-/// The exit confirmation (UI 1.4, 4.6): `quit` true quits the app, false
-/// closes the window.
-fn confirm_exit(sessions: usize, quit: bool, window: &mut Window, cx: &mut App) {
+/// Where [`Shell::place_tab`] puts a session.
+#[derive(Clone, Copy)]
+enum TabPlace {
+    /// A new tab, right after this one when given.
+    New(Option<SessionId>),
+    /// In place of this tab's new tab page.
+    Replace(SessionId),
+}
+
+/// What a new session tab opens with.
+enum TabSeed {
+    /// One pane connecting to a target.
+    Target(PaneTarget),
+    /// The panes of a Restore snapshot.
+    Snapshot(Layout<PaneTarget>),
+}
+
+/// The kind of a tab whose (first) pane connects to `target`.
+fn target_kind(target: &PaneTarget) -> SessionKind {
+    if target.is_local() {
+        SessionKind::Local
+    } else {
+        SessionKind::Ssh
+    }
+}
+
+/// Whether the window of `shell` may close now: with active sessions it
+/// asks first (UI 1.4, 4.6: [`confirm_close_window`] closes it on Close
+/// Window); otherwise the pending edit is saved, the last window saves the
+/// tabs for Restore, and it may go.
+fn window_may_close(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) -> bool {
+    let sessions = shell.read(cx).active_sessions(cx);
+    if sessions == 0 {
+        windows::before_close(shell, cx);
+        return true;
+    }
+    confirm_close_window(sessions, window, cx);
+    false
+}
+
+/// The close button of the window: the same as the system close
+/// ([`window_may_close`]), for the buttons the top bar draws itself (Linux
+/// client-side decorations call it instead of closing at once).
+pub fn request_close_window(window: &mut Window, cx: &mut App) {
+    let may_close = match shell_for(window, cx) {
+        Some(shell) => window_may_close(&shell, window, cx),
+        None => true,
+    };
+    if may_close {
+        window.remove_window();
+    }
+}
+
+/// Closing a window while its sessions are active (UI 1.4, 4.6): Close
+/// Window ends them (and, for the last window, saves the tabs for Restore
+/// first); Cancel keeps the window.
+fn confirm_close_window(sessions: usize, window: &mut Window, cx: &mut App) {
+    window.open_alert_dialog(cx, move |alert, _, cx| {
+        let theme = cx.theme();
+        alert
+            .title(
+                div()
+                    .text_size(metrics::FONT_SIZE_TITLE)
+                    .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                    .child(strings::CLOSE_WINDOW_TITLE),
+            )
+            .description(strings::close_window_body(sessions))
+            .show_cancel(true)
+            .cancel_text(strings::CLOSE_WINDOW_CANCEL)
+            .ok_text(strings::CLOSE_WINDOW_OK)
+            .ok_variant(ButtonVariant::Danger)
+            .bg(theme.popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .shadow(theme::shadow_modal(cx))
+            .on_ok(move |_, window, cx| {
+                if let Some(shell) = shell_for(window, cx) {
+                    windows::before_close(&shell, cx);
+                }
+                window.remove_window();
+                true
+            })
+    });
+}
+
+/// The exit confirmation (UI 1.4, 4.6): Exit ends the sessions of every
+/// window and quits (the open tabs are saved for Restore on the way out,
+/// `crate::app::run`).
+fn confirm_exit(sessions: usize, window: &mut Window, cx: &mut App) {
     window.open_alert_dialog(cx, move |alert, _, cx| {
         let theme = cx.theme();
         alert
@@ -1284,24 +2160,15 @@ fn confirm_exit(sessions: usize, quit: bool, window: &mut Window, cx: &mut App) 
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_modal(cx))
             .on_ok(move |_, window, cx| {
-                // Pending panel edits are saved before the window goes; its
-                // sessions (every window's on Exit) end.
+                // Pending panel edits are saved before the windows go; the
+                // sessions of every window end.
                 if let Some(shell) = shell_for(window, cx) {
                     shell.update(cx, |shell, cx| shell.flush_panel(cx));
                 }
-                let ending = if quit {
-                    all_shells(cx)
-                } else {
-                    shell_for(window, cx).into_iter().collect()
-                };
-                for shell in ending {
+                for shell in all_shells(cx) {
                     shell.update(cx, |shell, cx| shell.shutdown_sessions(cx));
                 }
-                if quit {
-                    cx.quit();
-                } else {
-                    window.remove_window();
-                }
+                cx.quit();
                 true
             })
     });
@@ -1351,12 +2218,15 @@ fn render_notification_list(list: &Entity<Notifications>, cx: &App) -> AnyElemen
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // New session tabs start now: their terminal needs the window. A
-        // tab in the background connects all the same.
-        for pane in std::mem::take(&mut self.unstarted) {
-            window.defer(cx, move |window, cx| {
-                pane.update(cx, |pane, cx| pane.start(window, cx));
-            });
+        // The terminal sidebar acts on the active pane's session (UI 4.2).
+        self.sync_sidebar_target(window, cx);
+        // New tab pages need the window; the active one and the search
+        // get the open tabs and the Restore flag.
+        self.prepare_new_tab_pages(window, cx);
+        // Sessions need the window to start: the panes of tabs in the
+        // background connect all the same.
+        for group in self.groups() {
+            group.update(cx, |group, cx| group.start_pending(window, cx));
         }
         if self.focus_shell && !window.has_active_dialog(cx) {
             self.focus_shell = false;
@@ -1383,7 +2253,12 @@ impl Render for Shell {
                         // The strip of icons below a 600 px main area.
                         sidebar::is_collapsed(
                             window.viewport_size().width,
-                            self.panel.as_ref().map(|_| self.details_width),
+                            self.panel.as_ref().map(|_| self.details_width).or_else(|| {
+                                // Known Hosts draws its own details panel.
+                                (self.section == Section::KnownHosts)
+                                    .then(|| self.known_hosts.read(cx).open_panel_width())
+                                    .flatten()
+                            }),
                         ),
                         {
                             let shell = cx.weak_entity();
@@ -1411,7 +2286,7 @@ impl Render for Shell {
                 ))
                 .child(self.render_toast_host())
                 .into_any_element(),
-            TopTab::Session(id) => self.render_session(id, cx).into_any_element(),
+            TopTab::Session(id) => self.render_session(id, window, cx).into_any_element(),
         };
         v_flex()
             .id("shell")
@@ -1442,9 +2317,12 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewSerialConnection, _, cx| {
                 this.open_session(SessionRequest::new(SessionKind::Serial), cx);
             }))
-            // The new tab page and the terminal sidebar are stage 2b: their
-            // entry points are disabled and the actions do nothing (D30).
-            .on_action(cx.listener(|_, _: &NewTab, _, _| {}))
+            // "+", Ctrl+T outside a terminal, Ctrl+Shift+T (UI 6).
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                this.new_tab(window, cx);
+            }))
+            // Ctrl+K outside a terminal, Ctrl+Shift+K (UI 6).
+            .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_search(window, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.placeholder_toast(i18n::menu::INTERFACE_ZOOM, cx)
             }))
@@ -1456,17 +2334,13 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-            .on_action(cx.listener(|this, _: &NewWindow, _, cx| {
-                this.placeholder_toast(i18n::menu::NEW_WINDOW, cx)
+            .on_action(cx.listener(|this, _: &NewWindow, window, cx| {
+                windows::open_in_new_window(this.state.clone(), window, cx, |_, _, _| {});
             }))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| this.cycle_tab(1, cx)))
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
-            // The focus goes to the next active tab (`close_session`).
-            .on_action(cx.listener(|this, _: &CloseTab, _, cx| {
-                if let TopTab::Session(id) = this.top_tab {
-                    this.close_session(id, cx);
-                }
-            }))
+            // The focus goes to the next active pane or tab.
+            .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_active(cx)))
             .on_action(cx.listener(|_, _: &OpenDocumentation, _, cx| {
                 cx.open_url(&format!("{}#readme", env!("CARGO_PKG_REPOSITORY")));
             }))
@@ -1481,11 +2355,21 @@ impl Render for Shell {
             )
             .on_action(cx.listener(|this, _: &LockApp, _, cx| this.lock_app(cx)))
             .on_action(cx.listener(|this, _: &Exit, window, cx| this.request_exit(window, cx)))
-            .on_action(cx.listener(|_, _: &ToggleTerminalSidebar, _, _| {}))
+            .on_action(cx.listener(|this, _: &ToggleTerminalSidebar, window, cx| {
+                this.toggle_terminal_sidebar(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &FindInTerminal, window, cx| {
+                    this.find_in_terminal(window, cx)
+                }),
+            )
             .child(self.render_title_bar(window, cx))
             .child(div().flex_1().min_h_0().child(body))
+            .children(self.search.as_ref().map(|(overlay, _)| overlay.clone()))
     }
 }
 
+#[cfg(test)]
+mod tabs_tests;
 #[cfg(test)]
 mod tests;

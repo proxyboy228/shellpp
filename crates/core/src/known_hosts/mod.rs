@@ -7,7 +7,10 @@
 //! The system `~/.ssh/known_hosts` is never read when connecting.
 //!
 //! Owner: S4. The facade methods (`Core::known_host_*`) are the contract;
-//! internal APIs are S4's choice.
+//! internal APIs are S4's choice. The known_hosts file format (import and
+//! export, stage 2b) is in [`openssh`].
+
+pub mod openssh;
 
 use data_encoding::{BASE64, BASE64_NOPAD};
 use hmac::{Hmac, KeyInit, Mac};

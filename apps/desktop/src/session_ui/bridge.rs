@@ -150,6 +150,11 @@ pub fn apply(
         _ => pane.info().icon(),
     };
     pane.set_info(title, icon, cx);
+    // The shell a default local terminal resolved to (UI 4.4: Duplicate
+    // opens the same shell).
+    if let Some(shell_id) = &view.shell_id {
+        pane.pin_local_shell(shell_id);
+    }
     // The host's terminal theme, or the default one (UI 4.1).
     pane.set_theme_slug(&view.theme, cx);
     // The host's Backspace setting (UI 3.1).

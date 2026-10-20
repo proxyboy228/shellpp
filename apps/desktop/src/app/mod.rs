@@ -5,8 +5,11 @@
 //! entity, the session layer (`crate::sessions::ui::install`; the user's
 //! `~/.ssh` keys and SSH agent, none for `--demo` and test runs) and the main
 //! window (1280x800, frameless, our own title bar), and hooks shutdown:
-//! closing the last window quits, and quitting ends the sessions and runs
-//! [`AppState::shutdown`] (which also deletes a `--demo` profile).
+//! closing the last window quits, and quitting saves the open tabs for
+//! Restore, ends the sessions and runs [`AppState::shutdown`] (which also
+//! deletes a `--demo` profile). More windows open from the shell
+//! ([`crate::shell::windows`]) with [`open_window_with`]; all of them share
+//! the app state, the session layer and the lock.
 
 pub mod assets;
 pub mod root;
@@ -56,12 +59,16 @@ pub fn run(launch: Launch) {
             crate::terminal::init(cx);
 
             // A temporary profile (`--demo`) or a test run never uses the
-            // user's ~/.ssh keys or SSH agent.
+            // user's ~/.ssh keys or SSH agent, and its Known Hosts import
+            // suggests no file instead of the real ~/.ssh/known_hosts.
             let keys = match &opened {
                 Ok(opened) if opened.temp_profile.is_none() && !crate::dirs::is_test_run() => {
                     KeySources::system()
                 }
-                _ => KeySources::none(),
+                _ => {
+                    crate::known_hosts::set_import_source(None, cx);
+                    KeySources::none()
+                }
             };
             let state = cx.new(|cx| match opened {
                 Ok(opened) => {
@@ -93,8 +100,11 @@ pub fn run(launch: Launch) {
             let quit_state = state.clone();
             cx.on_app_quit(move |cx| {
                 // The windows are still open here: edits waiting for the
-                // autosave are saved before the core closes.
+                // autosave are saved before the core closes, and the open
+                // tabs are saved for Restore (UI 6; nothing when the last
+                // window closed first, which saved them already).
                 crate::shell::flush_all_panels(cx);
+                crate::shell::restore::save_last_session(&quit_state, None, cx);
                 // Sessions end (their connection log entries close) and let
                 // go of the core before it closes.
                 crate::shell::release_all_sessions(cx);

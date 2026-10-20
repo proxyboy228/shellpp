@@ -26,6 +26,7 @@
 //!
 //! Nothing here logs terminal data, titles or sizes.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -36,11 +37,11 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Osc52};
+use alacritty_terminal::term::{Config, Osc52, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor, Rgb, StdSyncHandler};
 
 use super::colors::Palette;
-use super::limits::{Capped, MAX_ZEROWIDTH, OscLimiter};
+use super::limits::{self, Capped, MAX_ZEROWIDTH, OscLimiter};
 
 /// Largest chunk the queue carries; bigger feeds are split.
 pub const CHUNK_BYTES: usize = 64 * 1024;
@@ -157,6 +158,13 @@ pub(super) struct Outbox {
     palette: RwLock<Palette>,
     wake: async_channel::Sender<()>,
     size: Mutex<TerminalSize>,
+    /// Lines dropped off the top of the scrollback so far
+    /// ([`limits::count_evictions`]); written by the parser thread while it
+    /// holds the terminal lock, so a reader holding the lock sees the count
+    /// of the grid it reads.
+    evicted: AtomicUsize,
+    /// Command history capture (docs/security.md, section 10.1).
+    pub(super) capture: super::history_capture::Capture,
 }
 
 impl Outbox {
@@ -318,6 +326,8 @@ impl TerminalHandle {
             palette: RwLock::new(palette),
             wake,
             size: Mutex::new(options.size),
+            evicted: AtomicUsize::new(0),
+            capture: Default::default(),
         });
         let config = term_config(options.scrollback, options.cursor_shape);
         let dims = GridDims::from(options.size);
@@ -329,9 +339,10 @@ impl TerminalHandle {
         let (queue, receiver) = async_channel::bounded(QUEUE_CHUNKS);
         let thread_term = term.clone();
         let thread_outbox = outbox.clone();
+        let scrollback = options.scrollback;
         let spawned = thread::Builder::new()
             .name("shellpp-term-parse".into())
-            .spawn(move || parse_loop(thread_term, receiver, thread_outbox));
+            .spawn(move || parse_loop(thread_term, receiver, thread_outbox, scrollback));
         if spawned.is_err() {
             tracing::error!("the terminal parser thread did not start");
         }
@@ -407,6 +418,7 @@ impl TerminalHandle {
     /// parsed what is queued.
     pub fn close(&self) {
         self.set_sink(None);
+        self.outbox.capture.set_sink(None);
         self.queue.close();
     }
 
@@ -498,6 +510,22 @@ impl TerminalHandle {
     pub fn history_size(&self) -> usize {
         self.term.lock().grid().history_size()
     }
+
+    /// Lines dropped off the top of the scrollback so far (a full
+    /// scrollback that scrolls on, or a cleared one). Read it while holding
+    /// the terminal lock to match the grid.
+    pub(super) fn evicted_lines(&self) -> usize {
+        self.outbox.evicted.load(Ordering::Acquire)
+    }
+
+    /// Where the buffer of `term` (this handle's terminal, locked) stands,
+    /// for the search.
+    pub(super) fn search_origin(&self, term: &Term<Listener>) -> super::search::Origin {
+        super::search::Origin {
+            evicted: self.evicted_lines(),
+            alt_screen: term.mode().contains(TermMode::ALT_SCREEN),
+        }
+    }
 }
 
 /// Waits for the next message; `None` when `deadline` passed first.
@@ -521,7 +549,17 @@ fn receive_until(
     }
 }
 
-fn parse_loop(term: SharedTerm, receiver: async_channel::Receiver<Message>, outbox: Arc<Outbox>) {
+fn parse_loop(
+    term: SharedTerm,
+    receiver: async_channel::Receiver<Message>,
+    outbox: Arc<Outbox>,
+    scrollback: usize,
+) {
+    limits::count_evictions(scrollback);
+    // Published before the lock is let go (see `Outbox::evicted`).
+    let publish = |outbox: &Outbox| {
+        outbox.evicted.store(limits::evictions(), Ordering::Release);
+    };
     let mut processor: Processor<StdSyncHandler> = Processor::new();
     let mut osc = OscLimiter::default();
     let mut batch: Vec<u8> = Vec::with_capacity(CHUNK_BYTES);
@@ -535,6 +573,7 @@ fn parse_loop(term: SharedTerm, receiver: async_channel::Receiver<Message>, outb
                     // The synchronized update timed out: show what it has.
                     let mut locked = term.lock();
                     processor.stop_sync(&mut Capped(&mut *locked));
+                    publish(&outbox);
                     drop(locked);
                     outbox.wake();
                     continue;
@@ -559,8 +598,19 @@ fn parse_loop(term: SharedTerm, receiver: async_channel::Receiver<Message>, outb
         for slice in batch.chunks(LOCKED_BYTES) {
             let slice = osc.filter(slice);
             let mut locked = term.lock();
-            processor.advance(&mut Capped(&mut *locked), &slice);
+            if outbox.capture.watching() {
+                // A command line waits for its end (history capture).
+                super::history_capture::advance(
+                    &outbox.capture,
+                    &mut processor,
+                    &mut locked,
+                    &slice,
+                );
+            } else {
+                processor.advance(&mut Capped(&mut *locked), &slice);
+            }
             answer_color_requests(&locked, &outbox);
+            publish(&outbox);
             drop(locked);
             outbox.wake();
         }

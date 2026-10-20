@@ -269,6 +269,7 @@ fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
     assert!(ui.visible("settings-terminal", cx));
     for id in [
         "settings-autoreconnect",
+        "settings-record-history",
         "settings-copy-on-select",
         "settings-bell-sound",
         "settings-bold-bright",
@@ -292,6 +293,11 @@ fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
     // Toggles.
     click(&ui, "settings-autoreconnect", cx);
     assert_eq!(stored(&ui, "terminal.autoreconnect", cx), json!(false));
+    // Record command history: on by default; the core reads the stored value.
+    assert!(prefs.record_history);
+    click(&ui, "settings-record-history", cx);
+    assert_eq!(stored(&ui, "terminal.record_history", cx), json!(false));
+    assert!(!cx.update(|cx| TerminalPrefs::current(cx).record_history));
     // The open terminals follow at once (their settings global).
     let terminals =
         |cx: &mut TestAppContext| cx.update(|cx| crate::terminal::settings::settings(cx));
@@ -355,7 +361,7 @@ fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
     assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(45));
     let prefs = cx.update(|cx| TerminalPrefs::load(ui.state.read(cx).core().unwrap()));
     assert_eq!(prefs.keepalive_s, 45);
-    assert_eq!(prefs.default_theme, BuiltinTheme::Paper);
+    assert_eq!(prefs.default_theme, BuiltinTheme::PAPER);
     ui.finish(cx);
 }
 
@@ -363,4 +369,58 @@ fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
 fn click(ui: &Ui, id: &str, cx: &mut TestAppContext) {
     assert!(reveal(ui, id, cx), "{id} on screen");
     ui.click(id, cx);
+}
+
+/// Owner's stage 2b step 0.4 and UI 4.2: "Adjust indistinguishable colors"
+/// offers Off / Palette only / Always (Palette only by default) and the
+/// Font block has the line spacing (1.2 by default, 1.0-2.0, steps of 0.1);
+/// both are stored at once and the terminals follow.
+#[gpui::test]
+fn terminal_contrast_and_line_spacing(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    use crate::terminal::MinContrast;
+
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    click(&ui, "settings-nav-terminal", cx);
+    let terminals =
+        |cx: &mut TestAppContext| cx.update(|cx| crate::terminal::settings::settings(cx));
+    assert_eq!(terminals(cx).min_contrast, MinContrast::Palette);
+    assert_eq!(terminals(cx).line_height, 1.2);
+
+    click(&ui, "settings-min-contrast", cx);
+    for key in ["off", "palette", "always"] {
+        assert!(
+            reveal(&ui, &format!("settings-min-contrast-{key}"), cx),
+            "{key}"
+        );
+    }
+    click(&ui, "settings-min-contrast-always", cx);
+    assert!(!ui.visible("settings-min-contrast-list", cx));
+    assert_eq!(stored(&ui, "terminal.min_contrast", cx), json!("always"));
+    assert_eq!(terminals(cx).min_contrast, MinContrast::Always);
+    click(&ui, "settings-min-contrast", cx);
+    click(&ui, "settings-min-contrast-off", cx);
+    assert_eq!(stored(&ui, "terminal.min_contrast", cx), json!("off"));
+    assert_eq!(terminals(cx).min_contrast, MinContrast::Off);
+
+    click(&ui, "settings-line-height-plus", cx);
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.3));
+    click(&ui, "settings-line-height-minus", cx);
+    click(&ui, "settings-line-height-minus", cx);
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.1));
+    type_into(&ui, "settings-line-height", "1.75", cx);
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.75));
+    assert!((terminals(cx).line_height - 1.75).abs() < 0.001);
+    type_into(&ui, "settings-line-height", "0.5", cx);
+    assert!(ui.visible("settings-line-height-error", cx));
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.75));
+    type_into(&ui, "settings-line-height", "2", cx);
+    assert!(!ui.visible("settings-line-height-error", cx));
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(2.0));
+    // At the maximum the + button is disabled.
+    click(&ui, "settings-line-height-plus", cx);
+    assert_eq!(stored(&ui, "terminal.line_height", cx), json!(2.0));
+    ui.finish(cx);
 }

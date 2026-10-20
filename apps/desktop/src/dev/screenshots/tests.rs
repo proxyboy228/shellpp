@@ -93,6 +93,19 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "terminal-local",
         "terminal-tabs",
         "terminal-host-key-changed",
+        // Stage 2b (owner's step 5.1).
+        "known-hosts",
+        "terminal-connecting",
+        "terminal-splits",
+        "split-picker",
+        "tab-menu",
+        "new-tab",
+        "new-tab-search",
+        "sidebar-tools",
+        "sidebar-snippets",
+        "sidebar-history",
+        "sidebar-appearance",
+        "sidebar-font",
     ] {
         for theme in ["dark", "light"] {
             let name = format!("1280x800-{theme}-{state}.png");
@@ -105,7 +118,18 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(files.len(), 6 + 34 + 14 + 6);
+    assert_eq!(ShotState::ALL.len(), 36);
+    assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
+    for state in ShotState::STAGE_2B {
+        assert!(ShotState::ALL.contains(&state), "{state:?}");
+    }
+    // Every terminal state is in the terminal list, in capture order.
+    let terminal: Vec<ShotState> = ShotState::ALL
+        .iter()
+        .copied()
+        .filter(|state| state.scene() == Scene::Terminal)
+        .collect();
+    assert_eq!(terminal, ShotState::TERMINAL);
     let unique: std::collections::BTreeSet<_> = files.iter().collect();
     assert_eq!(unique.len(), files.len(), "no file is written twice");
     // On the russh test server two terminal states are named after what

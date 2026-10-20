@@ -271,6 +271,31 @@ pub fn read(data: &Map<String, Value>) -> Option<Entry> {
     })
 }
 
+/// The entry `template` for another host pattern of the same known_hosts
+/// line (the import, `crate::known_hosts::openssh`): only `host` and `port`
+/// are checked, by the rules of [`validate`]; the key type, the key and the
+/// comment are the template's, checked once per line. `None` when the host
+/// or the port is refused.
+pub fn with_host(template: &Entry, host: &str, port: Option<u16>) -> Option<Entry> {
+    let host = normalize_host(host).ok()?;
+    let hashed = matches!(known_hosts::classify(&host), HostKind::Hashed { .. });
+    let port = match port {
+        Some(0) => return None,
+        Some(_) if hashed => return None,
+        Some(22) | None => None,
+        Some(port) => Some(port),
+    };
+    Some(Entry {
+        host,
+        port,
+        key_type: template.key_type.clone(),
+        public_key: template.public_key.clone(),
+        revoked: template.revoked,
+        source: template.source,
+        comment: template.comment.clone(),
+    })
+}
+
 /// The natural key of docs/data-model.md, section 18.6: (`host`, `port`,
 /// `key_type`, `public_key`, `marker`), with the blob compared decoded.
 pub fn same_natural_key(a: &Entry, b: &Entry) -> bool {
@@ -314,6 +339,40 @@ mod tests {
             .into_iter()
             .map(|error| (error.field, error.reason))
             .collect()
+    }
+
+    /// `with_host` checks a host and a port exactly as `validate` does.
+    #[test]
+    fn with_host_agrees_with_validate() {
+        let key = ed25519_blob();
+        let mut template_input = input("first.example.com", "ssh-ed25519", &key);
+        template_input.comment = Some("a laptop");
+        template_input.revoked = true;
+        let template = validate(template_input).unwrap();
+        let salt = known_hosts::encode_blob(&[1u8; 20]);
+        let hash = known_hosts::encode_blob(&[2u8; 20]);
+        let hashed = format!("|1|{salt}|{hash}");
+        for (host, port) in [
+            ("Web.Example.com", None),
+            ("web.example.com", Some(22)),
+            ("web.example.com", Some(2222)),
+            ("web.example.com", Some(0)),
+            ("*.example.org", Some(2200)),
+            (hashed.as_str(), None),
+            (hashed.as_str(), Some(2222)),
+            ("bad[name", None),
+            ("!negated", None),
+            ("", None),
+        ] {
+            let mut full = template_input;
+            full.host = host;
+            full.port = port;
+            assert_eq!(
+                with_host(&template, host, port),
+                validate(full).ok(),
+                "{host} {port:?}"
+            );
+        }
     }
 
     #[test]

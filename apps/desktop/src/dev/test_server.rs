@@ -11,7 +11,7 @@
 //!   child process (`SHELLPP_TEST_SSHD_EXE`, else the binary next to this
 //!   one: `cargo build -p shellpp-test-sshd`), with one password user and a
 //!   generated password. Faults go through its stdin (`rotate-host-key`,
-//!   `drop`); it exits when the app does (stdin closes).
+//!   `drop`, `hold on|off`); it exits when the app does (stdin closes).
 //!
 //! Only the password user is used here: `pwuser` on both servers. Nothing
 //! secret is printed or logged; the russh configuration file (it holds the
@@ -251,6 +251,35 @@ impl DevServer {
                 let workdir = workdir.clone();
                 let output = run_control(&workdir, "drop-connections")?;
                 Ok(output.trim().parse().unwrap_or(0))
+            }
+        }
+    }
+
+    /// New connections hang before the server's first byte (a session stays
+    /// in "connecting"): OpenSSH pauses its container (`control.sh freeze`;
+    /// open connections stop answering too), the russh server holds new
+    /// connections (`hold on`). [`Self::thaw`] ends it.
+    pub fn freeze(&mut self) -> Result<(), String> {
+        self.set_frozen(true)
+    }
+
+    /// Ends [`Self::freeze`].
+    pub fn thaw(&mut self) -> Result<(), String> {
+        self.set_frozen(false)
+    }
+
+    fn set_frozen(&mut self, frozen: bool) -> Result<(), String> {
+        match &mut self.control {
+            Control::Russh { .. } => {
+                send(
+                    &mut self.control,
+                    if frozen { "hold on" } else { "hold off" },
+                )?;
+                wait_reply(&mut self.control, "holding").map(|_| ())
+            }
+            Control::OpenSsh { workdir } => {
+                let workdir = workdir.clone();
+                run_control(&workdir, if frozen { "freeze" } else { "thaw" }).map(|_| ())
             }
         }
     }
@@ -529,6 +558,8 @@ mod tests {
         server.rotate_host_key().unwrap();
         assert_ne!(server.host_key_fingerprints, before);
         assert_eq!(server.drop_connections().unwrap(), 0);
+        server.freeze().unwrap();
+        server.thaw().unwrap();
         assert!(!server.has_real_shell());
         let stream = std::net::TcpStream::connect(server.addr).unwrap();
         drop(stream);

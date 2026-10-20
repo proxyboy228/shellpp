@@ -1,7 +1,7 @@
 //! Session support in the core (stage 2 plan, section 4.4): effective
 //! session configuration, quick-connect validation, prompted passwords, OS
 //! detection results, the minimal connection log and Recent connections,
-//! and the `session.last` setting.
+//! and the last session of Restore (`last_session`).
 
 mod common;
 mod stage2;
@@ -98,7 +98,8 @@ fn defaults_of_a_minimal_host() {
     assert_eq!(values["terminal.autoreconnect"], json!(true));
     assert_eq!(values["terminal.keepalive_s"], json!(30));
     assert_eq!(values["terminal.term"], json!("xterm-256color"));
-    assert_eq!(values["session.last"], Value::Null);
+    // The last session is an encrypted record, not a setting (UI 6).
+    assert!(!values.contains_key("session.last"));
 }
 
 #[test]
@@ -607,37 +608,83 @@ fn connection_log_events_and_locked_ends() {
 }
 
 #[test]
-fn session_last_round_trip() {
+fn last_session_round_trip() {
+    use shellpp_core::service::last_session::{
+        SavedPane, SavedSession, SavedTab, SavedWindow, SplitDirection,
+    };
     let u = first_run();
+    assert_eq!(u.core.last_session().unwrap(), None);
     let host = u.host(json!({"address": "r.example.com"}));
-    let value = json!({
-        "saved_at": "2026-10-18T22:31:05.123Z",
-        "tabs": [
-            {"root": {"session": {"kind": "ssh", "host": {"vault_id": u.vault_id, "record_id": host.record_id}}}},
-            {"root": {"direction": "row", "sizes": [0.5, 0.5], "children": [
-                {"session": {"kind": "local"}},
-                {"session": {"kind": "local"}}
-            ]}}
-        ]
-    });
-    set(&u, json!({ "session.last": value.clone() }));
-    assert_eq!(u.core.settings_get().unwrap()["session.last"], value);
+    let windows = vec![
+        SavedWindow {
+            tabs: vec![
+                SavedTab {
+                    title: Some("prod".to_owned()),
+                    root: SavedPane::Leaf {
+                        session: SavedSession::Host(RecordRef {
+                            vault_id: u.vault_id,
+                            record_id: host.record_id,
+                        }),
+                    },
+                },
+                SavedTab {
+                    title: None,
+                    root: SavedPane::Split {
+                        direction: SplitDirection::Row,
+                        sizes: vec![0.3, 0.7],
+                        children: vec![
+                            SavedPane::Leaf {
+                                session: SavedSession::Local { shell: None },
+                            },
+                            SavedPane::Leaf {
+                                session: SavedSession::Quick {
+                                    address: "192.0.2.5".to_owned(),
+                                    port: Some(2200),
+                                    username: Some("admin".to_owned()),
+                                },
+                            },
+                        ],
+                    },
+                },
+            ],
+        },
+        // An empty window is not kept.
+        SavedWindow { tabs: vec![] },
+    ];
+    u.core.last_session_save(windows.clone()).unwrap();
+    let saved = u.core.last_session().unwrap().expect("saved");
+    assert_eq!(saved.windows, windows[..1].to_vec());
+    assert!(saved.has_tabs());
+    // One record, replaced by the next save.
+    u.core
+        .last_session_save(vec![SavedWindow {
+            tabs: windows[0].tabs[1..].to_vec(),
+        }])
+        .unwrap();
+    let saved = u.core.last_session().unwrap().expect("saved");
+    assert_eq!(saved.windows[0].tabs.len(), 1);
+    // A bad value is refused and the saved one stays.
     let error = u
         .core
-        .settings_set(SettingsSetInput {
-            values: [(
-                "session.last".to_owned(),
-                json!({"saved_at": "x", "tabs": []}),
-            )]
-            .into_iter()
-            .collect(),
-            reset: vec![],
-        })
+        .last_session_save(vec![SavedWindow {
+            tabs: vec![SavedTab {
+                title: Some("a\u{7}".to_owned()),
+                root: windows[0].tabs[0].root.clone(),
+            }],
+        }])
         .unwrap_err();
     assert_eq!(
         reasons(error),
-        vec![("session.last".into(), ValidationReason::Invalid)]
+        vec![("windows.0.tabs.0.title".into(), ValidationReason::Invalid)]
     );
-    set(&u, json!({ "session.last": null }));
-    assert_eq!(u.core.settings_get().unwrap()["session.last"], Value::Null);
+    assert!(u.core.last_session().unwrap().is_some());
+    // Nothing open: nothing to restore.
+    u.core.last_session_save(vec![]).unwrap();
+    assert_eq!(u.core.last_session().unwrap(), None);
+    // It needs the keys.
+    u.core.lock().unwrap();
+    assert!(matches!(
+        u.core.last_session_save(windows).unwrap_err(),
+        CoreError::Locked
+    ));
 }

@@ -16,7 +16,8 @@
 //! - `git-bash`: Git Bash, `%ProgramFiles%\Git\bin\bash.exe --login -i`
 //!   (or the per-user install under `%LocalAppData%\Programs\Git`).
 //!
-//! The default is `powershell`.
+//! The default is `pwsh` (PowerShell 7) when it is installed, else
+//! `powershell` (stage 2b, owner's step 0.5).
 //!
 //! macOS and Linux: every existing executable listed in `/etc/shells`, then
 //! `$SHELL` when it is not listed but exists, de-duplicated by real path;
@@ -67,9 +68,10 @@ pub fn detect_shells() -> Vec<ShellInfo> {
     platform::detect()
 }
 
-/// The default shell: PowerShell on Windows, the login shell (`$SHELL`,
-/// else the first `/etc/shells` entry that exists) elsewhere. Falls back to
-/// the first detected shell; `None` when `shells` is empty.
+/// The default shell: PowerShell 7 (`pwsh`) on Windows when it is
+/// installed, else Windows PowerShell; the login shell (`$SHELL`, else the
+/// first `/etc/shells` entry that exists) elsewhere. Falls back to the first
+/// detected shell; `None` when `shells` is empty.
 pub fn default_shell_id(shells: &[ShellInfo]) -> Option<String> {
     platform::default_id(shells)
 }
@@ -246,10 +248,12 @@ mod windows {
         shells
     }
 
+    /// PowerShell 7 when it is installed, else Windows PowerShell, else the
+    /// first detected shell (owner's stage 2b step 0.5).
     pub(super) fn default_id(shells: &[ShellInfo]) -> Option<String> {
-        shells
-            .iter()
-            .find(|shell| shell.id == POWERSHELL)
+        let by_id = |id: &str| shells.iter().find(|shell| shell.id == id);
+        by_id(PWSH)
+            .or_else(|| by_id(POWERSHELL))
             .or_else(|| shells.first())
             .map(|shell| shell.id.clone())
     }
@@ -618,8 +622,16 @@ mod tests {
     }
 
     #[test]
-    fn windows_default_prefers_powershell() {
+    fn windows_default_prefers_powershell_7_then_windows_powershell() {
         let exe = std::env::current_exe().expect("current exe");
+        // PowerShell 7 wins whenever it is installed, wherever it is listed.
+        let shells = vec![
+            shell("powershell", &exe),
+            shell("cmd", &exe),
+            shell("pwsh", &exe),
+        ];
+        assert_eq!(windows::default_id(&shells).as_deref(), Some("pwsh"));
+        // Without it, Windows PowerShell.
         let shells = vec![shell("cmd", &exe), shell("powershell", &exe)];
         assert_eq!(windows::default_id(&shells).as_deref(), Some("powershell"));
         let shells = vec![shell("cmd", &exe), shell("git-bash", &exe)];

@@ -82,6 +82,11 @@ pub struct SessionView {
     pub exit_signal: Option<String>,
     /// `Dropped` with automatic reconnection on.
     pub reconnect: Option<ReconnectView>,
+    /// A local terminal's shell, once resolved (`terminal.local_shell` or
+    /// the detected default when none was requested); `None` for SSH and
+    /// for a custom shell path. Duplicate, a new split pane and Restore
+    /// open the same shell with it (UI 4.4).
+    pub shell_id: Option<String>,
     /// Increases with every change.
     pub rev: u64,
 }

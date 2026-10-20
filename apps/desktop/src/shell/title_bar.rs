@@ -31,6 +31,7 @@ use gpui_kit::component::{
 
 use super::sessions::SessionTab;
 use crate::i18n;
+use crate::panes::PaneStatus;
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, controls, metrics};
 
@@ -43,10 +44,14 @@ const SESSION_TAB_MAX_WIDTH: gpui::Pixels = px(220.);
 const ICON_SIZE: gpui::Pixels = px(16.);
 
 /// A title bar without tabs, for the lock screens (UI 13.2: only the window
-/// buttons stay available) and the startup error.
+/// buttons stay available) and the startup error; the shell's top bar adds
+/// its tabs to it. Its close button (drawn by the kit on Linux) asks first
+/// when sessions are active and saves the tabs for Restore, as the system
+/// close does ([`super::request_close_window`]).
 pub fn bare_title_bar(cx: &App) -> TitleBar {
     let theme = cx.theme();
     TitleBar::new()
+        .on_close_window(|_, window, cx| super::request_close_window(window, cx))
         .h(metrics::HEIGHT_TOP_BAR)
         // macOS keeps the kit's room for the system buttons on the left.
         .when(!cfg!(target_os = "macos"), |bar| bar.pl(metrics::SPACE_1))
@@ -67,12 +72,12 @@ fn active_bar(cx: &App) -> impl IntoElement {
 }
 
 /// The shared look of a tab: 36 px, radius 6, states of design-system 6.
-fn tab_base(
-    id: impl Into<ElementId>,
+fn tab_base<I: Into<ElementId>>(
+    id: I,
     focus: &FocusHandle,
     active: bool,
     cx: &App,
-) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement {
+) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<I> {
     let theme = cx.theme();
     let tokens = theme::tokens(cx);
     let hover = theme.secondary_hover;
@@ -106,30 +111,35 @@ fn tab_base(
 }
 
 /// A persistent tab (Vaults, SFTP): icon and label.
-pub fn top_tab(
-    id: impl Into<ElementId>,
+pub fn top_tab<I: Into<ElementId>, L: Into<SharedString>>(
+    id: I,
     focus: &FocusHandle,
     icon: Lucide,
-    label: impl Into<SharedString>,
+    label: L,
     active: bool,
     cx: &App,
-) -> impl StatefulInteractiveElement + ParentElement + IntoElement {
+) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<I, L> {
     tab_base(id, focus, active, cx)
         .child(Icon::new(icon).size(ICON_SIZE))
         .child(label.into())
 }
 
-/// A session tab: the OS icon (the close button replaces it on the active
-/// tab and under the pointer), the name, the session type icon on the right.
-/// `close` is the tab's close button ([`session_tab_close`] with the
-/// caller's click handler); the caller attaches the tab's own click handler.
-pub fn session_tab(
+/// A session tab (UI 1.1): the OS icon (the close button replaces it on the
+/// active tab and under the pointer), the name, the 8 px state dot right
+/// after it (design-system 3.3; none while the tab has no session) and the
+/// session type icon on the right. `rename` replaces the name with the
+/// inline Rename field (UI 4.4). `close` is the tab's close button
+/// ([`session_tab_close`] with the caller's click handler); the caller
+/// attaches the tab's own click handler.
+pub fn session_tab<C: IntoElement>(
     tab: &SessionTab,
+    state: Option<PaneStatus>,
+    rename: Option<AnyElement>,
     focus: &FocusHandle,
     active: bool,
-    close: impl IntoElement,
+    close: C,
     cx: &App,
-) -> impl StatefulInteractiveElement + ParentElement + IntoElement {
+) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<C> {
     let theme = cx.theme();
     let group: SharedString = format!("{}-group", tab.element_id()).into();
     let icon_slot = div()
@@ -152,6 +162,15 @@ pub fn session_tab(
                 .group_hover(group.clone(), |style| style.visible())
                 .child(close),
         );
+    let title = match rename {
+        Some(field) => div().flex_1().min_w_0().child(field).into_any_element(),
+        None => div()
+            .flex_shrink(1.)
+            .min_w_0()
+            .truncate()
+            .child(tab.title().clone())
+            .into_any_element(),
+    };
     tab_base(tab.element_id(), focus, active, cx)
         // Inside the occluding strip: the wheel reaches the strip's scroll.
         .block_mouse_except_scroll()
@@ -161,13 +180,10 @@ pub fn session_tab(
         .max_w(SESSION_TAB_MAX_WIDTH)
         .px(metrics::SPACE_2)
         .child(icon_slot)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(tab.title().clone()),
-        )
+        .child(title)
+        .children(state.map(|state| state_dot(tab, state, cx)))
+        // The type icon keeps to the right edge; the dot stays by the name.
+        .child(div().flex_1())
         .children(tab.kind().type_icon().map(|icon| {
             div()
                 .flex_none()
@@ -176,11 +192,33 @@ pub fn session_tab(
         }))
 }
 
+/// The state dot of a session tab (design-system 3.3): 8 px, connecting
+/// `--warning`, connected `--success`, drop `--danger`, ended with a
+/// non-zero code `--text-muted`.
+fn state_dot(tab: &SessionTab, state: PaneStatus, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let color = match state {
+        PaneStatus::Connected => theme.success,
+        PaneStatus::Connecting => theme.warning,
+        PaneStatus::Dropped => theme.danger,
+        // Inactive (UI 1.1): `--text-muted`.
+        PaneStatus::Ended => crate::theme::tokens(cx).text_muted.hsla(),
+    };
+    div()
+        .id(tab.dot_element_id())
+        .test_support()
+        .flex_none()
+        .size(metrics::SIZE_STATUS_DOT)
+        .rounded_full()
+        .bg(color)
+        .into_any_element()
+}
+
 /// The close button of a session tab (16 px, inside the icon slot).
 pub fn session_tab_close(
     tab: &SessionTab,
     cx: &App,
-) -> impl StatefulInteractiveElement + ParentElement + IntoElement {
+) -> impl StatefulInteractiveElement + ParentElement + IntoElement + use<> {
     let theme = cx.theme();
     let hover = theme.secondary_active;
     div()

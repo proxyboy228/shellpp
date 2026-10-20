@@ -8,7 +8,8 @@ use shellpp_core::error::CoreError;
 use shellpp_core::os_detect::{self, DetectedOs};
 use shellpp_core::service::dto::{OsSource, RecordRef, SessionTarget, SettingsValues};
 use shellpp_core::service::host_api::{
-    ConnectionEndReason, ConnectionLogStart, HostKeyCheck, HostKeyStatus, SessionConfig,
+    ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryDropReason,
+    HistoryRecordInput, HostKeyCheck, HostKeyStatus, SessionConfig,
 };
 use uuid::Uuid;
 
@@ -44,6 +45,20 @@ pub trait SessionCore: Send + Sync + 'static {
         reason: ConnectionEndReason,
         exit_status: Option<u32>,
     );
+    /// A command line the terminal's history capture passed
+    /// (docs/security.md, section 10.1): the core checks every rule again
+    /// and writes a `history_entry` when they all pass. Fakes drop it.
+    fn history_record(&self, input: HistoryRecordInput) -> Result<HistoryDecision, CoreError> {
+        drop(input);
+        Ok(HistoryDecision::Dropped(HistoryDropReason::Off))
+    }
+    /// Whether a session to `host` records history now (docs/security.md,
+    /// section 10.1, rule 4: the host's override, else the setting);
+    /// `false` when the core cannot tell (locked). Fakes say yes.
+    fn record_history_now(&self, host: RecordRef) -> bool {
+        let _ = host;
+        true
+    }
 }
 
 impl SessionCore for Core {
@@ -107,6 +122,14 @@ impl SessionCore for Core {
         exit_status: Option<u32>,
     ) {
         Core::connection_log_end(self, log_id, reason, exit_status);
+    }
+
+    fn history_record(&self, input: HistoryRecordInput) -> Result<HistoryDecision, CoreError> {
+        Core::history_record(self, input)
+    }
+
+    fn record_history_now(&self, host: RecordRef) -> bool {
+        Core::record_history_now(self, Some(host)).unwrap_or(false)
     }
 }
 

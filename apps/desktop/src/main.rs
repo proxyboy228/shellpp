@@ -44,8 +44,8 @@ Developer options (builds with the dev-tools feature):
                      data, dark and light, the screen states, then quit
   --size <WxH[,WxH]> window size(s) for --screenshots, a comma-separated
                      list of up to 8 sizes (default 1280x800)
-  --bench-sessions <N> | --bench-output | --bench-latency
-                     terminal benchmarks on a temporary demo profile against
+  --bench-sessions <N> | --bench-splits | --bench-flood | --bench-output |
+  --bench-latency    terminal benchmarks on a temporary demo profile against
                      a test server (scripts/measure-terminal.ps1); options
                      --test-server <server.json>, --theme <mode>
 

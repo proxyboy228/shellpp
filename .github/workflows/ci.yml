@@ -266,6 +266,10 @@ jobs:
       - name: Desktop session tests (OpenSSH in Docker)
         run: cargo test --locked -p shellpp-desktop --test sessions -- --nocapture
 
+      # A hashed known_hosts entry imported for the server's real key.
+      - name: Desktop known_hosts import tests (OpenSSH in Docker)
+        run: cargo test --locked -p shellpp-desktop --test known_hosts -- --nocapture
+
       - name: Remove OpenSSH test containers
         if: always()
         run: bash tests/openssh/stop.sh --all

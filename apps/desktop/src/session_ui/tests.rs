@@ -784,6 +784,77 @@ fn changed_key_blocks_until_replace(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// UI 10.2, owner step 0.3: the changed-key dialog opens with the keyboard
+/// focus on Cancel; Enter and Esc press Cancel; Enter on a focused "Replace
+/// saved key" does nothing; Tab then Space, or a click, replaces the key.
+#[gpui_kit::test]
+fn changed_key_keyboard_starts_on_cancel(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Local), cx);
+    let ask = HostKeyAsk::Changed {
+        key: key("SHA256:presented"),
+        old_key_type: "ssh-ed25519".into(),
+        old_fingerprint: "SHA256:saved".into(),
+    };
+    let show = |cx: &mut TestAppContext| {
+        pane.update(cx, |pane, cx| pane.ask_host_key(ask.clone(), cx));
+        ui.frame(cx);
+        assert!(ui.visible("host-key-changed", cx));
+    };
+    let answers = |ui: &Ui| {
+        ui.record
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::HostKey(_)))
+            .collect::<Vec<_>>()
+    };
+
+    // Enter on the default focus: Cancel.
+    show(cx);
+    assert!(
+        ui.focused("host-key-cancel", cx),
+        "the focus starts on Cancel"
+    );
+    ui.press("enter", cx);
+    assert_eq!(answers(&ui), [Call::HostKey(HostKeyReply::Cancel)]);
+    assert!(!ui.visible("host-key-changed", cx));
+
+    // Esc: Cancel.
+    show(cx);
+    ui.press("escape", cx);
+    assert_eq!(
+        answers(&ui).last(),
+        Some(&Call::HostKey(HostKeyReply::Cancel))
+    );
+    assert_eq!(answers(&ui).len(), 2);
+
+    // Tab moves to "Replace saved key"; Enter there does nothing.
+    show(cx);
+    ui.press("tab", cx);
+    assert!(ui.focused("host-key-replace", cx), "Tab reaches Replace");
+    ui.press("enter", cx);
+    assert_eq!(answers(&ui).len(), 2, "Enter on Replace answers nothing");
+    assert!(ui.visible("host-key-changed", cx), "the dialog stays");
+    assert!(cx.update(|cx| pane.read(cx).host_key().is_some()));
+    // Space on it replaces.
+    ui.press("space", cx);
+    assert_eq!(
+        answers(&ui).last(),
+        Some(&Call::HostKey(HostKeyReply::Replace))
+    );
+    assert_eq!(answers(&ui).len(), 3);
+
+    // A click replaces.
+    show(cx);
+    ui.click("host-key-replace", cx);
+    assert_eq!(
+        answers(&ui).last(),
+        Some(&Call::HostKey(HostKeyReply::Replace))
+    );
+    assert_eq!(answers(&ui).len(), 4);
+    ui.finish(cx);
+}
+
 /// UI 4.6: a non-zero exit keeps the tab and the output with "Session
 /// ended with code N", Reconnect and Close; it never reconnects by itself.
 #[gpui_kit::test]
@@ -1081,8 +1152,54 @@ fn layer_view(state: crate::sessions::SessionState) -> crate::sessions::SessionV
         exit_status: None,
         exit_signal: None,
         reconnect: None,
+        shell_id: None,
         rev: 0,
     }
+}
+
+/// UI 4.4: a local terminal opened with the default shell takes over the
+/// shell the session layer resolved, so Duplicate, a split and Restore open
+/// that shell even when the default changes later.
+#[gpui_kit::test]
+fn a_default_local_terminal_pins_its_resolved_shell(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    use shellpp_core::service::dto::SessionKind as LayerKind;
+
+    use crate::panes::PaneTarget;
+    use crate::sessions::{OpenRequest, SessionState};
+
+    let ui = Ui::open(cx);
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Local), cx);
+    assert_eq!(
+        cx.update(|cx| pane.read(cx).request().clone()),
+        OpenRequest::Local { shell_id: None }
+    );
+    let shown = Cell::new(None);
+    let mut view = layer_view(SessionState::Connected);
+    view.kind = LayerKind::Local;
+    view.address = None;
+    view.port = None;
+    view.title = "PowerShell 7".into();
+    view.shell_id = Some("pwsh".into());
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    let target = cx.update(|cx| PaneTarget::from_open(pane.read(cx).request()));
+    assert_eq!(
+        target,
+        PaneTarget::Local {
+            shell_id: Some("pwsh".into())
+        }
+    );
+    // A later view of another shell does not move a pinned request.
+    view.shell_id = Some("cmd".into());
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    assert_eq!(
+        cx.update(|cx| pane.read(cx).request().clone()),
+        OpenRequest::Local {
+            shell_id: Some("pwsh".into())
+        }
+    );
+    ui.finish(cx);
 }
 
 /// The bridge (`bridge::apply`) turns every view of the session layer into
@@ -1433,5 +1550,42 @@ fn real_local_terminal_runs_in_the_tab(cx: &mut TestAppContext) {
         cx.update(|cx| shell.read(cx).sessions().is_empty())
     });
     assert_eq!(ui.top_tab(cx), TopTab::Vaults);
+    ui.finish(cx);
+}
+
+/// UI 1.1 (owner's stage 2b step 0.2): a dropped session's terminal is
+/// dimmed and has no cursor while it is down; running again restores both.
+#[gpui_kit::test]
+fn a_dropped_session_dims_its_terminal(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.save_host(cx);
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Ssh).host(host), cx);
+    set_phase(&ui, &pane, Phase::Running, None, cx);
+    let dimmed = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            pane.read(cx)
+                .terminal()
+                .map(|terminal| terminal.read(cx).is_dimmed())
+        })
+    };
+    assert_eq!(dimmed(cx), Some(false));
+    set_phase(
+        &ui,
+        &pane,
+        Phase::Dropped(Failure::ConnectionLost),
+        None,
+        cx,
+    );
+    assert_eq!(dimmed(cx), Some(true));
+    set_phase(
+        &ui,
+        &pane,
+        Phase::Reconnecting(ConnectStep::Authenticating),
+        None,
+        cx,
+    );
+    assert_eq!(dimmed(cx), Some(true), "still down while reconnecting");
+    set_phase(&ui, &pane, Phase::Running, None, cx);
+    assert_eq!(dimmed(cx), Some(false));
     ui.finish(cx);
 }

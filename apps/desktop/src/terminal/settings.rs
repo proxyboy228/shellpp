@@ -1,13 +1,14 @@
 //! The terminal settings a view uses (UI 12.4, docs/data-model.md 16.1).
 //!
 //! The source is the [`TerminalPrefs`] global of Settings → Terminal
-//! (`crate::settings::terminal`), which the Settings window replaces after
-//! every change; terminal views observe it and repaint. The values that
-//! stage 2a does not show in Settings (cursor style, line height,
-//! multi-line paste confirmation) keep their defaults.
+//! (`crate::settings::terminal`), which the Settings window and the
+//! terminal sidebar's Appearance tab replace after every change; terminal
+//! views observe it and repaint. The values that Settings does not show
+//! yet (cursor style, multi-line paste confirmation) keep their defaults.
 
 use gpui::{App, SharedString};
 
+use super::contrast::MinContrast;
 use super::fonts::JETBRAINS_MONO;
 use crate::settings::terminal::TerminalPrefs;
 use crate::theme::terminal::{TerminalTheme, builtin};
@@ -21,6 +22,9 @@ pub const MIN_FONT_SIZE: f32 = 6.;
 pub const MAX_FONT_SIZE: f32 = 72.;
 /// Default line height (`--line-height-mono`).
 pub const DEFAULT_LINE_HEIGHT: f32 = 1.2;
+/// Line height limits of `terminal.line_height`.
+pub const MIN_LINE_HEIGHT: f32 = 1.0;
+pub const MAX_LINE_HEIGHT: f32 = 2.0;
 
 /// The cursor shape when the program does not choose one (`terminal.cursor_style`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -51,6 +55,8 @@ pub struct TerminalSettings {
     pub bell_sound: bool,
     /// `terminal.cursor_style`.
     pub cursor_style: CursorStyleSetting,
+    /// `terminal.min_contrast`: which text is moved to 4.5:1.
+    pub min_contrast: MinContrast,
     /// `terminal.default_theme`: the theme of terminals whose host has none.
     pub default_theme: TerminalTheme,
 }
@@ -66,6 +72,7 @@ impl Default for TerminalSettings {
             confirm_multiline_paste: true,
             bell_sound: false,
             cursor_style: CursorStyleSetting::Block,
+            min_contrast: MinContrast::default(),
             default_theme: builtin()[0].clone(),
         }
     }
@@ -87,6 +94,12 @@ impl TerminalSettings {
             } else {
                 DEFAULT_FONT_SIZE
             },
+            line_height: if (MIN_LINE_HEIGHT..=MAX_LINE_HEIGHT).contains(&prefs.line_height) {
+                prefs.line_height
+            } else {
+                DEFAULT_LINE_HEIGHT
+            },
+            min_contrast: prefs.min_contrast,
             copy_on_select: prefs.copy_on_select,
             bold_is_bright: prefs.bold_is_bright,
             bell_sound: prefs.bell_sound,
@@ -125,7 +138,7 @@ mod tests {
             copy_on_select: true,
             font_size: 18,
             font_family: "  ".to_owned(),
-            default_theme: BuiltinTheme::Paper,
+            default_theme: BuiltinTheme::PAPER,
             ..TerminalPrefs::default()
         };
         let settings = TerminalSettings::from_prefs(&prefs);
@@ -138,5 +151,19 @@ mod tests {
             ..TerminalPrefs::default()
         };
         assert_eq!(TerminalSettings::from_prefs(&out_of_range).font_size, 14.);
+        let spaced = TerminalPrefs {
+            line_height: 1.5,
+            min_contrast: MinContrast::Always,
+            ..TerminalPrefs::default()
+        };
+        let settings = TerminalSettings::from_prefs(&spaced);
+        assert_eq!(settings.line_height, 1.5);
+        assert_eq!(settings.min_contrast, MinContrast::Always);
+        let too_wide = TerminalPrefs {
+            line_height: 3.,
+            ..TerminalPrefs::default()
+        };
+        assert_eq!(TerminalSettings::from_prefs(&too_wide).line_height, 1.2);
+        assert_eq!(defaults.min_contrast, MinContrast::Palette);
     }
 }

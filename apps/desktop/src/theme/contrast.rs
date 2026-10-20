@@ -331,11 +331,21 @@ fn interface_contrast_pairs_hold_in_both_themes() {
     report.finish(2 * 200);
 }
 
+/// Only our own themes, Graphite and Paper (the first two entries of the
+/// registry): the bundled open schemes of design-system 4.4 keep their
+/// original colors, some of which are below these thresholds (Solarized
+/// body text, for one); the "Adjust indistinguishable colors" setting
+/// (UI 12.4, `crate::terminal::contrast`) helps there instead.
 #[test]
 fn terminal_contrast_pairs_hold_for_builtin_themes() {
     let mut report = Report::default();
-    for theme in terminal::builtin() {
-        terminal_pairs(&theme, &mut report);
+    let ours = &terminal::registry()[..2];
+    assert_eq!(
+        ours.iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+        ["graphite", "paper"]
+    );
+    for entry in ours {
+        terminal_pairs(&entry.theme, &mut report);
     }
     report.finish(2 * 25);
 }

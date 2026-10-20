@@ -1,10 +1,11 @@
-//! Session tabs of the top bar (UI 1.1, 4.6): the model only. A tab shows
-//! the host OS icon (the server icon until the OS is known; a monitor for a
-//! local terminal) and its name, the close button on the active and the
-//! hovered tab, the type icon on the right; closing the active tab applies
-//! the neighbor rule of 4.6. The content of SSH and local terminal tabs is
-//! their `crate::session_ui::SessionPane` (owned by the shell); SFTP,
-//! serial and new tab page tabs show the "In development" placeholder.
+//! Session tabs of the top bar (UI 1.1, 4.4, 4.6): the model only. A tab
+//! shows the host OS icon (the server icon until the OS is known; a
+//! monitor for a local terminal; never the terminal glyph), its name, the
+//! state dot and the type icon on the right; the close button replaces the
+//! OS icon on the active and the hovered tab; closing the active tab
+//! applies the neighbor rule of 4.6. The name is the host of the active
+//! pane, unless the tab was renamed (4.4: the custom title lives as long as
+//! the tab). The content of a tab is owned by the shell.
 
 use gpui::SharedString;
 use gpui_kit::assets::IconName as Lucide;
@@ -12,6 +13,28 @@ use uuid::Uuid;
 
 use crate::hosts::QuickTarget;
 use crate::i18n;
+
+/// Longest title Rename keeps, in characters: what Restore saves
+/// (`shellpp_core::service::last_session::MAX_TITLE`).
+pub const MAX_TITLE_CHARS: usize = shellpp_core::service::last_session::MAX_TITLE;
+
+/// A title the Rename field accepts while typing: at most
+/// [`MAX_TITLE_CHARS`] characters, no control characters (a pasted tab).
+pub fn title_ok(text: &str) -> bool {
+    text.chars().count() <= MAX_TITLE_CHARS && !text.chars().any(char::is_control)
+}
+
+/// A title as Rename keeps it: control characters removed, cut to
+/// [`MAX_TITLE_CHARS`] characters, trimmed; `None` when nothing is left.
+pub fn clean_title(text: &str) -> Option<String> {
+    let title: String = text
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_TITLE_CHARS)
+        .collect();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_owned())
+}
 
 /// Identity of a session tab (unique per window, never reused).
 pub type SessionId = u64;
@@ -139,7 +162,11 @@ impl SessionRequest {
 pub struct SessionTab {
     id: SessionId,
     kind: SessionKind,
+    /// The host of the active pane (its label or address), the shell's
+    /// name of a local terminal, or the kind's default title.
     title: SharedString,
+    /// The title set with Rename (UI 4.4), for the lifetime of the tab.
+    custom_title: Option<SharedString>,
     host: Option<Uuid>,
     icon: Lucide,
 }
@@ -153,8 +180,30 @@ impl SessionTab {
         self.kind
     }
 
+    /// The title on display: the one set with Rename, else the host's.
     pub fn title(&self) -> &SharedString {
+        self.custom_title.as_ref().unwrap_or(&self.title)
+    }
+
+    /// The host's title (the active pane's host), whatever the tab is
+    /// called.
+    pub fn host_title(&self) -> &SharedString {
         &self.title
+    }
+
+    /// The title set with Rename, if any.
+    pub fn custom_title(&self) -> Option<&SharedString> {
+        self.custom_title.as_ref()
+    }
+
+    /// Stable element id of the tab's state dot.
+    pub fn dot_element_id(&self) -> SharedString {
+        format!("session-tab-{}-dot", self.id).into()
+    }
+
+    /// Stable element id of the tab's rename field.
+    pub fn rename_element_id(&self) -> SharedString {
+        format!("session-tab-{}-rename", self.id).into()
     }
 
     pub fn host(&self) -> Option<Uuid> {
@@ -207,17 +256,72 @@ impl SessionTabs {
 
     /// Adds a tab at the right end and returns its id.
     pub fn open(&mut self, request: SessionRequest) -> SessionId {
+        self.open_at(self.tabs.len(), request)
+    }
+
+    /// Adds a tab right after `after` (Duplicate, UI 4.4), at the right end
+    /// when `after` is not open.
+    pub fn open_after(&mut self, after: SessionId, request: SessionRequest) -> SessionId {
+        let index = self
+            .position(after)
+            .map_or(self.tabs.len(), |index| index + 1);
+        self.open_at(index, request)
+    }
+
+    fn open_at(&mut self, index: usize, request: SessionRequest) -> SessionId {
         self.last_id += 1;
         let id = self.last_id;
         let kind = request.kind;
-        self.tabs.push(SessionTab {
-            id,
-            kind,
-            title: request.title.unwrap_or_else(|| kind.default_title().into()),
-            host: request.host,
-            icon: request.icon.unwrap_or_else(|| kind.default_icon()),
-        });
+        self.tabs.insert(
+            index.min(self.tabs.len()),
+            SessionTab {
+                id,
+                kind,
+                title: request.title.unwrap_or_else(|| kind.default_title().into()),
+                custom_title: None,
+                host: request.host,
+                icon: request.icon.unwrap_or_else(|| kind.default_icon()),
+            },
+        );
         id
+    }
+
+    /// The new tab page of `id` chose its target (UI 6: the session opens
+    /// in the same tab): the tab takes the request's kind, host, title and
+    /// icon; a title set with Rename stays. Returns whether the tab exists.
+    pub fn replace(&mut self, id: SessionId, request: SessionRequest) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) else {
+            return false;
+        };
+        let kind = request.kind;
+        tab.kind = kind;
+        tab.title = request.title.unwrap_or_else(|| kind.default_title().into());
+        tab.host = request.host;
+        tab.icon = request.icon.unwrap_or_else(|| kind.default_icon());
+        true
+    }
+
+    /// Rename (UI 4.4): `Some` sets the tab's own title ([`clean_title`]:
+    /// no control characters, at most [`MAX_TITLE_CHARS`]); `None`, or a
+    /// title that is empty after that, brings back the host's. Returns
+    /// whether anything changed.
+    pub fn rename(&mut self, id: SessionId, title: Option<&str>) -> bool {
+        let title = title.and_then(clean_title).map(SharedString::from);
+        match self.tabs.iter_mut().find(|tab| tab.id == id) {
+            Some(tab) if tab.custom_title != title => {
+                tab.custom_title = title;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The saved host of the active pane changed (a split pane became
+    /// active, UI 4.7).
+    pub fn set_host(&mut self, id: SessionId, host: Option<Uuid>) {
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+            tab.host = host;
+        }
     }
 
     /// Removes a tab. Returns the tab that becomes active when `id` was the
@@ -301,5 +405,71 @@ mod tests {
         assert_eq!(tab.kind().type_icon(), Some(Lucide::SquareTerminal));
         assert_eq!(SessionKind::Sftp.type_icon(), Some(Lucide::FolderOpen));
         assert_eq!(SessionKind::NewTab.type_icon(), None);
+    }
+
+    /// UI 1.1: the left icon of a tab is never the terminal glyph of its
+    /// type icon.
+    #[test]
+    fn the_left_icon_is_never_the_type_icon() {
+        for kind in [
+            SessionKind::Ssh,
+            SessionKind::Sftp,
+            SessionKind::Local,
+            SessionKind::Serial,
+            SessionKind::NewTab,
+        ] {
+            assert_ne!(Some(kind.default_icon()), kind.type_icon(), "{kind:?}");
+            assert_ne!(kind.default_icon(), Lucide::SquareTerminal, "{kind:?}");
+        }
+    }
+
+    /// UI 4.4: Rename sets the tab's own title; empty brings the host's
+    /// back; the host's title keeps following the active pane.
+    #[test]
+    fn rename_and_duplicate_positions() {
+        let (mut tabs, ids) = tabs(2);
+        assert!(tabs.rename(ids[0], Some("  prod db  ")));
+        assert!(!tabs.rename(ids[0], Some("prod db")), "unchanged");
+        let tab = tabs.get(ids[0]).unwrap();
+        assert_eq!(tab.title().as_ref(), "prod db");
+        assert_eq!(tab.host_title().as_ref(), i18n::sessions::LOCAL_TERMINAL);
+        tabs.retitle(ids[0], "pwsh".into(), Lucide::Monitor);
+        assert_eq!(tabs.get(ids[0]).unwrap().title().as_ref(), "prod db");
+        assert!(tabs.rename(ids[0], Some("   ")));
+        assert_eq!(tabs.get(ids[0]).unwrap().title().as_ref(), "pwsh");
+        assert!(!tabs.rename(ids[0], None));
+        // Control characters are dropped and the title is cut to what
+        // Restore keeps.
+        assert!(tabs.rename(ids[0], Some("prod\tdb\u{7}")));
+        assert_eq!(tabs.get(ids[0]).unwrap().title().as_ref(), "proddb");
+        let long = "t".repeat(MAX_TITLE_CHARS + 10);
+        assert!(tabs.rename(ids[0], Some(&long)));
+        assert_eq!(
+            tabs.get(ids[0]).unwrap().title().chars().count(),
+            MAX_TITLE_CHARS
+        );
+        assert!(tabs.rename(ids[0], Some("\u{7}\t")));
+        assert_eq!(tabs.get(ids[0]).unwrap().custom_title(), None);
+        assert!(title_ok("prod db"));
+        assert!(!title_ok("a\tb"));
+        assert!(!title_ok(&long));
+        // A duplicate opens right after its tab.
+        let copy = tabs.open_after(ids[0], SessionRequest::new(SessionKind::Local));
+        assert_eq!(tabs.position(copy), Some(1));
+        assert_eq!(tabs.position(ids[1]), Some(2));
+        // The new tab page's choice turns the tab into a session tab.
+        let page = tabs.open(SessionRequest::new(SessionKind::NewTab));
+        assert!(
+            tabs.replace(
+                page,
+                SessionRequest::new(SessionKind::Ssh)
+                    .title("web")
+                    .host(Uuid::nil())
+            )
+        );
+        let tab = tabs.get(page).unwrap();
+        assert_eq!(tab.kind(), SessionKind::Ssh);
+        assert_eq!(tab.title().as_ref(), "web");
+        assert_eq!(tab.host(), Some(Uuid::nil()));
     }
 }

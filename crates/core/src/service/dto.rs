@@ -1090,6 +1090,20 @@ pub struct KnownHostAddInput {
 
 redacted_debug!(KnownHostAddInput);
 
+/// The summary of a known_hosts import (UI 10.1): four numbers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct KnownHostsImportSummary {
+    /// New entries (one per host pattern).
+    pub imported: usize,
+    /// Entries equal to one already in the list (natural key, data-model
+    /// 18.4), or to an earlier one of the same file.
+    pub duplicates: usize,
+    /// `@cert-authority` lines and negated (`!`) host patterns.
+    pub skipped: usize,
+    /// Lines that could not be read.
+    pub invalid: usize,
+}
+
 /// A `key` record without its secrets (docs/security.md, section 9.5).
 #[derive(Clone, Serialize)]
 pub struct KeyView {
@@ -1195,6 +1209,27 @@ pub struct HistoryClearInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct HistoryClearResult {
     pub removed: u32,
+}
+
+/// The "save as snippets" hint of a host's History tab (UI 4.2;
+/// docs/data-model.md, sections 13.1 and 13.2).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct HistoryHint {
+    /// At most three commands: the most frequent first (live entries of the
+    /// host), ties by the newest use. Commands that look like secrets
+    /// (docs/security.md, section 10.2) are never offered.
+    pub commands: Vec<String>,
+    /// "Close" was chosen for this host (`history_hint_state.dismissed`).
+    pub dismissed: bool,
+}
+
+impl fmt::Debug for HistoryHint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HistoryHint")
+            .field("commands", &self.commands.len())
+            .field("dismissed", &self.dismissed)
+            .finish()
+    }
 }
 
 /// A row of Recent connections (UI 6; docs/data-model.md, section 13.3).

@@ -29,8 +29,14 @@
 //! - [`render`]: the element: only visible rows, cached row layouts.
 //! - [`input`], [`mouse`], [`paste`], [`selection`], [`colors`]: the pure
 //!   rules, unit tested.
+//! - [`contrast`]: the minimum contrast of text (UI 12.4 "Adjust
+//!   indistinguishable colors"); [`search`]: search in the output and the
+//!   scrollback with match positions (UI 4.2 Tools).
 //! - [`fonts`]: the embedded JetBrains Mono; [`settings`]: the view's
 //!   settings, from Settings → Terminal's `TerminalPrefs` global.
+//! - [`history_capture`]: command history capture (docs/security.md,
+//!   section 10.1): the prompt boundary, the line at Enter read from the
+//!   screen, injected input; candidates go to a [`HistorySink`].
 //!
 //! Security (docs/security.md, section 12): OSC 52 clipboard access is
 //! disabled, window operations and text area size reports are not
@@ -39,13 +45,16 @@
 //! zero-width characters per cell are capped. Nothing logs terminal data.
 
 pub mod colors;
+pub mod contrast;
 pub mod fonts;
+pub mod history_capture;
 pub mod input;
 pub mod limits;
 pub mod model;
 pub mod mouse;
 pub mod paste;
 pub mod render;
+pub mod search;
 pub mod selection;
 pub mod settings;
 pub mod view;
@@ -57,9 +66,14 @@ mod tests;
 
 use gpui::App;
 
+pub use contrast::MinContrast;
+pub use history_capture::HistorySink;
 pub use model::{FeedError, TerminalHandle, TerminalSink, TerminalSize};
 pub use settings::{CursorStyleSetting, DEFAULT_SCROLLBACK, TerminalSettings};
-pub use view::{KEY_CONTEXT, PendingPaste, TerminalEvent, TerminalOptions, TerminalView};
+pub use view::{
+    KEY_CONTEXT, PendingPaste, SearchSummary, SearchUpdated, TerminalEvent, TerminalOptions,
+    TerminalView,
+};
 
 /// Registers the embedded font and the terminal's key bindings (once; the
 /// first [`TerminalView`] does it too). Call at startup, after

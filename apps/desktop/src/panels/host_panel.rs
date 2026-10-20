@@ -261,9 +261,9 @@ impl HostPanel {
             group_search,
             jump_search,
             env_rows: Vec::new(),
-            terminal_themes: crate::theme::terminal::builtin()
-                .into_iter()
-                .map(|theme| (theme.name.to_lowercase(), theme))
+            terminal_themes: crate::theme::terminal::registry()
+                .iter()
+                .map(|entry| (entry.id().to_owned(), entry.theme.clone()))
                 .filter(|(slug, _)| TERMINAL_THEMES.contains(&slug.as_str()))
                 .collect(),
             credentials: Credentials::new(window, cx),

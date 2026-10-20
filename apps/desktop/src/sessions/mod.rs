@@ -776,6 +776,7 @@ impl SessionManager {
                     exit_status: None,
                     exit_signal: None,
                     reconnect: None,
+                    shell_id: None,
                     rev: 1,
                 };
                 let encoding = charset::encoding_for(&config.charset);
@@ -808,6 +809,7 @@ impl SessionManager {
                     exit_status: None,
                     exit_signal: None,
                     reconnect: None,
+                    shell_id: None,
                     rev: 1,
                 };
                 let (session, ctrl, opened) =

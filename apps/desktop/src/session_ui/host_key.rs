@@ -5,13 +5,18 @@
 //! - **changed key**: the connection is blocked; a warning on
 //!   `--danger-subtle` with the danger icon explains a possible attack; the
 //!   saved and the presented fingerprints; only the explicit "Replace saved
-//!   key" (a danger button) continues. Enter and Esc cancel; there is no
-//!   "don't ask again";
+//!   key" (a danger button) continues. The keyboard focus starts on Cancel;
+//!   Enter and Esc cancel; "Replace saved key" answers only a mouse click or
+//!   Space once Tab has moved the focus to it; Enter on it does nothing
+//!   (stage 2b, owner step 0.3). There is no "don't ask again";
 //! - **revoked key**: not a question: the attempt fails and the failure
 //!   screen shows the danger warning with the key ([`revoked_block`]).
 
 use gpui::prelude::*;
-use gpui::{AnyElement, ClickEvent, Context, FocusHandle, IntoElement, SharedString, Window, div};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, FocusHandle, IntoElement, KeyBinding, SharedString,
+    Window, div,
+};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 
@@ -20,6 +25,35 @@ use super::dialog::{self, Confirm, Dismiss, Kind};
 use super::model::{HostKeyAsk, HostKeyInfo, HostKeyReply};
 use super::strings;
 use crate::theme::{self, metrics};
+
+/// Key context around "Replace saved key".
+const REPLACE_CONTEXT: &str = "HostKeyReplace";
+
+gpui_kit::actions!(
+    host_key,
+    [
+        /// Enter on a focused "Replace saved key": nothing happens. Taking
+        /// the key here keeps it from the dialog's Enter (Cancel) and from
+        /// the button's own keyboard click.
+        EnterOnReplace,
+    ]
+);
+
+/// Enter on "Replace saved key" does nothing (it binds deeper than the
+/// dialog's Enter).
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "enter",
+        EnterOnReplace,
+        Some(REPLACE_CONTEXT),
+    )]);
+}
+
+/// Whether the dialog for `ask` starts with the keyboard focus on its first
+/// button (Cancel of the changed-key dialog) rather than on its frame.
+pub fn focuses_first_button(ask: &HostKeyAsk) -> bool {
+    matches!(ask, HostKeyAsk::Changed { .. })
+}
 
 /// The dialog for `ask`.
 pub fn render(
@@ -195,20 +229,27 @@ fn changed(
         )
         .child(dialog::body(strings::CHANGED_HINT, cx))
         .child(dialog::buttons([
+            // The first focus stop: the dialog opens with the focus here.
             dialog::button("host-key-cancel", strings::CANCEL, Kind::Neutral, true, cx)
                 .on_click(cx.listener(reply(HostKeyReply::Cancel)))
                 .into_any_element(),
-            dialog::button(
-                "host-key-replace",
-                strings::REPLACE_KEY,
-                Kind::Danger,
-                true,
-                cx,
-            )
-            .on_click(cx.listener(reply(HostKeyReply::Replace)))
-            .into_any_element(),
+            // A click, or Space after Tab; Enter on it does nothing.
+            div()
+                .key_context(REPLACE_CONTEXT)
+                .on_action(|_: &EnterOnReplace, _, _| {})
+                .child(
+                    dialog::button(
+                        "host-key-replace",
+                        strings::REPLACE_KEY,
+                        Kind::Danger,
+                        true,
+                        cx,
+                    )
+                    .on_click(cx.listener(reply(HostKeyReply::Replace))),
+                )
+                .into_any_element(),
         ]));
-    // Enter never replaces the key: both keys cancel.
+    // Enter never replaces the key: on the dialog and on Cancel it cancels.
     dialog::frame("host-key-changed", focus, content, cx)
         .on_action(
             cx.listener(|this, _: &Confirm, _, cx| this.answer_host_key(HostKeyReply::Cancel, cx)),

@@ -30,7 +30,21 @@
   4. input latency: `shellpp --demo --bench-latency` sends 200 keystrokes
      (-LatencyKeys) each to a local terminal and to an SSH session and prints
      p50/p95 from the key event to the first painted frame that shows the
-     echoed glyph, then quits.
+     echoed glyph, then quits;
+  5. splits (stage 2b, step 4): `shellpp --demo --bench-splits` opens 4
+     session tabs in the main window and splits each into 4 panes (2 x 2),
+     every pane an SSH session to the test server: RSS with 16 sessions,
+     read like the session measurements;
+  6. flood (stage 2b, step 4): `shellpp --demo --bench-flood` runs
+     `yes | head -n 5000000` again and again in one SSH session for
+     -FloodSeconds (default 600; `seq 1 5000000` on the russh test server,
+     whose shell has no `yes`). At each `bench: flood sample` line of the app
+     (start, every -FloodSampleSeconds, end) the script reads RSS and private
+     bytes into -FloodCsv (phase, seconds, working set bytes, private bytes,
+     children) and prints start, peak and end. The app then prints the
+     number of runs and the terminal's scrollback line count against its cap
+     (more than the cap fails the run); RSS is read once more -IdleSeconds
+     after that ("after the flood").
 
   RSS (working set) and private bytes are read -IdleSeconds after the app
   reported ready, for the app process and its child processes (local shells),
@@ -59,8 +73,11 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -Server russh -NoBuild -Only output,latency
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -BuildProfile debug -SeqLines 20000 -LatencyKeys 20 -IdleSeconds 2
+  powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -BuildProfile debug -SeqLines 20000 -LatencyKeys 20 -IdleSeconds 2 -FloodSeconds 20 -FloodSampleSeconds 5
   (a quick smoke run of every measurement)
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -Server openssh -Only splits,flood
+  (stage 2b, step 4: 16 sessions in 4 tabs x 4 panes, the 10-minute flood)
 #>
 [CmdletBinding()]
 param(
@@ -81,8 +98,17 @@ param(
     # Keystrokes per terminal of the latency benchmark.
     [ValidateRange(1, 2000)]
     [int] $LatencyKeys = 200,
-    # Measurements to run: idle, sessions1, sessions10, output, latency.
-    [string[]] $Only = @('idle', 'sessions1', 'sessions10', 'output', 'latency'),
+    # Length of the flood (seconds; a run that started goes on to its end).
+    [ValidateRange(1, 7200)]
+    [int] $FloodSeconds = 600,
+    # Interval of the flood's memory samples (seconds).
+    [ValidateRange(1, 7200)]
+    [int] $FloodSampleSeconds = 30,
+    # The flood's memory samples; default <target dir>\measure-flood-rss.csv.
+    [string] $FloodCsv,
+    # Measurements to run: idle, sessions1, sessions10, splits, flood, output,
+    # latency.
+    [string[]] $Only = @('idle', 'sessions1', 'sessions10', 'splits', 'flood', 'output', 'latency'),
     # Use the existing binaries.
     [switch] $NoBuild
 )
@@ -94,9 +120,10 @@ $repo = Split-Path -Parent $PSScriptRoot
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
 $exe = Join-Path $targetDir "$BuildProfile\shellpp.exe"
 $sshdExe = Join-Path $targetDir "$BuildProfile\shellpp-test-sshd.exe"
+if (-not $FloodCsv) { $FloodCsv = Join-Path $targetDir 'measure-flood-rss.csv' }
 $Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 foreach ($name in $Only) {
-    if ($name -notin @('idle', 'sessions1', 'sessions10', 'output', 'latency')) { throw "unknown measurement '$name'" }
+    if ($name -notin @('idle', 'sessions1', 'sessions10', 'splits', 'flood', 'output', 'latency')) { throw "unknown measurement '$name'" }
 }
 
 function Fail([string] $message) {
@@ -183,8 +210,10 @@ function Get-AppMemory([System.Diagnostics.Process] $process) {
 # One launch of the app with these arguments. Collects the "bench: " lines
 # of stdout. With -WaitReady, reads RSS -IdleSeconds after "bench: ready" (or
 # the window, for the plain idle launch) and closes the window; otherwise
-# waits for the app to quit by itself.
-function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [switch] $WaitWindow) {
+# waits for the app to quit by itself. With -FloodSamples, also reads RSS at
+# every "bench: flood sample <phase> <seconds>" line (returned as Samples).
+# -Timeout replaces -TimeoutSeconds for this launch.
+function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [switch] $WaitWindow, [switch] $FloodSamples, [int] $Timeout = 0) {
     $runDir = Join-Path $tempRoot ([guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $runDir | Out-Null
     $info = New-Object System.Diagnostics.ProcessStartInfo
@@ -210,12 +239,14 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
     if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
     $lines = New-Object System.Collections.Generic.List[string]
+    $samples = New-Object System.Collections.Generic.List[object]
     $memory = $null
     $problem = $null
+    $limit = if ($Timeout -gt 0) { $Timeout } else { $TimeoutSeconds }
     $process = [System.Diagnostics.Process]::Start($info)
     $stderr = $process.StandardError.ReadToEndAsync()
     try {
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $deadline = (Get-Date).AddSeconds($limit)
         $pending = $process.StandardOutput.ReadLineAsync()
         $ready = $false
         while ($true) {
@@ -228,6 +259,10 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
                 if ($line.StartsWith('bench: ')) {
                     $lines.Add($line)
                     Write-Host "  $line"
+                }
+                if ($FloodSamples -and $line -match '^bench: flood sample (\S+) (\d+)$') {
+                    $sample = Get-AppMemory $process
+                    $samples.Add([pscustomobject]@{ Phase = $Matches[1]; Seconds = [int]$Matches[2]; Set = $sample.Set; Private = $sample.Private; Children = $sample.Children })
                 }
                 if ($line -eq 'bench: ready') { $ready = $true }
                 if ($line.StartsWith('bench: failed')) { $problem = $line; break }
@@ -244,7 +279,7 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
                 break
             }
             if ($process.HasExited -and $pending.IsCompleted -and $null -eq $pending.Result) { break }
-            if ((Get-Date) -gt $deadline) { $problem = "no result after $TimeoutSeconds s"; break }
+            if ((Get-Date) -gt $deadline) { $problem = "no result after $limit s"; break }
         }
     }
     finally {
@@ -284,7 +319,7 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
             ForEach-Object { Write-Host "    $_" }
         $problems.Add("${label}: $problem")
     }
-    return @{ Lines = $lines; Memory = $memory }
+    return @{ Lines = $lines; Memory = $memory; Samples = $samples }
 }
 
 try {
@@ -325,6 +360,48 @@ try {
         Write-Host "measure-terminal: $count SSH session(s)"
         $run = Invoke-App "sessions$count" (@('--demo', '--theme', 'dark', '--bench-sessions', "$count") + $serverArgs) -WaitReady
         if ($run.Memory) { $results.Add([pscustomobject]@{ Measurement = "RSS, 300 hosts, $count SSH session(s)"; Value = (MB $run.Memory.Set); Detail = "private $(MB $run.Memory.Private), children $($run.Memory.Children)" }) }
+    }
+    if ('splits' -in $Only) {
+        Write-Host 'measure-terminal: 4 tabs x 4 panes (16 SSH sessions)'
+        $run = Invoke-App 'splits' (@('--demo', '--theme', 'dark', '--bench-splits') + $serverArgs) -WaitReady
+        $connected = ''
+        foreach ($line in $run.Lines) {
+            if ($line -match '^bench: splits connected (\d+) sessions .* in (\d+) ms$') { $connected = "; $($Matches[1]) sessions connected in $($Matches[2]) ms" }
+        }
+        if ($run.Memory) { $results.Add([pscustomobject]@{ Measurement = 'RSS, 300 hosts, 4 tabs x 4 panes (16 SSH sessions)'; Value = (MB $run.Memory.Set); Detail = "private $(MB $run.Memory.Private), children $($run.Memory.Children)$connected" }) }
+    }
+    if ('flood' -in $Only) {
+        Write-Host "measure-terminal: flood, $FloodSeconds s, a sample every $FloodSampleSeconds s"
+        $floodArgs = @('--demo', '--theme', 'dark', '--bench-flood', '--flood-seconds', "$FloodSeconds", '--sample-seconds', "$FloodSampleSeconds") + $serverArgs
+        $run = Invoke-App 'flood' $floodArgs -WaitReady -FloodSamples -Timeout ([Math]::Max($TimeoutSeconds, $FloodSeconds + 900))
+        # (@() over a generic List fails in Windows PowerShell 5.1.)
+        $samples = $run.Samples.ToArray()
+        if ($samples.Count -gt 0) {
+            $csv = @('phase,seconds,working_set_bytes,private_bytes,children')
+            foreach ($sample in $samples) { $csv += "$($sample.Phase),$($sample.Seconds),$($sample.Set),$($sample.Private),$($sample.Children)" }
+            $csvDir = Split-Path -Parent $FloodCsv
+            if ($csvDir -and -not (Test-Path -LiteralPath $csvDir)) { New-Item -ItemType Directory -Path $csvDir | Out-Null }
+            [System.IO.File]::WriteAllText($FloodCsv, (($csv -join "`n") + "`n"))
+            $start = $samples[0]
+            $end = $samples[$samples.Count - 1]
+            $peak = $samples | Sort-Object -Property Set -Descending | Select-Object -First 1
+            Write-Host "measure-terminal: flood RSS start $(MB $start.Set), peak $(MB $peak.Set) at $($peak.Seconds) s, end $(MB $end.Set) ($($samples.Count) samples in $FloodCsv)"
+            $results.Add([pscustomobject]@{ Measurement = 'RSS, flood, start (connected, before the first run)'; Value = (MB $start.Set); Detail = "private $(MB $start.Private), 0 s" })
+            $results.Add([pscustomobject]@{ Measurement = 'RSS, flood, peak'; Value = (MB $peak.Set); Detail = "private $(MB $peak.Private), at $($peak.Seconds) s ($($peak.Phase))" })
+            $results.Add([pscustomobject]@{ Measurement = 'RSS, flood, end (after the last run)'; Value = (MB $end.Set); Detail = "private $(MB $end.Private), at $($end.Seconds) s; $($samples.Count) samples: $FloodCsv" })
+        }
+        else {
+            $problems.Add('flood: no memory samples')
+        }
+        foreach ($line in $run.Lines) {
+            if ($line -match '^bench: flood runs (\d+) in (\d+) s \((\d+) lines\)$') {
+                $results.Add([pscustomobject]@{ Measurement = 'flood, runs'; Value = $Matches[1]; Detail = "$($Matches[3]) lines in $($Matches[2]) s" })
+            }
+            if ($line -match '^bench: flood scrollback (\d+) lines, cap (\d+) \((.+)\)$') {
+                $results.Add([pscustomobject]@{ Measurement = 'flood, scrollback lines at the end'; Value = $Matches[1]; Detail = "cap $($Matches[2]), $($Matches[3])" })
+            }
+        }
+        if ($run.Memory) { $results.Add([pscustomobject]@{ Measurement = "RSS, after the flood ($IdleSeconds s idle)"; Value = (MB $run.Memory.Set); Detail = "private $(MB $run.Memory.Private), children $($run.Memory.Children)" }) }
     }
     if ('output' -in $Only) {
         Write-Host "measure-terminal: seq 1 $SeqLines"

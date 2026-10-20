@@ -49,6 +49,7 @@ use super::{ScreenshotError, ShotState, click, press, settle, shell_of, type_int
 use crate::app::RootView;
 use crate::dev::test_server::{DevServer, ServerKind};
 use crate::hosts::QuickTarget;
+use crate::panes::PaneStatus;
 use crate::session_ui::{HostKeyAsk, Phase, Prompt, SessionPane};
 use crate::settings::terminal::{KEY_AUTORECONNECT, KEY_DEFAULT_THEME, TerminalPrefs};
 use crate::shell::{SessionId, SessionKind, SessionRequest, Shell, TopTab};
@@ -112,6 +113,11 @@ pub struct Rig {
     /// Set when this run rotated the server's host keys; the next "Replace
     /// saved key" uses it up.
     rotated: Cell<bool>,
+    /// The server holds new connections ([`Rig::freeze`]).
+    frozen: Cell<bool>,
+    /// The other test hosts are among the recent connections
+    /// (`stage2b::seed_recent_connections`).
+    recents_seeded: Cell<bool>,
 }
 
 impl std::fmt::Debug for Rig {
@@ -164,7 +170,38 @@ impl Rig {
             vault_id,
             hosts,
             rotated: Cell::new(false),
+            frozen: Cell::new(false),
+            recents_seeded: Cell::new(false),
         })
+    }
+
+    /// New connections hang before the server's first byte (the connecting
+    /// state); see [`DevServer::freeze`].
+    fn freeze(&self) -> Result<(), ScreenshotError> {
+        // The second theme of the connecting state: still frozen (a paused
+        // container cannot be paused again).
+        if self.frozen.get() {
+            return Ok(());
+        }
+        self.server
+            .borrow_mut()
+            .freeze()
+            .map_err(|error| server_error("holding new connections", error))?;
+        self.frozen.set(true);
+        Ok(())
+    }
+
+    /// Ends [`Self::freeze`] when it is on.
+    fn thaw(&self) -> Result<(), ScreenshotError> {
+        if !self.frozen.get() {
+            return Ok(());
+        }
+        self.server
+            .borrow_mut()
+            .thaw()
+            .map_err(|error| server_error("releasing connections", error))?;
+        self.frozen.set(false);
+        Ok(())
     }
 
     fn real_shell(&self) -> bool {
@@ -187,6 +224,7 @@ impl Rig {
         cx: &mut AsyncApp,
         state: &Entity<AppState>,
     ) -> Result<(), ScreenshotError> {
+        let thawed = self.thaw();
         let core = core_of(cx, state)?;
         let removed = core
             .record_delete(RecordsRef {
@@ -202,7 +240,7 @@ impl Rig {
             vec![KEY_AUTORECONNECT.to_owned(), KEY_DEFAULT_THEME.to_owned()],
         );
         cx.update(|cx| TerminalPrefs::refresh(&core, cx));
-        removed.and(forgotten).and(reset)
+        thawed.and(removed).and(forgotten).and(reset)
     }
 
     /// Whether a known host entry is the test server's.
@@ -651,6 +689,8 @@ fn active_pane(shell: &Entity<Shell>, cx: &App) -> Option<Entity<SessionPane>> {
     }
 }
 
+mod stage2b;
+
 /// Brings the demo window (after the reset) into the terminal state `shot`.
 pub async fn reach(
     cx: &mut AsyncApp,
@@ -662,7 +702,22 @@ pub async fn reach(
 ) -> Result<(), ScreenshotError> {
     let core = core_of(cx, state)?;
     set_autoreconnect(&core, true)?;
+    // The connecting state leaves the server holding new connections.
+    if shot != ShotState::TerminalConnecting {
+        rig.thaw()?;
+    }
     match shot {
+        ShotState::TerminalConnecting
+        | ShotState::TerminalSplits
+        | ShotState::SplitPicker
+        | ShotState::TabMenu
+        | ShotState::NewTab
+        | ShotState::NewTabSearch
+        | ShotState::SidebarTools
+        | ShotState::SidebarSnippets
+        | ShotState::SidebarHistory
+        | ShotState::SidebarAppearance
+        | ShotState::SidebarFont => stage2b::reach(cx, handle, root, state, rig, shot).await,
         ShotState::TerminalTofu => {
             rig.forget_host_keys(&core)?;
             let (_, pane) = open_ssh(cx, handle, root, state, rig, 0, shot).await?;
@@ -839,6 +894,9 @@ pub fn check(
     let result = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
+            if stage2b::STATES.contains(&shot) {
+                return stage2b::check(window, cx, &shell, real_shell, shot);
+            }
             let Some(pane) = active_pane(&shell, cx) else {
                 return Err("no session tab is active");
             };
@@ -875,7 +933,9 @@ pub fn check(
                     )?;
                     need(visible(window, "session-dropped"), "no drop overlay")?;
                     need(visible(window, "session-dropped-reconnect"), "no Reconnect")?;
-                    need(visible(window, "session-dropped-close"), "no Close")
+                    need(visible(window, "session-dropped-close"), "no Close")?;
+                    // Stage 2b, step 0.2: the tab's `--danger` dot.
+                    stage2b::check_dot(window, cx, &shell, PaneStatus::Dropped)
                 }
                 ShotState::TerminalLocal => {
                     need(pane.read(cx).info().is_local(), "not a local terminal")?;
@@ -951,6 +1011,8 @@ mod tests {
             vault_id: Uuid::nil(),
             hosts: Vec::new(),
             rotated: Cell::new(false),
+            frozen: Cell::new(false),
+            recents_seeded: Cell::new(false),
         };
         let info = |fingerprint: &str| HostKeyInfo {
             address: "[127.0.0.1]:49153".into(),

@@ -26,6 +26,8 @@ pub struct Palette {
     cursor_text: Rgb,
     selection: Token,
     selection_foreground: Option<Rgb>,
+    search_match: Rgb,
+    search_match_active: Rgb,
 }
 
 /// An opaque [`Token`] as an `Rgb` (the alpha byte is dropped).
@@ -85,7 +87,19 @@ impl Palette {
             cursor_text: token_rgb(theme.cursor_text),
             selection: theme.selection,
             selection_foreground: theme.selection_foreground.map(token_rgb),
+            search_match: token_rgb(theme.search_match),
+            search_match_active: token_rgb(theme.search_match_active),
         }
+    }
+
+    /// The background of search matches (design-system 7.2 `searchMatch`).
+    pub fn search_match(&self) -> Rgb {
+        self.search_match
+    }
+
+    /// The background of the current search match (`searchMatchActive`).
+    pub fn search_match_active(&self) -> Rgb {
+        self.search_match_active
     }
 
     pub fn foreground(&self) -> Rgb {
@@ -151,6 +165,18 @@ impl Palette {
                 _ => self.foreground,
             },
         }
+    }
+
+    /// Whether the text of a cell is drawn in a truecolor (`SGR 38;2`, or
+    /// `48;2` for inverse text) rather than in a palette color: the
+    /// "Palette only" minimum contrast leaves such text alone.
+    pub fn text_is_truecolor(fg: Color, bg: Color, flags: Flags) -> bool {
+        let text = if flags.contains(Flags::INVERSE) {
+            bg
+        } else {
+            fg
+        };
+        matches!(text, Color::Spec(_))
     }
 
     /// A cell color with the remote overrides applied.

@@ -15,6 +15,7 @@
 //! `~/.ssh`, the real agent or a real host. Servers listen on 127.0.0.1.
 
 mod ends;
+mod history;
 mod local;
 mod ssh;
 
@@ -90,6 +91,10 @@ pub(super) struct RecordingCore {
     /// session layer heard of it), counting the refusals.
     pub config_locked: std::sync::atomic::AtomicBool,
     pub config_refusals: AtomicUsize,
+    /// Lines that reached `history_record`.
+    pub history_calls: AtomicUsize,
+    /// Reads of `record_history_now`.
+    pub history_flag_reads: AtomicUsize,
 }
 
 impl RecordingCore {
@@ -197,6 +202,20 @@ impl SessionCore for RecordingCore {
             reason,
             exit_status,
         });
+    }
+
+    fn history_record(
+        &self,
+        input: shellpp_core::service::host_api::HistoryRecordInput,
+    ) -> Result<shellpp_core::service::host_api::HistoryDecision, CoreError> {
+        self.history_calls.fetch_add(1, Ordering::SeqCst);
+        self.core.history_record(input)
+    }
+
+    fn record_history_now(&self, host: RecordRef) -> bool {
+        let on = SessionCore::record_history_now(&*self.core, host);
+        self.history_flag_reads.fetch_add(1, Ordering::SeqCst);
+        on
     }
 }
 
@@ -469,6 +488,8 @@ impl Harness {
             log: Mutex::new(Vec::new()),
             config_locked: Default::default(),
             config_refusals: AtomicUsize::new(0),
+            history_calls: AtomicUsize::new(0),
+            history_flag_reads: AtomicUsize::new(0),
         });
         let mut options = ManagerOptions::with_keys(KeySources {
             key_dir: Some(key_dir.path().to_path_buf()),

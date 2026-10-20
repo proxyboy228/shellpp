@@ -65,6 +65,7 @@ use crate::terminal::{PendingPaste, TerminalEvent, TerminalHandle, TerminalOptio
 /// Registers the keys of session dialogs.
 pub fn bind_keys(cx: &mut App) {
     dialog::bind_keys(cx);
+    host_key::bind_keys(cx);
 }
 
 /// Starts the session of a new tab. The app installs the session layer's
@@ -227,6 +228,9 @@ pub struct SessionPane {
     dialog_focus: FocusHandle,
     /// Move the keyboard focus into the pane at the next render.
     focus_request: bool,
+    /// The active pane of its tab (UI 4.7): only it takes the keyboard
+    /// focus; a request of another pane waits until it becomes active.
+    active: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -284,6 +288,7 @@ impl SessionPane {
             focus: cx.focus_handle(),
             dialog_focus: cx.focus_handle(),
             focus_request: true,
+            active: true,
             _subscriptions: Vec::new(),
         }
     }
@@ -335,6 +340,15 @@ impl SessionPane {
         }
     }
 
+    /// The size the pane will have (a new split pane before its first
+    /// frame): the terminal starts at it instead of the whole window. A
+    /// size measured in a frame wins.
+    pub fn set_area_hint(&mut self, area: Size<Pixels>) {
+        if self.area.get().is_none() {
+            self.area.set(Some(area));
+        }
+    }
+
     /// Whether [`Self::start`] ran.
     pub fn is_started(&self) -> bool {
         self.terminal.is_some()
@@ -346,6 +360,19 @@ impl SessionPane {
 
     pub fn request(&self) -> &OpenRequest {
         &self.request
+    }
+
+    /// A local terminal opened with the default shell learns which shell
+    /// that was (`shell_id` of the session view): the pane's request names
+    /// it from then on, so Duplicate, a new split pane and Restore open the
+    /// same shell (UI 4.4) even when the default changes meanwhile.
+    pub fn pin_local_shell(&mut self, shell_id: &str) {
+        if let OpenRequest::Local {
+            shell_id: id @ None,
+        } = &mut self.request
+        {
+            *id = Some(shell_id.to_owned());
+        }
     }
 
     pub fn phase(&self) -> &Phase {
@@ -467,6 +494,12 @@ impl SessionPane {
             self.focus_request = true;
         }
         self.phase = phase;
+        // UI 1.1: a dropped session is dimmed without a cursor until it runs
+        // again.
+        let dimmed = matches!(self.phase, Phase::Dropped(_) | Phase::Reconnecting(_));
+        if let Some(terminal) = &self.terminal {
+            terminal.update(cx, |terminal, cx| terminal.set_dimmed(dimmed, cx));
+        }
         let first_run = self.phase == Phase::Running && !self.connected_once;
         if first_run {
             self.connected_once = true;
@@ -542,6 +575,21 @@ impl SessionPane {
         }
     }
 
+    /// Whether this is the active pane of its tab (UI 4.7). An inactive
+    /// pane never takes the keyboard focus by itself (a session that
+    /// connects or asks a question in another pane leaves the focus where
+    /// it is).
+    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.active != active {
+            self.active = active;
+            cx.notify();
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Asks for the focus at the next render (the tab became active).
     pub fn request_focus(&mut self, cx: &mut Context<Self>) {
         self.focus_request = true;
@@ -576,7 +624,10 @@ impl SessionPane {
         self.shutdown(cx);
         self.control = None;
         if let Some(terminal) = &self.terminal {
-            terminal.read(cx).handle().set_sink(None);
+            let handle = terminal.read(cx).handle();
+            handle.set_sink(None);
+            // The history recorder holds the session too (stage 2b).
+            handle.set_history_sink(None);
         }
     }
 
@@ -744,12 +795,26 @@ impl Render for SessionPane {
             let prompt = prompt.clone();
             *form = Some(cx.new(|cx| PromptForm::new(prompt, target, on_reply, window, cx)));
         }
-        // Not from under a modal kit dialog (Settings, a confirmation): the
-        // request waits until it is closed.
-        if self.focus_request && !window.has_active_dialog(cx) {
+        // Not from under a modal kit dialog (Settings, a confirmation), nor
+        // from the Rename field of the tab: the request waits until it is
+        // closed.
+        if self.focus_request
+            && self.active
+            && !window.has_active_dialog(cx)
+            && !crate::shell::pane_focus_held(window, cx)
+        {
             self.focus_request = false;
             let handle = self.focus_handle(cx);
-            window.defer(cx, move |window, cx| window.focus(&handle, cx));
+            // The changed-key dialog starts on Cancel: from its frame, the
+            // next focus stop (the frame drawn this frame) is its first
+            // button (UI 10.2).
+            let first_button = self.host_key().is_some_and(host_key::focuses_first_button);
+            window.defer(cx, move |window, cx| {
+                window.focus(&handle, cx);
+                if first_button {
+                    window.focus_next(cx);
+                }
+            });
         }
         let content = self.render_content(cx);
         let overlay = overlays::render(self, cx);

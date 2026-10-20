@@ -173,6 +173,9 @@ pub const TAG_FILTER_EXAMPLE: [&str; 2] = ["prod", "linux"];
 /// The tags checked in the tag chips state: every tag of the first demo
 /// host, more than fit next to the host panel.
 pub const TAG_CHIPS_EXAMPLE: [&str; 4] = demo::FIRST_HOST_TAGS;
+/// The search of the new tab page state: the test server's hosts and the
+/// open tab to it.
+pub const NEW_TAB_SEARCH: &str = "Test";
 
 /// The command-line options of a screenshot run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,6 +247,39 @@ pub enum ShotState {
     /// The test server's host key changed: the blocking warning of UI 10.2
     /// with both fingerprints. Last: it rotates the server's host key.
     TerminalHostKeyChanged,
+    // Stage 2b (owner's step 5.1); the session states are in
+    // `terminal::stage2b`, Known Hosts in `known_hosts_shot`.
+    /// The Known Hosts screen (UI 10.1) after an import of a temporary
+    /// known_hosts file (plain, `[host]:port`, hashed and revoked entries),
+    /// the details panel of the first entry open.
+    KnownHosts,
+    /// A tab while it connects (the test server holds new connections): the
+    /// connecting screen and the tab's `--warning` dot (UI 1.1).
+    TerminalConnecting,
+    /// A tab with four panes (2 x 2) to the test server, split with
+    /// Ctrl+Shift+D / Ctrl+Shift+E and Enter in the new pane (UI 4.7).
+    TerminalSplits,
+    /// A tab right after Ctrl+Shift+D: the new pane's host list with the
+    /// split pane's host first (UI 4.7).
+    SplitPicker,
+    /// The tab menu (right click) of a tab with two panes (UI 4.4).
+    TabMenu,
+    /// The new tab page ("+", UI 6) next to an open session tab.
+    NewTab,
+    /// The new tab page with a search ([`NEW_TAB_SEARCH`]).
+    NewTabSearch,
+    /// The terminal sidebar's Tools (UI 4.2): a search with its matches
+    /// highlighted (Ctrl+Shift+F).
+    SidebarTools,
+    /// The terminal sidebar's Snippets placeholder.
+    SidebarSnippets,
+    /// The terminal sidebar's History: commands typed in the session and
+    /// the hint card.
+    SidebarHistory,
+    /// The terminal sidebar's Appearance: the theme list.
+    SidebarAppearance,
+    /// The terminal sidebar's Appearance: the Font page.
+    SidebarFont,
 }
 
 /// Which app state a screen state is shown on.
@@ -263,7 +299,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 36] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -278,6 +314,7 @@ impl ShotState {
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
+        Self::KnownHosts,
         Self::FirstRun,
         Self::Unlock,
         Self::TerminalTofu,
@@ -286,21 +323,60 @@ impl ShotState {
         Self::TerminalDrop,
         Self::TerminalLocal,
         Self::TerminalTabs,
+        Self::TerminalConnecting,
+        Self::TerminalSplits,
+        Self::SplitPicker,
+        Self::TabMenu,
+        Self::NewTab,
+        Self::NewTabSearch,
+        Self::SidebarTools,
+        Self::SidebarSnippets,
+        Self::SidebarHistory,
+        Self::SidebarAppearance,
+        Self::SidebarFont,
         Self::QuickConnectToast,
         Self::TerminalHostKeyChanged,
     ];
     /// The states with sessions to the SSH test server: the terminal states
-    /// (owner's stage 2a, step 5.1) and the offer to save a quick-connect
-    /// host, which needs a session that connected.
-    pub const TERMINAL: [Self; 8] = [
+    /// (owner's stage 2a and 2b, step 5.1) and the offer to save a
+    /// quick-connect host, which needs a session that connected.
+    pub const TERMINAL: [Self; 19] = [
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
         Self::TerminalDrop,
         Self::TerminalLocal,
         Self::TerminalTabs,
+        Self::TerminalConnecting,
+        Self::TerminalSplits,
+        Self::SplitPicker,
+        Self::TabMenu,
+        Self::NewTab,
+        Self::NewTabSearch,
+        Self::SidebarTools,
+        Self::SidebarSnippets,
+        Self::SidebarHistory,
+        Self::SidebarAppearance,
+        Self::SidebarFont,
         Self::QuickConnectToast,
         Self::TerminalHostKeyChanged,
+    ];
+    /// The states of stage 2b (owner's step 5.1) that are new in this run;
+    /// `terminal-htop` (light: after the minimum contrast change) and
+    /// `terminal-drop` (with the tab's dot) belong to the list too.
+    pub const STAGE_2B: [Self; 12] = [
+        Self::KnownHosts,
+        Self::TerminalConnecting,
+        Self::TerminalSplits,
+        Self::SplitPicker,
+        Self::TabMenu,
+        Self::NewTab,
+        Self::NewTabSearch,
+        Self::SidebarTools,
+        Self::SidebarSnippets,
+        Self::SidebarHistory,
+        Self::SidebarAppearance,
+        Self::SidebarFont,
     ];
     /// The states at the minimum window size: the Hosts screen without and
     /// with the details panel, and the tallest lock screen.
@@ -332,6 +408,18 @@ impl ShotState {
             Self::TerminalLocal => "terminal-local",
             Self::TerminalTabs => "terminal-tabs",
             Self::TerminalHostKeyChanged => "terminal-host-key-changed",
+            Self::KnownHosts => "known-hosts",
+            Self::TerminalConnecting => "terminal-connecting",
+            Self::TerminalSplits => "terminal-splits",
+            Self::SplitPicker => "split-picker",
+            Self::TabMenu => "tab-menu",
+            Self::NewTab => "new-tab",
+            Self::NewTabSearch => "new-tab-search",
+            Self::SidebarTools => "sidebar-tools",
+            Self::SidebarSnippets => "sidebar-snippets",
+            Self::SidebarHistory => "sidebar-history",
+            Self::SidebarAppearance => "sidebar-appearance",
+            Self::SidebarFont => "sidebar-font",
         }
     }
 
@@ -367,7 +455,18 @@ impl ShotState {
             | Self::TerminalLocal
             | Self::TerminalTabs
             | Self::QuickConnectToast
-            | Self::TerminalHostKeyChanged => Scene::Terminal,
+            | Self::TerminalHostKeyChanged
+            | Self::TerminalConnecting
+            | Self::TerminalSplits
+            | Self::SplitPicker
+            | Self::TabMenu
+            | Self::NewTab
+            | Self::NewTabSearch
+            | Self::SidebarTools
+            | Self::SidebarSnippets
+            | Self::SidebarHistory
+            | Self::SidebarAppearance
+            | Self::SidebarFont => Scene::Terminal,
             _ => Scene::Demo,
         }
     }
@@ -1034,6 +1133,19 @@ pub async fn reset_demo(
         type_into(cx, handle, SEARCH, "")?;
     }
     cx.update_window(handle, |_, window, cx| {
+        // The terminal sidebar of the sidebar states: hidden, on Tools with
+        // an empty search, Appearance on its theme list.
+        let sidebar = shell.read(cx).terminal_sidebar().clone();
+        let (tools, appearance) = {
+            let sidebar = sidebar.read(cx);
+            (sidebar.tools().clone(), sidebar.appearance().clone())
+        };
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_visible(false, cx);
+            sidebar.show_tab(crate::terminal_sidebar::SidebarTab::Tools, cx);
+        });
+        tools.update(cx, |tools, cx| tools.set_query("", window, cx));
+        appearance.update(cx, |appearance, cx| appearance.show_main_page(window, cx));
         let focus = shell.read(cx).focus_handle().clone();
         focus.focus(window, cx);
     })
@@ -1154,6 +1266,7 @@ pub async fn reach_state(
             settle(cx, handle).await?;
             scroll_to_bottom(cx, handle, HOST_PANEL_BODY)
         }
+        ShotState::KnownHosts => known_hosts_shot::reach(cx, handle, root, state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -1164,9 +1277,18 @@ pub async fn reach_state(
         | ShotState::TerminalLocal
         | ShotState::TerminalTabs
         | ShotState::QuickConnectToast
-        | ShotState::TerminalHostKeyChanged => {
-            Err(not_reached("needs the SSH test server (terminal::reach)"))
-        }
+        | ShotState::TerminalHostKeyChanged
+        | ShotState::TerminalConnecting
+        | ShotState::TerminalSplits
+        | ShotState::SplitPicker
+        | ShotState::TabMenu
+        | ShotState::NewTab
+        | ShotState::NewTabSearch
+        | ShotState::SidebarTools
+        | ShotState::SidebarSnippets
+        | ShotState::SidebarHistory
+        | ShotState::SidebarAppearance
+        | ShotState::SidebarFont => Err(not_reached("needs the SSH test server (terminal::reach)")),
     }
 }
 
@@ -1180,6 +1302,9 @@ pub fn check_state(
     shot_state: ShotState,
 ) -> Result<(), ScreenshotError> {
     let failed = |reason: &str| Err(ScreenshotError::state(shot_state, reason));
+    if shot_state == ShotState::KnownHosts {
+        return known_hosts_shot::check(cx, handle, root);
+    }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
         .update_window(handle, |_, window, cx| {
@@ -1285,6 +1410,8 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::ShowMore => need(visible(HOST_MORE), "\"Show more\" is not expanded"),
             ShotState::FirstRun => need(visible(FIRST_RUN), "no first-run screen"),
             ShotState::Unlock => need(visible(UNLOCK), "no unlock screen"),
+            // Checked by `known_hosts_shot::check`.
+            ShotState::KnownHosts => Err("checked with the Known Hosts screen"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -1293,7 +1420,18 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::TerminalLocal
             | ShotState::TerminalTabs
             | ShotState::QuickConnectToast
-            | ShotState::TerminalHostKeyChanged => Err("a terminal state needs its session"),
+            | ShotState::TerminalHostKeyChanged
+            | ShotState::TerminalConnecting
+            | ShotState::TerminalSplits
+            | ShotState::SplitPicker
+            | ShotState::TabMenu
+            | ShotState::NewTab
+            | ShotState::NewTabSearch
+            | ShotState::SidebarTools
+            | ShotState::SidebarSnippets
+            | ShotState::SidebarHistory
+            | ShotState::SidebarAppearance
+            | ShotState::SidebarFont => Err("a terminal state needs its session"),
         }
     }
 }
@@ -1535,6 +1673,7 @@ fn capture(
     .map_err(|_| ScreenshotError::WindowClosed)?
 }
 
+mod known_hosts_shot;
 mod terminal;
 
 #[cfg(test)]

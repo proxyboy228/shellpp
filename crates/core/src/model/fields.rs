@@ -195,8 +195,21 @@ pub const TAG_COLORS: &[&str] = &[
     "graphite", "jade", "amber", "coral", "plum", "moss", "ocean", "rose",
 ];
 
-/// Built-in terminal theme slugs (`apps/desktop/src/theme/terminal/*.json`).
-pub const BUILTIN_THEMES: &[&str] = &["graphite", "paper"];
+/// Built-in terminal theme slugs (`apps/desktop/src/theme/terminal/*.json`;
+/// the registry of `apps/desktop/src/theme/terminal.rs` lists the same ids in
+/// the same order, a desktop test checks it).
+pub const BUILTIN_THEMES: &[&str] = &[
+    "graphite",
+    "paper",
+    "dracula",
+    "nord",
+    "solarized-dark",
+    "solarized-light",
+    "gruvbox-dark",
+    "tokyo-night",
+    "catppuccin-mocha",
+    "catppuccin-latte",
+];
 
 /// An object member, `invalid` when it is not an object.
 pub fn opt_object<'a>(

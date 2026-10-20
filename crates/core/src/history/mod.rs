@@ -61,6 +61,21 @@ static PASSWORD_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
     .expect("static regex")
 });
 
+/// The password prompt pattern for a prompt inside the captured line: the
+/// long words without the leading word boundary, because input typed before
+/// the prompt appeared runs into it (`hunter2Password:`, stage 2b decision).
+/// The short words keep their boundaries, so `ping:` or `tokens:` are not
+/// prompts.
+static PASSWORD_PROMPT_IN_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)",
+        r"(password|passwd|passphrase|passcode|verification code|authenticator)",
+        r"|\b(pin|otp|one[- ]time|token|2fa|secret)\b",
+        r"|(passwort|kennwort|mot de passe|contraseña|senha|parola|wachtwoord|hasło|heslo|пароль|密码|パスワード|비밀번호)",
+    ))
+    .expect("static regex")
+});
+
 /// Rules S2-S9 (case-insensitive), in rule order.
 static CASE_INSENSITIVE_RULES: LazyLock<Vec<(SecretRule, Regex)>> = LazyLock::new(|| {
     [
@@ -201,6 +216,24 @@ pub fn prompt_looks_like_password(prompt_text: &str) -> bool {
     PASSWORD_PROMPT.is_match(prompt_text)
 }
 
+/// Characters that end a prompt: `:` and the fullwidth `：`.
+const PROMPT_END: &[char] = &[':', '\u{ff1a}'];
+
+/// The captured line itself holds a password prompt: a match of the
+/// password prompt pattern with a `:` after it on the line
+/// (docs/security.md, section 10.1, stage 2b decision). This catches a
+/// prompt that a program printed after the boundary, for example when the
+/// user typed a password before `sudo` showed `[sudo] password for ...:`.
+/// The long words match without a word boundary before them, so a prompt
+/// that starts with the word right after the typed text (`su` prints
+/// `Password:`) is caught too: `hunter2Password:`. It fails closed:
+/// `echo "password: x"` is not recorded either.
+pub fn line_holds_password_prompt(line: &str) -> bool {
+    PASSWORD_PROMPT_IN_LINE
+        .find_iter(line)
+        .any(|found| line[found.end()..].contains(PROMPT_END))
+}
+
 /// Skips the rest of a control string (OSC, DCS, SOS, PM, APC) up to its
 /// terminator: BEL, ST (`ESC \` or U+009C).
 fn skip_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
@@ -295,7 +328,9 @@ pub fn evaluate(
     if candidate.typed_printable && masked {
         return Err(HistoryDropReason::EchoOff);
     }
-    if prompt_looks_like_password(&clean_command(&candidate.prompt_text)) {
+    if prompt_looks_like_password(&clean_command(&candidate.prompt_text))
+        || line_holds_password_prompt(&command)
+    {
         return Err(HistoryDropReason::PasswordPrompt);
     }
     if command.is_empty() {

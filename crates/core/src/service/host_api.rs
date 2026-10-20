@@ -154,7 +154,8 @@ pub enum HistoryDecision {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryDropReason {
-    /// History recording is off for the host or globally.
+    /// History recording is off for the host or globally, or the linked
+    /// host of the personal vault no longer exists.
     Off,
     AltScreen,
     EchoOff,

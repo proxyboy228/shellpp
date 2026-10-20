@@ -35,6 +35,8 @@ use crate::theme::{self, metrics};
 pub fn bind_keys(cx: &mut App) {
     shell::bind_keys(cx);
     crate::session_ui::bind_keys(cx);
+    crate::panes::bind_keys(cx);
+    crate::terminal_sidebar::bind_keys(cx);
 }
 
 /// What the window shows.

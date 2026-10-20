@@ -218,6 +218,35 @@ fn recording_follows_the_current_host_and_setting() {
     ));
 }
 
+/// A session whose saved host was removed while it runs records nothing
+/// more, whatever the global setting says: its entries would show in no
+/// History tab (stage 2b decision: history only for saved hosts).
+#[test]
+fn a_removed_host_records_nothing() {
+    let u = first_run();
+    let host = u.host(json!({"address": "gone.example.com", "record_history": "off"}));
+    let link = RecordRef {
+        vault_id: u.vault_id,
+        record_id: host.record_id,
+    };
+    assert!(!u.core.record_history_now(Some(link)).unwrap());
+    u.core
+        .record_delete(RecordsRef {
+            vault_id: u.vault_id,
+            record_ids: vec![host.record_id],
+        })
+        .unwrap();
+    // The global setting is on (default), the host is gone.
+    assert!(u.core.record_history_now(None).unwrap());
+    assert!(!u.core.record_history_now(Some(link)).unwrap());
+    assert_eq!(
+        record(&u.core, Some(link), Uuid::now_v7(), "uptime"),
+        HistoryDecision::Dropped(HistoryDropReason::Off)
+    );
+    assert!(list(&u.core, Some(link), None, None).is_empty());
+    assert!(list(&u.core, None, None, None).is_empty());
+}
+
 #[test]
 fn list_filters_order_and_limits() {
     let u = first_run();

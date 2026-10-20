@@ -4,8 +4,8 @@
 //! on the Vaults tab). Items are 36 px, radius 6: `--text-secondary`, hover
 //! `--bg-raised-hover`, pressed `--bg-pressed`; the active one has the
 //! `--accent-subtle` background and `--text-primary`. Keyboard focus shows
-//! the design-system focus ring. Sections without a screen yet open the
-//! "In development" placeholder.
+//! the design-system focus ring. Sections without a screen yet (all but
+//! Hosts and Known Hosts) open the "In development" placeholder.
 //!
 //! Narrow windows (owner's step 0.5): when the main area next to the full
 //! sidebar would be narrower than 600 px (the details panel open in a
@@ -119,9 +119,10 @@ impl Section {
         format!("{}-tooltip", self.element_id()).into()
     }
 
-    /// Whether the section has a screen yet (the others show the placeholder).
+    /// Whether the section has a screen yet (the others show the placeholder):
+    /// Hosts, and Known Hosts from stage 2b (`crate::known_hosts`).
     pub fn is_built(self) -> bool {
-        matches!(self, Section::Hosts)
+        matches!(self, Section::Hosts | Section::KnownHosts)
     }
 }
 
@@ -227,8 +228,11 @@ mod tests {
                 Lucide::ScrollText
             ]
         );
-        assert!(Section::Hosts.is_built());
-        assert!(Section::ALL[1..].iter().all(|section| !section.is_built()));
+        let built: Vec<Section> = Section::ALL
+            .into_iter()
+            .filter(|section| section.is_built())
+            .collect();
+        assert_eq!(built, [Section::Hosts, Section::KnownHosts]);
     }
 
     #[test]

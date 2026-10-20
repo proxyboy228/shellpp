@@ -846,3 +846,341 @@ fn dropping_the_view_closes_the_terminal(cx: &mut TestAppContext) {
     assert_eq!(handle.feed_blocking(b"late"), Err(FeedError::Closed));
     assert_eq!(Arc::strong_count(&sink), 1, "the sink was released");
 }
+
+/// Prepares a frame of the fixture's terminal in the text area of an
+/// 800 x 500 view (8 px padding) and returns it.
+fn frame(fixture: &Fixture, cx: &mut TestAppContext) -> render::Frame {
+    fixture.with_window(cx, |terminal, window, cx| {
+        let style = terminal.read(cx).frame_style(window);
+        let layout = terminal.read(cx).layout_state();
+        let bounds = Bounds::new(point(px(8.), px(8.)), size(px(784.), px(484.)));
+        render::prepaint(
+            bounds,
+            &fixture.handle,
+            &mut layout.borrow_mut(),
+            &style,
+            window,
+        )
+    })
+}
+
+/// UI 4.2 Tools: the search finds matches in the scrollback and on screen,
+/// highlights the visible ones (the current one in its own color), steps
+/// with wrap-around, scrolls the current match into view and reports
+/// every change; clearing it removes the highlights.
+#[gpui_kit::test]
+fn search_highlights_steps_and_scrolls(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    let updates = Rc::new(RefCell::new(0usize));
+    let counted = updates.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&fixture.terminal, move |_, _: &SearchUpdated, _| {
+            *counted.borrow_mut() += 1;
+        })
+    });
+    let mut text = String::new();
+    for line in 0..150 {
+        if line == 5 || line == 140 {
+            text.push_str(&format!("line {line} Needle here\r\n"));
+        } else {
+            text.push_str(&format!("line {line}\r\n"));
+        }
+    }
+    fixture.feed(cx, text.as_bytes());
+    assert!(fixture.handle.history_size() > 100);
+
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("NEEDLE", cx));
+    assert_eq!(
+        summary,
+        SearchSummary {
+            count: 2,
+            current: Some(2),
+            truncated: false
+        }
+    );
+    assert_eq!(*updates.borrow(), 1);
+    let offset =
+        |cx: &mut TestAppContext| cx.update(|cx| fixture.terminal.read(cx).display_offset());
+    assert_eq!(offset(cx), 0, "the newest match is visible: no scrolling");
+    let spans = frame(&fixture, cx).matches().to_vec();
+    assert_eq!(spans.len(), 1);
+    assert!(spans[0].current);
+    assert_eq!((spans[0].first, spans[0].last), (9, 14));
+
+    // Previous: the match in the scrollback becomes current and visible.
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search_step(false, cx));
+    assert_eq!(summary.current, Some(1));
+    assert!(offset(cx) > 0, "scrolled into the scrollback");
+    let spans = frame(&fixture, cx).matches().to_vec();
+    assert_eq!(spans.len(), 1);
+    assert!(spans[0].current);
+    assert_eq!((spans[0].first, spans[0].last), (7, 12));
+
+    // Previous again wraps to the last match; next wraps to the first.
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search_step(false, cx));
+    assert_eq!(summary.current, Some(2));
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search_step(true, cx));
+    assert_eq!(summary.current, Some(1));
+    assert_eq!(*updates.borrow(), 4);
+
+    // Clearing removes the highlights.
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.clear_search(cx));
+    assert!(frame(&fixture, cx).matches().is_empty());
+    assert_eq!(
+        cx.update(|cx| fixture.terminal.read(cx).search_summary()),
+        None
+    );
+    // An empty query is no search.
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("", cx));
+    assert_eq!(summary, SearchSummary::default());
+}
+
+/// New output while the search is open is searched again shortly after.
+#[gpui_kit::test]
+fn new_output_is_searched_again(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    fixture.feed(cx, b"error one\r\n");
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("error", cx));
+    fixture.feed(cx, b"fine\r\nerror two\r\n");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    let summary = cx.update(|cx| fixture.terminal.read(cx).search_summary());
+    assert_eq!(summary.map(|summary| summary.count), Some(2));
+    // The current match stayed on the first one.
+    assert_eq!(summary.and_then(|summary| summary.current), Some(1));
+}
+
+/// A narrower grid reflows wrapped lines: the search runs again at once,
+/// without new output (the sidebar opening, a split, a window resize), so
+/// the highlights stay on the text.
+#[gpui_kit::test]
+fn a_reflow_searches_again(cx: &mut TestAppContext) {
+    let fixture = Fixture::open_sized(cx, 800., 500.);
+    let wide = fixture.handle.size().cols as usize;
+    assert!(wide > 60, "{wide}");
+    let line = format!("{}NEEDLE\r\n", "a".repeat(50));
+    fixture.feed(cx, line.as_bytes());
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("needle", cx));
+    let start = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let terminal = fixture.terminal.read(cx);
+            terminal.search_state().and_then(|search| search.current())
+        })
+        .map(|found| found.start)
+    };
+    let before = start(cx).expect("a match");
+    assert_eq!(before.column, 50);
+
+    cx.simulate_window_resize(fixture.window, size(px(300.), px(500.)));
+    fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
+    cx.run_until_parked();
+    let narrow = fixture.handle.size().cols as usize;
+    assert!(narrow < 50, "{narrow}");
+    let after = start(cx).expect("still a match");
+    // The match moved with the text to a later row.
+    assert_eq!(
+        (after.line - before.line, after.column),
+        (50 / narrow, 50 % narrow)
+    );
+}
+
+/// Gap 8: a reflow keeps the current match by its ordinal (three wrapped
+/// matches, the last one current, stay "3 of 3"). A second resize within
+/// the refresh period waits for the period (one search per period during a
+/// drag), without highlights on the moved text meanwhile.
+#[gpui_kit::test]
+fn a_reflow_keeps_the_current_match(cx: &mut TestAppContext) {
+    use alacritty_terminal::grid::Dimensions as _;
+
+    let fixture = Fixture::open_sized(cx, 800., 500.);
+    let line = format!("{}NEEDLE\r\n", "a".repeat(50));
+    fixture.feed(cx, line.repeat(3).as_bytes());
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("needle", cx));
+    assert_eq!((summary.count, summary.current), (3, Some(3)));
+    let summary = |cx: &mut TestAppContext| {
+        cx.update(|cx| fixture.terminal.read(cx).search_summary())
+            .map(|summary| (summary.count, summary.current))
+    };
+    // Whether the current match is highlighted on the grid as it is.
+    let highlighted = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let search = fixture.terminal.read(cx).search_state()?;
+            let term = fixture.handle.term().lock();
+            let grid = term.grid();
+            let origin = fixture.handle.search_origin(&term);
+            let spans = search.spans(grid, origin, grid.screen_lines(), grid.columns());
+            Some(spans.iter().any(|span| span.current))
+        })
+    };
+    assert_eq!(highlighted(cx), Some(true));
+    let resize = |cx: &mut TestAppContext, width: f32| {
+        cx.simulate_window_resize(fixture.window, size(px(width), px(500.)));
+        fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
+        cx.run_until_parked();
+    };
+
+    resize(cx, 300.);
+    assert!(fixture.handle.size().cols < 50);
+    assert_eq!(summary(cx), Some((3, Some(3))));
+    assert_eq!(highlighted(cx), Some(true));
+
+    resize(cx, 800.);
+    assert_eq!(highlighted(cx), Some(false), "waits for the period");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(summary(cx), Some((3, Some(3))));
+    assert_eq!(highlighted(cx), Some(true));
+}
+
+/// Gap 13: with a full scrollback and output going on, the oldest lines
+/// drop off, and the current match stays on its text (its ordinal moves
+/// down by the matches that dropped off).
+#[gpui_kit::test]
+fn the_current_match_keeps_its_text_in_a_full_scrollback(cx: &mut TestAppContext) {
+    use alacritty_terminal::grid::Dimensions as _;
+    use alacritty_terminal::index::{Column, Line};
+
+    let fixture = Fixture::open(cx);
+    let lines = |range: std::ops::Range<usize>| -> String {
+        range
+            .map(|index| {
+                if index % 50 == 0 {
+                    format!("line {index:05} hit\r\n")
+                } else {
+                    format!("line {index:05}\r\n")
+                }
+            })
+            .collect()
+    };
+    fixture.feed(cx, lines(0..10_500).as_bytes());
+    assert_eq!(fixture.handle.history_size(), DEFAULT_SCROLLBACK);
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("hit", cx));
+    // The text of the row the current match is on.
+    let current_text = |cx: &mut TestAppContext| -> Option<String> {
+        cx.update(|cx| {
+            let found = fixture.terminal.read(cx).search_state()?.current()?;
+            let term = fixture.handle.term().lock();
+            let grid = term.grid();
+            let buffer = found
+                .start
+                .line
+                .checked_sub(fixture.handle.evicted_lines())?;
+            let row = &grid[Line(buffer as i32 - grid.history_size() as i32)];
+            let text: String = (0..grid.columns())
+                .map(|column| row[Column(column)].c)
+                .collect();
+            Some(text.trim_end().to_owned())
+        })
+    };
+    for _ in 0..1000 {
+        if current_text(cx).as_deref() == Some("line 05000 hit") {
+            break;
+        }
+        fixture
+            .terminal
+            .update(cx, |terminal, cx| terminal.search_step(false, cx));
+    }
+    assert_eq!(current_text(cx).as_deref(), Some("line 05000 hit"));
+    let before = cx
+        .update(|cx| fixture.terminal.read(cx).search_summary())
+        .unwrap();
+
+    fixture.feed(cx, lines(10_500..11_500).as_bytes());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(current_text(cx).as_deref(), Some("line 05000 hit"));
+    let after = cx
+        .update(|cx| fixture.terminal.read(cx).search_summary())
+        .unwrap();
+    assert_eq!(after.count, before.count);
+    assert_eq!(after.current, before.current.map(|current| current - 20));
+}
+
+/// UI 1.1: a dropped session is dimmed and has no cursor; both come back.
+#[gpui_kit::test]
+fn a_dimmed_terminal_hides_the_cursor(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    fixture.feed(cx, b"$ ");
+    assert!(frame(&fixture, cx).cursor().is_some());
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.set_dimmed(true, cx));
+    assert!(cx.update(|cx| fixture.terminal.read(cx).is_dimmed()));
+    assert_eq!(frame(&fixture, cx).cursor(), None);
+    fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.set_dimmed(false, cx));
+    assert!(frame(&fixture, cx).cursor().is_some());
+}
+
+/// Settings (or the Appearance tab) change the line spacing, the size and
+/// the font family of open terminals at once.
+#[gpui_kit::test]
+fn font_size_spacing_and_family_apply_at_once(cx: &mut TestAppContext) {
+    let fixture = Fixture::open_sized(cx, 800., 500.);
+    let metrics = |cx: &mut TestAppContext| {
+        let _ = frame(&fixture, cx);
+        let layout = cx.update(|cx| fixture.terminal.read(cx).layout_state());
+        layout.borrow().metrics.expect("a frame was drawn")
+    };
+    let before = metrics(cx);
+    let rows_before = fixture.handle.size().rows;
+    assert_eq!(before.line_height, px(17.), "14 px x 1.2, snapped");
+
+    cx.update(|cx| {
+        let prefs = TerminalPrefs {
+            line_height: 1.5,
+            ..TerminalPrefs::current(cx)
+        };
+        cx.set_global(prefs);
+    });
+    fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
+    let spaced = metrics(cx);
+    assert_eq!(spaced.line_height, px(21.), "14 px x 1.5");
+    assert!(fixture.handle.size().rows < rows_before, "fewer rows fit");
+
+    cx.update(|cx| {
+        let prefs = TerminalPrefs {
+            font_size: 20,
+            font_family: "Courier New".to_owned(),
+            ..TerminalPrefs::current(cx)
+        };
+        cx.set_global(prefs);
+    });
+    let larger = metrics(cx);
+    assert_eq!(larger.font_size, px(20.));
+    assert_eq!(larger.line_height, px(30.));
+    let family = fixture.with_window(cx, |terminal, window, cx| {
+        terminal
+            .read(cx)
+            .frame_style(window)
+            .fonts
+            .family()
+            .to_owned()
+    });
+    assert_eq!(family, "Courier New");
+}

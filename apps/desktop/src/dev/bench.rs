@@ -27,11 +27,32 @@
 //! - `--bench-latency`: 200 keystrokes each into a local terminal and an SSH
 //!   session; for each, the time from the key event to the first presented
 //!   frame that shows the echoed glyph; prints p50/p95 and quits.
+//! - `--bench-splits` (owner's stage 2b, step 4): [`SPLIT_TABS`] session tabs
+//!   in the main window, each split into [`SPLIT_PANES`] panes (2 x 2: the
+//!   tab's pane, then a pane to its right, one below it and one below the
+//!   right one; [`crate::panes::PaneGroup::split`] and `open_in`, what
+//!   Ctrl+Shift+D / Ctrl+Shift+E and Enter in the new pane's host list do),
+//!   every pane an SSH session to the test server: 16 sessions. Then
+//!   `bench: ready` and the same idle as `--bench-sessions`.
+//! - `--bench-flood` (stage 2b, step 4): one SSH session tab in the main
+//!   window runs [`FloodShell::command`] (`yes | head -n 5000000` on
+//!   OpenSSH; `seq 1 5000000` on the russh test server, whose shell has no
+//!   `yes`) again and again for `--flood-seconds` (default
+//!   [`FLOOD_SECONDS`], 10 minutes; a run that started goes on to its end).
+//!   It prints `bench: flood sample <start|run|end> <seconds>` at the start,
+//!   every `--sample-seconds` (default [`FLOOD_SAMPLE_SECONDS`]) and after
+//!   the last run: the script reads the process memory at each of these
+//!   lines (the app cannot read its own working set without `unsafe` on
+//!   Windows). Then the number of runs, the terminal's scrollback line
+//!   count against its cap ([`crate::terminal::DEFAULT_SCROLLBACK`]; more
+//!   than the cap fails the run), `bench: ready` and the idle of
+//!   `--bench-sessions` (the script reads the memory once more).
 //!
 //! Common options: `--test-server <server.json>` (OpenSSH from
 //! `tests/openssh/start.sh`; default: the russh test server as a child
 //! process), `--theme auto|light|dark`. Short smoke runs: `--seq-lines <N>`
-//! for `--bench-output`, `--keys <N>` for `--bench-latency`.
+//! for `--bench-output`, `--keys <N>` for `--bench-latency`,
+//! `--flood-seconds <N>` and `--sample-seconds <N>` for `--bench-flood`.
 //!
 //! Output lines start with `bench: `; failures print `bench: failed <why>`
 //! and exit with code 1. Nothing secret, no address and no terminal data is
@@ -57,13 +78,36 @@ pub const MAX_KEYS: usize = 2_000;
 /// prompt can be told apart. The typed command builds it from two parts,
 /// so its echo never contains it.
 pub const SHELL_DONE: &str = "seq-bench-done";
+/// Session tabs of `--bench-splits`.
+pub const SPLIT_TABS: usize = 4;
+/// Panes per tab of `--bench-splits` (2 x 2).
+pub const SPLIT_PANES: usize = 4;
+/// Default length of `--bench-flood` (owner's step 4: 10 minutes).
+pub const FLOOD_SECONDS: u64 = 600;
+/// The longest `--flood-seconds` (2 hours).
+pub const MAX_FLOOD_SECONDS: u64 = 7_200;
+/// Default interval of the memory samples of `--bench-flood`.
+pub const FLOOD_SAMPLE_SECONDS: u64 = 30;
+/// Lines of one flood run (`yes | head -n 5000000`).
+pub const FLOOD_LINES: u64 = 5_000_000;
 
 /// What to measure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BenchMode {
     Sessions(usize),
-    Output { lines: u64 },
-    Latency { keys: usize },
+    /// [`SPLIT_TABS`] tabs x [`SPLIT_PANES`] panes.
+    Splits,
+    /// `seconds` of flood output, a memory sample every `sample_seconds`.
+    Flood {
+        seconds: u64,
+        sample_seconds: u64,
+    },
+    Output {
+        lines: u64,
+    },
+    Latency {
+        keys: usize,
+    },
 }
 
 /// The command line of a benchmark run.
@@ -75,16 +119,25 @@ pub struct BenchArgs {
 }
 
 /// The flags that select a benchmark.
-const MODE_FLAGS: [&str; 3] = ["--bench-sessions", "--bench-output", "--bench-latency"];
+const MODE_FLAGS: [&str; 5] = [
+    "--bench-sessions",
+    "--bench-splits",
+    "--bench-flood",
+    "--bench-output",
+    "--bench-latency",
+];
 
 /// The usage of the benchmark modes (`shellpp --help` lists them too).
 pub const USAGE: &str = "Benchmarks (dev-tools builds; scripts/measure-terminal.ps1):
   shellpp --bench-sessions <N> [--test-server <server.json>] [--theme <mode>]
+  shellpp --bench-splits [--test-server <server.json>] [--theme <mode>]
+  shellpp --bench-flood [--flood-seconds <N>] [--sample-seconds <N>] [--test-server <server.json>] [--theme <mode>]
   shellpp --bench-output [--seq-lines <N>] [--test-server <server.json>] [--theme <mode>]
   shellpp --bench-latency [--keys <N>] [--test-server <server.json>] [--theme <mode>]
 Without --test-server the russh test server runs as a child process
 (shellpp-test-sshd next to this binary, or SHELLPP_TEST_SSHD_EXE).
---seq-lines (default 3000000) and --keys (default 200) shorten smoke runs.";
+--seq-lines (default 3000000), --keys (default 200) and --flood-seconds
+(default 600, samples every --sample-seconds, default 30) shorten smoke runs.";
 
 /// The entry of `main`: `None` for a launch without a benchmark flag,
 /// otherwise runs the benchmark (or refuses the arguments with exit code 2).
@@ -115,13 +168,21 @@ fn parse_bench(args: &[String]) -> Result<BenchArgs, String> {
     let mut appearance = Appearance::Dark;
     let mut seq_lines = None;
     let mut keys = None;
+    let mut flood_seconds = None;
+    let mut sample_seconds = None;
     let mut iter = args.iter();
     let set = |mode: &mut Option<BenchMode>, value: BenchMode| {
         if mode.replace(value).is_some() {
-            Err("give one of --bench-sessions, --bench-output, --bench-latency".to_owned())
+            Err(format!("give one of {}", MODE_FLAGS.join(", ")))
         } else {
             Ok(())
         }
+    };
+    let number = |flag: &str, value: Option<&String>, range: std::ops::RangeInclusive<u64>| {
+        value
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| range.contains(value))
+            .ok_or_else(|| format!("{flag} takes {} to {}", range.start(), range.end()))
     };
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -134,6 +195,20 @@ fn parse_bench(args: &[String]) -> Result<BenchArgs, String> {
                     .filter(|count| (1..=MAX_SESSIONS).contains(count))
                     .ok_or_else(|| format!("--bench-sessions takes 1 to {MAX_SESSIONS}"))?;
                 set(&mut mode, BenchMode::Sessions(count))?;
+            }
+            "--bench-splits" => set(&mut mode, BenchMode::Splits)?,
+            "--bench-flood" => set(
+                &mut mode,
+                BenchMode::Flood {
+                    seconds: FLOOD_SECONDS,
+                    sample_seconds: FLOOD_SAMPLE_SECONDS,
+                },
+            )?,
+            "--flood-seconds" => {
+                flood_seconds = Some(number(arg, iter.next(), 1..=MAX_FLOOD_SECONDS)?);
+            }
+            "--sample-seconds" => {
+                sample_seconds = Some(number(arg, iter.next(), 1..=MAX_FLOOD_SECONDS)?);
             }
             "--bench-output" => set(&mut mode, BenchMode::Output { lines: SEQ_LINES })?,
             "--bench-latency" => set(&mut mode, BenchMode::Latency { keys: LATENCY_KEYS })?,
@@ -170,13 +245,38 @@ fn parse_bench(args: &[String]) -> Result<BenchArgs, String> {
         }
     }
     let mut mode = mode.ok_or("no benchmark selected")?;
-    match (&mut mode, seq_lines, keys) {
-        (_, Some(_), Some(_)) => return Err("--seq-lines and --keys do not go together".into()),
-        (BenchMode::Output { lines }, Some(value), None) => *lines = value,
-        (BenchMode::Latency { keys }, None, Some(value)) => *keys = value,
-        (_, Some(_), None) => return Err("--seq-lines goes with --bench-output".into()),
-        (_, None, Some(_)) => return Err("--keys goes with --bench-latency".into()),
-        (_, None, None) => {}
+    match &mut mode {
+        BenchMode::Output { lines } => {
+            if let Some(value) = seq_lines.take() {
+                *lines = value;
+            }
+        }
+        BenchMode::Latency { keys: count } => {
+            if let Some(value) = keys.take() {
+                *count = value;
+            }
+        }
+        BenchMode::Flood {
+            seconds,
+            sample_seconds: every,
+        } => {
+            if let Some(value) = flood_seconds.take() {
+                *seconds = value;
+            }
+            if let Some(value) = sample_seconds.take() {
+                *every = value;
+            }
+        }
+        BenchMode::Sessions(_) | BenchMode::Splits => {}
+    }
+    if seq_lines.is_some() {
+        return Err("--seq-lines goes with --bench-output".into());
+    }
+    if keys.is_some() {
+        return Err("--keys goes with --bench-latency".into());
+    }
+    if flood_seconds.is_some() || sample_seconds.is_some() {
+        return Err("--flood-seconds and --sample-seconds go with --bench-flood".into());
     }
     Ok(BenchArgs {
         mode,
@@ -354,6 +454,102 @@ pub fn seq_shell_finished(rows: &[String], last: u64) -> bool {
         })
 }
 
+/// The shell of `--bench-flood`'s session, by test server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloodShell {
+    /// bash on OpenSSH: `yes | head -n 5000000`, then the run's marker
+    /// line ([`flood_marker`]) from the same command line.
+    Bash,
+    /// The russh test server's own shell: one command per line and no
+    /// `yes`: `seq 1 5000000`, then `echo` of the marker as a command of its
+    /// own ([`FloodShell::mark_command`]).
+    Russh,
+}
+
+impl FloodShell {
+    /// The command line of run `run` (1, 2, ...), without the line ending.
+    /// Its echo never shows the marker as a row of its own.
+    pub fn command(self, run: u64) -> String {
+        match self {
+            Self::Bash => {
+                format!("yes | head -n {FLOOD_LINES}; printf 'flood-%s-%s\\n' done {run}")
+            }
+            Self::Russh => format!("seq 1 {FLOOD_LINES}"),
+        }
+    }
+
+    /// The command that prints run `run`'s marker after its output, when
+    /// the run's own command line cannot (russh).
+    pub fn mark_command(self, run: u64) -> Option<String> {
+        match self {
+            Self::Bash => None,
+            Self::Russh => Some(format!("echo {}", flood_marker(run))),
+        }
+    }
+
+    /// Whether the screen shows the end of run `run`'s output. On russh the
+    /// previous run's marker must have scrolled away first, so the end of
+    /// the previous run (the same last number) is never taken for this one.
+    pub fn output_finished(self, rows: &[String], run: u64) -> bool {
+        match self {
+            Self::Bash => shows_marker(rows, run),
+            Self::Russh => {
+                (run <= 1 || !shows_marker(rows, run - 1)) && seq_finished(rows, FLOOD_LINES)
+            }
+        }
+    }
+
+    /// What one run prints, for the output lines.
+    pub fn label(self) -> String {
+        match self {
+            Self::Bash => format!("yes | head -n {FLOOD_LINES}"),
+            Self::Russh => {
+                format!("seq 1 {FLOOD_LINES} (the russh test server's shell has no yes)")
+            }
+        }
+    }
+}
+
+/// The line that ends flood run `run`.
+pub fn flood_marker(run: u64) -> String {
+    format!("flood-done-{run}")
+}
+
+/// Whether a row is exactly run `run`'s marker.
+pub fn shows_marker(rows: &[String], run: u64) -> bool {
+    let marker = flood_marker(run);
+    rows.iter().any(|row| row.trim_end() == marker)
+}
+
+/// What the scrollback of the flood's terminal says about its cap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollbackCheck {
+    /// Exactly the cap: full and bounded.
+    AtCap,
+    /// Fewer lines than the cap (too little output to fill it).
+    Below,
+    /// More lines than the cap: the scrollback is not bounded.
+    Over,
+}
+
+impl ScrollbackCheck {
+    pub fn of(lines: usize, cap: usize) -> Self {
+        match lines.cmp(&cap) {
+            std::cmp::Ordering::Equal => Self::AtCap,
+            std::cmp::Ordering::Less => Self::Below,
+            std::cmp::Ordering::Greater => Self::Over,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AtCap => "at the cap",
+            Self::Below => "below the cap",
+            Self::Over => "over the cap",
+        }
+    }
+}
+
 /// Finds `needle` in a byte stream read in chunks: keeps the tail of the
 /// previous chunk, so a match across two chunks is found too.
 #[derive(Debug)]
@@ -499,9 +695,98 @@ mod tests {
             &["--bench-latency", "--seq-lines", "10"],
             &["--bench-latency", "--keys", "0"],
             &["--bench-sessions", "2", "--keys", "10"],
+            &["--bench-splits", "--bench-flood"],
+            &["--bench-splits", "--flood-seconds", "10"],
+            &["--bench-flood", "--flood-seconds", "0"],
+            &["--bench-flood", "--flood-seconds", "7201"],
+            &["--bench-flood", "--sample-seconds"],
+            &["--bench-flood", "--seq-lines", "10"],
+            &["--bench-output", "--sample-seconds", "5"],
         ] {
             assert!(matches!(parse(&args(bad)), Some(Err(_))), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn parses_the_stage_2b_benchmarks() {
+        assert_eq!(
+            parse(&args(&["--demo", "--bench-splits"])),
+            Some(Ok(BenchArgs {
+                mode: BenchMode::Splits,
+                server_json: None,
+                appearance: Appearance::Dark,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&["--bench-flood"])).map(|parsed| parsed.map(|args| args.mode)),
+            Some(Ok(BenchMode::Flood {
+                seconds: FLOOD_SECONDS,
+                sample_seconds: FLOOD_SAMPLE_SECONDS,
+            }))
+        );
+        assert_eq!(
+            parse(&args(&[
+                "--sample-seconds",
+                "5",
+                "--bench-flood",
+                "--flood-seconds",
+                "20",
+                "--test-server",
+                "x/server.json",
+            ])),
+            Some(Ok(BenchArgs {
+                mode: BenchMode::Flood {
+                    seconds: 20,
+                    sample_seconds: 5,
+                },
+                server_json: Some(PathBuf::from("x/server.json")),
+                appearance: Appearance::Dark,
+            }))
+        );
+        assert_eq!(FLOOD_SECONDS, 600, "owner's step 4: 10 minutes");
+        assert_eq!(SPLIT_TABS * SPLIT_PANES, 16);
+    }
+
+    #[test]
+    fn flood_runs_end_at_their_own_marker() {
+        let rows =
+            |list: &[&str]| -> Vec<String> { list.iter().map(|r| (*r).to_owned()).collect() };
+        let bash = FloodShell::Bash;
+        assert_eq!(
+            bash.command(3),
+            "yes | head -n 5000000; printf 'flood-%s-%s\\n' done 3"
+        );
+        assert_eq!(bash.mark_command(3), None);
+        // The echo of the command line is not the marker.
+        let echo = format!("pwuser@shellpp-openssh:~$ {}", bash.command(3));
+        assert!(!bash.output_finished(&rows(&[&echo, "y", "y"]), 3));
+        assert!(!bash.output_finished(&rows(&["y", "flood-done-2", "$"]), 3));
+        assert!(bash.output_finished(&rows(&["y", "y", "flood-done-3", "$"]), 3));
+
+        let russh = FloodShell::Russh;
+        assert_eq!(russh.command(1), "seq 1 5000000");
+        assert_eq!(russh.mark_command(2).as_deref(), Some("echo flood-done-2"));
+        let done = rows(&["4999999", "5000000", "pwuser@shellpp-test:~$"]);
+        assert!(russh.output_finished(&done, 1));
+        // The previous run's end with its marker below: not this run yet.
+        let previous = rows(&[
+            "5000000",
+            "pwuser@shellpp-test:~$ echo flood-done-1",
+            "flood-done-1",
+            "pwuser@shellpp-test:~$ seq 1 5000000",
+        ]);
+        assert!(!russh.output_finished(&previous, 2));
+        assert!(russh.output_finished(&done, 2));
+        assert!(!russh.output_finished(&rows(&["4999999", "5000000"]), 2));
+        for shell in [bash, russh] {
+            assert!(!shell.command(7).lines().any(|line| line == flood_marker(7)));
+            assert!(shell.label().contains("5000000"));
+        }
+
+        assert_eq!(ScrollbackCheck::of(10_000, 10_000), ScrollbackCheck::AtCap);
+        assert_eq!(ScrollbackCheck::of(9_000, 10_000), ScrollbackCheck::Below);
+        assert_eq!(ScrollbackCheck::of(10_001, 10_000), ScrollbackCheck::Over);
+        assert_eq!(ScrollbackCheck::Over.label(), "over the cap");
     }
 
     #[test]

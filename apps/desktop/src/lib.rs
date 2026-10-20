@@ -12,6 +12,7 @@
 //!   placeholder, toasts. [`session_ui`]: the content of a session tab
 //!   (connection screen, prompts, host key dialogs, end and drop overlays).
 //! - [`hosts`]: the Hosts screen. [`panels`]: the host and group panels.
+//!   [`known_hosts`]: the Known Hosts screen (UI 10.1).
 //! - [`lock`]: the first-run and unlock screens. [`settings`]: the
 //!   Settings window (Security section).
 //! - [`theme`]: `themes/graphite.json` in gpui-kit's theme registry (dark and
@@ -22,7 +23,13 @@
 //! - [`profile`]: temporary profiles (tests, `--demo`); [`testing`]: the test
 //!   helper that opens a core in a fresh temporary profile.
 //! - [`terminal`]: the terminal emulator view (alacritty_terminal and our
-//!   own GPUI element), fed by the session layer.
+//!   own GPUI element), fed by the session layer. [`terminal_sidebar`]: the
+//!   terminal sidebar of a window (UI 4.2: Tools, Snippets, History,
+//!   Appearance).
+//! - [`panes`]: the panes of a session tab (UI 4.7): splits, dividers, the
+//!   active pane, Restore snapshots of the pane tree.
+//! - [`new_tab`]: the new tab page (UI 6), the Ctrl+K search overlay and the
+//!   host picker of a new pane.
 //! - [`sessions`]: the session layer: SSH sessions and local terminals on a
 //!   Tokio runtime of its own (connecting, prompts, host keys, exit and
 //!   drop, automatic reconnection, the connection log, flow control).
@@ -39,9 +46,12 @@ pub mod dirs;
 pub mod hardening;
 pub mod hosts;
 pub mod i18n;
+pub mod known_hosts;
 pub mod lock;
 pub mod logging;
+pub mod new_tab;
 pub mod panels;
+pub mod panes;
 pub mod platform;
 pub mod profile;
 pub mod session_ui;
@@ -50,6 +60,7 @@ pub mod settings;
 pub mod shell;
 pub mod state;
 pub mod terminal;
+pub mod terminal_sidebar;
 pub mod testing;
 pub mod theme;
 

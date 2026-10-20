@@ -686,6 +686,48 @@ text ships next to the fonts as `apps/desktop/assets/fonts/OFL.txt`.
 |---|---|---|---|
 | JetBrains Mono (Regular, Bold, Italic, Bold Italic; TTF from the release asset `JetBrainsMono-2.304.zip`) | 2.304 | OFL-1.1 | <https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304> |
 
+## Terminal themes
+
+Open color schemes bundled as terminal themes (`apps/desktop/src/theme/terminal/`,
+compiled into the desktop binary; `docs/design-system.md`, section 4.4). The
+colors are copied unchanged from the sources below, retrieved on 2026-10-20;
+the exact files and commits are recorded in `apps/desktop/src/theme/terminal.rs`.
+The search highlight colors (and the cursor colors that a source does not
+define) are ours.
+
+| Theme | Author | License | Copyright notice | Source |
+|---|---|---|---|---|
+| Dracula | Dracula Theme | MIT | Copyright (c) 2023 Dracula Theme | <https://draculatheme.com/spec>; license: <https://github.com/dracula/dracula-theme> |
+| Nord | Sven Greb | MIT | Copyright (c) 2016-present Sven Greb <development@svengreb.de> (https://www.svengreb.de) | <https://github.com/nordtheme/alacritty> (`src/nord.yaml`); <https://github.com/nordtheme/nord> |
+| Solarized Dark, Solarized Light | Ethan Schoonover | MIT | Copyright (c) 2011 Ethan Schoonover | <https://github.com/altercation/solarized> |
+| Gruvbox Dark | morhetz | MIT (declared as "MIT/X11" in the README) | none published: the repository has no LICENSE file or copyright line; the author is "morhetz" | <https://github.com/morhetz/gruvbox> (`colors/gruvbox.vim`) |
+| Tokyo Night | folke (Neovim port); enkia (original Visual Studio Code theme) | Apache-2.0 (port); MIT (original theme) | port: none published; original: Copyright (c) 2018-present Enkia | <https://github.com/folke/tokyonight.nvim> (`extras/windows_terminal/tokyonight_night.json`); <https://github.com/enkia/tokyo-night-vscode-theme> |
+| Catppuccin Mocha, Catppuccin Latte | Catppuccin | MIT | Copyright (c) 2021 Catppuccin | <https://github.com/catppuccin/palette> (`palette.json` 1.8.0); <https://github.com/catppuccin/catppuccin> (style guide) |
+
+The Apache License 2.0 text is the project's own `LICENSE` file. The MIT
+license text, which applies to the MIT rows above together with each row's
+copyright notice:
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Other
 
 | Name | Version | License | Source |

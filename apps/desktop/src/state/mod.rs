@@ -43,6 +43,7 @@ use futures::StreamExt as _;
 use gpui::{AppContext as _, Context, EventEmitter, Task};
 use secrecy::SecretString;
 use serde_json::{Map, Value};
+use shellpp_core::model::types::RecordKind;
 use shellpp_core::service::dto::{
     CoreEvent, CoreEventKind, LockState, QueryScope, RecordDeleteResult, RecordMoveInput,
     RecordRef, RecordSaveInput, RecordType, RecordView, RecordsQuery, RecordsRef,
@@ -113,6 +114,9 @@ pub struct AppState {
     /// Removals that can still be undone ([`undo::UNDO_WINDOW`]).
     removals: undo::PendingRemovals,
     extras: PlatformExtras,
+    /// Counts the record changes other than command history, the
+    /// connection log and Restore ([`AppState::records_generation`]).
+    records_generation: u64,
     dirs: Option<AppDirs>,
     shut_down: bool,
     _event_task: Option<Task<()>>,
@@ -131,6 +135,21 @@ impl std::fmt::Debug for AppState {
 }
 
 impl EventEmitter<AppStateEvent> for AppState {}
+
+/// Whether a write of `classes` touches only command history, the
+/// connection log and Restore (`history_entry`, `history_hint_state`,
+/// `connection_log_entry`, `last_session`): such writes leave
+/// [`AppState::records_generation`] as it is.
+fn only_log_classes(classes: &[u8]) -> bool {
+    let log = [
+        RecordKind::HistoryEntry,
+        RecordKind::HistoryHintState,
+        RecordKind::ConnectionLogEntry,
+        RecordKind::LastSession,
+    ]
+    .map(RecordKind::class);
+    classes.iter().all(|class| log.contains(class))
+}
 
 impl AppState {
     /// Takes over an opened core: reads the lock state, loads the records
@@ -164,6 +183,7 @@ impl AppState {
             selection: Selection::default(),
             removals: undo::PendingRemovals::default(),
             extras,
+            records_generation: 0,
             dirs,
             shut_down: false,
             _event_task: Some(event_task),
@@ -190,6 +210,7 @@ impl AppState {
             selection: Selection::default(),
             removals: undo::PendingRemovals::default(),
             extras: PlatformExtras::default(),
+            records_generation: 0,
             dirs: None,
             shut_down: false,
             _event_task: None,
@@ -256,6 +277,16 @@ impl AppState {
 
     pub fn vault_id(&self) -> Option<Uuid> {
         self.vault_id
+    }
+
+    /// Changes with every [`AppStateEvent::RecordsChanged`] that may touch
+    /// records other than command history, the connection log and Restore
+    /// (hosts, groups, keys, known hosts), and with the lock. Views whose
+    /// data come from those records (Known Hosts, the "Record history" flag
+    /// of running sessions) skip the other events: a recorded command must
+    /// not reload them.
+    pub fn records_generation(&self) -> u64 {
+        self.records_generation
     }
 
     /// Every host of the personal vault, in manual order.
@@ -467,6 +498,7 @@ impl AppState {
     }
 
     fn records_written(&mut self, cx: &mut Context<Self>) {
+        self.records_generation += 1;
         self.reload_and_notify(cx);
     }
 
@@ -603,7 +635,16 @@ impl AppState {
     fn on_core_event(&mut self, event: &CoreEvent, cx: &mut Context<Self>) {
         match &event.kind {
             CoreEventKind::LockChanged { .. } => self.refresh_lock(cx),
-            CoreEventKind::RecordsChanged { .. } | CoreEventKind::VaultsChanged { .. } => {
+            CoreEventKind::RecordsChanged { classes, .. } => {
+                if !only_log_classes(classes) {
+                    self.records_generation += 1;
+                }
+                if self.lock == LockState::Unlocked {
+                    self.reload_and_notify(cx);
+                }
+            }
+            CoreEventKind::VaultsChanged { .. } => {
+                self.records_generation += 1;
                 if self.lock == LockState::Unlocked {
                     self.reload_and_notify(cx);
                 }
@@ -641,6 +682,7 @@ impl AppState {
             self.removals.clear();
         }
         tracing::info!(state = ?state, "lock state changed");
+        self.records_generation += 1;
         cx.emit(AppStateEvent::LockChanged(state));
         cx.emit(AppStateEvent::RecordsChanged);
         cx.notify();

@@ -1427,7 +1427,7 @@ mod tests {
         let kept = HostDraft::from_data(&imported, None).apply(&imported);
         assert_eq!(kept["terminal_theme"], imported["terminal_theme"]);
         assert!(CHARSETS.iter().all(|label| charset_ok(label)));
-        assert_eq!(TERMINAL_THEMES, ["graphite", "paper"]);
+        assert_eq!(TERMINAL_THEMES[..2], ["graphite", "paper"]);
     }
 
     #[test]

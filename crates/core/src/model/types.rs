@@ -10,7 +10,9 @@ use crate::service::dto::RecordType;
 
 /// The record types this app reads and writes (stage 1: vault records,
 /// hosts and groups, and identities for the host panel's "+ -> Identity";
-/// stage 2: keys, known hosts, history entries and connection log entries).
+/// stage 2: keys, known hosts, history entries and connection log entries;
+/// stage 2b: the history hint state of the History tab and the last session
+/// of Restore).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RecordKind {
     VaultMeta,
@@ -20,13 +22,15 @@ pub enum RecordKind {
     Group,
     Key,
     HistoryEntry,
+    HistoryHintState,
     ConnectionLogEntry,
     KnownHost,
     Identity,
+    LastSession,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 10] = [
+    pub const ALL: [RecordKind; 12] = [
         RecordKind::VaultMeta,
         RecordKind::RecoveryKey,
         RecordKind::DeviceInfo,
@@ -34,9 +38,11 @@ impl RecordKind {
         RecordKind::Group,
         RecordKind::Key,
         RecordKind::HistoryEntry,
+        RecordKind::HistoryHintState,
         RecordKind::ConnectionLogEntry,
         RecordKind::KnownHost,
         RecordKind::Identity,
+        RecordKind::LastSession,
     ];
 
     /// The u16 type code.
@@ -50,8 +56,10 @@ impl RecordKind {
             Self::Key => 0x0301,
             Self::Identity => 0x0302,
             Self::HistoryEntry => 0x0601,
+            Self::HistoryHintState => 0x0602,
             Self::ConnectionLogEntry => 0x0701,
             Self::KnownHost => 0x0801,
+            Self::LastSession => 0x0A02,
         }
     }
 
@@ -71,8 +79,10 @@ impl RecordKind {
             Self::Key => "key",
             Self::Identity => "identity",
             Self::HistoryEntry => "history_entry",
+            Self::HistoryHintState => "history_hint_state",
             Self::ConnectionLogEntry => "connection_log_entry",
             Self::KnownHost => "known_host",
+            Self::LastSession => "last_session",
         }
     }
 
@@ -142,7 +152,7 @@ pub fn class_of_type_name(name: &str) -> Option<u8> {
         "connection_log_entry" => classes::CONNECTION_LOG,
         "known_host" => classes::KNOWN_HOSTS,
         "terminal_theme" | "highlight_rule" => classes::APPEARANCE,
-        "workspace" => classes::WORKSPACES,
+        "workspace" | "last_session" => classes::WORKSPACES,
         _ => return None,
     };
     Some(class)
@@ -164,6 +174,8 @@ mod tests {
         assert_eq!(RecordKind::from_name("key"), Some(RecordKind::Key));
         assert_eq!(RecordKind::Key.code(), 0x0301);
         assert_eq!(RecordKind::HistoryEntry.code(), 0x0601);
+        assert_eq!(RecordKind::HistoryHintState.code(), 0x0602);
+        assert!(RecordKind::HistoryHintState.is_lazy());
         assert_eq!(RecordKind::ConnectionLogEntry.code(), 0x0701);
         assert_eq!(RecordKind::KnownHost.code(), 0x0801);
         assert_eq!(

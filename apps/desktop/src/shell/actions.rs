@@ -20,8 +20,12 @@ gpui_kit::actions!(
         NewLocalTerminal,
         /// Ctrl+Alt+S: new serial connection tab.
         NewSerialConnection,
-        /// "+" of the top bar: the new tab page.
+        /// "+" of the top bar, Ctrl+T (outside a terminal) and Ctrl+Shift+T:
+        /// the new tab page (UI 6).
         NewTab,
+        /// Ctrl+K (outside a terminal) and Ctrl+Shift+K: the search over
+        /// open tabs and hosts as an overlay (UI 6).
+        OpenSearch,
         ZoomIn,
         ZoomOut,
         ActualSize,
@@ -32,7 +36,8 @@ gpui_kit::actions!(
         NextTab,
         /// Alt+Left.
         PreviousTab,
-        /// Ctrl+Shift+W.
+        /// Ctrl+Shift+W: the active pane of a tab with splits, else the tab
+        /// (UI 4.7).
         CloseTab,
         OpenDocumentation,
         ReportIssue,
@@ -66,6 +71,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-l", LockApp, None),
         KeyBinding::new("secondary-alt-s", NewSerialConnection, context),
         KeyBinding::new("secondary-shift-w", CloseTab, context),
+        // Ctrl+T and Ctrl+K reach the shell only outside a terminal (the
+        // terminal keeps Ctrl+letter for the shell); the Ctrl+Shift keys
+        // work everywhere (UI 12.5).
+        KeyBinding::new("secondary-t", NewTab, context),
+        KeyBinding::new("secondary-shift-t", NewTab, context),
+        KeyBinding::new("secondary-k", OpenSearch, context),
+        KeyBinding::new("secondary-shift-k", OpenSearch, context),
         KeyBinding::new("alt-right", NextTab, context),
         KeyBinding::new("alt-left", PreviousTab, context),
     ];

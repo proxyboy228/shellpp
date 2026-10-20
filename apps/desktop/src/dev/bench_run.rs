@@ -8,6 +8,15 @@
 //!   layer as a Connect); after `bench: ready` the app idles until a `quit`
 //!   line arrives on stdin (`scripts/measure-terminal.ps1` sends it; closing
 //!   the window asks first while sessions run, UI 4.6) or the window closes.
+//! - `--bench-splits`: the same main window with 4 session tabs of 4 panes
+//!   each (the tab's pane group splits its panes and opens the session in
+//!   the new pane, as Ctrl+Shift+D / Ctrl+Shift+E and Enter in the new
+//!   pane's host list do); then the same idle.
+//! - `--bench-flood`: one session tab in the main window; its terminal gets
+//!   the flood command typed again and again (`TerminalHandle::send_input`,
+//!   the path of typed input) until the time is up, with the sample lines
+//!   the script reads the memory at; then the scrollback check and the
+//!   same idle.
 //! - `--bench-output`, `--bench-latency`: a benchmark window that shows one
 //!   terminal view (the tabs' view and session layer) and a probe. The
 //!   session layer's local backend is the app's PTY backend plus one extra
@@ -37,26 +46,33 @@ use gpui::{
 use shellpp_term_local::{LocalError, ShellInfo, ShellSpec};
 
 use super::bench::{
-    BenchArgs, BenchMode, LocalSeq, OutputKind, latency_char, latency_line_start, local_seq,
-    millis, percentile, seq_direct_finished, seq_finished, seq_shell_finished,
+    BenchArgs, BenchMode, FLOOD_LINES, FloodShell, LocalSeq, OutputKind, SPLIT_PANES, SPLIT_TABS,
+    ScrollbackCheck, latency_char, latency_line_start, local_seq, millis, percentile,
+    seq_direct_finished, seq_finished, seq_shell_finished, shows_marker,
 };
 use super::bench_pty::{self, BareRun, GridSize};
 use super::demo;
 use super::test_server::DevServer;
 use crate::app::{self, RootView};
+use crate::panes::{Direction, PaneGroup, PaneId};
 use crate::session_ui::{HostKeyAsk, HostKeyReply, Phase, SessionPane};
 use crate::sessions::transport::TermParts;
 use crate::sessions::{
     HostKeyChoice, KeySources, LocalBackend, ManagerOptions, OpenRequest, PromptKind, PromptReply,
     PtyBackend, SessionHandle, SessionState, SessionTarget,
 };
-use crate::shell::{SessionKind, SessionRequest};
+use crate::shell::{SessionId, SessionKind, SessionRequest, Shell};
 use crate::state::AppState;
-use crate::terminal::{TerminalOptions, TerminalView};
+use crate::terminal::{TerminalHandle, TerminalOptions, TerminalView};
 use crate::theme;
 
 /// Connecting and the shell's first prompt.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+/// One flood run (15 MB of output through the terminal; about 1.5 s on
+/// OpenSSH in Docker in stage 2a's numbers).
+const FLOOD_RUN_TIMEOUT: Duration = Duration::from_secs(300);
+/// How often the flood checks the screen.
+const FLOOD_POLL: Duration = Duration::from_millis(100);
 /// One echoed keystroke.
 const KEY_TIMEOUT: Duration = Duration::from_secs(10);
 /// The whole output benchmark of one terminal.
@@ -120,6 +136,11 @@ pub fn run(args: BenchArgs) -> ExitCode {
     let mode = args.mode.clone();
     let appearance = args.appearance;
     let seq = local_seq();
+    let flood_shell = if server.has_real_shell() {
+        FloodShell::Bash
+    } else {
+        FloodShell::Russh
+    };
     let direct = match &mode {
         BenchMode::Output { lines } => seq.direct_program().map(|program| ShellSpec {
             id: Some(DIRECT_SHELL_ID.to_owned()),
@@ -127,7 +148,10 @@ pub fn run(args: BenchArgs) -> ExitCode {
             program: program.to_path_buf(),
             args: vec!["1".to_owned(), lines.to_string()],
         }),
-        BenchMode::Sessions(_) | BenchMode::Latency { .. } => None,
+        BenchMode::Sessions(_)
+        | BenchMode::Splits
+        | BenchMode::Flood { .. }
+        | BenchMode::Latency { .. } => None,
     };
     gpui_kit::application()
         .with_assets(app::assets::AppAssets)
@@ -164,7 +188,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
                 cx.quit();
                 return;
             }
-            if let BenchMode::Sessions(count) = mode {
+            if in_main_window(&mode) {
                 let Ok((window, root)) = app::open_main_window(state.clone(), cx) else {
                     *outcome_in_app.borrow_mut() = Some(Err("the main window did not open".into()));
                     cx.quit();
@@ -177,8 +201,28 @@ pub fn run(args: BenchArgs) -> ExitCode {
                     unreachable!("the benchmark target is a saved host");
                 };
                 cx.spawn(async move |cx: &mut AsyncApp| {
-                    let result =
-                        session_tabs(cx, window, &root, count, record_id, &fingerprints).await;
+                    let result = match mode {
+                        BenchMode::Sessions(count) => {
+                            session_tabs(cx, window, &root, count, record_id, &fingerprints).await
+                        }
+                        BenchMode::Splits => {
+                            split_tabs(cx, window, &root, record_id, &fingerprints).await
+                        }
+                        BenchMode::Flood {
+                            seconds,
+                            sample_seconds,
+                        } => {
+                            let plan = FloodPlan {
+                                shell: flood_shell,
+                                duration: Duration::from_secs(seconds),
+                                every: Duration::from_secs(sample_seconds),
+                            };
+                            flood(cx, window, &root, record_id, &fingerprints, plan).await
+                        }
+                        BenchMode::Output { .. } | BenchMode::Latency { .. } => {
+                            Err("not a main window benchmark".to_owned())
+                        }
+                    };
                     let ready = result.is_ok();
                     *outcome_in_app.borrow_mut() = Some(result);
                     if ready && quit.recv().await.is_err() {
@@ -223,6 +267,15 @@ pub fn run(args: BenchArgs) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// The benchmarks that run in the app's main window (real tabs and panes)
+/// and idle until `quit` once ready.
+fn in_main_window(mode: &BenchMode) -> bool {
+    matches!(
+        mode,
+        BenchMode::Sessions(_) | BenchMode::Splits | BenchMode::Flood { .. }
+    )
 }
 
 /// The local backend of the benchmarks: the app's PTY backend, plus
@@ -582,7 +635,9 @@ async fn drive(
     cx.update_window(bench.window, |_, window, _| window.activate_window())
         .map_err(|_| "the benchmark window closed".to_owned())?;
     match mode {
-        BenchMode::Sessions(_) => Err("--bench-sessions runs in the main window".to_owned()),
+        BenchMode::Sessions(_) | BenchMode::Splits | BenchMode::Flood { .. } => {
+            Err("this benchmark runs in the main window".to_owned())
+        }
         BenchMode::Output { lines } => {
             output_runs(cx, bench, target, fingerprints, seq, *lines).await
         }
@@ -639,31 +694,10 @@ async fn session_tabs(
     fingerprints: &[String],
 ) -> Result<(), String> {
     let started = Instant::now();
-    let shell = cx
-        .update(|cx| root.read(cx).shell().cloned())
-        .ok_or("the main window shows no shell")?;
-    // The app state learns about the saved host through the core's events.
-    let deadline = Instant::now() + CONNECT_TIMEOUT;
-    while cx.update(|cx| root.read(cx).state().read(cx).host(host).is_none()) {
-        if Instant::now() > deadline {
-            return Err("the benchmark host did not appear".to_owned());
-        }
-        sleep(cx, Duration::from_millis(20)).await;
-    }
+    let shell = main_shell(cx, root, host).await?;
     let mut panes = Vec::with_capacity(count);
     for _ in 0..count {
-        let id = cx.update(|cx| {
-            shell.update(cx, |shell, cx| {
-                shell.open_session(SessionRequest::new(SessionKind::Ssh).host(host), cx)
-            })
-        });
-        // The pane's session starts at the shell's next frame.
-        cx.update_window(window, |_, window, _| window.refresh())
-            .map_err(|_| "the main window closed".to_owned())?;
-        let pane = cx
-            .update(|cx| shell.read(cx).pane(id).cloned())
-            .ok_or("the tab has no session pane")?;
-        wait_running(cx, &pane, fingerprints).await?;
+        let (_, pane) = open_host_tab(cx, window, &shell, host, fingerprints).await?;
         panes.push(pane);
     }
     for pane in &panes {
@@ -675,6 +709,287 @@ async fn session_tabs(
     ));
     say("ready");
     Ok(())
+}
+
+/// The shell of the main window, once the app state knows the benchmark
+/// host (it learns about it through the core's events).
+async fn main_shell(
+    cx: &mut AsyncApp,
+    root: &Entity<RootView>,
+    host: uuid::Uuid,
+) -> Result<Entity<Shell>, String> {
+    let shell = cx
+        .update(|cx| root.read(cx).shell().cloned())
+        .ok_or("the main window shows no shell")?;
+    let deadline = Instant::now() + CONNECT_TIMEOUT;
+    while cx.update(|cx| root.read(cx).state().read(cx).host(host).is_none()) {
+        if Instant::now() > deadline {
+            return Err("the benchmark host did not appear".to_owned());
+        }
+        sleep(cx, Duration::from_millis(20)).await;
+    }
+    Ok(shell)
+}
+
+/// Opens a session tab to the saved host as a Connect does and waits until
+/// its session runs.
+async fn open_host_tab(
+    cx: &mut AsyncApp,
+    window: AnyWindowHandle,
+    shell: &Entity<Shell>,
+    host: uuid::Uuid,
+    fingerprints: &[String],
+) -> Result<(SessionId, Entity<SessionPane>), String> {
+    let id = cx.update(|cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_session(SessionRequest::new(SessionKind::Ssh).host(host), cx)
+        })
+    });
+    // The pane's session starts at the shell's next frame.
+    refresh(cx, window)?;
+    let pane = cx
+        .update(|cx| shell.read(cx).pane(id).cloned())
+        .ok_or("the tab has no session pane")?;
+    wait_running(cx, &pane, fingerprints).await?;
+    Ok((id, pane))
+}
+
+/// Asks the window for a frame (new panes start their sessions when drawn).
+fn refresh(cx: &mut AsyncApp, window: AnyWindowHandle) -> Result<(), String> {
+    cx.update_window(window, |_, window, _| window.refresh())
+        .map_err(|_| "the main window closed".to_owned())
+}
+
+/// `--bench-splits`: [`SPLIT_TABS`] session tabs, each split into a 2 x 2
+/// grid of [`SPLIT_PANES`] panes with a session to the benchmark host in
+/// every pane; then every terminal waits at its prompt and `bench: ready`
+/// is printed.
+async fn split_tabs(
+    cx: &mut AsyncApp,
+    window: AnyWindowHandle,
+    root: &Entity<RootView>,
+    host: uuid::Uuid,
+    fingerprints: &[String],
+) -> Result<(), String> {
+    let started = Instant::now();
+    let shell = main_shell(cx, root, host).await?;
+    let mut panes = Vec::with_capacity(SPLIT_TABS * SPLIT_PANES);
+    for _ in 0..SPLIT_TABS {
+        let (id, first) = open_host_tab(cx, window, &shell, host, fingerprints).await?;
+        let group = cx
+            .update(|cx| shell.read(cx).group(id).cloned())
+            .ok_or("the tab has no panes")?;
+        let first_id = cx.update(|cx| group.read(cx).active_pane());
+        panes.push(first);
+        // The first pane keeps the top left; a pane to its right, one
+        // below it, one below the right one.
+        let (right, pane) =
+            split_pane(cx, window, &group, first_id, Direction::Row, fingerprints).await?;
+        panes.push(pane);
+        let (_, pane) = split_pane(
+            cx,
+            window,
+            &group,
+            first_id,
+            Direction::Column,
+            fingerprints,
+        )
+        .await?;
+        panes.push(pane);
+        let (_, pane) =
+            split_pane(cx, window, &group, right, Direction::Column, fingerprints).await?;
+        panes.push(pane);
+        let count = cx.update(|cx| group.read(cx).pane_count());
+        if count != SPLIT_PANES {
+            return Err(format!("a tab has {count} panes, not {SPLIT_PANES}"));
+        }
+    }
+    for pane in &panes {
+        wait_settled(cx, pane).await?;
+    }
+    say(&format!(
+        "splits connected {} sessions ({SPLIT_TABS} tabs x {SPLIT_PANES} panes) in {} ms",
+        panes.len(),
+        started.elapsed().as_millis()
+    ));
+    say("ready");
+    Ok(())
+}
+
+/// Splits pane `from` of `group` in `direction` and opens a session to the
+/// same target in the new pane (the new pane's host list offers it first;
+/// Enter opens it), then waits until it runs.
+async fn split_pane(
+    cx: &mut AsyncApp,
+    window: AnyWindowHandle,
+    group: &Entity<PaneGroup>,
+    from: PaneId,
+    direction: Direction,
+    fingerprints: &[String],
+) -> Result<(PaneId, Entity<SessionPane>), String> {
+    let new = cx
+        .update(|cx| {
+            group.update(cx, |group, cx| {
+                group.activate(from, cx);
+                let target = group.target(from, cx)?;
+                let new = group.split(direction, cx)?;
+                group.open_in(new, &target, cx);
+                Some(new)
+            })
+        })
+        .ok_or("a pane could not be split")?;
+    refresh(cx, window)?;
+    let pane = cx
+        .update(|cx| group.read(cx).session(new).cloned())
+        .ok_or("the new pane has no session")?;
+    wait_running(cx, &pane, fingerprints).await?;
+    Ok((new, pane))
+}
+
+/// What `--bench-flood` runs.
+#[derive(Clone, Copy, Debug)]
+struct FloodPlan {
+    shell: FloodShell,
+    duration: Duration,
+    every: Duration,
+}
+
+/// The memory sample lines of the flood: `bench: flood sample <phase>
+/// <seconds>`, at the start, every [`FloodPlan::every`] and at the end.
+struct Samples {
+    started: Instant,
+    every: Duration,
+    next: Duration,
+}
+
+impl Samples {
+    fn start(every: Duration) -> Self {
+        say("flood sample start 0");
+        Self {
+            started: Instant::now(),
+            every,
+            next: every,
+        }
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// Prints the samples that are due.
+    fn tick(&mut self) {
+        let elapsed = self.elapsed();
+        if elapsed >= self.next {
+            say(&format!("flood sample run {}", elapsed.as_secs()));
+            while self.next <= elapsed {
+                self.next += self.every;
+            }
+        }
+    }
+
+    fn end(&self) {
+        say(&format!("flood sample end {}", self.elapsed().as_secs()));
+    }
+}
+
+/// `--bench-flood`: one session tab; the flood command again and again
+/// until the time is up (the last run goes on to its end), the sample lines
+/// meanwhile; then the scrollback against its cap and `bench: ready`.
+async fn flood(
+    cx: &mut AsyncApp,
+    window: AnyWindowHandle,
+    root: &Entity<RootView>,
+    host: uuid::Uuid,
+    fingerprints: &[String],
+    plan: FloodPlan,
+) -> Result<(), String> {
+    let shell = main_shell(cx, root, host).await?;
+    let (_, pane) = open_host_tab(cx, window, &shell, host, fingerprints).await?;
+    wait_settled(cx, &pane).await?;
+    let handle = cx
+        .update(|cx| {
+            pane.read(cx)
+                .terminal()
+                .map(|terminal| terminal.read(cx).handle())
+        })
+        .ok_or("the tab has no terminal")?;
+    say(&format!(
+        "flood {} for {} s, a memory sample every {} s",
+        plan.shell.label(),
+        plan.duration.as_secs(),
+        plan.every.as_secs()
+    ));
+    let mut samples = Samples::start(plan.every);
+    let mut runs: u64 = 0;
+    while samples.elapsed() < plan.duration {
+        let run = runs + 1;
+        type_line(&handle, &plan.shell.command(run));
+        let shell = plan.shell;
+        wait_screen(cx, &handle, &mut samples, move |rows| {
+            shell.output_finished(rows, run)
+        })
+        .await
+        .map_err(|()| format!("flood run {run} did not end"))?;
+        if let Some(mark) = plan.shell.mark_command(run) {
+            type_line(&handle, &mark);
+            wait_screen(cx, &handle, &mut samples, move |rows| {
+                shows_marker(rows, run)
+            })
+            .await
+            .map_err(|()| format!("flood run {run} has no end marker"))?;
+        }
+        runs = run;
+    }
+    let elapsed = samples.elapsed();
+    samples.end();
+    say(&format!(
+        "flood runs {runs} in {} s ({} lines)",
+        elapsed.as_secs(),
+        runs * FLOOD_LINES
+    ));
+    // Session terminals keep the default scrollback (`TerminalOptions`).
+    let cap = crate::terminal::DEFAULT_SCROLLBACK;
+    let lines = handle.history_size();
+    let check = ScrollbackCheck::of(lines, cap);
+    say(&format!(
+        "flood scrollback {lines} lines, cap {cap} ({})",
+        check.label()
+    ));
+    if check == ScrollbackCheck::Over {
+        return Err(format!(
+            "the scrollback holds {lines} lines, more than its cap {cap}"
+        ));
+    }
+    say("ready");
+    Ok(())
+}
+
+/// Types `line` and Enter into the terminal (the sink of typed input).
+fn type_line(handle: &TerminalHandle, line: &str) {
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\r');
+    handle.send_input(bytes);
+}
+
+/// Polls the screen until `done` holds, printing the samples that fall
+/// due; gives up after [`FLOOD_RUN_TIMEOUT`].
+async fn wait_screen(
+    cx: &mut AsyncApp,
+    handle: &TerminalHandle,
+    samples: &mut Samples,
+    done: impl Fn(&[String]) -> bool,
+) -> Result<(), ()> {
+    let deadline = Instant::now() + FLOOD_RUN_TIMEOUT;
+    loop {
+        samples.tick();
+        if done(&handle.screen_text()) {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(());
+        }
+        sleep(cx, FLOOD_POLL).await;
+    }
 }
 
 /// Waits until the tab's session runs, answering the first-connection

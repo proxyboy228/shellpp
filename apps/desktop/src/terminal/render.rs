@@ -29,9 +29,11 @@ use gpui::{
 };
 
 use super::colors::{Palette, rgb_token};
+use super::contrast::{ContrastCache, MinContrast};
 use super::fonts::FontSet;
 use super::limits::MAX_ZEROWIDTH;
 use super::model::{SharedTerm, TerminalHandle, TerminalSize};
+use super::search::{MatchSpan, SearchState};
 
 /// Thickness of the underline and bar cursors and of text decorations.
 const CURSOR_THICKNESS: Pixels = px(2.);
@@ -56,6 +58,12 @@ pub struct FrameStyle {
     pub focused: bool,
     /// IME composition text, drawn at the cursor.
     pub marked_text: Option<String>,
+    /// `terminal.min_contrast`: which text is moved to 4.5:1.
+    pub min_contrast: MinContrast,
+    /// The cursor is not drawn (a dropped session, UI 1.1).
+    pub cursor_hidden: bool,
+    /// The search whose matches are highlighted (UI 4.2 Tools).
+    pub search: Option<SearchState>,
 }
 
 /// Geometry and caches shared by the view (events) and the element (frames).
@@ -74,6 +82,11 @@ pub struct LayoutState {
     cache_key: Vec<u64>,
     /// Rows shaped since the view was created (tests, benchmark).
     pub shaped_rows: u64,
+    /// The grid changed its cell size in a prepaint (a reflow): an open
+    /// search runs again at the next wake, since its positions moved.
+    pub resized: bool,
+    /// Adjusted text colors per (text, background) pair (minimum contrast).
+    contrast: ContrastCache,
     /// The cache slot of each visible row in the last frame.
     #[cfg(test)]
     row_hashes: Vec<u64>,
@@ -192,6 +205,10 @@ pub struct Frame {
     background: Hsla,
     selection: Vec<(usize, usize, usize)>,
     selection_color: Hsla,
+    /// Search matches on screen, and their two backgrounds.
+    matches: Vec<MatchSpan>,
+    match_color: Hsla,
+    match_active_color: Hsla,
     cursor: Option<(CursorOut, Option<ShapedLine>)>,
     cursor_color: Hsla,
     focused: bool,
@@ -262,6 +279,7 @@ fn style_words(style: &FrameStyle, metrics: &Metrics, colors: &Colors) -> Vec<u6
     words.write(u64::from(metrics.font_size.as_f32().to_bits()));
     words.write(u64::from(metrics.cell_width.as_f32().to_bits()));
     words.write(u64::from(style.bold_is_bright));
+    words.write(style.min_contrast as u64);
     let palette = &style.palette;
     for index in 0..=255u8 {
         words.write(rgb_bits(palette.indexed(index)));
@@ -326,9 +344,15 @@ pub fn prepaint(
 ) -> Frame {
     let metrics = metrics(style, window);
     let grid = grid_size(bounds.size, &metrics);
-    handle.resize(grid);
     let cols = usize::from(grid.cols);
     let rows = usize::from(grid.rows);
+    // A new cell size reflows wrapped lines: the view's search positions
+    // are stale (and not drawn) until it searches again (on the wake this
+    // sends).
+    if handle.resize(grid) && (layout.cols, layout.rows) != (cols, rows) {
+        layout.resized = true;
+        handle.outbox().wake();
+    }
     layout.metrics = Some(metrics);
     layout.origin = bounds.origin;
     layout.cols = cols;
@@ -338,6 +362,7 @@ pub fn prepaint(
     let mut inputs = Vec::with_capacity(rows);
     let mut words = Words::default();
     let selection;
+    let matches;
     let cursor;
     {
         let term = term.lock();
@@ -354,6 +379,12 @@ pub fn prepaint(
         selection = content
             .selection
             .map(|range| selection_spans(range, offset, visible, columns))
+            .unwrap_or_default();
+        let origin = handle.search_origin(&term);
+        matches = style
+            .search
+            .as_ref()
+            .map(|search| search.spans(grid, origin, visible, columns))
             .unwrap_or_default();
         // A theme's `selectionForeground` recolors the selected text, so the
         // selected columns become part of the row (design-system 7.2).
@@ -389,12 +420,14 @@ pub fn prepaint(
                 style,
                 content.colors,
                 selection_fg.zip(selected),
+                &mut layout.contrast,
             );
             inputs.push(RowInput::Miss(hash, words.0.as_slice().into(), cells));
         }
         let point = content.cursor.point;
         let cursor_line = point.line.0 + offset;
         cursor = (content.cursor.shape != CursorShape::Hidden
+            && !style.cursor_hidden
             && (0..visible as i32).contains(&cursor_line))
         .then(|| {
             let cell = &grid[point];
@@ -508,6 +541,9 @@ pub fn prepaint(
         background: rgb_token(style.palette.background()).hsla(),
         selection,
         selection_color: style.palette.selection().hsla(),
+        matches,
+        match_color: rgb_token(style.palette.search_match()).hsla(),
+        match_active_color: rgb_token(style.palette.search_match_active()).hsla(),
         cursor,
         cursor_color: rgb_token(style.palette.cursor()).hsla(),
         focused: style.focused,
@@ -516,15 +552,17 @@ pub fn prepaint(
 }
 
 /// The cells of a row as the shaper needs them: colors resolved (theme,
-/// remote overrides, attributes), wide character spacers left out, hidden
-/// text as blanks. `selected` is the theme's `selectionForeground` and the
-/// selected columns of the row, if both exist.
+/// remote overrides, attributes, minimum contrast), wide character spacers
+/// left out, hidden text as blanks. `selected` is the theme's
+/// `selectionForeground` and the selected columns of the row, if both
+/// exist; selected text in that color is not adjusted.
 fn row_cells(
     row: &Row<Cell>,
     columns: usize,
     style: &FrameStyle,
     colors: &Colors,
     selected: Option<(Rgb, (usize, usize))>,
+    contrast: &mut ContrastCache,
 ) -> Vec<CellOut> {
     let mut cells = Vec::with_capacity(columns);
     for column in 0..columns {
@@ -536,6 +574,15 @@ fn row_cells(
             style
                 .palette
                 .cell_colors(cell.fg, cell.bg, cell.flags, style.bold_is_bright, colors);
+        // Minimum contrast (UI 12.4): never for hidden text, which must
+        // stay invisible.
+        if !cell.flags.contains(Flags::HIDDEN)
+            && style
+                .min_contrast
+                .applies(Palette::text_is_truecolor(cell.fg, cell.bg, cell.flags))
+        {
+            fg = contrast.adjust(fg, bg.unwrap_or(style.palette.background()));
+        }
         // A wide character counts as selected when either of its cells is.
         let last_cell = if cell.flags.contains(Flags::WIDE_CHAR) {
             column + 1
@@ -813,6 +860,17 @@ pub fn paint(bounds: Bounds<Pixels>, frame: &Frame, window: &mut Window, cx: &mu
             window.paint_quad(fill(cell_rect(row, run.column, run.cells), run.color));
         }
     }
+    for span in &frame.matches {
+        let color = if span.current {
+            frame.match_active_color
+        } else {
+            frame.match_color
+        };
+        window.paint_quad(fill(
+            cell_rect(span.row, span.first, span.last - span.first + 1),
+            color,
+        ));
+    }
     for (row, first, last) in &frame.selection {
         window.paint_quad(fill(
             cell_rect(*row, *first, last - first + 1),
@@ -911,6 +969,11 @@ impl Frame {
         &self.selection
     }
 
+    /// The search match spans on screen.
+    pub fn matches(&self) -> &[MatchSpan] {
+        &self.matches
+    }
+
     /// The cursor cell and whether it is two cells wide.
     pub fn cursor(&self) -> Option<(usize, usize, bool)> {
         self.cursor
@@ -942,6 +1005,9 @@ mod tests {
             bold_is_bright: true,
             focused: true,
             marked_text: None,
+            min_contrast: MinContrast::Off,
+            cursor_hidden: false,
+            search: None,
         }
     }
 
@@ -966,7 +1032,14 @@ mod tests {
     fn row_cells_skip_spacers_and_resolve_colors() {
         let term = term("a你\x1b[8mz\x1b[0m\x1b[31mr");
         let style = style(false);
-        let cells = row_cells(&term.grid()[Line(0)], 12, &style, term.colors(), None);
+        let cells = row_cells(
+            &term.grid()[Line(0)],
+            12,
+            &style,
+            term.colors(),
+            None,
+            &mut ContrastCache::default(),
+        );
         let texts: Vec<(usize, &str)> = cells[..4]
             .iter()
             .map(|cell| (cell.column, cell.text.0.as_str()))
@@ -994,6 +1067,7 @@ mod tests {
             &with,
             term.colors(),
             Some((selected_fg, (1, 2))),
+            &mut ContrastCache::default(),
         );
         assert_eq!(
             fg_of(&cells)[..5],
@@ -1012,12 +1086,75 @@ mod tests {
             &with,
             term.colors(),
             Some((selected_fg, (3, 3))),
+            &mut ContrastCache::default(),
         );
         assert_eq!(fg_of(&cells)[2], (2, selected_fg));
         assert_eq!(fg_of(&cells)[1], (1, foreground));
 
         let without = style(false);
         assert_eq!(without.palette.selection_foreground(), None);
+    }
+
+    /// UI 12.4 "Adjust indistinguishable colors": black on ANSI blue in
+    /// Paper (htop, mc) reaches 4.5:1 with "Palette only"; truecolor text
+    /// is adjusted only with "Always"; "Off" and hidden text stay as sent.
+    #[test]
+    fn minimum_contrast_follows_the_setting() {
+        use crate::terminal::contrast::{MIN_RATIO, ratio};
+
+        let paper = builtin()[1].clone();
+        assert_eq!(paper.name, "Paper");
+        let mut style = style(false);
+        style.palette = Palette::from_theme(&paper);
+        let black = token_rgb(paper.ansi.0[0]);
+        let blue = token_rgb(paper.ansi.0[4]);
+        assert!(ratio(black, blue) < MIN_RATIO, "the pair is hard to read");
+        // Palette black on palette blue, the same colors as truecolor, and
+        // hidden palette text.
+        let term = term("[30;44mP[0m[38;2;42;42;39;48;2;47;98;160mT[0m[8;30;44mH");
+        let colors = |mode: MinContrast| {
+            let mut style = style.clone();
+            style.min_contrast = mode;
+            let cells = row_cells(
+                &term.grid()[Line(0)],
+                12,
+                &style,
+                term.colors(),
+                None,
+                &mut ContrastCache::default(),
+            );
+            cells[..3]
+                .iter()
+                .map(|cell| (cell.fg, cell.bg.expect("a background")))
+                .collect::<Vec<_>>()
+        };
+        let off = colors(MinContrast::Off);
+        assert_eq!(off[0], (black, blue));
+        assert_eq!(off[1], (black, blue), "truecolor as sent");
+        let palette = colors(MinContrast::Palette);
+        assert!(ratio(palette[0].0, blue) >= MIN_RATIO);
+        assert_eq!(palette[0].1, blue, "the background never changes");
+        assert_eq!(palette[1], (black, blue), "truecolor untouched");
+        assert_eq!(palette[2].0, blue, "hidden text stays invisible");
+        let always = colors(MinContrast::Always);
+        assert!(ratio(always[0].0, blue) >= MIN_RATIO);
+        assert!(ratio(always[1].0, blue) >= MIN_RATIO, "truecolor adjusted");
+        assert_eq!(always[2].0, blue);
+        // Readable pairs are left alone in every mode.
+        let term = super::tests::term("[31mred");
+        for mode in MinContrast::ALL {
+            let mut style = style.clone();
+            style.min_contrast = mode;
+            let cells = row_cells(
+                &term.grid()[Line(0)],
+                12,
+                &style,
+                term.colors(),
+                None,
+                &mut ContrastCache::default(),
+            );
+            assert_eq!(cells[0].fg, token_rgb(paper.ansi.0[1]));
+        }
     }
 
     #[test]

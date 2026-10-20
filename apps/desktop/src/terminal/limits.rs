@@ -11,11 +11,18 @@
 //!   (combining marks, joiners) to the cell before the cursor, without a
 //!   limit. The handler drops a zero-width character when that cell already
 //!   holds [`MAX_ZEROWIDTH`] of them.
+//!
+//! [`Capped`] also counts the lines that drop off the top of a full
+//! scrollback ([`count_evictions`]): positions counted from the oldest line
+//! (the search's) stay valid across new output with that count.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
+use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
@@ -137,8 +144,41 @@ impl OscLimiter {
     }
 }
 
-/// `Term` as the parser's handler, with the zero-width limit. Every other
-/// call is passed on unchanged.
+/// Eviction counting of this thread: the scrollback limit of the term
+/// parsed here and the lines dropped so far.
+#[derive(Clone, Copy, Debug)]
+struct Evictions {
+    limit: usize,
+    dropped: usize,
+}
+
+thread_local! {
+    static EVICTIONS: Cell<Option<Evictions>> = const { Cell::new(None) };
+}
+
+/// Starts counting, on this thread, the lines that drop off the top of the
+/// primary screen's scrollback of the term parsed here through [`Capped`]
+/// (its scrollback holds at most `limit` lines). The terminal's parser
+/// thread does this once; [`evictions`] reads the count.
+///
+/// Lines drop when output scrolls a full scrollback (alacritty then reuses
+/// the oldest line without telling) and when the scrollback is cleared (ED
+/// 3, RIS). To see the first, [`Capped`] gives the grid room for the lines
+/// one call can push (a screen) before a call that can scroll, and trims it
+/// back to `limit` right after: what it trims is what alacritty would have
+/// dropped, and the result is the same grid.
+pub fn count_evictions(limit: usize) {
+    EVICTIONS.set(Some(Evictions { limit, dropped: 0 }));
+}
+
+/// Lines dropped off the scrollback so far on this thread (0 when not
+/// counting).
+pub fn evictions() -> usize {
+    EVICTIONS.get().map_or(0, |count| count.dropped)
+}
+
+/// `Term` as the parser's handler, with the zero-width limit and the
+/// eviction count. Every other call is passed on unchanged.
 pub struct Capped<'a, T: EventListener>(pub &'a mut Term<T>);
 
 impl<T: EventListener> std::fmt::Debug for Capped<'_, T> {
@@ -167,6 +207,37 @@ impl<T: EventListener> Capped<'_, T> {
             .zerowidth()
             .is_some_and(|extra| extra.len() >= MAX_ZEROWIDTH)
     }
+
+    /// Runs a call that can scroll lines into the scrollback or clear it,
+    /// counting the lines it drops ([`count_evictions`]).
+    #[inline]
+    fn counting(&mut self, call: impl FnOnce(&mut Term<T>)) {
+        let Some(mut count) = EVICTIONS.get() else {
+            return call(self.0);
+        };
+        // The alternate screen has no scrollback.
+        if count.limit == 0 || self.0.mode().contains(TermMode::ALT_SCREEN) {
+            return call(self.0);
+        }
+        let room = self.0.screen_lines();
+        let before = self.0.grid().history_size();
+        let full = before + room > count.limit;
+        if full {
+            self.0.grid_mut().update_history(count.limit + room);
+        }
+        call(self.0);
+        let after = self.0.grid().history_size();
+        if full {
+            // Back to the limit: the oldest lines go, as alacritty drops them.
+            self.0.grid_mut().update_history(count.limit);
+        }
+        let cleared = before.saturating_sub(after);
+        let pushed_out = after.saturating_sub(count.limit);
+        if cleared + pushed_out > 0 {
+            count.dropped += cleared + pushed_out;
+            EVICTIONS.set(Some(count));
+        }
+    }
 }
 
 /// Passes the listed `Handler` methods on to the term.
@@ -184,10 +255,47 @@ macro_rules! forward {
 impl<T: EventListener> Handler for Capped<'_, T> {
     #[inline]
     fn input(&mut self, c: char) {
-        if c.width() == Some(0) && self.zerowidth_full() {
+        let width = c.width();
+        if width == Some(0) && self.zerowidth_full() {
             return;
         }
-        Handler::input(&mut *self.0, c);
+        // A pending wrap, or a wide character at the last column, can
+        // scroll.
+        if self.0.grid().cursor.input_needs_wrap || width == Some(2) {
+            self.counting(|term| Handler::input(term, c));
+        } else {
+            Handler::input(&mut *self.0, c);
+        }
+    }
+
+    #[inline]
+    fn linefeed(&mut self) {
+        self.counting(Handler::linefeed);
+    }
+
+    #[inline]
+    fn newline(&mut self) {
+        self.counting(Handler::newline);
+    }
+
+    #[inline]
+    fn scroll_up(&mut self, rows: usize) {
+        self.counting(|term| Handler::scroll_up(term, rows));
+    }
+
+    #[inline]
+    fn delete_lines(&mut self, count: usize) {
+        self.counting(|term| Handler::delete_lines(term, count));
+    }
+
+    #[inline]
+    fn clear_screen(&mut self, mode: ClearMode) {
+        self.counting(|term| Handler::clear_screen(term, mode));
+    }
+
+    #[inline]
+    fn reset_state(&mut self) {
+        self.counting(Handler::reset_state);
     }
 
     forward! {
@@ -209,15 +317,11 @@ impl<T: EventListener> Handler for Capped<'_, T> {
         put_tab(count: u16);
         backspace();
         carriage_return();
-        linefeed();
         bell();
         substitute();
-        newline();
         set_horizontal_tabstop();
-        scroll_up(rows: usize);
         scroll_down(rows: usize);
         insert_blank_lines(count: usize);
-        delete_lines(count: usize);
         erase_chars(count: usize);
         delete_chars(count: usize);
         move_backward_tabs(count: u16);
@@ -225,10 +329,8 @@ impl<T: EventListener> Handler for Capped<'_, T> {
         save_cursor_position();
         restore_cursor_position();
         clear_line(mode: LineClearMode);
-        clear_screen(mode: ClearMode);
         clear_tabs(mode: TabulationClearMode);
         set_tabs(interval: u16);
-        reset_state();
         reverse_index();
         terminal_attribute(attr: Attr);
         set_mode(mode: Mode);
@@ -373,5 +475,99 @@ mod tests {
         feed(&mut term, &format!("\rabcd{flood}"));
         assert_eq!(marks(&term, 0, 3), MAX_ZEROWIDTH);
         assert_eq!(marks(&term, 1, 0), 0);
+    }
+
+    /// Every row of the buffer, oldest first: its text and whether it wraps.
+    fn rows(term: &Term<VoidListener>) -> Vec<(String, bool)> {
+        let grid = term.grid();
+        let last = Column(grid.columns() - 1);
+        (grid.topmost_line().0..=grid.bottommost_line().0)
+            .map(|line| {
+                let row = &grid[Line(line)];
+                let text: String = (0..grid.columns())
+                    .map(|column| row[Column(column)].c)
+                    .collect();
+                (text, row[last].flags.contains(Flags::WRAPLINE))
+            })
+            .collect()
+    }
+
+    fn sized(cols: usize, rows: usize, scrollback: usize) -> Term<VoidListener> {
+        let config = Config {
+            scrolling_history: scrollback,
+            ..Config::default()
+        };
+        Term::new(config, &GridDims { cols, rows }, VoidListener)
+    }
+
+    /// Feeds `text` to a counted term (through [`Capped`]) and to a plain
+    /// one (alacritty alone): the grids stay the same.
+    fn both(counted: &mut Term<VoidListener>, plain: &mut Term<VoidListener>, text: &str) {
+        feed(counted, text);
+        let mut parser: Processor<StdSyncHandler> = Processor::new();
+        parser.advance(plain, text.as_bytes());
+        assert_eq!(rows(counted), rows(plain), "{text:?}");
+        assert_eq!(
+            counted.grid().display_offset(),
+            plain.grid().display_offset()
+        );
+    }
+
+    /// The count of lines that drop off a full scrollback (output that
+    /// scrolls on, wraps, SU, DL at the top, ED 2, ED 3, RIS), and the grid
+    /// is the one alacritty makes without the count.
+    #[test]
+    fn lines_dropped_off_the_scrollback_are_counted() {
+        count_evictions(5);
+        let mut counted = sized(6, 3, 5);
+        let mut plain = sized(6, 3, 5);
+        // 20 lines from the top of 3 rows: 18 scroll into the scrollback
+        // of 5, so 13 drop off.
+        both(&mut counted, &mut plain, &"x\r\n".repeat(20));
+        assert_eq!(counted.grid().history_size(), 5);
+        assert_eq!(evictions(), 13);
+        // A wrapped line: "abcdefghij" takes two rows.
+        both(&mut counted, &mut plain, "abcdefghij\r\n");
+        assert_eq!(evictions(), 15);
+        // A wide character that does not fit the last column wraps too.
+        both(&mut counted, &mut plain, "abcde\u{4f60}\r\n");
+        assert_eq!(evictions(), 17);
+        // While scrolled back, the view stays on its text as before.
+        counted.scroll_display(alacritty_terminal::grid::Scroll::Delta(2));
+        plain.scroll_display(alacritty_terminal::grid::Scroll::Delta(2));
+        both(&mut counted, &mut plain, "\x1b[2S\x1b[H\x1b[M");
+        assert_eq!(evictions(), 20);
+        // ED 2 moves the screen into the scrollback.
+        both(&mut counted, &mut plain, "y\r\nz\x1b[2J");
+        assert_eq!(counted.grid().history_size(), 5);
+        let before = evictions();
+        assert!(before > 20);
+        // ED 3 drops the whole scrollback.
+        both(&mut counted, &mut plain, "\x1b[3J");
+        assert_eq!(counted.grid().history_size(), 0);
+        assert_eq!(evictions(), before + 5);
+        // The alternate screen has no scrollback: nothing drops there, and
+        // the primary screen's lines stay.
+        both(&mut counted, &mut plain, &"w\r\n".repeat(4));
+        let before = evictions();
+        let kept = counted.grid().history_size();
+        assert!(kept > 0);
+        both(&mut counted, &mut plain, "\x1b[?1049h");
+        both(&mut counted, &mut plain, &"v\r\n".repeat(30));
+        assert_eq!(evictions(), before);
+        both(&mut counted, &mut plain, "\x1b[?1049l");
+        assert_eq!(counted.grid().history_size(), kept);
+        // RIS drops the scrollback.
+        both(&mut counted, &mut plain, "\x1bc");
+        assert_eq!(evictions(), before + kept);
+    }
+
+    /// Without [`count_evictions`] on the thread, nothing is counted.
+    #[test]
+    fn nothing_is_counted_unless_asked() {
+        let mut term = sized(6, 3, 2);
+        feed(&mut term, &"x\r\n".repeat(10));
+        assert_eq!(term.grid().history_size(), 2);
+        assert_eq!(evictions(), 0);
     }
 }

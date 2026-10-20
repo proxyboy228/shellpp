@@ -398,6 +398,60 @@ fn password_prompts_in_every_listed_language() {
     }
 }
 
+/// A prompt printed after the boundary (input typed before the prompt
+/// appeared) is part of the captured line; it drops the line too.
+#[test]
+fn a_password_prompt_inside_the_captured_line() {
+    for line in [
+        "Password:",
+        "[sudo] password for alice:",
+        "hun[sudo] password for alice:",
+        // Typed ahead of `su`'s prompt, which starts with the word: no
+        // word boundary between the input and the prompt.
+        "hunter2Password:",
+        "Ahead-pw-2Password:",
+        "Ahead-pw-2Passwort:",
+        "Enter passphrase (empty for no passphrase):",
+        "Enter same passphrase again:",
+        "Enter password:",
+        "Current password:",
+        "Mot de passe :",
+        "密码：",
+        "echo \"password: x\"",
+    ] {
+        assert!(line_holds_password_prompt(line), "{line}");
+        let mut typed_ahead = candidate(line);
+        typed_ahead.prompt_text = "alice@host:~$ sudo -v".to_owned();
+        assert_eq!(
+            evaluate(&typed_ahead, false, true),
+            Err(HistoryDropReason::PasswordPrompt),
+            "{line}"
+        );
+    }
+    // The word must come before a colon: a commit message, a path or a
+    // command that only names the tools stays a command.
+    for line in [
+        "passwd",
+        "sudo passwd alice",
+        "grep -i password /etc/app.conf",
+        "git commit -m \"fix: token refresh\"",
+        "ssh-keygen -t ed25519 -f /tmp/k",
+        "mysql -u root -p",
+        "sudo -S apt update",
+        "scp notes.txt deploy@web:/tmp/",
+        // The short words keep their word boundaries.
+        "ping: unknown host",
+        "curl -H \"tokens: 3\" http://localhost/",
+        "",
+    ] {
+        assert!(!line_holds_password_prompt(line), "{line}");
+    }
+    assert_eq!(
+        evaluate(&candidate("sudo passwd alice"), false, true),
+        Ok("sudo passwd alice".to_owned())
+    );
+}
+
 // ----- cleaning ----------------------------------------------------------------
 
 #[test]

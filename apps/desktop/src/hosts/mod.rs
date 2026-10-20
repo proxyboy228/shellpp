@@ -1308,7 +1308,8 @@ impl HostsScreen {
 }
 
 /// The first host whose label or address equals `text` (case-insensitive).
-fn exact_match(hosts: &[HostItem], text: &str) -> Option<Uuid> {
+/// Also the new tab search's exact match (UI 6).
+pub(crate) fn exact_match(hosts: &[HostItem], text: &str) -> Option<Uuid> {
     let exact = hosts
         .iter()
         .find(|host| host.label.as_deref() == Some(text) || host.address == text);

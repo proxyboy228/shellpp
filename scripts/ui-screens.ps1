@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Screenshots of the Shell++ window (owner's stage 1, step 5.2, and stage 2a,
-  step 5.1).
+  Screenshots of the Shell++ window (owner's stage 1, step 5.2, and stages 2a
+  and 2b, step 5.1).
 
 .DESCRIPTION
   Builds shellpp with the `screenshots` feature and launches it ONCE for all
@@ -36,20 +36,39 @@
     (root@10.0.0.5:2222, Connect active), search-results, search-no-results,
     three-selected, empty, list-view, new-host, quick-connect-toast,
     tag-filter, tag-chips (two tags on and the host panel open: the chips
-    collapse into "+N"), show-more, first-run, unlock, and the terminal
-    states: terminal-ls-color (OpenSSH; terminal-colors on the russh server,
-    whose shell has no ls), terminal-htop (OpenSSH; terminal-alt-screen on
-    the russh server), terminal-tofu, terminal-host-key-changed,
-    terminal-drop, terminal-local, terminal-tabs;
+    collapse into "+N"), show-more, known-hosts, first-run, unlock, and the
+    terminal states: terminal-ls-color (OpenSSH; terminal-colors on the
+    russh server, whose shell has no ls), terminal-htop (OpenSSH;
+    terminal-alt-screen on the russh server), terminal-tofu,
+    terminal-host-key-changed, terminal-drop, terminal-local, terminal-tabs,
+    and those of stage 2b: terminal-connecting, terminal-splits,
+    split-picker, tab-menu, new-tab, new-tab-search, sidebar-tools,
+    sidebar-snippets, sidebar-history, sidebar-appearance, sidebar-font;
   - 960x600 (the minimum window size): root, host-panel, first-run;
   - any other size: root, group, host-panel.
+
+  Stage 2b, step 5.1 (-Stage2b selects these states, both themes, 1280x800):
+  - known-hosts: the Known Hosts screen after an import of a temporary
+    known_hosts file (plain, [host]:port, hashed and revoked entries; never
+    ~/.ssh/known_hosts), the details panel open;
+  - terminal-connecting: a tab while it connects (the test server holds new
+    connections: tests/openssh control.sh freeze, or the russh server's
+    hold), its warning dot; terminal-drop: a dropped session, its danger dot;
+  - terminal-splits: a tab of 4 panes (Ctrl+Shift+D / Ctrl+Shift+E and Enter
+    in the new pane); split-picker: the new pane's host list, the split
+    pane's host first; tab-menu: the menu of a tab with two panes;
+  - new-tab, new-tab-search: the new tab page without and with a search;
+  - sidebar-tools (a search with its matches highlighted), sidebar-snippets,
+    sidebar-history (typed commands and the hint card), sidebar-appearance
+    (the theme list), sidebar-font (the Font page);
+  - terminal-htop: in the light theme, after the minimum contrast change.
 
   -States limits a run to some states (a smoke run; the app gets them as
   SHELLPP_SCREENSHOT_STATES): each listed state at the sizes that have it,
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (60 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (84 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -58,6 +77,9 @@
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -NoBuild
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -States terminal-ls-color,terminal-drop
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -Stage2b -Server openssh
+  (the screenshots of stage 2b, step 5.1)
 #>
 [CmdletBinding()]
 param(
@@ -72,6 +94,8 @@ param(
     [string] $Server = 'auto',
     # Only these states (names as in the file names, e.g. terminal-drop).
     [string[]] $States = @(),
+    # The states of stage 2b, step 5.1 (added to -States).
+    [switch] $Stage2b,
     # Use the existing debug binaries.
     [switch] $NoBuild
 )
@@ -127,8 +151,15 @@ function Test-DockerLinux {
 # terminal states named as on OpenSSH.
 $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 'search-results',
     'search-no-results', 'three-selected', 'empty', 'list-view', 'new-host', 'tag-filter', 'tag-chips',
-    'show-more', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
-    'terminal-drop', 'terminal-local', 'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed')
+    'show-more', 'known-hosts', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
+    'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
+    'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets',
+    'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed')
+# Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
+# htop in the light theme after the contrast change and the drop's dot).
+$stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'split-picker', 'tab-menu',
+    'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets', 'sidebar-history', 'sidebar-appearance',
+    'sidebar-font', 'terminal-htop', 'terminal-drop')
 function Get-SizeStates([string] $size) {
     if ($size -eq '1280x800') { return $allStates }
     if ($size -eq '960x600') { return @('root', 'host-panel', 'first-run') }
@@ -143,6 +174,7 @@ foreach ($size in $Sizes) {
     if ($size -notmatch '^\d{3,4}x\d{3,4}$') { Fail "bad size '$size' (expected WxH, e.g. 1920x1200)" }
 }
 if (@($Sizes | Select-Object -Unique).Count -ne $Sizes.Count) { Fail 'a size is listed twice' }
+if ($Stage2b) { $States = @($States) + $stage2bStates }
 $States = @($States | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
 foreach ($state in $States) {
     $known = $allStates + @($russhLabels.Values)
@@ -200,7 +232,9 @@ try {
     $reason = $null
     # A run limited to states without sessions needs no test server.
     $terminalOnly = @('terminal-tofu', 'terminal-ls-color', 'terminal-htop', 'terminal-drop', 'terminal-local',
-        'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed')
+        'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed', 'terminal-connecting',
+        'terminal-splits', 'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools',
+        'sidebar-snippets', 'sidebar-history', 'sidebar-appearance', 'sidebar-font')
     $needsServer = ($States.Count -eq 0) -or (@($States | Where-Object { $_ -in $terminalOnly }).Count -gt 0)
     if (-not $needsServer) {
         Write-Host 'ui-screens: server: none (no terminal state)'
@@ -308,7 +342,7 @@ foreach ($entry in $saved) {
 # host-panel in both themes, the default size every terminal state. A run
 # limited by -States has exactly its states at the sizes that have them.
 $terminalStates = @('terminal-tofu', 'terminal-host-key-changed', 'terminal-drop', 'terminal-local', 'terminal-tabs',
-    'terminal-ls-color', 'terminal-htop')
+    'terminal-ls-color', 'terminal-htop') + $stage2bStates
 # (PowerShell names ignore case: a `$states` here would overwrite -States.)
 $expectedCount = 0
 foreach ($size in $Sizes) {

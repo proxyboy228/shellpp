@@ -1,8 +1,10 @@
 //! Local terminals (UI 4.1, 12.4; lead decision 9): the shell in a
 //! pseudo-terminal (`shellpp-term-local`: ConPTY on Windows, a pty on macOS
-//! and Linux). The default shell is Windows PowerShell on Windows and the
-//! user's login shell elsewhere; the `terminal.local_shell` setting or the
-//! requested id choose another. Exit code 0 closes the tab, another code
+//! and Linux). The default shell is PowerShell 7 (`pwsh`) when it is
+//! installed, else Windows PowerShell, on Windows, and the user's login
+//! shell elsewhere; the `terminal.local_shell` setting or the requested id
+//! choose another. The view reports the resolved shell's id, so that
+//! Duplicate, a new split pane and Restore open the same shell. Exit code 0 closes the tab, another code
 //! shows "Session ended with code N"; a shell that cannot start is
 //! `Failed`. Reconnect starts the same shell again. No autoreconnect, no
 //! connection log.
@@ -254,6 +256,7 @@ pub(crate) async fn run(
                 input = Some(open_input(st, size));
                 st.view.state = SessionState::Connected;
                 st.view.title = spec.label.clone();
+                st.view.shell_id = spec.id.clone();
             });
             let input = input.unwrap_or_else(InputReceiver::closed);
             shell = Some((spec, term));
@@ -316,6 +319,7 @@ pub(crate) async fn run(
                 match spawned {
                     Some((spec, term, parts)) => {
                         let title = spec.label.clone();
+                        let shell_id = spec.id.clone();
                         shell = Some((spec, term));
                         // The terminal still shows the previous shell's screen.
                         super::reset_terminal_modes(&session).await;
@@ -324,6 +328,7 @@ pub(crate) async fn run(
                             input = Some(open_input(st, size));
                             st.view.state = SessionState::Connected;
                             st.view.title = title;
+                            st.view.shell_id = shell_id;
                             st.view.exit_status = None;
                             st.view.exit_signal = None;
                             st.view.error = None;

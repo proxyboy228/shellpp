@@ -246,10 +246,12 @@ pub fn last_column(host: &HostItem, group_name: Option<&str>) -> LastColumn {
 /// once the OS is detected, else the neutral server icon. Never a letter.
 ///
 /// The icons come from the app's Lucide subset (ISC license), which has no
-/// distribution logos; the OS families get generic glyphs.
+/// distribution logos; the OS families get generic glyphs. Linux gets the
+/// app's own penguin ([`crate::app::assets::LINUX_ICON`]): never the
+/// terminal glyph, which is the session type icon of a tab (UI 1.1).
 pub fn os_icon(os_family: Option<&str>) -> IconName {
     match os_family {
-        Some("linux") => IconName::SquareTerminal,
+        Some("linux") => crate::app::assets::LINUX_ICON,
         Some("windows" | "macos") => IconName::Monitor,
         _ => IconName::Server,
     }
@@ -467,7 +469,17 @@ mod tests {
             LastColumn::Tags("prod, db".to_owned())
         );
         assert_eq!(os_icon(None), IconName::Server);
-        assert_eq!(os_icon(Some("linux")), IconName::SquareTerminal);
+        assert_eq!(os_icon(Some("linux")), crate::app::assets::LINUX_ICON);
+        // UI 1.1: no OS icon is the terminal glyph of the type icon.
+        for os in [
+            None,
+            Some("linux"),
+            Some("windows"),
+            Some("macos"),
+            Some("bsd"),
+        ] {
+            assert_ne!(os_icon(os), IconName::SquareTerminal, "{os:?}");
+        }
         assert_eq!(os_icon(Some("other")), IconName::Server);
     }
 }

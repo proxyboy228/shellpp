@@ -1,6 +1,8 @@
 //! The terminal view: a GPUI entity that draws the emulator, takes keyboard,
 //! mouse and clipboard input and reports title changes and the bell
-//! (UI 4.1, 4.3, 12.4, 12.5).
+//! (UI 4.1, 4.3, 12.4, 12.5). It also runs the search of the terminal
+//! sidebar's Tools tab (UI 4.2; [`super::search`]) and shows a dropped
+//! session dimmed without a cursor (UI 1.1).
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -10,6 +12,7 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::Side;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::CursorShape;
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, ClipboardItem, Context, DispatchPhase, ElementInputHandler, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
@@ -28,6 +31,7 @@ use super::model::{ModelOptions, TerminalHandle, TerminalSize, term_config};
 use super::mouse::{self, ReportButton, ReportKind};
 use super::paste::{self, PastePreview};
 use super::render::{self, FrameStyle, LayoutState, grid_point};
+use super::search::SearchState;
 use super::selection;
 use super::settings::{CursorStyleSetting, DEFAULT_SCROLLBACK, TerminalSettings, settings};
 use crate::settings::terminal::TerminalPrefs;
@@ -44,6 +48,9 @@ const PADDING: Pixels = metrics::SPACE_2;
 const AUTOSCROLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 /// Most lines one autoscroll step moves (the pointer far from the grid).
 const AUTOSCROLL_MAX_LINES: i32 = 10;
+/// While a search is open, new output or a reflow searches again at most
+/// this often.
+const SEARCH_REFRESH: std::time::Duration = std::time::Duration::from_millis(250);
 
 gpui_kit::actions!(
     terminal,
@@ -138,6 +145,22 @@ pub enum TerminalEvent {
     ConfirmPaste(PendingPaste),
 }
 
+/// The matches of the search changed (a new query, a step, or new output
+/// searched again): the Tools tab updates its "N of M".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchUpdated;
+
+/// What the Tools tab shows about a search.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchSummary {
+    /// Matches found (at most `search::MAX_MATCHES`).
+    pub count: usize,
+    /// The current match, counted from 1 (the oldest match first).
+    pub current: Option<usize>,
+    /// More matches exist than are counted.
+    pub truncated: bool,
+}
+
 /// A paste waiting for the user's confirmation: already cleaned (no
 /// control characters except tab, CR and LF, no bracketed paste markers).
 #[derive(Clone, PartialEq, Eq)]
@@ -202,11 +225,20 @@ pub struct TerminalView {
     scroll_remainder: f32,
     marked_text: Option<String>,
     title: Option<SharedString>,
+    /// A dropped session: the content is dimmed and the cursor hidden.
+    dimmed: bool,
+    /// The open search, if any (UI 4.2 Tools).
+    search: Option<SearchState>,
+    /// New output arrived since the search last ran.
+    search_stale: bool,
+    /// The pending search refresh after new output.
+    search_refresh: Option<Task<()>>,
     _pump: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
+impl EventEmitter<SearchUpdated> for TerminalView {}
 
 impl std::fmt::Debug for TerminalView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -288,6 +320,10 @@ impl TerminalView {
             scroll_remainder: 0.,
             marked_text: None,
             title: None,
+            dimmed: false,
+            search: None,
+            search_stale: false,
+            search_refresh: None,
             _pump: pump,
             _subscriptions: subscriptions,
         }
@@ -334,6 +370,166 @@ impl TerminalView {
         self.update_palette(cx);
     }
 
+    /// The theme the terminal is drawn with: its own, else the default
+    /// theme of the settings.
+    pub fn theme(&self) -> &TerminalTheme {
+        self.theme.as_ref().unwrap_or(&self.settings.default_theme)
+    }
+
+    /// The settings the view draws with (font, size, spacing, contrast).
+    pub fn settings(&self) -> &TerminalSettings {
+        &self.settings
+    }
+
+    /// Dims the content and hides the cursor while the session is dropped
+    /// (UI 1.1, 4.6); `false` restores both (on reconnect).
+    pub fn set_dimmed(&mut self, dimmed: bool, cx: &mut Context<Self>) {
+        if self.dimmed != dimmed {
+            self.dimmed = dimmed;
+            cx.notify();
+        }
+    }
+
+    pub fn is_dimmed(&self) -> bool {
+        self.dimmed
+    }
+
+    // Search (UI 4.2 Tools) ---------------------------------------------------
+
+    /// Searches the scrollback and the screen for `query` (plain text,
+    /// case-insensitive) and highlights the matches; an empty query ends
+    /// the search. The view scrolls to the current match when it is not
+    /// visible.
+    pub fn search(&mut self, query: &str, cx: &mut Context<Self>) -> SearchSummary {
+        if query.is_empty() {
+            self.clear_search(cx);
+            return SearchSummary::default();
+        }
+        let state = {
+            let term = self.handle.term().lock();
+            SearchState::new(query, term.grid(), self.handle.search_origin(&term))
+        };
+        self.search = Some(state);
+        self.search_stale = false;
+        self.scroll_to_current();
+        cx.emit(SearchUpdated);
+        cx.notify();
+        self.search_summary().unwrap_or_default()
+    }
+
+    /// Moves to the next match (`forward`, toward newer output) or the
+    /// previous one, wrapping around, and scrolls it into view.
+    pub fn search_step(&mut self, forward: bool, cx: &mut Context<Self>) -> SearchSummary {
+        if self.search_stale {
+            self.refresh_search(cx);
+        }
+        let Some(search) = self.search.as_mut() else {
+            return SearchSummary::default();
+        };
+        search.step(forward);
+        self.scroll_to_current();
+        cx.emit(SearchUpdated);
+        cx.notify();
+        self.search_summary().unwrap_or_default()
+    }
+
+    /// Ends the search: the highlights go away.
+    pub fn clear_search(&mut self, cx: &mut Context<Self>) {
+        self.search_refresh = None;
+        self.search_stale = false;
+        if self.search.take().is_some() {
+            cx.emit(SearchUpdated);
+            cx.notify();
+        }
+    }
+
+    /// The open search's query, if any.
+    pub fn search_query(&self) -> Option<&str> {
+        self.search.as_ref().map(SearchState::query)
+    }
+
+    /// The counter of the open search, if any.
+    pub fn search_summary(&self) -> Option<SearchSummary> {
+        self.search.as_ref().map(|search| SearchSummary {
+            count: search.count(),
+            current: search.current_index().map(|index| index + 1),
+            truncated: search.truncated(),
+        })
+    }
+
+    /// The open search (tests and the sidebar).
+    pub fn search_state(&self) -> Option<&SearchState> {
+        self.search.as_ref()
+    }
+
+    /// Scrolls so the current match is visible (in the middle of the
+    /// screen when it was not).
+    fn scroll_to_current(&self) {
+        let Some(found) = self.search.as_ref().and_then(SearchState::current) else {
+            return;
+        };
+        let mut term = self.handle.term().lock();
+        let offset = term.grid().display_offset();
+        let evicted = self.handle.evicted_lines();
+        let target = SearchState::offset_showing(term.grid(), evicted, found);
+        if target != offset {
+            term.scroll_display(Scroll::Delta(target as i32 - offset as i32));
+        }
+    }
+
+    /// New output or a reflow while a search is open: search again, at
+    /// most once per [`SEARCH_REFRESH`], so the highlights follow the text
+    /// while a flood or a resize drag does not search on every frame. A
+    /// reflow searches at once when no search ran in the last period (its
+    /// highlights wait for that search); output searches at the end of the
+    /// period.
+    fn search_content_changed(&mut self, reflowed: bool, cx: &mut Context<Self>) {
+        if self.search.is_none() {
+            return;
+        }
+        self.search_stale = true;
+        if self.search_refresh.is_some() {
+            return;
+        }
+        if reflowed {
+            self.refresh_search(cx);
+        }
+        self.schedule_search_refresh(cx);
+    }
+
+    /// Searches again at the end of the period if anything changed in it,
+    /// and then waits another period.
+    fn schedule_search_refresh(&mut self, cx: &mut Context<Self>) {
+        self.search_refresh = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_REFRESH).await;
+            let _ = this.update(cx, |view, cx| {
+                view.search_refresh = None;
+                if view.search_stale {
+                    view.refresh_search(cx);
+                    view.schedule_search_refresh(cx);
+                }
+            });
+        }));
+    }
+
+    /// Searches again for the same query (after new output or a reflow):
+    /// only the rows that can have changed, unless the grid reflowed
+    /// ([`SearchState::refresh`]).
+    pub fn refresh_search(&mut self, cx: &mut Context<Self>) {
+        self.search_stale = false;
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let changed = {
+            let term = self.handle.term().lock();
+            search.refresh(term.grid(), self.handle.search_origin(&term))
+        };
+        if changed {
+            cx.emit(SearchUpdated);
+            cx.notify();
+        }
+    }
+
     /// The selected text, if any.
     pub fn selected_text(&self) -> Option<String> {
         selection::text(&self.handle.term().lock())
@@ -375,6 +571,10 @@ impl TerminalView {
         if events.bell {
             cx.emit(TerminalEvent::Bell);
         }
+        // After a reflow the search runs again soon (its positions moved);
+        // after output, shortly after.
+        let resized = std::mem::take(&mut self.layout.borrow_mut().resized);
+        self.search_content_changed(resized, cx);
         cx.notify();
     }
 
@@ -404,7 +604,8 @@ impl TerminalView {
                 term.scroll_display(Scroll::Bottom);
             }
         }
-        self.handle.send_input(bytes);
+        // Typed input: watched by the history capture.
+        self.handle.send_typed(bytes);
         cx.notify();
     }
 
@@ -755,6 +956,9 @@ impl TerminalView {
             bold_is_bright: self.settings.bold_is_bright,
             focused: self.focus.is_focused(window),
             marked_text: self.marked_text.clone(),
+            min_contrast: self.settings.min_contrast,
+            cursor_hidden: self.dimmed,
+            search: self.search.clone(),
         }
     }
 }
@@ -794,6 +998,7 @@ impl Render for TerminalView {
         let layout = self.layout.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
+        let dimmed = self.dimmed;
         let grid = canvas(
             move |bounds, window, _cx| {
                 render::prepaint(bounds, &handle, &mut layout.borrow_mut(), &style, window)
@@ -817,6 +1022,12 @@ impl Render for TerminalView {
             },
         )
         .size_full();
+        // A dropped session (UI 1.1): the text at `--opacity-disabled` over
+        // the theme background.
+        let grid = div()
+            .size_full()
+            .when(dimmed, |this| this.opacity(metrics::OPACITY_DISABLED))
+            .child(grid);
 
         div()
             .id("terminal")

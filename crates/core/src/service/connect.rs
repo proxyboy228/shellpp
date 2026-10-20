@@ -340,13 +340,19 @@ fn record_history_of(data: &Map<String, Value>, setting: bool) -> bool {
 }
 
 /// The effective `record_history` of a session now: the linked host's
-/// override when the host still exists in the personal vault, else the
-/// setting (docs/security.md, section 10.1, rule 4).
+/// override for a host of the personal vault, else the setting
+/// (docs/security.md, section 10.1, rule 4). A personal host that no longer
+/// exists records nothing: history is kept only for saved hosts (stage 2b
+/// decision), and an entry of a removed host would show in no History tab.
 fn current_record_history(session: &Session, host: Option<RecordRef>, setting: bool) -> bool {
     let personal = session.ring.vault_id();
-    host.filter(|host| host.vault_id == personal)
-        .and_then(|host| session.index.get_kind(&host.record_id, RecordKind::Host))
-        .map_or(setting, |record| record_history_of(record.data(), setting))
+    match host {
+        Some(host) if host.vault_id == personal => session
+            .index
+            .get_kind(&host.record_id, RecordKind::Host)
+            .is_some_and(|record| record_history_of(record.data(), setting)),
+        _ => setting,
+    }
 }
 
 /// `terminal.record_history` (default on).
@@ -826,19 +832,16 @@ impl Core {
                     .map(|entry| known_host_view(vault_id, record, &entry, &targets))
             })
             .collect();
-        views.sort_by(|a, b| {
-            a.hashed
-                .cmp(&b.hashed)
-                .then_with(|| {
-                    let key = |view: &KnownHostView| {
-                        view.display_address
-                            .as_deref()
-                            .map(fold)
-                            .unwrap_or_default()
-                    };
-                    key(a).cmp(&key(b))
-                })
-                .then_with(|| a.record_id.cmp(&b.record_id))
+        // The folded address is computed once per entry, not per comparison.
+        views.sort_by_cached_key(|view| {
+            (
+                view.hashed,
+                view.display_address
+                    .as_deref()
+                    .map(fold)
+                    .unwrap_or_default(),
+                view.record_id,
+            )
         });
         Ok(views)
     }
@@ -854,9 +857,68 @@ impl Core {
         }
         let targets: Vec<(Uuid, RecordKind)> =
             ids.iter().map(|id| (*id, RecordKind::KnownHost)).collect();
+        // Undo (UI 10.1 as hosts, 2.4): the last live payloads, memory only.
+        let undo: Vec<(Uuid, crate::model::payload::Payload)> = ids
+            .iter()
+            .filter_map(|id| {
+                parts
+                    .session
+                    .index
+                    .get(id)
+                    .map(|record| (*id, record.payload.clone()))
+            })
+            .collect();
         self.remove_rows(&mut parts, &targets, now)?;
+        for (id, payload) in undo {
+            parts
+                .session
+                .undo
+                .put(id, RecordKind::KnownHost, payload, now);
+        }
         tracing::info!(removed = ids.len(), "known hosts removed");
         Ok(())
+    }
+
+    pub(super) fn known_host_restore_impl(
+        &self,
+        input: RecordsRef,
+    ) -> Result<Vec<KnownHostView>, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        check_vault(parts.session, Some(input.vault_id))?;
+        parts.session.undo.purge(now);
+        let ids = distinct(&input.record_ids);
+        let mut restored = Vec::with_capacity(ids.len());
+        for id in &ids {
+            match parts.session.undo.get(id) {
+                Some(entry)
+                    if entry.kind == RecordKind::KnownHost
+                        && parts.session.index.get(id).is_none() =>
+                {
+                    restored.push((*id, entry.payload.data.clone().unwrap_or_default()));
+                }
+                _ => return Err(CoreError::NotFound),
+            }
+        }
+        let mut writes = Vec::with_capacity(restored.len());
+        for (id, data) in restored {
+            writes.push(parts.session.prepare_write(
+                parts.store,
+                RecordKind::KnownHost,
+                id,
+                data,
+                now,
+            )?);
+        }
+        self.commit_records(&mut parts, writes, Vec::new(), Vec::new())?;
+        for id in &ids {
+            parts.session.undo.remove(id);
+        }
+        tracing::info!(restored = ids.len(), "known hosts restored");
+        ids.iter()
+            .map(|id| known_host_view_of(parts.session, id))
+            .collect()
     }
 
     pub(super) fn keys_list_impl(&self) -> Result<Vec<KeyView>, CoreError> {
@@ -1459,6 +1521,9 @@ impl Core {
         Ok(rows)
     }
 }
+
+/// The History tab's "save as snippets" hint (stage 2b).
+mod hint;
 
 #[cfg(test)]
 mod tests;

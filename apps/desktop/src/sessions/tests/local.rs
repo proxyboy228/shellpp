@@ -1,6 +1,7 @@
 //! The local terminal (UI 4.1, lead decision 9) with this machine's default
-//! shell (Windows PowerShell on Windows, the login shell elsewhere): exit
-//! codes, Reconnect, and a shell that cannot start.
+//! shell (PowerShell 7 when it is installed, else Windows PowerShell, on
+//! Windows; the login shell elsewhere): exit codes, Reconnect, and a shell
+//! that cannot start.
 
 use super::*;
 
@@ -13,8 +14,15 @@ async fn the_default_shell_runs_and_its_exit_codes_follow_the_rules() {
         .expect("opens");
     assert_eq!(session.view.kind, SessionKind::Local);
     let view = session.state(SessionState::Connected).await;
+    // The resolved default shell is reported (Duplicate opens it again).
+    let default = shellpp_term_local::default_shell_id(&shellpp_term_local::detect_shells());
+    assert_eq!(view.shell_id, default);
     if cfg!(windows) {
-        assert_eq!(view.title, "PowerShell");
+        let expected = match view.shell_id.as_deref() {
+            Some("pwsh") => "PowerShell 7",
+            _ => "PowerShell",
+        };
+        assert_eq!(view.title, expected);
     }
     assert!(view.host.is_none() && view.address.is_none());
 

@@ -136,7 +136,7 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     }
     assert!(ui.visible("top-bar-notifications", cx));
     // The terminal sidebar button only on a session tab (UI 4.2).
-    assert!(!ui.visible("terminal-sidebar", cx));
+    assert!(!ui.visible("top-bar-terminal-sidebar", cx));
 
     ui.click("tab-sftp", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Sftp);
@@ -182,20 +182,15 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// UI 1.1, 4.6, 12.5 (D30): "+" is shown disabled and opens nothing;
-/// Ctrl+L outside a terminal opens a local terminal tab and Ctrl+Alt+S a
-/// serial placeholder; Alt+Left/Right and Ctrl+N move between tabs; the
-/// active tab closes to its neighbor; the last one closes to Vaults.
+/// UI 1.1, 4.6, 12.5: Ctrl+L outside a terminal opens a local terminal
+/// tab and Ctrl+Alt+S a serial placeholder; Alt+Left/Right and Ctrl+N move
+/// between tabs; the active tab closes to its neighbor; the last one
+/// closes to Vaults.
 #[gpui_kit::test]
 fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let shell = ui.shell(cx);
     assert!(ui.visible("tab-new", cx));
-    ui.click("tab-new", cx);
-    assert!(
-        cx.update(|cx| shell.read(cx).sessions().is_empty()),
-        "+ is disabled"
-    );
 
     // Ctrl+L: a local terminal tab, Ctrl+Alt+S: serial (placeholder).
     ui.press("ctrl-l", cx);
@@ -203,9 +198,9 @@ fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     assert_eq!(local.kind(), SessionKind::Local);
     assert!(cx.update(|cx| shell.read(cx).pane(local.id()).is_some()));
     // No sidebar on a session tab (UI 4.1); the terminal sidebar button is
-    // there, disabled (stage 2b).
+    // there (UI 4.2).
     assert!(!ui.visible("sidebar", cx));
-    assert!(ui.visible("terminal-sidebar", cx));
+    assert!(ui.visible("top-bar-terminal-sidebar", cx));
     assert!(ui.visible("session-pane", cx));
     // Back on Vaults, so that Ctrl+L and Ctrl+Alt+S reach the shell.
     ui.press("ctrl-1", cx);

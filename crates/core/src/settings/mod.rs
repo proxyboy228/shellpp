@@ -25,10 +25,8 @@ pub const VIEW_SCREENS: &[&str] = &["hosts", "keychain", "forwarding", "snippets
 /// The auto-lock setting key.
 pub const AUTO_LOCK_KEY: &str = "security.auto_lock_minutes";
 
-/// The last session setting key (stage 2; docs/data-model.md, section 16.3).
-pub const SESSION_LAST_KEY: &str = "session.last";
-
-/// Limits of `session.last` (docs/data-model.md, section 12).
+/// Limits of a saved tab (docs/data-model.md, section 12): workspaces and
+/// the last session of Restore (`crate::service::last_session`).
 pub const SESSION_LAST_MAX_TABS: usize = 32;
 pub const SESSION_LAST_MAX_LEAVES: usize = 16;
 /// Split nesting: a leaf has depth 0, a split of leaves depth 1.
@@ -57,9 +55,6 @@ enum Kind {
     ShortcutOverrides,
     /// List of hint ids.
     HintList,
-    /// `session.last` (docs/data-model.md, section 16.3): `null` or the tabs
-    /// of the last exit (stage 2).
-    SessionLast,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +107,12 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     add("terminal.copy_on_select", Kind::Bool, json!(false));
     add("terminal.bell_sound", Kind::Bool, json!(false));
     add("terminal.bold_is_bright", Kind::Bool, json!(true));
+    // "Adjust indistinguishable colors" (owner's stage 2b step 0.4).
+    add(
+        "terminal.min_contrast",
+        Kind::Enum(&["off", "palette", "always"]),
+        json!("palette"),
+    );
     add(
         "terminal.cursor_style",
         Kind::Enum(&["block", "bar", "underline"]),
@@ -190,7 +191,6 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
         );
     }
     add("hints.dismissed", Kind::HintList, json!([]));
-    add(SESSION_LAST_KEY, Kind::SessionLast, Value::Null);
     defs
 }
 
@@ -302,125 +302,7 @@ fn check(kind: &Kind, value: &Value) -> Result<Value, ValidationReason> {
             }
             Ok(value.clone())
         }
-        Kind::SessionLast => session_last(value),
     }
-}
-
-/// `true` for an object whose members are all in `allowed`.
-fn only_members(object: &Map<String, Value>, allowed: &[&str]) -> bool {
-    object.keys().all(|key| allowed.contains(&key.as_str()))
-}
-
-/// A `host_link`: `{"vault_id": uuid, "record_id": uuid}`.
-fn host_link_ok(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let uuid = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|raw| uuid::Uuid::parse_str(raw).is_ok())
-    };
-    only_members(object, &["vault_id", "record_id"]) && uuid("vault_id") && uuid("record_id")
-}
-
-/// Checks a pane; returns its leaf count and split depth.
-fn session_pane(value: &Value) -> Result<(usize, usize), ValidationReason> {
-    use ValidationReason::Invalid;
-    let object = value.as_object().ok_or(Invalid)?;
-    if let Some(session) = object.get("session") {
-        let session = session.as_object().ok_or(Invalid)?;
-        if !only_members(object, &["session"]) || !only_members(session, &["kind", "host"]) {
-            return Err(Invalid);
-        }
-        let host = session.get("host").filter(|host| !host.is_null());
-        if host.is_some_and(|host| !host_link_ok(host)) {
-            return Err(Invalid);
-        }
-        return match session.get("kind").and_then(Value::as_str) {
-            Some("ssh") if host.is_some() => Ok((1, 0)),
-            Some("local") => Ok((1, 0)),
-            _ => Err(Invalid),
-        };
-    }
-    if !only_members(object, &["direction", "sizes", "children"]) {
-        return Err(Invalid);
-    }
-    match object.get("direction").and_then(Value::as_str) {
-        Some("row" | "column") => {}
-        _ => return Err(Invalid),
-    }
-    let sizes = object
-        .get("sizes")
-        .and_then(Value::as_array)
-        .ok_or(Invalid)?;
-    let children = object
-        .get("children")
-        .and_then(Value::as_array)
-        .ok_or(Invalid)?;
-    if !(2..=4).contains(&children.len()) || sizes.len() != children.len() {
-        return Err(Invalid);
-    }
-    let mut total = 0.0;
-    for size in sizes {
-        match size.as_f64() {
-            Some(size) if size.is_finite() && size > 0.0 => total += size,
-            _ => return Err(Invalid),
-        }
-    }
-    if (total - 1.0).abs() > 0.001 {
-        return Err(Invalid);
-    }
-    let mut leaves = 0usize;
-    let mut depth = 0usize;
-    for child in children {
-        let (child_leaves, child_depth) = session_pane(child)?;
-        leaves += child_leaves;
-        depth = depth.max(child_depth);
-    }
-    Ok((leaves, depth + 1))
-}
-
-/// `session.last`: `null`, or `{"saved_at": timestamp, "tabs": [{"root": pane}]}`
-/// with at most 32 tabs, 16 leaves and split depth 4 per tab. An empty tab
-/// list is allowed: it means nothing to restore (docs/data-model.md, 16.3).
-fn session_last(value: &Value) -> Result<Value, ValidationReason> {
-    use ValidationReason::{Invalid, TooMany};
-    if value.is_null() {
-        return Ok(Value::Null);
-    }
-    let object = value.as_object().ok_or(Invalid)?;
-    if !only_members(object, &["saved_at", "tabs"]) {
-        return Err(Invalid);
-    }
-    let saved_at = object
-        .get("saved_at")
-        .and_then(Value::as_str)
-        .ok_or(Invalid)?;
-    if time::OffsetDateTime::parse(saved_at, &time::format_description::well_known::Rfc3339)
-        .is_err()
-    {
-        return Err(Invalid);
-    }
-    let tabs = object
-        .get("tabs")
-        .and_then(Value::as_array)
-        .ok_or(Invalid)?;
-    if tabs.len() > SESSION_LAST_MAX_TABS {
-        return Err(TooMany);
-    }
-    for tab in tabs {
-        let tab = tab.as_object().ok_or(Invalid)?;
-        if !only_members(tab, &["root"]) {
-            return Err(Invalid);
-        }
-        let (leaves, depth) = session_pane(tab.get("root").ok_or(Invalid)?)?;
-        if leaves > SESSION_LAST_MAX_LEAVES || depth > SESSION_LAST_MAX_DEPTH {
-            return Err(Invalid);
-        }
-    }
-    Ok(value.clone())
 }
 
 impl Settings {
@@ -678,109 +560,6 @@ mod tests {
             .unwrap();
         assert!(update.puts.is_empty());
         assert_eq!(update.deletes, vec![AUTO_LOCK_KEY.to_owned()]);
-    }
-
-    #[test]
-    fn session_last_values() {
-        let settings = Settings::new(OsKind::Windows, &[]);
-        assert_eq!(settings.get(SESSION_LAST_KEY), Some(Value::Null));
-        let host = json!({"vault_id": "0199f6a1-0000-7000-8000-0000000000a1",
-            "record_id": "0199f6a1-0000-7000-8000-0000000000b1"});
-        let ssh = json!({"session": {"kind": "ssh", "host": host}});
-        let local = json!({"session": {"kind": "local"}});
-        let split = |children: Vec<Value>| {
-            let n = children.len() as f64;
-            json!({"direction": "row", "sizes": vec![1.0 / n; children.len()], "children": children})
-        };
-        let value = |tabs: Vec<Value>| {
-            json!({"saved_at": "2026-10-18T22:31:05.123Z",
-                "tabs": tabs.into_iter().map(|root| json!({"root": root})).collect::<Vec<_>>()})
-        };
-        let ok = |v: Value| {
-            settings
-                .prepare(&input(json!({ SESSION_LAST_KEY: v }), &[]))
-                .map(|update| update.puts.len())
-        };
-        let refused = |v: Value| match settings.prepare(&input(json!({ SESSION_LAST_KEY: v }), &[]))
-        {
-            Err(error) => reasons(error)[0].1,
-            Ok(_) => panic!("accepted"),
-        };
-        assert_eq!(ok(Value::Null).unwrap(), 1);
-        assert_eq!(ok(value(vec![])).unwrap(), 1);
-        assert_eq!(ok(value(vec![ssh.clone(), local.clone()])).unwrap(), 1);
-        assert_eq!(
-            ok(value(vec![split(vec![
-                ssh.clone(),
-                local.clone(),
-                local.clone()
-            ])]))
-            .unwrap(),
-            1
-        );
-        // Sizes within 0.001 of 1.
-        let near = json!({"direction": "column", "sizes": [0.3333, 0.3333, 0.3333],
-            "children": [local, local, local]});
-        assert!(ok(value(vec![near])).is_ok());
-        // 16 leaves at depth 2 are allowed; 17 are not.
-        let four = split(vec![
-            local.clone(),
-            local.clone(),
-            local.clone(),
-            local.clone(),
-        ]);
-        let sixteen = split(vec![four.clone(), four.clone(), four.clone(), four.clone()]);
-        assert!(ok(value(vec![sixteen.clone()])).is_ok());
-        let seventeen = split(vec![sixteen.clone(), local.clone()]);
-        assert_eq!(refused(value(vec![seventeen])), ValidationReason::Invalid);
-        // Depth 4 is allowed, depth 5 is not.
-        let mut deep = local.clone();
-        for _ in 0..4 {
-            deep = split(vec![deep, local.clone()]);
-        }
-        assert!(ok(value(vec![deep.clone()])).is_ok());
-        assert_eq!(
-            refused(value(vec![split(vec![deep, local.clone()])])),
-            ValidationReason::Invalid
-        );
-        assert_eq!(
-            refused(value(vec![local.clone(); 33])),
-            ValidationReason::TooMany
-        );
-        for bad in [
-            json!("x"),
-            json!({"tabs": []}),
-            json!({"saved_at": "yesterday", "tabs": []}),
-            json!({"saved_at": "2026-10-18T22:31:05.123Z"}),
-            json!({"saved_at": "2026-10-18T22:31:05.123Z", "tabs": [], "extra": 1}),
-            value(vec![json!({"session": {"kind": "ssh"}})]),
-            value(vec![json!({"session": {"kind": "sftp", "host": host}})]),
-            value(vec![
-                json!({"session": {"kind": "ssh", "host": {"vault_id": "x", "record_id": "y"}}}),
-            ]),
-            value(vec![json!({"session": {"kind": "local"}, "title": "db"})]),
-            value(vec![
-                json!({"session": {"kind": "local", "address": "203.0.113.1"}}),
-            ]),
-            value(vec![
-                json!({"direction": "row", "sizes": [1.0], "children": [local]}),
-            ]),
-            value(vec![
-                json!({"direction": "diagonal", "sizes": [0.5, 0.5], "children": [local, local]}),
-            ]),
-            value(vec![
-                json!({"direction": "row", "sizes": [0.5, 0.6], "children": [local, local]}),
-            ]),
-            value(vec![
-                json!({"direction": "row", "sizes": [1.0, 0.0], "children": [local, local]}),
-            ]),
-            value(vec![
-                json!({"direction": "row", "sizes": [0.5], "children": [local, local]}),
-            ]),
-            json!({"saved_at": "2026-10-18T22:31:05.123Z", "tabs": [{"root": local, "title": "x"}]}),
-        ] {
-            assert_eq!(refused(bad.clone()), ValidationReason::Invalid, "{bad}");
-        }
     }
 
     #[test]
