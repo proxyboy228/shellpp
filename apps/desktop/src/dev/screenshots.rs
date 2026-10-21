@@ -221,6 +221,23 @@ pub enum ShotState {
     /// Export Data with "Encrypt with a password" off: the clear-text
     /// warning and "I understand" (UI 1.4).
     ExportDataPlain,
+    // Stage 4 (run 3, plan section 7): `sftp_shot`.
+    /// The SFTP tab: a local folder on the left, the empty panel on the right.
+    SftpLocal,
+    /// The empty panel's host selection.
+    SftpPicker,
+    /// The transfer queue under the name conflict dialog.
+    SftpQueue,
+    /// The Actions menu of the local panel.
+    SftpActions,
+    /// The Delete confirmation.
+    SftpDelete,
+    /// The Edit Permissions dialog.
+    SftpPermissions,
+    /// Export to host over the first key's panel.
+    KeychainExport,
+    /// A key with an expired certificate: its block and warning.
+    KeychainCertificate,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -328,7 +345,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 54] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -342,6 +359,14 @@ impl ShotState {
         Self::NewHost,
         Self::ExportData,
         Self::ExportDataPlain,
+        Self::SftpLocal,
+        Self::SftpPicker,
+        Self::SftpQueue,
+        Self::SftpActions,
+        Self::SftpDelete,
+        Self::SftpPermissions,
+        Self::KeychainExport,
+        Self::KeychainCertificate,
         Self::ExportOpenSsh,
         Self::ImportData,
         Self::ImportSshConfig,
@@ -444,6 +469,14 @@ impl ShotState {
             Self::NewHost => "new-host",
             Self::ExportData => "export-data",
             Self::ExportDataPlain => "export-data-plain",
+            Self::SftpLocal => "sftp-local",
+            Self::SftpPicker => "sftp-picker",
+            Self::SftpQueue => "sftp-queue",
+            Self::SftpActions => "sftp-actions",
+            Self::SftpDelete => "sftp-delete",
+            Self::SftpPermissions => "sftp-permissions",
+            Self::KeychainExport => "keychain-export",
+            Self::KeychainCertificate => "keychain-certificate",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1350,6 +1383,16 @@ pub async fn reach_state(
             scroll_to_bottom(cx, handle, HOST_PANEL_BODY)
         }
         ShotState::KnownHosts => known_hosts_shot::reach(cx, handle, root, state).await,
+        ShotState::SftpLocal
+        | ShotState::SftpPicker
+        | ShotState::SftpQueue
+        | ShotState::SftpActions
+        | ShotState::SftpDelete
+        | ShotState::SftpPermissions
+        | ShotState::KeychainExport
+        | ShotState::KeychainCertificate => {
+            sftp_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Keychain
         | ShotState::KeychainPanel
         | ShotState::KeychainGenerate
@@ -1396,6 +1439,9 @@ pub fn check_state(
     }
     if ShotState::STAGE_3.contains(&shot_state) {
         return keychain_shot::check(cx, handle, root, shot_state);
+    }
+    if sftp_shot::STATES.contains(&shot_state) {
+        return sftp_shot::check(cx, handle, shot_state);
     }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
@@ -1525,6 +1571,15 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::KeychainGenerate
             | ShotState::KeychainImportUnknown
             | ShotState::KeychainEmpty => Err("checked with the Keychain screen"),
+            // Checked by `sftp_shot::check`.
+            ShotState::SftpLocal
+            | ShotState::SftpPicker
+            | ShotState::SftpQueue
+            | ShotState::SftpActions
+            | ShotState::SftpDelete
+            | ShotState::SftpPermissions
+            | ShotState::KeychainExport
+            | ShotState::KeychainCertificate => Err("checked with the stage 4 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -1788,6 +1843,7 @@ fn capture(
 
 mod keychain_shot;
 mod known_hosts_shot;
+mod sftp_shot;
 mod terminal;
 mod transfer_shot;
 

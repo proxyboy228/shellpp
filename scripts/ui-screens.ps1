@@ -95,7 +95,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (104 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (120 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -191,6 +191,11 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the two
 # imports, captured after new-host).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config')
+# Stage 4 (run 3): the SFTP tab and the Keychain's Export to host and
+# certificate (ShotState::Sftp*, Keychain{Export,Certificate}).
+$stage4States = @('sftp-local', 'sftp-picker', 'sftp-queue', 'sftp-actions', 'sftp-delete', 'sftp-permissions',
+    'keychain-export', 'keychain-certificate')
+$allStates += $stage4States
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
 # htop in the light theme after the contrast change and the drop's dot).
 $stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'split-picker', 'tab-menu',

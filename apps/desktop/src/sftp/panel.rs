@@ -481,6 +481,7 @@ impl FilePanel {
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.close_remote();
         self.source = Source::Empty;
+        self.picker = None;
         self.history = History::new("");
         self.entries.clear();
         self.selected.clear();
@@ -1439,7 +1440,7 @@ impl FilePanel {
             .flex_none()
             .h(metrics::HEIGHT_CONTROL)
             .gap(metrics::SPACE_2)
-            .child(div().flex_1().min_w_0().child(source))
+            .child(h_flex().flex_1().min_w_0().justify_start().child(source))
             .when(self.is_ready(), |this| {
                 this.child(div().w(FILTER_WIDTH).flex_none().child(widgets::text_input(
                     &self.filter,
@@ -1833,7 +1834,7 @@ impl FilePanel {
         };
         let list = v_virtual_list(
             cx.entity(),
-            self.id("rows"),
+            self.id("rows-list"),
             self.row_sizes.clone(),
             |this: &mut Self, range, _, cx| {
                 range
@@ -1844,6 +1845,8 @@ impl FilePanel {
         .track_scroll(&self.scroll)
         .size_full();
         v_flex()
+            .id(self.id("rows"))
+            .test_support()
             .relative()
             .flex_1()
             .min_h_0()

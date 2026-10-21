@@ -28,9 +28,12 @@ dev-tools = []
 # (`Window::render_to_image`, which needs gpui-kit's test-support) and saves
 # PNGs. A separate feature, so `--demo` builds (memory measurement) stay
 # without test-support.
-screenshots = ["dev-tools", "gpui-kit/test-support"]
+# The stage 4 states sign a demo certificate (ssh-key).
+screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key"]
 
 [dependencies]
+# Only for the screenshot run's demo certificate (feature `screenshots`).
+ssh-key = { workspace = true, optional = true }
 shellpp-core.workspace = true
 shellpp-private-file.workspace = true
 

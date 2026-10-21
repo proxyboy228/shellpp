@@ -312,7 +312,12 @@ fn open_rename(panel: Entity<FilePanel>, from: String, window: &mut Window, cx: 
 }
 
 /// Delete: `Delete "name"?` with what it removes; Delete in `--danger`.
-fn open_delete(panel: Entity<FilePanel>, entries: Vec<Entry>, window: &mut Window, cx: &mut App) {
+pub(crate) fn open_delete(
+    panel: Entity<FilePanel>,
+    entries: Vec<Entry>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     if entries.is_empty() {
         return;
     }
@@ -508,7 +513,7 @@ impl Render for PermissionsForm {
 
 /// Edit Permissions: the first entry's mode to start with; Apply sets the
 /// mode on every entry (into folders with "apply to everything inside").
-fn open_permissions(
+pub(crate) fn open_permissions(
     panel: Entity<FilePanel>,
     entries: Vec<Entry>,
     window: &mut Window,

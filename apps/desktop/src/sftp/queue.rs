@@ -134,6 +134,9 @@ struct Job {
     resume: bool,
     /// What a folder transfer left out (D56).
     skipped: usize,
+    /// The size and date of the file the target folder already holds (the
+    /// conflict dialog).
+    existing: Option<(u64, Option<u64>)>,
 }
 
 /// A running transfer.
@@ -244,6 +247,7 @@ impl Transfers {
                     choice: None,
                     resume: false,
                     skipped: 0,
+                    existing: None,
                 },
             );
         }
@@ -299,8 +303,10 @@ impl Transfers {
         let handle = job.to.handle().or_else(|| job.from.handle()).cloned();
         let work = async move {
             // A name that exists, unless already answered.
-            if choice.is_none() && exists(&target).await {
-                return Outcome::Conflict;
+            if choice.is_none()
+                && let Some(existing) = existing(&target).await
+            {
+                return Outcome::Conflict(existing);
             }
             let target = match choice {
                 Some(ConflictChoice::Rename) => match free_name(&taken_place, &target).await {
@@ -379,7 +385,7 @@ impl Transfers {
             Outcome::Failed(reason) => self.queue.fail(id, &reason),
             // Paused or cancelled: the state is already set.
             Outcome::Stopped => {}
-            Outcome::Conflict => match self.queue.conflict(id) {
+            Outcome::Conflict(existing) => match self.queue.conflict(id) {
                 ConflictOutcome::Decided(ConflictChoice::Skip) => {}
                 ConflictOutcome::Decided(choice) => {
                     // The policy answered: the transfer still holds its
@@ -389,7 +395,12 @@ impl Transfers {
                     }
                     self.start(id, window, cx);
                 }
-                ConflictOutcome::Ask => self.ask_conflict(id, window, cx),
+                ConflictOutcome::Ask => {
+                    if let Some(job) = self.jobs.get_mut(&id) {
+                        job.existing = Some(existing);
+                    }
+                    self.ask_conflict(id, window, cx)
+                }
             },
         }
         self.pump(window, cx);
@@ -459,6 +470,17 @@ impl Transfers {
         cx.notify();
     }
 
+    /// Cancels every open transfer and empties the queue (the screenshot
+    /// run starts each state from an empty queue).
+    pub fn clear_all(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<TransferId> = self.queue.transfers().iter().map(|t| t.id).collect();
+        for id in ids {
+            self.cancel(id, cx);
+        }
+        self.asking = None;
+        self.clear_finished(cx);
+    }
+
     pub fn clear_finished(&mut self, cx: &mut Context<Self>) {
         self.queue.clear_finished();
         let kept: Vec<TransferId> = self.queue.transfers().iter().map(|t| t.id).collect();
@@ -486,6 +508,13 @@ impl Transfers {
             job.entry.size_text(),
             panel::date_text(job.entry.modified)
         );
+        let here = job.existing.map(|(size, modified)| {
+            format!(
+                "{}, {}",
+                listing::human_size(size),
+                panel::date_text(modified)
+            )
+        });
         let runner = cx.entity().downgrade();
         let all = Arc::new(std::sync::atomic::AtomicBool::new(false));
         window.open_dialog(cx, move |dialog, _, cx| {
@@ -524,6 +553,14 @@ impl Transfers {
                                 .text_size(metrics::FONT_SIZE_BODY)
                                 .child(name.clone()),
                         )
+                        .when_some(here.clone(), |this, here| {
+                            this.child(
+                                div()
+                                    .text_size(metrics::FONT_SIZE_DENSE)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("{}: {here}", strings::CONFLICT_HERE)),
+                            )
+                        })
                         .child(
                             div()
                                 .text_size(metrics::FONT_SIZE_DENSE)
@@ -592,8 +629,9 @@ enum Outcome {
         skipped: usize,
     },
     Failed(String),
-    /// The target name exists and nothing was answered yet.
-    Conflict,
+    /// The target name exists (its size and date) and nothing was answered
+    /// yet.
+    Conflict((u64, Option<u64>)),
     /// Paused or cancelled (the task was aborted).
     Stopped,
 }
@@ -606,11 +644,23 @@ fn reason(error: SftpError) -> String {
     error.to_string()
 }
 
-/// Whether `spot` exists.
-async fn exists(spot: &Spot) -> bool {
+/// The size and modification time of `spot` when it exists.
+async fn existing(spot: &Spot) -> Option<(u64, Option<u64>)> {
     match spot {
-        Spot::Local(path) => tokio::fs::symlink_metadata(path).await.is_ok(),
-        Spot::Remote(sftp, path) => sftp.stat(path).await.is_ok(),
+        Spot::Local(path) => {
+            let meta = tokio::fs::symlink_metadata(path).await.ok()?;
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|since| since.as_secs());
+            Some((meta.len(), modified))
+        }
+        Spot::Remote(sftp, path) => sftp
+            .stat(path)
+            .await
+            .ok()
+            .map(|entry| (entry.size, entry.modified)),
     }
 }
 
@@ -813,7 +863,14 @@ impl Render for Transfers {
             let id = transfer.id;
             let state = transfer.state.clone();
             let skipped = self.jobs.get(&id).map_or(0, |job| job.skipped);
-            let fraction = transfer.fraction().unwrap_or(0.) as f32;
+            let fraction = if state == State::Done {
+                1.
+            } else {
+                transfer.fraction().unwrap_or(0.) as f32
+            };
+            let local_copy = self.jobs.get(&id).is_some_and(|job| {
+                matches!((&job.from, &job.to), (Place::Local(_), Place::Local(_)))
+            });
             let row_id = SharedString::from(format!("sftp-transfer-{}", transfer.name));
             let button = |suffix: &str, icon: Lucide, tooltip: &'static str| {
                 ControlButton::new(
@@ -855,7 +912,11 @@ impl Render for Transfers {
                         .flex_none()
                         .text_size(metrics::FONT_SIZE_CAPTION)
                         .text_color(theme.muted_foreground)
-                        .child(direction_text(transfer.direction)),
+                        .child(if local_copy {
+                            strings::COPY_LOCAL
+                        } else {
+                            direction_text(transfer.direction)
+                        }),
                 )
                 .child(
                     div()
