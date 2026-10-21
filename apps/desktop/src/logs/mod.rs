@@ -331,7 +331,13 @@ impl LogsScreen {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
-            .child(div().flex_none().w(DATE_COLUMN).child(sort))
+            // The button's own padding: its label lines up with the dates.
+            .child(
+                h_flex()
+                    .flex_none()
+                    .w(DATE_COLUMN)
+                    .child(div().ml(-metrics::SPACE_3).child(sort)),
+            )
             .child(cell(strings::USER).flex_none().w(USER_COLUMN))
             .child(cell(strings::HOST).flex_1().min_w_0())
             .child(
