@@ -413,12 +413,15 @@ mod tests {
                 enabled,
             }
         };
+        // Colors from the palette (no color literals outside src/theme).
+        let palette =
+            |index: usize| crate::theme::highlight::hex(crate::theme::highlight::PALETTE[index][0]);
         let rules = Rules::from_views(&[
-            view("custom", None, Some("time\\s?out"), "#112233", true),
-            view("custom", None, Some("disk ERROR"), "#445566", true),
-            view("custom", None, Some("never"), "#778899", false),
-            view("category", Some("warning"), None, "#ABCDEF", true),
-            view("category", Some("ok"), None, "#000000", false),
+            view("custom", None, Some("time\\s?out"), &palette(0), true),
+            view("custom", None, Some("disk ERROR"), &palette(3), true),
+            view("custom", None, Some("never"), &palette(6), false),
+            view("category", Some("warning"), None, &palette(7), true),
+            view("category", Some("ok"), None, &palette(4), false),
         ]);
         assert_eq!(rules.custom_count(), 2);
         let text = "ü Timeout: disk error, warning ok";
@@ -431,15 +434,15 @@ mod tests {
                 )
             })
             .collect();
-        let rgb = |text: &str| parse_color(text).unwrap();
+        let color = |index: usize| parse_color(&palette(index)).unwrap();
         assert_eq!(
             found,
             [
-                ("Timeout".to_owned(), rgb("#112233")),
+                ("Timeout".to_owned(), color(0)),
                 // The custom rule takes "disk error"; the Error category
                 // does not color its "error" again.
-                ("disk error".to_owned(), rgb("#445566")),
-                ("warning".to_owned(), rgb("#ABCDEF")),
+                ("disk error".to_owned(), color(3)),
+                ("warning".to_owned(), color(7)),
             ]
         );
         assert_eq!(parse_color("#zzzzzz"), None);

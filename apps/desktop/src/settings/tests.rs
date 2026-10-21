@@ -427,9 +427,11 @@ fn terminal_section_defaults_and_changes(cx: &mut TestAppContext) {
     assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(0));
     assert!(!ui.visible("settings-keepalive-error", cx));
     type_into(&ui, "settings-keepalive", "-5", cx);
-    assert!(ui.visible("settings-keepalive-error", cx));
+    // The error line can sit just below the scrolled view.
+    assert!(reveal(&ui, "settings-keepalive-error", cx));
     type_into(&ui, "settings-keepalive", "99999", cx);
-    assert!(ui.visible("settings-keepalive-error", cx));
+    // The error line can sit just below the scrolled view.
+    assert!(reveal(&ui, "settings-keepalive-error", cx));
     assert_eq!(stored(&ui, "terminal.keepalive_s", cx), json!(0));
     type_into(&ui, "settings-keepalive", "45", cx);
     assert!(!ui.visible("settings-keepalive-error", cx));
@@ -489,7 +491,8 @@ fn terminal_contrast_and_line_spacing(cx: &mut TestAppContext) {
     assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.75));
     assert!((terminals(cx).line_height - 1.75).abs() < 0.001);
     type_into(&ui, "settings-line-height", "0.5", cx);
-    assert!(ui.visible("settings-line-height-error", cx));
+    // The error line can sit just below the scrolled view.
+    assert!(reveal(&ui, "settings-line-height-error", cx));
     assert_eq!(stored(&ui, "terminal.line_height", cx), json!(1.75));
     type_into(&ui, "settings-line-height", "2", cx);
     assert!(!ui.visible("settings-line-height-error", cx));

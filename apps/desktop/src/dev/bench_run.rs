@@ -136,7 +136,7 @@ fn install_bench_rules() {
                 category: None,
                 pattern: Some((*pattern).to_owned()),
                 case_insensitive: true,
-                color_dark: "#C586F0".into(),
+                color_dark: crate::theme::highlight::hex(crate::theme::highlight::PALETTE[6][0]),
                 color_light: None,
                 enabled: true,
             },

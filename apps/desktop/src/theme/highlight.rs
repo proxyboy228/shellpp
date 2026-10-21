@@ -24,3 +24,13 @@ pub const PALETTE: [CategoryColors; 8] = [
     [(0xC5, 0x86, 0xF0), (0x82, 0x50, 0xDF)],
     [(0xF0, 0x8A, 0x4B), (0xBC, 0x4C, 0x00)],
 ];
+
+/// `#RRGGBB` of a palette color (the form rules store).
+pub fn hex((r, g, b): (u8, u8, u8)) -> String {
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// A palette color as a fill (the swatches of Settings → Terminal).
+pub fn fill((r, g, b): (u8, u8, u8)) -> gpui::Rgba {
+    gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
+}

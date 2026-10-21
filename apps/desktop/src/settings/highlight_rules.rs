@@ -24,13 +24,8 @@ use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
 use crate::state::AppState;
 use crate::terminal::highlight::{Category, parse_color};
-use crate::theme::highlight::{CategoryColors, PALETTE};
+use crate::theme::highlight::{CategoryColors, PALETTE, fill, hex};
 use crate::theme::metrics;
-
-/// `#RRGGBB` of a palette color.
-fn hex((r, g, b): (u8, u8, u8)) -> String {
-    format!("#{r:02X}{g:02X}{b:02X}")
-}
 
 /// The palette entry a rule's dark color is, if any.
 fn palette_index(color_dark: &str) -> Option<usize> {
@@ -309,8 +304,7 @@ impl HighlightRulesBlock {
         h_flex()
             .gap(metrics::SPACE_1)
             .children(PALETTE.iter().enumerate().map(|(index, pair)| {
-                let (r, g, b) = pair[0];
-                let fill = gpui::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));
+                let fill = fill(pair[0]);
                 let on_pick = on_pick.clone();
                 div()
                     .id(SharedString::from(format!("{prefix}-color-{index}")))
