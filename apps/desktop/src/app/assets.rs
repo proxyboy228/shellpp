@@ -44,6 +44,7 @@ gpui_kit::assets::icon_assets!(pub AppIcons, [
     Monitor,
     Play,
     Plus,
+    RotateCcw,
     RotateCcwClock,
     ScrollText,
     Server,
