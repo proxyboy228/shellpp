@@ -207,9 +207,9 @@ fn sidebar_sections(cx: &mut TestAppContext) {
 
     // A section whose screen is not built yet shows the placeholder (D28);
     // the Keychain has its screen since stage 3.
-    ui.click("nav-snippets", cx);
+    ui.click("nav-logs", cx);
     let shell = ui.shell(cx);
-    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Snippets);
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Logs);
     assert!(ui.visible("section-placeholder", cx));
     assert!(!ui.visible("hosts-screen", cx));
     ui.click("nav-keychain", cx);
@@ -219,6 +219,9 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     // Port Forwarding has its screen since stage 5.
     ui.click("nav-port-forwarding", cx);
     assert!(ui.visible("forwarding-screen", cx));
+    assert!(!ui.visible("section-placeholder", cx));
+    ui.click("nav-snippets", cx);
+    assert!(ui.visible("snippets-screen", cx));
     assert!(!ui.visible("section-placeholder", cx));
     ui.click("nav-hosts", cx);
     assert!(ui.visible("hosts-screen", cx));

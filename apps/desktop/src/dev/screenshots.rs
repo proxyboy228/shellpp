@@ -244,6 +244,16 @@ pub enum ShotState {
     ForwardingCards,
     /// The full form of a Remote rule on all interfaces, with its status.
     ForwardingForm,
+    /// The Snippets screen: a package and snippet cards (UI 9).
+    Snippets,
+    /// A snippet's panel with its targets.
+    SnippetPanel,
+    /// The values of a run's `{{name}}` variables.
+    SnippetVariables,
+    /// The confirmation of a run on several hosts.
+    SnippetConfirm,
+    /// The results table of a run.
+    SnippetResults,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -351,7 +361,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 62] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -379,6 +389,11 @@ impl ShotState {
         Self::ForwardingEmpty,
         Self::ForwardingCards,
         Self::ForwardingForm,
+        Self::Snippets,
+        Self::SnippetPanel,
+        Self::SnippetVariables,
+        Self::SnippetConfirm,
+        Self::SnippetResults,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
@@ -489,6 +504,11 @@ impl ShotState {
             Self::ForwardingEmpty => "forwarding-empty",
             Self::ForwardingCards => "forwarding-cards",
             Self::ForwardingForm => "forwarding-form",
+            Self::Snippets => "snippets",
+            Self::SnippetPanel => "snippet-panel",
+            Self::SnippetVariables => "snippet-variables",
+            Self::SnippetConfirm => "snippet-confirm",
+            Self::SnippetResults => "snippet-results",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1414,6 +1434,13 @@ pub async fn reach_state(
         ShotState::ForwardingEmpty | ShotState::ForwardingCards | ShotState::ForwardingForm => {
             forwarding_shot::reach(cx, handle, root, state, shot_state).await
         }
+        ShotState::Snippets
+        | ShotState::SnippetPanel
+        | ShotState::SnippetVariables
+        | ShotState::SnippetConfirm
+        | ShotState::SnippetResults => {
+            snippets_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -1460,6 +1487,9 @@ pub fn check_state(
     }
     if forwarding_shot::STATES.contains(&shot_state) {
         return forwarding_shot::check(cx, handle, shot_state);
+    }
+    if snippets_shot::STATES.contains(&shot_state) {
+        return snippets_shot::check(cx, handle, shot_state);
     }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
@@ -1599,9 +1629,14 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::KeychainExport
             | ShotState::KeychainCertificate => Err("checked with the stage 4 screens"),
             // Checked by `forwarding_shot::check`.
-            ShotState::ForwardingEmpty | ShotState::ForwardingCards | ShotState::ForwardingForm => {
-                Err("checked with the stage 5 screens")
-            }
+            ShotState::ForwardingEmpty
+            | ShotState::ForwardingCards
+            | ShotState::ForwardingForm
+            | ShotState::Snippets
+            | ShotState::SnippetPanel
+            | ShotState::SnippetVariables
+            | ShotState::SnippetConfirm
+            | ShotState::SnippetResults => Err("checked with the stage 5 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -1867,6 +1902,7 @@ mod forwarding_shot;
 mod keychain_shot;
 mod known_hosts_shot;
 mod sftp_shot;
+mod snippets_shot;
 mod terminal;
 mod transfer_shot;
 
