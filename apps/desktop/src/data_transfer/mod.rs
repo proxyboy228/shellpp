@@ -1127,6 +1127,14 @@ impl ImportDialog {
                     summary.history_left_out,
                 ))
             })
+            // Rules on every interface come without autostart (D63).
+            .when(summary.rules_autostart_off > 0, |this| {
+                this.child(row(
+                    "data-import-rules-autostart-off",
+                    strings::SUMMARY_RULES_AUTOSTART_OFF,
+                    summary.rules_autostart_off,
+                ))
+            })
     }
 
     fn render_contents(

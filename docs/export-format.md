@@ -123,9 +123,14 @@ it derives anything.
 Import data reads both files (the encrypted one asks for its password) and
 merges them into the personal vault (D34):
 
-- Taken: groups, hosts, keys, identities and known hosts, each checked by
-  the same rules as a save (a record that breaks them is listed with its
-  errors and left out; the others are imported). The command history, the
+- Taken: groups, hosts, keys, identities, known hosts, snippets, snippet
+  packages and forwarding rules, each checked by the same rules as a save
+  (a record that breaks them is listed with its errors and left out; the
+  others are imported). A reference to a record that is neither here nor in
+  the file is kept and reads as missing (D63). A forwarding rule that
+  listens beyond loopback is imported with both autostart flags off, except
+  in a full restore; the summary counts such rules (D63, security.md 11.3).
+  The command history, the
   hosts' history hint states and the connection log are taken too when the
   file holds them, unless the user turns them off (both on, D51): each
   history entry goes through the capture rules and the secret detector of

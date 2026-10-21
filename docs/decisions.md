@@ -989,3 +989,20 @@ Status: accepted, 2026-10-21 (owner's choice; the six questions in section 3 of 
 6. Locking does not stop running forwarding rules, as it does not close open sessions (UI 13.3). While the app is locked no rule starts: autostart on connect and on launch waits for unlock, and so does the restart of a rule whose connection dropped.
 
 **Spec impact:** with the implementation: `docs/export-format.md` section 4 and `docs/data-model.md` 18.4 (the record types Import Data takes), `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).
+
+## Run 3 of 2026-10-21
+
+The decisions below were taken during the owner's third long run (its plan, section 1.1), marked "run 3"; the disputable ones are listed for the owner in the run report.
+
+### 63. Import Data of snippets, packages and forwarding rules (run 3)
+
+Status: run 3 decision, 2026-10-21 (plan, section 5; how D62, item 4, is built; amends D34).
+
+**Decision:**
+
+- Import Data takes `snippet_package`, `snippet` and `forwarding_rule` records by the rules of D34, after the hosts and before the history: each is checked by the rules of its save (`build_package`, `build_snippet`, `build_rule`); a conflict copy gets " (imported)" on its `name` (package) or `label` (snippet, rule) and the `import_key` `json:<exported id>`. A rule's `import_key` and the others' come back from the file as for hosts.
+- References are rewritten as every other reference of an import: a snippet's package and target hosts, a host's startup snippet and a rule's host point to the imported copy when that record is a conflict copy and the naming record is new or a copy itself. A snippet or rule that is the same as here stays "already exists" with its references to the local records, even when its package or host became a copy (D34). The `missing_ref` check of a save is not applied: a reference to a record that is neither here nor in the file stays and reads as missing (data-model 3.4, principle 3).
+- A forwarding rule that listens beyond loopback (`0.0.0.0`, `::`, any non-loopback address) is imported with `autostart_on_connect` and `autostart_on_launch` off, as the `~/.ssh/config` import does (D62, item 5; security.md 11.3): a file from elsewhere does not open such a port on its own. "Full restore from my backup" keeps the file's flags. The incoming rule is compared in that form, so the next import of the same file finds it again; the summary counts such rules ("Forwarding rules on every interface, imported without autostart").
+- A startup snippet comes with its host: it runs only on that host, which the same file defines, unlike the OS detection script that D41 keeps local because it runs on every server.
+
+**Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).

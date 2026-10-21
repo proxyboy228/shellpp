@@ -18,8 +18,10 @@
 //! - An id that exists here with other content is a conflict: both versions
 //!   are kept; the imported one gets a new id and an " (imported)" suffix
 //!   on its label or name, and references inside the import point to it.
-//! - Groups, hosts, keys, identities and known hosts are imported, each
-//!   checked by the same rules as a save; the command history and the
+//! - Groups, hosts, keys, identities, known hosts, snippets, snippet
+//!   packages and forwarding rules are imported, each checked by the same
+//!   rules as a save (D63: a rule that listens beyond loopback comes without
+//!   autostart, except in a full restore); the command history and the
 //!   connection log too unless the user turns them off (D51), each history
 //!   entry through the secret detector of live recording; device records
 //!   are skipped and counted.
@@ -60,6 +62,7 @@ use crate::model::group::{self, GroupRules};
 use crate::model::host::{self, HostRules};
 use crate::model::identity::{self, PasswordChange};
 use crate::model::known_host;
+use crate::model::snippet;
 use crate::model::time::{format_timestamp, is_timestamp};
 use crate::model::types::RecordKind;
 use crate::model::wipe::WipeOnDrop;
@@ -79,13 +82,17 @@ pub const CONFLICT_SUFFIX: &str = " (imported)";
 const MAX_GROUP_DEPTH: usize = 32;
 
 /// The record types an import takes, in the order they are written: the
-/// history and the connection log after the hosts they name (D51).
-const IMPORTED: [RecordKind; 8] = [
+/// snippets after their packages, the history and the connection log after
+/// the hosts they name (D51, D63).
+const IMPORTED: [RecordKind; 11] = [
     RecordKind::Group,
     RecordKind::Key,
     RecordKind::Identity,
     RecordKind::Host,
     RecordKind::KnownHost,
+    RecordKind::SnippetPackage,
+    RecordKind::Snippet,
+    RecordKind::ForwardingRule,
     RecordKind::HistoryEntry,
     RecordKind::HistoryHintState,
     RecordKind::ConnectionLogEntry,
@@ -151,10 +158,36 @@ fn imported(kind: RecordKind, input: &DataImportInput) -> bool {
 /// The label member of a record type (for the conflict suffix).
 fn label_member(kind: RecordKind) -> Option<&'static str> {
     match kind {
-        RecordKind::Group => Some("name"),
-        RecordKind::Host | RecordKind::Key | RecordKind::Identity => Some("label"),
+        RecordKind::Group | RecordKind::SnippetPackage => Some("name"),
+        RecordKind::Host
+        | RecordKind::Key
+        | RecordKind::Identity
+        | RecordKind::Snippet
+        | RecordKind::ForwardingRule => Some("label"),
         _ => None,
     }
+}
+
+/// A forwarding rule from a file that listens beyond loopback never starts
+/// on its own (D63; security.md 11.3, as the `~/.ssh/config` import, D62):
+/// both autostart flags go off unless the user restores a backup of their
+/// own. Applied before the rule is compared, so the next import of the
+/// same file finds it again. Returns whether a flag was turned off.
+fn as_imported_rule(data: &mut Map<String, Value>) -> bool {
+    let wide = data
+        .get("bind_address")
+        .and_then(Value::as_str)
+        .is_some_and(|address| !address.trim().is_empty() && snippet::is_wide_bind(address));
+    let mut changed = false;
+    if wide {
+        for flag in ["autostart_on_connect", "autostart_on_launch"] {
+            if data.get(flag) == Some(&Value::Bool(true)) {
+                data.insert(flag.into(), Value::Bool(false));
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// Whether `local` holds what `incoming` holds once the ids of `map` are
@@ -375,6 +408,17 @@ fn check(
             })?;
             known_host::to_data(&checked)
         }
+        // References are not checked here: one to a record that is neither
+        // here nor in the file stays and reads as missing (D63).
+        RecordKind::SnippetPackage => {
+            input.remove("order_key");
+            snippet::build_package(&input, None)?
+        }
+        RecordKind::Snippet => {
+            input.remove("order_key");
+            snippet::build_snippet(&input, None)?
+        }
+        RecordKind::ForwardingRule => snippet::build_rule(&input, None)?,
         _ => return Err(vec![FieldError::new("type", ValidationReason::NotAllowed)]),
     };
     if let Some(Value::String(order_key)) = order_key
@@ -564,7 +608,13 @@ fn restore_managed(
 ) {
     if matches!(
         kind,
-        RecordKind::Host | RecordKind::Group | RecordKind::Identity | RecordKind::Key
+        RecordKind::Host
+            | RecordKind::Group
+            | RecordKind::Identity
+            | RecordKind::Key
+            | RecordKind::SnippetPackage
+            | RecordKind::Snippet
+            | RecordKind::ForwardingRule
     ) && let Some(raw) = incoming.get("import_key").and_then(Value::as_str)
         && let Ok(Some(import_key)) = text::string(raw, MAX_IMPORT_KEY_CHARS)
     {
@@ -826,6 +876,8 @@ impl Core {
         let mut summary = DataImportSummary::default();
         let mut incoming: Vec<Incoming> = Vec::new();
         let mut seen: HashSet<Uuid> = HashSet::new();
+        // Forwarding rules whose autostart this import turned off (D63).
+        let mut quieted: HashSet<Uuid> = HashSet::new();
         // The exported personal vault: the history and the connection log
         // name its hosts by vault and record id (`host_link`).
         let mut exported_vaults: Vec<Uuid> = Vec::new();
@@ -864,6 +916,12 @@ impl Core {
                             let mut data = WipeOnDrop::new(data.clone());
                             if kind == RecordKind::ConnectionLogEntry {
                                 as_imported_log_entry(&mut data);
+                            }
+                            if kind == RecordKind::ForwardingRule
+                                && !input.full_restore
+                                && as_imported_rule(&mut data)
+                            {
+                                quieted.insert(record_id);
                             }
                             incoming.push(Incoming {
                                 kind,
@@ -1096,6 +1154,9 @@ impl Core {
                 } else {
                     summary.added += 1;
                 }
+                if quieted.contains(&record.record_id) {
+                    summary.rules_autostart_off += 1;
+                }
                 writes.push((record.kind, target, data));
             }
             // References to records that are neither here nor imported are
@@ -1140,6 +1201,7 @@ impl Core {
             refused = summary.refused.len(),
             unknown_keys = summary.unknown_keys,
             history_left_out = summary.history_left_out,
+            rules_autostart_off = summary.rules_autostart_off,
             full_restore = input.full_restore,
             "data imported"
         );

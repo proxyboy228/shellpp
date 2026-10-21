@@ -4,8 +4,9 @@
 //! empty store, and every host, group, tag, key, identity, known host and
 //! setting is the same, plain and encrypted. Then the merge rules: a second
 //! import adds nothing, a conflicting record is kept as a suffixed copy,
-//! wrong passwords and hostile files are refused. Every secret is
-//! generated at run time.
+//! wrong passwords and hostile files are refused. Snippets, their packages
+//! and forwarding rules come back with every reference between them and to
+//! the hosts (D62, D63). Every secret is generated at run time.
 
 mod common;
 mod stage2;
@@ -24,7 +25,20 @@ use shellpp_core::service::dto::{
     SettingsSetInput,
 };
 use shellpp_core::service::keychain::IdentitySaveInput;
+use shellpp_core::service::snippets::RecordInput;
 use uuid::Uuid;
+
+/// The record types an import takes, compared by the round trips.
+const COMPARED: [&str; 8] = [
+    "group",
+    "host",
+    "key",
+    "identity",
+    "known_host",
+    "snippet_package",
+    "snippet",
+    "forwarding_rule",
+];
 
 /// Content of a vault worth comparing: (type, record id) -> data, for the
 /// types an import takes, and the settings. Read from a plain export.
@@ -42,7 +56,7 @@ fn content(core: &Core) -> Content {
         .expect("records")
     {
         let kind = record["type"].as_str().unwrap().to_owned();
-        if ["group", "host", "key", "identity", "known_host"].contains(&kind.as_str()) {
+        if COMPARED.contains(&kind.as_str()) {
             let id = record["record_id"].as_str().unwrap().to_owned();
             records.insert((kind, id), record["data"].clone());
         }
@@ -168,6 +182,92 @@ fn populated() -> common::Unlocked {
             reset: Vec::new(),
         })
         .expect("settings");
+    u
+}
+
+fn record_input(u: &common::Unlocked, record_id: Option<Uuid>, data: Value) -> RecordInput {
+    RecordInput {
+        vault_id: u.vault_id,
+        record_id,
+        data: common::map(data),
+    }
+}
+
+/// The id of the record of `kind` whose `member` is `value`.
+fn id_of(core: &Core, kind: &str, member: &str, value: &str) -> Uuid {
+    content(core)
+        .0
+        .into_iter()
+        .find(|((record_kind, _), data)| record_kind == kind && data[member] == value)
+        .map(|((_, id), _)| Uuid::parse_str(&id).unwrap())
+        .unwrap_or_else(|| panic!("no {kind} with {member} {value}"))
+}
+
+/// [`populated`] with a snippet package, a snippet in it that targets web-1,
+/// a snippet that is db's startup snippet, and two forwarding rules of db: a
+/// loopback tunnel that starts on connect and a SOCKS proxy on every
+/// interface that starts on launch.
+fn with_snippets() -> common::Unlocked {
+    let u = populated();
+    let web1 = id_of(&u.core, "host", "label", "web-1");
+    let db = id_of(&u.core, "host", "label", "db");
+    let package = u
+        .core
+        .snippet_package_save(record_input(&u, None, json!({"name": "Deploy"})))
+        .expect("package");
+    u.core
+        .snippet_save(record_input(
+            &u,
+            None,
+            json!({
+                "label": "restart",
+                "script": "sudo systemctl restart {{service}}",
+                "package_id": package.record.record_id.to_string(),
+                "tags": ["ops"],
+                "target_host_ids": [web1.to_string()]
+            }),
+        ))
+        .expect("snippet in a package");
+    let startup = u
+        .core
+        .snippet_save(record_input(
+            &u,
+            None,
+            json!({"label": "motd", "script": "uptime"}),
+        ))
+        .expect("startup snippet");
+    let mut data = content(&u.core).0[&("host".to_owned(), db.to_string())].clone();
+    data["ssh"]["startup_snippet_id"] = json!(startup.record.record_id.to_string());
+    save(&u.core, u.vault_id, Some(db), RecordType::Host, data, &[]).expect("startup link");
+    u.core
+        .forwarding_rule_save(record_input(
+            &u,
+            None,
+            json!({
+                "type": "local",
+                "host_id": db.to_string(),
+                "label": "db tunnel",
+                "bind_port": 15432,
+                "dest_address": "db.internal",
+                "dest_port": 5432,
+                "autostart_on_connect": true
+            }),
+        ))
+        .expect("loopback rule");
+    u.core
+        .forwarding_rule_save(record_input(
+            &u,
+            None,
+            json!({
+                "type": "dynamic",
+                "host_id": db.to_string(),
+                "label": "lab socks",
+                "bind_address": "0.0.0.0",
+                "bind_port": 1080,
+                "autostart_on_launch": true
+            }),
+        ))
+        .expect("rule on every interface");
     u
 }
 
@@ -596,4 +696,182 @@ fn records_that_name_a_copied_record_are_not_copied_again() {
         .filter(|((kind, _), data)| kind == "group" && data["name"] == "by identity (imported)")
         .count();
     assert_eq!(groups, 0);
+}
+
+/// Snippets, packages and forwarding rules come back with every reference
+/// between them and to the hosts (D62), from a plain and from an encrypted
+/// file. A full restore keeps every rule as it was; an ordinary import
+/// turns off the autostart of a rule that listens beyond loopback (D63), and
+/// the same file again finds every record.
+#[test]
+fn snippets_packages_and_rules_round_trip_with_their_references() {
+    let source = with_snippets();
+    let expected = content(&source.core);
+    let count = |kind: &str| expected.0.keys().filter(|(k, _)| k == kind).count();
+    assert_eq!(
+        (
+            count("snippet_package"),
+            count("snippet"),
+            count("forwarding_rule")
+        ),
+        (1, 2, 2)
+    );
+    let wide = id_of(&source.core, "forwarding_rule", "label", "lab socks");
+    let plain = source.core.data_export(DataExportInput::default()).unwrap();
+    let export_password = format!("export-{}", common::random_hex());
+    let encrypted = source
+        .core
+        .data_export(DataExportInput {
+            password: Some(SecretString::from(export_password.clone())),
+            ..DataExportInput::default()
+        })
+        .unwrap();
+    assert!(!encrypted.text.expose_secret().contains("systemctl"));
+
+    for (text, password) in [
+        (&plain.text, None),
+        (&encrypted.text, Some(export_password.as_str())),
+    ] {
+        let secret = |value: &str| SecretString::from(value.to_owned());
+        // A full restore: everything as it was.
+        let target = first_run();
+        let summary = target
+            .core
+            .data_import(DataImportInput {
+                full_restore: true,
+                ..DataImportInput::new(text.clone(), password.map(secret))
+            })
+            .unwrap();
+        assert!(summary.refused.is_empty(), "{:?}", summary.refused);
+        assert_eq!(summary.added, expected.0.len());
+        assert_eq!(summary.rules_autostart_off, 0);
+        assert_eq!(content(&target.core).0, expected.0);
+        // The references read through the services here.
+        let package = id_of(&target.core, "snippet_package", "name", "Deploy");
+        let web1 = id_of(&target.core, "host", "label", "web-1");
+        let db = id_of(&target.core, "host", "label", "db");
+        let snippets = target.core.snippets_list(target.vault_id).unwrap();
+        let restart = snippets
+            .iter()
+            .find(|view| view.label.as_deref() == Some("restart"))
+            .unwrap();
+        assert_eq!(restart.package_id, Some(package));
+        assert_eq!(restart.target_host_ids, vec![web1]);
+        assert_eq!(restart.variables, vec!["service".to_owned()]);
+        let motd = id_of(&target.core, "snippet", "label", "motd");
+        assert_eq!(
+            content(&target.core).0[&("host".to_owned(), db.to_string())]["ssh"]["startup_snippet_id"],
+            motd.to_string()
+        );
+        let rules = target.core.forwarding_rules_personal().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(rules.iter().all(|rule| rule.host_id == db), "{rules:?}");
+
+        // An ordinary import: the same, except the rule on every interface.
+        let target = first_run();
+        let summary = import(&target.core, text, password);
+        assert!(summary.refused.is_empty(), "{:?}", summary.refused);
+        assert_eq!(summary.added, expected.0.len());
+        assert_eq!(summary.rules_autostart_off, 1);
+        let mut wanted = expected.0.clone();
+        wanted
+            .get_mut(&("forwarding_rule".to_owned(), wide.to_string()))
+            .unwrap()["autostart_on_launch"] = json!(false);
+        assert_eq!(content(&target.core).0, wanted);
+        // The same file again adds and copies nothing.
+        let again = import(&target.core, text, password);
+        assert_eq!(
+            (again.added, again.conflicts, again.existing),
+            (0, 0, expected.0.len()),
+            "{again:?}"
+        );
+        assert_eq!(again.rules_autostart_off, 0);
+    }
+}
+
+/// A package, a snippet, a host and a rule changed here are conflicts: the
+/// imported copies get the suffix, and the copies of the snippet and the
+/// rule point to the copies of the package and the host. A record of the
+/// file that is the same as here stays "existing", with its references to
+/// the local records (D34). The next import of the same file finds the
+/// copies.
+#[test]
+fn conflicting_snippets_and_rules_point_to_the_imported_copies() {
+    let source = with_snippets();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let target = first_run();
+    let total = import(&target.core, &export.text, None).added;
+    let package = id_of(&target.core, "snippet_package", "name", "Deploy");
+    target
+        .core
+        .snippet_package_save(record_input(
+            &target,
+            Some(package),
+            json!({"name": "Deploy here"}),
+        ))
+        .unwrap();
+    let restart = id_of(&target.core, "snippet", "label", "restart");
+    let mut snippet = content(&target.core).0[&("snippet".to_owned(), restart.to_string())].clone();
+    snippet["script"] = json!("sudo systemctl reload {{service}}");
+    target
+        .core
+        .snippet_save(record_input(&target, Some(restart), snippet))
+        .unwrap();
+    let db = id_of(&target.core, "host", "label", "db");
+    let mut data = content(&target.core).0[&("host".to_owned(), db.to_string())].clone();
+    data["notes"] = json!("changed here");
+    save(
+        &target.core,
+        target.vault_id,
+        Some(db),
+        RecordType::Host,
+        data,
+        &[],
+    )
+    .unwrap();
+    let tunnel = id_of(&target.core, "forwarding_rule", "label", "db tunnel");
+    let mut rule =
+        content(&target.core).0[&("forwarding_rule".to_owned(), tunnel.to_string())].clone();
+    rule["bind_port"] = json!(25432);
+    target
+        .core
+        .forwarding_rule_save(record_input(&target, Some(tunnel), rule))
+        .unwrap();
+
+    let summary = import(&target.core, &export.text, None);
+    assert_eq!(summary.conflicts, 4, "{summary:?}");
+    assert_eq!(summary.existing, total - 4);
+    let package_copy = id_of(&target.core, "snippet_package", "name", "Deploy (imported)");
+    let db_copy = id_of(&target.core, "host", "label", "db (imported)");
+    let records = content(&target.core).0;
+    let record = |kind: &str, label: &str| {
+        records[&(
+            kind.to_owned(),
+            id_of(&target.core, kind, "label", label).to_string(),
+        )]
+            .clone()
+    };
+    let snippet_copy = record("snippet", "restart (imported)");
+    assert_eq!(snippet_copy["package_id"], package_copy.to_string());
+    assert_eq!(snippet_copy["script"], "sudo systemctl restart {{service}}");
+    assert_eq!(snippet_copy["import_key"], format!("json:{restart}"));
+    let rule_copy = record("forwarding_rule", "db tunnel (imported)");
+    assert_eq!(rule_copy["host_id"], db_copy.to_string());
+    assert_eq!(rule_copy["bind_port"], 15432);
+    // The local records keep their own references.
+    assert_eq!(
+        record("snippet", "restart")["package_id"],
+        package.to_string()
+    );
+    assert_eq!(
+        record("forwarding_rule", "db tunnel")["host_id"],
+        db.to_string()
+    );
+    assert_eq!(
+        record("forwarding_rule", "lab socks")["host_id"],
+        db.to_string()
+    );
+
+    let again = import(&target.core, &export.text, None);
+    assert_eq!((again.added, again.conflicts), (0, 0), "{again:?}");
 }

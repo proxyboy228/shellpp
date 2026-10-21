@@ -1426,6 +1426,9 @@ pub struct DataImportSummary {
     /// History entries left out because the secret detector or the capture
     /// rules of live recording would not have recorded them (D51).
     pub history_left_out: usize,
+    /// Forwarding rules of the file that listen beyond loopback, imported
+    /// with autostart off (D63; not in a full restore).
+    pub rules_autostart_off: usize,
 }
 
 /// Result of `key_import`.
