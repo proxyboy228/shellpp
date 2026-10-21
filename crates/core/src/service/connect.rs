@@ -10,7 +10,7 @@
 //!
 //! Owner: S4. The public signatures are in `service/mod.rs` (lead contract).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use secrecy::{ExposeSecret, SecretString};
@@ -1513,7 +1513,20 @@ impl Core {
         input: HistoryListInput,
     ) -> Result<Vec<HistoryEntryView>, CoreError> {
         let host = input.host;
-        self.history_entries(input.text.as_deref(), input.limit, |data| {
+        self.history_entries(input.text.as_deref(), input.limit, false, |data| {
+            same_link(data, host)
+        })
+    }
+
+    /// The History tab (UI 4.2): as `history_list`, with the entries of one
+    /// command collapsed into its newest (run 3 polish, D64); each row
+    /// lists the ids of the older ones, so deleting the row deletes them all.
+    pub fn history_list_distinct(
+        &self,
+        input: HistoryListInput,
+    ) -> Result<Vec<HistoryEntryView>, CoreError> {
+        let host = input.host;
+        self.history_entries(input.text.as_deref(), input.limit, true, |data| {
             same_link(data, host)
         })
     }
@@ -1524,16 +1537,19 @@ impl Core {
         input: super::dto::HistorySearchInput,
     ) -> Result<Vec<HistoryEntryView>, CoreError> {
         let hosts = input.hosts;
-        self.history_entries(input.text.as_deref(), input.limit, |data| {
+        self.history_entries(input.text.as_deref(), input.limit, false, |data| {
             hosts.is_empty() || history_entry::host(data).is_some_and(|host| hosts.contains(&host))
         })
     }
 
-    /// History entries `keep` selects, newest first, filtered by `text`.
+    /// History entries `keep` selects, newest first, filtered by `text`;
+    /// `distinct`: one row per command (its newest entry, the others in
+    /// `older`), the limit counting rows.
     fn history_entries(
         &self,
         text: Option<&str>,
         limit: Option<u32>,
+        distinct: bool,
         keep: impl Fn(&Map<String, Value>) -> bool,
     ) -> Result<Vec<HistoryEntryView>, CoreError> {
         let now = self.now();
@@ -1561,17 +1577,32 @@ impl Core {
                 .then_with(|| b.record_id.cmp(&a.record_id))
         });
         let vault_id = parts.session.ring.vault_id();
-        Ok(entries
-            .into_iter()
-            .take(limit)
-            .map(|record| HistoryEntryView {
-                vault_id,
-                record_id: record.record_id,
-                command: history_entry::command(record.data()).to_owned(),
-                executed_at: history_entry::executed_at(record.data()).to_owned(),
-                host: history_entry::host(record.data()),
-            })
-            .collect())
+        let view = |record: &IndexedRecord| HistoryEntryView {
+            vault_id,
+            record_id: record.record_id,
+            command: history_entry::command(record.data()).to_owned(),
+            executed_at: history_entry::executed_at(record.data()).to_owned(),
+            host: history_entry::host(record.data()),
+            older: Vec::new(),
+        };
+        if !distinct {
+            return Ok(entries.into_iter().take(limit).map(view).collect());
+        }
+        let mut rows: Vec<HistoryEntryView> = Vec::new();
+        let mut row_of: HashMap<&str, usize> = HashMap::new();
+        for record in entries {
+            let command = history_entry::command(record.data());
+            match row_of.get(command) {
+                Some(&row) => rows[row].older.push(record.record_id),
+                // Past the limit only the older ids of shown rows count.
+                None if rows.len() < limit => {
+                    row_of.insert(command, rows.len());
+                    rows.push(view(record));
+                }
+                None => {}
+            }
+        }
+        Ok(rows)
     }
 
     pub(super) fn history_delete_impl(&self, input: RecordsRef) -> Result<(), CoreError> {

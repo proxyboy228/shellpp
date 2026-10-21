@@ -37,10 +37,31 @@ fn dismissed_state(host: RecordRef) -> Map<String, Value> {
     data
 }
 
+/// Programs not worth a snippet: they look around, move or leave (run 3
+/// polish, D64).
+const TRIVIAL_PROGRAMS: &[&str] = &[
+    "cd", "cls", "clear", "dir", "exit", "history", "htop", "l", "la", "ll", "logout", "ls", "pwd",
+    "reset", "top", "whoami",
+];
+
+/// Whether `command` is one simple command (no `;`, `&&`, pipe or
+/// redirection) of a [`TRIVIAL_PROGRAMS`] program, whatever its arguments:
+/// `ls -la /etc` is, `cd /srv && git pull` is not.
+pub(crate) fn is_trivial(command: &str) -> bool {
+    let command = command.trim();
+    if command.contains([';', '&', '|', '>', '<', '`', '$', '\n']) {
+        return false;
+    }
+    command
+        .split_whitespace()
+        .next()
+        .is_some_and(|program| TRIVIAL_PROGRAMS.contains(&program))
+}
+
 /// The three most frequent commands of the entries, most frequent first,
-/// ties by the newest use, then by text; secret-looking commands and lines
-/// that hold a password prompt (input typed before the prompt, recorded
-/// before that rule existed) left out.
+/// ties by the newest use, then by text; trivial commands ([`is_trivial`]),
+/// secret-looking commands and lines that hold a password prompt (input
+/// typed before the prompt, recorded before that rule existed) left out.
 pub(crate) fn top_commands<'a>(entries: impl Iterator<Item = (&'a str, &'a str)>) -> Vec<String> {
     // command -> (count, newest executed_at)
     let mut counts: HashMap<&str, (u32, &str)> = HashMap::new();
@@ -55,6 +76,7 @@ pub(crate) fn top_commands<'a>(entries: impl Iterator<Item = (&'a str, &'a str)>
         .into_iter()
         .filter(|(command, _)| {
             !command.trim().is_empty()
+                && !is_trivial(command)
                 && !history::looks_like_secret(command)
                 && !history::line_holds_password_prompt(command)
         })
@@ -174,20 +196,55 @@ mod tests {
     #[test]
     fn top_commands_rank_by_count_then_newest_use() {
         let entries = [
-            ("ls", "2026-10-20T10:00:00.000Z"),
+            ("df -h", "2026-10-20T10:00:00.000Z"),
             ("git status", "2026-10-20T10:01:00.000Z"),
-            ("ls", "2026-10-20T10:02:00.000Z"),
+            ("df -h", "2026-10-20T10:02:00.000Z"),
             ("make", "2026-10-20T10:03:00.000Z"),
             ("git status", "2026-10-20T10:04:00.000Z"),
             ("uptime", "2026-10-20T09:00:00.000Z"),
         ];
-        // ls and git status twice (git status used last), then make (newer
-        // than uptime).
+        // df -h and git status twice (git status used last), then make
+        // (newer than uptime).
         assert_eq!(
             top_commands(entries.into_iter()),
-            ["git status", "ls", "make"]
+            ["git status", "df -h", "make"]
         );
         assert!(top_commands(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn trivial_commands_are_never_offered() {
+        for trivial in [
+            "ls",
+            "ls -la /etc",
+            "cd",
+            "cd /var/www",
+            "pwd",
+            "clear",
+            "exit",
+            "history",
+            "  ll ",
+            "top",
+        ] {
+            assert!(is_trivial(trivial), "{trivial}");
+        }
+        for useful in [
+            "cd /srv/app && git pull",
+            "ls -la | grep conf",
+            "ls > files.txt",
+            "lsblk",
+            "df -h",
+            "sudo systemctl restart nginx",
+        ] {
+            assert!(!is_trivial(useful), "{useful}");
+        }
+        let mut entries = Vec::new();
+        for (command, times) in [("ls", 9), ("cd ..", 8), ("clear", 7), ("df -h", 2)] {
+            for _ in 0..times {
+                entries.push((command, "2026-10-20T10:00:00.000Z"));
+            }
+        }
+        assert_eq!(top_commands(entries.into_iter()), ["df -h"]);
     }
 
     #[test]
@@ -202,7 +259,7 @@ mod tests {
             "echo q7Xv2LmR9tKp4WzN8sBe".to_owned(),
             // A password typed ahead of `su`'s prompt.
             "Ahead-pw-5Password:".to_owned(),
-            "ls".to_owned(),
+            "uptime".to_owned(),
         ];
         let mut entries = Vec::new();
         for (n, command) in commands.iter().enumerate() {
@@ -211,6 +268,6 @@ mod tests {
                 entries.push((command.as_str(), "2026-10-20T10:00:00.000Z"));
             }
         }
-        assert_eq!(top_commands(entries.into_iter()), ["ls"]);
+        assert_eq!(top_commands(entries.into_iter()), ["uptime"]);
     }
 }

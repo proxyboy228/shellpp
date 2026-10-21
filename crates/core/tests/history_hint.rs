@@ -86,14 +86,14 @@ fn close_is_remembered_per_host_across_restarts() {
         vault_id: u.vault_id,
         record_id: db.record_id,
     };
-    record(&u.core, web, "ls");
+    record(&u.core, web, "df -h");
     u.core.history_hint_dismiss(web).unwrap();
     // Twice is fine and writes nothing new.
     u.core.history_hint_dismiss(web).unwrap();
     assert!(u.core.history_hint(web).unwrap().dismissed);
     assert!(!u.core.history_hint(db).unwrap().dismissed);
     // The commands are still computed (the History list keeps working).
-    assert_eq!(u.core.history_hint(web).unwrap().commands, ["ls"]);
+    assert_eq!(u.core.history_hint(web).unwrap().commands, ["df -h"]);
 
     u.reopen();
     assert!(matches!(

@@ -320,6 +320,27 @@ fn list_search_insert_and_delete(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// A command run again shows once, at its newest place; deleting the row
+/// deletes every repeat (run 3 polish, D64).
+#[gpui::test]
+fn repeats_show_once_and_go_together(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let web = ui.saved_host("web.example.com", cx);
+    for command in ["uptime", "df -h", "uptime", "free -m", "uptime"] {
+        ui.record(web, command, cx);
+    }
+    ui.show(Some(web), cx);
+    assert_eq!(ui.commands(cx), ["uptime", "free -m", "df -h"]);
+    ui.click("history-entry-0-delete", cx);
+    assert_eq!(ui.commands(cx), ["free -m", "df -h"]);
+    assert_eq!(
+        ui.stored(web, cx),
+        ["free -m", "df -h"],
+        "every uptime is gone"
+    );
+    ui.finish(cx);
+}
+
 /// "Clear history" asks first, then removes every entry of the host.
 #[gpui::test]
 fn clear_history_asks_first(cx: &mut TestAppContext) {
@@ -340,14 +361,14 @@ fn clear_history_asks_first(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// The hint offers the three most frequent commands in editable fields;
-/// "Save" is disabled until stage 5; "Close" hides it for the host for
+/// The hint offers the three most frequent commands in editable fields
+/// (trivial ones such as `ls` never); "Close" hides it for the host for
 /// good, also in a new tab.
 #[gpui::test]
 fn the_hint_card_and_its_close(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let web = ui.saved_host("web.example.com", cx);
-    for (command, times) in [("df -h", 3), ("uptime", 2), ("free -m", 2), ("ls", 1)] {
+    for (command, times) in [("ls", 9), ("df -h", 3), ("uptime", 2), ("free -m", 2)] {
         for _ in 0..times {
             ui.record(web, command, cx);
         }
@@ -363,9 +384,6 @@ fn the_hint_card_and_its_close(cx: &mut TestAppContext) {
         assert!(ui.visible(&format!("history-hint-command-{index}"), cx));
     }
     assert!(ui.visible("history-hint-save", cx));
-    // Save does nothing yet.
-    ui.click("history-hint-save", cx);
-    assert!(ui.visible("history-hint", cx));
 
     ui.click("history-hint-close", cx);
     assert!(!ui.visible("history-hint", cx));
@@ -390,8 +408,42 @@ fn the_hint_card_and_its_close(cx: &mut TestAppContext) {
     .unwrap();
     ui.settle(cx);
     assert!(cx.update(|cx| fresh.read(cx).hint_commands().is_empty()));
-    // Every entry is listed (3 + 2 + 2 + 1).
-    assert_eq!(cx.update(|cx| fresh.read(cx).commands().len()), 8);
+    // Every command is listed once.
+    assert_eq!(cx.update(|cx| fresh.read(cx).commands().len()), 4);
+    ui.finish(cx);
+}
+
+/// "Save" on the hint makes a snippet of each (edited) command for this
+/// host and hides the hint for good.
+#[gpui::test]
+fn the_hint_saves_snippets(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let web = ui.saved_host("web.example.com", cx);
+    for (command, times) in [("df -h", 3), ("uptime", 2), ("free -m", 1)] {
+        for _ in 0..times {
+            ui.record(web, command, cx);
+        }
+    }
+    ui.show(Some(web), cx);
+    let tab = ui.tab(cx);
+    let field = cx.update(|cx| tab.read(cx).hint_field(0));
+    cx.update_window(ui.window, |_, window, cx| {
+        field.update(cx, |input, cx| input.set_value("df -h /var", window, cx))
+    })
+    .unwrap();
+    ui.click("history-hint-save", cx);
+    assert!(!ui.visible("history-hint", cx));
+    let core = ui.core(cx);
+    assert!(core.history_hint(web).unwrap().dismissed);
+    let mut scripts: Vec<String> = core
+        .snippets_list(web.vault_id)
+        .unwrap()
+        .into_iter()
+        .inspect(|snippet| assert_eq!(snippet.target_host_ids, [web.record_id]))
+        .map(|snippet| snippet.script)
+        .collect();
+    scripts.sort();
+    assert_eq!(scripts, ["df -h /var", "free -m", "uptime"]);
     ui.finish(cx);
 }
 

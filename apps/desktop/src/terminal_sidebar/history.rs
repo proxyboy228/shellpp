@@ -53,7 +53,7 @@ use crate::panels::widgets;
 use crate::state::{AppState, AppStateEvent};
 use crate::terminal::TerminalView;
 use crate::terminal::fonts::JETBRAINS_MONO;
-use crate::theme::controls::{ButtonColors as _, Filled};
+use crate::theme::controls::ButtonColors as _;
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
@@ -78,7 +78,8 @@ pub mod text {
         "Your most used commands on this host. You can edit them before saving.";
     pub const HINT_CLOSE: &str = "Close";
     pub const HINT_SAVE: &str = "Save";
-    pub const HINT_SAVE_LATER: &str = "Snippets arrive in stage 5.";
+    pub const HINT_SAVED: &str = "Saved as snippets of this host";
+    pub const HINT_NOT_SAVED: &str = "The snippets could not be saved";
     pub const CLEAR_TITLE: &str = "Clear the history of this host?";
     pub const CLEAR_BODY: &str =
         "Every recorded command of this host is removed. This cannot be undone.";
@@ -203,6 +204,12 @@ impl HistoryTab {
             .collect()
     }
 
+    /// The editable field of the hint's `index`-th command (tests).
+    #[cfg(test)]
+    pub fn hint_field(&self, index: usize) -> Entity<InputState> {
+        self.hint_fields[index].clone()
+    }
+
     /// The hint's commands as loaded (empty: no hint).
     pub fn hint_commands(&self) -> &[String] {
         &self.hint
@@ -245,7 +252,8 @@ impl HistoryTab {
         };
         let search = self.search.read(cx).value().trim().to_owned();
         let work = cx.background_spawn(async move {
-            let entries = core.history_list(HistoryListInput {
+            // One row per command, its newest use (run 3 polish, D64).
+            let entries = core.history_list_distinct(HistoryListInput {
                 host: Some(host),
                 text: (!search.is_empty()).then_some(search),
                 limit: Some(LIST_LIMIT),
@@ -304,7 +312,7 @@ impl HistoryTab {
         });
     }
 
-    /// Deletes one entry.
+    /// Deletes a row: the command's entry and its older repeats.
     pub fn delete(&mut self, record_id: Uuid, cx: &mut Context<Self>) {
         let Some(entry) = self
             .entries
@@ -318,9 +326,11 @@ impl HistoryTab {
             return;
         };
         let work = cx.background_spawn(async move {
+            let mut record_ids = vec![entry.record_id];
+            record_ids.extend(entry.older);
             core.history_delete(RecordsRef {
                 vault_id: entry.vault_id,
-                record_ids: vec![entry.record_id],
+                record_ids,
             })
         });
         cx.spawn(async move |this, cx| {
@@ -384,6 +394,36 @@ impl HistoryTab {
         cx.notify();
     }
 
+    /// "Save" on the hint (UI 4.2): each (edited) command becomes a snippet
+    /// of this host; the hint is not shown again for it.
+    pub fn save_hint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(host), Some(core)) = (self.host(cx), self.state.read(cx).core().cloned()) else {
+            return;
+        };
+        let commands: Vec<String> = self
+            .hint_fields
+            .iter()
+            .map(|field| field.read(cx).value().to_string())
+            .collect();
+        self.set_hint(Vec::new());
+        let work = cx.background_spawn(async move { core.history_hint_save(host, &commands) });
+        cx.spawn_in(window, async move |this, cx| {
+            let saved = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                match saved {
+                    Ok(_) => crate::shell::show_toast(text::HINT_SAVED, window, cx),
+                    Err(error) => {
+                        tracing::warn!(code = error.code(), "hint snippets not saved");
+                        crate::shell::show_toast(text::HINT_NOT_SAVED, window, cx);
+                    }
+                }
+                this.reload(cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// "Close" on the hint: it is not shown again for this host.
     pub fn close_hint(&mut self, cx: &mut Context<Self>) {
         let (Some(host), Some(core)) = (self.host(cx), self.state.read(cx).core().cloned()) else {
@@ -439,23 +479,16 @@ impl HistoryTab {
             .collect();
         let close = widgets::form_button("history-hint-close", text::HINT_CLOSE, true, cx)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_hint(cx)));
-        // Disabled until snippets arrive; the tooltip sits on a wrapper
-        // because a disabled button takes no hover.
-        let save = div()
-            .id("history-hint-save-wrapper")
-            .tooltip(|window, cx| Tooltip::new(text::HINT_SAVE_LATER).build(window, cx))
-            .child(
-                Button::new("history-hint-save")
-                    .label(text::HINT_SAVE)
-                    .accent_colors()
-                    // The size of "Close" next to it (`widgets::form_button`):
-                    // 32 px high, the label at body size (`large`).
-                    .large()
-                    .h(px(32.))
-                    .px(metrics::SPACE_3)
-                    .rounded(metrics::RADIUS_CONTROL)
-                    .disabled_as_designed(true, Filled::Accent, cx),
-            );
+        let save = Button::new("history-hint-save")
+            .label(text::HINT_SAVE)
+            .accent_colors()
+            // The size of "Close" next to it (`widgets::form_button`): 32 px
+            // high, the label at body size (`large`).
+            .large()
+            .h(px(32.))
+            .px(metrics::SPACE_3)
+            .rounded(metrics::RADIUS_CONTROL)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.save_hint(window, cx)));
         Some(
             widgets::block("history-hint", Some(text::HINT_TITLE), cx)
                 .child(widgets::caption(text::HINT_BODY, cx))

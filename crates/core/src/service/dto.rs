@@ -1473,6 +1473,9 @@ pub struct HistoryEntryView {
     /// The saved host it ran on; `None` for local terminals and quick
     /// connects.
     pub host: Option<RecordRef>,
+    /// `history_list_distinct`: the older entries of the same command that
+    /// this one stands for (newest first); empty otherwise.
+    pub older: Vec<Uuid>,
 }
 
 /// Input of `history_search` (UI 9.1, the Shell History screen: every
