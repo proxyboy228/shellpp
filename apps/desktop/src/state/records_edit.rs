@@ -1287,6 +1287,16 @@ impl AppState {
         self.require_core()?.key_public_key(key)
     }
 
+    /// The hosts, groups and identities that use a key: the confirmation of
+    /// its Remove lists them (D50).
+    pub fn key_users(
+        &self,
+        key_id: Uuid,
+    ) -> Result<shellpp_core::service::keychain::KeyUsers, CoreError> {
+        let key = self.key_ref(key_id)?;
+        self.require_core()?.key_users(key)
+    }
+
     /// The private key text, for the key panel's explicit Show (UI 7.3).
     /// The caller keeps it only while it is shown.
     pub fn reveal_private_key(&self, key_id: Uuid) -> Result<SecretString, CoreError> {

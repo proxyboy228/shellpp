@@ -19,8 +19,9 @@
 //! Identities are read-only cards here (their panel, UI 7.4, comes later):
 //! the name and the authentication method. Certificate, FIDO2 and New
 //! identity are shown disabled (D30), and so are Export to host, Duplicate
-//! and Export to file in the key panel; keys have no Remove yet, because the
-//! core's record removal covers hosts and groups only (D33).
+//! and Export to file in the key panel. Remove in the key panel's "…" menu
+//! asks first, naming the hosts, groups and identities that use the key,
+//! and offers Undo (D50).
 //!
 //! Loading: the keys and identities are read from the core on a background
 //! thread, as on the Known Hosts screen; a change of the records marks the
@@ -415,6 +416,8 @@ pub enum KeychainEvent {
     /// A key was created, or the key that was already there (`created`
     /// false) was found: show it.
     Saved { key_id: Uuid, created: bool },
+    /// Remove was confirmed in the key panel (D50).
+    Remove { key_id: Uuid },
 }
 
 pub struct KeychainScreen {
@@ -895,7 +898,41 @@ impl KeychainScreen {
                     crate::shell::show_toast(strings::ALREADY_SAVED, window, cx);
                 }
             }
+            KeychainEvent::Remove { key_id } => self.remove_key(*key_id, window, cx),
         }
+    }
+
+    /// Removes a key once its Remove was confirmed (D50) and offers Undo for
+    /// the undo window, as Remove of hosts does (UI 2.4). Its users keep a
+    /// missing reference (data-model 3.4).
+    pub fn remove_key(&mut self, key_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let removed = self
+            .state
+            .update(cx, |state, cx| state.delete_records(vec![key_id], cx));
+        if let Err(error) = removed {
+            tracing::warn!(code = error.code(), "key not removed");
+            crate::shell::show_toast(strings::REMOVE_FAILED, window, cx);
+            return;
+        }
+        if self.selected == Some(key_id) {
+            self.close_panel(cx);
+        }
+        let state = self.state.downgrade();
+        crate::shell::show_toast(
+            crate::shell::Toast::new(strings::KEY_REMOVED).action_with_id(
+                "toast-undo",
+                crate::i18n::notifications::UNDO,
+                move |window, cx| {
+                    let restored =
+                        state.update(cx, |state, cx| state.restore_records(vec![key_id], cx));
+                    if !matches!(restored, Ok(Ok(()))) {
+                        crate::shell::show_toast(strings::UNDO_FAILED, window, cx);
+                    }
+                },
+            ),
+            window,
+            cx,
+        );
     }
 
     /// Arrows move the selection over the keys (the grid's columns for up

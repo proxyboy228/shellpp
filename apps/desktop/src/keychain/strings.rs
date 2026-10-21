@@ -74,6 +74,17 @@ pub const EXPORT_HELP: &str = "Adds the public key to ~/.ssh/authorized_keys on 
      choose, without duplicates.";
 pub const EXPORT_TO_HOST: &str = "Export to host…";
 pub const MENU_DUPLICATE: &str = "Duplicate";
+pub const MENU_REMOVE: &str = "Remove";
+pub const REMOVE_TITLE: &str = "Remove key?";
+pub const REMOVE: &str = "Remove";
+pub const REMOVE_UNUSED: &str = "No host or identity uses it.";
+pub const REMOVE_USED: &str = "These will lose the key and connect with their other sign-in methods until another key is set:";
+pub const REMOVE_HOSTS: &str = "Hosts";
+pub const REMOVE_GROUPS: &str = "Groups";
+pub const REMOVE_IDENTITIES: &str = "Identities";
+pub const KEY_REMOVED: &str = "Key removed";
+pub const REMOVE_FAILED: &str = "The key could not be removed";
+pub const UNDO_FAILED: &str = "The key could not be restored";
 pub const MENU_EXPORT_FILE: &str = "Export to file…";
 pub const LABEL_NOT_SAVED: &str = "The label could not be saved";
 
@@ -100,6 +111,11 @@ pub const GENERATING: &str = "Generating…";
 pub const GENERATING_RSA: &str = "Generating an RSA key takes a few seconds.";
 pub const GENERATE_FAILED: &str = "The key could not be generated";
 pub const CANCEL: &str = "Cancel";
+
+/// The first line of the Remove confirmation.
+pub fn remove_body(label: &str) -> String {
+    format!("Remove the key \u{201c}{label}\u{201d}? Undo is offered for a few seconds.")
+}
 
 // Import (New key, 7.1, 7.3).
 pub const IMPORT_TITLE: &str = "New key";

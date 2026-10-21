@@ -440,6 +440,9 @@ impl Core {
         self.record_save_impl(input)
     }
 
+    /// Removes hosts, groups and keys (a removed group's children move one
+    /// level up; a removed key leaves its users with a missing reference,
+    /// see [`Core::key_users`]). [`Core::record_restore`] undoes it.
     pub fn record_delete(&self, input: RecordsRef) -> Result<RecordDeleteResult, CoreError> {
         self.record_delete_impl(input)
     }

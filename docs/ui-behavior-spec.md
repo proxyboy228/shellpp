@@ -1062,7 +1062,11 @@ Blocks from top to bottom:
    is appended to `~/.ssh/authorized_keys` without duplicates (equivalent to `ssh-copy-id`).
 
 The "…" menu in the header: Duplicate, copy public key, export
-to file, Remove. [decision]
+to file, Remove. [decision] Remove asks first ("Remove key?", Cancel and Remove in
+`--danger`); when hosts, groups or identities use the key, the confirmation lists them
+and warns that they lose it and connect with their other sign-in methods until another
+key is set. After Remove a toast offers Undo for the undo window of 2.4; the users keep
+a missing reference (data-model 3.4). [decision] (D50)
 
 The saving rule from 1.3 applies, except for the creation: a new key is created with the
 form's Import or Generate button once Label and Private key are valid, because creating

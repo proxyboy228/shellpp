@@ -18,8 +18,8 @@ use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
-    v_flex, v_virtual_list,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    WindowExt as _, h_flex, v_flex, v_virtual_list,
 };
 use shellpp_core::service::dto::{KeyView, TagColor};
 
@@ -86,6 +86,113 @@ fn menu_item(id: &'static str, label: &'static str, enabled: bool, cx: &App) -> 
         .text_color(color)
         .child(label)
         .into_any_element()
+}
+
+/// Width of the Remove confirmation (as Known Hosts').
+const REMOVE_DIALOG_WIDTH: Pixels = px(420.);
+
+/// "Remove key?" (D50): the key's label, then the hosts, groups and
+/// identities that use it with the warning that they lose it, or that
+/// nothing uses it; Cancel and Remove (`--danger`). Remove or Enter
+/// confirms; Esc and Cancel close without removing.
+pub(super) fn open_remove_confirmation(
+    label: &str,
+    users: &shellpp_core::service::keychain::KeyUsers,
+    window: &mut Window,
+    cx: &mut App,
+    on_confirm: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    let on_confirm = Rc::new(on_confirm);
+    let body: SharedString = strings::remove_body(label).into();
+    let used = !users.is_empty();
+    let lists: Vec<(&'static str, &'static str, SharedString)> = [
+        ("kc-remove-hosts", strings::REMOVE_HOSTS, &users.hosts),
+        ("kc-remove-groups", strings::REMOVE_GROUPS, &users.groups),
+        (
+            "kc-remove-identities",
+            strings::REMOVE_IDENTITIES,
+            &users.identities,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, _, list)| !list.is_empty())
+    .map(|(id, heading, list)| {
+        let names: Vec<&str> = list.iter().map(|user| user.name.as_str()).collect();
+        (id, heading, names.join(", ").into())
+    })
+    .collect();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let confirm = on_confirm.clone();
+        let on_ok = on_confirm.clone();
+        let theme = cx.theme();
+        let mut content = v_flex()
+            .id("kc-remove-dialog")
+            .test_support()
+            .gap(metrics::SPACE_2)
+            .text_size(metrics::FONT_SIZE_BODY)
+            .text_color(theme.muted_foreground)
+            .child(div().child(body.clone()));
+        if used {
+            content = content.child(
+                div()
+                    .id("kc-remove-warning")
+                    .test_support()
+                    .text_color(theme.warning)
+                    .child(strings::REMOVE_USED),
+            );
+            for (id, heading, names) in &lists {
+                content = content.child(
+                    div()
+                        .id(*id)
+                        .test_support()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child(*heading),
+                        )
+                        .child(div().child(names.clone())),
+                );
+            }
+        } else {
+            content = content.child(div().child(strings::REMOVE_UNUSED));
+        }
+        dialog
+            .w(REMOVE_DIALOG_WIDTH)
+            .bg(theme.popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(
+                div()
+                    .text_size(metrics::FONT_SIZE_TITLE)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(strings::REMOVE_TITLE),
+            )
+            .child(content)
+            .on_ok(move |_, window, cx| {
+                on_ok(window, cx);
+                true
+            })
+            .footer(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        ControlButton::new("kc-remove-cancel", ControlKind::Neutral)
+                            .label(strings::CANCEL)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        ControlButton::new("kc-remove-confirm", ControlKind::Danger)
+                            .label(strings::REMOVE)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                confirm(window, cx);
+                            }),
+                    ),
+            )
+    });
 }
 
 /// The row of a key's type, led by the warning icon `warning_id` when the
@@ -1136,6 +1243,7 @@ impl KeyPanel {
         let header = DetailsHeader::new(strings::PANEL_TITLE)
             .menu(move |menu: PopupMenu, _, _| {
                 let copy = menu_panel.clone();
+                let remove = menu_panel.clone();
                 menu.min_w(MENU_WIDTH)
                     .item(
                         PopupMenuItem::element(move |_, cx| {
@@ -1163,6 +1271,15 @@ impl KeyPanel {
                             menu_item("kc-menu-export-file", strings::MENU_EXPORT_FILE, false, cx)
                         })
                         .disabled(true),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::element(|_, cx| {
+                            menu_item("kc-menu-remove", strings::MENU_REMOVE, true, cx)
+                        })
+                        .on_click(move |_, window, cx| {
+                            let _ = remove.update(cx, |panel, cx| panel.confirm_remove(window, cx));
+                        }),
                     )
             })
             .on_collapse(move |_, _, cx| {

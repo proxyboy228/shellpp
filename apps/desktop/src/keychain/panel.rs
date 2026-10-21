@@ -105,6 +105,30 @@ impl KeyPanel {
         self.view.record_id
     }
 
+    /// Remove in the "…" menu (D50): asks first, naming the hosts, groups
+    /// and identities that use the key; the screen removes it.
+    pub fn confirm_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key_id = self.view.record_id;
+        let users = match self.state.read(cx).key_users(key_id) {
+            Ok(users) => users,
+            Err(error) => {
+                tracing::warn!(code = error.code(), "users of a key not read");
+                crate::shell::show_toast(strings::REMOVE_FAILED, window, cx);
+                return;
+            }
+        };
+        let panel = cx.entity().downgrade();
+        super::view::open_remove_confirmation(
+            &self.view.label,
+            &users,
+            window,
+            cx,
+            move |_, cx| {
+                let _ = panel.update(cx, |_, cx| cx.emit(KeychainEvent::Remove { key_id }));
+            },
+        );
+    }
+
     pub fn view(&self) -> &KeyView {
         &self.view
     }

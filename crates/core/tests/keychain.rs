@@ -306,3 +306,83 @@ fn a_key_is_renamed_shows_its_public_key_and_copies_its_private_key() {
     u.core.tick();
     assert_eq!(clipboard.text(), None);
 }
+
+/// D50, item 2: Remove of a key lists who uses it first; the removal can
+/// be undone, and the users keep their (now missing) reference.
+#[test]
+fn a_key_lists_its_users_and_is_removed_and_restored() {
+    use serde_json::json;
+    use shellpp_core::service::dto::{RecordType, RecordsRef};
+
+    let u = first_run();
+    let vault_id = u.vault_id;
+    let pair = generate(KeyKind::Ed25519, "users@test");
+    let key = u
+        .core
+        .key_import(KeyImportInput {
+            vault_id,
+            label: Some("Shared".into()),
+            private_key: SecretString::from(openssh(&pair, None)),
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .expect("imported")
+        .key;
+    let key_ref = RecordRef {
+        vault_id,
+        record_id: key.record_id,
+    };
+    assert!(u.core.key_users(key_ref).unwrap().is_empty());
+    let id = key.record_id.to_string();
+    let save = |kind, data| common::save(&u.core, vault_id, None, kind, data, &[]).unwrap();
+    let web = save(
+        RecordType::Host,
+        json!({"label": "web", "address": "web.example.com", "ssh": {"key_id": id}}),
+    );
+    let bare = save(
+        RecordType::Host,
+        json!({"address": "10.0.0.7", "ssh": {"certificate_key_id": id}}),
+    );
+    save(RecordType::Host, json!({"address": "other.example.com"}));
+    let group = save(
+        RecordType::Group,
+        json!({"name": "prod", "ssh": {"key_id": id}}),
+    );
+    let mut ops = identity(vault_id, None, "ops");
+    ops.key_id = Some(key.record_id);
+    let ops = u.core.identity_save(ops).unwrap();
+
+    let users = u.core.key_users(key_ref).unwrap();
+    let names = |list: &[shellpp_core::service::keychain::KeyUser]| {
+        list.iter()
+            .map(|user| user.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&users.hosts),
+        ["10.0.0.7", "web"],
+        "label, else address"
+    );
+    assert_eq!(users.hosts[1].record_id, web.record_id());
+    assert_eq!(users.hosts[0].record_id, bare.record_id());
+    assert_eq!(names(&users.groups), ["prod"]);
+    assert_eq!(users.groups[0].record_id, group.record_id());
+    assert_eq!(names(&users.identities), ["ops"]);
+    assert_eq!(users.identities[0].record_id, ops.record_id);
+
+    let removal = RecordsRef {
+        vault_id,
+        record_ids: vec![key.record_id],
+    };
+    u.core.record_delete(removal.clone()).expect("removed");
+    assert!(u.core.keys_list().unwrap().is_empty());
+    assert!(matches!(
+        u.core.key_users(key_ref),
+        Err(shellpp_core::CoreError::NotFound)
+    ));
+    u.core.record_restore(removal).expect("restored");
+    let keys = u.core.keys_list().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].label, "Shared");
+    assert_eq!(u.core.key_users(key_ref).unwrap().hosts.len(), 2);
+}

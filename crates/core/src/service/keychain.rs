@@ -90,6 +90,41 @@ impl fmt::Debug for KeyCertificateInput {
     }
 }
 
+/// A record named in [`KeyUsers`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct KeyUser {
+    pub record_id: Uuid,
+    /// The host's label (else its address), the group's or the identity's
+    /// name.
+    pub name: String,
+}
+
+/// The records that use a key ([`Core::key_users`]): what the confirmation
+/// of Remove lists (D50, item 2). Each list is sorted by name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct KeyUsers {
+    pub hosts: Vec<KeyUser>,
+    pub groups: Vec<KeyUser>,
+    pub identities: Vec<KeyUser>,
+}
+
+impl KeyUsers {
+    pub fn is_empty(&self) -> bool {
+        self.hosts.is_empty() && self.groups.is_empty() && self.identities.is_empty()
+    }
+}
+
+/// The members of a host's or group's `ssh` that name a key (data-model
+/// 7.3, 9.1).
+const SSH_KEY_MEMBERS: [&str; 3] = ["key_id", "certificate_key_id", "fido2_key_id"];
+
+fn names_key(member: Option<&Value>, key: Uuid) -> bool {
+    member
+        .and_then(Value::as_str)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+        == Some(key)
+}
+
 /// Input of [`Core::key_label_set`]: the new label of the key `key`
 /// (`string(256)`, required).
 pub struct KeyLabelInput {
@@ -460,6 +495,67 @@ impl Core {
         self.commit_records(&mut parts, vec![write], Vec::new(), Vec::new())?;
         tracing::info!(record_id = %record_id, "key label saved");
         key_view(parts.session, record_id)
+    }
+
+    /// The hosts, groups and identities that use a key (its key, its
+    /// certificate's key or its FIDO2 key; an identity's key): the
+    /// confirmation of Remove lists them (D50). A removed key leaves them
+    /// with a missing reference, which data-model 3.4 keeps as it is.
+    /// `not_found` when the key is not there.
+    pub fn key_users(&self, key: RecordRef) -> Result<KeyUsers, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(key.vault_id))?;
+        session
+            .index
+            .get_kind(&key.record_id, RecordKind::Key)
+            .ok_or(CoreError::NotFound)?;
+        let id = key.record_id;
+        let by_ssh = |kind: RecordKind| -> Vec<KeyUser> {
+            session
+                .index
+                .of_kind(kind)
+                .filter(|record| {
+                    let ssh = record.data().get("ssh").and_then(Value::as_object);
+                    SSH_KEY_MEMBERS
+                        .iter()
+                        .any(|member| names_key(ssh.and_then(|ssh| ssh.get(*member)), id))
+                })
+                .map(|record| {
+                    let data = record.data();
+                    let text = |name: &str| {
+                        data.get(name)
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.is_empty())
+                    };
+                    let name = match kind {
+                        RecordKind::Group => text("name"),
+                        _ => text("label").or_else(|| text("address")),
+                    };
+                    KeyUser {
+                        record_id: record.record_id,
+                        name: name.unwrap_or_default().to_owned(),
+                    }
+                })
+                .collect()
+        };
+        let mut users = KeyUsers {
+            hosts: by_ssh(RecordKind::Host),
+            groups: by_ssh(RecordKind::Group),
+            identities: session
+                .index
+                .of_kind(RecordKind::Identity)
+                .filter(|record| names_key(record.data().get("key_id"), id))
+                .map(|record| KeyUser {
+                    record_id: record.record_id,
+                    name: identity::label(record.data()).to_owned(),
+                })
+                .collect(),
+        };
+        for list in [&mut users.hosts, &mut users.groups, &mut users.identities] {
+            list.sort_by_key(|user| fold(&user.name));
+        }
+        Ok(users)
     }
 
     /// The one-line public key of a key (UI 7.3: shown in the key panel,

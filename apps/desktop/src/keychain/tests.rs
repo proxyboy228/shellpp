@@ -51,11 +51,7 @@ struct Ui {
 }
 
 fn install(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        crate::testing::init_ui(cx);
-        // Dialogs and panels without animation, so clicks never miss.
-        cx.set_reduce_motion(true);
-    });
+    cx.update(crate::testing::init_ui);
 }
 
 impl Ui {
@@ -616,6 +612,74 @@ fn public_key_and_passphrase_hints(cx: &mut TestAppContext) {
     ui.click(cx, key_card_id(laptop.record_id));
     assert!(ui.visible(cx, "kc-key-passphrase-note"));
     assert!(!ui.visible(cx, "kc-key-no-passphrase"));
+    ui.finish(cx);
+}
+
+/// Remove (D50): the confirmation names who uses the key and warns; Cancel
+/// keeps it; Remove takes it out, and Undo brings it back.
+#[gpui_kit::test]
+fn remove_names_the_users_of_the_key_and_can_be_undone(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, |core, vault_id| {
+        sample(core, vault_id);
+        let deploy = core
+            .keys_list()
+            .unwrap()
+            .into_iter()
+            .find(|key| key.label == "Deploy")
+            .unwrap();
+        core.record_save(shellpp_core::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: None,
+            record_type: shellpp_core::service::dto::RecordType::Host,
+            data: serde_json::json!({
+                "label": "web",
+                "address": "web.example.com",
+                "ssh": {"key_id": deploy.record_id.to_string()}
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+            secrets: Default::default(),
+        })
+        .expect("host");
+    });
+    let deploy = ui.key_by_label(cx, "Deploy");
+    ui.click(cx, key_card_id(deploy.record_id));
+    ui.click(cx, "panel-menu");
+    ui.click(cx, "kc-menu-remove");
+    assert!(ui.visible(cx, "kc-remove-dialog"));
+    assert!(ui.visible(cx, "kc-remove-warning"));
+    assert!(ui.visible(cx, "kc-remove-hosts"));
+    assert!(ui.visible(cx, "kc-remove-identities"));
+    assert!(!ui.visible(cx, "kc-remove-groups"));
+    ui.click(cx, "kc-remove-cancel");
+    assert!(!ui.visible(cx, "kc-remove-dialog"));
+    assert_eq!(ui.keys(cx).len(), 3, "Cancel keeps the key");
+
+    ui.click(cx, "panel-menu");
+    ui.click(cx, "kc-menu-remove");
+    ui.click(cx, "kc-remove-confirm");
+    let labels: Vec<String> = ui.keys(cx).into_iter().map(|key| key.label).collect();
+    assert!(!labels.contains(&"Deploy".to_owned()), "{labels:?}");
+    assert!(!ui.visible(cx, "kc-key-panel"), "its panel closed");
+    // Undo (the toast's action) brings it back under its id.
+    ui.state
+        .update(cx, |state, cx| {
+            state.restore_records(vec![deploy.record_id], cx)
+        })
+        .expect("undo");
+    ui.frame(cx, |_, _| {});
+    ui.frame(cx, |_, _| {});
+    assert_eq!(ui.key_by_label(cx, "Deploy").record_id, deploy.record_id);
+
+    // A key nobody uses says so.
+    let laptop = ui.key_by_label(cx, "Laptop");
+    ui.click(cx, key_card_id(laptop.record_id));
+    ui.click(cx, "panel-menu");
+    ui.click(cx, "kc-menu-remove");
+    assert!(ui.visible(cx, "kc-remove-dialog"));
+    assert!(!ui.visible(cx, "kc-remove-warning"));
+    ui.click(cx, "kc-remove-cancel");
     ui.finish(cx);
 }
 

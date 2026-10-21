@@ -96,12 +96,13 @@ fn distinct(ids: &[Uuid]) -> Vec<Uuid> {
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
 }
 
-/// The kind of every id (hosts and groups only), or `not_found`.
+/// The kind of every id (hosts, groups and keys: the records with Remove
+/// and Undo, D50), or `not_found`.
 fn kinds_of(session: &Session, ids: &[Uuid]) -> Result<HashMap<Uuid, RecordKind>, CoreError> {
     let mut kinds = HashMap::new();
     for id in ids {
         match session.index.get(id).map(|record| record.kind) {
-            Some(kind @ (RecordKind::Host | RecordKind::Group)) => {
+            Some(kind @ (RecordKind::Host | RecordKind::Group | RecordKind::Key)) => {
                 kinds.insert(*id, kind);
             }
             _ => return Err(CoreError::NotFound),
