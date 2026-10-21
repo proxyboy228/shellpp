@@ -12,6 +12,8 @@ gpui_kit::actions!(
     [
         /// Ctrl+1: the Vaults tab.
         ShowVaults,
+        /// The Hosts screen (unassigned by default, UI 12.5).
+        ShowHosts,
         /// Ctrl+2: the SFTP tab.
         ShowSftp,
         /// Ctrl+,: the Settings window (UI 12.1).

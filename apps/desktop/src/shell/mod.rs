@@ -44,6 +44,7 @@ pub mod notifications;
 pub mod placeholder;
 pub mod restore;
 pub mod sessions;
+pub mod shortcuts;
 pub mod sidebar;
 pub mod strings;
 pub mod tab_menu;
@@ -439,6 +440,8 @@ impl Shell {
         // Terminal replaces the global after each change).
         if let Some(core) = state.read(cx).core().cloned() {
             crate::settings::terminal::TerminalPrefs::refresh(&core, cx);
+            // The user's shortcuts (UI 12.5) on top of the defaults.
+            shortcuts::apply_stored(&core, cx);
         }
         // What Restore offers: the tabs of the previous launch, read once
         // at the first unlock (UI 6).
@@ -2402,6 +2405,10 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &ShowVaults, _, cx| this.set_top_tab(TopTab::Vaults, cx)),
             )
+            .on_action(cx.listener(|this, _: &actions::ShowHosts, _, cx| {
+                this.set_top_tab(TopTab::Vaults, cx);
+                this.set_section(Section::Hosts, cx);
+            }))
             .on_action(cx.listener(|this, _: &ShowSftp, _, cx| this.set_top_tab(TopTab::Sftp, cx)))
             .on_action(
                 cx.listener(|this, action: &ActivateTab, _, cx| this.activate_tab(action.0, cx)),

@@ -68,6 +68,16 @@ pub fn cleared(count: usize) -> String {
     }
 }
 
+// Shortcuts (UI 12.5; D67).
+pub const SHORTCUTS_HINT: &str = "Click the keys of an action, then press the new ones; Esc cancels. \
+     While a terminal has the focus, keys without Shift (such as Ctrl+L or Ctrl+K) go to the shell.";
+pub const PRESS_KEYS: &str = "Press keys...";
+pub const UNASSIGNED: &str = "Unassigned";
+pub const UNASSIGN: &str = "Leave unassigned";
+pub const RESET_SHORTCUT: &str = "Back to the default";
+pub const RESET_ALL: &str = "Reset all";
+pub const CONFLICT: &str = "Another action has the same keys";
+
 // Security (UI 13.4).
 pub const AUTO_LOCK: &str = "Auto-lock";
 pub const AUTO_LOCK_HINT: &str =

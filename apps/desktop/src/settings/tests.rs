@@ -206,7 +206,8 @@ fn sections_and_a_missing_keychain(cx: &mut TestAppContext) {
             "{section:?}"
         );
     }
-    ui.click("settings-nav-shortcuts", cx);
+    // Updates is the one section still in development.
+    ui.click("settings-nav-updates", cx);
     assert!(ui.visible("settings-placeholder", cx));
     assert!(!ui.visible("settings-security", cx));
     ui.click("settings-nav-security", cx);
@@ -483,5 +484,59 @@ fn terminal_contrast_and_line_spacing(cx: &mut TestAppContext) {
     // At the maximum the + button is disabled.
     click(&ui, "settings-line-height-plus", cx);
     assert_eq!(stored(&ui, "terminal.line_height", cx), json!(2.0));
+    ui.finish(cx);
+}
+
+/// Shortcuts (UI 12.5, D67): a click records new keys, which work at once
+/// and replace the old ones; shared keys are marked; × unassigns and ↺ and
+/// Reset all bring the defaults back.
+#[gpui::test]
+fn shortcuts_are_recorded_and_bound(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-shortcuts", cx);
+    assert!(ui.visible("settings-shortcuts", cx));
+    let core = ui.core(cx);
+    let overrides = |cx: &mut TestAppContext| {
+        let _ = cx;
+        core.settings_get()
+            .unwrap()
+            .get("shortcuts.overrides")
+            .cloned()
+            .unwrap()
+    };
+    // Lock moves to Ctrl+Shift+J.
+    assert!(reveal(&ui, "shortcut-lock", cx));
+    ui.click("shortcut-lock", cx);
+    ui.press("ctrl-shift-j", cx);
+    assert_eq!(overrides(cx), serde_json::json!({"lock": "ctrl-shift-j"}));
+    // Settings on Ctrl+L as well: both are marked as sharing keys.
+    assert!(reveal(&ui, "shortcut-open_settings", cx));
+    ui.click("shortcut-open_settings", cx);
+    ui.press("ctrl-l", cx);
+    let changed = overrides(cx);
+    assert_eq!(changed["open_settings"], serde_json::json!("ctrl-l"));
+    let map = changed.as_object().cloned().unwrap();
+    assert_eq!(
+        crate::shell::shortcuts::conflicts(&map),
+        ["new_local_terminal", "open_settings"]
+    );
+    // Esc cancels a recording; × unassigns; ↺ brings the default back.
+    assert!(reveal(&ui, "shortcut-next_tab", cx));
+    ui.click("shortcut-next_tab", cx);
+    ui.press("escape", cx);
+    assert!(ui.visible("settings", cx), "Esc only ended the recording");
+    assert!(overrides(cx).get("next_tab").is_none());
+    ui.click("shortcut-unassign-next_tab", cx);
+    assert_eq!(overrides(cx)["next_tab"], serde_json::Value::Null);
+    assert!(reveal(&ui, "shortcut-reset-open_settings", cx));
+    ui.click("shortcut-reset-open_settings", cx);
+    assert!(overrides(cx).get("open_settings").is_none());
+
+    // The new keys lock; the old ones do not any more.
+    ui.press("ctrl-shift-l", cx);
+    assert!(cx.update(|cx| ui.state.read(cx).is_unlocked()));
+    ui.press("ctrl-shift-j", cx);
+    assert!(!cx.update(|cx| ui.state.read(cx).is_unlocked()));
     ui.finish(cx);
 }

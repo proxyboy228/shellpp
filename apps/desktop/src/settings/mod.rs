@@ -12,6 +12,7 @@
 //! the recovery key of 13.4 are not part of this stage.
 
 mod data;
+mod shortcuts;
 pub mod strings;
 pub mod terminal;
 
@@ -107,6 +108,7 @@ impl Section {
                 | Section::Terminal
                 | Section::Sftp
                 | Section::Logs
+                | Section::Shortcuts
         )
     }
 
@@ -161,6 +163,10 @@ pub struct SettingsView {
     open_program: Entity<gpui_kit::component::input::InputState>,
     /// Logs: how many entries "Clear the log" removed.
     cleared: Option<usize>,
+    /// Shortcuts: the action whose keys are being recorded, and the focus
+    /// that takes the keys.
+    recording: Option<&'static str>,
+    shortcuts_focus: gpui::FocusHandle,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -211,6 +217,8 @@ impl SettingsView {
             terminal,
             open_program,
             cleared: None,
+            recording: None,
+            shortcuts_focus: cx.focus_handle(),
             _subscriptions: vec![subscription],
         }
     }
@@ -226,6 +234,7 @@ impl SettingsView {
 
     pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.section = section;
+        self.recording = None;
         self.auto_lock_open = false;
         cx.notify();
     }
@@ -462,6 +471,7 @@ impl Render for SettingsView {
             Section::AccountSync => self.render_account(cx),
             Section::Sftp => self.render_sftp(window, cx),
             Section::Logs => self.render_logs(cx),
+            Section::Shortcuts => self.render_shortcuts(cx),
             _ => placeholder::placeholder("settings-placeholder", self.section.label(), cx)
                 .into_any_element(),
         };
