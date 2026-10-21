@@ -127,9 +127,11 @@ merges them into the personal vault (D34):
   packages and forwarding rules, each checked by the same rules as a save
   (a record that breaks them is listed with its errors and left out; the
   others are imported). A reference to a record that is neither here nor in
-  the file is kept and reads as missing (D63). A forwarding rule that
-  listens beyond loopback is imported with both autostart flags off, except
-  in a full restore; the summary counts such rules (D63, security.md 11.3).
+  the file is kept and reads as missing (D63). A forwarding rule never
+  starts on app launch after an ordinary import, and one that listens
+  beyond loopback does not start on connect either; a full restore keeps
+  the file's flags. The summary counts the rules whose flags were turned
+  off (D63, security.md 11.3).
   The command history, the
   hosts' history hint states and the connection log are taken too when the
   file holds them, unless the user turns them off (both on, D51): each

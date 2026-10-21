@@ -1622,6 +1622,32 @@ impl Core {
         self.remove_rows(&mut parts, &targets, now)
     }
 
+    /// Deletes every entry of `command` for `host` (or for no host): a row
+    /// of `history_list_distinct` with all its repeats, also those recorded
+    /// after the list was read (D64). Returns how many were deleted.
+    pub fn history_delete_command(
+        &self,
+        host: Option<RecordRef>,
+        command: &str,
+    ) -> Result<usize, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        self.ensure_history(&mut parts, now)?;
+        let targets: Vec<(Uuid, RecordKind)> = parts
+            .session
+            .index
+            .of_kind(RecordKind::HistoryEntry)
+            .filter(|record| {
+                same_link(record.data(), host) && history_entry::command(record.data()) == command
+            })
+            .map(|record| (record.record_id, RecordKind::HistoryEntry))
+            .collect();
+        let count = targets.len();
+        self.remove_rows(&mut parts, &targets, now)?;
+        Ok(count)
+    }
+
     pub(super) fn history_clear_impl(
         &self,
         input: HistoryClearInput,

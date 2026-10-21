@@ -423,6 +423,10 @@ fn unusable_texts_say_why() {
         Err(KeyProblem::PublicKey)
     );
     assert_eq!(
+        inspect(&format!("command=\"echo hi there\",no-pty {public}")),
+        Err(KeyProblem::PublicKey)
+    );
+    assert_eq!(
         inspect(
             "---- BEGIN SSH2 PUBLIC KEY ----\nAAAAC3NzaC1lZDI1NTE5\n---- END SSH2 PUBLIC KEY ----\n"
         ),

@@ -156,10 +156,10 @@
    command history or a connection log asks next whether to import them ("Import command
    history", "Import the connection log", only those the file holds, both on); imported
    history goes through the secret detector of 4.2 (D51). The import takes snippets,
-   snippet packages and forwarding rules too; a forwarding rule that listens beyond
-   loopback comes without autostart, except in a full restore (D63). The summary also
-   counts the keys kept as unknown, the commands left out and the rules that came without
-   autostart, when there are any. [decision]
+   snippet packages and forwarding rules too; a forwarding rule never starts on launch,
+   and one that listens beyond loopback not on connect either, except in a full restore
+   (D63). The summary also counts the keys kept as unknown, the commands left out and the
+   rules whose autostart was turned off, when there are any. [decision]
 7. Edit ▸: undo, redo, cut, copy, paste, select all. [decision]
 8. View ▸: interface zoom, full-screen mode, show or hide
    the sidebar. [decision]

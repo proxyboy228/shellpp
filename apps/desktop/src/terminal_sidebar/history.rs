@@ -44,7 +44,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use shellpp_core::error::CoreError;
 use shellpp_core::service::dto::{
-    HistoryClearInput, HistoryEntryView, HistoryHint, HistoryListInput, RecordRef, RecordsRef,
+    HistoryClearInput, HistoryEntryView, HistoryHint, HistoryListInput, RecordRef,
 };
 use uuid::Uuid;
 
@@ -325,14 +325,10 @@ impl HistoryTab {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
-        let work = cx.background_spawn(async move {
-            let mut record_ids = vec![entry.record_id];
-            record_ids.extend(entry.older);
-            core.history_delete(RecordsRef {
-                vault_id: entry.vault_id,
-                record_ids,
-            })
-        });
+        let work =
+            cx.background_spawn(
+                async move { core.history_delete_command(entry.host, &entry.command) },
+            );
         cx.spawn(async move |this, cx| {
             if let Err(error) = work.await {
                 tracing::warn!(code = error.code(), "history entry not deleted");

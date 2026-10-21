@@ -20,8 +20,9 @@
 //!   on its label or name, and references inside the import point to it.
 //! - Groups, hosts, keys, identities, known hosts, snippets, snippet
 //!   packages and forwarding rules are imported, each checked by the same
-//!   rules as a save (D63: a rule that listens beyond loopback comes without
-//!   autostart, except in a full restore); the command history and the
+//!   rules as a save (D63: a rule never starts on launch, and one that
+//!   listens beyond loopback not on connect either, except in a full
+//!   restore); the command history and the
 //!   connection log too unless the user turns them off (D51), each history
 //!   entry through the secret detector of live recording; device records
 //!   are skipped and counted.
@@ -168,40 +169,40 @@ fn label_member(kind: RecordKind) -> Option<&'static str> {
     }
 }
 
-/// A forwarding rule from a file that listens beyond loopback never starts
-/// on its own (D63; security.md 11.3, as the `~/.ssh/config` import, D62):
-/// both autostart flags go off unless the user restores a backup of their
-/// own. Applied before the rule is compared, so the next import of the
-/// same file finds it again. Returns whether a flag was turned off.
+/// The autostart flags of a forwarding rule.
+const AUTOSTART: [&str; 2] = ["autostart_on_connect", "autostart_on_launch"];
+
+/// A forwarding rule from a file starts on its own only when the user
+/// connects to its host, and only when it listens on loopback (D63, as the
+/// `~/.ssh/config` import, D62 item 5; security.md 11.3): `autostart_on_launch`
+/// goes off, and `autostart_on_connect` too for a rule that listens beyond
+/// loopback, unless the user restores a backup of their own. Returns whether
+/// a flag was turned off; such a rule is compared without its flags
+/// ([`Incoming::ignored`]), so a rule that is the same here stays "already
+/// exists" and the next import of the same file finds the copy again.
 fn as_imported_rule(data: &mut Map<String, Value>) -> bool {
     let wide = data
         .get("bind_address")
         .and_then(Value::as_str)
         .is_some_and(|address| !address.trim().is_empty() && snippet::is_wide_bind(address));
+    let flags: &[&str] = if wide {
+        &AUTOSTART
+    } else {
+        &["autostart_on_launch"]
+    };
     let mut changed = false;
-    if wide {
-        for flag in ["autostart_on_connect", "autostart_on_launch"] {
-            if data.get(flag) == Some(&Value::Bool(true)) {
-                data.insert(flag.into(), Value::Bool(false));
-                changed = true;
-            }
+    for flag in flags {
+        if data.get(*flag) == Some(&Value::Bool(true)) {
+            data.insert((*flag).into(), Value::Bool(false));
+            changed = true;
         }
     }
     changed
 }
 
 /// Whether `local` holds what `incoming` holds once the ids of `map` are
-/// rewritten, the members that change with the place in a list aside.
-/// Compares in place: no copy of the secrets is made.
-fn same_content(
-    local: &Map<String, Value>,
-    incoming: &Map<String, Value>,
-    map: &HashMap<Uuid, Uuid>,
-) -> bool {
-    same_content_except(local, incoming, map, &[])
-}
-
-/// [`same_content`], the `ignored` members aside too.
+/// rewritten, the members that change with the place in a list and the
+/// `ignored` ones aside. Compares in place: no copy of the secrets is made.
 fn same_content_except(
     local: &Map<String, Value>,
     incoming: &Map<String, Value>,
@@ -228,10 +229,12 @@ fn same_copy(
     copy: &Map<String, Value>,
     incoming: &Map<String, Value>,
     map: &HashMap<Uuid, Uuid>,
+    also_ignored: &[&str],
 ) -> bool {
     let label = label_member(kind);
     let mut ignored = vec!["import_key"];
     ignored.extend(label);
+    ignored.extend(also_ignored);
     same_content_except(copy, incoming, map, &ignored)
         && label.is_none_or(|member| {
             copy.get(member).and_then(Value::as_str)
@@ -305,6 +308,17 @@ struct Incoming {
     kind: RecordKind,
     record_id: Uuid,
     data: WipeOnDrop,
+    /// A forwarding rule whose autostart this import turned off (D63).
+    quieted: bool,
+}
+
+impl Incoming {
+    /// The members left out when this record is compared with one here: the
+    /// autostart flags of a quieted rule (the local rule keeps the user's own
+    /// choice; an import never overwrites it).
+    fn ignored(&self) -> &'static [&'static str] {
+        if self.quieted { &AUTOSTART } else { &[] }
+    }
 }
 
 /// Takes the string at `path` (dotted) out of `data`.
@@ -876,8 +890,6 @@ impl Core {
         let mut summary = DataImportSummary::default();
         let mut incoming: Vec<Incoming> = Vec::new();
         let mut seen: HashSet<Uuid> = HashSet::new();
-        // Forwarding rules whose autostart this import turned off (D63).
-        let mut quieted: HashSet<Uuid> = HashSet::new();
         // The exported personal vault: the history and the connection log
         // name its hosts by vault and record id (`host_link`).
         let mut exported_vaults: Vec<Uuid> = Vec::new();
@@ -917,16 +929,14 @@ impl Core {
                             if kind == RecordKind::ConnectionLogEntry {
                                 as_imported_log_entry(&mut data);
                             }
-                            if kind == RecordKind::ForwardingRule
+                            let quieted = kind == RecordKind::ForwardingRule
                                 && !input.full_restore
-                                && as_imported_rule(&mut data)
-                            {
-                                quieted.insert(record_id);
-                            }
+                                && as_imported_rule(&mut data);
                             incoming.push(Incoming {
                                 kind,
                                 record_id,
                                 data,
+                                quieted,
                             });
                         }
                     }
@@ -1029,7 +1039,8 @@ impl Core {
             for record in incoming {
                 let local = parts.session.index.get(&record.record_id);
                 if local.is_some_and(|local| {
-                    local.kind == record.kind && same_content(local.data(), &record.data, &map)
+                    local.kind == record.kind
+                        && same_content_except(local.data(), &record.data, &map, record.ignored())
                 }) {
                     summary.existing += 1;
                     continue;
@@ -1066,7 +1077,12 @@ impl Core {
                     .filter_map(|(at, record)| {
                         let local = index.get(&record.record_id)?;
                         if local.kind == record.kind
-                            && same_content(local.data(), &record.data, &map)
+                            && same_content_except(
+                                local.data(),
+                                &record.data,
+                                &map,
+                                record.ignored(),
+                            )
                         {
                             return None;
                         }
@@ -1075,7 +1091,13 @@ impl Core {
                             .iter()
                             .find(|copy| {
                                 index.get_kind(copy, record.kind).is_some_and(|held| {
-                                    same_copy(record.kind, held.data(), &record.data, &map)
+                                    same_copy(
+                                        record.kind,
+                                        held.data(),
+                                        &record.data,
+                                        &map,
+                                        record.ignored(),
+                                    )
                                 })
                             })
                             .map(|copy| (at, *copy))
@@ -1098,7 +1120,12 @@ impl Core {
                 match local {
                     Some(local)
                         if local.kind == record.kind
-                            && same_content(local.data(), &record.data, &map) =>
+                            && same_content_except(
+                                local.data(),
+                                &record.data,
+                                &map,
+                                record.ignored(),
+                            ) =>
                     {
                         summary.existing += 1;
                     }
@@ -1154,7 +1181,7 @@ impl Core {
                 } else {
                     summary.added += 1;
                 }
-                if quieted.contains(&record.record_id) {
+                if record.quieted {
                     summary.rules_autostart_off += 1;
                 }
                 writes.push((record.kind, target, data));

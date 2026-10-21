@@ -204,9 +204,9 @@ fn id_of(core: &Core, kind: &str, member: &str, value: &str) -> Uuid {
 }
 
 /// [`populated`] with a snippet package, a snippet in it that targets web-1,
-/// a snippet that is db's startup snippet, and two forwarding rules of db: a
-/// loopback tunnel that starts on connect and a SOCKS proxy on every
-/// interface that starts on launch.
+/// a snippet that is db's startup snippet, and two forwarding rules of db
+/// that start on connect and on launch: a loopback tunnel and a SOCKS proxy
+/// on every interface.
 fn with_snippets() -> common::Unlocked {
     let u = populated();
     let web1 = id_of(&u.core, "host", "label", "web-1");
@@ -250,7 +250,8 @@ fn with_snippets() -> common::Unlocked {
                 "bind_port": 15432,
                 "dest_address": "db.internal",
                 "dest_port": 5432,
-                "autostart_on_connect": true
+                "autostart_on_connect": true,
+                "autostart_on_launch": true
             }),
         ))
         .expect("loopback rule");
@@ -264,6 +265,7 @@ fn with_snippets() -> common::Unlocked {
                 "label": "lab socks",
                 "bind_address": "0.0.0.0",
                 "bind_port": 1080,
+                "autostart_on_connect": true,
                 "autostart_on_launch": true
             }),
         ))
@@ -700,9 +702,9 @@ fn records_that_name_a_copied_record_are_not_copied_again() {
 
 /// Snippets, packages and forwarding rules come back with every reference
 /// between them and to the hosts (D62), from a plain and from an encrypted
-/// file. A full restore keeps every rule as it was; an ordinary import
-/// turns off the autostart of a rule that listens beyond loopback (D63), and
-/// the same file again finds every record.
+/// file. A full restore keeps every rule as it was; on an ordinary import no
+/// rule starts on launch and the one beyond loopback not on connect either
+/// (D63), and the same file again finds every record.
 #[test]
 fn snippets_packages_and_rules_round_trip_with_their_references() {
     let source = with_snippets();
@@ -717,6 +719,7 @@ fn snippets_packages_and_rules_round_trip_with_their_references() {
         (1, 2, 2)
     );
     let wide = id_of(&source.core, "forwarding_rule", "label", "lab socks");
+    let tunnel = id_of(&source.core, "forwarding_rule", "label", "db tunnel");
     let plain = source.core.data_export(DataExportInput::default()).unwrap();
     let export_password = format!("export-{}", common::random_hex());
     let encrypted = source
@@ -767,16 +770,23 @@ fn snippets_packages_and_rules_round_trip_with_their_references() {
         assert_eq!(rules.len(), 2);
         assert!(rules.iter().all(|rule| rule.host_id == db), "{rules:?}");
 
-        // An ordinary import: the same, except the rule on every interface.
+        // An ordinary import: the same, except the autostart of the rules.
         let target = first_run();
         let summary = import(&target.core, text, password);
         assert!(summary.refused.is_empty(), "{:?}", summary.refused);
         assert_eq!(summary.added, expected.0.len());
-        assert_eq!(summary.rules_autostart_off, 1);
+        assert_eq!(summary.rules_autostart_off, 2);
         let mut wanted = expected.0.clone();
-        wanted
-            .get_mut(&("forwarding_rule".to_owned(), wide.to_string()))
-            .unwrap()["autostart_on_launch"] = json!(false);
+        let rule = |wanted: &BTreeMap<(String, String), Value>, id: Uuid| {
+            wanted[&("forwarding_rule".to_owned(), id.to_string())].clone()
+        };
+        let mut socks = rule(&wanted, wide);
+        socks["autostart_on_connect"] = json!(false);
+        socks["autostart_on_launch"] = json!(false);
+        wanted.insert(("forwarding_rule".to_owned(), wide.to_string()), socks);
+        let mut loopback = rule(&wanted, tunnel);
+        loopback["autostart_on_launch"] = json!(false);
+        wanted.insert(("forwarding_rule".to_owned(), tunnel.to_string()), loopback);
         assert_eq!(content(&target.core).0, wanted);
         // The same file again adds and copies nothing.
         let again = import(&target.core, text, password);
@@ -874,4 +884,22 @@ fn conflicting_snippets_and_rules_point_to_the_imported_copies() {
 
     let again = import(&target.core, &export.text, None);
     assert_eq!((again.added, again.conflicts), (0, 0), "{again:?}");
+}
+
+/// The export of a profile imported into that same profile: every record
+/// already exists, rules whose autostart an ordinary import would turn off
+/// included; nothing is copied and the local flags stay (D34, D63).
+#[test]
+fn a_profile_imports_its_own_export_without_copies() {
+    let source = with_snippets();
+    let before = content(&source.core).0;
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let summary = import(&source.core, &export.text, None);
+    assert_eq!(
+        (summary.added, summary.conflicts, summary.existing),
+        (0, 0, before.len()),
+        "{summary:?}"
+    );
+    assert_eq!(summary.rules_autostart_off, 0);
+    assert_eq!(content(&source.core).0, before);
 }

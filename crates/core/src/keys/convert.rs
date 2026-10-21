@@ -127,9 +127,11 @@ pub fn is_public_key(text: &str) -> bool {
     {
         return true;
     }
-    // `algorithm base64 [comment]`, with an optional options prefix as in
-    // authorized_keys; the blob starts with the algorithm name's length.
-    let words: Vec<&str> = first.split_whitespace().take(3).collect();
+    // `algorithm base64 [comment]`, after authorized_keys options when there
+    // are any (they may hold quoted spaces: `command="echo hi"`), so every
+    // pair of words is tried; the blob starts with the algorithm name's
+    // length (`AAAA`).
+    let words: Vec<&str> = first.split_whitespace().collect();
     words.windows(2).any(|pair| {
         let (algorithm, blob) = (pair[0], pair[1]);
         (algorithm.starts_with("ssh-")
