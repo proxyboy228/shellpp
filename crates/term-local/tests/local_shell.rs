@@ -287,7 +287,10 @@ impl Terminal {
     async fn finish(&mut self) -> (ExitInfo, bool) {
         let deadline = Instant::now() + STEP;
         while self.exit.is_none() || !self.eof {
-            if !self.pump(deadline).await && !self.eof {
+            // `pump` returns false at once after the end of file: stop and
+            // wait for the exit below (on Linux the PTY's end of file comes
+            // before the exit; testing `!self.eof` here spun forever).
+            if !self.pump(deadline).await {
                 break;
             }
         }
