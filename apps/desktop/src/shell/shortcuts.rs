@@ -4,13 +4,13 @@
 //! `null` for unassigned), conflicts, and how a change takes effect.
 //!
 //! A change is bound on top of the defaults: the keys the action had are
-//! bound to `NoAction` and the new keys to the action, later bindings
-//! taking precedence. Keys of the terminal (copy, paste, splits, focus
+//! unbound for that action (`Unbind`) and every action's current keys are
+//! bound again after them, later bindings taking precedence. Keys of the terminal (copy, paste, splits, focus
 //! between panes) keep their defaults for now (D67).
 
 use std::collections::HashMap;
 
-use gpui::{App, Global, KeyBinding, Keystroke, NoAction};
+use gpui::{App, Global, KeyBinding, Keystroke, Unbind};
 use serde_json::{Map, Value};
 
 use super::actions::{
@@ -172,23 +172,41 @@ pub fn effective(shortcut: &Shortcut, overrides: &Map<String, Value>) -> Vec<Str
     }
 }
 
-/// Keys written the same way on every platform here: `secondary` is the
-/// platform's command key.
+/// Keys of the terminal and the panes that keep their defaults (UI 12.5):
+/// an action given one of them is marked as a conflict.
+pub const FIXED: [&str; 10] = [
+    "secondary-shift-c",
+    "secondary-shift-v",
+    "secondary-shift-a",
+    "secondary-shift-d",
+    "secondary-shift-e",
+    "secondary-shift-f",
+    "secondary-alt-left",
+    "secondary-alt-right",
+    "secondary-alt-up",
+    "secondary-alt-down",
+];
+
+/// Keys in one canonical form (GPUI's own order of modifiers, `secondary`
+/// resolved), so the same keys written differently compare equal.
 fn normalized(keys: &str) -> String {
-    let secondary = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
-    keys.split('-')
-        .map(|part| if part == "secondary" { secondary } else { part })
+    keys.split_whitespace()
+        .map(|stroke| {
+            Keystroke::parse(stroke)
+                .map(|stroke| stroke.unparse())
+                .unwrap_or_else(|_| stroke.to_owned())
+        })
         .collect::<Vec<_>>()
-        .join("-")
+        .join(" ")
 }
 
-/// The ids of the actions whose keys are also another action's.
+/// The ids of the actions whose keys are also another action's, or one of
+/// the [`FIXED`] keys.
 pub fn conflicts(overrides: &Map<String, Value>) -> Vec<&'static str> {
     let mut owners: HashMap<String, Vec<&'static str>> = HashMap::new();
+    for keys in FIXED {
+        owners.entry(normalized(keys)).or_default().push("");
+    }
     for shortcut in &SHORTCUTS {
         for keys in effective(shortcut, overrides) {
             owners
@@ -201,6 +219,7 @@ pub fn conflicts(overrides: &Map<String, Value>) -> Vec<&'static str> {
         .into_values()
         .filter(|ids| ids.len() > 1)
         .flatten()
+        .filter(|id| !id.is_empty())
         .collect();
     ids.sort_unstable();
     ids.dedup();
@@ -211,31 +230,48 @@ pub fn conflicts(overrides: &Map<String, Value>) -> Vec<&'static str> {
 pub fn display(keys: &str) -> String {
     keys.split_whitespace()
         .map(|stroke| {
-            normalized(stroke)
-                .split('-')
-                .filter(|part| !part.is_empty())
-                .map(|part| match part {
-                    "ctrl" => "Ctrl".to_owned(),
-                    "cmd" => "Cmd".to_owned(),
-                    "alt" => "Alt".to_owned(),
-                    "shift" => "Shift".to_owned(),
-                    "win" | "super" => "Win".to_owned(),
-                    "fn" => "Fn".to_owned(),
-                    "right" => "→".to_owned(),
-                    "left" => "←".to_owned(),
-                    "up" => "↑".to_owned(),
-                    "down" => "↓".to_owned(),
-                    key if key.chars().count() == 1 => key.to_uppercase(),
-                    key => {
-                        let mut chars = key.chars();
-                        chars
-                            .next()
-                            .map(|first| first.to_uppercase().chain(chars).collect())
-                            .unwrap_or_default()
+            let Ok(stroke) = Keystroke::parse(stroke) else {
+                return stroke.to_owned();
+            };
+            let modifiers = stroke.modifiers;
+            let mut parts: Vec<String> = Vec::new();
+            if modifiers.function {
+                parts.push("Fn".into());
+            }
+            if modifiers.control {
+                parts.push("Ctrl".into());
+            }
+            if modifiers.alt {
+                parts.push("Alt".into());
+            }
+            if modifiers.platform {
+                parts.push(
+                    if cfg!(target_os = "macos") {
+                        "Cmd"
+                    } else {
+                        "Win"
                     }
-                })
-                .collect::<Vec<_>>()
-                .join("+")
+                    .into(),
+                );
+            }
+            if modifiers.shift {
+                parts.push("Shift".into());
+            }
+            parts.push(match stroke.key.as_str() {
+                "right" => "→".to_owned(),
+                "left" => "←".to_owned(),
+                "up" => "↑".to_owned(),
+                "down" => "↓".to_owned(),
+                key if key.chars().count() == 1 => key.to_uppercase(),
+                key => {
+                    let mut chars = key.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_uppercase().chain(chars).collect())
+                        .unwrap_or_default()
+                }
+            });
+            parts.join("+")
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -271,8 +307,9 @@ fn binding(id: &str, keys: &str, context: Option<&str>) -> Option<KeyBinding> {
     }
 }
 
-/// The keys each action got from the user's changes so far (to unbind
-/// them when the change changes again).
+/// The actions the user's changes touched so far, with the keys they had
+/// (to unbind them when the change changes again). An entry with no keys
+/// is an action left unassigned.
 #[derive(Default)]
 struct Applied(HashMap<&'static str, Vec<String>>);
 
@@ -280,43 +317,50 @@ impl Global for Applied {}
 
 /// Binds the user's changes (`shortcuts.overrides`) on top of the defaults.
 /// Call it after the defaults are bound and after each change.
+///
+/// Each touched action's old keys are unbound for that action only
+/// (`Unbind` with its name: other actions on the same keys stay), then the
+/// current keys of every action are bound again, after the unbinds (later
+/// bindings win): so swaps, resets and conflicts resolve in any order.
 pub fn apply(overrides: &Map<String, Value>, cx: &mut App) {
     let mut applied = if cx.has_global::<Applied>() {
         cx.remove_global::<Applied>()
     } else {
         Applied::default()
     };
-    let mut bindings = Vec::new();
-    for shortcut in &SHORTCUTS {
-        let context = (!shortcut.global).then_some(KEY_CONTEXT);
-        let changed = overrides.contains_key(shortcut.id);
-        let previous = applied.0.remove(shortcut.id).unwrap_or_default();
-        if !changed && previous.is_empty() {
-            continue;
-        }
-        // Off: the defaults and the keys of an earlier change.
-        for keys in shortcut
-            .defaults
-            .iter()
-            .map(|keys| (*keys).to_owned())
-            .chain(previous)
-        {
-            if is_valid(&keys) {
-                bindings.push(KeyBinding::new(&keys, NoAction, context));
+    let touched = SHORTCUTS
+        .iter()
+        .any(|shortcut| overrides.contains_key(shortcut.id) || applied.0.contains_key(shortcut.id));
+    if touched {
+        let mut off = Vec::new();
+        let mut on = Vec::new();
+        for shortcut in &SHORTCUTS {
+            let context = (!shortcut.global).then_some(KEY_CONTEXT);
+            let previous = applied.0.remove(shortcut.id);
+            if overrides.contains_key(shortcut.id) || previous.is_some() {
+                for keys in shortcut
+                    .defaults
+                    .iter()
+                    .map(|keys| (*keys).to_owned())
+                    .chain(previous.unwrap_or_default())
+                {
+                    if let Some(bound) = binding(shortcut.id, &keys, context) {
+                        let name = bound.action().name();
+                        off.push(KeyBinding::new(&keys, Unbind(name.into()), context));
+                    }
+                }
+            }
+            let keys = effective(shortcut, overrides);
+            on.extend(
+                keys.iter()
+                    .filter_map(|keys| binding(shortcut.id, keys, context)),
+            );
+            if overrides.contains_key(shortcut.id) {
+                applied.0.insert(shortcut.id, keys);
             }
         }
-        // On: what the action has now (the defaults again after a reset).
-        let keys = effective(shortcut, overrides);
-        bindings.extend(
-            keys.iter()
-                .filter_map(|keys| binding(shortcut.id, keys, context)),
-        );
-        if changed {
-            applied.0.insert(shortcut.id, keys);
-        }
-    }
-    if !bindings.is_empty() {
-        cx.bind_keys(bindings);
+        cx.bind_keys(off);
+        cx.bind_keys(on);
     }
     cx.set_global(applied);
 }
@@ -372,6 +416,15 @@ mod tests {
             effective(lock, &map(json!({"lock": " "}))),
             ["secondary-shift-l"]
         );
+        // The terminal's fixed keys count; the order of modifiers does not.
+        if !cfg!(target_os = "macos") {
+            assert_eq!(
+                conflicts(&map(json!({"new_tab": "ctrl-shift-c"}))),
+                ["new_tab"]
+            );
+        }
+        assert_eq!(normalized("alt-ctrl-l"), normalized("ctrl-alt-l"));
+        assert_eq!(display("ctrl--"), "Ctrl+-");
         // Every action of the table binds.
         for shortcut in &SHORTCUTS {
             assert!(

@@ -1188,7 +1188,8 @@ mod tests {
         assert!(ratio(black, blue) < MIN_RATIO, "the pair is hard to read");
         // Palette black on palette blue, the same colors as truecolor, and
         // hidden palette text.
-        let term = term("\x1b[30;44mP\x1b[0m\x1b[38;2;42;42;39;48;2;47;98;160mT\x1b[0m\x1b[8;30;44mH");
+        let term =
+            term("\x1b[30;44mP\x1b[0m\x1b[38;2;42;42;39;48;2;47;98;160mT\x1b[0m\x1b[8;30;44mH");
         let colors = |mode: MinContrast| {
             let mut style = style.clone();
             style.min_contrast = mode;

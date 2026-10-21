@@ -540,3 +540,38 @@ fn shortcuts_are_recorded_and_bound(cx: &mut TestAppContext) {
     assert!(!cx.update(|cx| ui.state.read(cx).is_unlocked()));
     ui.finish(cx);
 }
+
+/// The review of the Shortcuts (D67): unassign then reset brings the default
+/// back; a key without a modifier is not recorded; Lock moved to keys that
+/// another action had leaves that action its other keys.
+#[gpui::test]
+fn shortcut_changes_undo_cleanly(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-shortcuts", cx);
+    let core = ui.core(cx);
+    let overrides = || {
+        core.settings_get()
+            .unwrap()
+            .get("shortcuts.overrides")
+            .cloned()
+            .unwrap()
+    };
+    assert!(reveal(&ui, "shortcut-lock", cx));
+    // A plain letter is not taken; recording goes on.
+    ui.click("shortcut-lock", cx);
+    ui.press("t", cx);
+    assert_eq!(overrides(), serde_json::json!({}));
+    ui.press("escape", cx);
+    // Unassigned: Ctrl+Shift+L does nothing; reset: it locks again.
+    ui.click("shortcut-unassign-lock", cx);
+    assert_eq!(overrides()["lock"], serde_json::Value::Null);
+    ui.press("ctrl-shift-l", cx);
+    assert!(cx.update(|cx| ui.state.read(cx).is_unlocked()));
+    assert!(reveal(&ui, "shortcut-reset-lock", cx));
+    ui.click("shortcut-reset-lock", cx);
+    assert_eq!(overrides(), serde_json::json!({}));
+    ui.press("ctrl-shift-l", cx);
+    assert!(!cx.update(|cx| ui.state.read(cx).is_unlocked()));
+    ui.finish(cx);
+}

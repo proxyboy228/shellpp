@@ -105,6 +105,17 @@ impl SettingsView {
             cx.notify();
             return;
         }
+        // A key without Ctrl, Alt, Cmd or Fn would fire while typing (the
+        // F-keys excepted): recording waits for one with a modifier.
+        let modifiers = stroke.modifiers;
+        let function_key = stroke.key.len() > 1
+            && stroke.key.starts_with('f')
+            && stroke.key[1..].bytes().all(|byte| byte.is_ascii_digit());
+        if !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
+            && !function_key
+        {
+            return;
+        }
         let keys = stroke.unparse();
         if shortcuts::is_valid(&keys) {
             self.set_shortcut(id, Some(keys), cx);
