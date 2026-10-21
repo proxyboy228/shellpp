@@ -52,54 +52,44 @@ pub fn saved_id(id: Uuid) -> SharedString {
     format!("log-saved-{id}").into()
 }
 
-/// The date and the time of a UTC timestamp (`2026-10-21T18:04:05.123Z`).
-fn date_time(timestamp: &str) -> (&str, &str) {
-    (
-        timestamp.get(..10).unwrap_or(timestamp),
-        timestamp.get(11..16).unwrap_or(""),
-    )
-}
-
-/// Days between two `YYYY-MM-DD` dates (0 when unreadable).
-fn days_between(start: &str, end: &str) -> i64 {
-    let day = |date: &str| -> Option<i64> {
-        let year: i64 = date.get(..4)?.parse().ok()?;
-        let month: i64 = date.get(5..7)?.parse().ok()?;
-        let day: i64 = date.get(8..10)?.parse().ok()?;
-        // Days from civil (proleptic Gregorian), enough to compare dates.
-        let (y, m) = if month <= 2 {
-            (year - 1, month + 9)
-        } else {
-            (year, month - 3)
-        };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * m + 2) / 5 + day - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        Some(era * 146_097 + doe)
-    };
-    match (day(start), day(end)) {
-        (Some(start), Some(end)) => end - start,
-        _ => 0,
-    }
-}
-
-/// The two lines of the Date column: the start date, then "18:04 – 19:10
-/// UTC", "23:50 – 00:20 (+1d) UTC" or "18:04 – now".
+/// The two lines of the Date column, in local time (D68): the start date,
+/// then "18:04 – 19:10", "23:50 – 00:20 (+1d)" (by local dates) or
+/// "18:04 – now".
 pub fn date_lines(entry: &ConnectionLogView) -> (String, String) {
-    let (date, start) = date_time(&entry.started_at);
-    let times = match &entry.ended_at {
-        _ if entry.is_active() => format!("{start} – {}", strings::NOW),
-        Some(ended) => {
-            let (end_date, end) = date_time(ended);
-            match days_between(date, end_date) {
-                0 => format!("{start} – {end} UTC"),
-                days => format!("{start} – {end} (+{days}d) UTC"),
-            }
-        }
-        None => format!("{start} – {}", strings::UNKNOWN_END),
+    let Some(start) = crate::dates::parse(&entry.started_at) else {
+        return (entry.started_at.clone(), String::new());
     };
-    (date.to_owned(), times)
+    let begun = crate::dates::time(start);
+    let times = match &entry.ended_at {
+        _ if entry.is_active() => format!("{begun} – {}", strings::NOW),
+        Some(ended) => match crate::dates::parse(ended) {
+            Some(end) => {
+                let finished = crate::dates::time(end);
+                match crate::dates::days_apart(start, end) {
+                    0 => format!("{begun} – {finished}"),
+                    days => format!("{begun} – {finished} (+{days}d)"),
+                }
+            }
+            None => format!("{begun} – {}", strings::UNKNOWN_END),
+        },
+        None => format!("{begun} – {}", strings::UNKNOWN_END),
+    };
+    (crate::dates::date(start), times)
+}
+
+/// The tooltip of the Date column: start and end in UTC.
+pub fn date_tooltip(entry: &ConnectionLogView) -> Option<String> {
+    let start = crate::dates::timestamp_tooltip(&entry.started_at)?;
+    Some(
+        match entry
+            .ended_at
+            .as_deref()
+            .and_then(crate::dates::timestamp_tooltip)
+        {
+            Some(end) => format!("{start} – {end}"),
+            None => start,
+        },
+    )
 }
 
 /// How the session ended, in words.
@@ -393,10 +383,14 @@ impl LogsScreen {
             })
             .child(
                 v_flex()
+                    .id(SharedString::from(format!("log-date-{id}")))
                     .flex_none()
                     .w(DATE_COLUMN)
                     .child(div().text_size(metrics::FONT_SIZE_BODY).child(date))
-                    .child(secondary(times)),
+                    .child(secondary(times))
+                    .when_some(date_tooltip(entry), |this, utc| {
+                        this.tooltip(crate::dates::utc_tooltip(utc))
+                    }),
             )
             .child(
                 v_flex().flex_none().w(USER_COLUMN).child(
@@ -474,9 +468,7 @@ impl LogsScreen {
                 .child(widgets::caption(label, cx))
                 .child(div().text_size(metrics::FONT_SIZE_BODY).child(value))
         };
-        let (date, _) = date_time(&entry.started_at);
-        let (_, start) = date_time(&entry.started_at);
-        let started = format!("{date} {start} UTC");
+        let started = crate::dates::timestamp_text(&entry.started_at);
         let ended = entry.ended_at.as_deref().map_or_else(
             || {
                 if entry.is_active() {
@@ -485,10 +477,7 @@ impl LogsScreen {
                     strings::UNKNOWN_END.to_owned()
                 }
             },
-            |ended| {
-                let (date, time) = date_time(ended);
-                format!("{date} {time} UTC")
-            },
+            crate::dates::timestamp_text,
         );
         let block = widgets::block("log-panel-block", None, cx)
             .child(row(

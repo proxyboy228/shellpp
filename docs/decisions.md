@@ -1134,3 +1134,16 @@ Status: run 4 decision, 2026-10-22 (plan, item 4.3; how D68, item 3, is built).
 - A click on the notification brings its window forward with the tab, and the pane that asks becomes the active one. The answer, the end of the question (a drop, the timeout) and a new question replace or withdraw it.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru`).
+
+### 71. Dates in local time (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 4.6; how D68, item 6, is built; replaces the UTC dates of D65 and D67).
+
+**Decision:**
+
+- One module shows every date (`apps/desktop/src/dates.rs`): it reads the records' RFC 3339 UTC timestamps and writes the short date and the time without seconds. On Windows the zone comes from `GetDynamicTimeZoneInformation` and `SystemTimeToTzSpecificLocalTimeEx` (the daylight saving rules of each date, also of past years), the format from `GetDateFormatEx` and `GetTimeFormatEx` with the user's locale (a platform module, `platform/local_time.rs`; `windows-sys`, already a dependency, with three more features). No time zone crate is added.
+- Elsewhere, until the platform's zone is read (macOS and Linux builds come later), times stay in UTC and say so ("18:04 UTC"); `time`'s local offset is not used, as it cannot be read safely in a program with threads on Linux.
+- The places: the Logs table (the start date; start and end times; "(+1d)" counted by local dates) and its details, Known Hosts (table, tiles and panel), SFTP (the Modified column and the name conflict dialog), the Keychain's certificate validity and Shell History. Each date's tooltip gives its full UTC time. Import Data and Export Data show no dates (checked); exports keep the UTC timestamps as they are.
+- Tests fix the zone and the format per thread (`set_fixed_display`: dates `21.10.2026`, times `18:04`), so their expectations do not depend on the machine; the Windows calls have their own tests (a zone with fixed daylight saving rules, the `de-DE` and `en-US` formats).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.5, 1.6 (new) and 10.1 (and `docs/ru`); CONTRIBUTING.md (the new platform module).

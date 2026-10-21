@@ -412,7 +412,11 @@ fn names_modes_and_dates() {
         assert_eq!(parse_octal(bad), None, "{bad:?}");
     }
     assert_eq!(date_text(None), "—");
-    assert_eq!(date_text(Some(0)), "1970-01-01 00:00 UTC");
+    crate::dates::set_fixed_display(Some(crate::dates::FixedDisplay {
+        offset_minutes: 120,
+    }));
+    assert_eq!(date_text(Some(0)), "01.01.1970 02:00");
+    crate::dates::set_fixed_display(None);
 }
 
 /// The review of stage 4: a local copy onto itself is refused and leaves

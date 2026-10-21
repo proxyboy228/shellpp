@@ -76,8 +76,14 @@ gpui-pre-platform-pin.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
 # The drive letters of the local file panel without touching a drive
-# (GetLogicalDrives in platform/drives.rs; CONTRIBUTING.md, "Unsafe code").
-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+# (GetLogicalDrives in platform/drives.rs), and the user's time zone and
+# date format (platform/local_time.rs; CONTRIBUTING.md, "Unsafe code").
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Time",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }

@@ -229,7 +229,11 @@ fn a_click_opens_the_details_panel(cx: &mut TestAppContext) {
     assert_eq!(web.host_ids.len(), 1);
     assert!(ui.visible(cx, panel_host_id(web.host_ids[0])));
     assert_eq!(port_text(&web), "22");
-    assert!(date_text(&web.created_at).ends_with(" UTC"));
+    // Local time: the UTC time only in the tooltip (D68).
+    assert!(!date_text(&web.created_at).contains("UTC"));
+    assert!(
+        crate::dates::timestamp_tooltip(&web.created_at).is_some_and(|utc| utc.ends_with(" UTC"))
+    );
 
     // A hashed entry: no address, the port is in the hash; a revoked one
     // carries the badge in the panel too.
@@ -781,14 +785,17 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     app.finish(cx);
 }
 
+/// D68: "Date added" in local time (here UTC+3) and the locale's format;
+/// anything that is not a timestamp as it is.
 #[test]
 fn pure_texts_and_listing() {
-    assert_eq!(
-        date_text("2026-10-20T12:34:56.789Z"),
-        "2026-10-20 12:34 UTC"
-    );
+    crate::dates::set_fixed_display(Some(crate::dates::FixedDisplay {
+        offset_minutes: 180,
+    }));
+    assert_eq!(date_text("2026-10-20T12:34:56.789Z"), "20.10.2026 15:34");
     assert_eq!(date_text("garbage"), "garbage");
     assert_eq!(date_text(""), "");
+    crate::dates::set_fixed_display(None);
 }
 
 /// A test build never suggests the real `~/.ssh/known_hosts`, even without

@@ -469,6 +469,11 @@ impl KnownHostsScreen {
                 .text_color(theme.muted_foreground)
                 .into_any_element(),
             secondary(date_text(&view.created_at))
+                .id(SharedString::from(format!("kh-added-{id}")))
+                .when_some(
+                    crate::dates::timestamp_tooltip(&view.created_at),
+                    |this, utc| this.tooltip(crate::dates::utc_tooltip(utc)),
+                )
                 .flex_none()
                 .w(ADDED_COLUMN)
                 .into_any_element(),
@@ -807,11 +812,17 @@ impl KnownHostsScreen {
                 strings::FIELD_FINGERPRINT,
                 fingerprint,
             ))
-            .child(row(
-                "kh-panel-added",
-                strings::FIELD_ADDED,
-                text(date_text(&view.created_at)),
-            ))
+            .child(
+                row(
+                    "kh-panel-added",
+                    strings::FIELD_ADDED,
+                    text(date_text(&view.created_at)),
+                )
+                .when_some(
+                    crate::dates::timestamp_tooltip(&view.created_at),
+                    |this, utc| this.tooltip(crate::dates::utc_tooltip(utc)),
+                ),
+            )
             .when_some(view.comment.clone(), |this, comment| {
                 this.child(row(
                     "kh-panel-comment",

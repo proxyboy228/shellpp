@@ -1523,13 +1523,19 @@ impl KeyPanel {
                 "{} \u{2013} {}",
                 info.valid_after
                     .as_deref()
-                    .map(crate::known_hosts::date_text)
+                    .map(crate::dates::timestamp_text)
                     .unwrap_or_default(),
                 info.valid_before
                     .as_deref()
-                    .map(crate::known_hosts::date_text)
+                    .map(crate::dates::timestamp_text)
                     .unwrap_or_else(|| strings::CERTIFICATE_FOREVER.to_owned())
             );
+            let valid_utc = [info.valid_after.as_deref(), info.valid_before.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter_map(crate::dates::timestamp_tooltip)
+                .collect::<Vec<_>>();
+            let valid_utc = (!valid_utc.is_empty()).then(|| valid_utc.join(" \u{2013} "));
             let principals = if info.principals.is_empty() {
                 strings::CERTIFICATE_ANY_PRINCIPAL.to_owned()
             } else {
@@ -1575,7 +1581,12 @@ impl KeyPanel {
             .child(value_row(
                 "kc-key-certificate-valid",
                 strings::CERTIFICATE_VALID,
-                div().child(valid),
+                div()
+                    .id("kc-key-certificate-valid-dates")
+                    .child(valid)
+                    .when_some(valid_utc, |this, utc| {
+                        this.tooltip(crate::dates::utc_tooltip(utc))
+                    }),
                 cx,
             ))
             .child(value_row(

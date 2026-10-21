@@ -122,8 +122,13 @@ fn entry(started: &str, ended: Option<&str>, reason: Option<&str>) -> Connection
     }
 }
 
+/// D68: the Date column in local time (here UTC+3), the day boundary by
+/// local dates, the UTC times in its tooltip.
 #[test]
 fn the_date_column_reads_its_times() {
+    crate::dates::set_fixed_display(Some(crate::dates::FixedDisplay {
+        offset_minutes: 180,
+    }));
     let ended = entry(
         "2026-10-21T18:04:05.000Z",
         Some("2026-10-21T19:10:00.000Z"),
@@ -131,22 +136,41 @@ fn the_date_column_reads_its_times() {
     );
     assert_eq!(
         date_lines(&ended),
-        ("2026-10-21".to_owned(), "18:04 – 19:10 UTC".to_owned())
+        ("21.10.2026".to_owned(), "21:04 – 22:10".to_owned())
+    );
+    assert_eq!(
+        date_tooltip(&ended).as_deref(),
+        Some("2026-10-21 18:04:05 UTC – 2026-10-21 19:10:00 UTC")
     );
     assert_eq!(end_text(&ended), strings::END_CLOSED);
-    // Over midnight, and over a month's end.
+    // Over local midnight, and over a month's end.
     let next_day = entry(
-        "2026-10-31T23:50:00.000Z",
-        Some("2026-11-01T00:20:00.000Z"),
+        "2026-10-31T20:50:00.000Z",
+        Some("2026-10-31T21:20:00.000Z"),
         Some("dropped"),
     );
-    assert_eq!(date_lines(&next_day).1, "23:50 – 00:20 (+1d) UTC");
+    assert_eq!(date_lines(&next_day).1, "23:50 – 00:20 (+1d)");
     assert_eq!(end_text(&next_day), strings::END_DROPPED);
+    // UTC midnight is no local one here.
+    let same_day = entry(
+        "2026-10-31T23:50:00.000Z",
+        Some("2026-11-01T00:20:00.000Z"),
+        Some("closed"),
+    );
+    assert_eq!(
+        date_lines(&same_day),
+        ("01.11.2026".to_owned(), "02:50 – 03:20".to_owned())
+    );
     let active = entry("2026-10-21T18:04:05.000Z", None, None);
-    assert_eq!(date_lines(&active).1, "18:04 – now");
+    assert_eq!(date_lines(&active).1, "21:04 – now");
+    assert_eq!(
+        date_tooltip(&active).as_deref(),
+        Some("2026-10-21 18:04:05 UTC")
+    );
     assert_eq!(end_text(&active), strings::ACTIVE);
     let unknown = entry("2026-10-21T18:04:05.000Z", None, Some("unknown"));
-    assert_eq!(date_lines(&unknown).1, "18:04 – unknown");
+    assert_eq!(date_lines(&unknown).1, "21:04 – unknown");
+    crate::dates::set_fixed_display(None);
     assert_eq!(end_text(&unknown), strings::END_UNKNOWN);
 }
 

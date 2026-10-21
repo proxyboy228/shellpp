@@ -190,15 +190,10 @@ pub fn port_text(view: &KnownHostView) -> String {
     }
 }
 
-/// "Date added" from the record's UTC timestamp (`2026-10-20T12:34:56.789Z`
-/// becomes `2026-10-20 12:34 UTC`); anything else is shown as it is.
+/// "Date added" from the record's UTC timestamp, in local time and the
+/// locale's format (D68; [`crate::dates`]); anything else as it is.
 pub fn date_text(timestamp: &str) -> String {
-    match (timestamp.get(..10), timestamp.get(11..16)) {
-        (Some(date), Some(time)) if timestamp.as_bytes().get(10) == Some(&b'T') => {
-            format!("{date} {time} UTC")
-        }
-        _ => timestamp.to_owned(),
-    }
+    crate::dates::timestamp_text(timestamp)
 }
 
 /// Whether an entry matches the search text (case-insensitive substring of

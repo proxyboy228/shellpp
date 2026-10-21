@@ -259,15 +259,18 @@ fn local_style() -> PathStyle {
     }
 }
 
-/// "2026-10-21 14:02 UTC" for a modification time (the format of Known
-/// Hosts; D65).
+/// A modification time in local time and the locale's format (D68; the
+/// format of Known Hosts); "—" when the server gave none.
 pub fn date_text(modified: Option<u64>) -> String {
     match modified {
-        Some(seconds) => crate::known_hosts::date_text(
-            &shellpp_core::model::time::format_timestamp(UNIX_EPOCH + Duration::from_secs(seconds)),
-        ),
+        Some(seconds) => crate::dates::date_time(UNIX_EPOCH + Duration::from_secs(seconds)),
         None => "—".to_owned(),
     }
+}
+
+/// The tooltip of a modification time: its full time in UTC.
+fn date_tooltip(modified: Option<u64>) -> Option<String> {
+    modified.map(|seconds| crate::dates::utc_text(UNIX_EPOCH + Duration::from_secs(seconds)))
 }
 
 /// Whether `name` can be a new name in a folder (no separator, not `.` or
@@ -1794,7 +1797,17 @@ impl FilePanel {
                             }),
                     ),
             )
-            .child(cell(date_text(entry.modified), MODIFIED_COLUMN, muted))
+            .child(
+                cell(date_text(entry.modified), MODIFIED_COLUMN, muted)
+                    .id(SharedString::from(format!(
+                        "sftp-{}-modified-{}",
+                        self.side.name(),
+                        entry.name
+                    )))
+                    .when_some(date_tooltip(entry.modified), |this, utc| {
+                        this.tooltip(crate::dates::utc_tooltip(utc))
+                    }),
+            )
             .child(cell(entry.size_text(), SIZE_COLUMN, muted))
             .child(cell(entry.kind_text(), KIND_COLUMN, muted))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -1916,7 +1929,7 @@ impl FilePanel {
 }
 
 /// A fixed-width cell of a row.
-fn cell(text: String, width: Pixels, color: gpui::Hsla) -> impl IntoElement {
+fn cell(text: String, width: Pixels, color: gpui::Hsla) -> gpui::Div {
     div()
         .flex_none()
         .w(width)

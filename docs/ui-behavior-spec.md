@@ -210,7 +210,20 @@ Additionally:
   list marks all notifications as read.
 - Example source: uploads of files opened from SFTP (5.4).
 - Notifications are kept in memory only and disappear when the app exits. System (OS)
-  notifications are not used.
+  notifications are not used, with one exception: the signature question of a
+  forwarded agent while the window is not focused (3.1). [decision] (D68)
+
+### 1.6 Dates and times [decision] (D68)
+
+- Every date on screen (Logs, Known Hosts, SFTP, the Keychain's certificates, Shell
+  History, and every later screen) is in local time, in the system's time zone with the
+  daylight saving rules of that date, and in the short date and time format of the
+  system's locale ("21.10.2026 18:04", "10/21/2026 6:04 PM").
+- The tooltip of a date gives its full time in UTC ("2026-10-21 15:04:09 UTC").
+- Records keep their UTC timestamps (`docs/data-model.md`, 1.1); exports write them
+  as they are.
+- Where the platform's zone cannot be read yet (outside Windows for now), times are
+  shown in UTC and say so ("18:04 UTC").
 
 ---
 
@@ -1370,9 +1383,9 @@ Blocks from top to bottom:
     [decision]
 - The view toggle is remembered (`view.known_hosts.layout`, `docs/data-model.md`); the
   sort is not, and the screen opens sorted by address. In the list layout the Key type
-  column is 200 px and the Date added column 148 px wide. The date added is shown as
-  `YYYY-MM-DD HH:MM UTC`. Remove in the details panel is a neutral button with text in the
-  danger color. [decision]
+  column is 200 px and the Date added column 148 px wide. The date added is shown in
+  local time (1.6), its UTC time in the tooltip. Remove in the details panel is a neutral
+  button with text in the danger color. [decision]
 - Export to the known_hosts format. Hashed entries are exported as they are. [decision]
   Revoked entries are exported with the `@revoked` marker. [decision]
 - Connections check host keys only against this list. The system `~/.ssh/known_hosts` is

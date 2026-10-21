@@ -17,6 +17,7 @@ pub mod device_name;
 pub mod drives;
 pub mod events;
 pub mod keychain;
+pub mod local_time;
 
 use std::sync::Arc;
 

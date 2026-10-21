@@ -35,9 +35,9 @@ pub fn save_id(id: Uuid) -> SharedString {
     format!("shell-history-save-{id}").into()
 }
 
-/// "2026-10-21 18:04" from the entry's UTC timestamp.
+/// The entry's time in local time and the locale's format (D68).
 fn when(timestamp: &str) -> String {
-    crate::known_hosts::date_text(timestamp)
+    crate::dates::timestamp_text(timestamp)
 }
 
 pub struct ShellHistory {
@@ -282,11 +282,16 @@ impl ShellHistory {
             )
             .child(
                 div()
+                    .id(SharedString::from(format!("shell-history-when-{id}")))
                     .flex_none()
                     .w(px(140.))
                     .text_size(metrics::FONT_SIZE_CAPTION)
                     .text_color(theme.muted_foreground)
-                    .child(when(&entry.executed_at)),
+                    .child(when(&entry.executed_at))
+                    .when_some(
+                        crate::dates::timestamp_tooltip(&entry.executed_at),
+                        |this, utc| this.tooltip(crate::dates::utc_tooltip(utc)),
+                    ),
             )
             .child(
                 ControlButton::new(save_id(id), ControlKind::Ghost)
