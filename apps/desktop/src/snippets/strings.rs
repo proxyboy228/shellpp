@@ -6,6 +6,17 @@ pub const NEW_MENU: &str = "More to create";
 pub const NEW_PACKAGE: &str = "New snippet package";
 pub const SEARCH_PLACEHOLDER: &str = "Search snippets";
 pub const ALL_SNIPPETS: &str = "Snippets";
+pub const SHELL_HISTORY: &str = "Shell History";
+
+// Shell History (9.1).
+pub const HISTORY_SEARCH: &str = "Search commands";
+pub const ALL_HOSTS: &str = "All hosts";
+pub const NO_HOST: &str = "Removed host";
+pub const SAVE_AS_SNIPPET: &str = "Save as snippet";
+pub const HISTORY_NOTE: &str = "Commands typed in sessions to saved hosts, newest first. \
+     Commands that look like secrets are never kept.";
+pub const HISTORY_EMPTY: &str = "No commands here yet.";
+pub const HISTORY_FAILED: &str = "The history could not be read.";
 
 // Content (9.2).
 pub const PACKAGES: &str = "Packages";

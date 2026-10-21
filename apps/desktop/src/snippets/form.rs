@@ -101,13 +101,50 @@ impl SnippetForm {
         form
     }
 
-    /// A saved snippet.
+    /// Save as snippet from Shell History: the command as the script, its
+    /// host as the target.
+    pub fn from_command(
+        command: &str,
+        host: Option<Uuid>,
+        state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let form = Self::build(
+            FormMode::New,
+            (String::new(), String::new(), command.to_owned()),
+            None,
+            host.into_iter().collect(),
+            state,
+            window,
+            cx,
+        );
+        form.label.update(cx, |input, cx| input.focus(window, cx));
+        form
+    }
+
+    /// A saved snippet. Targets and a package removed since are left out:
+    /// the core refuses references to removed records.
     pub fn edit(
         snippet: &SnippetView,
         state: Entity<AppState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let targets: Vec<Uuid> = {
+            let state = state.read(cx);
+            snippet
+                .target_host_ids
+                .iter()
+                .copied()
+                .filter(|id| state.host(*id).is_some())
+                .collect()
+        };
+        let package = snippet.package_id.filter(|id| {
+            Self::packages(&state, cx)
+                .iter()
+                .any(|p| p.record.record_id == *id)
+        });
         Self::build(
             FormMode::Edit(snippet.record.record_id),
             (
@@ -115,12 +152,24 @@ impl SnippetForm {
                 snippet.tags.join(", "),
                 snippet.script.clone(),
             ),
-            snippet.package_id,
-            snippet.target_host_ids.clone(),
+            package,
+            targets,
             state,
             window,
             cx,
         )
+    }
+
+    fn packages(
+        state: &Entity<AppState>,
+        cx: &App,
+    ) -> Vec<shellpp_core::service::snippets::SnippetPackageView> {
+        let state = state.read(cx);
+        state
+            .core()
+            .zip(state.vault_id())
+            .and_then(|(core, vault)| core.snippet_packages_list(vault).ok())
+            .unwrap_or_default()
     }
 
     fn build(
@@ -225,15 +274,28 @@ impl SnippetForm {
         if !label.is_empty() {
             data.insert("label".into(), json!(label));
         }
-        if let Some(package) = self.package {
+        // A package or host removed while the form is open is left out.
+        if let Some(package) = self.package.filter(|id| {
+            Self::packages(&self.state, cx)
+                .iter()
+                .any(|package| package.record.record_id == *id)
+        }) {
             data.insert("package_id".into(), json!(package));
         }
         let tags = parse_tags(&self.tags.read(cx).value());
         if !tags.is_empty() {
             data.insert("tags".into(), json!(tags));
         }
-        if !self.targets.is_empty() {
-            data.insert("target_host_ids".into(), json!(self.targets));
+        let targets: Vec<Uuid> = {
+            let state = self.state.read(cx);
+            self.targets
+                .iter()
+                .copied()
+                .filter(|id| state.host(*id).is_some())
+                .collect()
+        };
+        if !targets.is_empty() {
+            data.insert("target_host_ids".into(), json!(targets));
         }
         Ok(data)
     }

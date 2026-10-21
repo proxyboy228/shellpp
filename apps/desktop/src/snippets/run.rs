@@ -206,9 +206,12 @@ pub fn confirm(
                             })),
                     ),
             )
+            // Enter: closed before the run opens its results, so the close
+            // takes this dialog, not the results.
             .on_ok(move |_, window, cx| {
+                window.close_dialog(cx);
                 on_ok(window, cx);
-                true
+                false
             })
             .footer(
                 h_flex()

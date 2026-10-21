@@ -427,3 +427,141 @@ fn a_plain_snippet_on_one_host_runs_at_once(cx: &mut TestAppContext) {
     assert_eq!(results.read_with(cx, |results, _| results.rows().len()), 1);
     ui.finish(cx);
 }
+
+/// Shell History (9.1): every host's commands, a host filter, a search and
+/// "Save as snippet" with the command and its host.
+#[gpui_kit::test]
+fn shell_history_filters_and_saves_a_snippet(cx: &mut TestAppContext) {
+    use shellpp_core::service::dto::{HistoryCandidate, RecordRef};
+    use shellpp_core::service::host_api::HistoryRecordInput;
+
+    let ui = Screen::open(
+        cx,
+        &[
+            json!({"address": "web.example.com", "label": "Web"}),
+            json!({"address": "db.example.com", "label": "DB"}),
+        ],
+    );
+    let vault = ui.vault(cx);
+    let web = ui.host_id(cx, "web.example.com");
+    let db = ui.host_id(cx, "db.example.com");
+    for (host, command) in [(web, "systemctl status nginx"), (db, "psql -c 'select 1'")] {
+        ui.core(cx)
+            .history_record(HistoryRecordInput {
+                host: Some(RecordRef {
+                    vault_id: vault,
+                    record_id: host,
+                }),
+                session_id: Uuid::now_v7(),
+                candidate: HistoryCandidate {
+                    command: command.to_owned(),
+                    prompt_text: "alice@host:~$".to_owned(),
+                    typed_printable: true,
+                    alt_screen: false,
+                },
+                injected: false,
+                record_history: true,
+            })
+            .unwrap();
+    }
+    ui.click(cx, "snippet-shell-history");
+    let history = ui
+        .screen
+        .read_with(cx, |screen, _| screen.history().cloned())
+        .expect("Shell History is shown");
+    ui.frame(cx, |_, _| {});
+    let commands = |cx: &mut TestAppContext| {
+        history.read_with(cx, |history, _| {
+            history
+                .entries()
+                .iter()
+                .map(|entry| entry.command.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        commands(cx),
+        ["psql -c 'select 1'", "systemctl status nginx"]
+    );
+    assert!(ui.visible(cx, "shell-history-list"));
+
+    // The host filter and the search.
+    history.update(cx, |history, cx| history.set_host(Some(web), cx));
+    ui.frame(cx, |_, _| {});
+    assert_eq!(commands(cx), ["systemctl status nginx"]);
+    history.update(cx, |history, cx| history.set_host(None, cx));
+    ui.type_into(cx, "shell-history-search", "PSQL");
+    assert_eq!(commands(cx), ["psql -c 'select 1'"]);
+
+    // Save as snippet: a new snippet with the command, on its host.
+    let entry = history.read_with(cx, |history, _| history.entries()[0].record_id);
+    ui.click(cx, history::save_id(entry));
+    let form = ui.form(cx);
+    assert_eq!(form.read_with(cx, |form, _| form.mode()), FormMode::New);
+    assert_eq!(
+        form.read_with(cx, |form, cx| form.script_text(cx)),
+        "psql -c 'select 1'"
+    );
+    assert_eq!(form.read_with(cx, |form, _| form.targets().to_vec()), [db]);
+
+    // Back to the snippets.
+    ui.click(cx, "snippet-back");
+    assert!(
+        ui.screen
+            .read_with(cx, |screen, _| screen.history().is_none())
+    );
+    ui.finish(cx);
+}
+
+/// Enter on the confirmation starts one run and leaves its results open;
+/// Run from the menu of the open snippet saves first; a removed host
+/// leaves the targets.
+#[gpui_kit::test]
+fn the_review_cases_of_the_run(cx: &mut TestAppContext) {
+    let ui = Screen::open(
+        cx,
+        &[
+            json!({"address": "web.example.com", "label": "Web"}),
+            json!({"address": "db.example.com", "label": "DB"}),
+        ],
+    );
+    let web = ui.host_id(cx, "web.example.com");
+    let db = ui.host_id(cx, "db.example.com");
+    let id = ui
+        .save(
+            cx,
+            json!({"script": "uptime", "target_host_ids": [web, db]}),
+        )
+        .record
+        .record_id;
+    ui.act(cx, |screen, window, cx| screen.run(id, window, cx));
+    assert!(ui.visible(cx, "snippet-confirm"));
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert!(ui.visible(cx, "snippet-results"));
+    assert!(!ui.visible(cx, "snippet-confirm"));
+    ui.click(cx, "snippet-results-close");
+
+    // A removed host leaves the targets of the form; Save works.
+    ui.state
+        .update(cx, |state, cx| state.delete_records(vec![db], cx))
+        .unwrap();
+    ui.act(cx, |screen, _, cx| screen.reload(cx));
+    ui.click(cx, card_id(id));
+    let form = ui.form(cx);
+    assert_eq!(form.read_with(cx, |form, _| form.targets().to_vec()), [web]);
+    // Run from the menu of the open snippet: what is typed runs.
+    ui.type_into(cx, "snippet-script", "uptime -p");
+    ui.act(cx, |screen, window, cx| {
+        screen.run_from_menu(id, window, cx)
+    });
+    let saved = ui.snippets(cx);
+    assert_eq!(saved[0].script, "uptime -p");
+    assert_eq!(saved[0].target_host_ids, [web]);
+    assert!(ui.visible(cx, "snippet-results"));
+    // Selecting the open snippet again keeps its form.
+    ui.click(cx, "snippet-results-close");
+    let before = ui.form(cx);
+    ui.click(cx, card_id(id));
+    assert_eq!(ui.form(cx).entity_id(), before.entity_id());
+    ui.finish(cx);
+}

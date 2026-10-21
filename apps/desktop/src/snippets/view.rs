@@ -15,8 +15,8 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    WindowExt as _, h_flex, v_flex,
 };
 use shellpp_core::service::dto::TagColor;
 use shellpp_core::service::snippets::{SnippetPackageView, SnippetView};
@@ -58,7 +58,7 @@ fn snippet_menu(menu: PopupMenu, screen: gpui::WeakEntity<SnippetsScreen>, id: U
         .item(
             PopupMenuItem::element(|_, cx| menu_item("snippet-menu-run", strings::RUN, false, cx))
                 .on_click(move |_, window, cx| {
-                    let _ = run.update(cx, |screen, cx| screen.run(id, window, cx));
+                    let _ = run.update(cx, |screen, cx| screen.run_from_menu(id, window, cx));
                 }),
         )
         .item(
@@ -332,6 +332,14 @@ impl SnippetsScreen {
                     }),
                 )
             });
+        let showing_history = self.history.is_some();
+        let history = ControlButton::new("snippet-shell-history", ControlKind::Neutral)
+            .icon(Lucide::RotateCcwClock)
+            .label(strings::SHELL_HISTORY)
+            .selected(showing_history)
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.show_history(!showing_history, window, cx)
+            }));
         h_flex()
             .id("snippet-action-bar")
             .test_support()
@@ -346,6 +354,7 @@ impl SnippetsScreen {
                     .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
                     .child(new_menu),
             )
+            .child(history)
             .child(
                 h_flex()
                     .flex_1()
@@ -355,9 +364,16 @@ impl SnippetsScreen {
             )
     }
 
-    /// The way back from a package: "Snippets › Deploy".
+    /// The way back from a package or Shell History: "Snippets › Deploy".
     fn render_breadcrumb(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let package = self.package.and_then(|id| self.package_view(id))?;
+        let name = if self.history.is_some() {
+            strings::SHELL_HISTORY.to_owned()
+        } else {
+            self.package
+                .and_then(|id| self.package_view(id))?
+                .name
+                .clone()
+        };
         let theme = cx.theme();
         Some(
             h_flex()
@@ -370,7 +386,10 @@ impl SnippetsScreen {
                 .text_size(metrics::FONT_SIZE_BODY)
                 .child(
                     widgets::text_button("snippet-back", strings::ALL_SNIPPETS, true, cx).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.enter_package(None, cx)),
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.show_history(false, window, cx);
+                            this.enter_package(None, cx)
+                        }),
                     ),
                 )
                 .child(
@@ -378,11 +397,7 @@ impl SnippetsScreen {
                         .small()
                         .text_color(theme.muted_foreground),
                 )
-                .child(
-                    div()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(package.name.clone()),
-                )
+                .child(div().font_weight(FontWeight::MEDIUM).child(name))
                 .into_any_element(),
         )
     }
@@ -899,7 +914,10 @@ impl Render for SnippetsScreen {
         )
         .absolute()
         .size_full();
-        let content = if self.shown.is_empty() && self.shown_packages.is_empty() {
+        let history = self.history.clone();
+        let content = if history.is_some() {
+            div().into_any_element()
+        } else if self.shown.is_empty() && self.shown_packages.is_empty() {
             self.render_empty(cx)
         } else {
             self.render_grid(window, cx)
@@ -919,27 +937,34 @@ impl Render for SnippetsScreen {
                     .child(self.render_action_bar(window, cx)),
             )
             .children(self.render_breadcrumb(cx))
-            .child(
-                div()
-                    .id("snippet-content")
-                    .test_support()
-                    .key_context("SnippetsGrid")
-                    .track_focus(&self.focus)
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        this.on_key_down(event, window, cx)
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| this.focus.focus(window, cx)),
-                    )
-                    .child(content),
-            );
+            // Shell History has its own fields: the grid's focus handling
+            // (which takes the focus on a click) is not around it.
+            .when_some(history.clone(), |this, history| {
+                this.child(div().flex().flex_col().flex_1().min_h_0().child(history))
+            })
+            .when(history.is_none(), |this| {
+                this.child(
+                    div()
+                        .id("snippet-content")
+                        .test_support()
+                        .key_context("SnippetsGrid")
+                        .track_focus(&self.focus)
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            this.on_key_down(event, window, cx)
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| this.focus.focus(window, cx)),
+                        )
+                        .child(content),
+                )
+            });
         let panel = self.render_panel(total, cx);
         h_flex()
             .id("snippets-screen")

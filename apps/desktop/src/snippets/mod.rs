@@ -20,6 +20,7 @@
 //! here logs scripts, their output or host names.
 
 mod form;
+pub mod history;
 mod run;
 pub mod strings;
 mod view;
@@ -36,6 +37,7 @@ use shellpp_core::service::snippets::{RecordInput, SnippetPackageView, SnippetVi
 use uuid::Uuid;
 
 pub use form::{FormMode, SnippetForm};
+pub use history::ShellHistory;
 pub use run::{RunResults, RunRow, RunState, ask_values};
 
 use crate::shell::Toast;
@@ -104,6 +106,8 @@ pub struct SnippetsScreen {
     undo: Option<PendingUndo>,
     /// The results of the last run, while its dialog is open.
     results: Option<Entity<RunResults>>,
+    /// Shell History, while it is shown instead of the snippets.
+    history: Option<Entity<ShellHistory>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -143,6 +147,7 @@ impl SnippetsScreen {
                         this.form = None;
                         this.selected = None;
                         this.results = None;
+                        this.history = None;
                     }
                     this.reload(cx);
                 }
@@ -167,6 +172,7 @@ impl SnippetsScreen {
             focus: cx.focus_handle().tab_stop(true),
             undo: None,
             results: None,
+            history: None,
             _subscriptions: vec![search_subscription, state_subscription],
         };
         screen.reload(cx);
@@ -225,6 +231,40 @@ impl SnippetsScreen {
 
     pub fn results(&self) -> Option<&Entity<RunResults>> {
         self.results.as_ref()
+    }
+
+    pub fn history(&self) -> Option<&Entity<ShellHistory>> {
+        self.history.as_ref()
+    }
+
+    /// Shows Shell History instead of the snippets (9.1), or the snippets
+    /// again.
+    pub fn show_history(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if show == self.history.is_some() {
+            return;
+        }
+        self.history = show.then(|| {
+            let state = self.state.clone();
+            let screen = cx.entity().downgrade();
+            cx.new(|cx| ShellHistory::new(state, screen, window, cx))
+        });
+        cx.notify();
+    }
+
+    /// Save as snippet (Shell History): a new snippet with `command` as
+    /// its script, targeting `host`.
+    pub fn new_snippet_from(
+        &mut self,
+        command: &str,
+        host: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected = None;
+        let state = self.state.clone();
+        let host = host.filter(|id| self.state.read(cx).host(*id).is_some());
+        self.form = Some(cx.new(|cx| SnippetForm::from_command(command, host, state, window, cx)));
+        cx.notify();
     }
 
     pub fn can_undo(&self) -> bool {
@@ -327,8 +367,12 @@ impl SnippetsScreen {
     }
 
     /// Selects a card and opens its snippet in the panel (`None` closes it).
+    /// The snippet open already keeps its form and what is typed in it.
     pub fn select(&mut self, id: Option<Uuid>, window: &mut Window, cx: &mut Context<Self>) {
         let id = id.filter(|id| self.snippet(*id).is_some());
+        if id.is_some() && id == self.selected && self.form.is_some() {
+            return;
+        }
         self.selected = id;
         self.form = id.and_then(|id| self.snippet(id).cloned()).map(|snippet| {
             let state = self.state.clone();
@@ -384,6 +428,8 @@ impl SnippetsScreen {
                 let id = view.record.record_id;
                 tracing::info!(created = record_id.is_none(), "snippet saved");
                 self.reload(cx);
+                // The form again, with the values as saved.
+                self.selected = None;
                 self.select(Some(id), window, cx);
                 if then_run {
                     self.run(id, window, cx);
@@ -399,14 +445,28 @@ impl SnippetsScreen {
         }
     }
 
+    /// Run from a menu: the snippet open in the panel is saved first, so
+    /// what runs is what is on screen (as the panel's Run).
+    pub fn run_from_menu(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self
+            .form
+            .as_ref()
+            .is_some_and(|form| form.read(cx).mode() == FormMode::Edit(id));
+        if open {
+            self.save(true, window, cx);
+        } else {
+            self.run(id, window, cx);
+        }
+    }
+
     /// Run (9.4): the variables' values, the confirmation for two or more
-    /// hosts, then the results. A snippet without targets opens in the
-    /// panel, where they are added.
+    /// hosts, then the results. A snippet without targets (or whose hosts
+    /// were all removed) opens in the panel, where they are added.
     pub fn run(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let Some(snippet) = self.snippet(id).cloned() else {
             return;
         };
-        if snippet.target_host_ids.is_empty() {
+        if self.target_titles(&snippet, cx).is_empty() {
             if self.selected != Some(id) {
                 self.select(Some(id), window, cx);
             }
@@ -436,14 +496,16 @@ impl SnippetsScreen {
     ) {
         let hosts = self.target_titles(&snippet, cx);
         if hosts.len() < 2 {
-            self.start_run(&snippet, script, window, cx);
+            self.start_run(&snippet, script, hosts, window, cx);
             return;
         }
         let title = card_title(&snippet);
         let screen = cx.entity().downgrade();
+        // The run takes the hosts the confirmation listed.
+        let confirmed = hosts.clone();
         run::confirm(title, hosts, window, cx, move |window, cx| {
             let _ = screen.update(cx, |screen, cx| {
-                screen.start_run(&snippet, script.clone(), window, cx)
+                screen.start_run(&snippet, script.clone(), confirmed.clone(), window, cx)
             });
         });
     }
@@ -463,10 +525,10 @@ impl SnippetsScreen {
         &mut self,
         snippet: &SnippetView,
         script: String,
+        targets: Vec<(Uuid, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let targets = self.target_titles(snippet, cx);
         let vault_id = snippet.record.vault_id;
         let results =
             cx.new(|cx| RunResults::start(card_title(snippet), script, vault_id, targets, cx));
