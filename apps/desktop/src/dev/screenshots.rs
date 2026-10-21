@@ -254,6 +254,8 @@ pub enum ShotState {
     SnippetConfirm,
     /// The results table of a run.
     SnippetResults,
+    /// Shell History: every host's commands (UI 9.1).
+    ShellHistory,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -361,7 +363,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -394,6 +396,7 @@ impl ShotState {
         Self::SnippetVariables,
         Self::SnippetConfirm,
         Self::SnippetResults,
+        Self::ShellHistory,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
@@ -509,6 +512,7 @@ impl ShotState {
             Self::SnippetVariables => "snippet-variables",
             Self::SnippetConfirm => "snippet-confirm",
             Self::SnippetResults => "snippet-results",
+            Self::ShellHistory => "shell-history",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1438,7 +1442,8 @@ pub async fn reach_state(
         | ShotState::SnippetPanel
         | ShotState::SnippetVariables
         | ShotState::SnippetConfirm
-        | ShotState::SnippetResults => {
+        | ShotState::SnippetResults
+        | ShotState::ShellHistory => {
             snippets_shot::reach(cx, handle, root, state, shot_state).await
         }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
@@ -1636,7 +1641,8 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SnippetPanel
             | ShotState::SnippetVariables
             | ShotState::SnippetConfirm
-            | ShotState::SnippetResults => Err("checked with the stage 5 screens"),
+            | ShotState::SnippetResults
+            | ShotState::ShellHistory => Err("checked with the stage 5 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor

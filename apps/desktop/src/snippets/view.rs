@@ -360,7 +360,10 @@ impl SnippetsScreen {
                     .flex_1()
                     .min_w_0()
                     .justify_end()
-                    .child(self.render_search(window, cx)),
+                    // Shell History has its own search.
+                    .when(!showing_history, |this| {
+                        this.child(self.render_search(window, cx))
+                    }),
             )
     }
 

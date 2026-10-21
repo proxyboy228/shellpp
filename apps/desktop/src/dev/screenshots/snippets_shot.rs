@@ -22,13 +22,67 @@ use crate::snippets::{RunResults, RunRow, RunState};
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 5] = [
+pub const STATES: [ShotState; 6] = [
     ShotState::Snippets,
     ShotState::SnippetPanel,
     ShotState::SnippetVariables,
     ShotState::SnippetConfirm,
     ShotState::SnippetResults,
+    ShotState::ShellHistory,
 ];
+
+/// Commands of the demo's first hosts for Shell History (once).
+fn seed_history(state: &Entity<AppState>, cx: &mut gpui::App) -> Option<()> {
+    use shellpp_core::service::dto::{HistoryCandidate, HistorySearchInput, RecordRef};
+    use shellpp_core::service::host_api::HistoryRecordInput;
+    let core = state.read(cx).core()?.clone();
+    let vault_id = state.read(cx).vault_id()?;
+    let found = core
+        .history_search(HistorySearchInput {
+            hosts: Vec::new(),
+            text: None,
+            limit: Some(1),
+        })
+        .ok()?;
+    if !found.is_empty() {
+        return Some(());
+    }
+    let hosts: Vec<Uuid> = state
+        .read(cx)
+        .hosts()
+        .iter()
+        .take(3)
+        .map(|host| host.record_id)
+        .collect();
+    let commands = [
+        "sudo systemctl restart nginx",
+        "journalctl -u nginx --since today",
+        "df -h /var",
+        "docker compose ps",
+        "git -C /srv/app pull --ff-only",
+        "tail -f /var/log/syslog",
+    ];
+    for (index, command) in commands.iter().enumerate() {
+        let host = *hosts.get(index % hosts.len().max(1))?;
+        core.history_record(HistoryRecordInput {
+            host: Some(RecordRef {
+                vault_id,
+                record_id: host,
+            }),
+            session_id: Uuid::now_v7(),
+            candidate: HistoryCandidate {
+                command: (*command).to_owned(),
+                prompt_text: "deploy@web:~$".to_owned(),
+                typed_printable: true,
+                alt_screen: false,
+            },
+            injected: false,
+            record_history: true,
+        })
+        .ok()?;
+    }
+    Some(())
+}
 
 fn not_reached(state: ShotState, reason: &str) -> ScreenshotError {
     ScreenshotError::state(state, reason)
@@ -105,13 +159,19 @@ pub async fn reach(
         })
     });
     let screen = cx.update(|cx| shell.read(cx).snippets_screen().clone());
-    cx.update(|cx| {
+    if shot == ShotState::ShellHistory {
+        cx.update(|cx| seed_history(state, cx))
+            .ok_or_else(|| not_reached(shot, "the demo history could not be saved"))?;
+    }
+    cx.update_window(handle, |_, window, cx| {
         screen.update(cx, |screen, cx| {
             screen.reload(cx);
             screen.enter_package(None, cx);
             screen.close_panel(cx);
+            screen.show_history(shot == ShotState::ShellHistory, window, cx);
         })
-    });
+    })
+    .map_err(|_| ScreenshotError::WindowClosed)?;
     settle(cx, handle).await?;
     let by_label = |label: &str| {
         snippets
@@ -183,6 +243,7 @@ pub fn check(
         ShotState::SnippetVariables => &["snippet-variables-form"],
         ShotState::SnippetConfirm => &["snippet-confirm"],
         ShotState::SnippetResults => &["snippet-results"],
+        ShotState::ShellHistory => &["shell-history-list"],
         _ => return Err(not_reached(shot, "not a Snippets state")),
     };
     for id in wanted {
