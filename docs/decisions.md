@@ -760,3 +760,16 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 2; 
 - A symbolic link (or a junction) is listed as a link, never as what it points to.
 
 **Spec impact:** none (these are the rules of UI 5.3 written out).
+
+### 49. Open and Open with a remote file (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 6; UI 5.4).
+
+**Decision:**
+
+- The engine part is `shellpp_ssh::open_with::OpenedCopy`; the app launches the program, warns that the copy is not encrypted, watches the copy and notifies after each upload.
+- Each copy gets a folder of its own under a root inside the app's data folder (mode 0700 on Unix), under the file's own name (made safe for Windows, D46), so the program sees the right extension. A symbolic link is opened as the file it points to, and an upload goes there; the link stays a link.
+- A copy changed locally (its size or modification time is not the one written) is uploaded back. When the file on the server changed since the copy was made (its size or modification time), nothing is written and the app asks; overwriting is an explicit `force`. After an upload the copy is based on the new server state.
+- A copy is removed with its folder when the user is done (the tab closes); at exit, and at the next start after a crash, the whole root is removed.
+
+**Spec impact:** none (UI 5.4 states the behavior).

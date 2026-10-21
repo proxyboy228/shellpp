@@ -334,6 +334,18 @@ impl Sftp {
         Ok(found)
     }
 
+    /// The entry `path` points to (a symbolic link followed).
+    pub async fn stat_target(&self, path: &str) -> Result<RemoteEntry, SftpError> {
+        let path = trimmed(path);
+        let attrs = self
+            .session
+            .metadata(path)
+            .await
+            .map_err(|error| self.fail(error))?;
+        let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+        Ok(entry(name, &attrs))
+    }
+
     async fn describe_link(&self, path: &str, found: &mut RemoteEntry) {
         if let EntryKind::Symlink { target, to_dir } = &mut found.kind {
             *target = self.session.read_link(path).await.ok();

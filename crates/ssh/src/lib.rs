@@ -33,6 +33,7 @@ pub mod client;
 pub mod error;
 mod handler;
 pub mod local_names;
+pub mod open_with;
 pub mod reconnect;
 pub mod sftp;
 pub mod transfer;

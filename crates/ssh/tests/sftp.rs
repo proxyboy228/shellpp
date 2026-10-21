@@ -370,6 +370,83 @@ async fn trees_and_remote_to_remote(
     assert_eq!(std::fs::read_to_string(&check).unwrap(), "file 0");
 }
 
+/// Open / Open with (D49): a copy in a folder of its own, saved changes
+/// uploaded back, a file changed on the server asked about first, the copy
+/// removed when done or at exit.
+async fn open_with_round_trip(sftp: &Sftp, dir: &str, local: &Path) {
+    use shellpp_ssh::open_with::{OpenedCopy, UploadOutcome, discard_all};
+    let remote = shellpp_ssh::sftp::join(dir, "edit me.txt");
+    let source = local.join("edit-source.txt");
+    std::fs::write(&source, "first").unwrap();
+    sftp.upload(&source, &remote, false, &mut |_| {})
+        .await
+        .unwrap();
+    let root = local.join("open-copies");
+    let mut copy = OpenedCopy::open(sftp, &remote, &root).await.expect("open");
+    assert_eq!(std::fs::read_to_string(copy.local_path()).unwrap(), "first");
+    assert_eq!(
+        copy.local_path().file_name().unwrap().to_string_lossy(),
+        "edit me.txt"
+    );
+    assert!(!copy.changed_locally());
+    assert_eq!(
+        copy.upload_back(sftp, false).await,
+        Ok(UploadOutcome::Unchanged)
+    );
+    // The program saves: uploaded back.
+    std::fs::write(copy.local_path(), "second version").unwrap();
+    assert!(copy.changed_locally());
+    assert_eq!(
+        copy.upload_back(sftp, false).await,
+        Ok(UploadOutcome::Uploaded)
+    );
+    assert!(!copy.changed_locally());
+    let check = local.join("edit-check.txt");
+    sftp.download(&remote, &check, false, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&check).unwrap(), "second version");
+    // Someone changes the file on the server; the program saves again.
+    std::fs::write(&source, "changed on the server").unwrap();
+    sftp.upload(&source, &remote, false, &mut |_| {})
+        .await
+        .unwrap();
+    std::fs::write(copy.local_path(), "third").unwrap();
+    assert_eq!(
+        copy.upload_back(sftp, false).await,
+        Ok(UploadOutcome::RemoteChanged)
+    );
+    sftp.download(&remote, &check, false, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&check).unwrap(),
+        "changed on the server"
+    );
+    assert_eq!(
+        copy.upload_back(sftp, true).await,
+        Ok(UploadOutcome::Uploaded)
+    );
+    sftp.download(&remote, &check, false, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&check).unwrap(), "third");
+    let folder = copy.local_path().parent().unwrap().to_path_buf();
+    copy.discard().unwrap();
+    assert!(!folder.exists());
+    // A copy left behind goes at exit.
+    let left = OpenedCopy::open(sftp, &remote, &root).await.unwrap();
+    let path = left.local_path().to_path_buf();
+    drop(left);
+    discard_all(&root).unwrap();
+    assert!(!path.exists() && !root.exists());
+    // A folder is not opened.
+    assert_eq!(
+        OpenedCopy::open(sftp, dir, &root).await.err(),
+        Some(SftpError::NotAFile)
+    );
+}
+
 /// A download cut by a dropped connection resumes over a new one from its
 /// `.part`. Last: the drop ends every connection of the server.
 async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &Path) {
@@ -454,6 +531,7 @@ async fn sftp_against_openssh() {
     let second = key_connection(&server).await;
     let other = second.open_sftp().await.expect("second sftp");
     trees_and_remote_to_remote(&connection, &sftp, &other, &dir, local.path()).await;
+    open_with_round_trip(&sftp, &dir, local.path()).await;
     other.close().await;
     second.disconnect().await;
     sftp.close().await;
