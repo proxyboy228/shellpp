@@ -847,7 +847,8 @@ fn the_owner_sequences_through_the_core() {
         assert!(!command.contains('\u{1b}'));
         assert!(!command.contains("200~") && !command.contains("201~"));
     }
-    // The hint never offers secret-looking entries (none were stored).
+    // The hint never offers secret-looking entries (none were stored), nor
+    // trivial ones such as `ls -la` (D64).
     let hint = core.history_hint(host).unwrap();
-    assert_eq!(hint.commands.len(), 3);
+    assert_eq!(hint.commands, ["vim x", "su"]);
 }
