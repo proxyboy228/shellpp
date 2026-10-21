@@ -229,6 +229,39 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// D68: another section of the sidebar while the snippet panel holds
+/// changes not saved asks first; Stay stays on Snippets, Discard changes
+/// goes on.
+#[gpui_kit::test]
+fn leaving_snippets_with_changes_not_saved_asks_first(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let shell = ui.shell(cx);
+    ui.click("nav-snippets", cx);
+    ui.click("snippet-new", cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.click("snippet-script", cx);
+        window.input("uptime", cx);
+    })
+    .unwrap();
+    ui.frame(cx);
+    ui.click("nav-hosts", cx);
+    assert!(ui.visible("snippet-leave-dialog", cx));
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Snippets);
+    ui.click("snippet-leave-stay", cx);
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Snippets);
+    assert!(ui.visible("snippet-panel", cx));
+    ui.click("nav-hosts", cx);
+    ui.click("snippet-leave-discard", cx);
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Hosts);
+    // Nothing was saved, and the panel of the new snippet is closed.
+    ui.click("nav-snippets", cx);
+    assert!(!ui.visible("snippet-panel", cx));
+    ui.click("nav-hosts", cx);
+    assert!(!ui.visible("snippet-leave-dialog", cx));
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Hosts);
+    ui.finish(cx);
+}
+
 /// UI 1.1, 4.6, 12.5: Ctrl+L outside a terminal opens a local terminal
 /// tab and Ctrl+Alt+S a serial placeholder; Alt+Left/Right and Ctrl+N move
 /// between tabs; the active tab closes to its neighbor; the last one

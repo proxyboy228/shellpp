@@ -128,8 +128,18 @@
   - after that, changes are saved automatically; there is no save button;
   - an invalid value is highlighted, with the reason under the field, and is not saved. The
     last valid value stays in effect;
-  - wizards with an explicit "Create" button (8.3) and the Keychain's forms that add a
-    key (New key and Generate key, 7.3, D33) are the only exceptions.
+  - wizards with an explicit "Create" button (8.3), the Keychain's forms that add a
+    key (New key and Generate key, 7.3, D33) and the snippet panel (9.3) are the only
+    exceptions.
+- The snippet panel saves only with Create and Save: a run must use a saved script, and
+  a script is often typed in several goes. [decision] (D66, D68)
+  - while the panel holds changes that are not saved, its header shows "Not saved";
+  - leaving it then (another card, a new snippet, the collapse button or Esc, another
+    section of the sidebar) asks "Save", "Discard changes" or "Stay". Enter is Save, Esc
+    is Stay; a Save the checks refuse keeps the panel open with the reasons under the
+    fields. Switching to a session tab or the SFTP tab does not ask: the panel stays as
+    it is;
+  - Run with changes not saved asks "Save and run" (or Cancel).
 
 ### 1.4 App menu (the button with three bars)
 

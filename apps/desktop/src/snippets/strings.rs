@@ -108,6 +108,33 @@ pub fn variables(names: &[String]) -> String {
     format!("Variables: {}", names.join(", "))
 }
 
+// Changes not saved (D68).
+pub const NOT_SAVED: &str = "Not saved";
+pub const STAY: &str = "Stay";
+pub const DISCARD_CHANGES: &str = "Discard changes";
+pub const SAVE_AND_RUN: &str = "Save and run";
+pub const LEAVE_BODY: &str =
+    "The changes in the panel are not saved. Discarded changes cannot be brought back.";
+pub const SAVE_RUN_BODY: &str = "The snippet has changes that are not saved. A run uses the saved snippet, so they are saved first.";
+
+/// "Save changes to "Restart nginx"?"; a new snippet: "Save the new
+/// snippet?".
+pub fn leave_title(title: Option<&str>) -> String {
+    match title {
+        Some(title) => format!("Save changes to \"{title}\"?"),
+        None => "Save the new snippet?".to_owned(),
+    }
+}
+
+/// "Save and run "Restart nginx"?"; a new snippet: "Save and run the new
+/// snippet?".
+pub fn save_run_title(title: Option<&str>) -> String {
+    match title {
+        Some(title) => format!("Save and run \"{title}\"?"),
+        None => "Save and run the new snippet?".to_owned(),
+    }
+}
+
 // Field errors.
 pub const ERROR_SCRIPT: &str = "Write the script to run.";
 pub const ERROR_TOO_LONG: &str = "This is too long.";

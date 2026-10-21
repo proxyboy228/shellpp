@@ -549,11 +549,15 @@ fn the_review_cases_of_the_run(cx: &mut TestAppContext) {
     ui.click(cx, card_id(id));
     let form = ui.form(cx);
     assert_eq!(form.read_with(cx, |form, _| form.targets().to_vec()), [web]);
-    // Run from the menu of the open snippet: what is typed runs.
+    // Run from the menu of the open snippet: what is typed runs, after
+    // "Save and run" (D68).
     ui.type_into(cx, "snippet-script", "uptime -p");
     ui.act(cx, |screen, window, cx| {
         screen.run_from_menu(id, window, cx)
     });
+    assert!(ui.visible(cx, "snippet-save-run-dialog"));
+    assert!(!ui.visible(cx, "snippet-results"));
+    ui.click(cx, "snippet-save-run-confirm");
     let saved = ui.snippets(cx);
     assert_eq!(saved[0].script, "uptime -p");
     assert_eq!(saved[0].target_host_ids, [web]);
@@ -563,5 +567,157 @@ fn the_review_cases_of_the_run(cx: &mut TestAppContext) {
     let before = ui.form(cx);
     ui.click(cx, card_id(id));
     assert_eq!(ui.form(cx).entity_id(), before.entity_id());
+    ui.finish(cx);
+}
+
+/// D68: leaving the panel with changes not saved (another card, the
+/// collapse button, a new snippet) asks Save, Discard changes or Stay; the
+/// header marks them "Not saved"; a refused Save stays; Run asks "Save
+/// and run".
+#[gpui_kit::test]
+fn changes_not_saved_are_asked_about_before_they_are_left(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[json!({"address": "web.example.com", "label": "Web"})]);
+    let web = ui.host_id(cx, "web.example.com");
+    let a = ui
+        .save(
+            cx,
+            json!({"label": "Uptime", "script": "uptime", "target_host_ids": [web]}),
+        )
+        .record
+        .record_id;
+    let b = ui
+        .save(cx, json!({"label": "Disk", "script": "df -h"}))
+        .record
+        .record_id;
+    let dirty = |cx: &mut TestAppContext| {
+        ui.screen
+            .read_with(cx, |screen, cx| screen.has_unsaved_changes(cx))
+    };
+    ui.click(cx, card_id(a));
+    assert!(!dirty(cx));
+    assert!(!ui.visible(cx, "panel-note"));
+    // A typed change: the header says so.
+    ui.type_into(cx, "snippet-label", "Uptime now");
+    assert!(dirty(cx));
+    assert!(ui.visible(cx, "panel-note"));
+    // Typing the saved value back is no change.
+    ui.type_into(cx, "snippet-label", "Uptime");
+    assert!(!dirty(cx));
+    ui.type_into(cx, "snippet-label", "Uptime now");
+
+    // Another card: the question; Stay keeps the panel and what is typed.
+    ui.click(cx, card_id(b));
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.selected()),
+        Some(a)
+    );
+    ui.click(cx, "snippet-leave-stay");
+    assert!(!ui.visible(cx, "snippet-leave-dialog"));
+    assert!(dirty(cx));
+    // Discard changes: the other card opens, nothing is saved.
+    ui.click(cx, card_id(b));
+    ui.click(cx, "snippet-leave-discard");
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.selected()),
+        Some(b)
+    );
+    assert!(!dirty(cx));
+    let label = |cx: &mut TestAppContext, id: Uuid| {
+        ui.snippets(cx)
+            .into_iter()
+            .find(|snippet| snippet.record.record_id == id)
+            .and_then(|snippet| snippet.label)
+    };
+    assert_eq!(label(cx, a).as_deref(), Some("Uptime"));
+
+    // The collapse button with a change, then Save: saved and closed.
+    ui.type_into(cx, "snippet-script", "df -h /");
+    ui.click(cx, "panel-close");
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    ui.click(cx, "snippet-leave-save");
+    assert!(!ui.visible(cx, "snippet-panel"));
+    let saved = ui.snippets(cx);
+    let disk = saved.iter().find(|s| s.record.record_id == b).unwrap();
+    assert_eq!(disk.script, "df -h /");
+
+    // A new snippet untouched is no change; one with a label only cannot
+    // be saved, so Save keeps the panel open with the reason.
+    ui.click(cx, "snippet-new");
+    assert!(!dirty(cx));
+    ui.click(cx, card_id(a));
+    assert!(!ui.visible(cx, "snippet-leave-dialog"));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.selected()),
+        Some(a)
+    );
+    ui.click(cx, "snippet-new");
+    ui.type_into(cx, "snippet-label", "Half done");
+    ui.click(cx, "panel-close");
+    // Enter on the question is Save.
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert!(ui.visible(cx, "snippet-panel"));
+    assert_eq!(
+        ui.form(cx)
+            .read_with(cx, |form, _| form.errors().get("script").copied()),
+        Some(strings::ERROR_SCRIPT)
+    );
+    assert_eq!(ui.snippets(cx).len(), 2);
+    // Esc on the question stays.
+    ui.click(cx, card_id(b));
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert!(!ui.visible(cx, "snippet-leave-dialog"));
+    assert_eq!(
+        ui.form(cx).read_with(cx, |form, _| form.mode()),
+        FormMode::New
+    );
+    ui.click(cx, card_id(b));
+    ui.click(cx, "snippet-leave-discard");
+
+    // Run with a change: "Save and run" first; Cancel saves nothing.
+    ui.click(cx, card_id(a));
+    ui.type_into(cx, "snippet-script", "uptime -p");
+    ui.click(cx, "snippet-run");
+    assert!(ui.visible(cx, "snippet-save-run-dialog"));
+    ui.click(cx, "snippet-save-run-cancel");
+    assert!(!ui.visible(cx, "snippet-results"));
+    let script = |cx: &mut TestAppContext| {
+        ui.snippets(cx)
+            .into_iter()
+            .find(|snippet| snippet.record.record_id == a)
+            .unwrap()
+            .script
+    };
+    assert_eq!(script(cx), "uptime");
+    ui.click(cx, "snippet-run");
+    ui.click(cx, "snippet-save-run-confirm");
+    assert_eq!(script(cx), "uptime -p");
+    assert!(ui.visible(cx, "snippet-results"));
+    ui.click(cx, "snippet-results-close");
+    // Without changes Run runs at once.
+    ui.click(cx, "snippet-run");
+    assert!(!ui.visible(cx, "snippet-save-run-dialog"));
+    assert!(ui.visible(cx, "snippet-results"));
+    ui.finish(cx);
+}
+
+/// Save as snippet from Shell History is not saved yet: leaving it asks.
+#[gpui_kit::test]
+fn a_snippet_from_history_counts_as_not_saved(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[json!({"address": "web.example.com"})]);
+    let web = ui.host_id(cx, "web.example.com");
+    ui.act(cx, |screen, window, cx| {
+        screen.new_snippet_from("uptime", Some(web), window, cx)
+    });
+    assert!(
+        ui.screen
+            .read_with(cx, |screen, cx| screen.has_unsaved_changes(cx))
+    );
+    ui.click(cx, "panel-close");
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    ui.click(cx, "snippet-leave-save");
+    assert!(!ui.visible(cx, "snippet-panel"));
+    assert_eq!(ui.snippets(cx)[0].script, "uptime");
     ui.finish(cx);
 }

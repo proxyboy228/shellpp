@@ -49,6 +49,17 @@ pub fn pick_id(id: Uuid) -> String {
     format!("snippet-pick-{id}")
 }
 
+/// What the form holds, as compared with what was saved (D68: leaving
+/// with changes not saved asks first).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Values {
+    label: String,
+    tags: Vec<String>,
+    script: String,
+    package: Option<Uuid>,
+    targets: Vec<Uuid>,
+}
+
 fn reason_text(reason: ValidationReason) -> &'static str {
     match reason {
         ValidationReason::Required => strings::ERROR_SCRIPT,
@@ -67,6 +78,8 @@ pub struct SnippetForm {
     targets: Vec<Uuid>,
     picker_open: bool,
     errors: BTreeMap<&'static str, &'static str>,
+    /// The values as saved (empty for a new snippet).
+    saved: Values,
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -102,7 +115,7 @@ impl SnippetForm {
     }
 
     /// Save as snippet from Shell History: the command as the script, its
-    /// host as the target.
+    /// host as the target. Nothing of it is saved yet.
     pub fn from_command(
         command: &str,
         host: Option<Uuid>,
@@ -110,7 +123,7 @@ impl SnippetForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let form = Self::build(
+        let mut form = Self::build(
             FormMode::New,
             (String::new(), String::new(), command.to_owned()),
             None,
@@ -119,6 +132,7 @@ impl SnippetForm {
             window,
             cx,
         );
+        form.saved = Values::default();
         form.label.update(cx, |input, cx| input.focus(window, cx));
         form
     }
@@ -216,7 +230,7 @@ impl SnippetForm {
                 }
             }),
         );
-        Self {
+        let mut form = Self {
             mode,
             label,
             tags,
@@ -226,9 +240,27 @@ impl SnippetForm {
             targets,
             picker_open: false,
             errors: BTreeMap::new(),
+            saved: Values::default(),
             state,
             _subscriptions: subscriptions,
+        };
+        form.saved = form.values(cx);
+        form
+    }
+
+    fn values(&self, cx: &App) -> Values {
+        Values {
+            label: self.label.read(cx).value().trim().to_owned(),
+            tags: parse_tags(&self.tags.read(cx).value()),
+            script: self.script_text(cx),
+            package: self.package,
+            targets: self.targets.clone(),
         }
+    }
+
+    /// Whether the form holds changes that are not saved (D68).
+    pub fn is_dirty(&self, cx: &App) -> bool {
+        self.values(cx) != self.saved
     }
 
     // -- Reading -----------------------------------------------------------------

@@ -11,7 +11,9 @@
 //!   runs it on its targets; the menu has Run, Edit and Remove (with Undo).
 //! - The panel (9.3): description, package, tags, the script in a
 //!   monospaced multi-line field and the targets with Add targets; Run is
-//!   pinned at the bottom with Save (Create for a new snippet).
+//!   pinned at the bottom with Save (Create for a new snippet). It saves
+//!   only on Save (UI 1.3's exception): leaving it with changes not saved
+//!   asks Save, Discard changes or Stay, and Run asks Save and run (D68).
 //! - Run (9.4, [`run`]): the values of the script's `{{name}}` variables
 //!   first, then the hosts to confirm when there are two or more, then the
 //!   results table: status, exit code and the output on click, per host.
@@ -237,6 +239,21 @@ impl SnippetsScreen {
         self.history.as_ref()
     }
 
+    /// Whether the panel holds changes that are not saved (D68).
+    pub fn has_unsaved_changes(&self, cx: &App) -> bool {
+        self.form
+            .as_ref()
+            .is_some_and(|form| form.read(cx).is_dirty(cx))
+    }
+
+    /// The saved title of the snippet in the panel (`None`: a new one).
+    fn form_title(&self, cx: &App) -> Option<String> {
+        match self.form.as_ref()?.read(cx).mode() {
+            FormMode::Edit(id) => self.snippet(id).map(card_title),
+            FormMode::New => None,
+        }
+    }
+
     /// Shows Shell History instead of the snippets (9.1), or the snippets
     /// again.
     pub fn show_history(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -260,11 +277,15 @@ impl SnippetsScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.selected = None;
-        let state = self.state.clone();
-        let host = host.filter(|id| self.state.read(cx).host(*id).is_some());
-        self.form = Some(cx.new(|cx| SnippetForm::from_command(command, host, state, window, cx)));
-        cx.notify();
+        let command = command.to_owned();
+        self.leave_then(window, cx, move |screen, window, cx| {
+            screen.selected = None;
+            let state = screen.state.clone();
+            let host = host.filter(|id| screen.state.read(cx).host(*id).is_some());
+            screen.form =
+                Some(cx.new(|cx| SnippetForm::from_command(&command, host, state, window, cx)));
+            cx.notify();
+        });
     }
 
     pub fn can_undo(&self) -> bool {
@@ -367,12 +388,20 @@ impl SnippetsScreen {
     }
 
     /// Selects a card and opens its snippet in the panel (`None` closes it).
-    /// The snippet open already keeps its form and what is typed in it.
+    /// The snippet open already keeps its form and what is typed in it;
+    /// leaving changes not saved asks first (D68).
     pub fn select(&mut self, id: Option<Uuid>, window: &mut Window, cx: &mut Context<Self>) {
         let id = id.filter(|id| self.snippet(*id).is_some());
         if id.is_some() && id == self.selected && self.form.is_some() {
             return;
         }
+        self.leave_then(window, cx, move |screen, window, cx| {
+            screen.open_snippet(id, window, cx)
+        });
+    }
+
+    /// Opens the snippet in the panel with its saved values.
+    fn open_snippet(&mut self, id: Option<Uuid>, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = id;
         self.form = id.and_then(|id| self.snippet(id).cloned()).map(|snippet| {
             let state = self.state.clone();
@@ -381,38 +410,122 @@ impl SnippetsScreen {
         cx.notify();
     }
 
+    /// Closes the panel; what is typed in it is dropped.
     pub fn close_panel(&mut self, cx: &mut Context<Self>) {
         self.selected = None;
         self.form = None;
         cx.notify();
     }
 
-    /// New snippet: in the package open, if any.
-    pub fn new_snippet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.selected = None;
-        let state = self.state.clone();
-        let package = self.package;
-        self.form = Some(cx.new(|cx| SnippetForm::new(package, state, window, cx)));
-        cx.notify();
+    /// The panel's collapse button and Esc: asks first when it holds
+    /// changes not saved (D68).
+    pub fn leave_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_then(window, cx, |screen, _, cx| screen.close_panel(cx));
     }
 
-    /// Saves the form; `then_run` runs the saved snippet after.
-    pub fn save(&mut self, then_run: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Another screen (the shell's sections): asks first when the panel
+    /// holds changes not saved, then `then` goes there; Discard changes
+    /// brings back the saved values. The shell calls it only then, so
+    /// `then` runs after the dialog, outside the shell's update.
+    pub fn leave_screen(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Window, &mut App) + 'static,
+    ) {
+        self.leave_then(window, cx, move |_, window, cx| then(window, cx));
+    }
+
+    /// Leaving the panel's snippet (another card, a new snippet, closing
+    /// the panel, another screen): with changes not saved, Save, Discard
+    /// changes or Stay first (D68), then `then`. Save leaves only when the
+    /// snippet was saved; Stay keeps everything as it is.
+    fn leave_then(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if !self.has_unsaved_changes(cx) {
+            then(self, window, cx);
+            return;
+        }
+        let title = self.form_title(cx);
+        let screen = cx.entity().downgrade();
+        view::open_leave_dialog(title, window, cx, move |choice, window, cx| {
+            let _ = screen.update(cx, |screen, cx| match choice {
+                view::LeaveChoice::Save => {
+                    if screen.save(false, window, cx) {
+                        then(screen, window, cx);
+                    }
+                }
+                view::LeaveChoice::Discard => {
+                    screen.discard(window, cx);
+                    then(screen, window, cx);
+                }
+            });
+        });
+    }
+
+    /// Discard changes: the snippet's saved values again (a new snippet's
+    /// panel closes).
+    fn discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.form.as_ref().map(|form| form.read(cx).mode()) {
+            Some(FormMode::Edit(id)) => self.open_snippet(Some(id), window, cx),
+            _ => self.close_panel(cx),
+        }
+    }
+
+    /// New snippet: in the package open, if any.
+    pub fn new_snippet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_then(window, cx, |screen, window, cx| {
+            screen.selected = None;
+            let state = screen.state.clone();
+            let package = screen.package;
+            screen.form = Some(cx.new(|cx| SnippetForm::new(package, state, window, cx)));
+            cx.notify();
+        });
+    }
+
+    /// Run in the panel: a snippet with changes not saved asks "Save and
+    /// run" first (D68), so what runs is what is on screen.
+    pub fn run_from_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.form.clone() else {
             return;
+        };
+        if form.read(cx).is_dirty(cx) {
+            self.ask_save_and_run(window, cx);
+        } else if let FormMode::Edit(id) = form.read(cx).mode() {
+            self.run(id, window, cx);
+        }
+    }
+
+    fn ask_save_and_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.form_title(cx);
+        let screen = cx.entity().downgrade();
+        view::open_save_and_run(title, window, cx, move |window, cx| {
+            let _ = screen.update(cx, |screen, cx| screen.save(true, window, cx));
+        });
+    }
+
+    /// Saves the form; `then_run` runs the saved snippet after. Whether it
+    /// was saved (a refusal shows its reasons in the form).
+    pub fn save(&mut self, then_run: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(form) = self.form.clone() else {
+            return false;
         };
         let (core, vault_id) = {
             let state = self.state.read(cx);
             (state.core().cloned(), state.vault_id())
         };
         let (Some(core), Some(vault_id)) = (core, vault_id) else {
-            return;
+            return false;
         };
         let data = match form.read(cx).data(cx) {
             Ok(data) => data,
             Err(errors) => {
                 form.update(cx, |form, cx| form.set_errors(errors, cx));
-                return;
+                return false;
             }
         };
         let record_id = match form.read(cx).mode() {
@@ -429,31 +542,34 @@ impl SnippetsScreen {
                 tracing::info!(created = record_id.is_none(), "snippet saved");
                 self.reload(cx);
                 // The form again, with the values as saved.
-                self.selected = None;
-                self.select(Some(id), window, cx);
+                self.open_snippet(Some(id), window, cx);
                 if then_run {
                     self.run(id, window, cx);
                 }
+                true
             }
             Err(shellpp_core::error::CoreError::Validation(fields)) => {
                 form.update(cx, |form, cx| form.set_core_errors(&fields, cx));
+                false
             }
             Err(error) => {
                 tracing::warn!(code = error.code(), "snippet not saved");
                 crate::shell::show_toast(strings::SAVE_FAILED, window, cx);
+                false
             }
         }
     }
 
-    /// Run from a menu: the snippet open in the panel is saved first, so
-    /// what runs is what is on screen (as the panel's Run).
+    /// Run from a menu: the snippet open in the panel with changes not
+    /// saved asks "Save and run" first (as the panel's Run), so what runs
+    /// is what is on screen.
     pub fn run_from_menu(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self
-            .form
-            .as_ref()
-            .is_some_and(|form| form.read(cx).mode() == FormMode::Edit(id));
-        if open {
-            self.save(true, window, cx);
+        let open_and_changed = self.form.as_ref().is_some_and(|form| {
+            let form = form.read(cx);
+            form.mode() == FormMode::Edit(id) && form.is_dirty(cx)
+        });
+        if open_and_changed {
+            self.ask_save_and_run(window, cx);
         } else {
             self.run(id, window, cx);
         }

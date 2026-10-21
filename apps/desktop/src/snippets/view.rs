@@ -2,6 +2,7 @@
 //! cards, the empty states, the snippet panel and the dialogs (removal,
 //! package name). Cards and the panel follow the Port Forwarding screen.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
@@ -175,6 +176,149 @@ pub(super) fn open_confirmation(
                             window.close_dialog(cx);
                             confirm(window, cx);
                         }),
+                    ),
+            )
+    });
+}
+
+/// What was chosen on leaving the panel with changes not saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LeaveChoice {
+    Save,
+    Discard,
+}
+
+type LeaveAction = Rc<RefCell<Option<Box<dyn FnOnce(LeaveChoice, &mut Window, &mut App)>>>>;
+
+/// A button's handler: closes the dialog, then acts once (the action may
+/// open a dialog of its own).
+fn leave_choice(
+    action: &LeaveAction,
+    choice: LeaveChoice,
+) -> impl Fn(&mut Window, &mut App) + 'static {
+    let action = action.clone();
+    move |window, cx| {
+        window.close_dialog(cx);
+        if let Some(act) = action.borrow_mut().take() {
+            act(choice, window, cx);
+        }
+    }
+}
+
+fn dialog_title(title: SharedString) -> impl IntoElement {
+    div()
+        .text_size(metrics::FONT_SIZE_TITLE)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(title)
+}
+
+/// Leaving the panel with changes not saved (D68): Save, Discard changes
+/// or Stay. Enter saves; Esc stays.
+pub(super) fn open_leave_dialog(
+    title: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+    on_choice: impl FnOnce(LeaveChoice, &mut Window, &mut App) + 'static,
+) {
+    let action: LeaveAction = Rc::new(RefCell::new(Some(Box::new(on_choice))));
+    let heading: SharedString = strings::leave_title(title.as_deref()).into();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let save = leave_choice(&action, LeaveChoice::Save);
+        let on_ok = leave_choice(&action, LeaveChoice::Save);
+        let discard = leave_choice(&action, LeaveChoice::Discard);
+        dialog
+            .w(DIALOG_WIDTH)
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(dialog_title(heading.clone()))
+            .child(
+                div()
+                    .id("snippet-leave-dialog")
+                    .test_support()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(strings::LEAVE_BODY),
+            )
+            .on_ok(move |_, window, cx| {
+                on_ok(window, cx);
+                false
+            })
+            .footer(
+                h_flex()
+                    .w_full()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        ControlButton::new("snippet-leave-discard", ControlKind::Danger)
+                            .label(strings::DISCARD_CHANGES)
+                            .on_click(move |_, window, cx| discard(window, cx)),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        ControlButton::new("snippet-leave-stay", ControlKind::Neutral)
+                            .label(strings::STAY)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        ControlButton::new("snippet-leave-save", ControlKind::Accent)
+                            .label(strings::SAVE)
+                            .on_click(move |_, window, cx| save(window, cx)),
+                    ),
+            )
+    });
+}
+
+/// Run with changes not saved (D68): Save and run, or Cancel. Enter saves
+/// and runs.
+pub(super) fn open_save_and_run(
+    title: Option<String>,
+    window: &mut Window,
+    cx: &mut App,
+    on_confirm: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    let on_confirm = Rc::new(on_confirm);
+    let heading: SharedString = strings::save_run_title(title.as_deref()).into();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let confirm = on_confirm.clone();
+        let on_ok = on_confirm.clone();
+        dialog
+            .w(DIALOG_WIDTH)
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(dialog_title(heading.clone()))
+            .child(
+                div()
+                    .id("snippet-save-run-dialog")
+                    .test_support()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(strings::SAVE_RUN_BODY),
+            )
+            // Closed before the run opens its own dialogs.
+            .on_ok(move |_, window, cx| {
+                window.close_dialog(cx);
+                on_ok(window, cx);
+                false
+            })
+            .footer(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        ControlButton::new("snippet-save-run-cancel", ControlKind::Neutral)
+                            .label(strings::CANCEL)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        ControlButton::new("snippet-save-run-confirm", ControlKind::Accent)
+                            .icon(Lucide::Play)
+                            .label(strings::SAVE_AND_RUN)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                confirm(window, cx);
+                            }),
                     ),
             )
     });
@@ -720,10 +864,13 @@ impl SnippetsScreen {
         };
         let mut header = DetailsHeader::new(title).on_collapse({
             let screen = screen.clone();
-            move |_, _, cx| {
-                let _ = screen.update(cx, |screen, cx| screen.close_panel(cx));
+            move |_, window, cx| {
+                let _ = screen.update(cx, |screen, cx| screen.leave_panel(window, cx));
             }
         });
+        if form.read(cx).is_dirty(cx) {
+            header = header.note(strings::NOT_SAVED);
+        }
         if let Some(id) = edited {
             let screen = screen.clone();
             header = header.menu(move |menu, _, _| snippet_menu(menu, screen.clone(), id));
@@ -769,13 +916,18 @@ impl SnippetsScreen {
         } else {
             strings::CREATE
         })
-        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.save(false, window, cx)));
-        // Run saves first (9.3: disabled without a script or a target).
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.save(false, window, cx);
+        }));
+        // Changes not saved: Save and run first (9.3: disabled without a
+        // script or a target; D68).
         let run = ControlButton::new("snippet-run", ControlKind::Accent)
             .icon(Lucide::Play)
             .label(strings::RUN)
             .disabled(!can_run)
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.save(true, window, cx)));
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.run_from_panel(window, cx)
+            }));
         let room = px(total) - details::MAIN_AREA_MIN;
         let width =
             details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN));
@@ -872,7 +1024,7 @@ impl SnippetsScreen {
             }
             "escape" if self.form.is_some() => {
                 cx.stop_propagation();
-                self.close_panel(cx);
+                self.leave_panel(window, cx);
                 return;
             }
             "escape" if self.package.is_some() => {

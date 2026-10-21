@@ -72,6 +72,7 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 #[derive(IntoElement)]
 pub struct DetailsHeader {
     title: SharedString,
+    note: Option<SharedString>,
     menu: Option<MenuBuilder>,
     on_collapse: Option<ClickHandler>,
 }
@@ -80,9 +81,16 @@ impl DetailsHeader {
     pub fn new(title: impl Into<SharedString>) -> Self {
         Self {
             title: title.into(),
+            note: None,
             menu: None,
             on_collapse: None,
         }
+    }
+
+    /// A short mark after the title in `--warning` ("Not saved", D68).
+    pub fn note(mut self, note: impl Into<SharedString>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 
     /// The "…" menu (UI 3.3 for a host). Without it the button is hidden.
@@ -151,16 +159,33 @@ impl RenderOnce for DetailsHeader {
             .gap(metrics::SPACE_1)
             .items_center()
             .child(
-                div()
-                    .id("panel-title")
-                    .test_support()
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(metrics::FONT_SIZE_HEADING)
-                    .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
-                    .text_color(theme.foreground)
-                    .child(self.title),
+                    .gap(metrics::SPACE_2)
+                    .items_center()
+                    .child(
+                        div()
+                            .id("panel-title")
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(metrics::FONT_SIZE_HEADING)
+                            .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(self.title),
+                    )
+                    .when_some(self.note, |this, note| {
+                        this.child(
+                            div()
+                                .id("panel-note")
+                                .test_support()
+                                .flex_none()
+                                .text_size(metrics::FONT_SIZE_CAPTION)
+                                .text_color(theme.warning)
+                                .child(note),
+                        )
+                    }),
             )
             .children(menu)
             .child(collapse)

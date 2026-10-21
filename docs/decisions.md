@@ -1104,3 +1104,20 @@ Status: accepted, 2026-10-21 (owner's choice; the seven questions in section 3 o
 7. The hang of `scripts\ui-screens.ps1` on `new-tab-search` in a full run is looked into for an hour at most. A cause in the app (a leak, a lock after many sessions) is fixed, with a test; a cause in the harness gets a timeout and one retry per state, and the cause goes to `CLAUDE.md`.
 
 **Spec impact:** with the implementation (run 4): `docs/ui-behavior-spec.md` 1.3 (the snippet panel's exception), 3.1 (the signature question), 4.2 (the insert button), 9.4 (the split tab with Broadcast), 12.6 (when retention applies) and the dates of 2.5, 5, 10 and 11 (and `docs/ru`).
+
+## Run 4 of 2026-10-21
+
+The decisions below were taken during the owner's fourth long run (its plan, section 1.1), marked "run 4"; the disputable ones are listed for the owner in the run report.
+
+### 69. Changes not saved in the snippet panel (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 4.1; how D68, item 1, is built).
+
+**Decision:**
+
+- A change is a difference from the saved values: the description and tags as they would be saved (trimmed; tags split at commas), the script as typed, the package and the targets. Typing the saved value back is no change. A new snippet untouched is no change; one made by "Save as snippet" (Shell History) is, since nothing of it is saved yet.
+- Leaving asks on another card (a click, Edit in a menu, the arrow keys), New snippet, Save as snippet, the collapse button and Esc, and another section of the sidebar (a click, the Hosts shortcut). Switching to a session tab or the SFTP tab does not ask: the Snippets screen keeps its panel as it is, and the terminal is where a script is often tried before it is saved. Locking the app drops the panel without asking, as before.
+- "Save" leaves only when the snippet was saved; a refusal keeps the panel with its reasons. "Discard changes" brings the saved values back (a new snippet's panel closes), then leaves. "Stay", Esc and a click outside keep everything. Enter is Save.
+- Run in the panel, and Run in the menu of the snippet open in the panel, ask "Save and run" only when there are changes; without them Run runs the saved snippet at once.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.3 (and `docs/ru`).

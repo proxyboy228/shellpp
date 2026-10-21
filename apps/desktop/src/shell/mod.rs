@@ -671,6 +671,24 @@ impl Shell {
         }
     }
 
+    /// A section of the sidebar chosen by the user: leaving Snippets with
+    /// changes not saved in its panel asks first (D68).
+    pub fn go_to_section(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
+        let leaving_snippets = self.top_tab == TopTab::Vaults
+            && self.section == Section::Snippets
+            && section != Section::Snippets;
+        if leaving_snippets && self.snippets.read(cx).has_unsaved_changes(cx) {
+            let shell = cx.weak_entity();
+            self.snippets.update(cx, |snippets, cx| {
+                snippets.leave_screen(window, cx, move |_, cx| {
+                    let _ = shell.update(cx, |shell, cx| shell.set_section(section, cx));
+                })
+            });
+            return;
+        }
+        self.set_section(section, cx);
+    }
+
     pub fn set_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.top_tab = TopTab::Vaults;
         self.section = section;
@@ -2367,9 +2385,10 @@ impl Render for Shell {
                         ),
                         {
                             let shell = cx.weak_entity();
-                            move |section, _, cx| {
-                                let _ =
-                                    shell.update(cx, |shell, cx| shell.set_section(section, cx));
+                            move |section, window, cx| {
+                                let _ = shell.update(cx, |shell, cx| {
+                                    shell.go_to_section(section, window, cx)
+                                });
                             }
                         },
                         cx,
@@ -2405,9 +2424,9 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &ShowVaults, _, cx| this.set_top_tab(TopTab::Vaults, cx)),
             )
-            .on_action(cx.listener(|this, _: &actions::ShowHosts, _, cx| {
+            .on_action(cx.listener(|this, _: &actions::ShowHosts, window, cx| {
                 this.set_top_tab(TopTab::Vaults, cx);
-                this.set_section(Section::Hosts, cx);
+                this.go_to_section(Section::Hosts, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowSftp, _, cx| this.set_top_tab(TopTab::Sftp, cx)))
             .on_action(
