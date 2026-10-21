@@ -280,6 +280,10 @@ fn style_words(
 ) -> Vec<u64> {
     let mut words = Words::default();
     words.write(u64::from(highlight));
+    if highlight {
+        // Rows are laid out again under new rules (D77).
+        words.write(super::highlight::current().generation());
+    }
     let family = style.fonts.family();
     words.write(family.len() as u64);
     for byte in family.bytes() {
@@ -650,8 +654,8 @@ fn row_cells(
             .iter()
             .map(|cell| cell.text.0.chars().next().unwrap_or(' '))
             .collect();
-        for (range, category) in super::highlight::spans(&line) {
-            let color = category.color(dark);
+        let rules = super::highlight::current();
+        for (range, color) in super::highlight::colored_spans(&line, &rules, dark) {
             for index in range {
                 if plain.get(index).copied().unwrap_or(false) {
                     cells[index].fg = color;

@@ -170,3 +170,23 @@ pub fn auto_lock_label(minutes: Option<u64>) -> String {
 pub fn version() -> String {
     format!("{} {}", crate::i18n::APP_NAME, env!("CARGO_PKG_VERSION"))
 }
+
+// Keyword highlighting rules (UI 12.4, D77).
+pub const HL_CATEGORIES: &str = "Categories";
+pub const HL_CATEGORIES_HINT: &str = "The color is shown on dark terminal backgrounds; a lighter or darker shade of it on light ones.";
+pub const HL_CUSTOM: &str = "Your rules";
+pub const HL_CUSTOM_HINT: &str = "A regular expression and its color. Your rules come before the categories; where two match the same text, the first wins.";
+pub const HL_PATTERN_PLACEHOLDER: &str = "timeout|refused";
+pub const HL_ANY_CASE: &str = "Any case";
+pub const HL_ADD: &str = "Add rule";
+pub const HL_INVALID: &str =
+    "Enter a regular expression that compiles and does not match empty text.";
+pub const HL_TOO_LONG: &str = "The expression is longer than 512 characters.";
+pub const HL_TOO_MANY: &str = "There are 64 rules already. Remove one first.";
+pub const HL_SAVE_FAILED: &str = "The rule could not be saved.";
+pub const HL_ERROR: &str = "Error";
+pub const HL_WARNING: &str = "Warning";
+pub const HL_OK: &str = "OK";
+pub const HL_INFO: &str = "Info";
+pub const HL_DEBUG: &str = "Debug";
+pub const HL_ADDRESS: &str = "IP and MAC addresses";

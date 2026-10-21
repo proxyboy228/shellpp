@@ -175,3 +175,85 @@ fn the_records_survive_a_restart() {
     assert_eq!(u.core.snippets_list(u.vault_id).unwrap()[0].script, "df -h");
     assert_eq!(u.core.forwarding_rules_list(u.vault_id).unwrap().len(), 1);
 }
+
+/// Highlight rules (data-model 14.2; UI 12.4; D77): custom rules in
+/// creation order, a category's colors, the checks, at most 64 custom
+/// rules, removal, and a round trip through Export Data and Import Data.
+#[test]
+fn highlight_rules_are_saved_listed_and_limited() {
+    let u = first_run();
+    let custom = u
+        .core
+        .highlight_rule_save(input(
+            &u,
+            None,
+            json!({"kind": "custom", "pattern": "timeout", "color_dark": "#ff8800"}),
+        ))
+        .unwrap();
+    assert_eq!(custom.color_dark, "#FF8800");
+    assert!(custom.enabled && !custom.case_insensitive);
+    let category = u
+        .core
+        .highlight_rule_save(input(
+            &u,
+            None,
+            json!({"kind": "category", "category": "error", "color_dark": "#AA0000",
+                   "color_light": "#880000", "enabled": false}),
+        ))
+        .unwrap();
+    let listed = u.core.highlight_rules_list(u.vault_id).unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].record, custom.record);
+    assert_eq!(listed[1].category.as_deref(), Some("error"));
+    assert!(!listed[1].enabled);
+    let refused = u
+        .core
+        .highlight_rule_save(input(
+            &u,
+            None,
+            json!({"kind": "custom", "pattern": "(", "color_dark": "#000000"}),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        reasons(refused),
+        [("pattern".to_owned(), ValidationReason::Invalid)]
+    );
+    // At most 64 custom rules (one is there already).
+    for i in 0..63 {
+        u.core
+            .highlight_rule_save(input(
+                &u,
+                None,
+                json!({"kind": "custom", "pattern": format!("word{i}"), "color_dark": "#000000"}),
+            ))
+            .unwrap();
+    }
+    let too_many = u
+        .core
+        .highlight_rule_save(input(
+            &u,
+            None,
+            json!({"kind": "custom", "pattern": "one more", "color_dark": "#000000"}),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        reasons(too_many),
+        [("pattern".to_owned(), ValidationReason::TooMany)]
+    );
+    // An update of one of them is not one more.
+    u.core
+        .highlight_rule_save(input(
+            &u,
+            Some(custom.record.record_id),
+            json!({"kind": "custom", "pattern": "timed out", "color_dark": "#00FF00"}),
+        ))
+        .unwrap();
+    // Removal.
+    u.core
+        .record_delete(RecordsRef {
+            vault_id: u.vault_id,
+            record_ids: vec![category.record.record_id],
+        })
+        .unwrap();
+    assert_eq!(u.core.highlight_rules_list(u.vault_id).unwrap().len(), 64);
+}

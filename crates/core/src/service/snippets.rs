@@ -460,3 +460,99 @@ impl Core {
         Ok(views)
     }
 }
+
+/// A keyword highlighting rule of the personal vault (data-model 14.2;
+/// UI 12.4; D77): a custom rule or a category's colors.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct HighlightRuleView {
+    pub record: RecordRef,
+    /// `custom` or `category`.
+    pub kind: String,
+    pub category: Option<String>,
+    pub pattern: Option<String>,
+    pub case_insensitive: bool,
+    /// `#RRGGBB` on a dark terminal background.
+    pub color_dark: String,
+    /// `#RRGGBB` on a light background (`None`: the dark one).
+    pub color_light: Option<String>,
+    pub enabled: bool,
+}
+
+fn highlight_rule_view(
+    vault_id: Uuid,
+    record_id: Uuid,
+    data: &Map<String, Value>,
+) -> HighlightRuleView {
+    let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
+    HighlightRuleView {
+        record: RecordRef {
+            vault_id,
+            record_id,
+        },
+        kind: text("kind").unwrap_or_default(),
+        category: text("category"),
+        pattern: text("pattern"),
+        case_insensitive: data
+            .get("case_insensitive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        color_dark: text("color_dark").unwrap_or_default(),
+        color_light: text("color_light"),
+        enabled: data.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+    }
+}
+
+impl Core {
+    /// The highlight rules of the vault, in creation order (data-model
+    /// 14.2: custom rules are evaluated in it; of two records of one
+    /// category, the newer counts).
+    pub fn highlight_rules_list(
+        &self,
+        vault_id: Uuid,
+    ) -> Result<Vec<HighlightRuleView>, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(vault_id))?;
+        let mut views: Vec<HighlightRuleView> = session
+            .index
+            .of_kind(RecordKind::HighlightRule)
+            .map(|record| highlight_rule_view(vault_id, record.record_id, record.data()))
+            .collect();
+        views.sort_by_key(|view| view.record.record_id);
+        Ok(views)
+    }
+
+    /// Creates or updates a highlight rule: its checks (a pattern that
+    /// compiles and does not match the empty string, `#RRGGBB` colors) and
+    /// at most [`crate::model::highlight_rule::MAX_CUSTOM_RULES`] custom
+    /// rules.
+    pub fn highlight_rule_save(&self, input: RecordInput) -> Result<HighlightRuleView, CoreError> {
+        let record_id = self.save_kind(&input, RecordKind::HighlightRule, |session, stored| {
+            let data = crate::model::highlight_rule::build(&input.data, stored)?;
+            let custom = data.get("kind").and_then(Value::as_str) == Some("custom");
+            let others = session
+                .index
+                .of_kind(RecordKind::HighlightRule)
+                .filter(|record| Some(record.record_id) != input.record_id)
+                .filter(|record| {
+                    record.data().get("kind").and_then(Value::as_str) == Some("custom")
+                })
+                .count();
+            if custom && others >= crate::model::highlight_rule::MAX_CUSTOM_RULES {
+                return Err(vec![FieldError::new("pattern", ValidationReason::TooMany)]);
+            }
+            Ok(data)
+        })?;
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        let record = session
+            .index
+            .get_kind(&record_id, RecordKind::HighlightRule)
+            .ok_or(CoreError::NotFound)?;
+        Ok(highlight_rule_view(
+            input.vault_id,
+            record_id,
+            record.data(),
+        ))
+    }
+}

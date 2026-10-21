@@ -1210,3 +1210,15 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.4; UI 12.5; completes D67).
 - The user's own keys (`shortcuts.overrides`) stay when the set changes. Every change, reset and change of set rebinds every action at once: for each action, the keys either set gives it and the keys bound last are unbound for that action only in its key context, then its current keys are bound after them.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 12.5 (the Mac set; and `docs/ru`).
+
+### 77. The user's keyword highlighting rules and category colors (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.5; UI 12.4; data-model 14.2; completes D67).
+
+**Decision:**
+
+- The core keeps `highlight_rule` records (type `0x0902`, class appearance, personal vault): a custom rule (`pattern`, `case_insensitive`, colors, `enabled`) or a category's colors and on/off. A pattern must compile in the terminal's own regex engine (the `regex` crate: linear time, no backtracking, so no rule can stall the terminal; its syntax is close to ECMAScript's, which data-model 14.2 names, without look-around and backreferences), within a 256 KiB compiled size, and must not match the empty text; 512 characters at most; 64 custom rules at most. Colors are `#RRGGBB`. Export Data writes the records and Import Data takes them back (D34's rules).
+- The terminal applies the custom rules first, in creation order, then the categories that are on, each in its own colors for a dark or a light terminal background; where two match the same text, the earlier wins. As before, only text in the terminal's default colors is recolored, never in the alternate screen. The rules are one set for the app; a new set has a new generation, which is part of the row cache's key, so rows are laid out again at once.
+- Settings → Terminal, under "Keyword highlighting" (shown while it is on): each category with its color and on/off, then "Your rules": the pattern, "Any case" and the color, on/off and remove for each, and a field with "Add rule" (Enter adds too). Colors are chosen from a palette of eight pairs (a shade for dark and one for light backgrounds: the six categories' own, violet and orange), not typed, so a rule is never unreadable on one of the two backgrounds. An expression the checks refuse leaves its reason under the field.
+
+**Spec impact:** none; UI 12.4 and data-model 14.2 are followed as written (the palette is the "color selection").

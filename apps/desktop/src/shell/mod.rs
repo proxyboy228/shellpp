@@ -465,6 +465,8 @@ impl Shell {
             // The user's shortcuts (UI 12.5) on top of the defaults.
             shortcuts::apply_stored(&core, cx);
         }
+        // The user's keyword highlighting rules (UI 12.4, D77).
+        crate::terminal::highlight::load(&state, cx);
         // What Restore offers: the tabs of the previous launch, read once
         // at the first unlock (UI 6).
         restore::load_previous_launch(&state, cx);

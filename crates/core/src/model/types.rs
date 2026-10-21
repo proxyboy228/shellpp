@@ -30,10 +30,11 @@ pub enum RecordKind {
     Snippet,
     SnippetPackage,
     ForwardingRule,
+    HighlightRule,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 15] = [
+    pub const ALL: [RecordKind; 16] = [
         RecordKind::VaultMeta,
         RecordKind::RecoveryKey,
         RecordKind::DeviceInfo,
@@ -49,6 +50,7 @@ impl RecordKind {
         RecordKind::Snippet,
         RecordKind::SnippetPackage,
         RecordKind::ForwardingRule,
+        RecordKind::HighlightRule,
     ];
 
     /// The u16 type code.
@@ -69,6 +71,7 @@ impl RecordKind {
             Self::Snippet => 0x0401,
             Self::SnippetPackage => 0x0402,
             Self::ForwardingRule => 0x0501,
+            Self::HighlightRule => 0x0902,
         }
     }
 
@@ -95,6 +98,7 @@ impl RecordKind {
             Self::Snippet => "snippet",
             Self::SnippetPackage => "snippet_package",
             Self::ForwardingRule => "forwarding_rule",
+            Self::HighlightRule => "highlight_rule",
         }
     }
 

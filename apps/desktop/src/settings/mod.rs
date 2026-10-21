@@ -12,6 +12,7 @@
 //! the recovery key of 13.4 are not part of this stage.
 
 mod data;
+pub mod highlight_rules;
 mod shortcuts;
 pub mod strings;
 pub mod terminal;

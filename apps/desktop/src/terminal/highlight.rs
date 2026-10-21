@@ -5,9 +5,18 @@
 //! text color are recolored (a program's own colors stay), never in the
 //! alternate screen (vim, htop), and only when a row is laid out anew (the
 //! row cache keeps the result).
+//!
+//! The user's rules (D77; data-model 14.2): custom regular expressions
+//! with their colors, applied first in creation order, and each built-in
+//! category's colors and on/off. Where matches overlap, the earlier rule
+//! wins. They are one process-wide set ([`install`]); a new set has a new
+//! generation, which is part of the row cache's key.
 
 use std::ops::Range;
-use std::sync::LazyLock;
+#[cfg(not(test))]
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use alacritty_terminal::vte::ansi::Rgb;
 use regex::Regex;
@@ -62,6 +71,217 @@ impl Category {
         let (r, g, b) = self.colors()[usize::from(!dark)];
         Rgb { r, g, b }
     }
+
+    /// The category's name in a `highlight_rule` record.
+    pub fn record_name(self) -> &'static str {
+        match self {
+            Category::Address => "ip_mac",
+            other => other.group(),
+        }
+    }
+
+    fn index(self) -> usize {
+        Category::ALL
+            .iter()
+            .position(|category| *category == self)
+            .unwrap_or(0)
+    }
+}
+
+/// `#RRGGBB` as a color.
+pub fn parse_color(text: &str) -> Option<Rgb> {
+    if !shellpp_core::model::highlight_rule::is_color(text) {
+        return None;
+    }
+    let byte = |at: usize| u8::from_str_radix(&text[at..at + 2], 16).ok();
+    Some(Rgb {
+        r: byte(1)?,
+        g: byte(3)?,
+        b: byte(5)?,
+    })
+}
+
+/// A custom rule ready to match.
+struct Custom {
+    regex: Regex,
+    colors: [Rgb; 2],
+}
+
+/// Everything highlighting uses: the custom rules, then each category's
+/// on/off and colors (`[dark, light]`).
+pub struct Rules {
+    custom: Vec<Custom>,
+    categories: [(bool, [Rgb; 2]); 6],
+    generation: u64,
+}
+
+impl std::fmt::Debug for Rules {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rules")
+            .field("custom", &self.custom.len())
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(not(test))]
+static RULES: LazyLock<RwLock<Arc<Rules>>> =
+    LazyLock::new(|| RwLock::new(Arc::new(Rules::builtin())));
+// Tests run side by side: each thread has its own rules.
+#[cfg(test)]
+thread_local! {
+    static RULES: std::cell::RefCell<Arc<Rules>> =
+        std::cell::RefCell::new(Arc::new(Rules::builtin()));
+}
+
+impl Rules {
+    /// The built-in categories in their colors, no custom rule.
+    pub fn builtin() -> Self {
+        Self {
+            custom: Vec::new(),
+            categories: Category::ALL
+                .map(|category| (true, [category.color(true), category.color(false)])),
+            generation: 0,
+        }
+    }
+
+    /// The rules of the vault's `highlight_rule` records (in creation
+    /// order; of two records of one category the newer counts). A pattern
+    /// that does not compile any more is left out.
+    pub fn from_views(views: &[shellpp_core::service::snippets::HighlightRuleView]) -> Self {
+        let mut rules = Self::builtin();
+        for view in views {
+            let Some(dark) = parse_color(&view.color_dark) else {
+                continue;
+            };
+            let light = view
+                .color_light
+                .as_deref()
+                .and_then(parse_color)
+                .unwrap_or(dark);
+            match view.kind.as_str() {
+                "custom" if view.enabled => {
+                    let Some(pattern) = &view.pattern else {
+                        continue;
+                    };
+                    if let Ok(regex) =
+                        shellpp_core::model::highlight_rule::compile(pattern, view.case_insensitive)
+                    {
+                        rules.custom.push(Custom {
+                            regex,
+                            colors: [dark, light],
+                        });
+                    }
+                }
+                "category" => {
+                    if let Some(category) = Category::ALL
+                        .iter()
+                        .find(|category| Some(category.record_name()) == view.category.as_deref())
+                    {
+                        rules.categories[category.index()] = (view.enabled, [dark, light]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        rules
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn custom_count(&self) -> usize {
+        self.custom.len()
+    }
+}
+
+/// The rules in use.
+pub fn current() -> Arc<Rules> {
+    #[cfg(not(test))]
+    {
+        RULES
+            .read()
+            .map(|rules| rules.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    }
+    #[cfg(test)]
+    {
+        RULES.with(|rules| rules.borrow().clone())
+    }
+}
+
+/// Puts `rules` in use, with a new generation (rows are laid out again).
+pub fn install(mut rules: Rules) {
+    rules.generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let rules = Arc::new(rules);
+    #[cfg(not(test))]
+    match RULES.write() {
+        Ok(mut current) => *current = rules,
+        Err(poisoned) => *poisoned.into_inner() = rules,
+    }
+    #[cfg(test)]
+    RULES.with(|current| *current.borrow_mut() = rules);
+}
+
+/// Reads the vault's rules and puts them in use; the windows draw again.
+pub fn load(state: &gpui::Entity<crate::state::AppState>, cx: &mut gpui::App) {
+    let views = {
+        let state = state.read(cx);
+        state
+            .core()
+            .filter(|_| state.is_unlocked())
+            .zip(state.vault_id())
+            .and_then(|(core, vault)| core.highlight_rules_list(vault).ok())
+            .unwrap_or_default()
+    };
+    install(Rules::from_views(&views));
+    cx.refresh_windows();
+}
+
+/// The colored spans of `text` under `rules`, as character ranges: the
+/// custom rules first, then the enabled categories, an overlap left to the
+/// earlier one.
+pub fn colored_spans(text: &str, rules: &Rules, dark: bool) -> Vec<(Range<usize>, Rgb)> {
+    let shade = usize::from(!dark);
+    let mut out: Vec<(Range<usize>, Rgb)> = Vec::new();
+    let free = |out: &Vec<(Range<usize>, Rgb)>, range: &Range<usize>| {
+        out.iter()
+            .all(|(taken, _)| taken.end <= range.start || range.end <= taken.start)
+    };
+    if !rules.custom.is_empty() {
+        // Character position of each byte offset (once per row).
+        let mut chars_at = vec![0usize; text.len() + 1];
+        let mut count = 0;
+        for (byte, c) in text.char_indices() {
+            chars_at[byte] = count;
+            count += 1;
+            for slot in &mut chars_at[byte + 1..byte + c.len_utf8()] {
+                *slot = count;
+            }
+        }
+        chars_at[text.len()] = count;
+        for custom in &rules.custom {
+            for found in custom.regex.find_iter(text) {
+                if found.is_empty() {
+                    continue;
+                }
+                let range = chars_at[found.start()]..chars_at[found.end()];
+                if free(&out, &range) {
+                    out.push((range, custom.colors[shade]));
+                }
+            }
+        }
+    }
+    for (range, category) in spans(text) {
+        let (enabled, colors) = rules.categories[category.index()];
+        if enabled && free(&out, &range) {
+            out.push((range, colors[shade]));
+        }
+    }
+    out.sort_by_key(|(range, _)| range.start);
+    out
 }
 
 /// One regex with a named group per category, case-insensitive, on ASCII
@@ -166,5 +386,66 @@ mod tests {
         let both = spans("ü error ü ok");
         assert_eq!((both[0].0.clone(), both[1].0.clone()), (2..7, 10..12));
         assert_ne!(Category::Error.color(true), Category::Error.color(false));
+    }
+
+    /// D77: custom rules first, in order, then the categories that are on,
+    /// in their own colors; an overlap stays with the earlier rule.
+    #[test]
+    fn custom_rules_and_category_colors() {
+        use shellpp_core::service::dto::RecordRef;
+        use shellpp_core::service::snippets::HighlightRuleView;
+        let view = |kind: &str,
+                    category: Option<&str>,
+                    pattern: Option<&str>,
+                    dark: &str,
+                    enabled: bool| {
+            HighlightRuleView {
+                record: RecordRef {
+                    vault_id: uuid::Uuid::nil(),
+                    record_id: uuid::Uuid::now_v7(),
+                },
+                kind: kind.into(),
+                category: category.map(str::to_owned),
+                pattern: pattern.map(str::to_owned),
+                case_insensitive: true,
+                color_dark: dark.into(),
+                color_light: None,
+                enabled,
+            }
+        };
+        let rules = Rules::from_views(&[
+            view("custom", None, Some("time\\s?out"), "#112233", true),
+            view("custom", None, Some("disk ERROR"), "#445566", true),
+            view("custom", None, Some("never"), "#778899", false),
+            view("category", Some("warning"), None, "#ABCDEF", true),
+            view("category", Some("ok"), None, "#000000", false),
+        ]);
+        assert_eq!(rules.custom_count(), 2);
+        let text = "ü Timeout: disk error, warning ok";
+        let found: Vec<(String, Rgb)> = colored_spans(text, &rules, true)
+            .into_iter()
+            .map(|(range, color)| {
+                (
+                    text.chars().skip(range.start).take(range.len()).collect(),
+                    color,
+                )
+            })
+            .collect();
+        let rgb = |text: &str| parse_color(text).unwrap();
+        assert_eq!(
+            found,
+            [
+                ("Timeout".to_owned(), rgb("#112233")),
+                // The custom rule takes "disk error"; the Error category
+                // does not color its "error" again.
+                ("disk error".to_owned(), rgb("#445566")),
+                ("warning".to_owned(), rgb("#ABCDEF")),
+            ]
+        );
+        assert_eq!(parse_color("#zzzzzz"), None);
+        assert_eq!(
+            colored_spans("error", &Rules::builtin(), false)[0].1,
+            Category::Error.color(false)
+        );
     }
 }

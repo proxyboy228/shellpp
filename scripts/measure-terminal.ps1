@@ -109,11 +109,12 @@ param(
     # Measurements to run: idle, sessions1, sessions10, splits, flood, output,
     # latency.
     [string[]] $Only = @('idle', 'sessions1', 'sessions10', 'splits', 'flood', 'output', 'latency'),
+    # Custom keyword highlighting rules installed for the run (run 4, D77).
+    [ValidateRange(0, 64)]
+    [int] $HighlightRules = 0,
     # Use the existing binaries.
     [switch] $NoBuild
-)
-
-$ErrorActionPreference = 'Stop'
+)$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -238,8 +239,8 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
     $info.EnvironmentVariables['LOCALAPPDATA'] = (Join-Path $runDir 'localappdata')
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
     if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
-    $lines = New-Object System.Collections.Generic.List[string]
-    $samples = New-Object System.Collections.Generic.List[object]
+    if ($HighlightRules -gt 0) { $info.EnvironmentVariables['SHELLPP_BENCH_HIGHLIGHT_RULES'] = "$HighlightRules" }
+    $lines = New-Object System.Collections.Generic.List[string]$samples = New-Object System.Collections.Generic.List[object]
     $memory = $null
     $problem = $null
     $limit = if ($Timeout -gt 0) { $Timeout } else { $TimeoutSeconds }

@@ -96,6 +96,57 @@ fn say(line: &str) {
 }
 
 /// Runs one benchmark and returns the process exit code.
+/// `SHELLPP_BENCH_HIGHLIGHT_RULES=<n>`: n custom keyword highlighting
+/// rules of the kind people write (words, a date, ids), for the measurement
+/// of their cost (plan of run 4, item 5.5; D77).
+pub const HIGHLIGHT_RULES_ENV: &str = "SHELLPP_BENCH_HIGHLIGHT_RULES";
+
+const BENCH_PATTERNS: [&str; 10] = [
+    "timeout",
+    "refused",
+    "denied",
+    "panic",
+    "segfault",
+    "out of memory",
+    "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+    "\\bpid=[0-9]+",
+    "WARN(ING)?",
+    "0x[0-9a-f]{8}",
+];
+
+fn install_bench_rules() {
+    let count: usize = std::env::var(HIGHLIGHT_RULES_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0);
+    if count == 0 {
+        return;
+    }
+    let views: Vec<shellpp_core::service::snippets::HighlightRuleView> = BENCH_PATTERNS
+        .iter()
+        .cycle()
+        .take(count)
+        .map(
+            |pattern| shellpp_core::service::snippets::HighlightRuleView {
+                record: shellpp_core::service::dto::RecordRef {
+                    vault_id: uuid::Uuid::nil(),
+                    record_id: uuid::Uuid::now_v7(),
+                },
+                kind: "custom".into(),
+                category: None,
+                pattern: Some((*pattern).to_owned()),
+                case_insensitive: true,
+                color_dark: "#C586F0".into(),
+                color_light: None,
+                enabled: true,
+            },
+        )
+        .collect();
+    let rules = crate::terminal::highlight::Rules::from_views(&views);
+    say(&format!("highlight rules: {}", rules.custom_count()));
+    crate::terminal::highlight::install(rules);
+}
+
 pub fn run(args: BenchArgs) -> ExitCode {
     let server = match DevServer::start(args.server_json.as_deref()) {
         Ok(server) => server,
@@ -163,6 +214,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
             theme::install(appearance, cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
+            install_bench_rules();
             let state = cx.new(|cx| AppState::new(opened, cx));
             // Never the user's ~/.ssh or agent: the host has a password.
             let options = ManagerOptions {

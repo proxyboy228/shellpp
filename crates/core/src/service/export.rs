@@ -85,7 +85,7 @@ const MAX_GROUP_DEPTH: usize = 32;
 /// The record types an import takes, in the order they are written: the
 /// snippets after their packages, the history and the connection log after
 /// the hosts they name (D51, D63).
-const IMPORTED: [RecordKind; 11] = [
+const IMPORTED: [RecordKind; 12] = [
     RecordKind::Group,
     RecordKind::Key,
     RecordKind::Identity,
@@ -94,6 +94,7 @@ const IMPORTED: [RecordKind; 11] = [
     RecordKind::SnippetPackage,
     RecordKind::Snippet,
     RecordKind::ForwardingRule,
+    RecordKind::HighlightRule,
     RecordKind::HistoryEntry,
     RecordKind::HistoryHintState,
     RecordKind::ConnectionLogEntry,
@@ -433,6 +434,7 @@ fn check(
             snippet::build_snippet(&input, None)?
         }
         RecordKind::ForwardingRule => snippet::build_rule(&input, None)?,
+        RecordKind::HighlightRule => crate::model::highlight_rule::build(&input, None)?,
         _ => return Err(vec![FieldError::new("type", ValidationReason::NotAllowed)]),
     };
     if let Some(Value::String(order_key)) = order_key

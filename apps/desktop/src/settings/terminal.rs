@@ -432,6 +432,8 @@ pub struct TerminalSection {
     fonts: Option<Arc<Vec<SharedString>>>,
     fonts_task: Option<Task<()>>,
     error: Option<SharedString>,
+    /// The keyword highlighting rules (D77).
+    highlight_rules: Entity<super::highlight_rules::HighlightRulesBlock>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -515,6 +517,9 @@ impl TerminalSection {
                 },
             ),
         ];
+        let rules_state = state.clone();
+        let highlight_rules =
+            cx.new(|cx| super::highlight_rules::HighlightRulesBlock::new(rules_state, window, cx));
         Self {
             state,
             prefs,
@@ -529,8 +534,14 @@ impl TerminalSection {
             fonts: None,
             fonts_task: None,
             error: None,
+            highlight_rules,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The keyword highlighting rules block (tests).
+    pub fn highlight_rules(&self) -> &Entity<super::highlight_rules::HighlightRulesBlock> {
+        &self.highlight_rules
     }
 
     /// The settings as this section shows them.
@@ -905,6 +916,9 @@ impl TerminalSection {
                 Self::set_highlighting,
                 cx,
             ))
+            .when(prefs.highlighting, |this| {
+                this.child(self.highlight_rules.clone())
+            })
             .child(contrast_row)
             .child(
                 v_flex()

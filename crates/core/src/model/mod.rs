@@ -19,6 +19,7 @@ pub mod connection_log;
 pub mod draft;
 pub mod fields;
 pub mod group;
+pub mod highlight_rule;
 pub mod history_entry;
 pub mod hlc;
 pub mod host;
