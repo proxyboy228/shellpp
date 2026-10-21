@@ -743,3 +743,59 @@ fn non_zero_exit_ends_without_reconnect() {
     assert_eq!(session.view.state, SessionState::Ended);
     assert!(!session.states.contains(&SessionState::Dropped));
 }
+
+/// An SFTP session (the SFTP tab, stage 4, item 1): the same first
+/// connection dialog as a terminal, then the `sftp` subsystem instead of a
+/// shell. OpenSSH lists the home folder through it; the russh test server
+/// has no SFTP and the session fails with a reason instead of hanging.
+#[test]
+fn sftp_session_lists_the_home_folder() {
+    let harness = Harness::new();
+    let host = harness.password_host();
+    let opened = harness
+        .manager
+        .open_sftp(SessionTarget::Host {
+            vault_id: harness.vault_id,
+            record_id: host,
+        })
+        .expect("the sftp session opens");
+    let view = opened.handle.view();
+    assert_eq!(view.kind, shellpp_core::service::dto::SessionKind::Sftp);
+    let terminal = Arc::new(RecordingTerminal::default());
+    let mut session = Session {
+        handle: opened.handle,
+        events: opened.events,
+        terminal,
+        states: vec![view.state],
+        prompts: Vec::new(),
+        view,
+    };
+    session.accept_host_key();
+    if harness.server.kind == ServerKind::Russh {
+        let view = session.wait_state(SessionState::Failed);
+        assert!(view.error.is_some(), "a reason is shown");
+        assert!(session.handle.sftp().is_none());
+        return;
+    }
+    session.wait_state(SessionState::Connected);
+    let sftp = session.handle.sftp().expect("the sftp channel");
+    let listed = session.handle.spawn(async move {
+        let home = sftp.canonicalize(".").await?;
+        sftp.list(&home).await.map(|entries| (home, entries))
+    });
+    let (home, entries) = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(listed)
+        .expect("joined")
+        .expect("listed");
+    assert!(home.starts_with('/'), "{home}");
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.name != "." && entry.name != "..")
+    );
+    session.handle.close();
+    session.wait_state(SessionState::Closed);
+    assert!(session.handle.sftp().is_none());
+}

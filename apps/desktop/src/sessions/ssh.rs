@@ -94,9 +94,28 @@ enum Outcome {
     Locked,
 }
 
+/// What a session opens once logged in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    /// A shell in a PTY (a terminal tab).
+    Shell,
+    /// The `sftp` subsystem (the SFTP tab, stage 4): no shell, no OS
+    /// detection, no startup snippet.
+    Sftp,
+}
+
+/// The channel a session opened.
+enum Channel {
+    Shell(TermParts),
+    Sftp(Arc<shellpp_ssh::Sftp>),
+}
+
+/// How often a connected SFTP session checks that its connection lives.
+const SFTP_LIVENESS: Duration = Duration::from_millis(500);
+
 struct Established {
     connection: Arc<dyn RemoteConnection>,
-    parts: TermParts,
+    channel: Channel,
     username: String,
     /// The size the shell was opened with.
     size: (u16, u16),
@@ -151,6 +170,7 @@ pub(crate) struct SshTask {
     reconnected: bool,
     /// The message about refused environment variables was shown.
     env_noticed: bool,
+    purpose: Purpose,
 }
 
 impl SshTask {
@@ -161,6 +181,7 @@ impl SshTask {
         target: SessionTarget,
         config: SessionConfig,
         settings: SessionSettings,
+        purpose: Purpose,
     ) -> Self {
         let unlocked = shared.unlocked();
         Self {
@@ -177,6 +198,7 @@ impl SshTask {
             info: None,
             reconnected: false,
             env_noticed: false,
+            purpose,
         }
     }
 
@@ -410,6 +432,7 @@ impl SshTask {
             saves,
             shell,
             kept.file_passphrase.clone(),
+            self.purpose,
         );
         tokio::pin!(establish);
         // Biased: a lock cancels the pending prompt after it flips the lock
@@ -546,7 +569,7 @@ impl SshTask {
     async fn connected(&mut self, established: Established) -> Next {
         let Established {
             connection,
-            parts,
+            channel,
             username,
             size,
         } = established;
@@ -554,6 +577,12 @@ impl SshTask {
             return Next::Exit;
         };
         self.backoff.reset();
+        let parts = match channel {
+            Channel::Shell(parts) => parts,
+            Channel::Sftp(sftp) => {
+                return self.connected_sftp(connection, sftp, username, info).await;
+            }
+        };
         if self.reconnected {
             // The terminal still shows the previous shell's screen and modes.
             super::reset_terminal_modes(&self.session).await;
@@ -711,6 +740,84 @@ impl SshTask {
                     .end_log(log_id, ConnectionEndReason::Dropped, None);
                 self.dropped(kind).await
             }
+        }
+    }
+
+    /// An SFTP session is connected: its channel is handed out until the
+    /// session is closed or the connection drops (no automatic reconnect:
+    /// the panel shows the reason with Reconnect).
+    async fn connected_sftp(
+        &mut self,
+        connection: Arc<dyn RemoteConnection>,
+        sftp: Arc<shellpp_ssh::Sftp>,
+        username: String,
+        info: ConnInfo,
+    ) -> Next {
+        self.update(|st| {
+            st.sftp = Some(sftp.clone());
+            let view = &mut st.view;
+            view.state = SessionState::Connected;
+            view.step = None;
+            view.prompt = None;
+            view.error = None;
+            view.host_key = None;
+            view.reconnect = None;
+            view.username = Some(username.clone());
+        });
+        let entry = ConnectionLogStart {
+            host: info.host,
+            host_label: info.host.map(|_| info.title.clone()),
+            address: info.address.clone(),
+            port: info.port,
+            username: Some(username),
+            os: self.session.view().os,
+        };
+        let log_id = self
+            .shared
+            .blocking(move |core| core.connection_log_start(entry))
+            .await
+            .and_then(Result::ok);
+        self.session.lock().log_id = log_id;
+        let closed = loop {
+            tokio::select! {
+                control = self.ctrl.recv() => match control {
+                    Some(Control::Close) | None => break true,
+                    // Nothing to cancel or reconnect while connected.
+                    Some(Control::Cancel | Control::Reconnect) => {}
+                },
+                () = tokio::time::sleep(SFTP_LIVENESS) => {
+                    if sftp.is_closed() {
+                        break false;
+                    }
+                }
+            }
+        };
+        let log_id = {
+            let mut st = self.session.lock();
+            st.sftp = None;
+            st.log_id.take()
+        };
+        drop(self.shared.rt.spawn(async move {
+            sftp.close().await;
+            let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.disconnect()).await;
+        }));
+        tracing::info!(session = self.session.id, closed, "sftp ended");
+        if closed {
+            self.shared
+                .end_log(log_id, ConnectionEndReason::Closed, None);
+            Next::Exit
+        } else {
+            self.shared
+                .end_log(log_id, ConnectionEndReason::Dropped, None);
+            self.last_drop = SessionError::from_drop(FailureKind::Disconnected);
+            let error = self.last_drop;
+            self.update(|st| {
+                let view = &mut st.view;
+                view.state = SessionState::Dropped;
+                view.error = Some(error);
+                view.reconnect = None;
+            });
+            Next::Idle
         }
     }
 
@@ -1130,6 +1237,7 @@ async fn establish(
     saves: SaveTargets,
     shell: ShellSetup,
     kept_file_passphrase: Option<(String, SecretString)>,
+    purpose: Purpose,
 ) -> Result<Established, SshError> {
     add_key_sources(&shared, &mut spec, kept_file_passphrase).await;
     // Jump hosts log in with the same sources (agent, key files and their
@@ -1162,18 +1270,23 @@ async fn establish(
         }
     });
     let (cols, rows) = session.lock().size;
-    let parts = connection
-        .open_shell(ShellRequest {
-            term: shell.term,
-            cols: u32::from(cols),
-            rows: u32::from(rows),
-            env: shell.env,
-            agent_forwarding: shell.agent_forwarding,
-        })
-        .await?;
+    let channel = match purpose {
+        Purpose::Shell => Channel::Shell(
+            connection
+                .open_shell(ShellRequest {
+                    term: shell.term,
+                    cols: u32::from(cols),
+                    rows: u32::from(rows),
+                    env: shell.env,
+                    agent_forwarding: shell.agent_forwarding,
+                })
+                .await?,
+        ),
+        Purpose::Sftp => Channel::Sftp(Arc::new(connection.open_sftp().await?)),
+    };
     Ok(Established {
         connection,
-        parts,
+        channel,
         username,
         size: (cols, rows),
     })

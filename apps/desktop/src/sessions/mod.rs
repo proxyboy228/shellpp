@@ -112,6 +112,27 @@ pub trait SessionTerminal: Send + Sync + 'static {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalClosed;
 
+/// The "terminal" of a session without one (SFTP): nothing is shown.
+struct NoTerminal;
+
+impl SessionTerminal for NoTerminal {
+    fn feed<'a>(&'a self, _bytes: &'a [u8]) -> BoxFuture<'a, Result<(), TerminalClosed>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn attach(&self, _session: SessionHandle) {}
+
+    fn inject(&self, _bytes: Vec<u8>) {}
+}
+
+/// The `kind` of the "session opened" log line.
+fn view_kind(purpose: ssh::Purpose) -> &'static str {
+    match purpose {
+        ssh::Purpose::Shell => "ssh",
+        ssh::Purpose::Sftp => "sftp",
+    }
+}
+
 /// Output kept per host of a snippet run on many hosts.
 const SNIPPET_OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -449,6 +470,8 @@ pub(crate) struct SessionMut {
     pub(crate) once_keys: Vec<(String, String)>,
     /// The open connection log entry.
     pub(crate) log_id: Option<Uuid>,
+    /// An SFTP session's channel while connected.
+    pub(crate) sftp: Option<Arc<shellpp_ssh::Sftp>>,
 }
 
 impl Session {
@@ -498,6 +521,8 @@ impl Session {
         st.prompt = None;
         st.input = None;
         st.kept = KeptCredentials::default();
+        // An SFTP channel is not handed out any more (its task closes it).
+        st.sftp = None;
         let view = &mut st.view;
         view.state = SessionState::Closed;
         view.step = None;
@@ -605,6 +630,21 @@ impl SessionHandle {
     /// The current view.
     pub fn view(&self) -> SessionView {
         self.session.view()
+    }
+
+    /// The SFTP channel of an SFTP session while it is connected.
+    pub fn sftp(&self) -> Option<Arc<shellpp_ssh::Sftp>> {
+        self.session.lock().sftp.clone()
+    }
+
+    /// Runs `work` on the session layer's runtime (the requests of an SFTP
+    /// channel); the result arrives through the returned handle.
+    pub fn spawn<F>(&self, work: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.shared.rt.spawn(work)
     }
 
     /// Input for the remote side: keys, pastes, mouse reports and replies to
@@ -867,47 +907,7 @@ impl SessionManager {
         }
         let size = (clamp_size(size.0), clamp_size(size.1));
         match request {
-            OpenRequest::Ssh(target) => {
-                let config = self
-                    .shared
-                    .core
-                    .session_config(&target)
-                    .map_err(|error| core_error(&error))?;
-                check_route(&config)?;
-                let settings = SessionSettings::read(&*self.shared.core);
-                let view = SessionView {
-                    id: self.next_id(),
-                    kind: SessionKind::Ssh,
-                    state: SessionState::Connecting,
-                    step: Some(ConnectStep::Resolving),
-                    title: config.title.clone(),
-                    host: config.host,
-                    address: Some(config.address.clone()),
-                    port: Some(config.port),
-                    username: config.username.clone(),
-                    os: config.os.clone(),
-                    theme: backend::theme_slug(&config.terminal_theme)
-                        .unwrap_or_else(|| settings.default_theme.clone()),
-                    backspace: config.backspace,
-                    prompt: None,
-                    error: None,
-                    host_key: None,
-                    error_place: None,
-                    exit_status: None,
-                    exit_signal: None,
-                    reconnect: None,
-                    shell_id: None,
-                    rev: 1,
-                };
-                let encoding = charset::encoding_for(&config.charset);
-                let (session, ctrl, opened) =
-                    self.register(view, size, terminal, InputEncoder::new(encoding));
-                tracing::info!(session = session.id, kind = "ssh", "session opened");
-                let task =
-                    ssh::SshTask::new(self.shared.clone(), session, ctrl, target, config, settings);
-                drop(self.shared.rt.spawn(task.run()));
-                Ok(opened)
-            }
+            OpenRequest::Ssh(target) => self.open_ssh(target, size, terminal, ssh::Purpose::Shell),
             OpenRequest::Local { shell_id } => {
                 let settings = SessionSettings::read(&*self.shared.core);
                 let view = SessionView {
@@ -947,6 +947,80 @@ impl SessionManager {
         }
     }
 
+    /// An SFTP session to `target` (the SFTP tab, stage 4, item 1): the
+    /// route, credentials, prompts and host key dialogs of an SSH session,
+    /// then the `sftp` subsystem instead of a shell
+    /// ([`SessionHandle::sftp`] once connected). It has no terminal.
+    pub fn open_sftp(&self, target: SessionTarget) -> Result<Opened, SessionError> {
+        if self.shared.shut_down.load(Ordering::SeqCst) || !self.shared.is_unlocked() {
+            return Err(SessionError::Locked);
+        }
+        self.open_ssh(target, (80, 24), Arc::new(NoTerminal), ssh::Purpose::Sftp)
+    }
+
+    /// An SSH session to `target`: a shell or SFTP.
+    fn open_ssh(
+        &self,
+        target: SessionTarget,
+        size: (u16, u16),
+        terminal: Arc<dyn SessionTerminal>,
+        purpose: ssh::Purpose,
+    ) -> Result<Opened, SessionError> {
+        let config = self
+            .shared
+            .core
+            .session_config(&target)
+            .map_err(|error| core_error(&error))?;
+        check_route(&config)?;
+        let settings = SessionSettings::read(&*self.shared.core);
+        let view = SessionView {
+            id: self.next_id(),
+            kind: match purpose {
+                ssh::Purpose::Shell => SessionKind::Ssh,
+                ssh::Purpose::Sftp => SessionKind::Sftp,
+            },
+            state: SessionState::Connecting,
+            step: Some(ConnectStep::Resolving),
+            title: config.title.clone(),
+            host: config.host,
+            address: Some(config.address.clone()),
+            port: Some(config.port),
+            username: config.username.clone(),
+            os: config.os.clone(),
+            theme: backend::theme_slug(&config.terminal_theme)
+                .unwrap_or_else(|| settings.default_theme.clone()),
+            backspace: config.backspace,
+            prompt: None,
+            error: None,
+            host_key: None,
+            error_place: None,
+            exit_status: None,
+            exit_signal: None,
+            reconnect: None,
+            shell_id: None,
+            rev: 1,
+        };
+        let encoding = charset::encoding_for(&config.charset);
+        let (session, ctrl, opened) =
+            self.register(view, size, terminal, InputEncoder::new(encoding));
+        tracing::info!(
+            session = session.id,
+            kind = view_kind(purpose),
+            "session opened"
+        );
+        let task = ssh::SshTask::new(
+            self.shared.clone(),
+            session,
+            ctrl,
+            target,
+            config,
+            settings,
+            purpose,
+        );
+        drop(self.shared.rt.spawn(task.run()));
+        Ok(opened)
+    }
+
     fn next_id(&self) -> SessionId {
         self.shared.next_id.fetch_add(1, Ordering::SeqCst)
     }
@@ -980,6 +1054,7 @@ impl SessionManager {
                 kept: KeptCredentials::default(),
                 once_keys: Vec::new(),
                 log_id: None,
+                sftp: None,
             }),
         });
         session.emit(&view);

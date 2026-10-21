@@ -882,6 +882,12 @@ impl Sftp {
         self.fail_io(error)
     }
 
+    /// Whether the connection under this session is gone (a request would
+    /// fail with `ConnectionLost`).
+    pub fn is_closed(&self) -> bool {
+        self.link.is_closed()
+    }
+
     /// Ends the session (the channel closes; the connection stays).
     pub async fn close(&self) {
         let _ = self.session.close().await;

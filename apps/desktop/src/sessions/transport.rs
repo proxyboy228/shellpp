@@ -149,6 +149,8 @@ pub trait RemoteConnection: Send + Sync + 'static {
         max_output: usize,
     ) -> BoxFuture<'_, Result<ExecOutput, SshError>>;
     fn disconnect(&self) -> BoxFuture<'_, ()>;
+    /// An SFTP session on a new channel (the SFTP tab, stage 4).
+    fn open_sftp(&self) -> BoxFuture<'_, Result<shellpp_ssh::Sftp, SshError>>;
 }
 
 /// Opens SSH connections.
@@ -233,6 +235,10 @@ impl RemoteConnection for SshConnection {
 
     fn disconnect(&self) -> BoxFuture<'_, ()> {
         Box::pin(self.0.disconnect())
+    }
+
+    fn open_sftp(&self) -> BoxFuture<'_, Result<shellpp_ssh::Sftp, SshError>> {
+        Box::pin(self.0.open_sftp())
     }
 }
 
