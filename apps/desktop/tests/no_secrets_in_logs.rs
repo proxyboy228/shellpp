@@ -511,6 +511,8 @@ fn keychain_flows_leave_no_key_or_passphrase_in_the_trace(cx: &mut TestAppContex
         });
         type_into(cx, "kc-gen-label", "Generated");
         type_into(cx, "kc-gen-passphrase", &generate_passphrase);
+        // Typed twice (D64).
+        type_into(cx, "kc-gen-passphrase-repeat", &generate_passphrase);
         act(cx, &mut |window, cx| window.click("kc-gen-submit", cx));
         let generated = cx
             .update(|cx| screen.read(cx).selected())
