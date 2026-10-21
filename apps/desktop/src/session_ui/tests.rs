@@ -1588,3 +1588,42 @@ fn a_dropped_session_dims_its_terminal(cx: &mut TestAppContext) {
     assert_eq!(dimmed(cx), Some(false));
     ui.finish(cx);
 }
+
+/// Stage 5 (D57): a failure on the route says where: a jump host with its
+/// number and name, the proxy, or the chain; on the host itself nothing.
+#[gpui_kit::test]
+fn a_route_failure_names_its_place(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    use crate::sessions::types::ErrorPlace;
+    use crate::sessions::{SessionError, SessionState};
+
+    let ui = Ui::open(cx);
+    let target = crate::hosts::parse_address("192.0.2.20:2200").unwrap();
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Ssh).quick(target), cx);
+    let shown = Cell::new(None);
+    let mut view = layer_view(SessionState::Failed);
+    view.error = Some(SessionError::Ssh(shellpp_ssh::FailureKind::Refused));
+    view.error_place = Some(ErrorPlace::JumpHost {
+        index: 1,
+        count: 2,
+        title: "bastion".into(),
+    });
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert_eq!(
+        cx.update(|cx| pane.read(cx).place().cloned()),
+        Some("On jump host 2 of 2: bastion".into())
+    );
+    assert!(ui.visible("failure-place", cx));
+    view.error_place = Some(ErrorPlace::Proxy);
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    assert_eq!(
+        cx.update(|cx| pane.read(cx).place().cloned()),
+        Some(super::strings::PLACE_PROXY.into())
+    );
+    view.error_place = None;
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(!ui.visible("failure-place", cx));
+}

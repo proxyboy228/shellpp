@@ -114,6 +114,15 @@ pub fn question_of(index: u32, count: u32) -> String {
     format!("Question {} of {count}", index + 1)
 }
 
+// Where a route failed (stage 5, D57).
+pub const PLACE_PROXY: &str = "At the proxy";
+pub const PLACE_CHAIN: &str = "A jump host of this host is missing or listed twice";
+
+/// "On jump host 1 of 2: bastion".
+pub fn place_jump_host(index: usize, count: usize, title: &str) -> String {
+    format!("On jump host {} of {count}: {title}", index + 1)
+}
+
 // Host keys (UI 10.2).
 pub const HOST_KEY_ADDRESS: &str = "Address";
 pub const HOST_KEY_TYPE: &str = "Key type";

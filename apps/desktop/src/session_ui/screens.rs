@@ -219,6 +219,7 @@ pub fn connecting(
 pub fn failed(
     target: &TabInfo,
     reason: Failure,
+    place: Option<gpui::SharedString>,
     revoked: Option<&HostKeyInfo>,
     focus: FocusHandle,
     cx: &mut Context<SessionPane>,
@@ -247,6 +248,17 @@ pub fn failed(
         .text_color(theme.muted_foreground)
         .text_center()
         .child(reason.text());
+    // Where on the route (stage 5, D57): a jump host, the proxy, the chain.
+    let place = place.map(|place| {
+        div()
+            .id("failure-place")
+            .test_support()
+            .text_size(metrics::FONT_SIZE_BODY)
+            .font_weight(metrics::FONT_WEIGHT_MEDIUM)
+            .text_color(theme.foreground)
+            .text_center()
+            .child(place)
+    });
     // A revoked key cannot continue (UI 10.2), a missing host or an invalid
     // target fails again: no Retry.
     let blocked = !reason.can_retry();
@@ -276,6 +288,7 @@ pub fn failed(
                     .items_center()
                     .gap(metrics::SPACE_2)
                     .child(status)
+                    .children(place)
                     .child(reason_text),
             )
             .children(revoked.map(|key| host_key::revoked_block(key, cx)))

@@ -209,6 +209,9 @@ pub struct SessionPane {
     phase: Phase,
     /// The presented key of a revoked-key failure (UI 10.2).
     revoked: Option<HostKeyInfo>,
+    /// Where on the route the failure happened (a jump host, the proxy, the
+    /// chain; stage 5, D57); `None` on the host itself.
+    place: Option<SharedString>,
     reconnect: Option<ReconnectInfo>,
     ask: Option<Ask>,
     paste: Option<PendingPaste>,
@@ -276,6 +279,7 @@ impl SessionPane {
             control: None,
             phase: Phase::Connecting(first),
             revoked: None,
+            place: None,
             reconnect: None,
             ask: None,
             paste: None,
@@ -511,6 +515,18 @@ impl SessionPane {
 
     /// The presented key of a revoked-key failure (shown on the failure
     /// screen).
+    /// Where on the route the shown failure happened.
+    pub fn set_place(&mut self, place: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.place != place {
+            self.place = place;
+            cx.notify();
+        }
+    }
+
+    pub fn place(&self) -> Option<&SharedString> {
+        self.place.as_ref()
+    }
+
     pub fn set_revoked_key(&mut self, key: Option<HostKeyInfo>, cx: &mut Context<Self>) {
         self.revoked = key;
         cx.notify();
@@ -765,6 +781,7 @@ impl SessionPane {
             Phase::Failed(reason) => screens::failed(
                 &self.info,
                 *reason,
+                self.place.clone(),
                 self.revoked.as_ref(),
                 self.focus.clone(),
                 cx,

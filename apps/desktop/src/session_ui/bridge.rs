@@ -195,6 +195,12 @@ pub fn apply(
         .then(|| view.host_key.as_ref().map(host_key_of))
         .flatten();
     pane.set_phase(phase, reconnect, cx);
+    pane.set_place(
+        matches!(view.state, SessionState::Failed | SessionState::Dropped)
+            .then(|| view.error_place.as_ref().map(place_of))
+            .flatten(),
+        cx,
+    );
     if view.state == SessionState::Failed {
         pane.set_revoked_key(revoked, cx);
     }
@@ -255,6 +261,20 @@ pub(crate) fn step_of(step: sessions::ConnectStep) -> ConnectStep {
         sessions::ConnectStep::HostKey => ConnectStep::HostKey,
         sessions::ConnectStep::Authenticating => ConnectStep::Authenticating,
         sessions::ConnectStep::OpeningSession => ConnectStep::OpeningSession,
+    }
+}
+
+/// The text of where on the route a session failed.
+pub(crate) fn place_of(place: &crate::sessions::types::ErrorPlace) -> SharedString {
+    use super::strings;
+    match place {
+        crate::sessions::types::ErrorPlace::JumpHost {
+            index,
+            count,
+            title,
+        } => strings::place_jump_host(*index, *count, title).into(),
+        crate::sessions::types::ErrorPlace::Proxy => strings::PLACE_PROXY.into(),
+        crate::sessions::types::ErrorPlace::Chain { .. } => strings::PLACE_CHAIN.into(),
     }
 }
 
