@@ -254,6 +254,9 @@ pub enum ShotState {
     SnippetConfirm,
     /// The results table of a run.
     SnippetResults,
+    /// A snippet's panel with changes not saved and the question on
+    /// leaving it (D68).
+    SnippetLeave,
     /// Shell History: every host's commands (UI 9.1).
     ShellHistory,
     /// The Logs screen with an entry's details (UI 11).
@@ -405,6 +408,7 @@ impl ShotState {
         Self::SnippetVariables,
         Self::SnippetConfirm,
         Self::SnippetResults,
+        Self::SnippetLeave,
         Self::ShellHistory,
         Self::Logs,
         Self::SettingsLogs,
@@ -524,6 +528,7 @@ impl ShotState {
             Self::SnippetPanel => "snippet-panel",
             Self::SnippetVariables => "snippet-variables",
             Self::SnippetConfirm => "snippet-confirm",
+            Self::SnippetLeave => "snippet-leave",
             Self::SnippetResults => "snippet-results",
             Self::ShellHistory => "shell-history",
             Self::Logs => "logs",
@@ -1496,6 +1501,7 @@ pub async fn reach_state(
         | ShotState::SnippetVariables
         | ShotState::SnippetConfirm
         | ShotState::SnippetResults
+        | ShotState::SnippetLeave
         | ShotState::ShellHistory => {
             snippets_shot::reach(cx, handle, root, state, shot_state).await
         }
@@ -1705,6 +1711,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SnippetVariables
             | ShotState::SnippetConfirm
             | ShotState::SnippetResults
+            | ShotState::SnippetLeave
             | ShotState::ShellHistory => Err("checked with the stage 5 screens"),
             ShotState::Logs | ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
                 Err("checked with the stage 6 screens")

@@ -1286,11 +1286,13 @@ Blocks from top to bottom:
 
 ### 9.4 Running on multiple hosts [decision]
 
-- Up to 4 targets: a new tab split into panes, one session per host.
-  The script runs in each.
-- More than 4 targets: a tab with a results table. For each host, the
-  status (waiting, running, success, error), exit code and output,
-  which expands on click, are shown.
+- Any number of targets, one included: a results table. For each host, the
+  status (waiting, running, success, error, timed out), exit code and output,
+  which expands on click, are shown. The table opens in a dialog over the
+  screen (D66). [decision] (D68)
+- A tab split into panes, one session per host for up to 4 targets, comes
+  with Broadcast (stage 9); until then the table is the only view of a run.
+  [decision] (D68)
 - Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
 ### 9.5 Script generation from a description [decision, later stage]

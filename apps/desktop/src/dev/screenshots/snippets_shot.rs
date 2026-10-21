@@ -22,12 +22,13 @@ use crate::snippets::{RunResults, RunRow, RunState};
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 6] = [
+pub const STATES: [ShotState; 7] = [
     ShotState::Snippets,
     ShotState::SnippetPanel,
     ShotState::SnippetVariables,
     ShotState::SnippetConfirm,
     ShotState::SnippetResults,
+    ShotState::SnippetLeave,
     ShotState::ShellHistory,
 ];
 
@@ -191,7 +192,9 @@ pub async fn reach(
     });
     cx.update_window(handle, |_, window, cx| {
         screen.update(cx, |screen, cx| match shot {
-            ShotState::SnippetPanel => screen.select(Some(nginx.record.record_id), window, cx),
+            ShotState::SnippetPanel | ShotState::SnippetLeave => {
+                screen.select(Some(nginx.record.record_id), window, cx)
+            }
             ShotState::SnippetVariables => screen.run(disk.record.record_id, window, cx),
             ShotState::SnippetConfirm => screen.run(nginx.record.record_id, window, cx),
             ShotState::SnippetResults => {
@@ -228,7 +231,23 @@ pub async fn reach(
         })
     })
     .map_err(|_| ScreenshotError::WindowClosed)?;
-    settle(cx, handle).await
+    settle(cx, handle).await?;
+    if shot == ShotState::SnippetLeave {
+        // A change typed into the description, then the collapse button.
+        cx.update_window(handle, |_, window, cx| {
+            window.click("snippet-label", cx);
+            window.press("end", cx);
+            window.input(" and php-fpm", cx);
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+        settle(cx, handle).await?;
+        cx.update_window(handle, |_, window, cx| {
+            screen.update(cx, |screen, cx| screen.leave_panel(window, cx))
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+        settle(cx, handle).await?;
+    }
+    Ok(())
 }
 
 /// Checks that the window shows `shot`.
@@ -243,6 +262,7 @@ pub fn check(
         ShotState::SnippetVariables => &["snippet-variables-form"],
         ShotState::SnippetConfirm => &["snippet-confirm"],
         ShotState::SnippetResults => &["snippet-results"],
+        ShotState::SnippetLeave => &["panel-note", "snippet-leave-dialog"],
         ShotState::ShellHistory => &["shell-history-list"],
         _ => return Err(not_reached(shot, "not a Snippets state")),
     };

@@ -203,6 +203,9 @@ $stage5States = @('forwarding-empty', 'forwarding-cards', 'forwarding-form', 'sn
 # Stage 6 (run 3): the Logs screen and the Logs settings (ShotState::Logs,
 # SettingsLogs).
 $stage6States = @('logs', 'settings-logs', 'settings-shortcuts')
+# Run 4 (D68 and the rest of run 3).
+$run4States = @('snippet-leave')
+$allStates += $run4States
 $allStates += $stage6States
 $allStates += $stage5States
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
