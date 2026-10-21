@@ -105,6 +105,12 @@ pub fn certificate_of(key: &str) -> String {
 pub const SHOW_MORE: &str = "Show more";
 pub const SHOW_LESS: &str = "Show less";
 pub const AGENT_FORWARDING: &str = "Agent Forwarding";
+pub const AGENT_FORWARDING_WARNING: &str = "While a session is open, anyone with root on \
+     this host can sign in elsewhere with your keys.";
+pub const AGENT_FORWARD_SYSTEM: &str = "Also offer the system agent's keys";
+pub const AGENT_CONFIRM: &str = "Ask before every signature";
+pub const AGENT_CONFIRM_LATER: &str = "Until the question arrives, a host with this option \
+     gets no signature at all.";
 pub const STARTUP_SNIPPET: &str = "Startup snippet";
 pub const NONE: &str = "None";
 pub const HOST_CHAINING: &str = "Host Chaining";

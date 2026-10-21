@@ -48,6 +48,7 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
@@ -1912,6 +1913,45 @@ impl HostPanel {
                 this.draft.agent_forwarding = *checked;
                 this.changed(cx);
             }));
+        // Agent Forwarding (stage 5, D60): the warning and the two options
+        // show while it is on.
+        let agent_options = self.draft.agent_forwarding.then(|| {
+            let theme = cx.theme();
+            v_flex()
+                .id("host-agent-options")
+                .test_support()
+                .w_full()
+                .gap(metrics::SPACE_2)
+                .child(
+                    div()
+                        .id("host-agent-warning")
+                        .test_support()
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .text_color(theme.warning)
+                        .child(strings::AGENT_FORWARDING_WARNING),
+                )
+                .child(
+                    Checkbox::new("host-agent-system")
+                        .checked(self.draft.agent_forward_system)
+                        .label(strings::AGENT_FORWARD_SYSTEM)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.draft.agent_forward_system = *checked;
+                            this.changed(cx);
+                        })),
+                )
+                .child(
+                    Checkbox::new("host-agent-confirm")
+                        .checked(self.draft.agent_confirm)
+                        .label(strings::AGENT_CONFIRM)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.draft.agent_confirm = *checked;
+                            this.changed(cx);
+                        })),
+                )
+                .when(self.draft.agent_confirm, |this| {
+                    this.child(widgets::caption(strings::AGENT_CONFIRM_LATER, cx))
+                })
+        });
         let mosh = Switch::new("host-mosh")
             .checked(self.draft.mosh)
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -1927,6 +1967,7 @@ impl HostPanel {
             .child(widgets::divider(cx))
             // UI 3.1 "Show more", one field per line, in this order.
             .child(widgets::inline_row(strings::AGENT_FORWARDING, agent, cx))
+            .children(agent_options)
             .child(self.render_startup_snippet(window, cx))
             .child(self.render_jump_hosts(window, cx))
             .child(self.render_proxy(window, cx))

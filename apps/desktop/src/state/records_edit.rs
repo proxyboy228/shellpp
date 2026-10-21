@@ -310,6 +310,10 @@ pub struct HostDraft {
     pub certificate_key_id: Option<Uuid>,
     pub fido2_key_id: Option<Uuid>,
     pub agent_forwarding: bool,
+    /// Agent Forwarding also offers the system agent's keys (D60).
+    pub agent_forward_system: bool,
+    /// Agent Forwarding asks before every signature (D60).
+    pub agent_confirm: bool,
     /// The startup snippet (`ssh.startup_snippet_id`), kept as stored.
     pub startup_snippet_id: Option<Uuid>,
     /// `None`: inherit from the group (or none).
@@ -551,6 +555,14 @@ impl HostDraft {
                 .get("agent_forwarding")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            agent_forward_system: ssh
+                .get("agent_forward_system")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            agent_confirm: ssh
+                .get("agent_confirm")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             startup_snippet_id: uuid_member(ssh, "startup_snippet_id"),
             jump_chain: uuid_list(ssh.get("jump_chain")),
             proxy_kind: ProxyKind::parse(proxy.map(|proxy| str_of(proxy, "type"))),
@@ -748,6 +760,8 @@ impl HostDraft {
         }
         for (member, flag) in [
             ("agent_forwarding", self.agent_forwarding),
+            ("agent_forward_system", self.agent_forward_system),
+            ("agent_confirm", self.agent_confirm),
             ("mosh", self.mosh),
         ] {
             if flag {

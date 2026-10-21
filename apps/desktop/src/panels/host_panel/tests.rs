@@ -840,3 +840,30 @@ fn panel_values_survive_a_restart(cx: &mut TestAppContext) {
     });
     reopened.update(cx, |state, _| state.shutdown());
 }
+
+/// Stage 5 (D60): Agent Forwarding on shows its warning and two options;
+/// both are saved in `host.ssh`.
+#[gpui_kit::test]
+fn agent_forwarding_shows_its_warning_and_options(cx: &mut TestAppContext) {
+    let state = setup(cx);
+    let host = new_host(cx, &state, "192.0.2.21");
+    let (handle, _panel) = open_panel(cx, &state, Some(host));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-show-more", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("host-agent-warning").is_none());
+        window.click("host-agent-forwarding", cx);
+        window.render_frame(cx);
+        assert!(window.find("host-agent-warning").visible());
+        window.click("host-agent-system", cx);
+        window.render_frame(cx);
+        window.click("host-agent-confirm", cx);
+    })
+    .unwrap();
+    settle(cx);
+    let data = stored(cx, &state, host);
+    assert_eq!(data["ssh"]["agent_forwarding"], json!(true));
+    assert_eq!(data["ssh"]["agent_forward_system"], json!(true));
+    assert_eq!(data["ssh"]["agent_confirm"], json!(true));
+}

@@ -474,7 +474,11 @@ The same form is used for creating and editing; it opens in the details panel.
    - "Show more" expands additional settings, one field per line. Every field below is
      shown and its value is saved; what a field changes in a session arrives with the
      stage that implements that feature (D29):
-     - Agent Forwarding: on/off, off by default;
+     - Agent Forwarding: on/off, off by default. While it is on, a `--warning` line says
+       that root on the host can sign in elsewhere with the user's keys while a session is
+       open, and two checkboxes follow, both off: "Also offer the system agent's keys" and
+       "Ask before every signature" (until that question exists, such a host gets no
+       signature). [decision, D60, D66]
      - Startup snippet: a snippet that runs right after login;
      - Host Chaining: a chain of intermediate hosts (jump hosts);
      - Proxy: HTTP or SOCKS proxy for the connection;
