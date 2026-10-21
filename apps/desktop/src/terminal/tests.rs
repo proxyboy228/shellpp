@@ -1182,3 +1182,78 @@ fn font_size_spacing_and_family_apply_at_once(cx: &mut TestAppContext) {
     });
     assert_eq!(family, "Courier New");
 }
+
+/// Robustness (plan of run 3, section 10, item 4): output made of escape
+/// sequences, mutated with a fixed seed (CSI, OSC titles and hyperlinks,
+/// DCS, the alternate screen, wide and combining characters, keywords for
+/// the highlighting), is parsed and drawn without a panic, and none of it
+/// reaches the session as input except the terminal's own replies.
+#[gpui_kit::test]
+fn mutated_escape_sequences_never_panic(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    const PIECES: &[&str] = &[
+        "\x1b[31m",
+        "\x1b[0m",
+        "\x1b[1;4;7m",
+        "\x1b[38;2;1;2;3m",
+        "\x1b[48;5;200m",
+        "\x1b[2J",
+        "\x1b[H",
+        "\x1b[10;20H",
+        "\x1b[999;999H",
+        "\x1b[?1049h",
+        "\x1b[?1049l",
+        "\x1b[?25l",
+        "\x1b[?2004h",
+        "\x1b[K",
+        "\x1b[3S",
+        "\x1b[3T",
+        "\x1b]0;title\x07",
+        "\x1b]2;t\x1b\\",
+        "\x1b]8;;http://example.com\x1b\\link\x1b]8;;\x1b\\",
+        "\x1bP+q544e\x1b\\",
+        "\x1b[6n",
+        "\x1b[c",
+        "\x1b(0lqk\x1b(B",
+        "\r\n",
+        "\t",
+        "\x08",
+        "\x07",
+        "你好",
+        "e\u{301}",
+        "🙂",
+        "error ",
+        "warning ",
+        "ok ",
+        "192.168.1.1 ",
+        "aa:bb:cc:dd:ee:ff ",
+        "\x1b",
+        "\x1b[",
+        "\x1b]",
+        "\u{9b}31m",
+        "\u{202e}",
+    ];
+    let mut state = 0x5eed_0005_u64;
+    let mut next = move || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    for _ in 0..300 {
+        let mut chunk = Vec::new();
+        for _ in 0..1 + next() % 24 {
+            match next() % 5 {
+                0 => chunk.push(next() as u8),
+                _ => chunk
+                    .extend_from_slice(PIECES[(next() % PIECES.len() as u64) as usize].as_bytes()),
+            }
+        }
+        fixture.feed(cx, &chunk);
+    }
+    // Replies (cursor position, device attributes) are the only bytes sent
+    // back: never the output's own text.
+    let sent = fixture.sink.take();
+    assert!(sent.is_empty() || sent.starts_with(b"\x1b"));
+    assert!(!sent.windows(7).any(|window| window == b"warning"));
+}
