@@ -26,6 +26,8 @@ use gpui_kit::component::Icon;
 gpui_kit::assets::icon_assets!(pub AppIcons, [
     ArrowLeftRight,
     ArrowUpDown,
+    Bookmark,
+    BookmarkCheck,
     Braces,
     CornerLeftUp,
     Download,

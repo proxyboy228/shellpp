@@ -835,6 +835,18 @@ impl Core {
         self.connection_log_end_impl(log_id, reason, exit_status)
     }
 
+    /// The connection log of the Logs screen (UI 11.1): every entry, newest
+    /// first.
+    pub fn connection_log_list(&self) -> Result<Vec<dto::ConnectionLogView>, CoreError> {
+        self.connection_log_list_impl()
+    }
+
+    /// The bookmark of an entry (UI 11.1): saved entries are kept by the
+    /// auto-cleanup.
+    pub fn connection_log_set_saved(&self, log_id: Uuid, saved: bool) -> Result<(), CoreError> {
+        self.connection_log_set_saved_impl(log_id, saved)
+    }
+
     /// Recent connections (UI 6): newest first, one row per host link (or
     /// per address and port), at most 10.
     pub fn recent_connections(&self) -> Result<Vec<RecentConnection>, CoreError> {

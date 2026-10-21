@@ -99,6 +99,27 @@ pub fn set_end(
     }
 }
 
+/// `ended_at`, when the session ended and its time is known.
+pub fn ended_at(data: &Map<String, Value>) -> Option<&str> {
+    data.get("ended_at").and_then(Value::as_str)
+}
+
+/// `end_reason` (`closed`, `exit_status`, `dropped`, `unknown`).
+pub fn end_reason(data: &Map<String, Value>) -> Option<&str> {
+    data.get("end_reason").and_then(Value::as_str)
+}
+
+pub fn exit_status(data: &Map<String, Value>) -> Option<u32> {
+    data.get("exit_status")
+        .and_then(Value::as_u64)
+        .and_then(|status| u32::try_from(status).ok())
+}
+
+/// The bookmark of the Logs screen (UI 11.1).
+pub fn saved(data: &Map<String, Value>) -> bool {
+    data.get("saved").and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// `started_at` (empty when missing).
 pub fn started_at(data: &Map<String, Value>) -> &str {
     data.get("started_at").and_then(Value::as_str).unwrap_or("")

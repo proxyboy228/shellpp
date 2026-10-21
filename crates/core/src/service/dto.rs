@@ -1545,6 +1545,52 @@ impl fmt::Debug for HistoryHint {
     }
 }
 
+/// A row of the Logs screen (UI 11.1; docs/data-model.md, section 13.3).
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct ConnectionLogView {
+    pub record_id: Uuid,
+    pub started_at: String,
+    /// Absent while the session is active, or when its end is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    /// `closed`, `exit_status`, `dropped` or `unknown`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<u32>,
+    pub protocol: String,
+    /// Absent for a quick connect without a saved host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<RecordRef>,
+    /// The host title now (label or address), else the snapshot.
+    pub title: String,
+    pub address: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os: Option<HostOs>,
+    pub saved: bool,
+    /// The session ran on this device.
+    pub this_device: bool,
+}
+
+impl ConnectionLogView {
+    /// No end yet (UI 11.1 shows "now").
+    pub fn is_active(&self) -> bool {
+        self.ended_at.is_none() && self.end_reason.is_none()
+    }
+}
+
+impl fmt::Debug for ConnectionLogView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionLogView")
+            .field("record_id", &self.record_id)
+            .field("saved", &self.saved)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A row of Recent connections (UI 6; docs/data-model.md, section 13.3).
 #[derive(Clone, Serialize)]
 pub struct RecentConnection {

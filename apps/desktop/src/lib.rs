@@ -54,6 +54,7 @@ pub mod keychain;
 pub mod known_hosts;
 pub mod lock;
 pub mod logging;
+pub mod logs;
 pub mod new_tab;
 pub mod panels;
 pub mod panes;

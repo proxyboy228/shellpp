@@ -249,7 +249,7 @@ fn backspace_of(backspace: Backspace) -> BackspaceKey {
 }
 
 /// The OS family name the host icons use.
-fn os_family(family: OsFamily) -> &'static str {
+pub(crate) fn os_family(family: OsFamily) -> &'static str {
     match family {
         OsFamily::Linux => "linux",
         OsFamily::Windows => "windows",

@@ -340,6 +340,7 @@ pub struct Shell {
     known_hosts: Entity<crate::known_hosts::KnownHostsScreen>,
     forwarding: Entity<crate::forwarding::ForwardingScreen>,
     snippets: Entity<crate::snippets::SnippetsScreen>,
+    logs: Entity<crate::logs::LogsScreen>,
     sftp: Entity<crate::sftp::SftpScreen>,
     /// The Keychain section (UI 7), with its own details panel.
     keychain: Entity<crate::keychain::KeychainScreen>,
@@ -401,6 +402,7 @@ impl Shell {
         let forwarding =
             cx.new(|cx| crate::forwarding::ForwardingScreen::new(state.clone(), window, cx));
         let snippets = cx.new(|cx| crate::snippets::SnippetsScreen::new(state.clone(), window, cx));
+        let logs = cx.new(|cx| crate::logs::LogsScreen::new(state.clone(), window, cx));
         let keychain = cx.new(|cx| crate::keychain::KeychainScreen::new(state.clone(), window, cx));
         let sftp = cx.new(|cx| crate::sftp::SftpScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
@@ -459,6 +461,7 @@ impl Shell {
             known_hosts,
             forwarding,
             snippets,
+            logs,
             sftp,
             keychain,
             panel: None,
@@ -515,6 +518,10 @@ impl Shell {
 
     pub fn snippets_screen(&self) -> &Entity<crate::snippets::SnippetsScreen> {
         &self.snippets
+    }
+
+    pub fn logs_screen(&self) -> &Entity<crate::logs::LogsScreen> {
+        &self.logs
     }
 
     pub fn keychain_screen(&self) -> &Entity<crate::keychain::KeychainScreen> {
@@ -1483,8 +1490,7 @@ impl Shell {
             Section::Keychain => self.keychain.clone().into_any_element(),
             Section::PortForwarding => self.forwarding.clone().into_any_element(),
             Section::Snippets => self.snippets.clone().into_any_element(),
-            _ => placeholder::placeholder("section-placeholder", self.section.label(), cx)
-                .into_any_element(),
+            Section::Logs => self.logs.clone().into_any_element(),
         };
         div()
             .id("main-area")
@@ -2351,6 +2357,7 @@ impl Render for Shell {
                                         self.forwarding.read(cx).open_panel_width()
                                     }
                                     Section::Snippets => self.snippets.read(cx).open_panel_width(),
+                                    Section::Logs => self.logs.read(cx).open_panel_width(),
                                     _ => None,
                                 }
                             }),

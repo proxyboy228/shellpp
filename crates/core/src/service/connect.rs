@@ -22,9 +22,10 @@ use zeroize::Zeroizing;
 use super::Core;
 use super::Inner;
 use super::dto::{
-    Backspace, HistoryClearInput, HistoryClearResult, HistoryEntryView, HistoryListInput, HostOs,
-    KeyImportInput, KeyImportResult, KeyView, KnownHostAddInput, KnownHostSource, KnownHostView,
-    OsSource, RecentConnection, RecordRef, RecordsRef, SessionTarget,
+    Backspace, ConnectionLogView, HistoryClearInput, HistoryClearResult, HistoryEntryView,
+    HistoryListInput, HostOs, KeyImportInput, KeyImportResult, KeyView, KnownHostAddInput,
+    KnownHostSource, KnownHostView, OsSource, RecentConnection, RecordRef, RecordsRef,
+    SessionTarget,
 };
 use super::host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryDropReason,
@@ -1758,6 +1759,84 @@ impl Core {
         self.write_record(parts, RecordKind::ConnectionLogEntry, end.log_id, data, now)?;
         parts.connlog.ended(&end.log_id);
         Ok(())
+    }
+
+    pub(super) fn connection_log_list_impl(&self) -> Result<Vec<ConnectionLogView>, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        self.ensure_connlog(&mut parts, now)?;
+        let session = &*parts.session;
+        let index = &session.index;
+        let personal = session.ring.vault_id();
+        let mut views: Vec<ConnectionLogView> = index
+            .of_kind(RecordKind::ConnectionLogEntry)
+            .map(|record| {
+                let data = record.data();
+                let host = connection_log::host(data);
+                let live = host
+                    .filter(|link| link.vault_id == personal)
+                    .and_then(|link| index.get_kind(&link.record_id, RecordKind::Host));
+                let address = connection_log::address(data).to_owned();
+                let title = match live {
+                    Some(live) => host::title(live.data()).to_owned(),
+                    None => connection_log::host_label(data)
+                        .unwrap_or(&address)
+                        .to_owned(),
+                };
+                ConnectionLogView {
+                    record_id: record.record_id,
+                    started_at: connection_log::started_at(data).to_owned(),
+                    ended_at: connection_log::ended_at(data).map(str::to_owned),
+                    end_reason: connection_log::end_reason(data).map(str::to_owned),
+                    exit_status: connection_log::exit_status(data),
+                    protocol: data
+                        .get("protocol")
+                        .and_then(Value::as_str)
+                        .unwrap_or("ssh")
+                        .to_owned(),
+                    host,
+                    title,
+                    port: connection_log::port(data),
+                    address,
+                    username: connection_log::username(data).map(str::to_owned),
+                    os: connection_log::os(data),
+                    saved: connection_log::saved(data),
+                    this_device: connection_log::device_id(data) == Some(session.device_id),
+                }
+            })
+            .collect();
+        views.sort_by(|a, b| {
+            b.started_at
+                .cmp(&a.started_at)
+                .then_with(|| b.record_id.cmp(&a.record_id))
+        });
+        Ok(views)
+    }
+
+    pub(super) fn connection_log_set_saved_impl(
+        &self,
+        log_id: Uuid,
+        saved: bool,
+    ) -> Result<(), CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        self.ensure_connlog(&mut parts, now)?;
+        let record = parts
+            .session
+            .index
+            .get_kind(&log_id, RecordKind::ConnectionLogEntry)
+            .ok_or(CoreError::NotFound)?;
+        let mut data = record.data().clone();
+        data.insert("saved".into(), json!(saved));
+        self.write_record(
+            &mut parts,
+            RecordKind::ConnectionLogEntry,
+            log_id,
+            data,
+            now,
+        )
     }
 
     pub(super) fn recent_connections_impl(&self) -> Result<Vec<RecentConnection>, CoreError> {

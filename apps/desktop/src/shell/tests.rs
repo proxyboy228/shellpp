@@ -205,12 +205,13 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     let hosts = ui.bounds("nav-hosts", cx).unwrap();
     assert_eq!(hosts.origin.y - sidebar.origin.y, metrics::SPACE_2);
 
-    // A section whose screen is not built yet shows the placeholder (D28);
-    // the Keychain has its screen since stage 3.
+    // Every section has its screen since stage 6 (D28 placeholders are
+    // gone from the sidebar): Logs, the Keychain, Port Forwarding, Snippets.
     ui.click("nav-logs", cx);
     let shell = ui.shell(cx);
     assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Logs);
-    assert!(ui.visible("section-placeholder", cx));
+    assert!(ui.visible("logs-screen", cx));
+    assert!(!ui.visible("section-placeholder", cx));
     assert!(!ui.visible("hosts-screen", cx));
     ui.click("nav-keychain", cx);
     assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Keychain);

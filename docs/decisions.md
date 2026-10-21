@@ -1067,3 +1067,16 @@ Status: run 3 decision, 2026-10-21 (plan, section 8: stage 5, the interface; UI 
 - Not built in this run: the split tab for up to four hosts and the results in a tab (9.4; the dialog shows the same table), tags as chips with autocomplete (one comma-separated field), syntax highlighting of the script, the placeholder card of a draft (9.2), the Vault block and Share this snippet (one vault in local mode), the search in Add targets, Undo of a package removal (its snippets stay), the script generation hint (9.5, a later stage), and the tile/list toggle and sorting.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 3.1 and 4.2 (and `docs/ru`); UI 1.3 (the snippet panel's explicit Save), 8 and 9 are followed as written otherwise, with the parts above left for later.
+
+### 67. The Logs screen (run 3)
+
+Status: run 3 decision, 2026-10-21 (plan, section 9: stage 6, item 1; UI 11).
+
+**Decision:**
+
+- The core lists the connection log (`connection_log_list`: every entry, newest first, with the host's title now or the snapshot, its end, the bookmark and whether it ran on this device) and sets the bookmark (`connection_log_set_saved`).
+- The Logs screen is the table of 11.1: Date (the start date; start and end times below, `(+1d)` when the session ended on a later day, "now" while it is open, "unknown" after a crash), User (the device: "This device" in local mode, before accounts in stage 8), Host (OS icon, title, protocol and remote user) and Saved (the bookmark). The Date header turns the order; the Saved header shows only the saved entries. Times are UTC, as elsewhere until the app formats dates in the local time zone (D65).
+- A click opens the connection's details on the right (host, address and port, remote user, protocol, start, end, how it ended, device). Session output is not recorded yet, so the details say so; the recording viewer and the export to .txt of 11.2 come with the recordings.
+- With the Logs screen every section of the sidebar has its screen; the "In development" placeholder of the sections is gone.
+
+**Spec impact:** none; UI 11 is followed as written, with the recordings of 11.2 left for later.

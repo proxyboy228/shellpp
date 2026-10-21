@@ -851,3 +851,36 @@ fn the_proxy_is_the_hosts_own() {
     let plain = u.host(json!({"address": "direct.example"}));
     assert!(config(&u, plain.record_id).proxy.is_none());
 }
+
+/// The Logs screen's list (UI 11.1): every entry newest first with its end,
+/// "now" while active, and the bookmark.
+#[test]
+fn the_connection_log_lists_every_entry_and_keeps_the_bookmark() {
+    let u = first_run();
+    let host = u.host(json!({"address": "w1.example.com", "label": "W1"}));
+    let host_ref = Some(RecordRef {
+        vault_id: u.vault_id,
+        record_id: host.record_id,
+    });
+    let first = start(&u, host_ref, Some("W1"), "w1.example.com", 22);
+    u.core
+        .connection_log_end(first, ConnectionEndReason::ExitStatus, Some(2));
+    u.env.mem.clock.advance(Duration::from_secs(5));
+    let active = start(&u, None, None, "203.0.113.4", 2222);
+    let rows = u.core.connection_log_list().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].record_id, active);
+    assert!(rows[0].is_active() && rows[0].this_device);
+    assert_eq!(rows[0].title, "203.0.113.4");
+    assert_eq!(rows[1].record_id, first);
+    assert_eq!(rows[1].title, "W1");
+    assert_eq!(rows[1].end_reason.as_deref(), Some("exit_status"));
+    assert_eq!(rows[1].exit_status, Some(2));
+    assert!(rows[1].ended_at.is_some() && !rows[1].is_active());
+    assert!(rows.iter().all(|row| !row.saved));
+    u.core.connection_log_set_saved(first, true).unwrap();
+    let rows = u.core.connection_log_list().unwrap();
+    assert!(rows[1].saved && !rows[0].saved);
+    u.core.connection_log_set_saved(first, false).unwrap();
+    assert!(!u.core.connection_log_list().unwrap()[1].saved);
+}
