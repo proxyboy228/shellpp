@@ -238,8 +238,8 @@ async fn copy<R, W>(
     target: &mut W,
     mut done: u64,
     progress: &mut (dyn FnMut(u64) + Send),
-    read_error: &dyn Fn(std::io::Error) -> SftpError,
-    write_error: &dyn Fn(std::io::Error) -> SftpError,
+    read_error: &(dyn Fn(std::io::Error) -> SftpError + Sync),
+    write_error: &(dyn Fn(std::io::Error) -> SftpError + Sync),
 ) -> Result<u64, SftpError>
 where
     R: AsyncRead + Unpin,

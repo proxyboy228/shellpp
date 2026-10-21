@@ -25,7 +25,7 @@
 
 pub mod bridge;
 pub mod dialog;
-mod host_key;
+pub mod host_key;
 pub mod model;
 mod overlays;
 mod paste;

@@ -310,7 +310,13 @@ enum TabContent {
     NewTab {
         page: Option<(Entity<NewTabPage>, Subscription)>,
     },
-    /// The tabs of later stages (SFTP, serial).
+    /// Connect → with SFTP (UI 5.1): the dual-pane manager with the host on
+    /// the right; created at the next render (it needs the window).
+    Sftp {
+        host: Uuid,
+        screen: Option<Entity<crate::sftp::SftpScreen>>,
+    },
+    /// The tabs of later stages (serial).
     Placeholder,
 }
 
@@ -332,6 +338,7 @@ pub struct Shell {
     hosts: Entity<HostsScreen>,
     /// The Known Hosts section (UI 10.1), with its own details panel.
     known_hosts: Entity<crate::known_hosts::KnownHostsScreen>,
+    sftp: Entity<crate::sftp::SftpScreen>,
     /// The Keychain section (UI 7), with its own details panel.
     keychain: Entity<crate::keychain::KeychainScreen>,
     panel: Option<Panel>,
@@ -390,6 +397,7 @@ impl Shell {
         let known_hosts =
             cx.new(|cx| crate::known_hosts::KnownHostsScreen::new(state.clone(), window, cx));
         let keychain = cx.new(|cx| crate::keychain::KeychainScreen::new(state.clone(), window, cx));
+        let sftp = cx.new(|cx| crate::sftp::SftpScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
         let notifications = Notifications::global(cx);
         let subscriptions = vec![
@@ -444,6 +452,7 @@ impl Shell {
             sidebar_visible: true,
             hosts,
             known_hosts,
+            sftp,
             keychain,
             panel: None,
             details_width: metrics::WIDTH_DETAILS,
@@ -483,6 +492,10 @@ impl Shell {
 
     pub fn hosts_screen(&self) -> &Entity<HostsScreen> {
         &self.hosts
+    }
+
+    pub fn sftp_screen(&self) -> &Entity<crate::sftp::SftpScreen> {
+        &self.sftp
     }
 
     pub fn known_hosts_screen(&self) -> &Entity<crate::known_hosts::KnownHostsScreen> {
@@ -569,7 +582,7 @@ impl Shell {
     pub fn group(&self, id: SessionId) -> Option<&Entity<PaneGroup>> {
         match self.content(id)? {
             TabContent::Panes { group, .. } => Some(group),
-            TabContent::NewTab { .. } | TabContent::Placeholder => None,
+            TabContent::NewTab { .. } | TabContent::Sftp { .. } | TabContent::Placeholder => None,
         }
     }
 
@@ -578,7 +591,7 @@ impl Shell {
     pub fn pane(&self, id: SessionId) -> Option<&Entity<SessionPane>> {
         match self.content(id)? {
             TabContent::Panes { active, .. } => active.as_ref(),
-            TabContent::NewTab { .. } | TabContent::Placeholder => None,
+            TabContent::NewTab { .. } | TabContent::Sftp { .. } | TabContent::Placeholder => None,
         }
     }
 
@@ -681,8 +694,9 @@ impl Shell {
         if let Some(target) = PaneTarget::from_request(&request, self.state.read(cx)) {
             return self.open_tab(TabSeed::Target(target), None, None, cx);
         }
-        let content = match request.kind() {
-            SessionKind::NewTab => TabContent::NewTab { page: None },
+        let content = match (request.kind(), request.host_id()) {
+            (SessionKind::NewTab, _) => TabContent::NewTab { page: None },
+            (SessionKind::Sftp, Some(host)) => TabContent::Sftp { host, screen: None },
             _ => TabContent::Placeholder,
         };
         let id = self.sessions.open(request);
@@ -1546,12 +1560,16 @@ impl Shell {
         let page = match self.content(id) {
             Some(TabContent::NewTab {
                 page: Some((page, _)),
-            }) => Some(page.clone()),
+            }) => Some(page.clone().into_any_element()),
+            Some(TabContent::Sftp {
+                screen: Some(screen),
+                ..
+            }) => Some(screen.clone().into_any_element()),
             _ => None,
         };
         let content = match (self.group(id), page) {
             (Some(group), _) => group.clone().into_any_element(),
-            (None, Some(page)) => page.into_any_element(),
+            (None, Some(page)) => page,
             (None, None) => {
                 let title = self
                     .sessions
@@ -1645,6 +1663,41 @@ impl Shell {
                     .host(tab.host())
             })
             .collect()
+    }
+
+    /// Creates the SFTP session tabs that wait for the window: Local on the
+    /// left, their host connecting on the right (UI 5.1).
+    fn prepare_sftp_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let waiting: Vec<(SessionId, Uuid)> = self
+            .contents
+            .iter()
+            .filter_map(|(id, content)| match content {
+                TabContent::Sftp { host, screen: None } => Some((*id, *host)),
+                _ => None,
+            })
+            .collect();
+        for (id, host) in waiting {
+            let state = self.state.clone();
+            let Some(item) = state.read(cx).host(host).cloned() else {
+                continue;
+            };
+            let title: SharedString = item
+                .label
+                .clone()
+                .unwrap_or_else(|| item.address.clone())
+                .into();
+            let screen = cx.new(|cx| crate::sftp::SftpScreen::new(state, window, cx));
+            let record = shellpp_core::service::dto::RecordRef {
+                vault_id: item.vault_id,
+                record_id: item.record_id,
+            };
+            screen.update(cx, |screen, cx| screen.open_host(record, title, window, cx));
+            if let Some((_, TabContent::Sftp { screen: slot, .. })) =
+                self.contents.iter_mut().find(|(tab, _)| *tab == id)
+            {
+                *slot = Some(screen);
+            }
+        }
     }
 
     /// Creates the new tab pages that wait for the window, and hands the
@@ -2238,6 +2291,7 @@ impl Render for Shell {
         // New tab pages need the window; the active one and the search
         // get the open tabs and the Restore flag.
         self.prepare_new_tab_pages(window, cx);
+        self.prepare_sftp_tabs(window, cx);
         // Sessions need the window to start: the panes of tabs in the
         // background connect all the same.
         for group in self.groups() {
@@ -2299,11 +2353,7 @@ impl Render for Shell {
                 .relative()
                 .size_full()
                 .bg(cx.theme().colors.list)
-                .child(placeholder::placeholder(
-                    "sftp-placeholder",
-                    i18n::top_bar::SFTP,
-                    cx,
-                ))
+                .child(self.sftp.clone())
                 .child(self.render_toast_host())
                 .into_any_element(),
             TopTab::Session(id) => self.render_session(id, window, cx).into_any_element(),

@@ -90,6 +90,37 @@ pub fn drives() -> Vec<PathBuf> {
     crate::platform::drives::roots()
 }
 
+/// The row of one local file or folder (a file dropped from the system's
+/// file manager); `None` when it cannot be read.
+pub fn entry_of(path: &Path) -> Option<Entry> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    let kind = if meta.file_type().is_symlink() {
+        Kind::Link {
+            to_folder: std::fs::metadata(path).is_ok_and(|target| target.is_dir()),
+        }
+    } else if meta.is_dir() {
+        Kind::Folder
+    } else if meta.is_file() {
+        Kind::File
+    } else {
+        Kind::Other
+    };
+    Some(Entry {
+        hidden: hidden(&name, &meta),
+        kind,
+        size: if kind == Kind::File { meta.len() } else { 0 },
+        modified: meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|since| since.as_secs()),
+        permissions: None,
+        local_path: Some(path.to_path_buf()),
+        name,
+    })
+}
+
 /// The row of a remote entry.
 pub fn from_remote(entry: &RemoteEntry) -> Entry {
     Entry {

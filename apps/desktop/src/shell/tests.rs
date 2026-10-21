@@ -165,7 +165,9 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
 
     ui.click("tab-sftp", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Sftp);
-    assert!(ui.visible("sftp-placeholder", cx));
+    // The SFTP tab (stage 4): Local on the left, an empty panel on the right.
+    assert!(ui.visible("sftp-screen", cx));
+    assert!(ui.visible("sftp-right-empty", cx));
     assert!(!ui.visible("main-area", cx));
 
     // Ctrl+1 / Ctrl+2 (UI 1.4).

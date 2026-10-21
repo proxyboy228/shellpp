@@ -248,7 +248,7 @@ fn os_family(family: OsFamily) -> &'static str {
     }
 }
 
-fn step_of(step: sessions::ConnectStep) -> ConnectStep {
+pub(crate) fn step_of(step: sessions::ConnectStep) -> ConnectStep {
     match step {
         sessions::ConnectStep::Resolving => ConnectStep::Resolving,
         sessions::ConnectStep::Connecting => ConnectStep::Connecting,
@@ -258,7 +258,7 @@ fn step_of(step: sessions::ConnectStep) -> ConnectStep {
     }
 }
 
-fn host_key_of(key: &sessions::HostKeyInfo) -> HostKeyInfo {
+pub(crate) fn host_key_of(key: &sessions::HostKeyInfo) -> HostKeyInfo {
     HostKeyInfo {
         address: HostKeyInfo::openssh_address(&key.address, key.port),
         key_type: key.key_type.clone(),
@@ -275,7 +275,7 @@ fn keep_of(save: SaveOption) -> Keep {
 }
 
 /// A text prompt (the host key kinds are dialogs of their own).
-fn prompt_of(kind: &PromptKind) -> Prompt {
+pub(crate) fn prompt_of(kind: &PromptKind) -> Prompt {
     match kind {
         PromptKind::Username
         | PromptKind::HostKeyUnknown { .. }

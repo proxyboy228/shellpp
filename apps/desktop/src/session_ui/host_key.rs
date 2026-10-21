@@ -11,6 +11,9 @@
 //!   (stage 2b, owner step 0.3). There is no "don't ask again";
 //! - **revoked key**: not a question: the attempt fails and the failure
 //!   screen shows the danger warning with the key ([`revoked_block`]).
+//!
+//! The dialogs answer any view that asks ([`AnswersHostKey`]): a session
+//! tab, and the remote panel of the SFTP tab (stage 4).
 
 use gpui::prelude::*;
 use gpui::{
@@ -49,6 +52,17 @@ pub fn bind_keys(cx: &mut App) {
     )]);
 }
 
+/// A view that shows the host key dialogs and takes their answer.
+pub trait AnswersHostKey: Sized + 'static {
+    fn answer_host_key(&mut self, reply: HostKeyReply, cx: &mut Context<Self>);
+}
+
+impl AnswersHostKey for SessionPane {
+    fn answer_host_key(&mut self, reply: HostKeyReply, cx: &mut Context<Self>) {
+        SessionPane::answer_host_key(self, reply, cx);
+    }
+}
+
 /// Whether the dialog for `ask` starts with the keyboard focus on its first
 /// button (Cancel of the changed-key dialog) rather than on its frame.
 pub fn focuses_first_button(ask: &HostKeyAsk) -> bool {
@@ -56,10 +70,10 @@ pub fn focuses_first_button(ask: &HostKeyAsk) -> bool {
 }
 
 /// The dialog for `ask`.
-pub fn render(
+pub fn render<T: AnswersHostKey>(
     ask: &HostKeyAsk,
     focus: &FocusHandle,
-    cx: &mut Context<SessionPane>,
+    cx: &mut Context<T>,
 ) -> impl IntoElement {
     match ask {
         HostKeyAsk::Unknown(key) => unknown(key, focus, cx),
@@ -71,13 +85,13 @@ pub fn render(
     }
 }
 
-fn reply(
+fn reply<T: AnswersHostKey>(
     reply: HostKeyReply,
-) -> impl Fn(&mut SessionPane, &ClickEvent, &mut Window, &mut Context<SessionPane>) + 'static {
+) -> impl Fn(&mut T, &ClickEvent, &mut Window, &mut Context<T>) + 'static {
     move |this, _, _, cx| this.answer_host_key(reply, cx)
 }
 
-fn key_rows(key: &HostKeyInfo, cx: &Context<SessionPane>) -> impl IntoElement {
+fn key_rows(key: &HostKeyInfo, cx: &App) -> impl IntoElement {
     v_flex()
         .gap(metrics::SPACE_3)
         .child(dialog::key_row(
@@ -105,7 +119,7 @@ fn key_rows(key: &HostKeyInfo, cx: &Context<SessionPane>) -> impl IntoElement {
 
 /// The blocking warning: danger icon and `--text-primary` text on
 /// `--danger-subtle` (design-system 2.5).
-fn warning(id: &'static str, text: String, cx: &Context<SessionPane>) -> impl IntoElement {
+fn warning(id: &'static str, text: String, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
         .id(id)
@@ -134,7 +148,11 @@ fn warning(id: &'static str, text: String, cx: &Context<SessionPane>) -> impl In
         )
 }
 
-fn unknown(key: &HostKeyInfo, focus: &FocusHandle, cx: &mut Context<SessionPane>) -> AnyElement {
+fn unknown<T: AnswersHostKey>(
+    key: &HostKeyInfo,
+    focus: &FocusHandle,
+    cx: &mut Context<T>,
+) -> AnyElement {
     let content = v_flex()
         .gap(metrics::SPACE_4)
         .child(
@@ -146,7 +164,7 @@ fn unknown(key: &HostKeyInfo, focus: &FocusHandle, cx: &mut Context<SessionPane>
         .child(key_rows(key, cx))
         .child(dialog::buttons([
             dialog::button("host-key-cancel", strings::CANCEL, Kind::Neutral, true, cx)
-                .on_click(cx.listener(reply(HostKeyReply::Cancel)))
+                .on_click(cx.listener(reply::<T>(HostKeyReply::Cancel)))
                 .into_any_element(),
             dialog::button(
                 "host-key-once",
@@ -155,7 +173,7 @@ fn unknown(key: &HostKeyInfo, focus: &FocusHandle, cx: &mut Context<SessionPane>
                 true,
                 cx,
             )
-            .on_click(cx.listener(reply(HostKeyReply::ConnectOnce)))
+            .on_click(cx.listener(reply::<T>(HostKeyReply::ConnectOnce)))
             .into_any_element(),
             dialog::button(
                 "host-key-accept",
@@ -164,7 +182,7 @@ fn unknown(key: &HostKeyInfo, focus: &FocusHandle, cx: &mut Context<SessionPane>
                 true,
                 cx,
             )
-            .on_click(cx.listener(reply(HostKeyReply::AcceptAndSave)))
+            .on_click(cx.listener(reply::<T>(HostKeyReply::AcceptAndSave)))
             .into_any_element(),
         ]));
     dialog::frame("host-key-unknown", focus, content, cx)
@@ -177,12 +195,12 @@ fn unknown(key: &HostKeyInfo, focus: &FocusHandle, cx: &mut Context<SessionPane>
         .into_any_element()
 }
 
-fn changed(
+fn changed<T: AnswersHostKey>(
     key: &HostKeyInfo,
     old_key_type: &str,
     old_fingerprint: &str,
     focus: &FocusHandle,
-    cx: &mut Context<SessionPane>,
+    cx: &mut Context<T>,
 ) -> AnyElement {
     let old = if old_key_type == key.key_type {
         SharedString::from(old_fingerprint.to_owned())
@@ -231,7 +249,7 @@ fn changed(
         .child(dialog::buttons([
             // The first focus stop: the dialog opens with the focus here.
             dialog::button("host-key-cancel", strings::CANCEL, Kind::Neutral, true, cx)
-                .on_click(cx.listener(reply(HostKeyReply::Cancel)))
+                .on_click(cx.listener(reply::<T>(HostKeyReply::Cancel)))
                 .into_any_element(),
             // A click, or Space after Tab; Enter on it does nothing.
             div()
@@ -245,7 +263,7 @@ fn changed(
                         true,
                         cx,
                     )
-                    .on_click(cx.listener(reply(HostKeyReply::Replace))),
+                    .on_click(cx.listener(reply::<T>(HostKeyReply::Replace))),
                 )
                 .into_any_element(),
         ]));
@@ -262,7 +280,7 @@ fn changed(
 
 /// The revoked-key warning of the failure screen (UI 10.2): the danger
 /// warning and the presented key; there is no way to continue.
-pub fn revoked_block(key: &HostKeyInfo, cx: &Context<SessionPane>) -> impl IntoElement {
+pub fn revoked_block(key: &HostKeyInfo, cx: &App) -> impl IntoElement {
     v_flex()
         .id("host-key-revoked")
         .test_support()

@@ -289,6 +289,12 @@ impl AppState {
         self.records_generation
     }
 
+    /// The app's temporary folder (`tmp/`, emptied when the app exits;
+    /// SFTP Open copies, storage-format 9); `None` without a profile.
+    pub fn tmp_dir(&self) -> Option<std::path::PathBuf> {
+        self.dirs.as_ref().map(|dirs| dirs.tmp.clone())
+    }
+
     /// Every host of the personal vault, in manual order.
     pub fn hosts(&self) -> Rc<Vec<HostItem>> {
         self.hosts.clone()
