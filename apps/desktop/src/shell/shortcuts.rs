@@ -1,12 +1,16 @@
-//! The shortcuts of the app's own actions that the user can change (UI
-//! 12.5; stage 6, D67): the defaults of [`super::actions::bind_keys`], the
-//! user's changes in `shortcuts.overrides` (action id → keystroke, or
-//! `null` for unassigned), conflicts, and how a change takes effect.
+//! The shortcuts the user can change (UI 12.5; D67, D76): the app's own
+//! actions and the terminal's (copy, paste, select all, splits, focus
+//! between panes, search in the terminal), each with its keys in the PC
+//! and the Mac set, the user's changes in `shortcuts.overrides` (action id
+//! → keystroke, or `null` for unassigned), the set in `shortcuts.preset`,
+//! conflicts, and how a change takes effect.
 //!
-//! A change is bound on top of the defaults: the keys the action had are
-//! unbound for that action (`Unbind`) and every action's current keys are
-//! bound again after them, later bindings taking precedence. Keys of the terminal (copy, paste, splits, focus
-//! between panes) keep their defaults for now (D67).
+//! [`apply`] binds every action's keys over the bindings each module made
+//! at start: for each action, the keys either set could have given it and
+//! the keys bound last are unbound for that action only (`Unbind` in its
+//! key context), then the current keys of every action are bound after
+//! them (later bindings win). So a change, a reset and a new set take
+//! effect at once and in any order.
 
 use std::collections::HashMap;
 
@@ -20,6 +24,75 @@ use super::actions::{
 
 /// The setting that holds the user's changes.
 pub const OVERRIDES_KEY: &str = "shortcuts.overrides";
+/// The setting of the set of keys (`pc` or `mac`).
+pub const PRESET_KEY: &str = "shortcuts.preset";
+
+/// The set of default keys (UI 12.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    /// Ctrl for the app's keys, Ctrl+Shift in the terminal.
+    Pc,
+    /// Cmd, as macOS apps use it.
+    Mac,
+}
+
+impl Preset {
+    /// The set of the platform: Mac on macOS, PC elsewhere.
+    pub fn platform() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Mac
+        } else {
+            Self::Pc
+        }
+    }
+
+    /// The stored set; the platform's when there is none.
+    pub fn of(values: &Map<String, Value>) -> Self {
+        match values.get(PRESET_KEY).and_then(Value::as_str) {
+            Some("pc") => Self::Pc,
+            Some("mac") => Self::Mac,
+            _ => Self::platform(),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pc => "pc",
+            Self::Mac => "mac",
+        }
+    }
+}
+
+/// Where an action's keys work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The window (the shell's key context).
+    App,
+    /// Everywhere, over dialogs too (Lock).
+    Global,
+    /// A terminal that has the focus.
+    Terminal,
+    /// A tab of panes.
+    Panes,
+}
+
+impl Scope {
+    fn context(self) -> Option<&'static str> {
+        match self {
+            Scope::App => Some(KEY_CONTEXT),
+            Scope::Global => None,
+            Scope::Terminal => Some(crate::terminal::view::KEY_CONTEXT),
+            Scope::Panes => Some(crate::panes::KEY_CONTEXT),
+        }
+    }
+}
+
+/// The groups of the table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    App,
+    Terminal,
+}
 
 /// An action of the shortcuts table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,128 +100,183 @@ pub struct Shortcut {
     /// The id in `shortcuts.overrides`.
     pub id: &'static str,
     pub label: &'static str,
-    /// The default keys (GPUI keystrokes; `secondary` is Ctrl, Cmd on macOS).
-    pub defaults: &'static [&'static str],
-    /// Bound in every key context (Lock works over dialogs too).
-    pub global: bool,
+    /// The default keys of the PC and of the Mac set.
+    pub pc: &'static [&'static str],
+    pub mac: &'static [&'static str],
+    pub scope: Scope,
+    pub group: Group,
+}
+
+impl Shortcut {
+    pub fn defaults(&self, preset: Preset) -> &'static [&'static str] {
+        match preset {
+            Preset::Pc => self.pc,
+            Preset::Mac => self.mac,
+        }
+    }
+}
+
+const fn app(
+    id: &'static str,
+    label: &'static str,
+    pc: &'static [&'static str],
+    mac: &'static [&'static str],
+) -> Shortcut {
+    Shortcut {
+        id,
+        label,
+        pc,
+        mac,
+        scope: Scope::App,
+        group: Group::App,
+    }
+}
+
+const fn terminal(
+    id: &'static str,
+    label: &'static str,
+    pc: &'static [&'static str],
+    mac: &'static [&'static str],
+    scope: Scope,
+) -> Shortcut {
+    Shortcut {
+        id,
+        label,
+        pc,
+        mac,
+        scope,
+        group: Group::Terminal,
+    }
 }
 
 /// Every action of the table, in its order.
-pub const SHORTCUTS: [Shortcut; 19] = [
-    Shortcut {
-        id: "show_vaults",
-        label: "Go to Vaults",
-        defaults: &["secondary-1"],
-        global: false,
-    },
-    Shortcut {
-        id: "show_sftp",
-        label: "Go to SFTP",
-        defaults: &["secondary-2"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_3",
-        label: "Go to tab 3",
-        defaults: &["secondary-3"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_4",
-        label: "Go to tab 4",
-        defaults: &["secondary-4"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_5",
-        label: "Go to tab 5",
-        defaults: &["secondary-5"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_6",
-        label: "Go to tab 6",
-        defaults: &["secondary-6"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_7",
-        label: "Go to tab 7",
-        defaults: &["secondary-7"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_8",
-        label: "Go to tab 8",
-        defaults: &["secondary-8"],
-        global: false,
-    },
-    Shortcut {
-        id: "tab_9",
-        label: "Go to tab 9",
-        defaults: &["secondary-9"],
-        global: false,
-    },
-    Shortcut {
-        id: "new_local_terminal",
-        label: "New local terminal",
-        defaults: &["secondary-l"],
-        global: false,
-    },
+pub const SHORTCUTS: [Shortcut; 29] = [
+    app("show_vaults", "Go to Vaults", &["ctrl-1"], &["cmd-1"]),
+    app("show_sftp", "Go to SFTP", &["ctrl-2"], &["cmd-2"]),
+    app("tab_3", "Go to tab 3", &["ctrl-3"], &["cmd-3"]),
+    app("tab_4", "Go to tab 4", &["ctrl-4"], &["cmd-4"]),
+    app("tab_5", "Go to tab 5", &["ctrl-5"], &["cmd-5"]),
+    app("tab_6", "Go to tab 6", &["ctrl-6"], &["cmd-6"]),
+    app("tab_7", "Go to tab 7", &["ctrl-7"], &["cmd-7"]),
+    app("tab_8", "Go to tab 8", &["ctrl-8"], &["cmd-8"]),
+    app("tab_9", "Go to tab 9", &["ctrl-9"], &["cmd-9"]),
+    app(
+        "new_local_terminal",
+        "New local terminal",
+        &["ctrl-l"],
+        &["cmd-l"],
+    ),
     Shortcut {
         id: "lock",
         label: "Lock the app",
-        defaults: &["secondary-shift-l"],
-        global: true,
+        pc: &["ctrl-shift-l"],
+        mac: &["cmd-shift-l"],
+        scope: Scope::Global,
+        group: Group::App,
     },
-    Shortcut {
-        id: "new_serial",
-        label: "New serial connection",
-        defaults: &["secondary-alt-s"],
-        global: false,
-    },
-    Shortcut {
-        id: "new_tab",
-        label: "New tab",
-        defaults: &["secondary-t", "secondary-shift-t"],
-        global: false,
-    },
-    Shortcut {
-        id: "close_tab",
-        label: "Close tab or pane",
-        defaults: &["secondary-shift-w"],
-        global: false,
-    },
-    Shortcut {
-        id: "next_tab",
-        label: "Next tab",
-        defaults: &["alt-right"],
-        global: false,
-    },
-    Shortcut {
-        id: "previous_tab",
-        label: "Previous tab",
-        defaults: &["alt-left"],
-        global: false,
-    },
-    Shortcut {
-        id: "open_search",
-        label: "Search hosts and tabs",
-        defaults: &["secondary-k", "secondary-shift-k"],
-        global: false,
-    },
-    Shortcut {
-        id: "open_settings",
-        label: "Settings",
-        defaults: &["secondary-,"],
-        global: false,
-    },
-    Shortcut {
-        id: "open_hosts",
-        label: "Open the Hosts screen",
-        defaults: &[],
-        global: false,
-    },
+    app(
+        "new_serial",
+        "New serial connection",
+        &["ctrl-alt-s"],
+        &["cmd-alt-s"],
+    ),
+    app(
+        "new_tab",
+        "New tab",
+        &["ctrl-t", "ctrl-shift-t"],
+        &["cmd-t", "cmd-shift-t"],
+    ),
+    app(
+        "close_tab",
+        "Close tab or pane",
+        &["ctrl-shift-w"],
+        &["cmd-w"],
+    ),
+    app("next_tab", "Next tab", &["alt-right"], &["cmd-shift-]"]),
+    app(
+        "previous_tab",
+        "Previous tab",
+        &["alt-left"],
+        &["cmd-shift-["],
+    ),
+    app(
+        "open_search",
+        "Search hosts and tabs",
+        &["ctrl-k", "ctrl-shift-k"],
+        &["cmd-k", "cmd-shift-k"],
+    ),
+    app("open_settings", "Settings", &["ctrl-,"], &["cmd-,"]),
+    app("open_hosts", "Open the Hosts screen", &[], &[]),
+    terminal(
+        "copy",
+        "Copy",
+        &["ctrl-shift-c"],
+        &["cmd-c"],
+        Scope::Terminal,
+    ),
+    terminal(
+        "paste",
+        "Paste",
+        &["ctrl-shift-v"],
+        &["cmd-v"],
+        Scope::Terminal,
+    ),
+    terminal(
+        "select_all",
+        "Select all",
+        &["ctrl-shift-a"],
+        &["cmd-a"],
+        Scope::Terminal,
+    ),
+    terminal(
+        "split_right",
+        "Split to the right",
+        &["ctrl-shift-d"],
+        &["cmd-d"],
+        Scope::Panes,
+    ),
+    terminal(
+        "split_down",
+        "Split down",
+        &["ctrl-shift-e"],
+        &["cmd-shift-d"],
+        Scope::Panes,
+    ),
+    terminal(
+        "focus_left",
+        "Pane on the left",
+        &["ctrl-alt-left"],
+        &["cmd-alt-left"],
+        Scope::Panes,
+    ),
+    terminal(
+        "focus_right",
+        "Pane on the right",
+        &["ctrl-alt-right"],
+        &["cmd-alt-right"],
+        Scope::Panes,
+    ),
+    terminal(
+        "focus_up",
+        "Pane above",
+        &["ctrl-alt-up"],
+        &["cmd-alt-up"],
+        Scope::Panes,
+    ),
+    terminal(
+        "focus_down",
+        "Pane below",
+        &["ctrl-alt-down"],
+        &["cmd-alt-down"],
+        Scope::Panes,
+    ),
+    terminal(
+        "find",
+        "Search in the terminal",
+        &["ctrl-shift-f"],
+        &["cmd-f"],
+        Scope::App,
+    ),
 ];
 
 /// Whether a keystroke text is one GPUI reads (one or more keystrokes).
@@ -159,36 +287,25 @@ pub fn is_valid(keys: &str) -> bool {
             .all(|part| Keystroke::parse(part).is_ok())
 }
 
-/// The keys of `shortcut` with the user's `overrides`.
-pub fn effective(shortcut: &Shortcut, overrides: &Map<String, Value>) -> Vec<String> {
+/// The keys of `shortcut` with the user's `overrides` over the `preset`.
+pub fn effective(
+    shortcut: &Shortcut,
+    overrides: &Map<String, Value>,
+    preset: Preset,
+) -> Vec<String> {
     match overrides.get(shortcut.id) {
         Some(Value::Null) => Vec::new(),
         Some(Value::String(keys)) if is_valid(keys) => vec![keys.clone()],
         _ => shortcut
-            .defaults
+            .defaults(preset)
             .iter()
             .map(|keys| (*keys).to_owned())
             .collect(),
     }
 }
 
-/// Keys of the terminal and the panes that keep their defaults (UI 12.5):
-/// an action given one of them is marked as a conflict.
-pub const FIXED: [&str; 10] = [
-    "secondary-shift-c",
-    "secondary-shift-v",
-    "secondary-shift-a",
-    "secondary-shift-d",
-    "secondary-shift-e",
-    "secondary-shift-f",
-    "secondary-alt-left",
-    "secondary-alt-right",
-    "secondary-alt-up",
-    "secondary-alt-down",
-];
-
-/// Keys in one canonical form (GPUI's own order of modifiers, `secondary`
-/// resolved), so the same keys written differently compare equal.
+/// Keys in one canonical form (GPUI's own order of modifiers), so the same
+/// keys written differently compare equal.
 fn normalized(keys: &str) -> String {
     keys.split_whitespace()
         .map(|stroke| {
@@ -200,15 +317,12 @@ fn normalized(keys: &str) -> String {
         .join(" ")
 }
 
-/// The ids of the actions whose keys are also another action's, or one of
-/// the [`FIXED`] keys.
-pub fn conflicts(overrides: &Map<String, Value>) -> Vec<&'static str> {
+/// The ids of the actions whose keys are also another action's (the app's
+/// and the terminal's alike).
+pub fn conflicts(overrides: &Map<String, Value>, preset: Preset) -> Vec<&'static str> {
     let mut owners: HashMap<String, Vec<&'static str>> = HashMap::new();
-    for keys in FIXED {
-        owners.entry(normalized(keys)).or_default().push("");
-    }
     for shortcut in &SHORTCUTS {
-        for keys in effective(shortcut, overrides) {
+        for keys in effective(shortcut, overrides, preset) {
             owners
                 .entry(normalized(&keys))
                 .or_default()
@@ -219,14 +333,13 @@ pub fn conflicts(overrides: &Map<String, Value>) -> Vec<&'static str> {
         .into_values()
         .filter(|ids| ids.len() > 1)
         .flatten()
-        .filter(|id| !id.is_empty())
         .collect();
     ids.sort_unstable();
     ids.dedup();
     ids
 }
 
-/// How keys read in the table: `Ctrl+Shift+L`, `Alt+→`.
+/// How keys read in the table: `Ctrl+Shift+L`, `Alt+→`, `Cmd+]`.
 pub fn display(keys: &str) -> String {
     keys.split_whitespace()
         .map(|stroke| {
@@ -303,77 +416,90 @@ fn binding(id: &str, keys: &str, context: Option<&str>) -> Option<KeyBinding> {
         "open_search" => Some(KeyBinding::new(keys, OpenSearch, context)),
         "open_settings" => Some(KeyBinding::new(keys, OpenSettings, context)),
         "open_hosts" => Some(KeyBinding::new(keys, super::actions::ShowHosts, context)),
+        "copy" => Some(KeyBinding::new(keys, crate::terminal::view::Copy, context)),
+        "paste" => Some(KeyBinding::new(keys, crate::terminal::view::Paste, context)),
+        "select_all" => Some(KeyBinding::new(
+            keys,
+            crate::terminal::view::SelectAll,
+            context,
+        )),
+        "split_right" => Some(KeyBinding::new(keys, crate::panes::SplitRight, context)),
+        "split_down" => Some(KeyBinding::new(keys, crate::panes::SplitDown, context)),
+        "focus_left" => Some(KeyBinding::new(keys, crate::panes::FocusLeft, context)),
+        "focus_right" => Some(KeyBinding::new(keys, crate::panes::FocusRight, context)),
+        "focus_up" => Some(KeyBinding::new(keys, crate::panes::FocusUp, context)),
+        "focus_down" => Some(KeyBinding::new(keys, crate::panes::FocusDown, context)),
+        "find" => Some(KeyBinding::new(
+            keys,
+            crate::terminal_sidebar::FindInTerminal,
+            context,
+        )),
         _ => None,
     }
 }
 
-/// The actions the user's changes touched so far, with the keys they had
-/// (to unbind them when the change changes again). An entry with no keys
-/// is an action left unassigned.
+/// The keys each action was bound to last, to unbind them before the next
+/// binding.
 #[derive(Default)]
 struct Applied(HashMap<&'static str, Vec<String>>);
 
 impl Global for Applied {}
 
-/// Binds the user's changes (`shortcuts.overrides`) on top of the defaults.
-/// Call it after the defaults are bound and after each change.
-///
-/// Each touched action's old keys are unbound for that action only
-/// (`Unbind` with its name: other actions on the same keys stay), then the
-/// current keys of every action are bound again, after the unbinds (later
-/// bindings win): so swaps, resets and conflicts resolve in any order.
-pub fn apply(overrides: &Map<String, Value>, cx: &mut App) {
+/// Binds every action's current keys (`overrides` over `preset`). Call it
+/// after the modules bound their defaults and after each change.
+pub fn apply(overrides: &Map<String, Value>, preset: Preset, cx: &mut App) {
     let mut applied = if cx.has_global::<Applied>() {
         cx.remove_global::<Applied>()
     } else {
         Applied::default()
     };
-    let touched = SHORTCUTS
-        .iter()
-        .any(|shortcut| overrides.contains_key(shortcut.id) || applied.0.contains_key(shortcut.id));
-    if touched {
-        let mut off = Vec::new();
-        let mut on = Vec::new();
-        for shortcut in &SHORTCUTS {
-            let context = (!shortcut.global).then_some(KEY_CONTEXT);
-            let previous = applied.0.remove(shortcut.id);
-            if overrides.contains_key(shortcut.id) || previous.is_some() {
-                for keys in shortcut
-                    .defaults
-                    .iter()
-                    .map(|keys| (*keys).to_owned())
-                    .chain(previous.unwrap_or_default())
-                {
-                    if let Some(bound) = binding(shortcut.id, &keys, context) {
-                        let name = bound.action().name();
-                        off.push(KeyBinding::new(&keys, Unbind(name.into()), context));
-                    }
-                }
-            }
-            let keys = effective(shortcut, overrides);
-            on.extend(
-                keys.iter()
-                    .filter_map(|keys| binding(shortcut.id, keys, context)),
-            );
-            if overrides.contains_key(shortcut.id) {
-                applied.0.insert(shortcut.id, keys);
+    let mut off = Vec::new();
+    let mut on = Vec::new();
+    for shortcut in &SHORTCUTS {
+        let context = shortcut.scope.context();
+        let previous = applied.0.remove(shortcut.id).unwrap_or_default();
+        // Whatever either set or a module's own start could have bound,
+        // and what this function bound last.
+        let mut stale: Vec<String> = shortcut
+            .pc
+            .iter()
+            .chain(shortcut.mac.iter())
+            .map(|keys| (*keys).to_owned())
+            .chain(previous)
+            .collect();
+        stale.sort_unstable();
+        stale.dedup();
+        for keys in stale {
+            if let Some(bound) = binding(shortcut.id, &keys, context) {
+                let name = bound.action().name();
+                off.push(KeyBinding::new(&keys, Unbind(name.into()), context));
             }
         }
-        cx.bind_keys(off);
-        cx.bind_keys(on);
+        let keys = effective(shortcut, overrides, preset);
+        on.extend(
+            keys.iter()
+                .filter_map(|keys| binding(shortcut.id, keys, context)),
+        );
+        applied.0.insert(shortcut.id, keys);
     }
+    cx.bind_keys(off);
+    cx.bind_keys(on);
     cx.set_global(applied);
 }
 
-/// [`apply`] with the stored changes.
+/// [`apply`] with the stored changes and set.
 pub fn apply_stored(core: &shellpp_core::Core, cx: &mut App) {
-    let overrides = core
+    let values: Map<String, Value> = core
         .settings_get()
         .ok()
-        .and_then(|values| values.get(OVERRIDES_KEY).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let overrides = values
+        .get(OVERRIDES_KEY)
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    apply(&overrides, cx);
+    apply(&overrides, Preset::of(&values), cx);
 }
 
 #[cfg(test)]
@@ -382,56 +508,146 @@ mod tests {
 
     use super::*;
 
+    /// A view in the terminal's key context that counts its copies.
+    struct Probe {
+        copies: usize,
+        focus: gpui::FocusHandle,
+    }
+
+    impl gpui::Render for Probe {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+            gpui::div()
+                .key_context(crate::terminal::view::KEY_CONTEXT)
+                .track_focus(&self.focus)
+                .size_full()
+                .on_action(
+                    cx.listener(|this, _: &crate::terminal::view::Copy, _, _| this.copies += 1),
+                )
+                .child("probe")
+        }
+    }
+
+    /// D76: a terminal key moved by the user, and the other set, change
+    /// what the keys do at once (the old keys stop).
+    #[gpui_kit::test]
+    fn changes_and_sets_rebind_the_terminal_keys(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+        cx.update(|cx| {
+            crate::testing::init_ui(cx);
+            crate::terminal::view::bind_keys(cx);
+        });
+        let (handle, probe) = cx
+            .update(|cx| {
+                gpui_kit::open_window(gpui::WindowOptions::default(), cx, |window, cx| {
+                    cx.new(|cx| {
+                        let focus = cx.focus_handle();
+                        window.focus(&focus, cx);
+                        Probe { copies: 0, focus }
+                    })
+                })
+            })
+            .unwrap();
+        let press = |cx: &mut gpui::TestAppContext, keys: &str| {
+            let keys = keys.to_owned();
+            cx.update_window(handle, move |_, window, cx| {
+                window.render_frame(cx);
+                window.press(&keys, cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+        let copies = |cx: &mut gpui::TestAppContext| probe.read_with(cx, |probe, _| probe.copies);
+        cx.update(|cx| apply(&Map::new(), Preset::Pc, cx));
+        press(cx, "ctrl-shift-c");
+        assert_eq!(copies(cx), 1);
+        cx.update(|cx| apply(&map(json!({"copy": "ctrl-insert"})), Preset::Pc, cx));
+        press(cx, "ctrl-shift-c");
+        assert_eq!(copies(cx), 1, "the old keys stop");
+        press(cx, "ctrl-insert");
+        assert_eq!(copies(cx), 2);
+        // The Mac set, the user's change reset: Cmd+C.
+        cx.update(|cx| apply(&Map::new(), Preset::Mac, cx));
+        press(cx, "ctrl-insert");
+        press(cx, "ctrl-shift-c");
+        assert_eq!(copies(cx), 2);
+        press(cx, "cmd-c");
+        assert_eq!(copies(cx), 3);
+        // Back to PC.
+        cx.update(|cx| apply(&Map::new(), Preset::Pc, cx));
+        press(cx, "cmd-c");
+        press(cx, "ctrl-shift-c");
+        assert_eq!(copies(cx), 4);
+    }
+
     fn map(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap()
     }
 
     #[test]
     fn keys_read_and_conflict() {
-        let ctrl = if cfg!(target_os = "macos") {
-            "Cmd"
-        } else {
-            "Ctrl"
-        };
-        assert_eq!(display("secondary-shift-l"), format!("{ctrl}+Shift+L"));
+        assert_eq!(display("ctrl-shift-l"), "Ctrl+Shift+L");
         assert_eq!(display("alt-right"), "Alt+→");
-        assert_eq!(display("secondary-,"), format!("{ctrl}+,"));
+        assert_eq!(display("ctrl-,"), "Ctrl+,");
         assert!(is_valid("ctrl-shift-j") && !is_valid("") && !is_valid("  "));
         let none = Map::new();
-        assert!(conflicts(&none).is_empty(), "{:?}", conflicts(&none));
-        let new_tab = SHORTCUTS.iter().find(|s| s.id == "new_tab").unwrap();
-        assert_eq!(effective(new_tab, &none).len(), 2);
-        // Ctrl+L for Settings as well: both are marked.
-        let changed = map(json!({"open_settings": "secondary-l"}));
-        assert_eq!(conflicts(&changed), ["new_local_terminal", "open_settings"]);
-        // The same keys written as ctrl- conflict too (on Windows and Linux).
-        if !cfg!(target_os = "macos") {
-            let changed = map(json!({"open_settings": "ctrl-l"}));
-            assert_eq!(conflicts(&changed).len(), 2);
-        }
-        // Unassigned has no keys; an unreadable value keeps the defaults.
-        let lock = SHORTCUTS.iter().find(|s| s.id == "lock").unwrap();
-        assert!(effective(lock, &map(json!({"lock": null}))).is_empty());
-        assert_eq!(
-            effective(lock, &map(json!({"lock": " "}))),
-            ["secondary-shift-l"]
-        );
-        // The terminal's fixed keys count; the order of modifiers does not.
-        if !cfg!(target_os = "macos") {
-            assert_eq!(
-                conflicts(&map(json!({"new_tab": "ctrl-shift-c"}))),
-                ["new_tab"]
+        for preset in [Preset::Pc, Preset::Mac] {
+            assert!(
+                conflicts(&none, preset).is_empty(),
+                "{preset:?}: {:?}",
+                conflicts(&none, preset)
             );
         }
+        let new_tab = SHORTCUTS.iter().find(|s| s.id == "new_tab").unwrap();
+        assert_eq!(effective(new_tab, &none, Preset::Pc).len(), 2);
+        // The sets: Ctrl on PC, Cmd on Mac; the terminal copies with
+        // Ctrl+Shift+C or Cmd+C.
+        let copy = SHORTCUTS.iter().find(|s| s.id == "copy").unwrap();
+        assert_eq!(effective(copy, &none, Preset::Pc), ["ctrl-shift-c"]);
+        assert_eq!(effective(copy, &none, Preset::Mac), ["cmd-c"]);
+        // Ctrl+L for Settings as well: both are marked.
+        let changed = map(json!({"open_settings": "ctrl-l"}));
+        assert_eq!(
+            conflicts(&changed, Preset::Pc),
+            ["new_local_terminal", "open_settings"]
+        );
+        // A terminal key given to an app action conflicts; the order of
+        // modifiers does not count.
+        assert_eq!(
+            conflicts(&map(json!({"new_tab": "shift-ctrl-c"})), Preset::Pc),
+            ["copy", "new_tab"]
+        );
+        // A terminal key moved: no conflict, and the old keys are free.
+        assert!(conflicts(&map(json!({"copy": "ctrl-insert"})), Preset::Pc).is_empty());
+        // Unassigned has no keys; an unreadable value keeps the defaults.
+        let lock = SHORTCUTS.iter().find(|s| s.id == "lock").unwrap();
+        assert!(effective(lock, &map(json!({"lock": null})), Preset::Pc).is_empty());
+        assert_eq!(
+            effective(lock, &map(json!({"lock": " "})), Preset::Pc),
+            ["ctrl-shift-l"]
+        );
         assert_eq!(normalized("alt-ctrl-l"), normalized("ctrl-alt-l"));
         assert_eq!(display("ctrl--"), "Ctrl+-");
-        // Every action of the table binds.
+        assert_eq!(
+            Preset::of(&map(json!({"shortcuts.preset": "mac"}))),
+            Preset::Mac
+        );
+        assert_eq!(Preset::of(&Map::new()), Preset::platform());
+        // Every action of the table binds, in both sets.
         for shortcut in &SHORTCUTS {
             assert!(
                 binding(shortcut.id, "ctrl-j", None).is_some(),
                 "{}",
                 shortcut.id
             );
+            for keys in shortcut.pc.iter().chain(shortcut.mac.iter()) {
+                assert!(is_valid(keys), "{}: {keys}", shortcut.id);
+            }
         }
     }
 }

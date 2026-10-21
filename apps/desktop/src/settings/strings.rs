@@ -49,6 +49,13 @@ pub const RECORD_TITLE: &str = "Record session output?";
 pub const RECORD_BODY: &str = "Everything the servers print is kept, also passwords, keys and tokens a program prints or a command echoes. Recordings are encrypted on this device, never synced, and go with their log entry.";
 pub const RECORD_CONFIRM: &str = "Record output";
 pub const CLEAR_LOG: &str = "Clear the log";
+pub const PRESET: &str = "Set of keys";
+pub const PRESET_PC: &str = "PC";
+pub const PRESET_MAC: &str = "Mac";
+pub const PRESET_HINT: &str =
+    "PC uses Ctrl (Ctrl+Shift in the terminal), Mac uses Cmd. Keys you set yourself stay.";
+pub const GROUP_APP: &str = "App";
+pub const GROUP_TERMINAL: &str = "Terminal";
 pub const CLEAR_LOG_HINT: &str = "Removes every entry of this device, saved ones too.";
 pub const CLEAR_LOG_TITLE: &str = "Clear the connection log?";
 pub const CLEAR_LOG_BODY: &str = "Every entry of this device is removed, saved ones too.";

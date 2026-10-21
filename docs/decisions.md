@@ -1198,3 +1198,15 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.3; UI 11.2, 12.6; storage-forma
 - Not built: the listing of recordings without a log entry (storage-format 8.4), re-encryption at sign-in (stage 7), the background scan for files whose entry is a tombstone (no tombstones are kept in local mode yet: entries are removed outright, and their files with them).
 
 **Spec impact:** none; UI 11.2 and 12.6 and storage-format 8 are followed as written, with the parts above left for their stages.
+
+### 76. The sets of keys and the terminal's keys in the Shortcuts (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.4; UI 12.5; completes D67).
+
+**Decision:**
+
+- The Shortcuts section starts with the set of keys, PC or Mac (`shortcuts.preset`; Mac on macOS, PC elsewhere by default). Each action has its keys in both sets: PC as UI 12.5's table, Mac with Cmd in place of Ctrl and the macOS habits for the terminal and the tabs (Cmd+C/V/A, Cmd+D and Cmd+Shift+D, Cmd+F, Cmd+W, Cmd+Shift+] and [). On Windows the Mac set's Cmd is the Windows key, which the system keeps for many keys; it is offered for people used to it.
+- The terminal's keys are in the table under "Terminal": copy, paste, select all, the two splits, the four focus moves between panes and the search in the terminal. They are recorded, unassigned and reset like the app's, and conflicts are checked among all of them (the fixed list of D67 is gone). Tab and Shift+Tab to the shell are not in the table: a key without a modifier cannot be recorded.
+- The user's own keys (`shortcuts.overrides`) stay when the set changes. Every change, reset and change of set rebinds every action at once: for each action, the keys either set gives it and the keys bound last are unbound for that action only in its key context, then its current keys are bound after them.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 12.5 (the Mac set; and `docs/ru`).

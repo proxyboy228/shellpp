@@ -1,9 +1,9 @@
-//! The Shortcuts section of the Settings window (UI 12.5; stage 6, D67):
-//! the app's actions with their keys. A click on the keys records new ones
-//! (Esc cancels); × leaves the action unassigned; ↺ brings its default
-//! back; actions that share keys are marked. Changes are written to
-//! `shortcuts.overrides` and bound at once
-//! ([`crate::shell::shortcuts::apply`]).
+//! The Shortcuts section of the Settings window (UI 12.5; D67, D76): the
+//! set of keys (PC or Mac), then the app's actions and the terminal's with
+//! their keys. A click on the keys records new ones (Esc cancels); × leaves
+//! the action unassigned; ↺ brings its default back; actions that share
+//! keys are marked. Changes are written to `shortcuts.overrides` and
+//! `shortcuts.preset` and bound at once ([`crate::shell::shortcuts::apply`]).
 
 use gpui::prelude::*;
 use gpui::{
@@ -11,12 +11,12 @@ use gpui::{
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{SettingsView, strings};
 use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
-use crate::shell::shortcuts::{self, OVERRIDES_KEY, SHORTCUTS};
+use crate::shell::shortcuts::{self, Group, OVERRIDES_KEY, PRESET_KEY, Preset, SHORTCUTS};
 use crate::theme::{self, metrics};
 
 /// The element id of an action's keys and of its buttons.
@@ -49,11 +49,26 @@ impl SettingsView {
             .unwrap_or_default()
     }
 
+    /// The set of keys in use.
+    pub fn preset(&self, cx: &gpui::App) -> Preset {
+        Preset::of(&self.values(cx))
+    }
+
     /// Writes the user's shortcuts and binds them now.
     fn write_overrides(&mut self, overrides: Map<String, Value>, cx: &mut Context<Self>) {
         self.set_value(OVERRIDES_KEY, Value::Object(overrides.clone()), cx);
         if self.error.is_none() {
-            shortcuts::apply(&overrides, cx);
+            let preset = self.preset(cx);
+            shortcuts::apply(&overrides, preset, cx);
+        }
+    }
+
+    /// The PC or the Mac set (the user's own keys stay).
+    pub fn set_preset(&mut self, preset: Preset, cx: &mut Context<Self>) {
+        self.set_value(PRESET_KEY, json!(preset.name()), cx);
+        if self.error.is_none() {
+            let overrides = self.overrides(cx);
+            shortcuts::apply(&overrides, preset, cx);
         }
     }
 
@@ -123,13 +138,15 @@ impl SettingsView {
     }
 
     pub(super) fn render_shortcuts(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+        let foreground = cx.theme().popover_foreground;
         let tokens = theme::tokens(cx);
         let overrides = self.overrides(cx);
-        let conflicts = shortcuts::conflicts(&overrides);
-        let rows = SHORTCUTS.iter().map(|shortcut| {
+        let preset = self.preset(cx);
+        let conflicts = shortcuts::conflicts(&overrides, preset);
+        let row = |shortcut: &shortcuts::Shortcut, cx: &mut Context<Self>| {
+            let theme = cx.theme();
             let id = shortcut.id;
-            let keys = shortcuts::effective(shortcut, &overrides);
+            let keys = shortcuts::effective(shortcut, &overrides, preset);
             let recording = self.recording == Some(id);
             let conflict = conflicts.contains(&id);
             let text: SharedString = if recording {
@@ -222,7 +239,41 @@ impl SettingsView {
                             this.reset_shortcut(id, cx)
                         }))
                 })))
-        });
+                .into_any_element()
+        };
+        let group = |group: Group, title: &'static str, cx: &mut Context<Self>| {
+            let rows: Vec<AnyElement> = SHORTCUTS
+                .iter()
+                .filter(|shortcut| shortcut.group == group)
+                .map(|shortcut| row(shortcut, cx))
+                .collect();
+            v_flex()
+                .w_full()
+                .child(
+                    div()
+                        .pt(metrics::SPACE_2)
+                        .pb(metrics::SPACE_1)
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(title),
+                )
+                .children(rows)
+        };
+        let segment = |id: &'static str,
+                       label: &'static str,
+                       set: Preset,
+                       cx: &mut Context<Self>| {
+            widgets::segment(id, label, preset == set, cx)
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_preset(set, cx)))
+                .into_any_element()
+        };
+        let presets = widgets::segments([
+            segment("shortcuts-preset-pc", strings::PRESET_PC, Preset::Pc, cx),
+            segment("shortcuts-preset-mac", strings::PRESET_MAC, Preset::Mac, cx),
+        ]);
+        let app_rows = group(Group::App, strings::GROUP_APP, cx);
+        let terminal_rows = group(Group::Terminal, strings::GROUP_TERMINAL, cx);
         v_flex()
             .id("settings-shortcuts")
             .test_support()
@@ -250,7 +301,7 @@ impl SettingsView {
                         div()
                             .text_size(metrics::FONT_SIZE_HEADING)
                             .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
-                            .text_color(theme.popover_foreground)
+                            .text_color(foreground)
                             .child(strings::SHORTCUTS),
                     )
                     .when(!overrides.is_empty(), |this| {
@@ -264,7 +315,22 @@ impl SettingsView {
                     }),
             )
             .child(widgets::caption(strings::SHORTCUTS_HINT, cx))
-            .child(v_flex().w_full().children(rows))
+            .child(
+                v_flex()
+                    .id("shortcuts-preset")
+                    .test_support()
+                    .gap(metrics::SPACE_1)
+                    .child(
+                        div()
+                            .text_size(metrics::FONT_SIZE_BODY)
+                            .text_color(foreground)
+                            .child(strings::PRESET),
+                    )
+                    .child(presets)
+                    .child(widgets::caption(strings::PRESET_HINT, cx)),
+            )
+            .child(app_rows)
+            .child(terminal_rows)
             .into_any_element()
     }
 }

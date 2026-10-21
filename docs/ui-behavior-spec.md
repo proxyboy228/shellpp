@@ -1689,6 +1689,12 @@ terminal is opened with the "+" button or the app menu (D29).
 - Option types characters and is not used for app shortcuts.
 - The full Mac table is added to this section before stage 6.
 
+The Mac set [decision] (D76): Cmd in place of Ctrl for the app's keys; in the terminal
+Cmd+C, Cmd+V and Cmd+A; Cmd+D and Cmd+Shift+D split; Cmd+Alt+arrows move between panes;
+Cmd+F searches in the terminal; Cmd+W closes the tab or pane; Cmd+Shift+] and Cmd+Shift+[
+go to the next and previous tab. The terminal's keys are in the table too and can be
+changed like the app's. Keys the user set stay when the set changes.
+
 ### 12.6 SFTP and Logs [decision]
 
 - **SFTP:**

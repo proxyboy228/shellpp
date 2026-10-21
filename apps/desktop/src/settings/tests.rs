@@ -531,7 +531,7 @@ fn shortcuts_are_recorded_and_bound(cx: &mut TestAppContext) {
     assert_eq!(changed["open_settings"], serde_json::json!("ctrl-l"));
     let map = changed.as_object().cloned().unwrap();
     assert_eq!(
-        crate::shell::shortcuts::conflicts(&map),
+        crate::shell::shortcuts::conflicts(&map, crate::shell::shortcuts::Preset::platform()),
         ["new_local_terminal", "open_settings"]
     );
     // Esc cancels a recording; × unassigns; ↺ brings the default back.
@@ -586,5 +586,41 @@ fn shortcut_changes_undo_cleanly(cx: &mut TestAppContext) {
     assert_eq!(overrides(), serde_json::json!({}));
     ui.press("ctrl-shift-l", cx);
     assert!(!cx.update(|cx| ui.state.read(cx).is_unlocked()));
+    ui.finish(cx);
+}
+
+/// D76: the set of keys and the terminal's keys in the table: Mac is
+/// written as the set, the user's keys stay; a terminal key is recorded and
+/// is free of conflicts once moved.
+#[gpui::test]
+fn the_set_of_keys_and_the_terminal_keys(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-shortcuts", cx);
+    assert!(ui.visible("shortcuts-preset", cx));
+    let core = ui.core(cx);
+    let value = |key: &str| core.settings_get().unwrap().get(key).cloned();
+    assert!(reveal(&ui, "shortcuts-preset-mac", cx));
+    ui.click("shortcuts-preset-mac", cx);
+    assert_eq!(value("shortcuts.preset"), Some(serde_json::json!("mac")));
+    ui.click("shortcuts-preset-pc", cx);
+    assert_eq!(value("shortcuts.preset"), Some(serde_json::json!("pc")));
+    // Copy of the terminal moves to Ctrl+Insert.
+    assert!(reveal(&ui, "shortcut-copy", cx));
+    ui.click("shortcut-copy", cx);
+    ui.press("ctrl-insert", cx);
+    let overrides = value("shortcuts.overrides").unwrap();
+    assert_eq!(overrides["copy"], serde_json::json!("ctrl-insert"));
+    let map = overrides.as_object().cloned().unwrap();
+    assert!(
+        crate::shell::shortcuts::conflicts(&map, crate::shell::shortcuts::Preset::Pc).is_empty()
+    );
+    // The Mac set keeps that change.
+    assert!(reveal(&ui, "shortcuts-preset-mac", cx));
+    ui.click("shortcuts-preset-mac", cx);
+    assert_eq!(
+        value("shortcuts.overrides").unwrap()["copy"],
+        serde_json::json!("ctrl-insert")
+    );
     ui.finish(cx);
 }
