@@ -72,6 +72,24 @@ native_path() {
     fi
 }
 
+# Starts a container, again when publishing its port failed: Docker picks
+# the random host port from the kernel's ephemeral range, so the port can be
+# taken by a local socket meanwhile (rootless Docker then fails instead of
+# picking another one).
+start_container() {
+    local tries=0
+    until docker start "$1" >/dev/null 2>"$workdir/start-error"; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 5 ] || ! grep -q 'address already in use' "$workdir/start-error"; then
+            cat "$workdir/start-error" >&2
+            rm -f "$workdir/start-error"
+            return 1
+        fi
+        sleep 1
+    done
+    rm -f "$workdir/start-error"
+}
+
 # 128 random bits as 32 hex digits.
 random_hex() {
     od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
@@ -149,7 +167,7 @@ COPYFILE_DISABLE=1 tar -C "$input" -cf - shellpp-input | docker cp - "$name:/run
     die 'copying the credentials into the container failed'
 rm -rf "$input"
 
-docker start "$name" >/dev/null || die 'docker start failed'
+start_container "$name" || die 'docker start failed'
 
 mapping="$(docker port "$name" 22/tcp | head -n 1)" || die 'reading the published port failed'
 port="${mapping##*:}"

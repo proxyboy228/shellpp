@@ -1544,9 +1544,7 @@ impl Core {
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .map(fold);
-        let limit = limit
-            .unwrap_or(HISTORY_LIST_DEFAULT)
-            .min(HISTORY_LIST_MAX) as usize;
+        let limit = limit.unwrap_or(HISTORY_LIST_DEFAULT).min(HISTORY_LIST_MAX) as usize;
         let mut entries: Vec<&IndexedRecord> = parts
             .session
             .index

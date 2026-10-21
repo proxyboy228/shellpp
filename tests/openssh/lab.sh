@@ -88,6 +88,24 @@ command -v ssh-keygen >/dev/null 2>&1 || die 'ssh-keygen is required to generate
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Starts a container, again when publishing its port failed: Docker picks
+# the random host port from the kernel's ephemeral range, so the port can be
+# taken by a local socket meanwhile (rootless Docker then fails instead of
+# picking another one).
+start_container() {
+    local tries=0
+    until docker start "$1" >/dev/null 2>"$workdir/start-error"; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 5 ] || ! grep -q 'address already in use' "$workdir/start-error"; then
+            cat "$workdir/start-error" >&2
+            rm -f "$workdir/start-error"
+            return 1
+        fi
+        sleep 1
+    done
+    rm -f "$workdir/start-error"
+}
+
 random_hex() {
     od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
 }
@@ -165,7 +183,7 @@ for server in $SERVERS; do
         docker network connect --alias jump1 "$network" "$name" >/dev/null ||
             die 'connecting jump1 to the lab network failed'
     fi
-    docker start "$name" >/dev/null || die "docker start $server failed"
+    start_container "$name" || die "docker start $server failed"
 done
 rm -rf "$input"
 
@@ -183,7 +201,7 @@ COPYFILE_DISABLE=1 tar -C "$input" -cf - shellpp-input | docker cp - "$proxy_nam
     die 'copying the proxy credentials failed'
 rm -rf "$input"
 docker network connect "$network" "$proxy_name" >/dev/null || die 'connecting the proxy failed'
-docker start "$proxy_name" >/dev/null || die 'docker start proxy failed'
+start_container "$proxy_name" || die 'docker start proxy failed'
 http_mapping="$(docker port "$proxy_name" 3128/tcp | head -n 1)" || die 'reading the proxy port failed'
 socks_mapping="$(docker port "$proxy_name" 1080/tcp | head -n 1)" || die 'reading the proxy port failed'
 http_port="${http_mapping##*:}"
