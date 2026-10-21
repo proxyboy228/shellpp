@@ -146,6 +146,8 @@ struct SaveTargets {
 }
 
 struct ShellSetup {
+    /// A shell, or SFTP (then the rest is not used).
+    purpose: Purpose,
     term: String,
     env: Vec<(String, SecretString)>,
     agent_forwarding: bool,
@@ -412,6 +414,7 @@ impl SshTask {
             );
         }
         let shell = ShellSetup {
+            purpose: self.purpose,
             term: config.term.clone(),
             env: config.env.clone(),
             agent_forwarding: config.agent_forwarding,
@@ -432,7 +435,6 @@ impl SshTask {
             saves,
             shell,
             kept.file_passphrase.clone(),
-            self.purpose,
         );
         tokio::pin!(establish);
         // Biased: a lock cancels the pending prompt after it flips the lock
@@ -1237,7 +1239,6 @@ async fn establish(
     saves: SaveTargets,
     shell: ShellSetup,
     kept_file_passphrase: Option<(String, SecretString)>,
-    purpose: Purpose,
 ) -> Result<Established, SshError> {
     add_key_sources(&shared, &mut spec, kept_file_passphrase).await;
     // Jump hosts log in with the same sources (agent, key files and their
@@ -1270,7 +1271,7 @@ async fn establish(
         }
     });
     let (cols, rows) = session.lock().size;
-    let channel = match purpose {
+    let channel = match shell.purpose {
         Purpose::Shell => Channel::Shell(
             connection
                 .open_shell(ShellRequest {
