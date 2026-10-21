@@ -95,7 +95,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (138 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (140 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -183,7 +183,7 @@ function Test-DockerLinux {
 # terminal states named as on OpenSSH.
 $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 'search-results',
     'search-no-results', 'three-selected', 'empty', 'list-view', 'new-host', 'tag-filter', 'tag-chips',
-    'show-more', 'known-hosts', 'keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
+    'show-more', 'agent-forwarding', 'known-hosts', 'keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
     'keychain-empty', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
     'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
     'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'sidebar-snippets',

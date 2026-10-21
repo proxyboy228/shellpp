@@ -275,6 +275,9 @@ pub enum ShotState {
     TagChips,
     /// The bottom of the host panel with "Show more" expanded (UI 3.1).
     ShowMore,
+    /// Agent Forwarding on in "Show more": the warning and both options
+    /// (UI 3.1, D60).
+    AgentForwarding,
     /// The first-run screen (UI 13.1).
     FirstRun,
     /// The unlock screen (UI 13.2).
@@ -363,7 +366,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 64] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -400,6 +403,7 @@ impl ShotState {
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
+        Self::AgentForwarding,
         Self::KnownHosts,
         Self::Keychain,
         Self::KeychainPanel,
@@ -520,6 +524,7 @@ impl ShotState {
             Self::TagFilter => "tag-filter",
             Self::TagChips => "tag-chips",
             Self::ShowMore => "show-more",
+            Self::AgentForwarding => "agent-forwarding",
             Self::FirstRun => "first-run",
             Self::Unlock => "unlock",
             Self::TerminalTofu => "terminal-tofu",
@@ -1311,6 +1316,10 @@ pub mod ids {
     pub const HOST_ADDRESS: &str = "host-address";
     pub const HOST_SHOW_MORE: &str = "host-show-more";
     pub const HOST_MORE: &str = "host-more";
+    /// Agent Forwarding's switch, warning and "Ask before every signature".
+    pub const HOST_AGENT: &str = "host-agent-forwarding";
+    pub const HOST_AGENT_WARNING: &str = "host-agent-warning";
+    pub const HOST_AGENT_CONFIRM: &str = "host-agent-confirm";
     pub const POPUP_MENU: &str = "popup-menu";
     pub const BREADCRUMBS: &str = "breadcrumbs";
     pub const HOSTS_SCREEN: &str = "hosts-screen";
@@ -1406,6 +1415,38 @@ pub async fn reach_state(
             press(cx, handle, "escape")?;
             settle(cx, handle).await?;
             click_first_card(cx, handle, shot_state, ClickKind::Left)
+        }
+        ShotState::AgentForwarding => {
+            click_first_card(cx, handle, shot_state, ClickKind::Left)?;
+            settle(cx, handle).await?;
+            scroll_to_bottom(cx, handle, HOST_PANEL_BODY)?;
+            settle(cx, handle).await?;
+            click(cx, handle, HOST_SHOW_MORE)?;
+            settle(cx, handle).await?;
+            scroll_to_bottom(cx, handle, HOST_PANEL_BODY)?;
+            // Up from the bottom until the switch is on screen.
+            scroll_until_visible(cx, handle, HOST_PANEL_BODY, HOST_AGENT)?;
+            // The demo host keeps what an earlier run (the other theme)
+            // saved: switch on only what is off.
+            let shell = shell_of(cx, root, shot_state)?;
+            let draft = |cx: &mut AsyncApp| {
+                cx.update(|cx| match shell.read(cx).panel() {
+                    Some(crate::shell::Panel::Host(panel)) => {
+                        let draft = panel.read(cx).draft();
+                        Some((draft.agent_forwarding, draft.agent_confirm))
+                    }
+                    _ => None,
+                })
+            };
+            if draft(cx).is_some_and(|(on, _)| !on) {
+                click(cx, handle, HOST_AGENT)?;
+                settle(cx, handle).await?;
+            }
+            if draft(cx).is_some_and(|(_, confirm)| !confirm) {
+                click(cx, handle, HOST_AGENT_CONFIRM)?;
+                settle(cx, handle).await?;
+            }
+            Ok(())
         }
         ShotState::ShowMore => {
             click_first_card(cx, handle, shot_state, ClickKind::Left)?;
@@ -1614,6 +1655,10 @@ impl<V: Fn(&str) -> bool> Facts<V> {
                 )
             }
             ShotState::ShowMore => need(visible(HOST_MORE), "\"Show more\" is not expanded"),
+            ShotState::AgentForwarding => need(
+                visible(HOST_AGENT_WARNING) && visible(HOST_AGENT_CONFIRM),
+                "no Agent Forwarding warning",
+            ),
             ShotState::FirstRun => need(visible(FIRST_RUN), "no first-run screen"),
             ShotState::Unlock => need(visible(UNLOCK), "no unlock screen"),
             // Checked by `known_hosts_shot::check`.
@@ -1748,6 +1793,26 @@ fn scroll_to_bottom(
         window.render_frame(cx);
     })
     .map_err(|_| ScreenshotError::WindowClosed)
+}
+
+/// Scrolls `id` up in steps until `target` is on screen.
+fn scroll_until_visible(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    id: &'static str,
+    target: &'static str,
+) -> Result<(), ScreenshotError> {
+    cx.update_window(handle, |_, window, cx| {
+        for _ in 0..40 {
+            window.render_frame(cx);
+            if visible(window, target) {
+                return Ok(());
+            }
+            window.scroll(id, ScrollDelta::Pixels(point(px(0.), px(120.))), cx);
+        }
+        Err(ScreenshotError::State(format!("{target} is not on screen")))
+    })
+    .map_err(|_| ScreenshotError::WindowClosed)?
 }
 
 fn press(cx: &mut AsyncApp, handle: AnyWindowHandle, key: &str) -> Result<(), ScreenshotError> {
