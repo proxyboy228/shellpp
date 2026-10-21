@@ -215,9 +215,12 @@ pub enum ShotState {
     /// New host: the empty panel, the focus in Address.
     NewHost,
     // Stage 3 (night plan, items 5-6): `transfer_shot`.
+    /// Export Data as it opens: "Encrypt with a password" on (the
+    /// default), the password and its repeat (UI 1.4).
+    ExportData,
     /// Export Data with "Encrypt with a password" off: the clear-text
     /// warning and "I understand" (UI 1.4).
-    ExportData,
+    ExportDataPlain,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -325,7 +328,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 46] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -338,6 +341,7 @@ impl ShotState {
         Self::ListView,
         Self::NewHost,
         Self::ExportData,
+        Self::ExportDataPlain,
         Self::ExportOpenSsh,
         Self::ImportData,
         Self::ImportSshConfig,
@@ -439,6 +443,7 @@ impl ShotState {
             Self::ListView => "list-view",
             Self::NewHost => "new-host",
             Self::ExportData => "export-data",
+            Self::ExportDataPlain => "export-data-plain",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1314,6 +1319,7 @@ pub async fn reach_state(
         ShotState::ListView => click(cx, handle, VIEW_LIST),
         ShotState::NewHost => click(cx, handle, NEW_HOST),
         ShotState::ExportData
+        | ShotState::ExportDataPlain
         | ShotState::ExportOpenSsh
         | ShotState::ImportData
         | ShotState::ImportSshConfig => transfer_shot::reach(cx, handle, state, shot_state).await,
@@ -1469,6 +1475,10 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             }
             // `transfer_shot::reach` checked the dialog's content.
             ShotState::ExportData => {
+                need(visible("data-export-dialog"), "no Export Data dialog")?;
+                need(visible("data-export-password"), "no password field")
+            }
+            ShotState::ExportDataPlain => {
                 need(visible("data-export-dialog"), "no Export Data dialog")?;
                 need(visible("data-export-warning"), "no clear-text warning")
             }

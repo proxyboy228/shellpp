@@ -78,7 +78,8 @@ pub async fn reach(
     shot_state: ShotState,
 ) -> Result<(), ScreenshotError> {
     match shot_state {
-        ShotState::ExportData => export_plain(cx, handle, state).await,
+        ShotState::ExportData => export_default(cx, handle, state).await,
+        ShotState::ExportDataPlain => export_plain(cx, handle, state).await,
         ShotState::ExportOpenSsh => export_openssh(cx, handle, state).await,
         ShotState::ImportData => import_summary(cx, handle, state).await,
         ShotState::ImportSshConfig => config_preview(cx, handle, state).await,
@@ -87,6 +88,19 @@ pub async fn reach(
             "not a data transfer state",
         )),
     }
+}
+
+/// Export Data as it opens: encrypted with a password (the default).
+async fn export_default(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    state: &Entity<AppState>,
+) -> Result<(), ScreenshotError> {
+    cx.update_window(handle, |_, window, cx| {
+        data_transfer::open_export(state.clone(), window, cx);
+    })
+    .map_err(|_| ScreenshotError::WindowClosed)?;
+    settle(cx, handle).await
 }
 
 /// Export Data, "Encrypt with a password" turned off: the warning and

@@ -215,6 +215,11 @@ impl ExportDialog {
         self.format == ExportFormat::Data || self.include_keys
     }
 
+    /// "Encrypt with a password" (on when the dialog opens).
+    pub fn encrypt(&self) -> bool {
+        self.encrypt
+    }
+
     pub fn set_encrypt(&mut self, encrypt: bool, cx: &mut Context<Self>) {
         self.encrypt = encrypt;
         self.understood = false;

@@ -126,6 +126,18 @@ fn password() -> String {
     )
 }
 
+/// Export Data opens encrypted with a password: the password and its repeat
+/// show, the clear-text warning does not (UI 1.4; run 3 polish).
+#[gpui_kit::test]
+fn the_export_is_encrypted_by_default(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[json!({"address": "web.example.com"})]);
+    let export = ui.export(cx);
+    assert!(export.read_with(cx, |dialog, _| dialog.encrypt()));
+    assert!(ui.visible(cx, "data-export-password"));
+    assert!(ui.visible(cx, "data-export-repeat"));
+    assert!(!ui.visible(cx, "data-export-warning"));
+}
+
 #[gpui_kit::test]
 fn an_encrypted_export_imports_into_another_profile(cx: &mut TestAppContext) {
     let source = Ui::open(cx, &[json!({"address": "web.example.com", "label": "web"})]);
