@@ -36,7 +36,7 @@ use shellpp_core::service::snippets::{RecordInput, SnippetPackageView, SnippetVi
 use uuid::Uuid;
 
 pub use form::{FormMode, SnippetForm};
-pub use run::{RunResults, RunRow, RunState};
+pub use run::{RunResults, RunRow, RunState, ask_values};
 
 use crate::shell::Toast;
 use crate::state::{AppState, AppStateEvent};

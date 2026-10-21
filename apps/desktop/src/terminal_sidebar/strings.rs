@@ -24,8 +24,15 @@ pub fn match_counter(current: Option<usize>, count: usize, truncated: bool) -> S
     }
 }
 
-// Snippets (stage 5).
-pub const SNIPPETS_LATER: &str = "Snippets will be available in stage 5.";
+// Snippets (stage 5, D66).
+pub const SNIPPETS_SEARCH: &str = "Search snippets";
+pub const SNIPPET_RUN: &str = "Run: insert and press Enter";
+pub const SNIPPETS_HINT: &str = "Click a snippet to put it at the prompt without running it.";
+pub const SNIPPETS_EMPTY: &str = "No snippets yet. Create them on the Snippets screen.";
+pub const SNIPPETS_NO_MATCHES: &str = "No snippets match the search";
+pub const SNIPPETS_NO_SESSION: &str = "Open a session in this pane to insert snippets.";
+pub const SNIPPET_NEEDS_RUN: &str =
+    "This shell would run each line at once: use Run for a script of several lines.";
 
 // Appearance.
 pub const FONT: &str = "Font";

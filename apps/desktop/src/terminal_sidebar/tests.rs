@@ -192,11 +192,7 @@ fn tabs_and_the_snippets_placeholder(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|cx| tools.read(cx).summary()), None);
 
     ui.click("terminal-sidebar-tab-snippets", cx);
-    assert!(ui.visible("terminal-sidebar-snippets-empty", cx));
-    assert_eq!(
-        strings::SNIPPETS_LATER,
-        "Snippets will be available in stage 5."
-    );
+    assert!(ui.visible("terminal-sidebar-snippets", cx));
     ui.click("terminal-sidebar-tab-history", cx);
     assert!(ui.visible("terminal-sidebar-history", cx));
     ui.click("terminal-sidebar-tab-appearance", cx);

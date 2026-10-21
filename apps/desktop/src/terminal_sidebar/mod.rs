@@ -15,7 +15,8 @@
 //!
 //! - Tools ([`tools`]): search in the output and the scrollback.
 //!   Autocomplete is not shown (later stage).
-//! - Snippets: the stage 5 placeholder.
+//! - Snippets: the vault's snippets, inserted or run in the active pane
+//!   ([`snippets`]).
 //! - History ([`history`]): the command history of the host (the history
 //!   package owns that view; this container only hosts it).
 //! - Appearance ([`appearance`]): the Font page (family, size, line
@@ -28,6 +29,7 @@
 
 pub mod appearance;
 pub mod history;
+pub mod snippets;
 pub mod strings;
 pub mod tools;
 
@@ -202,6 +204,7 @@ pub struct TerminalSidebar {
     tools: Entity<tools::ToolsTab>,
     appearance: Entity<appearance::AppearanceTab>,
     history: Entity<history::HistoryTab>,
+    snippets: Entity<snippets::SnippetsTab>,
     /// Focus handles of the tab buttons, in [`SidebarTab::ALL`] order.
     tab_focus: [FocusHandle; 4],
 }
@@ -221,6 +224,7 @@ impl TerminalSidebar {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tools = cx.new(|cx| tools::ToolsTab::new(window, cx));
         let appearance = cx.new(|cx| appearance::AppearanceTab::new(state.clone(), window, cx));
+        let snippets = cx.new(|cx| snippets::SnippetsTab::new(state.clone(), window, cx));
         let history = cx.new(|cx| history::HistoryTab::new(state, window, cx));
         Self {
             tab: SidebarTab::default(),
@@ -229,6 +233,7 @@ impl TerminalSidebar {
             tools,
             appearance,
             history,
+            snippets,
             tab_focus: std::array::from_fn(|_| cx.focus_handle()),
         }
     }
@@ -271,6 +276,8 @@ impl TerminalSidebar {
         self.appearance.update(cx, |appearance, cx| {
             appearance.set_target(target.clone(), cx)
         });
+        self.snippets
+            .update(cx, |snippets, cx| snippets.set_target(target.clone(), cx));
         self.history
             .update(cx, |history, cx| history.set_target(target, window, cx));
         cx.notify();
@@ -308,6 +315,10 @@ impl TerminalSidebar {
 
     pub fn appearance(&self) -> &Entity<appearance::AppearanceTab> {
         &self.appearance
+    }
+
+    pub fn snippets(&self) -> &Entity<snippets::SnippetsTab> {
+        &self.snippets
     }
 
     pub fn history(&self) -> &Entity<history::HistoryTab> {
@@ -384,39 +395,12 @@ pub(crate) fn heading(text: &'static str, cx: &App) -> gpui::Div {
         .child(text)
 }
 
-/// The Snippets tab until stage 5.
-fn render_snippets(cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
-    v_flex()
-        .id("terminal-sidebar-snippets")
-        .test_support()
-        .p(metrics::SPACE_4)
-        .gap(metrics::SPACE_3)
-        .child(heading(strings::SNIPPETS, cx))
-        .child(
-            v_flex()
-                .py(metrics::SPACE_6)
-                .gap(metrics::SPACE_3)
-                .items_center()
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::Braces).size(metrics::SPACE_5))
-                .child(
-                    div()
-                        .id("terminal-sidebar-snippets-empty")
-                        .test_support()
-                        .text_size(metrics::FONT_SIZE_BODY)
-                        .text_center()
-                        .child(strings::SNIPPETS_LATER),
-                ),
-        )
-}
-
 impl Render for TerminalSidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let content = match self.tab {
             SidebarTab::Tools => self.tools.clone().into_any_element(),
-            SidebarTab::Snippets => render_snippets(cx).into_any_element(),
+            SidebarTab::Snippets => self.snippets.clone().into_any_element(),
             SidebarTab::History => self.history.clone().into_any_element(),
             SidebarTab::Appearance => self.appearance.clone().into_any_element(),
         };

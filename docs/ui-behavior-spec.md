@@ -592,8 +592,12 @@ The same form is used for creating and editing; it opens in the details panel.
 - list of snippets with search;
 - clicking inserts the snippet into the terminal without executing it;
 - the "run" button inserts the snippet and immediately sends Enter.
-- Until snippets arrive (stage 5), the tab shows only the empty state "Snippets will be
-  available in stage 5." (section 0).
+- the values of `{{name}}` variables are asked first, in the form of the Snippets
+  screen (9.4);
+- both go as injected input, never recorded in history (`docs/security.md`, 10.1). A
+  script of several lines goes as one bracketed paste, so the shell holds it until
+  Enter; when the shell has no bracketed paste, each line would run as it arrives, so
+  only "run" takes such a script and a click says so. [decision, D66]
 
 **History tab:**
 

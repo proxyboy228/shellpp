@@ -844,6 +844,37 @@ impl TerminalView {
         handle.inject_input(paste::paste_bytes(&one_line, bracketed));
         cx.notify();
     }
+
+    /// A snippet from the terminal sidebar (UI 4.2), as injected input:
+    /// `run` sends Enter after it. A script of several lines goes as one
+    /// bracketed paste when the shell takes one, so nothing runs before
+    /// Enter; without bracketed paste each line would run as it arrives, so
+    /// an insert of such a script is refused (`false`).
+    pub fn insert_snippet(&mut self, script: &str, run: bool, cx: &mut Context<Self>) -> bool {
+        let text = paste::sanitize(script).replace("\r\n", "\n");
+        let text = text.trim_end_matches(['\n', '\r']);
+        if text.trim().is_empty() {
+            return false;
+        }
+        let handle = self.handle();
+        let bracketed = {
+            let mut term = handle.term().lock();
+            if term.grid().display_offset() != 0 {
+                term.scroll_display(Scroll::Bottom);
+            }
+            term.mode().contains(TermMode::BRACKETED_PASTE)
+        };
+        if !run && !bracketed && paste::has_line_break(text) {
+            return false;
+        }
+        let mut bytes = paste::paste_bytes(text, bracketed);
+        if run {
+            bytes.push(b'\r');
+        }
+        handle.inject_input(bytes);
+        cx.notify();
+        true
+    }
 }
 
 #[cfg(test)]

@@ -586,8 +586,9 @@ pub fn check(
                     need(visible(window, "terminal-search-count"), "no match counter")
                 }
                 ShotState::SidebarSnippets => need(
-                    visible(window, "terminal-sidebar-snippets-empty"),
-                    "no Snippets placeholder",
+                    visible(window, "sidebar-snippets-list")
+                        || visible(window, "terminal-sidebar-snippets-empty"),
+                    "no Snippets tab",
                 ),
                 ShotState::SidebarHistory => {
                     let history = sidebar.read(cx).history().clone();
