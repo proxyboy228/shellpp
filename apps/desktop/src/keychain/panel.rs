@@ -207,6 +207,13 @@ impl KeyPanel {
         }
     }
 
+    /// Export to host… (UI 7.3).
+    pub fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(line) = self.public_key.clone() {
+            super::export_host::open(self.state.clone(), line, window, cx);
+        }
+    }
+
     pub fn copy_fingerprint(
         &mut self,
         fingerprint: &str,

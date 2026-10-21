@@ -799,3 +799,53 @@ fn sftp_session_lists_the_home_folder() {
     session.wait_state(SessionState::Closed);
     assert!(session.handle.sftp().is_none());
 }
+
+/// Export to host (UI 7.3; stage 4, item 8): a connection without a tab
+/// accepts only a host key Known Hosts holds, so the export fails before
+/// the first connection; after it, OpenSSH gets the key once (the second
+/// export finds it). The key is generated at run time.
+#[test]
+fn export_to_host_appends_the_key_once() {
+    let harness = Harness::new();
+    let host = harness.password_host();
+    let target = shellpp_core::service::dto::RecordRef {
+        vault_id: harness.vault_id,
+        record_id: host,
+    };
+    let text = shellpp_core::keys::generate::generate(
+        shellpp_core::keys::generate::KeyKind::Ed25519,
+        "export@test",
+        None,
+    )
+    .expect("key");
+    let line = ssh_key::PrivateKey::from_openssh(text.as_bytes())
+        .expect("parsed")
+        .public_key()
+        .to_openssh()
+        .expect("public key line");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let before = runtime.block_on(harness.manager.export_key(vec![target], line.clone()));
+    assert_eq!(
+        before,
+        vec![(target, Err(shellpp_ssh::FailureKind::HostKeyRejected))],
+        "an unknown host key is never accepted without a dialog"
+    );
+    // The first connection saves the host key.
+    let mut session = harness.open(host);
+    session.accept_host_key();
+    session.wait_state(SessionState::Connected);
+    session.handle.close();
+    if harness.server.kind == ServerKind::Russh {
+        // The russh test server runs no shell commands.
+        return;
+    }
+    let first = runtime.block_on(harness.manager.export_key(vec![target], line.clone()));
+    assert_eq!(first, vec![(target, Ok(shellpp_ssh::ExportOutcome::Added))]);
+    let second = runtime.block_on(harness.manager.export_key(vec![target], line));
+    assert_eq!(
+        second,
+        vec![(target, Ok(shellpp_ssh::ExportOutcome::AlreadyPresent))]
+    );
+}

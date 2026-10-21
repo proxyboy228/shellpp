@@ -28,6 +28,7 @@
 //! lists stale and the screen loads them when it is drawn. Nothing here logs
 //! labels, key text, passphrases, fingerprints or file names.
 
+pub mod export_host;
 mod forms;
 mod panel;
 pub mod strings;

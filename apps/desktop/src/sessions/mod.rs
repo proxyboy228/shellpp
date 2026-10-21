@@ -826,6 +826,50 @@ impl SessionManager {
             ))
     }
 
+    /// Export to host (UI 7.3; stage 4, item 8): appends `public_key` to
+    /// `~/.ssh/authorized_keys` of each host over a connection without a tab
+    /// (saved credentials, the agent and key files, known host keys only,
+    /// D61), at most four hosts at once. The results keep the hosts' order.
+    pub fn export_key(
+        &self,
+        hosts: Vec<RecordRef>,
+        public_key: String,
+    ) -> impl std::future::Future<
+        Output = Vec<(
+            RecordRef,
+            Result<shellpp_ssh::ExportOutcome, shellpp_ssh::FailureKind>,
+        )>,
+    > + 'static {
+        use futures::StreamExt as _;
+        let shared = Arc::clone(&self.shared);
+        let work = self.shared.rt.spawn(async move {
+            let key = Arc::new(public_key);
+            futures::stream::iter(hosts)
+                .map(|host| {
+                    let shared = Arc::clone(&shared);
+                    let key = Arc::clone(&key);
+                    async move {
+                        let result = match background::connect(&shared, host).await {
+                            Ok(connection) => {
+                                let result = shellpp_ssh::export_public_key(&connection, &key)
+                                    .await
+                                    .map_err(|error| error.kind);
+                                connection.disconnect().await;
+                                result
+                            }
+                            Err(error) => Err(error.kind),
+                        };
+                        tracing::info!(ok = result.is_ok(), "key exported to a host");
+                        (host, result)
+                    }
+                })
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+        });
+        async move { work.await.unwrap_or_default() }
+    }
+
     /// Stops a forwarding rule.
     pub async fn forward_stop(&self, rule: uuid::Uuid) {
         let shared = Arc::clone(&self.shared);

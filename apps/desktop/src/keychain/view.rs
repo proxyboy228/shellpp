@@ -1515,16 +1515,24 @@ impl KeyPanel {
                 None => widgets::caption(strings::PUBLIC_KEY_MISSING, cx).into_any_element(),
             });
 
-        // 5. Key export: Export to host is not built yet (D30, D33).
-        let export = widgets::block("kc-key-block-export", Some(strings::EXPORT_TITLE), cx)
-            .child(widgets::caption(strings::EXPORT_HELP, cx))
-            .child(h_flex().child(panel_button(
-                "kc-key-export",
-                Lucide::Upload,
-                strings::EXPORT_TO_HOST,
-                false,
-                cx,
-            )));
+        // 5. Key export: Export to host (stage 4, item 8).
+        let export =
+            widgets::block("kc-key-block-export", Some(strings::EXPORT_TITLE), cx)
+                .child(widgets::caption(strings::EXPORT_HELP, cx))
+                .child(
+                    h_flex().child(
+                        panel_button(
+                            "kc-key-export",
+                            Lucide::Upload,
+                            strings::EXPORT_TO_HOST,
+                            self.public_key.is_some(),
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| this.open_export(window, cx),
+                        )),
+                    ),
+                );
 
         v_flex()
             .id("kc-key-panel")

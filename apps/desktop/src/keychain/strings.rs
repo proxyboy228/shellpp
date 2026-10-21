@@ -77,6 +77,19 @@ pub const EXPORT_TITLE: &str = "Key export";
 pub const EXPORT_HELP: &str = "Adds the public key to ~/.ssh/authorized_keys on the hosts you \
      choose, without duplicates.";
 pub const EXPORT_TO_HOST: &str = "Export to host…";
+pub const EXPORT_DIALOG_TITLE: &str = "Export to host";
+pub const EXPORT_HOSTS_HINT: &str = "Hosts sign in with their saved credentials; a host whose key \
+     is not in Known Hosts yet is left as it is.";
+pub const EXPORT_SEARCH: &str = "Search hosts";
+pub const EXPORT_NO_HOSTS: &str = "No saved host matches.";
+pub const EXPORT_RUN: &str = "Export";
+pub const EXPORT_CANCEL: &str = "Cancel";
+pub const EXPORT_CLOSE: &str = "Close";
+pub const EXPORT_RUNNING: &str = "Exporting…";
+pub const EXPORT_ADDED: &str = "Added";
+pub const EXPORT_ALREADY: &str = "Already there";
+pub const EXPORT_UNKNOWN_KEY: &str = "Connect once to save its host key first";
+pub const EXPORT_NO_CREDENTIALS: &str = "No saved credentials signed in";
 pub const MENU_DUPLICATE: &str = "Duplicate";
 pub const MENU_REMOVE: &str = "Remove";
 pub const REMOVE_TITLE: &str = "Remove key?";
