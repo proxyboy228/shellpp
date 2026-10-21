@@ -293,6 +293,20 @@ async fn a_recursive_delete_leaves_link_targets_alone(
         .await
         .expect("exec");
     assert_eq!(output.exit_status, Some(0));
+    // Permissions applied recursively leave the link and its target alone.
+    let changed = sftp
+        .set_permissions_tree(&doomed, 0o750)
+        .await
+        .expect("recursive permissions");
+    assert_eq!(changed, 3, "doomed, sub, sub/x.txt");
+    assert_eq!(
+        sftp.stat(&shellpp_ssh::sftp::join(&doomed, "sub/x.txt"))
+            .await
+            .unwrap()
+            .permissions,
+        Some(0o750)
+    );
+    assert_ne!(sftp.stat(&outside).await.unwrap().permissions, Some(0o750));
     // The confirmation counts what the delete removes: x.txt and the link,
     // sub and doomed itself; nothing behind the link.
     assert_eq!(sftp.count_tree(&doomed).await.unwrap(), (2, 2));

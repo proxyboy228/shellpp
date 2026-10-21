@@ -437,6 +437,44 @@ impl Sftp {
             .map_err(|error| self.fail(error))
     }
 
+    /// Edit Permissions with "apply recursively" (UI 5.4): `mode` on `path`
+    /// and on every folder and file in it; links are left alone and never
+    /// entered (a link's own mode means nothing, and following it would
+    /// change what lies outside). Returns how many entries were changed.
+    pub async fn set_permissions_tree(&self, path: &str, mode: u32) -> Result<usize, SftpError> {
+        let path = trimmed(path);
+        self.set_permissions(path, mode).await?;
+        if !self.is_real_dir(path).await? {
+            return Ok(1);
+        }
+        let mut changed = 1;
+        let mut stack = vec![path.to_owned()];
+        while let Some(dir) = stack.pop() {
+            let items = self
+                .session
+                .read_dir(dir.as_str())
+                .await
+                .map_err(|error| self.fail(error))?;
+            for item in items {
+                let name = item.file_name();
+                if name == "." || name == ".." || item.file_type().is_symlink() {
+                    continue;
+                }
+                let child = join(&dir, &name);
+                let folder = item.file_type().is_dir() && self.is_real_dir(&child).await?;
+                if !folder && !item.file_type().is_file() {
+                    continue;
+                }
+                self.set_permissions(&child, mode).await?;
+                changed += 1;
+                if folder {
+                    stack.push(child);
+                }
+            }
+        }
+        Ok(changed)
+    }
+
     /// Whether `path` is a folder and not a link, by its own lstat.
     async fn is_real_dir(&self, path: &str) -> Result<bool, SftpError> {
         let attrs = self
