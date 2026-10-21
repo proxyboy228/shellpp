@@ -1222,3 +1222,25 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.5; UI 12.4; data-model 14.2; co
 - Settings → Terminal, under "Keyword highlighting" (shown while it is on): each category with its color and on/off, then "Your rules": the pattern, "Any case" and the color, on/off and remove for each, and a field with "Add rule" (Enter adds too). Colors are chosen from a palette of eight pairs (a shade for dark and one for light backgrounds: the six categories' own, violet and orange), not typed, so a rule is never unreadable on one of the two backgrounds. An expression the checks refuse leaves its reason under the field.
 
 **Spec impact:** none; UI 12.4 and data-model 14.2 are followed as written (the palette is the "color selection").
+
+### 78. Interface zoom waits for the owner's choice (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.6; UI 1.4): blocked, with the options for the owner.
+
+**Decision:**
+
+- Zoom In, Zoom Out and Actual Size stay "In development". GPUI has no window zoom: the window's scale factor comes from the display, and its override (`Window::set_scale_factor`) exists only in test builds. The app's sizes are the design system's absolute pixels (`theme::metrics`, 47 values used at about 1 400 places, besides the `px()` of each view), so a zoom cannot be put on top of them.
+- The options, for the owner: (a) the design system in rems: `theme::metrics` becomes rem-based and `Window::set_rem_size` zooms the whole window (GPUI Kit's own components follow rems already); a refactor of every view, its tests and screenshots, done in one stage with the design system's review; (b) a patch of GPUI's window scale (a fork of `gpui-pre`, against the one-dependency rule of GPUI Kit and the license and update path of D4); (c) zoom of text only (the metrics of font sizes), which leaves controls and spacing as they are and breaks the layout's proportions. Recommendation: (a), in its own stage.
+
+**Spec impact:** none until the choice.
+
+### 79. "If time remains" of run 3 against the owner's section 9 (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, section 7; the owner added section 9 during the run, after section 7, and named 9.1 the most important). Disputable: listed for the owner.
+
+**Decision:**
+
+- 7.1 (a compact scrollback: the emulator keeps the screen and about 1 000 lines, older lines go to a journal of text and attribute runs that the renderer, the search and the selection read by absolute line) changes the terminal's rendering, search and selection together; estimated at four to six hours with its tests and measurements, it is not started tonight. 7.2 (serial connections) and 7.3 (Telnet) are SPEC stage 9 features of their own (a new session kind each, its connection dialog, its tests without real hardware or servers); about two hours each. Started under the 45-minute rule of section 1.4, each would end as a `wip/*` branch; so they are left whole for their stage, and the night's time goes to section 9.
+- 7.4 (keyboard navigation and visible focus on every screen) is done as far as an audit of the screens and its fixes take within the hour.
+
+**Spec impact:** none.
