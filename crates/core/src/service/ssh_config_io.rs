@@ -16,8 +16,12 @@
 //! - `ForwardAgent` → `ssh.agent_forwarding`, `ServerAliveInterval` →
 //!   `ssh.keepalive_s` (at most 3600), `SetEnv` → `ssh.env`;
 //! - `ProxyCommand` → the host is not imported ("not supported");
-//! - `SendEnv`, the forwardings (stage 5), `CertificateFile` and every
-//!   other keyword are listed in the host's notes as not imported;
+//! - `LocalForward`, `RemoteForward`, `DynamicForward` → forwarding rules
+//!   of the host that start when it connects (`autostart_on_connect`, as
+//!   OpenSSH starts them with every connection); a form the rules cannot
+//!   hold (a Unix socket, a remote SOCKS proxy) is listed in the notes;
+//! - `SendEnv`, `CertificateFile` and every other keyword are listed in the
+//!   host's notes as not imported;
 //! - commands (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,
 //!   `KnownHostsCommand`, `Match exec`) are never run or stored, and the
 //!   summary counts them (security.md 13.5).
@@ -149,8 +153,88 @@ struct HostPlan {
     /// The hop host names of `ProxyJump` (`[user@]host[:port]` → host).
     jump: Vec<String>,
     jump_raw: Vec<String>,
+    /// Forwarding rule data (`type`, bind and destination) from the
+    /// `*Forward` keywords, in file order.
+    forwards: Vec<Map<String, Value>>,
     notes: Vec<String>,
     error: Option<String>,
+}
+
+/// `[address:]port` of a forwarding (`[::1]:8080`, `*:8080`, `8080`;
+/// OpenSSH also writes `address/port`). `*` and an empty address are all
+/// interfaces; none is loopback.
+fn bind_spec(raw: &str) -> Option<(String, u16)> {
+    let (address, port) = if let Some(rest) = raw.strip_prefix('[') {
+        let (address, rest) = rest.split_once(']')?;
+        (address.to_owned(), rest.strip_prefix(':')?)
+    } else if let Some((address, port)) = raw.rsplit_once([':', '/']) {
+        (address.to_owned(), port)
+    } else {
+        (String::new(), raw)
+    };
+    let port: u16 = port.parse().ok().filter(|port| *port > 0)?;
+    let address = match address.as_str() {
+        "" | "localhost" => "127.0.0.1".to_owned(),
+        "*" => "0.0.0.0".to_owned(),
+        other => other.to_owned(),
+    };
+    Some((address, port))
+}
+
+/// `host:port` of a forwarding destination (`[v6]:port` too).
+fn destination(raw: &str) -> Option<(String, u16)> {
+    let (host, port) = if let Some(rest) = raw.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')?;
+        (host, rest.strip_prefix(':')?)
+    } else {
+        raw.rsplit_once([':', '/'])?
+    };
+    let port: u16 = port.parse().ok().filter(|port| *port > 0)?;
+    (!host.is_empty()).then(|| (host.to_owned(), port))
+}
+
+/// The forwarding rules of a host's `*Forward` keywords, and notes for
+/// those the rules cannot hold.
+fn forwards_of(options: &Options, notes: &mut Vec<String>) -> Vec<Map<String, Value>> {
+    let mut rules = Vec::new();
+    for (keyword, kind) in [
+        ("localforward", "local"),
+        ("remoteforward", "remote"),
+        ("dynamicforward", "dynamic"),
+    ] {
+        for args in options.get(keyword).into_iter().flatten() {
+            let parsed = match (kind, args.as_slice()) {
+                ("dynamic", [bind]) => bind_spec(bind).map(|bind| (bind, None)),
+                ("local" | "remote", [bind, dest]) => bind_spec(bind)
+                    .zip(destination(dest))
+                    .map(|(bind, dest)| (bind, Some(dest))),
+                _ => None,
+            };
+            let Some(((bind_address, bind_port), dest)) = parsed else {
+                notes.push(format!(
+                    "{} {} is not imported: this form is not supported",
+                    match kind {
+                        "local" => "LocalForward",
+                        "remote" => "RemoteForward",
+                        _ => "DynamicForward",
+                    },
+                    args.join(" ")
+                ));
+                continue;
+            };
+            let mut rule = Map::new();
+            rule.insert("type".into(), json!(kind));
+            rule.insert("bind_address".into(), json!(bind_address));
+            rule.insert("bind_port".into(), json!(bind_port));
+            if let Some((host, port)) = dest {
+                rule.insert("dest_address".into(), json!(host));
+                rule.insert("dest_port".into(), json!(port));
+            }
+            rule.insert("autostart_on_connect".into(), json!(true));
+            rules.push(rule);
+        }
+    }
+    rules
 }
 
 fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
@@ -226,12 +310,7 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
     if options.contains_key("sendenv") {
         notes.push("SendEnv is not imported: its values come from the local environment".into());
     }
-    for keyword in ["localforward", "remoteforward", "dynamicforward"] {
-        if options.contains_key(keyword) {
-            notes.push("Port forwarding rules are imported with stage 5".into());
-            break;
-        }
-    }
+    let forwards = forwards_of(options, &mut notes);
     if options.contains_key("certificatefile") {
         notes.push("CertificateFile is not imported yet".into());
     }
@@ -299,6 +378,7 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         key_files,
         jump,
         jump_raw,
+        forwards,
         notes,
         error,
     }
@@ -649,6 +729,19 @@ impl Core {
                     built.insert("import_key".into(), json!(import_key(&plan.alias)));
                     plan_writes.set(RecordKind::Host, id, built);
                     writes += 1;
+                    // Its forwarding rules, in file order.
+                    for (index, rule) in plan.forwards.iter().enumerate() {
+                        let mut rule = rule.clone();
+                        rule.insert("host_id".into(), json!(id.to_string()));
+                        if let Ok(mut built) = crate::model::snippet::build_rule(&rule, None) {
+                            built.insert(
+                                "import_key".into(),
+                                json!(format!("{}:{index}", import_key(&plan.alias))),
+                            );
+                            plan_writes.set(RecordKind::ForwardingRule, parts.ids.next(now), built);
+                            summary.rules_added += 1;
+                        }
+                    }
                 }
                 Err(errors) => {
                     let fields: Vec<String> = errors.into_iter().map(|error| error.field).collect();

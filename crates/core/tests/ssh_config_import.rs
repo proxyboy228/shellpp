@@ -114,7 +114,8 @@ fn hosts_keys_and_links_are_imported_once() {
     assert_eq!(host("web-1").jump, ["admin@bastion:2222"]);
     let notes = host("web-1").notes.join("\n");
     assert!(notes.contains("SendEnv"), "{notes}");
-    assert!(notes.contains("stage 5"), "{notes}");
+    // LocalForward becomes a rule of the host (stage 5), not a note.
+    assert!(!notes.contains("Forward"), "{notes}");
     assert!(notes.contains("ciphers"), "{notes}");
     // Match host applies on the HostName; Match exec never applies.
     assert_eq!(host("db").port, Some(5432));
@@ -496,5 +497,118 @@ fn no_jump_chain_points_at_a_host_that_was_refused() {
     assert_eq!(
         app["ssh"]["jump_chain"],
         json!([uuid::Uuid::nil().to_string()])
+    );
+}
+
+/// `LocalForward`, `RemoteForward` and `DynamicForward` become the host's
+/// forwarding rules, started on connect; forms the rules cannot hold are
+/// noted (stage 5).
+#[test]
+fn forwardings_become_rules_of_the_host() {
+    use shellpp_core::service::snippets::ForwardType;
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    write(
+        &ssh.join("config"),
+        "Host app\n  HostName app.example.com\n  LocalForward 15432 db.internal:5432\n  \
+         LocalForward [::1]:8443 localhost:443\n  RemoteForward 9000 127.0.0.1:3000\n  \
+         DynamicForward *:1080\n  RemoteForward 1081\n  LocalForward /tmp/sock /run/x.sock\n",
+    );
+    let source = SshConfigSource {
+        path: ssh.join("config"),
+        home: home.path().to_path_buf(),
+    };
+    let u = first_run();
+    let summary = u
+        .core
+        .ssh_config_import(SshConfigImportInput {
+            source,
+            aliases: None,
+            passphrases: BTreeMap::new(),
+            save_passphrases: false,
+        })
+        .expect("import");
+    assert_eq!(summary.added, 1);
+    assert_eq!(summary.rules_added, 4);
+    let rules = u.core.forwarding_rules_list(u.vault_id).unwrap();
+    type Seen = (ForwardType, String, u16, Option<String>, Option<u16>, bool);
+    let mut seen: Vec<Seen> = rules
+        .iter()
+        .map(|rule| {
+            (
+                rule.kind,
+                rule.bind_address.clone(),
+                rule.bind_port,
+                rule.dest_address.clone(),
+                rule.dest_port,
+                rule.autostart_on_connect,
+            )
+        })
+        .collect();
+    seen.sort_by_key(|rule| rule.2);
+    assert_eq!(
+        seen,
+        [
+            (
+                ForwardType::Dynamic,
+                "0.0.0.0".into(),
+                1080,
+                None,
+                None,
+                true
+            ),
+            (
+                ForwardType::Local,
+                "::1".into(),
+                8443,
+                Some("localhost".into()),
+                Some(443),
+                true
+            ),
+            (
+                ForwardType::Remote,
+                "127.0.0.1".into(),
+                9000,
+                Some("127.0.0.1".into()),
+                Some(3000),
+                true
+            ),
+            (
+                ForwardType::Local,
+                "127.0.0.1".into(),
+                15432,
+                Some("db.internal".into()),
+                Some(5432),
+                true
+            ),
+        ]
+    );
+    assert!(
+        rules.iter().any(|rule| rule.wide_bind),
+        "*:1080 is all interfaces"
+    );
+    // The forms rules cannot hold are in the host's notes.
+    let hosts = u
+        .core
+        .records_query(RecordsQuery {
+            vault_id: None,
+            types: vec![RecordType::Host],
+            scope: QueryScope::All,
+            text: None,
+            tags: Vec::new(),
+            sort: SortMode::Manual,
+        })
+        .unwrap();
+    let notes = as_host(hosts.into_iter().next().unwrap()).data["notes"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        notes.contains("RemoteForward 1081 is not imported"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("LocalForward /tmp/sock /run/x.sock is not imported"),
+        "{notes}"
     );
 }

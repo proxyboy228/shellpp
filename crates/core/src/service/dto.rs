@@ -1382,6 +1382,9 @@ pub struct SshConfigImportSummary {
     /// (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,
     /// `KnownHostsCommand`, `Match exec`; security.md 13.5).
     pub commands_skipped: usize,
+    /// Forwarding rules made from `LocalForward`, `RemoteForward` and
+    /// `DynamicForward` of the imported hosts (stage 5).
+    pub rules_added: usize,
 }
 
 /// One record of an import that was not imported.
