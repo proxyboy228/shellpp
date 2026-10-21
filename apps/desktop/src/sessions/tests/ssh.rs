@@ -546,6 +546,60 @@ async fn agent_forwarding_offers_the_keychain_keys() {
     server.shutdown().await;
 }
 
+/// "Ask before every signature" (D60): a forwarded signature waits for the
+/// question in the session's view; Allow signs, Cancel refuses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_signature_waits_for_the_answer() {
+    let harness = Harness::new();
+    let key = generate_key(KeyType::Ed25519, "signer", None).expect("key");
+    harness
+        .core
+        .key_import(shellpp_core::service::dto::KeyImportInput {
+            vault_id: harness.vault_id,
+            label: None,
+            private_key: key.private_openssh.clone(),
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .expect("imported");
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice", "agent_forwarding": true, "agent_confirm": true}}),
+        Some(&password),
+    );
+    let mut session = harness.connect(target, true).await;
+    for (reply, expected) in [
+        (PromptReply::Allow, "agent signed: ok"),
+        (PromptReply::Cancel, "agent signed: refused"),
+    ] {
+        let from = session.terminal.bytes().len();
+        session.type_line("agent-sign");
+        let mut asked = None;
+        for _ in 0..200 {
+            asked = session
+                .handle
+                .view()
+                .prompt
+                .filter(|prompt| matches!(prompt.kind, PromptKind::AgentSignature { .. }));
+            if asked.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let asked = asked.expect("the signature asks first");
+        let PromptKind::AgentSignature { fingerprint } = &asked.kind else {
+            unreachable!();
+        };
+        assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+        session.handle.reply(asked.id, reply).expect("answered");
+        session.output_from(from, expected).await;
+    }
+    session.handle.close();
+    server.shutdown().await;
+}
+
 /// A jump host logs in with the user's key files like a direct connection
 /// to it would (the review of stage 5: hops had no key sources).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

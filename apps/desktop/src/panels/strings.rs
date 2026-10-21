@@ -109,8 +109,7 @@ pub const AGENT_FORWARDING_WARNING: &str = "While a session is open, anyone with
      this host can sign in elsewhere with your keys.";
 pub const AGENT_FORWARD_SYSTEM: &str = "Also offer the system agent's keys";
 pub const AGENT_CONFIRM: &str = "Ask before every signature";
-pub const AGENT_CONFIRM_LATER: &str = "Until the question arrives, a host with this option \
-     gets no signature at all.";
+pub const AGENT_CONFIRM_NOTE: &str = "Each signature waits for your Allow in the session's tab.";
 pub const STARTUP_SNIPPET: &str = "Startup snippet";
 pub const NONE: &str = "None";
 pub const HOST_CHAINING: &str = "Host Chaining";

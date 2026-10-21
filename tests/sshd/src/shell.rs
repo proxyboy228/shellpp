@@ -115,6 +115,8 @@ pub enum Action {
     /// Ask the forwarded agent for its identities, then call
     /// [`Shell::resume`] with the line to print.
     AgentKeys,
+    /// `agent-sign`: asks the forwarded agent to sign with its first key.
+    AgentSign,
     /// Cancel the pending `Sleep` or `AgentKeys` (Ctrl+C); a later
     /// [`Shell::resume`] is ignored.
     CancelBusy,
@@ -537,6 +539,11 @@ impl Shell {
             "agent-keys" => {
                 self.mode = Mode::Busy;
                 self.actions.push(Action::AgentKeys);
+                return;
+            }
+            "agent-sign" => {
+                self.mode = Mode::Busy;
+                self.actions.push(Action::AgentSign);
                 return;
             }
             "lines" => match rest.parse::<u32>() {

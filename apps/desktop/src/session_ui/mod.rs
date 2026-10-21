@@ -31,6 +31,7 @@ mod overlays;
 mod paste;
 pub mod prompt;
 mod screens;
+mod signature;
 pub mod strings;
 
 #[cfg(test)]
@@ -199,6 +200,8 @@ enum Ask {
         form: Option<Entity<PromptForm>>,
     },
     HostKey(HostKeyAsk),
+    /// A signature of the forwarded agent: the key's fingerprint (D60).
+    Signature(String),
 }
 
 /// The content of one session tab.
@@ -612,6 +615,43 @@ impl SessionPane {
         cx.notify();
     }
 
+    /// The forwarded agent asks to sign with the key of `fingerprint`
+    /// (Agent Forwarding, "Ask before every signature", D60).
+    pub fn ask_signature(&mut self, fingerprint: String, cx: &mut Context<Self>) {
+        if matches!(&self.ask, Some(Ask::Signature(shown)) if *shown == fingerprint) {
+            return;
+        }
+        self.ask = Some(Ask::Signature(fingerprint));
+        self.focus_request = true;
+        cx.notify();
+    }
+
+    /// The fingerprint of the signature question on display.
+    pub fn signature_asked(&self) -> Option<&str> {
+        match &self.ask {
+            Some(Ask::Signature(fingerprint)) => Some(fingerprint),
+            _ => None,
+        }
+    }
+
+    /// Allow or Deny of the signature question.
+    pub fn answer_signature(&mut self, allow: bool, cx: &mut Context<Self>) {
+        if !matches!(self.ask, Some(Ask::Signature(_))) {
+            return;
+        }
+        self.ask = None;
+        self.focus_request = true;
+        if let Some(control) = self.control.clone() {
+            let reply = if allow {
+                PromptReply::Allow
+            } else {
+                PromptReply::Cancel
+            };
+            control.reply_prompt(reply, cx);
+        }
+        cx.notify();
+    }
+
     /// The session layer withdrew its question.
     pub fn clear_ask(&mut self, cx: &mut Context<Self>) {
         if self.ask.take().is_some() {
@@ -893,6 +933,9 @@ impl Render for SessionPane {
             Some(Ask::HostKey(ask)) => {
                 Some(host_key::render(ask, &self.dialog_focus, cx).into_any_element())
             }
+            Some(Ask::Signature(fingerprint)) => Some(
+                signature::render(fingerprint.clone(), &self.dialog_focus, cx).into_any_element(),
+            ),
             None => None,
         };
         let paste = self

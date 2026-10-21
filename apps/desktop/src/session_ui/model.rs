@@ -401,8 +401,10 @@ impl Prompt {
 pub enum PromptReply {
     /// The value; `keep` is the checkbox ([`Keep`]), false without one.
     Answer { value: SecretString, keep: bool },
-    /// Cancel: the attempt stops (UI 4.8).
+    /// Cancel: the attempt stops (UI 4.8); a signature is refused.
     Cancel,
+    /// Allow of the signature question (Agent Forwarding, D60).
+    Allow,
 }
 
 impl std::fmt::Debug for PromptReply {
@@ -413,6 +415,7 @@ impl std::fmt::Debug for PromptReply {
                 .field("keep", keep)
                 .finish_non_exhaustive(),
             PromptReply::Cancel => f.write_str("PromptReply::Cancel"),
+            PromptReply::Allow => f.write_str("PromptReply::Allow"),
         }
     }
 }

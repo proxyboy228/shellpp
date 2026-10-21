@@ -113,6 +113,7 @@ impl SessionControl for Control {
                 sessions::PromptReply::Text { value, save: keep }
             }
             PromptReply::Cancel => sessions::PromptReply::Cancel,
+            PromptReply::Allow => sessions::PromptReply::Allow,
         });
     }
 
@@ -229,6 +230,9 @@ pub fn apply(
                     },
                     cx,
                 ),
+                PromptKind::AgentSignature { fingerprint } => {
+                    pane.ask_signature(fingerprint.clone(), cx)
+                }
                 kind => pane.ask_prompt(prompt_of(kind), cx),
             }
         }
@@ -298,9 +302,11 @@ fn keep_of(save: SaveOption) -> Keep {
 /// A text prompt (the host key kinds are dialogs of their own).
 pub(crate) fn prompt_of(kind: &PromptKind) -> Prompt {
     match kind {
+        // Dialogs of their own (`apply` routes them before this).
         PromptKind::Username
         | PromptKind::HostKeyUnknown { .. }
-        | PromptKind::HostKeyChanged { .. } => Prompt::Username,
+        | PromptKind::HostKeyChanged { .. }
+        | PromptKind::AgentSignature { .. } => Prompt::Username,
         PromptKind::Password {
             username,
             error,

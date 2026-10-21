@@ -1667,3 +1667,49 @@ fn a_route_failure_names_its_place(cx: &mut TestAppContext) {
     ui.frame(cx);
     assert!(!ui.visible("failure-place", cx));
 }
+
+/// Agent Forwarding with "Ask before every signature" (D60): the question
+/// shows the key's fingerprint; Allow answers it, Enter and Esc deny.
+#[gpui_kit::test]
+fn the_signature_question_allows_or_denies(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    use crate::sessions::{PromptKind, SessionPrompt, SessionState};
+
+    let ui = Ui::open(cx);
+    let target = crate::hosts::parse_address("192.0.2.20:2200").unwrap();
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Ssh).quick(target), cx);
+    let shown = Cell::new(None);
+    let mut view = layer_view(SessionState::Connected);
+    view.prompt = Some(SessionPrompt {
+        id: 3,
+        kind: PromptKind::AgentSignature {
+            fingerprint: "SHA256:agentkey".into(),
+        },
+    });
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(ui.visible("signature-dialog", cx));
+    assert!(ui.visible("signature-fingerprint", cx));
+    assert_eq!(
+        cx.update(|cx| pane.read(cx).signature_asked().map(str::to_owned)),
+        Some("SHA256:agentkey".to_owned())
+    );
+    ui.click("signature-allow", cx);
+    assert_eq!(ui.record.calls().last(), Some(&Call::AllowSignature));
+    assert!(!ui.visible("signature-dialog", cx));
+
+    // The next one: Enter denies.
+    view.prompt.as_mut().unwrap().id = 4;
+    view.prompt.as_mut().unwrap().kind = PromptKind::AgentSignature {
+        fingerprint: "SHA256:other".into(),
+    };
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(ui.visible("signature-dialog", cx));
+    cx.update_window(ui.handle, |_, window, cx| window.press("enter", cx))
+        .unwrap();
+    ui.frame(cx);
+    assert_eq!(ui.record.calls().last(), Some(&Call::CancelPrompt));
+    ui.finish(cx);
+}

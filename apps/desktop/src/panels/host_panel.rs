@@ -1949,7 +1949,7 @@ impl HostPanel {
                         })),
                 )
                 .when(self.draft.agent_confirm, |this| {
-                    this.child(widgets::caption(strings::AGENT_CONFIRM_LATER, cx))
+                    this.child(widgets::caption(strings::AGENT_CONFIRM_NOTE, cx))
                 })
         });
         let mosh = Switch::new("host-mosh")

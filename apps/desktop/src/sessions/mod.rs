@@ -371,6 +371,8 @@ enum Expect {
     HostKeyUnknown,
     HostKeyChanged,
     Text,
+    /// A forwarded signature: Allow or Cancel.
+    Signature,
 }
 
 impl Expect {
@@ -378,16 +380,20 @@ impl Expect {
         match kind {
             PromptKind::HostKeyUnknown { .. } => Self::HostKeyUnknown,
             PromptKind::HostKeyChanged { .. } => Self::HostKeyChanged,
+            PromptKind::AgentSignature { .. } => Self::Signature,
             _ => Self::Text,
         }
     }
 
     /// Whether `reply` answers a prompt of this kind. Cancel answers every
     /// prompt; "Replace" never answers a first connection and "Accept and
-    /// save" or "Connect once" never answer a changed key (UI 10.2).
+    /// save" or "Connect once" never answer a changed key (UI 10.2); only
+    /// a signature question takes Allow.
     fn accepts(self, reply: &PromptReply) -> bool {
         match (self, reply) {
-            (_, PromptReply::Cancel) | (Self::Text, PromptReply::Text { .. }) => true,
+            (_, PromptReply::Cancel)
+            | (Self::Text, PromptReply::Text { .. })
+            | (Self::Signature, PromptReply::Allow) => true,
             (Self::HostKeyUnknown, PromptReply::HostKey(choice)) => matches!(
                 choice,
                 HostKeyChoice::AcceptAndSave | HostKeyChoice::ConnectOnce | HostKeyChoice::Cancel

@@ -114,6 +114,13 @@ pub fn question_of(index: u32, count: u32) -> String {
     format!("Question {} of {count}", index + 1)
 }
 
+// Agent Forwarding: the signature question (D60).
+pub const SIGN_TITLE: &str = "Sign with your key?";
+pub const SIGN_BODY: &str = "The server asks your forwarded agent to sign with this key. \
+     Allow it only for something you started there, such as git or ssh to another host.";
+pub const SIGN_ALLOW: &str = "Allow";
+pub const SIGN_DENY: &str = "Deny";
+
 // Where a route failed (stage 5, D57).
 pub const PLACE_PROXY: &str = "At the proxy";
 pub const PLACE_CHAIN: &str = "A jump host of this host is missing or listed twice";

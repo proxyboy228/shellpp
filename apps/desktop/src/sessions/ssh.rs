@@ -406,10 +406,12 @@ impl SshTask {
         spec.jump_hosts = hops.iter().map(|(jump, _, _)| jump.clone()).collect();
         // Agent forwarding (stage 5, D60): the built-in agent with the
         // Keychain's keys, the system agent's too when the host says so.
-        if config.agent_forwarding {
+        // Not for an SFTP session: it opens no shell to forward to.
+        if config.agent_forwarding && self.purpose == Purpose::Shell {
             spec.forward_agent = Some(
                 built_in_agent(
                     &self.shared,
+                    &self.session,
                     config.agent_forward_system,
                     config.agent_confirm,
                 )
@@ -1116,15 +1118,28 @@ impl shellpp_ssh::AgentKeys for AgentKeyStore {
     }
 }
 
-/// Confirmation of forwarded signatures needs the stage 5 interface: until
-/// then a host that asks for it gets no signature at all (never one
-/// without the user's yes).
-struct NoConfirmationYet;
+/// "Ask before every signature" (D60): each signature of the forwarded
+/// agent waits for the user's answer in the session's tab. No answer (the
+/// tab closed, another question open, the app locked) refuses it.
+struct AskSignature {
+    shared: Arc<Shared>,
+    session: std::sync::Weak<Session>,
+}
 
-impl shellpp_ssh::ConfirmSignature for NoConfirmationYet {
-    fn confirm<'a>(&'a self, _fingerprint: &'a str) -> BoxFuture<'a, bool> {
-        tracing::info!("forwarded signature declined: confirmation needs its dialog");
-        Box::pin(async { false })
+impl shellpp_ssh::ConfirmSignature for AskSignature {
+    fn confirm<'a>(&'a self, fingerprint: &'a str) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let Some(session) = self.session.upgrade() else {
+                return false;
+            };
+            let kind = PromptKind::AgentSignature {
+                fingerprint: fingerprint.to_owned(),
+            };
+            let reply = super::ask(&self.shared, &session, kind).await;
+            let allowed = matches!(reply, Some(PromptReply::Allow));
+            tracing::info!(allowed, "forwarded signature answered");
+            allowed
+        })
     }
 }
 
@@ -1164,6 +1179,7 @@ async fn load_agent_keys(shared: &Arc<Shared>) -> Vec<Arc<shellpp_ssh::agent::Pr
 
 async fn built_in_agent(
     shared: &Arc<Shared>,
+    session: &Arc<Session>,
     system: bool,
     confirm: bool,
 ) -> shellpp_ssh::ForwardedAgent {
@@ -1206,8 +1222,12 @@ async fn built_in_agent(
         } else {
             None
         },
-        confirm: confirm
-            .then(|| Arc::new(NoConfirmationYet) as Arc<dyn shellpp_ssh::ConfirmSignature>),
+        confirm: confirm.then(|| {
+            Arc::new(AskSignature {
+                shared: Arc::clone(shared),
+                session: Arc::downgrade(session),
+            }) as Arc<dyn shellpp_ssh::ConfirmSignature>
+        }),
     }
 }
 

@@ -1287,14 +1287,19 @@ async fn run_session_channel(mut channel: Channel<Msg>, context: SessionContext)
                     });
                     busy = Some((done, task));
                 }
-                Action::AgentKeys => {
+                Action::AgentKeys | Action::AgentSign => {
+                    let sign = matches!(action, Action::AgentSign);
                     generation += 1;
                     let done = generation;
                     let sender = internal_tx.clone();
                     let out = context.out.clone();
                     let forwarded = context.agent_forwarded.load(Ordering::SeqCst);
                     let task = tokio::spawn(async move {
-                        let line = agent_keys_line(out, forwarded).await;
+                        let line = if sign {
+                            agent_sign_line(out, forwarded).await
+                        } else {
+                            agent_keys_line(out, forwarded).await
+                        };
                         let _ = sender.send(Internal::BusyDone {
                             generation: done,
                             line: Some(line),
@@ -1337,6 +1342,35 @@ async fn answer_exec(out: &Outbound, id: ChannelId, answer: &ExecAnswer) {
         out.data(id, answer.stdout.clone().into_bytes()).await;
     }
     out.finish(id, answer.exit_status).await;
+}
+
+/// The line `agent-sign` prints: asks the client's forwarded agent to sign
+/// with its first key ("agent signed: ok", or "agent signed: refused" when
+/// the agent refuses). Waits longer than `agent-keys`: the client may ask
+/// its user first.
+async fn agent_sign_line(out: Outbound, forwarded: bool) -> String {
+    if !forwarded {
+        return shell::AGENT_NOT_FORWARDED.to_owned();
+    }
+    let query = async {
+        let channel = out.open_agent_channel().await?;
+        let mut client = AgentClient::connect(channel.into_stream());
+        out.trace.output();
+        let identities = client.request_identities().await.ok()?;
+        let first = identities.first()?;
+        let signed = client
+            .sign_request(first, None, b"shellpp test data".to_vec())
+            .await
+            .is_ok();
+        out.trace.output();
+        drop(client);
+        Some(signed)
+    };
+    match tokio::time::timeout(AGENT_TIMEOUT * 6, query).await {
+        Ok(Some(true)) => "agent signed: ok".to_owned(),
+        Ok(Some(false)) => "agent signed: refused".to_owned(),
+        _ => shell::AGENT_ERROR.to_owned(),
+    }
 }
 
 /// The line `agent-keys` prints: asks the client's forwarded agent for its

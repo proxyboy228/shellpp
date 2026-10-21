@@ -1293,6 +1293,7 @@ impl FilePanel {
                 let reply = match reply {
                     FormReply::Answer { value, keep } => PromptReply::Text { value, save: keep },
                     FormReply::Cancel => PromptReply::Cancel,
+                    FormReply::Allow => PromptReply::Allow,
                 };
                 if let Err(error) = handle.reply(id, reply) {
                     tracing::debug!(%error, "answer not taken");

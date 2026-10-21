@@ -24,6 +24,8 @@ pub enum Call {
     /// checkbox.
     Answer(String, bool),
     CancelPrompt,
+    /// Allow of a signature question.
+    AllowSignature,
     HostKey(HostKeyReply),
 }
 
@@ -138,6 +140,7 @@ impl SessionControl for FakeControl {
                 Call::Answer(value.expose_secret().to_owned(), keep)
             }
             PromptReply::Cancel => Call::CancelPrompt,
+            PromptReply::Allow => Call::AllowSignature,
         });
     }
 

@@ -232,6 +232,12 @@ pub enum PromptKind {
         count: u32,
         error: bool,
     },
+    /// Agent forwarding with "Ask before every signature" (D60): the server
+    /// asks the forwarded agent to sign with the key of `fingerprint`
+    /// (`SHA256:`). [`PromptReply::Allow`] signs; anything else refuses.
+    AgentSignature {
+        fingerprint: String,
+    },
 }
 
 impl std::fmt::Debug for PromptKind {
@@ -250,6 +256,7 @@ impl PromptKind {
             Self::Password { .. } => "password",
             Self::Passphrase { .. } => "passphrase",
             Self::KeyboardInteractive { .. } => "keyboard_interactive",
+            Self::AgentSignature { .. } => "agent_signature",
         }
     }
 
@@ -258,7 +265,10 @@ impl PromptKind {
         match self {
             Self::Password { .. } | Self::Passphrase { .. } => true,
             Self::KeyboardInteractive { echo, .. } => !echo,
-            Self::HostKeyUnknown { .. } | Self::HostKeyChanged { .. } | Self::Username => false,
+            Self::HostKeyUnknown { .. }
+            | Self::HostKeyChanged { .. }
+            | Self::Username
+            | Self::AgentSignature { .. } => false,
         }
     }
 }
@@ -284,6 +294,8 @@ pub enum PromptReply {
     Text { value: SecretString, save: bool },
     /// "Cancel" of any prompt: the attempt fails with `Cancelled`.
     Cancel,
+    /// "Allow" of a signature question ([`PromptKind::AgentSignature`]).
+    Allow,
 }
 
 impl std::fmt::Debug for PromptReply {
@@ -295,6 +307,7 @@ impl std::fmt::Debug for PromptReply {
                 .field("save", save)
                 .finish_non_exhaustive(),
             Self::Cancel => f.write_str("Cancel"),
+            Self::Allow => f.write_str("Allow"),
         }
     }
 }
