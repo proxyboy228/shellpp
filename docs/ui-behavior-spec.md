@@ -606,13 +606,17 @@ The same form is used for creating and editing; it opens in the details panel.
   host; [decision]
   - each of the three commands is checked again by the secret filter below before it is
     offered; [decision]
-  - until snippets arrive (stage 5), "Save" is disabled, and its tooltip says that
-    snippets come in stage 5. "Close" works and is remembered for the host; [decision]
+  - "Save" makes a snippet of each (edited) command, targeting this host, and the hint is
+    not shown again for it; "Close" only hides it for good; [decision]
+  - trivial commands are never offered: one simple command (no `;`, `&&`, pipe or
+    redirection) of `cd`, `ls`, `ll`, `la`, `l`, `dir`, `pwd`, `clear`, `cls`, `reset`,
+    `exit`, `logout`, `history`, `whoami`, `top` or `htop`; [decision, D64]
 - layout and states of the tab [decision]:
   - the trash button next to the heading is "Clear history" (inactive while the list is
     empty or filtered by a search). Each row shows the command on one line in the terminal
-    font, with its own delete button. The list shows the newest 500 entries; the search
-    filters them as you type (plain text, case-insensitive);
+    font, with its own delete button. A command run again shows once, at its newest
+    use, and deleting the row deletes every repeat (D64). The list shows the newest 500
+    commands; the search filters them as you type (plain text, case-insensitive);
   - the hint card is above the search field. It appears when the host has at least one
     command; commands are ranked by how often they were run and, at equal counts, by the
     latest use;
@@ -1035,13 +1039,26 @@ On the left:
   1. **Generate key**: generate a new pair. Parameters: type (Ed25519
      by default, ECDSA P-256, P-384 or P-521, RSA 3072 (the default length) or 4096;
      RSA 2048 is not offered, D32), label, optional passphrase. [decision on parameters]
+     The passphrase field has a show/hide button; once a passphrase is typed, "Repeat
+     passphrase" appears, and Generate refuses two different values ("The passphrases do
+     not match."). [decision, D64]
   2. **New Identity**: create an identity.
 - **Certificate**: add an SSH certificate.
 - **FIDO2**: add a hardware key (`sk-ssh-ed25519`, `sk-ecdsa`). [decision on types]
+  It opens the New key form for the private key file that `ssh-keygen -t ed25519-sk`
+  made (a handle; the key stays on the security key). [decision, D64]
+- While a part is not built, its button says so in a tooltip: what does not work yet and
+  when it arrives (Certificate: stage 4; creating a key on a security key and signing with
+  it: a later stage). [decision, D64]
 
 On the right: search, a tile/list toggle, a sort menu (by name,
 by creation date, by modification date). The same sort icon is used
 on the Hosts screen. [decision]
+
+- The search takes the room left, from 200 to 320 px. When the bar cannot hold it at
+  200 px next to the labelled buttons (an open details panel narrows it), Certificate and
+  FIDO2 show only their icons, with their names in the tooltips; only when that is not
+  enough either does the right group wrap below. [decision, D64]
 
 ### 7.2 Content
 
@@ -1095,7 +1112,13 @@ a key runs a key derivation or a key generation and settles the passphrase choic
   is cleared after 30 seconds. [decision on the timeout]
 - If the Public key field is empty, the public key is derived from the private key
   automatically.
-- The SHA256 fingerprint is shown for each key.
+- The SHA256 fingerprint is shown for each key: one line in the monospaced font, with a
+  copy button; a narrow panel cuts it in the middle (`SHA256:nTM…j9e5Q`), never at a
+  `/`. The same applies to the Keychain list and to Known Hosts (10). The TOFU and
+  changed-key dialogs show the whole fingerprint for comparison. [decision, D64]
+- A public key pasted or chosen instead of the private key (an OpenSSH `.pub` line, an
+  RFC 4716 or a PEM public key) is named as such: "This is a public key. Import the
+  private key: the file of the same name without .pub." [decision, D64]
 - A key without a passphrase is marked with an unobtrusive hint "not protected
   by a passphrase". When exporting to a file, the user is offered to set a passphrase.
 - The passphrase of an encrypted key is requested on import. The user

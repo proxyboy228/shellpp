@@ -1006,3 +1006,19 @@ Status: run 3 decision, 2026-10-21 (plan, section 5; how D62, item 4, is built; 
 - A startup snippet comes with its host: it runs only on that host, which the same file defines, unlike the OS detection script that D41 keeps local because it runs on every server.
 
 **Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).
+
+### 64. Polish from the owner's review of the run 2 screenshots (run 3)
+
+Status: run 3 decision, 2026-10-21 (plan, section 6).
+
+**Decision:**
+
+- Export Data was already encrypted with a password by default; the `export-data` screenshot showed the dialog after the switch was turned off, which read as the default. `export-data` now shows the dialog as it opens and `export-data-plain` the clear-text warning; a test checks the default.
+- Generate key: the passphrase field has a show/hide button (the import form's too); once a passphrase is typed, "Repeat passphrase" appears, and Generate refuses two different values before any key is made.
+- The core tells a public key from other text (`KeyProblem::PublicKey`): an OpenSSH line, also with `authorized_keys` options, an RFC 4716 block or a PEM `PUBLIC KEY`. The import says so and points to the file without `.pub`.
+- The Keychain action bar: the search takes 200 to 320 px. When the bar cannot hold it at 200 px next to the labelled buttons (an open panel narrows the bar), Certificate and FIDO2 show only their icons, their names in the tooltips; the right group wraps below only when that is not enough either. The screen decides from its own width, as it does for the grid's columns.
+- Certificate stays disabled; its tooltip says that certificates arrive in stage 4. FIDO2 opens the New key form as "FIDO2 key", which explains the file `ssh-keygen -t ed25519-sk` makes: the core reads such keys already (D37); creating one on a security key and signing with it come later (D50, item 8), as its tooltip says.
+- A fingerprint is one line with a middle ellipsis (`SHA256:nTM…j9e5Q`), never broken at a `/`: in the key panel (with a new copy button), the Keychain list and Known Hosts. The TOFU and changed-key dialogs keep the whole fingerprint, since it is what the user compares (it fits their width on one line).
+- History tab: one row per command, at its newest use (`history_list_distinct`), and deleting the row deletes every repeat. The "save as snippets" hint leaves out trivial commands: one simple command (no `;`, `&`, pipe, redirection or `$`) of `cd`, `ls`, `ll`, `la`, `l`, `dir`, `pwd`, `clear`, `cls`, `reset`, `exit`, `logout`, `history`, `whoami`, `top` or `htop`, whatever its arguments. "Save" works: each (edited) command becomes a snippet of the host (`history_hint_save`, run 2).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 4.2 and 7.1-7.3 (and `docs/ru`).
