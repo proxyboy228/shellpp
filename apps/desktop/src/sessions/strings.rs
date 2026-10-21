@@ -81,6 +81,20 @@ pub const OLD_FINGERPRINT: &str = "Saved fingerprint";
 pub const NEW_FINGERPRINT: &str = "Presented fingerprint";
 pub const HOST_KEY_REVOKED_TITLE: &str = "The host key is revoked";
 
+/// A startup snippet as typed input: control characters other than tab
+/// and line breaks removed (an ESC could end bracketed paste or start a
+/// sequence, docs/security.md, section 12), every line ended with Enter.
+pub fn startup_input(script: &str) -> Vec<u8> {
+    let text: String = script
+        .replace("\r\n", "\n")
+        .chars()
+        .filter(|c| *c == '\t' || *c == '\n' || !(c.is_control()))
+        .collect();
+    let mut input = text.trim_end_matches('\n').replace('\n', "\r");
+    input.push('\r');
+    input.into_bytes()
+}
+
 /// The line shown once in a session whose server refused environment
 /// variables (OpenSSH sets only the names of its `AcceptEnv`). Names are
 /// validated identifiers (`[A-Za-z_][A-Za-z0-9_]*`), so the line holds no

@@ -111,6 +111,8 @@ struct ConnInfo {
     port: u16,
     encoding: &'static encoding_rs::Encoding,
     os_detection_script: Option<String>,
+    /// Runs as typed input right after login (UI 3.1).
+    startup_snippet: Option<shellpp_core::service::host_api::StartupSnippet>,
 }
 
 /// Where prompted secrets may be saved, and the server they are kept for.
@@ -302,6 +304,7 @@ impl SshTask {
             port: config.port,
             encoding: charset::encoding_for(&config.charset),
             os_detection_script: config.os_detection_script.clone(),
+            startup_snippet: config.startup_snippet.clone(),
         };
         let saves = SaveTargets {
             host: config.host,
@@ -604,6 +607,21 @@ impl SshTask {
             }
         }
 
+        // The startup snippet, after every login (UI 3.1): as injected
+        // input, so its lines are never recorded in history. One with
+        // variables waits for the run form of the stage 5 interface.
+        if let Some(snippet) = &info.startup_snippet {
+            if snippet.variables.is_empty() {
+                if let Some(terminal) = self.session.terminal() {
+                    terminal.inject(super::strings::startup_input(&snippet.script));
+                }
+            } else {
+                tracing::info!(
+                    session = self.session.id,
+                    "startup snippet not run: it has variables"
+                );
+            }
+        }
         // Refused environment variables: one message per session (stage 5),
         // in the terminal before the server's output.
         let parts = if !self.env_noticed && !parts.refused_env.is_empty() {

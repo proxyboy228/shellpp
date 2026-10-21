@@ -74,6 +74,12 @@ impl SessionTerminal for RecordingTerminal {
     fn attach(&self, session: SessionHandle) {
         *self.session.lock().unwrap() = Some(session);
     }
+
+    fn inject(&self, bytes: Vec<u8>) {
+        if let Some(session) = self.session.lock().unwrap().clone() {
+            let _ = session.write(&bytes);
+        }
+    }
 }
 
 /// One open session as a test sees it.

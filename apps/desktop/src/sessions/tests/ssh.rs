@@ -421,6 +421,62 @@ async fn refused_environment_variables_are_named_once_per_session() {
     server.shutdown().await;
 }
 
+/// The startup snippet runs right after every login as injected input
+/// (never recorded in history); one with variables waits for its form.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_startup_snippet_runs_after_login() {
+    let harness = Harness::new();
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let snippet = harness
+        .core
+        .snippet_save(shellpp_core::service::snippets::RecordInput {
+            vault_id: harness.vault_id,
+            record_id: None,
+            data: json!({"script": "echo started-$((6*7))\necho second"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice",
+            "startup_snippet_id": snippet.record.record_id.to_string()}}),
+        Some(&password),
+    );
+    let mut session = harness.connect(target, true).await;
+    session.output("second").await;
+    assert_eq!(
+        session.terminal.injected(),
+        b"echo started-$((6*7))\recho second\r"
+    );
+    session.handle.close();
+
+    // A snippet with variables is not run without its form.
+    let with_vars = harness
+        .core
+        .snippet_save(shellpp_core::service::snippets::RecordInput {
+            vault_id: harness.vault_id,
+            record_id: None,
+            data: json!({"script": "cd {{dir}}"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    let target = harness.host(
+        server.port(),
+        json!({"label": "other", "ssh": {"username": "alice",
+            "startup_snippet_id": with_vars.record.record_id.to_string()}}),
+        Some(&password),
+    );
+    let session = harness.connect(target, false).await;
+    assert!(session.terminal.injected().is_empty());
+    session.handle.close();
+    server.shutdown().await;
+}
+
 /// A host whose chain names a host that does not exist is refused, never
 /// connected directly instead (data-model 8.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

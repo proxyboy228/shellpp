@@ -101,6 +101,10 @@ pub trait SessionTerminal: Send + Sync + 'static {
     /// query replies and size changes go to `session`
     /// ([`SessionHandle::write`], [`SessionHandle::resize`]).
     fn attach(&self, session: SessionHandle);
+    /// Input the app sends on its own (a startup snippet): sent like typed
+    /// input, and the line that holds it is never recorded in history
+    /// (docs/security.md, section 10.1).
+    fn inject(&self, bytes: Vec<u8>);
 }
 
 /// The terminal of a session is gone.

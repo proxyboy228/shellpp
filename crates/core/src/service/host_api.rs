@@ -68,6 +68,25 @@ pub struct SessionConfig {
     /// The host's own `ssh.proxy` (not inherited) for the route's first
     /// connection: the first hop, else this host.
     pub proxy: Option<SessionProxy>,
+    /// `ssh.startup_snippet_id` (not inherited): the snippet that runs right
+    /// after login, as typed input (UI 3.1). A missing snippet is none.
+    pub startup_snippet: Option<StartupSnippet>,
+}
+
+/// The startup snippet of a session.
+#[derive(Clone)]
+pub struct StartupSnippet {
+    pub script: String,
+    /// Its `{{ name }}` variables: asked before it runs (UI 9.3).
+    pub variables: Vec<String>,
+}
+
+impl fmt::Debug for StartupSnippet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StartupSnippet")
+            .field("variables", &self.variables.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a route cannot be built (`index`: 0-based position in the chain).

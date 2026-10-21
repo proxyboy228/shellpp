@@ -142,6 +142,10 @@ pub fn forward_events<T: 'static>(
 /// parser queue (which waits while full: flow control), and the session
 /// becomes its sink for input and size changes.
 impl SessionTerminal for TerminalHandle {
+    fn inject(&self, bytes: Vec<u8>) {
+        self.inject_input(bytes);
+    }
+
     fn feed<'a>(&'a self, bytes: &'a [u8]) -> BoxFuture<'a, Result<(), TerminalClosed>> {
         Box::pin(async move {
             TerminalHandle::feed(self, bytes)

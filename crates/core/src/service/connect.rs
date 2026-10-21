@@ -29,7 +29,7 @@ use super::dto::{
 use super::host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryDropReason,
     HistoryRecordInput, HostKeyCheck, HostKeyStatus, ProxyType, RouteProblem, SessionConfig,
-    SessionKey, SessionProxy,
+    SessionKey, SessionProxy, StartupSnippet,
 };
 use super::records::{self, Parts, check_vault, parts};
 use super::session::Session;
@@ -349,6 +349,14 @@ fn host_session_config(
         jump_hosts: Vec::new(),
         route_problem: None,
         proxy: None,
+        startup_snippet: uuid_member(ssh, "startup_snippet_id")
+            .and_then(|id| index.get_kind(&id, RecordKind::Snippet))
+            .and_then(|record| record.data().get("script")?.as_str().map(str::to_owned))
+            .filter(|script| !script.trim().is_empty())
+            .map(|script| StartupSnippet {
+                variables: crate::snippet::variables(&script),
+                script,
+            }),
         address,
     })
 }
@@ -734,9 +742,11 @@ impl Core {
                         for hop in hops {
                             let mut hop =
                                 host_session_config(session, &defaults, &entries, *vault_id, &hop)?;
-                            // A hop runs no session: no detection, no env.
+                            // A hop runs no session: no detection, no env,
+                            // no startup snippet.
                             hop.os_detection_script = None;
                             hop.env.clear();
+                            hop.startup_snippet = None;
                             hop.agent_forwarding = false;
                             config.jump_hosts.push(hop);
                         }
@@ -804,6 +814,7 @@ impl Core {
                     jump_hosts: Vec::new(),
                     route_problem: None,
                     proxy: None,
+                    startup_snippet: None,
                     address,
                 })
             }

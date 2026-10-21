@@ -61,6 +61,9 @@ impl SessionTerminal for RecordingTerminal {
     }
 
     fn attach(&self, _: SessionHandle) {}
+
+    // These sessions have no startup snippet.
+    fn inject(&self, _: Vec<u8>) {}
 }
 
 /// One session as the test sees it.

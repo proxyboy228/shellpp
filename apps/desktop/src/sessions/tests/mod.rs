@@ -227,6 +227,8 @@ pub(super) struct TestTerminal {
     handle: Mutex<Option<SessionHandle>>,
     open: watch::Sender<bool>,
     feeds: AtomicUsize,
+    /// What the session injected (a startup snippet).
+    injected: Mutex<Vec<u8>>,
 }
 
 impl Default for TestTerminal {
@@ -236,11 +238,17 @@ impl Default for TestTerminal {
             handle: Mutex::new(None),
             open: watch::Sender::new(true),
             feeds: AtomicUsize::new(0),
+            injected: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl TestTerminal {
+    /// The input the session injected so far.
+    pub fn injected(&self) -> Vec<u8> {
+        self.injected.lock().unwrap().clone()
+    }
+
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
     }
@@ -287,6 +295,13 @@ impl SessionTerminal for TestTerminal {
 
     fn attach(&self, session: SessionHandle) {
         *self.handle.lock().unwrap() = Some(session);
+    }
+
+    fn inject(&self, bytes: Vec<u8>) {
+        self.injected.lock().unwrap().extend_from_slice(&bytes);
+        if let Some(handle) = self.attached() {
+            let _ = handle.write(&bytes);
+        }
     }
 }
 
