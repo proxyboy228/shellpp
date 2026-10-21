@@ -849,3 +849,69 @@ fn export_to_host_appends_the_key_once() {
         vec![(target, Ok(shellpp_ssh::ExportOutcome::AlreadyPresent))]
     );
 }
+
+/// The SFTP tab's operations on a host (stage 4 tests: choose a host,
+/// upload a folder, rename, change permissions, delete), through the
+/// channel of an SFTP session as the panels use it. OpenSSH only (the
+/// russh test server has no SFTP).
+#[test]
+fn sftp_session_uploads_renames_changes_permissions_and_deletes() {
+    let harness = Harness::new();
+    if harness.server.kind == ServerKind::Russh {
+        return;
+    }
+    let host = harness.password_host();
+    let opened = harness
+        .manager
+        .open_sftp(SessionTarget::Host {
+            vault_id: harness.vault_id,
+            record_id: host,
+        })
+        .expect("opens");
+    let view = opened.handle.view();
+    let mut session = Session {
+        handle: opened.handle,
+        events: opened.events,
+        terminal: Arc::new(RecordingTerminal::default()),
+        states: vec![view.state],
+        prompts: Vec::new(),
+        view,
+    };
+    session.accept_host_key();
+    session.wait_state(SessionState::Connected);
+    let sftp = session.handle.sftp().expect("channel");
+    let local = tempfile::tempdir().expect("temp");
+    let folder = local.path().join("site");
+    std::fs::create_dir_all(folder.join("css")).unwrap();
+    std::fs::write(folder.join("index.html"), b"<html>").unwrap();
+    std::fs::write(folder.join("css").join("a.css"), b"body{}").unwrap();
+    let work = session.handle.spawn(async move {
+        let home = sftp.canonicalize(".").await?;
+        let remote = shellpp_ssh::sftp::join(&home, &format!("tab-{}", std::process::id()));
+        let mut progress = |_: u64| {};
+        let summary =
+            shellpp_ssh::transfer::upload_tree(&sftp, &folder, &remote, &mut progress).await?;
+        let renamed = format!("{remote}-renamed");
+        sftp.rename(&remote, &renamed).await?;
+        let changed = sftp.set_permissions_tree(&renamed, 0o750).await?;
+        let mode = sftp
+            .stat(&shellpp_ssh::sftp::join(&renamed, "index.html"))
+            .await?
+            .permissions;
+        let removed = sftp.remove_tree(&renamed).await?;
+        let gone = sftp.stat(&renamed).await.is_err();
+        Ok::<_, shellpp_ssh::SftpError>((summary.files, changed, mode, removed, gone))
+    });
+    let (files, changed, mode, removed, gone) = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(work)
+        .expect("joined")
+        .expect("the operations");
+    assert_eq!(files, 2);
+    assert!(changed >= 3, "{changed}");
+    assert_eq!(mode.map(|mode| mode & 0o777), Some(0o750));
+    assert!(removed >= 3, "{removed}");
+    assert!(gone);
+    session.handle.close();
+}

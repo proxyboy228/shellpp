@@ -1021,9 +1021,10 @@ impl FilePanel {
                 )
             })
             .collect();
+        let local_targets = targets.clone();
         self.operate(
             strings::PERMISSIONS_FAILED,
-            || Ok(()),
+            move || set_local_permissions(&local_targets, mode),
             move |sftp| {
                 Box::pin(async move {
                     for (path, tree) in &targets {
@@ -1040,6 +1041,38 @@ impl FilePanel {
             window,
             cx,
         );
+    }
+}
+
+/// Edit Permissions in a local panel (Unix; the item is hidden on
+/// Windows): `mode` on each target, into folders when it says so.
+fn set_local_permissions(targets: &[(String, bool)], mode: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fn apply(path: &Path, mode: u32, tree: bool) -> std::io::Result<()> {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+            if tree {
+                for entry in std::fs::read_dir(path)? {
+                    let entry = entry?;
+                    let kind = entry.file_type()?;
+                    // Links are never followed.
+                    if !kind.is_symlink() {
+                        apply(&entry.path(), mode, kind.is_dir())?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        for (path, tree) in targets {
+            apply(Path::new(path), mode, *tree).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (targets, mode);
+        Ok(())
     }
 }
 
