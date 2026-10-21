@@ -202,6 +202,23 @@ async fn permissions_rename_and_errors(sftp: &Sftp, dir: &str) {
     let replaced = sftp.stat(&secret).await.unwrap();
     assert_eq!(replaced.permissions, Some(0o600));
     assert_eq!(replaced.size, "edited".len() as u64);
+    // A group-writable file stays so (the server's umask 022 alone would
+    // make it 0644).
+    sftp.set_permissions(&secret, 0o664).await.unwrap();
+    sftp.upload(local.path(), &secret, false, &mut |_| {})
+        .await
+        .expect("upload over a 0664 file");
+    assert_eq!(sftp.stat(&secret).await.unwrap().permissions, Some(0o664));
+    // A folder of that name is never moved aside for a file.
+    let folder = shellpp_ssh::sftp::join(dir, "a-folder");
+    sftp.create_dir(&folder).await.unwrap();
+    assert_eq!(
+        sftp.upload(local.path(), &folder, false, &mut |_| {})
+            .await
+            .err(),
+        Some(SftpError::NotAFile)
+    );
+    assert_eq!(sftp.stat(&folder).await.unwrap().kind, EntryKind::Dir);
     let names: Vec<String> = sftp
         .list(dir)
         .await
@@ -363,13 +380,16 @@ async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &P
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let mut tx = Some(tx);
     let flag = Arc::clone(&cut);
-    // After 4 MB the download slows down until the drop lands.
+    // After 4 MB the download waits (at most 20 s) until the drop landed.
     let mut slow = move |done: u64| {
         if done >= 4 * 1024 * 1024 {
             if let Some(tx) = tx.take() {
                 let _ = tx.send(());
             }
-            if !flag.load(Ordering::SeqCst) {
+            let waited = std::time::Instant::now();
+            while !flag.load(Ordering::SeqCst)
+                && waited.elapsed() < std::time::Duration::from_secs(20)
+            {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
         }
@@ -384,6 +404,8 @@ async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &P
         cut.store(true, Ordering::SeqCst);
     });
     let result = sftp.download(&remote, &target, false, &mut slow).await;
+    // The sender goes with the callback, so the dropper never waits forever.
+    drop(slow);
     dropper.await.expect("dropper");
     assert!(result.is_err(), "the drop ends the download");
     let part = shellpp_ssh::sftp::local_part(&target);

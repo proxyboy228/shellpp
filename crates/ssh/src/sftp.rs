@@ -49,8 +49,9 @@ const READS_IN_FLIGHT: usize = 8;
 const WRITES_IN_FLIGHT: usize = 64;
 /// How long one request may wait for its answer. Requests are answered in
 /// order, so a request waits behind the 2 MiB in flight: 60 s still lets a
-/// 300 kbit/s link through. A dead link ends sooner through the
-/// connection's keepalive.
+/// 300 kbit/s link through, for one transfer per session (parallel
+/// transfers each take their own session, D46). A dead link ends sooner
+/// through the connection's keepalive.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Links resolved at once while listing a folder.
 const LINKS_AT_ONCE: usize = 16;
@@ -95,14 +96,14 @@ pub enum SftpError {
     Changed,
 }
 
-impl From<LibError> for SftpError {
-    fn from(error: LibError) -> Self {
+impl From<&LibError> for SftpError {
+    fn from(error: &LibError) -> Self {
         match error {
             LibError::Status(status) => match status.status_code {
                 StatusCode::NoSuchFile => SftpError::NotFound,
                 StatusCode::PermissionDenied => SftpError::PermissionDenied,
                 StatusCode::NoConnection | StatusCode::ConnectionLost => SftpError::ConnectionLost,
-                _ => SftpError::Failure(status.error_message),
+                _ => SftpError::Failure(status.error_message.clone()),
             },
             LibError::Timeout => SftpError::Timeout,
             LibError::IO(_) => SftpError::ConnectionLost,
@@ -119,9 +120,22 @@ impl From<LibError> for SftpError {
     }
 }
 
-/// An I/O error of a remote file (russh-sftp reports a status as
-/// `io::Error::other` with the server's message).
+impl From<LibError> for SftpError {
+    fn from(error: LibError) -> Self {
+        Self::from(&error)
+    }
+}
+
+/// An I/O error of a remote file. russh-sftp wraps its own error (a lost
+/// channel, a timeout) in the `io::Error`, and a status as
+/// `io::Error::other` with the server's message.
 fn remote_io(error: std::io::Error) -> SftpError {
+    if let Some(inner) = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<LibError>())
+    {
+        return SftpError::from(inner);
+    }
     match error.kind() {
         std::io::ErrorKind::NotFound => SftpError::NotFound,
         std::io::ErrorKind::PermissionDenied => SftpError::PermissionDenied,
@@ -466,18 +480,45 @@ impl Sftp {
     }
 
     /// Whether the last block before `offset` of the remote `path` holds
-    /// `local` (the same block of the local side).
-    async fn tail_matches(&self, path: &str, offset: u64, local: &[u8]) -> bool {
-        let Ok(mut file) = self.session.open(path).await else {
-            return false;
-        };
-        let mut remote = vec![0u8; local.len()];
-        let same = read_at(&mut file, offset - local.len() as u64, &mut remote)
+    /// `local` (the same block of the local side). A remote file that is
+    /// shorter does not; an error (a timeout, no permission) is returned, so
+    /// a partial transfer is never thrown away on a guess.
+    async fn tail_matches(&self, path: &str, offset: u64, local: &[u8]) -> Result<bool, SftpError> {
+        let mut file = self
+            .session
+            .open(path)
             .await
-            .is_ok()
-            && remote == local;
+            .map_err(|error| self.fail(error))?;
+        let mut remote = vec![0u8; local.len()];
+        let read = read_at(&mut file, offset - local.len() as u64, &mut remote).await;
         let _ = file.shutdown().await;
-        same
+        match read {
+            Ok(()) => Ok(remote == local),
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+            Err(error) => Err(self.fail_io(error)),
+        }
+    }
+
+    /// The permission bits of `path`, when it exists.
+    pub(crate) async fn mode_of(&self, path: &str) -> Option<u32> {
+        self.session
+            .metadata(path)
+            .await
+            .ok()
+            .and_then(|attrs| attrs.permissions)
+            .map(|mode| mode & 0o7777)
+    }
+
+    /// Sets `mode` on an open file (fchmod: the server's umask and the
+    /// mode of an older `.part` do not apply). Best effort.
+    async fn set_mode(file: &RemoteFile, mode: Option<u32>) {
+        if let Some(mode) = mode {
+            let attrs = FileAttributes {
+                permissions: Some(mode),
+                ..FileAttributes::empty()
+            };
+            let _ = file.set_metadata(attrs).await;
+        }
     }
 
     /// Downloads `remote` to `local` through `local.part`; with `resume` a
@@ -513,11 +554,12 @@ impl Sftp {
         if offset > 0 {
             let check = offset.min(RESUME_CHECK);
             let mut tail = vec![0u8; check as usize];
-            let read = async {
-                let mut file = tokio::fs::File::open(&part).await?;
-                read_at(&mut file, offset - check, &mut tail).await
-            };
-            if read.await.is_err() || !self.tail_matches(remote, offset, &tail).await {
+            let mut file = tokio::fs::File::open(&part).await.map_err(local_io)?;
+            read_at(&mut file, offset - check, &mut tail)
+                .await
+                .map_err(local_io)?;
+            drop(file);
+            if !self.tail_matches(remote, offset, &tail).await? {
                 // Another file by now: start over.
                 offset = 0;
             }
@@ -533,16 +575,22 @@ impl Sftp {
                 .await
                 .map_err(|error| self.fail_io(error))?;
         }
-        let mut options = tokio::fs::OpenOptions::new();
-        options.create(true);
-        if offset > 0 {
-            options.append(true);
-        } else {
-            options.write(true).truncate(true);
-        }
-        let mut target = options.open(&part).await.map_err(local_io)?;
+        // Written at `offset`, not appended: whatever lies past it (a write
+        // of the cut transfer that landed late) is cut off first.
+        let mut target = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&part)
+            .await
+            .map_err(local_io)?;
+        target.set_len(offset).await.map_err(local_io)?;
+        target
+            .seek(SeekFrom::Start(offset))
+            .await
+            .map_err(local_io)?;
         progress(offset);
-        let done = copy(
+        let copied = copy(
             &mut source,
             &mut target,
             offset,
@@ -550,11 +598,16 @@ impl Sftp {
             &|error| self.fail_io(error),
             &local_io,
         )
-        .await?;
+        .await;
+        // What was copied is on disk before any error is reported, so a
+        // resume measures the .part right.
+        let _ = target.flush().await;
+        let done = copied?;
         target.sync_all().await.map_err(local_io)?;
         drop(target);
         let _ = source.shutdown().await;
-        if size.is_some_and(|size| size != done) {
+        let written = tokio::fs::metadata(&part).await.map_err(local_io)?.len();
+        if written != done || size.is_some_and(|size| size != done) {
             return Err(SftpError::Changed);
         }
         if let Some(mtime) = attrs.mtime
@@ -599,29 +652,23 @@ impl Sftp {
         if offset > 0 {
             let check = offset.min(RESUME_CHECK);
             let mut tail = vec![0u8; check as usize];
-            if read_at(&mut source, offset - check, &mut tail)
+            read_at(&mut source, offset - check, &mut tail)
                 .await
-                .is_err()
-                || !self.tail_matches(&part, offset, &tail).await
-            {
+                .map_err(local_io)?;
+            if !self.tail_matches(&part, offset, &tail).await? {
                 offset = 0;
             }
         }
         // A file that is replaced keeps its permissions, from its .part on
         // (an edited 0600 file never sits there as 0644).
-        let mode = self
-            .session
-            .metadata(remote)
-            .await
-            .ok()
-            .and_then(|attrs| attrs.permissions);
+        let mode = self.mode_of(remote).await;
         let flags = if offset > 0 {
             OpenFlags::WRITE
         } else {
             OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE
         };
         let attrs = FileAttributes {
-            permissions: mode.map(|mode| mode & 0o7777),
+            permissions: mode,
             ..FileAttributes::empty()
         };
         let mut target = self
@@ -629,10 +676,9 @@ impl Sftp {
             .open_with_flags_and_attributes(part.as_str(), flags, attrs)
             .await
             .map_err(|error| self.fail(error))?;
-        if let (Some(mode), true) = (mode, offset > 0) {
-            // A resumed .part was created before: set its mode now.
-            let _ = self.set_permissions(&part, mode).await;
-        }
+        // On the handle too: CREATE applies the umask, and an existing .part
+        // keeps its own mode.
+        Self::set_mode(&target, mode).await;
         if offset > 0 {
             target
                 .seek(SeekFrom::Start(offset))
@@ -690,20 +736,33 @@ impl Sftp {
             Err(error) => return Err(self.fail(error)),
         };
         let part_there = self.session.symlink_metadata(part).await.is_ok();
-        let target_there = self.session.symlink_metadata(target).await.is_ok();
-        if !part_there || !target_there {
-            return Err(SftpError::Failure(refused.error_message));
+        let target_type = self
+            .session
+            .symlink_metadata(target)
+            .await
+            .ok()
+            .map(|attrs| attrs.file_type());
+        match target_type {
+            // A folder (or a device) of that name is never moved aside.
+            Some(kind) if !kind.is_file() && !kind.is_symlink() => {
+                return Err(SftpError::NotAFile);
+            }
+            Some(_) if part_there => {}
+            _ => return Err(SftpError::Failure(refused.error_message)),
         }
         let aside = format!(
-            "{target}.{}-{}.old",
-            std::process::id(),
+            "{target}.{:04x}.old",
             std::time::SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.subsec_nanos())
+                .map_or(0, |elapsed| elapsed.subsec_nanos() & 0xffff)
         );
         self.rename(target, &aside).await?;
         if let Err(error) = self.rename(part, target).await {
-            let _ = self.session.rename(aside.as_str(), target).await;
+            if self.session.rename(aside.as_str(), target).await.is_err() {
+                return Err(SftpError::Failure(format!(
+                    "{error}; the old file is kept as {aside}"
+                )));
+            }
             return Err(error);
         }
         let _ = self.session.remove_file(aside).await;
@@ -718,13 +777,21 @@ impl Sftp {
             .map_err(|error| self.fail(error))
     }
 
-    /// The file `path` created or emptied for writing (pipelined writes).
-    pub(crate) async fn open_write(&self, path: &str) -> Result<RemoteFile, SftpError> {
+    /// The file `path` created or emptied for writing (pipelined writes),
+    /// with `mode` set on it when given.
+    pub(crate) async fn open_write(
+        &self,
+        path: &str,
+        mode: Option<u32>,
+    ) -> Result<RemoteFile, SftpError> {
         let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE;
-        self.session
+        let file = self
+            .session
             .open_with_flags(path, flags)
             .await
-            .map_err(|error| self.fail(error))
+            .map_err(|error| self.fail(error))?;
+        Self::set_mode(&file, mode).await;
+        Ok(file)
     }
 
     /// A remote file error as this session sees it.

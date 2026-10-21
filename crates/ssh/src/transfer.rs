@@ -144,7 +144,9 @@ pub async fn copy_between(
     }
     let mut reader = from.open_read(source).await?;
     let part = format!("{target}{PART_SUFFIX}");
-    let mut writer = to.open_write(&part).await?;
+    // A file that is replaced keeps its permissions.
+    let mode = to.mode_of(target).await;
+    let mut writer = to.open_write(&part, mode).await?;
     let mut buffer = vec![0u8; 256 * 1024];
     let mut done = 0u64;
     loop {
