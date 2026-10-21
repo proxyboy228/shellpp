@@ -106,11 +106,20 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "sidebar-history",
         "sidebar-appearance",
         "sidebar-font",
+        // Stage 3 (night plan, items 1-4).
+        "keychain",
+        "keychain-key-panel",
+        "keychain-generate",
+        "keychain-import-unknown",
+        "keychain-empty",
     ] {
         for theme in ["dark", "light"] {
             let name = format!("1280x800-{theme}-{state}.png");
             assert!(files.contains(&name), "{name}");
         }
+    }
+    for state in ShotState::STAGE_3 {
+        assert!(ShotState::ALL.contains(&state), "{state:?}");
     }
     for state in ["root", "host-panel", "first-run"] {
         for theme in ["dark", "light"] {
@@ -118,7 +127,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 40);
+    assert_eq!(ShotState::ALL.len(), 45);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");
@@ -311,13 +320,22 @@ async fn every_demo_state_is_reached(cx: &mut TestAppContext) {
 async fn fresh_profile_states_show_their_screens(cx: &mut TestAppContext) {
     setup(cx);
     let parent = TempProfile::create("shellpp-test-shots").unwrap();
-    for shot_state in [ShotState::FirstRun, ShotState::Empty, ShotState::Unlock] {
+    for shot_state in [
+        ShotState::FirstRun,
+        ShotState::Empty,
+        ShotState::Unlock,
+        ShotState::KeychainEmpty,
+    ] {
         let Scene::Fresh(stage) = shot_state.scene() else {
             panic!("{shot_state:?} is a fresh-profile state");
         };
         let mut async_cx = cx.to_async();
         let fresh = open_fresh_state(&mut async_cx, parent.path(), stage).expect("fresh profile");
         let (handle, root) = test_window(&fresh, MAIN_SIZE, cx);
+        settle(&mut async_cx, handle).await.expect("settle");
+        reach_fresh_state(&mut async_cx, handle, shot_state)
+            .await
+            .expect("reached");
         settle(&mut async_cx, handle).await.expect("settle");
         check_state(&mut async_cx, handle, &root, shot_state)
             .unwrap_or_else(|error| panic!("{error}"));

@@ -1,6 +1,7 @@
-//! Keychain records written from the host panel's "+" (UI 3.1, 7.3, 7.4;
-//! docs/data-model.md, sections 9.2 and 9.4): identities (list, create,
-//! edit) and the OpenSSH user certificate stored on a key.
+//! Keychain records written from the host panel's "+" and the Keychain
+//! screen (UI 3.1, 7.3, 7.4; docs/data-model.md, sections 9.1, 9.2 and
+//! 9.4): identities (list, create, edit), the OpenSSH user certificate
+//! stored on a key, a key's label and its public key.
 //!
 //! These methods are facade methods like the ones in `service/mod.rs`; they
 //! live here so the Keychain additions of stage 1 stay in one place. Every
@@ -24,7 +25,7 @@ use crate::error::{CoreError, FieldError, ValidationReason};
 use crate::keys;
 use crate::model::identity::{self, PasswordChange};
 use crate::model::key;
-use crate::model::text::fold;
+use crate::model::text::{self, fold};
 use crate::model::time::{format_unix_ms, uuid_v7_timestamp};
 use crate::model::types::RecordKind;
 use crate::model::wipe::WipeOnDrop;
@@ -87,6 +88,45 @@ impl fmt::Debug for KeyCertificateInput {
             .field("key", &self.key)
             .finish_non_exhaustive()
     }
+}
+
+/// Input of [`Core::key_label_set`]: the new label of the key `key`
+/// (`string(256)`, required).
+pub struct KeyLabelInput {
+    pub key: RecordRef,
+    pub label: String,
+}
+
+impl fmt::Debug for KeyLabelInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyLabelInput")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The one-line public key of a key record: its `public_key` member, else
+/// derived from the private key (the public half of an OpenSSH key is
+/// readable without its passphrase). `None` when neither can be read.
+pub fn public_key_line(data: &Map<String, Value>) -> Option<String> {
+    if let Some(line) = key::public_key(data) {
+        return Some(line.to_owned());
+    }
+    let private = PrivateKey::from_openssh(key::private_key(data)?.as_bytes()).ok()?;
+    private.public_key().to_openssh().ok()
+}
+
+fn key_view(session: &Session, record_id: Uuid) -> Result<KeyView, CoreError> {
+    let record = session
+        .index
+        .get_kind(&record_id, RecordKind::Key)
+        .ok_or(CoreError::NotFound)?;
+    Ok(keys::view(
+        session.ring.vault_id(),
+        record_id,
+        record.payload.hlc.ms(),
+        record.data(),
+    ))
 }
 
 fn identity_view(session: &Session, record_id: Uuid) -> Result<IdentityView, CoreError> {
@@ -384,5 +424,97 @@ impl Core {
             .get("certificate")
             .and_then(Value::as_str)
             .is_some_and(|line| !line.is_empty()))
+    }
+
+    /// Renames a key (the Keychain's key panel, UI 7.3; saved as in UI 1.3):
+    /// `label` `required` when empty, `too_long` over 256 characters. Every
+    /// other member is kept; an unchanged label writes nothing.
+    pub fn key_label_set(&self, input: KeyLabelInput) -> Result<KeyView, CoreError> {
+        let label = match text::string(&input.label, key::MAX_LABEL_CHARS) {
+            Ok(Some(label)) => label,
+            Ok(None) => return Err(CoreError::field("label", ValidationReason::Required)),
+            Err(reason) => return Err(CoreError::field("label", reason)),
+        };
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        check_vault(parts.session, Some(input.key.vault_id))?;
+        let record_id = input.key.record_id;
+        let record = parts
+            .session
+            .index
+            .get_kind(&record_id, RecordKind::Key)
+            .ok_or(CoreError::NotFound)?;
+        if key::label(record.data()) == label {
+            return key_view(parts.session, record_id);
+        }
+        let mut data = WipeOnDrop::new(record.data().clone());
+        data.insert("label".into(), Value::String(label));
+        let write = parts.session.prepare_write(
+            parts.store,
+            RecordKind::Key,
+            record_id,
+            data.into_inner(),
+            now,
+        )?;
+        self.commit_records(&mut parts, vec![write], Vec::new(), Vec::new())?;
+        tracing::info!(record_id = %record_id, "key label saved");
+        key_view(parts.session, record_id)
+    }
+
+    /// The one-line public key of a key (UI 7.3: shown in the key panel,
+    /// derived from the private key when the record has none). Not a
+    /// secret (docs/security.md, section 9.4). `not_found` when the key
+    /// cannot be read.
+    pub fn key_public_key(&self, key: RecordRef) -> Result<String, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(key.vault_id))?;
+        let record = session
+            .index
+            .get_kind(&key.record_id, RecordKind::Key)
+            .ok_or(CoreError::NotFound)?;
+        public_key_line(record.data()).ok_or(CoreError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::generate::{KeyKind, generate};
+
+    /// A record without `public_key` (written by another client) still
+    /// shows its public key: the public half of the private key, also for
+    /// an encrypted key.
+    #[test]
+    fn the_public_key_is_derived_when_the_record_has_none() {
+        let passphrase = SecretString::from(format!(
+            "pp-{:x}",
+            u64::from_le_bytes(crate::crypto::random_array().expect("random"))
+        ));
+        for passphrase in [None, Some(&passphrase)] {
+            let text = generate(KeyKind::Ed25519, "derived@test", passphrase).expect("key");
+            let private = PrivateKey::from_openssh(text.as_bytes()).expect("parsed");
+            let expected = private.public_key().to_openssh().expect("public");
+            let mut data = Map::new();
+            data.insert("private_key".into(), Value::String(text.to_string()));
+            assert_eq!(public_key_line(&data).as_deref(), Some(expected.as_str()));
+            assert!(expected.starts_with("ssh-ed25519 "));
+            // The comment of an encrypted key is inside its encrypted part.
+            assert_eq!(expected.ends_with(" derived@test"), passphrase.is_none());
+            // A stored line wins.
+            data.insert(
+                "public_key".into(),
+                Value::String("ssh-ed25519 AAAA x".into()),
+            );
+            assert_eq!(
+                public_key_line(&data).as_deref(),
+                Some("ssh-ed25519 AAAA x")
+            );
+        }
+        assert_eq!(public_key_line(&Map::new()), None);
+        let mut broken = Map::new();
+        broken.insert("private_key".into(), Value::String("not a key".into()));
+        assert_eq!(public_key_line(&broken), None);
     }
 }

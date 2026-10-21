@@ -9,11 +9,11 @@ use common::{first_run, reasons};
 use secrecy::{ExposeSecret, SecretString};
 use shellpp_core::ValidationReason;
 use shellpp_core::model::identity::PasswordChange;
-use shellpp_core::service::dto::{KeyImportInput, RecordRef};
-use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput};
+use shellpp_core::service::dto::{KeyImportInput, RecordRef, SecretCopyTarget, SecretFieldRef};
+use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput, KeyLabelInput};
 use ssh_key::PrivateKey;
 use ssh_key::certificate::{Builder, CertType};
-use stage2::{KeyKind, generate, openssh};
+use stage2::{KeyKind, generate, openssh, passphrase};
 use uuid::Uuid;
 
 fn identity(vault_id: Uuid, record_id: Option<Uuid>, label: &str) -> IdentitySaveInput {
@@ -197,4 +197,112 @@ fn a_user_certificate_is_stored_on_the_key_it_certifies() {
     // An empty text removes the certificate.
     set("").expect("removed");
     assert!(!u.core.key_has_certificate(key_ref).unwrap());
+}
+
+/// The Keychain's key panel (UI 7.3): the label is renamed (required, at
+/// most 256 characters; nothing else changes), the public key is the stored
+/// line, and the private key is revealed and copied through the secret
+/// paths, the copy cleared after 30 seconds.
+#[test]
+fn a_key_is_renamed_shows_its_public_key_and_copies_its_private_key() {
+    let u = first_run();
+    let vault_id = u.vault_id;
+    let pair = generate(KeyKind::Ed25519, "panel@test");
+    let pass = passphrase();
+    let text = openssh(&pair, Some(pass.expose_secret()));
+    let key = u
+        .core
+        .key_import(KeyImportInput {
+            vault_id,
+            label: Some("Deploy".into()),
+            private_key: SecretString::from(text.clone()),
+            passphrase: Some(pass.clone()),
+            save_passphrase: true,
+        })
+        .expect("imported")
+        .key;
+    let key_ref = RecordRef {
+        vault_id,
+        record_id: key.record_id,
+    };
+    let rename = |label: &str| {
+        u.core.key_label_set(KeyLabelInput {
+            key: key_ref,
+            label: label.to_owned(),
+        })
+    };
+    assert_eq!(
+        reasons(rename("  ").unwrap_err()),
+        vec![("label".into(), ValidationReason::Required)]
+    );
+    assert_eq!(
+        reasons(rename(&"x".repeat(257)).unwrap_err()),
+        vec![("label".into(), ValidationReason::TooLong)]
+    );
+    let renamed = rename(" Deploy (CI) ").expect("renamed");
+    assert_eq!(renamed.label, "Deploy (CI)");
+    assert_eq!(renamed.fingerprint, key.fingerprint);
+    assert!(renamed.encrypted && renamed.passphrase_saved);
+    assert_eq!(u.core.keys_list().unwrap()[0].label, "Deploy (CI)");
+    // Unchanged: no write, the same view.
+    assert_eq!(
+        rename("Deploy (CI)").unwrap().modified_at,
+        renamed.modified_at
+    );
+    let missing = u.core.key_label_set(KeyLabelInput {
+        key: RecordRef {
+            vault_id,
+            record_id: Uuid::now_v7(),
+        },
+        label: "x".into(),
+    });
+    assert!(matches!(missing, Err(shellpp_core::CoreError::NotFound)));
+
+    // The public key line (an encrypted key keeps its comment inside the
+    // encrypted part, so the stored line has none).
+    let public = u.core.key_public_key(key_ref).expect("public key");
+    let expected = pair.public_key().to_openssh().unwrap();
+    let fields = |line: &str| {
+        line.split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(fields(&public), fields(&expected));
+
+    // The private key: revealed as stored, copied as a sensitive value.
+    let field = |path: &str| SecretFieldRef {
+        vault_id,
+        record_id: key.record_id,
+        path: path.to_owned(),
+    };
+    let revealed = u
+        .core
+        .secret_reveal(field("private_key"))
+        .expect("revealed");
+    assert_eq!(revealed.expose_secret(), text.trim());
+    assert_eq!(
+        u.core
+            .secret_reveal(field("passphrase"))
+            .unwrap()
+            .expose_secret(),
+        pass.expose_secret()
+    );
+    assert!(matches!(
+        u.core.secret_reveal(field("public_key")),
+        Err(shellpp_core::CoreError::Validation(_))
+    ));
+    let clipboard = &u.env.mem.clipboard;
+    u.core
+        .secret_copy(SecretCopyTarget::RecordField {
+            vault_id,
+            record_id: key.record_id,
+            path: "private_key".into(),
+        })
+        .expect("copied");
+    assert_eq!(clipboard.text().as_deref(), Some(text.trim()));
+    assert!(clipboard.last_was_sensitive());
+    u.env.mem.clock.advance(std::time::Duration::from_secs(31));
+    u.core.tick();
+    assert_eq!(clipboard.text(), None);
 }

@@ -59,8 +59,9 @@ pub fn run(launch: Launch) {
             crate::terminal::init(cx);
 
             // A temporary profile (`--demo`) or a test run never uses the
-            // user's ~/.ssh keys or SSH agent, and its Known Hosts import
-            // suggests no file instead of the real ~/.ssh/known_hosts.
+            // user's ~/.ssh keys or SSH agent, its Known Hosts import
+            // suggests no file instead of the real ~/.ssh/known_hosts, and
+            // the Keychain's "Import from ~/.ssh" lists no folder.
             let keys = match &opened {
                 Ok(opened) if opened.temp_profile.is_none() && !crate::dirs::is_test_run() => {
                     KeySources::system()
@@ -69,6 +70,7 @@ pub fn run(launch: Launch) {
                     crate::known_hosts::set_import_source(None, cx);
                     // Neither the import dialog (UI 2.5) suggests ~/.ssh/config.
                     crate::import_sources::set_default_path(None, cx);
+                    crate::keychain::set_ssh_folder(None, cx);
                     KeySources::none()
                 }
             };

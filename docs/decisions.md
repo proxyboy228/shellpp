@@ -545,6 +545,27 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 3, items 3 
 
 **Spec impact:** `docs/ui-behavior-spec.md` 7.1 (generation parameters); `docs/data-model.md` 9.1 (RSA sizes).
 
+### 33. The Keychain screen: creating keys, the hidden private key and what is not built yet (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 3, items 1-4, UI side; the points below are the lead's choices where the plan and the specification leave the details open).
+
+**Context.** The night plan asks for the Keychain screen (UI 7.1, 7.2), the key panel with the mandatory security requirements of 7.3, Generate key and the import of existing keys, on top of the core of D32. The specification does not say how a key is created under the saving rule of 1.3 when its creation runs a key derivation or a generation, how "Import from ~/.ssh" reaches the folder, what the panel shows of a key that cannot be read, or how the items of later work look meanwhile. The core could not rename a key, give its public key line or reveal and copy its private key.
+
+**Decision:**
+
+- Creating a key: New key and Generate key commit with an explicit button (Import, Generate) instead of "created once the required fields are valid" (1.3). Creating a key runs a key derivation (an encrypted import: bcrypt-pbkdf, PBKDF2, scrypt or Argon2) or a generation (RSA takes seconds) and settles the passphrase choice (save in the vault or ask on every connection), which must not happen while the user still types the passphrase or has not chosen. Afterwards the new key's panel opens and its label is saved as in 1.3 (autosave, an invalid label outlined and not saved). An import without a label takes the key comment, else the algorithm name, as the core does; Generate key requires a label.
+- A duplicate (the same SHA256 fingerprint) opens the existing key's panel with the toast "This key is already in the Keychain"; merging stays a later item (7.2).
+- The private key: Show reads it through the core (`secret_reveal` of the `private_key` path, which the core now allows for keys) and only the key panel keeps it, while it is shown. It is dropped on Hide, when the panel closes, shows another key or a form, on Esc, when the window shows another section or tab (the shell tells the screen on every frame) and on lock. Copy private key never passes through the UI: the core's `secret_copy` writes it to the OS clipboard as a sensitive value, and its clipboard guard clears it after 30 seconds if the clipboard still holds it (docs/security.md 9.4). The public key is copied as ordinary text. The core adds `key_label_set` (the label rules of a key record) and `key_public_key` (the stored line, else derived from the private key).
+- The type shown: ED25519, ECDSA with its curve (P-256, P-384, P-521), RSA. A stored record this client cannot read shows "unknown" with the `--warning` icon on its card and the reason in its panel. In the import form, a text that is not a usable key shows "unknown" with the reason of the core's `inspect` (D32), and Import stays disabled.
+- Import from ~/.ssh: GPUI's file dialog cannot start in a given folder, so the button opens the New key form with the private key files of `~/.ssh` (files up to 64 KiB that the core recognizes as a private key; `.pub` files, `config`, `known_hosts` and the like are not listed); a click puts one into the form. The folder is injected (`keychain::set_ssh_folder`), so tests, the demo and the screenshots never read the real one, and a test build sees none, as for known_hosts (D31).
+- Not built tonight, shown disabled by the D30 rule: Certificate and FIDO2 in the action bar, New identity in the New key menu, Export to host in the panel's Key export block, Duplicate and Export to file in its "…" menu. Remove is left out: the core's record removal and its undo cover hosts and groups only. The panel's Certificate block (7.3, block 5) is not shown; a certificate is attached from the host panel ("+ -> Certificate") until the Certificate item is built. Identity cards are read-only until the identity panel (7.4).
+- The view toggle and the sort are remembered (`view.keychain.layout`, `view.keychain.sort`: the screen's sort modes are those of the setting). The forms' Cancel and Import or Generate are pinned below their scrolling body, like the host panel's Connect; Import or Generate is the panel's one accent button, and the empty state's Generate is the screen's accent button while no panel is open.
+- Demo and screenshots: the demo profile gets three keys generated when it is seeded (Ed25519 and ECDSA P-256, without a passphrase and without RSA, so the seeding stays fast) and two identities. The screenshot states are keychain, keychain-key-panel, keychain-generate, keychain-import-unknown and keychain-empty (`scripts/ui-screens.ps1 -Stage3`).
+
+**For the owner:** whether a key should rather be created by the literal rule of 1.3 (an unencrypted key saved as soon as it is pasted), and whether Remove for keys should come with an extension of the core's record removal now.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.3, 7.2 and 7.3 (and `docs/ru`).
+
 ### 34. Export and import of all data in JSON (night)
 
 Status: night decision, 2026-10-21 (the owner's night plan for stage 3, item 11; the points below are the lead's choices where the plan and the specification leave the details open).
