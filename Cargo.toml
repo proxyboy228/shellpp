@@ -147,6 +147,14 @@ dbg_macro = "warn"
 print_stdout = "warn"
 print_stderr = "warn"
 
+# Debug info costs most of target/ on a small disk: the workspace crates keep
+# line tables (backtraces with file and line), the dependencies none.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # KDF parameters are never weakened in tests (docs/architecture.md, section 9.4).
 # Instead the crypto crates are optimized in the dev and test profiles.
 [profile.dev.package.argon2]
