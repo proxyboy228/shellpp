@@ -33,6 +33,10 @@ pub const REASON_CONNECTION_LOST: &str = "The connection was lost. Check the net
 pub const REASON_KEEPALIVE: &str = "The server stopped answering (keepalive timeout).";
 pub const REASON_CLOSED_BY_SERVER: &str = "The server closed the session without an exit code.";
 pub const REASON_KEY_UNUSABLE: &str = "The private key cannot be used.";
+pub const REASON_PROXY_FAILED: &str = "The proxy did not open the connection.";
+pub const REASON_PROXY_AUTH_FAILED: &str = "The proxy did not accept the username or password.";
+pub const REASON_FORWARDING_REFUSED: &str =
+    "A jump host does not allow connections to the next host.";
 pub const REASON_LOCKED: &str = "Shell++ is locked. Unlock it and try again.";
 pub const REASON_HOST_MISSING: &str = "The host no longer exists.";
 pub const REASON_INVALID_TARGET: &str = "The address, port or username is not valid.";

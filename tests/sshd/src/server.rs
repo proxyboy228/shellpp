@@ -83,6 +83,13 @@ pub enum ServerEvent {
     Exec { command: String },
     /// An `auth-agent-req@openssh.com` request.
     AgentForward,
+    /// A `direct-tcpip` channel request (opened only with forwarding on and
+    /// a loopback destination).
+    DirectTcpip { host: String, port: u32 },
+    /// A `tcpip-forward` request.
+    TcpipForward { address: String, port: u32 },
+    /// A `cancel-tcpip-forward` request.
+    CancelTcpipForward { address: String, port: u32 },
     /// A keepalive (`keepalive@openssh.com`) global request, answered with a
     /// failure reply as OpenSSH does.
     ///
@@ -125,6 +132,8 @@ struct Shared {
     /// Extension: new connections are accepted and frozen at once (the
     /// client waits for the server's identification forever).
     hold_new: AtomicBool,
+    forwarding: bool,
+    accept_env: Option<Vec<String>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -221,6 +230,8 @@ impl TestServer {
             connections: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(1),
             hold_new: AtomicBool::new(false),
+            forwarding: config.forwarding,
+            accept_env: config.accept_env.clone(),
         };
         let russh_config = Arc::new(shared.build_config(host_key));
         shared.russh_config = RwLock::new(russh_config);
@@ -498,6 +509,7 @@ async fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
             agent_forwarded: Arc::new(AtomicBool::new(false)),
             user: None,
             ki_failures: 0,
+            forwards: HashMap::new(),
         };
         let recorder = Arc::clone(&shared);
         let on_silent_reply = Box::new(move || recorder.record(ServerEvent::Keepalive));
@@ -522,6 +534,49 @@ struct ConnHandler {
     /// The authenticated user (the shell prompt shows it).
     user: Option<String>,
     ki_failures: u32,
+    /// Listeners of `tcpip-forward` requests, by address and port.
+    forwards: HashMap<(String, u32), JoinHandle<()>>,
+}
+
+impl Drop for ConnHandler {
+    fn drop(&mut self) {
+        for (_, task) in self.forwards.drain() {
+            task.abort();
+        }
+    }
+}
+
+/// A loopback destination or bind address: `localhost` or a loopback IP.
+fn loopback(address: &str) -> Option<std::net::IpAddr> {
+    if address.eq_ignore_ascii_case("localhost") {
+        return Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    }
+    address
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .filter(|ip| ip.is_loopback())
+}
+
+/// Whether an env request may set `name` (see `ServerConfig::accept_env`).
+fn env_accepted(patterns: Option<&[String]>, name: &str) -> bool {
+    let Some(patterns) = patterns else {
+        return true;
+    };
+    patterns
+        .iter()
+        .any(|pattern| match pattern.strip_suffix('*') {
+            Some(prefix) => name.starts_with(prefix),
+            None => pattern == name,
+        })
+}
+
+/// Copies between a forwarded TCP connection and its channel until either
+/// side closes.
+async fn relay(mut socket: tokio::net::TcpStream, channel: Channel<Msg>) {
+    let mut stream = channel.into_stream();
+    let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
 }
 
 impl ConnHandler {
@@ -708,15 +763,36 @@ impl russh::server::Handler for ConnHandler {
 
     async fn channel_open_direct_tcpip(
         &mut self,
-        _channel: Channel<Msg>,
-        _host_to_connect: &str,
-        _port_to_connect: u32,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
         _originator_address: &str,
         _originator_port: u32,
-        _reply: ChannelOpenHandle,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.trace.callback();
+        self.shared.record(ServerEvent::DirectTcpip {
+            host: host_to_connect.to_owned(),
+            port: port_to_connect,
+        });
+        let destination = loopback(host_to_connect)
+            .zip(u16::try_from(port_to_connect).ok())
+            .filter(|_| self.shared.forwarding);
+        let Some((ip, port)) = destination else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        let connect = tokio::net::TcpStream::connect(SocketAddr::new(ip, port));
+        match tokio::time::timeout(Duration::from_secs(5), connect).await {
+            Ok(Ok(socket)) => {
+                reply.accept().await;
+                tokio::spawn(relay(socket, channel));
+            }
+            _ => reply.reject(russh::ChannelOpenFailure::ConnectFailed).await,
+        }
         Ok(())
     }
 
@@ -818,26 +894,80 @@ impl russh::server::Handler for ConnHandler {
         Ok(())
     }
 
-    // No port forwarding in stage 2: every request is refused.
+    // Remote forwarding on loopback addresses, with forwarding on.
 
     async fn tcpip_forward(
         &mut self,
-        _address: &str,
-        _port: &mut u32,
-        _session: &mut Session,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
     ) -> Result<bool, Self::Error> {
         self.trace.callback();
-        Ok(false)
+        self.shared.record(ServerEvent::TcpipForward {
+            address: address.to_owned(),
+            port: *port,
+        });
+        let bind = loopback(address)
+            .zip(u16::try_from(*port).ok())
+            .filter(|_| self.shared.forwarding);
+        let Some((ip, requested)) = bind else {
+            return Ok(false);
+        };
+        let Ok(listener) = TcpListener::bind(SocketAddr::new(ip, requested)).await else {
+            return Ok(false);
+        };
+        let Ok(bound) = listener.local_addr() else {
+            return Ok(false);
+        };
+        *port = u32::from(bound.port());
+        let handle = session.handle();
+        let reported = (address.to_owned(), *port);
+        let task = tokio::spawn({
+            let (address, port) = reported.clone();
+            async move {
+                while let Ok((socket, peer)) = listener.accept().await {
+                    let handle = handle.clone();
+                    let address = address.clone();
+                    tokio::spawn(async move {
+                        if let Ok(channel) = handle
+                            .channel_open_forwarded_tcpip(
+                                address,
+                                port,
+                                peer.ip().to_string(),
+                                u32::from(peer.port()),
+                            )
+                            .await
+                        {
+                            relay(socket, channel).await;
+                        }
+                    });
+                }
+            }
+        });
+        if let Some(old) = self.forwards.insert(reported, task) {
+            old.abort();
+        }
+        Ok(true)
     }
 
     async fn cancel_tcpip_forward(
         &mut self,
-        _address: &str,
-        _port: u32,
+        address: &str,
+        port: u32,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
         self.trace.callback();
-        Ok(false)
+        self.shared.record(ServerEvent::CancelTcpipForward {
+            address: address.to_owned(),
+            port,
+        });
+        match self.forwards.remove(&(address.to_owned(), port)) {
+            Some(task) => {
+                task.abort();
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     async fn streamlocal_forward(
@@ -906,7 +1036,11 @@ impl russh::server::Handler for ConnHandler {
         self.shared.record(ServerEvent::Env {
             name: variable_name.to_owned(),
         });
-        session.channel_success(channel)
+        if env_accepted(self.shared.accept_env.as_deref(), variable_name) {
+            session.channel_success(channel)
+        } else {
+            session.channel_failure(channel)
+        }
     }
 
     async fn shell_request(

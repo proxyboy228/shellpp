@@ -45,6 +45,9 @@ pub(crate) struct Shared {
     /// The attempt was abandoned (the [`crate::connect`] future was
     /// dropped): a pending host key decision ends as a reject.
     cancelled: watch::Sender<bool>,
+    /// Active Remote forwarding rules: the only `forwarded-tcpip` channels
+    /// accepted (docs/security.md, section 11.4).
+    remote_rules: crate::forward::RemoteRules,
 }
 
 #[derive(Default)]
@@ -84,7 +87,12 @@ impl Shared {
             lost: watch::Sender::new(false),
             lost_reason: Mutex::new(None),
             cancelled: watch::Sender::new(false),
+            remote_rules: crate::forward::RemoteRules::default(),
         }
+    }
+
+    pub(crate) fn remote_rules(&self) -> &crate::forward::RemoteRules {
+        &self.remote_rules
     }
 
     /// Abandons the attempt (see `cancelled`).
@@ -298,16 +306,28 @@ impl russh::client::Handler for ClientHandler {
     #[allow(clippy::too_many_arguments)]
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
-        _channel: russh::Channel<Msg>,
-        _connected_address: &str,
-        _connected_port: u32,
+        channel: russh::Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // Remote forwarding rules arrive in stage 5.
-        reject(reply, "forwarded-tcpip").await;
+        // Only for an active Remote rule with that address and port.
+        match self
+            .shared
+            .remote_rules
+            .destination(connected_address, connected_port)
+        {
+            Some((host, port, state)) => {
+                reply.accept().await;
+                tokio::spawn(crate::forward::serve_remote_channel(
+                    channel, host, port, state,
+                ));
+            }
+            None => reject(reply, "forwarded-tcpip").await,
+        }
         Ok(())
     }
 

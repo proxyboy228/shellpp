@@ -29,6 +29,13 @@ pub enum FailureKind {
     /// The private key could not be decoded (not after a passphrase prompt:
     /// a wrong passphrase is asked again).
     KeyUnusable,
+    /// The proxy refused the tunnel or did not answer as a proxy.
+    ProxyFailed,
+    /// The proxy refused the credentials (or wants some and none are set).
+    ProxyAuthFailed,
+    /// A jump host refused to open a channel to the next host of the route
+    /// (OpenSSH `AllowTcpForwarding no`).
+    ForwardingRefused,
 }
 
 impl FailureKind {
@@ -46,6 +53,9 @@ impl FailureKind {
             Self::ChannelFailed => "channel_failed",
             Self::Disconnected => "disconnected",
             Self::KeyUnusable => "key_unusable",
+            Self::ProxyFailed => "proxy_failed",
+            Self::ProxyAuthFailed => "proxy_auth_failed",
+            Self::ForwardingRefused => "forwarding_refused",
         }
     }
 
@@ -66,22 +76,58 @@ impl FailureKind {
     }
 }
 
-/// An SSH failure.
+/// Where on a route a failure happened (stage 5: jump hosts and a proxy).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FailurePlace {
+    /// The host being connected (the last one of the route).
+    #[default]
+    Target,
+    /// The jump host at this index of [`crate::ConnectSpec::jump_hosts`]
+    /// (0 = the first one).
+    JumpHost(usize),
+    /// The proxy of the first connection.
+    Proxy,
+}
+
+/// An SSH failure: its kind and its place on the route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("ssh failure: {}", .kind.reason())]
+#[error("ssh failure: {}{}", .kind.reason(), place_suffix(.place))]
 pub struct SshError {
     pub kind: FailureKind,
+    pub place: FailurePlace,
+}
+
+fn place_suffix(place: &FailurePlace) -> String {
+    match place {
+        FailurePlace::Target => String::new(),
+        FailurePlace::JumpHost(index) => format!(" (jump host {})", index + 1),
+        FailurePlace::Proxy => " (proxy)".to_owned(),
+    }
 }
 
 impl SshError {
+    /// A failure of the host being connected.
     pub fn new(kind: FailureKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            place: FailurePlace::Target,
+        }
+    }
+
+    /// Moves a failure of "this connection" ([`FailurePlace::Target`]) to
+    /// `place`; a failure placed already (the proxy, an earlier jump host)
+    /// keeps its place.
+    pub fn placed_at(self, place: FailurePlace) -> Self {
+        match self.place {
+            FailurePlace::Target => Self { place, ..self },
+            _ => self,
+        }
     }
 }
 
 impl From<FailureKind> for SshError {
     fn from(kind: FailureKind) -> Self {
-        Self { kind }
+        Self::new(kind)
     }
 }
 
@@ -120,6 +166,26 @@ mod tests {
         assert_eq!(
             SshError::new(FailureKind::AuthFailed).to_string(),
             "ssh failure: auth_failed"
+        );
+        assert_eq!(
+            SshError::new(FailureKind::AuthFailed)
+                .placed_at(FailurePlace::JumpHost(1))
+                .to_string(),
+            "ssh failure: auth_failed (jump host 2)"
+        );
+    }
+
+    #[test]
+    fn a_placed_failure_keeps_its_place() {
+        let proxy = SshError::new(FailureKind::ProxyFailed).placed_at(FailurePlace::Proxy);
+        assert_eq!(
+            proxy.placed_at(FailurePlace::JumpHost(0)).place,
+            FailurePlace::Proxy
+        );
+        let hop = SshError::new(FailureKind::Refused).placed_at(FailurePlace::JumpHost(0));
+        assert_eq!(
+            hop.placed_at(FailurePlace::JumpHost(1)).place,
+            FailurePlace::JumpHost(0)
         );
     }
 }

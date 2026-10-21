@@ -12,6 +12,7 @@ pub mod agent;
 pub mod json;
 pub mod net;
 pub mod openssh;
+pub mod proxy;
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -92,6 +93,8 @@ pub fn spec(addr: SocketAddr, username: Option<&str>, auth: AuthPlan) -> Connect
         keepalive: None,
         connect_timeout: Duration::from_secs(10),
         preferred_host_key_types: Vec::new(),
+        jump_hosts: Vec::new(),
+        proxy: None,
     }
 }
 

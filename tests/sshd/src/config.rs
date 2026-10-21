@@ -142,6 +142,15 @@ pub struct ServerConfig {
     /// MOTD printed when the shell starts (default `"Welcome to shellpp-test-sshd\r\n"`).
     #[serde(default)]
     pub motd: Option<String>,
+    /// Port forwarding (stage 5): `direct-tcpip` channels to loopback
+    /// destinations and `tcpip-forward` on loopback addresses. Off, both
+    /// are refused (OpenSSH `AllowTcpForwarding no`).
+    #[serde(default)]
+    pub forwarding: bool,
+    /// Names env requests may set (OpenSSH `AcceptEnv`; a trailing `*`
+    /// matches a prefix); other names are refused. `None` accepts every name.
+    #[serde(default)]
+    pub accept_env: Option<Vec<String>>,
 }
 
 fn default_bind() -> SocketAddr {
@@ -159,6 +168,8 @@ impl ServerConfig {
             exec: None,
             auth_banner: None,
             motd: None,
+            forwarding: false,
+            accept_env: None,
         }
     }
 

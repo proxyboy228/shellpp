@@ -25,6 +25,16 @@
 //! once after an accept and accepts exactly that key again without asking
 //! (docs/architecture.md, section 4.2, step 4).
 //!
+//! Routes (stage 5): [`ConnectSpec::jump_hosts`] are connected first, in
+//! order, each over a `direct-tcpip` channel of the one before (the first
+//! over TCP, through [`ConnectSpec::proxy`] when one is set); this host then
+//! connects over a channel of the last jump host. Every connection of the
+//! route has its own spec (address, port, credentials, keepalive) and its
+//! own [`Interaction`], so each host key is decided on its own (TOFU per
+//! jump host). A failure names its place on the route
+//! ([`crate::FailurePlace`]). The returned [`Connection`] owns the jump
+//! connections: dropping or disconnecting it closes the whole route.
+//!
 //! Keepalive: after authentication a task sends `keepalive@openssh.com`
 //! requests every [`ConnectSpec::keepalive`] interval; three consecutive
 //! unanswered intervals mark the connection lost and cut the transport, and
@@ -45,8 +55,9 @@ use tokio::time::Instant;
 
 use crate::agent::SystemAgent;
 use crate::auth::{AuthContext, AuthError};
-use crate::error::{FailureKind, SshError};
+use crate::error::{FailureKind, FailurePlace, SshError};
 use crate::handler::{ClientHandler, Shared};
+use crate::proxy::{ProxyError, ProxySpec};
 use crate::transport::{KillSwitch, KillableStream};
 
 /// A boxed, sendable future (dyn-compatible async trait methods without an extra crate).
@@ -128,6 +139,23 @@ impl std::fmt::Debug for KeyCredential {
     }
 }
 
+/// A jump host of a route (Host Chaining): its own spec and its own
+/// interaction (host key decision, prompts). The spec's own `jump_hosts`
+/// and `proxy` are ignored (docs/data-model.md, section 7.3).
+#[derive(Clone)]
+pub struct JumpHost {
+    pub spec: ConnectSpec,
+    pub interaction: Arc<dyn Interaction>,
+}
+
+impl std::fmt::Debug for JumpHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JumpHost")
+            .field("spec", &self.spec)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Everything needed to open one connection.
 #[derive(Clone)]
 pub struct ConnectSpec {
@@ -146,6 +174,11 @@ pub struct ConnectSpec {
     /// Host key algorithms already saved for this host in known hosts, most
     /// preferred first, so that the server presents a key the store knows.
     pub preferred_host_key_types: Vec<String>,
+    /// Jump hosts connected in this order before this host (stage 5).
+    pub jump_hosts: Vec<JumpHost>,
+    /// The proxy of the route's first connection: the first jump host, or
+    /// this host when there is none (docs/data-model.md, section 7.3).
+    pub proxy: Option<ProxySpec>,
 }
 
 impl std::fmt::Debug for ConnectSpec {
@@ -154,6 +187,8 @@ impl std::fmt::Debug for ConnectSpec {
             .field("auth", &self.auth)
             .field("agent", &self.agent.is_some())
             .field("keepalive", &self.keepalive)
+            .field("jump_hosts", &self.jump_hosts.len())
+            .field("proxy", &self.proxy)
             .finish_non_exhaustive()
     }
 }
@@ -326,19 +361,75 @@ enum AttemptError {
     /// The transport closed before the first authentication reply, after the
     /// user accepted this host key: reconnect once.
     LostAfterAccept(HostKeyInfo),
-    Failed(FailureKind),
+    /// The failure and its place ([`FailurePlace::Target`] = the connection
+    /// being made).
+    Failed(SshError),
 }
 
 impl From<FailureKind> for AttemptError {
     fn from(kind: FailureKind) -> Self {
-        Self::Failed(kind)
+        Self::Failed(SshError::new(kind))
     }
 }
 
-/// Opens a connection: TCP, handshake, host key decision, authentication.
+impl From<SshError> for AttemptError {
+    fn from(error: SshError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// How the transport of one connection of a route is opened.
+#[derive(Clone, Copy)]
+enum Via<'a> {
+    /// TCP to the host, through the proxy when there is one.
+    Direct(Option<&'a ProxySpec>),
+    /// A `direct-tcpip` channel of the previous connection of the route,
+    /// which sits at `place`.
+    Through {
+        previous: &'a Connection,
+        place: FailurePlace,
+    },
+}
+
+/// Opens a connection: the jump hosts in order, then this host (module
+/// documentation); for each: transport, handshake, host key decision,
+/// authentication.
 pub async fn connect(
     spec: ConnectSpec,
     interaction: Arc<dyn Interaction>,
+) -> Result<Connection, SshError> {
+    let mut chain: Vec<Connection> = Vec::with_capacity(spec.jump_hosts.len());
+    for (index, hop) in spec.jump_hosts.iter().enumerate() {
+        let place = FailurePlace::JumpHost(index);
+        let via = via_after(&chain, spec.proxy.as_ref());
+        let connection = connect_one(&hop.spec, &hop.interaction, via)
+            .await
+            .map_err(|error| error.placed_at(place))?;
+        chain.push(connection);
+    }
+    let via = via_after(&chain, spec.proxy.as_ref());
+    let mut connection = connect_one(&spec, &interaction, via).await?;
+    connection.chain = chain;
+    Ok(connection)
+}
+
+/// The transport of the next connection after `chain`.
+fn via_after<'a>(chain: &'a [Connection], proxy: Option<&'a ProxySpec>) -> Via<'a> {
+    match chain.last() {
+        None => Via::Direct(proxy),
+        Some(previous) => Via::Through {
+            previous,
+            place: FailurePlace::JumpHost(chain.len() - 1),
+        },
+    }
+}
+
+/// Opens one connection of a route over `via`, reconnecting once when the
+/// server closed during the host key decision (module documentation).
+async fn connect_one(
+    spec: &ConnectSpec,
+    interaction: &Arc<dyn Interaction>,
+    via: Via<'_>,
 ) -> Result<Connection, SshError> {
     let mut username = spec
         .username
@@ -348,7 +439,7 @@ pub async fn connect(
     let mut auto_accept: Option<HostKeyInfo> = None;
     let mut reconnected = false;
     loop {
-        match attempt(&spec, &interaction, auto_accept.take(), &mut username).await {
+        match attempt(spec, interaction, auto_accept.take(), &mut username, via).await {
             Ok(connection) => return Ok(connection),
             Err(AttemptError::LostAfterAccept(key)) if !reconnected => {
                 tracing::debug!(
@@ -360,9 +451,94 @@ pub async fn connect(
             Err(AttemptError::LostAfterAccept(_)) => {
                 return Err(SshError::new(FailureKind::Disconnected));
             }
-            Err(AttemptError::Failed(kind)) => {
-                tracing::debug!(kind = kind.reason(), "connect failed");
-                return Err(SshError::new(kind));
+            Err(AttemptError::Failed(error)) => {
+                tracing::debug!(kind = error.kind.reason(), "connect failed");
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// A transport stream of any kind (TCP, a proxy tunnel, a channel).
+trait Duplex: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Duplex for T {}
+
+/// Opens the transport of one connection before `deadline`.
+async fn open_transport(
+    spec: &ConnectSpec,
+    interaction: &Arc<dyn Interaction>,
+    via: Via<'_>,
+    deadline: Instant,
+) -> Result<Box<dyn Duplex>, SshError> {
+    match via {
+        Via::Direct(None) => {
+            interaction.step(ConnectStep::Resolving);
+            let addrs = tokio::time::timeout_at(
+                deadline,
+                crate::transport::resolve(&spec.address, spec.port),
+            )
+            .await
+            .map_err(|_| FailureKind::Timeout)??;
+            interaction.step(ConnectStep::Connecting);
+            let tcp =
+                tokio::time::timeout_at(deadline, crate::transport::connect_any(&addrs, deadline))
+                    .await
+                    .map_err(|_| FailureKind::Timeout)??;
+            Ok(Box::new(tcp))
+        }
+        Via::Direct(Some(proxy)) => {
+            let at_proxy = |kind: FailureKind| SshError::new(kind).placed_at(FailurePlace::Proxy);
+            interaction.step(ConnectStep::Resolving);
+            let addrs = tokio::time::timeout_at(
+                deadline,
+                crate::transport::resolve(&proxy.address, proxy.port),
+            )
+            .await
+            .map_err(|_| at_proxy(FailureKind::Timeout))?
+            .map_err(at_proxy)?;
+            interaction.step(ConnectStep::Connecting);
+            let mut tcp =
+                tokio::time::timeout_at(deadline, crate::transport::connect_any(&addrs, deadline))
+                    .await
+                    .map_err(|_| at_proxy(FailureKind::Timeout))?
+                    .map_err(at_proxy)?;
+            let opened = tokio::time::timeout_at(
+                deadline,
+                crate::proxy::open(&mut tcp, proxy, spec.address.trim(), spec.port),
+            )
+            .await
+            .map_err(|_| at_proxy(FailureKind::Timeout))?;
+            match opened {
+                Ok(()) => Ok(Box::new(tcp)),
+                Err(ProxyError::Proxy(kind)) => Err(at_proxy(kind)),
+                Err(ProxyError::Target(kind)) => Err(SshError::new(kind)),
+            }
+        }
+        Via::Through { previous, place } => {
+            interaction.step(ConnectStep::Connecting);
+            let opened = tokio::time::timeout_at(
+                deadline,
+                previous.core.handle.channel_open_direct_tcpip(
+                    spec.address.trim(),
+                    u32::from(spec.port),
+                    "127.0.0.1",
+                    0,
+                ),
+            )
+            .await
+            .map_err(|_| FailureKind::Timeout)?;
+            match opened {
+                Ok(channel) => Ok(Box::new(channel.into_stream())),
+                // The jump host could not reach this host.
+                Err(russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::ConnectFailed)) => {
+                    Err(SshError::new(FailureKind::Refused))
+                }
+                // The jump host does not forward (AllowTcpForwarding no),
+                // or it is gone.
+                Err(_) if previous.is_closed() => {
+                    Err(SshError::new(FailureKind::Disconnected).placed_at(place))
+                }
+                Err(_) => Err(SshError::new(FailureKind::ForwardingRefused).placed_at(place)),
             }
         }
     }
@@ -389,6 +565,7 @@ async fn attempt(
     interaction: &Arc<dyn Interaction>,
     auto_accept: Option<HostKeyInfo>,
     username: &mut Option<String>,
+    via: Via<'_>,
 ) -> Result<Connection, AttemptError> {
     let deadline = Instant::now() + spec.connect_timeout;
     let shared = Arc::new(Shared::new(
@@ -397,21 +574,10 @@ async fn attempt(
         spec.agent.clone(),
     ));
 
-    interaction.step(ConnectStep::Resolving);
-    let addrs = tokio::time::timeout_at(
-        deadline,
-        crate::transport::resolve(&spec.address, spec.port),
-    )
-    .await
-    .map_err(|_| FailureKind::Timeout)??;
-
-    interaction.step(ConnectStep::Connecting);
-    let tcp = tokio::time::timeout_at(deadline, crate::transport::connect_any(&addrs, deadline))
-        .await
-        .map_err(|_| FailureKind::Timeout)??;
+    let transport = open_transport(spec, interaction, via, deadline).await?;
 
     let switch = Arc::new(KillSwitch::default());
-    let stream = KillableStream::new(tcp, Arc::clone(&switch));
+    let stream = KillableStream::new(transport, Arc::clone(&switch));
     // Dropping this future (the host cancelled the attempt) ends a pending
     // host key decision and cuts the transport.
     let mut guard = AttemptGuard {
@@ -466,9 +632,9 @@ async fn attempt(
             return Err(match error {
                 AuthError::LostBeforeFirstReply => match shared.key_accepted_by_user() {
                     Some(key) => AttemptError::LostAfterAccept(key),
-                    None => AttemptError::Failed(FailureKind::Disconnected),
+                    None => AttemptError::from(FailureKind::Disconnected),
                 },
-                AuthError::Failed(kind) => AttemptError::Failed(kind),
+                AuthError::Failed(kind) => AttemptError::from(kind),
             });
         }
     };
@@ -490,6 +656,7 @@ async fn attempt(
     }
     Ok(Connection {
         core,
+        chain: Vec::new(),
         server_ident,
         auth: authenticated.outcome,
         prompted: std::sync::Mutex::new(authenticated.prompted),
@@ -556,6 +723,22 @@ pub(crate) struct ConnCore {
 }
 
 impl ConnCore {
+    pub(crate) fn handle(&self) -> &Handle<ClientHandler> {
+        &self.handle
+    }
+
+    pub(crate) fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    pub(crate) fn remote_rules(&self) -> &crate::forward::RemoteRules {
+        self.shared.remote_rules()
+    }
+
+    pub(crate) fn subscribe_lost(&self) -> watch::Receiver<bool> {
+        self.shared.subscribe_lost()
+    }
+
     pub(crate) fn is_closed(&self) -> bool {
         self.handle.is_closed()
             || self.shared.transport_closed()
@@ -608,6 +791,8 @@ impl Drop for ConnCore {
 /// An authenticated connection.
 pub struct Connection {
     core: Arc<ConnCore>,
+    /// The jump hosts of the route, first one first; dropped after `core`.
+    chain: Vec<Connection>,
     server_ident: String,
     auth: AuthOutcome,
     /// Taken once by [`Connection::take_prompted_secrets`].
@@ -932,23 +1117,55 @@ impl Connection {
         self.core.is_closed()
     }
 
-    /// Sends an SSH disconnect and closes the transport.
+    /// The number of jump hosts this connection goes through.
+    pub fn jump_hosts(&self) -> usize {
+        self.chain.len()
+    }
+
+    pub(crate) fn core(&self) -> &Arc<ConnCore> {
+        &self.core
+    }
+
+    /// Resolves once the transport is gone.
+    pub fn lost_signal(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut lost = self.core.shared.subscribe_lost();
+        let core = Arc::downgrade(&self.core);
+        async move {
+            loop {
+                if *lost.borrow_and_update() || core.upgrade().is_none_or(|core| core.is_closed()) {
+                    return;
+                }
+                // Also re-checks now and then: a closed handle does not
+                // always mark the connection lost.
+                let _ = tokio::time::timeout(Duration::from_secs(1), lost.changed()).await;
+            }
+        }
+    }
+
+    /// Sends an SSH disconnect and closes the transport, then the jump
+    /// hosts' connections, last one first.
     pub async fn disconnect(&self) {
-        let core = &self.core;
-        let _ = core
-            .handle
-            .disconnect(Disconnect::ByApplication, "", "en")
-            .await;
-        let deadline = Instant::now() + DISCONNECT_GRACE;
-        while !core.handle.is_closed() && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        disconnect_core(&self.core).await;
+        for hop in self.chain.iter().rev() {
+            disconnect_core(&hop.core).await;
         }
-        core.switch.kill();
-        if let Ok(mut slot) = core.keepalive.lock()
-            && let Some(task) = slot.take()
-        {
-            task.abort();
-        }
+    }
+}
+
+async fn disconnect_core(core: &ConnCore) {
+    let _ = core
+        .handle
+        .disconnect(Disconnect::ByApplication, "", "en")
+        .await;
+    let deadline = Instant::now() + DISCONNECT_GRACE;
+    while !core.handle.is_closed() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    core.switch.kill();
+    if let Ok(mut slot) = core.keepalive.lock()
+        && let Some(task) = slot.take()
+    {
+        task.abort();
     }
 }
 
@@ -1210,6 +1427,8 @@ mod tests {
             keepalive: None,
             connect_timeout: Duration::from_secs(1),
             preferred_host_key_types: vec![],
+            jump_hosts: Vec::new(),
+            proxy: None,
         };
         let future = connect(spec, Arc::new(Nothing));
         assert_send(&future);
@@ -1252,6 +1471,8 @@ mod tests {
             keepalive: None,
             connect_timeout: Duration::from_secs(15),
             preferred_host_key_types: vec![],
+            jump_hosts: Vec::new(),
+            proxy: None,
         };
         let text = format!("{spec:?}");
         assert!(!text.contains("example.com"));

@@ -1,5 +1,6 @@
 //! Shell++ SSH client (docs/architecture.md, sections 2.4 and 4.2): direct TCP
-//! connections in stage 2 (jump hosts and proxies join in stage 5), host key
+//! connections, routes through jump hosts and an HTTP or SOCKS5 proxy
+//! (stage 5), port forwarding ([`forward`]), host key
 //! verification through a callback, authentication (public key, system agent,
 //! password, keyboard-interactive), a shell channel with a PTY, an exec
 //! channel for OS detection, keepalive, the reconnect backoff, the system
@@ -31,9 +32,11 @@ mod auth;
 pub mod authorized_keys;
 pub mod client;
 pub mod error;
+pub mod forward;
 mod handler;
 pub mod local_names;
 pub mod open_with;
+pub mod proxy;
 pub mod reconnect;
 pub mod sftp;
 pub mod transfer;
@@ -44,9 +47,14 @@ pub use agent::{AgentLocation, SystemAgent};
 pub use authorized_keys::{ExportOutcome, export_public_key};
 pub use client::{
     AuthMethod, AuthOutcome, AuthPlan, BoxFuture, ConnectSpec, ConnectStep, Connection, ExecOutput,
-    FileKey, HostKeyDecision, HostKeyInfo, Interaction, KeyCredential, Prompt, PromptAnswer,
-    PromptedSecrets, SessionEnd, Shell, ShellEvent, ShellRequest, ShellWriter, connect,
+    FileKey, HostKeyDecision, HostKeyInfo, Interaction, JumpHost, KeyCredential, Prompt,
+    PromptAnswer, PromptedSecrets, SessionEnd, Shell, ShellEvent, ShellRequest, ShellWriter,
+    connect,
 };
-pub use error::{FailureKind, SshError};
+pub use error::{FailureKind, FailurePlace, SshError};
+pub use forward::{
+    Bound, Forward, ForwardEnd, ForwardError, ForwardKind, ForwardSpec, HostForwarder, RuleStatus,
+};
+pub use proxy::{ProxyKind, ProxySpec};
 pub use reconnect::{Backoff, RECONNECT_DELAYS_S, RECONNECT_STEADY_S};
 pub use sftp::{EntryKind, RemoteEntry, Sftp, SftpError};

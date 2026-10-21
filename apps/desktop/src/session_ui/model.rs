@@ -84,6 +84,12 @@ pub enum Failure {
     /// The server closed the channel without an exit status.
     ClosedByServer,
     KeyUnusable,
+    /// The proxy refused the tunnel or did not answer as a proxy.
+    ProxyFailed,
+    /// The proxy refused the credentials.
+    ProxyAuthFailed,
+    /// A jump host does not forward connections to the next host.
+    ForwardingRefused,
     /// The app is locked.
     Locked,
     /// The saved host no longer exists.
@@ -117,6 +123,9 @@ impl Failure {
             Failure::KeepaliveTimeout => strings::REASON_KEEPALIVE,
             Failure::ClosedByServer => strings::REASON_CLOSED_BY_SERVER,
             Failure::KeyUnusable => strings::REASON_KEY_UNUSABLE,
+            Failure::ProxyFailed => strings::REASON_PROXY_FAILED,
+            Failure::ProxyAuthFailed => strings::REASON_PROXY_AUTH_FAILED,
+            Failure::ForwardingRefused => strings::REASON_FORWARDING_REFUSED,
             Failure::Locked => strings::REASON_LOCKED,
             Failure::HostMissing => strings::REASON_HOST_MISSING,
             Failure::InvalidTarget => strings::REASON_INVALID_TARGET,
@@ -157,6 +166,9 @@ impl Failure {
             Failure::KeepaliveTimeout => "keepalive_timeout",
             Failure::ClosedByServer => "closed_by_server",
             Failure::KeyUnusable => "key_unusable",
+            Failure::ProxyFailed => "proxy_failed",
+            Failure::ProxyAuthFailed => "proxy_auth_failed",
+            Failure::ForwardingRefused => "forwarding_refused",
             Failure::Locked => "locked",
             Failure::HostMissing => "host_missing",
             Failure::InvalidTarget => "invalid_target",
@@ -167,7 +179,7 @@ impl Failure {
     }
 
     /// Every reason (tests).
-    pub const ALL: [Failure; 21] = [
+    pub const ALL: [Failure; 24] = [
         Failure::NotFound,
         Failure::Refused,
         Failure::Timeout,
@@ -183,6 +195,9 @@ impl Failure {
         Failure::KeepaliveTimeout,
         Failure::ClosedByServer,
         Failure::KeyUnusable,
+        Failure::ProxyFailed,
+        Failure::ProxyAuthFailed,
+        Failure::ForwardingRefused,
         Failure::Locked,
         Failure::HostMissing,
         Failure::InvalidTarget,

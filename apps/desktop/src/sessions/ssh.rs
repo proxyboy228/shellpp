@@ -331,6 +331,8 @@ impl SshTask {
                 .then(|| Duration::from_secs(u64::from(config.keepalive_s))),
             connect_timeout: CONNECT_TIMEOUT,
             preferred_host_key_types: config.known_key_types.clone(),
+            jump_hosts: Vec::new(),
+            proxy: None,
         };
         let shell = ShellSetup {
             term: config.term.clone(),

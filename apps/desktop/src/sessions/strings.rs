@@ -96,6 +96,11 @@ pub fn error_message(error: SessionError) -> &'static str {
             FailureKind::ChannelFailed => "The server refused to open a session.",
             FailureKind::Disconnected => "The server closed the connection.",
             FailureKind::KeyUnusable => "The private key could not be used.",
+            FailureKind::ProxyFailed => "The proxy did not open the connection.",
+            FailureKind::ProxyAuthFailed => "The proxy did not accept the username or password.",
+            FailureKind::ForwardingRefused => {
+                "A jump host does not allow connections to the next host."
+            }
         },
         SessionError::ConnectionLost => "The connection was lost.",
         SessionError::KeepaliveTimeout => "The server stopped responding.",
