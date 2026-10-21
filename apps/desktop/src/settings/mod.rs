@@ -11,6 +11,7 @@
 //! development" placeholder (audit decision 1). Change master password and
 //! the recovery key of 13.4 are not part of this stage.
 
+mod data;
 pub mod strings;
 pub mod terminal;
 
@@ -96,9 +97,23 @@ impl Section {
         }
     }
 
-    /// Security and Terminal are built in this stage.
+    /// The sections with their content (stage 6 adds Account & Sync, SFTP
+    /// and Logs, D67).
     pub fn is_built(self) -> bool {
-        matches!(self, Section::Security | Section::Terminal)
+        matches!(
+            self,
+            Section::AccountSync
+                | Section::Security
+                | Section::Terminal
+                | Section::Sftp
+                | Section::Logs
+        )
+    }
+
+    /// SSH ID and Team stay hidden until accounts and teams (stages 7-8,
+    /// plan of run 3, section 9).
+    pub fn is_shown(self) -> bool {
+        !matches!(self, Section::SshId | Section::Team)
     }
 }
 
@@ -142,6 +157,11 @@ pub struct SettingsView {
     work: Option<Task<()>>,
     /// The Terminal section (UI 12.4).
     terminal: Entity<terminal::TerminalSection>,
+    /// SFTP: the program for Open.
+    open_program: Entity<gpui_kit::component::input::InputState>,
+    /// Logs: how many entries "Clear the log" removed.
+    cleared: Option<usize>,
+    _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl std::fmt::Debug for SettingsView {
@@ -156,6 +176,30 @@ impl SettingsView {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
         let terminal = cx.new(|cx| terminal::TerminalSection::new(state.clone(), window, cx));
+        let program = state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| {
+                values
+                    .get("sftp.open_program")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        let open_program = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .default_value(program)
+                .placeholder(strings::OPEN_PROGRAM_PLACEHOLDER)
+        });
+        let subscription = cx.subscribe(
+            &open_program,
+            |this: &mut Self, _, event: &gpui_kit::component::input::InputEvent, cx| {
+                if matches!(event, gpui_kit::component::input::InputEvent::Change) {
+                    this.open_program_changed(cx);
+                }
+            },
+        );
         Self {
             state,
             section: Section::Security,
@@ -165,6 +209,9 @@ impl SettingsView {
             error: None,
             work: None,
             terminal,
+            open_program,
+            cleared: None,
+            _subscriptions: vec![subscription],
         }
     }
 
@@ -243,6 +290,7 @@ impl SettingsView {
         let items: Vec<AnyElement> =
             Section::ALL
                 .iter()
+                .filter(|section| section.is_shown())
                 .map(|&section| {
                     let active = section == self.section;
                     widgets::hit(section.nav_id())
@@ -407,14 +455,15 @@ fn label(text: &'static str, cx: &App) -> impl IntoElement {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let section = if self.section == Section::Terminal {
-            self.terminal.clone().into_any_element()
-        } else if self.section.is_built() {
-            self.render_security(cx).into_any_element()
-        } else {
-            placeholder::placeholder("settings-placeholder", self.section.label(), cx)
-                .into_any_element()
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = match self.section {
+            Section::Terminal => self.terminal.clone().into_any_element(),
+            Section::Security => self.render_security(cx).into_any_element(),
+            Section::AccountSync => self.render_account(cx),
+            Section::Sftp => self.render_sftp(window, cx),
+            Section::Logs => self.render_logs(cx),
+            _ => placeholder::placeholder("settings-placeholder", self.section.label(), cx)
+                .into_any_element(),
         };
         h_flex()
             .id("settings")

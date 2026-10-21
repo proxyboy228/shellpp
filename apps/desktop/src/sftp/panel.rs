@@ -294,6 +294,14 @@ impl FilePanel {
                     }
                 }),
             ];
+        // `sftp.show_hidden` (UI 12.6): the starting choice; the panel's
+        // own toggle changes it for this panel only.
+        let show_hidden = state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| values.get("sftp.show_hidden").and_then(|v| v.as_bool()))
+            .unwrap_or(false);
         let mut panel = Self {
             side,
             state,
@@ -304,7 +312,7 @@ impl FilePanel {
             rows: Vec::new(),
             sort: Sort::default(),
             filter,
-            show_hidden: false,
+            show_hidden,
             selected: BTreeSet::new(),
             anchor: None,
             load: Load::Idle,

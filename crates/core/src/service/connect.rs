@@ -1764,8 +1764,14 @@ impl Core {
     pub(super) fn connection_log_list_impl(&self) -> Result<Vec<ConnectionLogView>, CoreError> {
         let now = self.now();
         let mut guard = self.inner();
+        let retention_days = guard
+            .settings
+            .get("logs.retention_days")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(90);
         let mut parts = parts(&mut guard)?;
         self.ensure_connlog(&mut parts, now)?;
+        self.prune_connlog(&mut parts, retention_days, now)?;
         let session = &*parts.session;
         let index = &session.index;
         let personal = session.ring.vault_id();
@@ -1812,6 +1818,66 @@ impl Core {
                 .then_with(|| b.record_id.cmp(&a.record_id))
         });
         Ok(views)
+    }
+
+    /// Retention (UI 12.6; data-model 13.3): this device's entries whose
+    /// end (or start, while open) is older than `days` and that are not
+    /// saved are removed.
+    fn prune_connlog(
+        &self,
+        parts: &mut Parts<'_>,
+        days: u64,
+        now: SystemTime,
+    ) -> Result<(), CoreError> {
+        let cutoff = now
+            .checked_sub(std::time::Duration::from_secs(days.saturating_mul(86_400)))
+            .map(format_timestamp)
+            .unwrap_or_default();
+        let device = parts.session.device_id;
+        let expired: Vec<(Uuid, RecordKind)> = parts
+            .session
+            .index
+            .of_kind(RecordKind::ConnectionLogEntry)
+            .filter(|record| {
+                let data = record.data();
+                let last = connection_log::ended_at(data)
+                    .unwrap_or_else(|| connection_log::started_at(data));
+                connection_log::device_id(data) == Some(device)
+                    && !connection_log::saved(data)
+                    && !parts.connlog.is_active(&record.record_id)
+                    && last < cutoff.as_str()
+            })
+            .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
+            .collect();
+        if expired.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(
+            count = expired.len(),
+            "expired connection log entries removed"
+        );
+        self.remove_rows(parts, &expired, now)
+    }
+
+    /// "Clear the log" (UI 12.6): every entry of this device, saved or not;
+    /// the open sessions' entries too (their end is then not written).
+    pub(super) fn connection_log_clear_impl(&self) -> Result<usize, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = parts(&mut guard)?;
+        self.ensure_connlog(&mut parts, now)?;
+        let device = parts.session.device_id;
+        let ids: Vec<(Uuid, RecordKind)> = parts
+            .session
+            .index
+            .of_kind(RecordKind::ConnectionLogEntry)
+            .filter(|record| connection_log::device_id(record.data()) == Some(device))
+            .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
+            .collect();
+        let count = ids.len();
+        self.remove_rows(&mut parts, &ids, now)?;
+        tracing::info!(count, "connection log cleared");
+        Ok(count)
     }
 
     pub(super) fn connection_log_set_saved_impl(

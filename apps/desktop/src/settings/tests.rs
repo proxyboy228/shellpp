@@ -84,6 +84,11 @@ impl Ui {
         self.settle(cx);
     }
 
+    fn core(&self, cx: &mut TestAppContext) -> std::sync::Arc<shellpp_core::Core> {
+        self.state
+            .read_with(cx, |state, _| state.core().cloned().unwrap())
+    }
+
     fn finish(self, cx: &mut TestAppContext) {
         self.state.update(cx, |state, _| state.shutdown());
     }
@@ -193,14 +198,72 @@ fn sections_and_a_missing_keychain(cx: &mut TestAppContext) {
     ui.press("ctrl-,", cx);
     assert!(ui.visible("settings-auto-lock", cx));
     assert!(!ui.visible("settings-remember", cx));
+    // SSH ID and Team stay hidden until accounts and teams (D67).
     for section in super::Section::ALL {
-        assert!(ui.visible(section.nav_id(), cx), "{section:?}");
+        assert_eq!(
+            ui.visible(section.nav_id(), cx),
+            section.is_shown(),
+            "{section:?}"
+        );
     }
-    ui.click("settings-nav-sftp", cx);
+    ui.click("settings-nav-shortcuts", cx);
     assert!(ui.visible("settings-placeholder", cx));
     assert!(!ui.visible("settings-security", cx));
     ui.click("settings-nav-security", cx);
     assert!(ui.visible("settings-security", cx));
+    ui.finish(cx);
+    drop(profile);
+}
+
+/// SFTP and Logs (UI 12.6, D67): changes are written at once; Clear the log
+/// asks first and removes the entries; Account & Sync offers the data
+/// dialogs and a disabled sync server.
+#[gpui::test]
+fn sftp_and_logs_settings_are_written(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    ui.press("ctrl-,", cx);
+    let core = ui.core(cx);
+    let value = |key: &str| core.settings_get().unwrap().get(key).cloned();
+    ui.click("settings-nav-sftp", cx);
+    assert!(ui.visible("settings-sftp", cx));
+    ui.click("settings-sftp-hidden", cx);
+    assert_eq!(value("sftp.show_hidden"), Some(serde_json::json!(true)));
+    ui.click("settings-sftp-conflict-skip", cx);
+    assert_eq!(value("sftp.name_conflict"), Some(serde_json::json!("skip")));
+    assert!(reveal(&ui, "settings-sftp-parallel-6", cx));
+    ui.click("settings-sftp-parallel-6", cx);
+    assert_eq!(value("sftp.parallel_transfers"), Some(serde_json::json!(6)));
+
+    ui.click("settings-nav-logs", cx);
+    ui.click("settings-logs-retention-30", cx);
+    assert_eq!(value("logs.retention_days"), Some(serde_json::json!(30)));
+    let started = core
+        .connection_log_start(shellpp_core::service::host_api::ConnectionLogStart {
+            host: None,
+            host_label: None,
+            address: "203.0.113.9".into(),
+            port: 22,
+            username: None,
+            os: None,
+        })
+        .unwrap();
+    core.connection_log_end(
+        started,
+        shellpp_core::service::host_api::ConnectionEndReason::Closed,
+        None,
+    );
+    assert!(reveal(&ui, "settings-clear-log", cx));
+    ui.click("settings-clear-log", cx);
+    assert!(ui.visible("settings-clear-log-dialog", cx));
+    ui.click("settings-clear-log-confirm", cx);
+    assert!(core.connection_log_list().unwrap().is_empty());
+    assert!(reveal(&ui, "settings-log-cleared", cx));
+
+    ui.click("settings-nav-account", cx);
+    assert!(ui.visible("settings-account", cx));
+    assert!(ui.visible("settings-export-data", cx));
     ui.finish(cx);
     drop(profile);
 }

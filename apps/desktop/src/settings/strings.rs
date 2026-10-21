@@ -14,6 +14,60 @@ pub const LOGS: &str = "Logs";
 pub const SHORTCUTS: &str = "Shortcuts";
 pub const UPDATES: &str = "Updates";
 
+// Account & Sync (UI 12.2; D67).
+pub const SYNC_SERVER: &str = "Sync server";
+pub const SYNC_SERVER_HINT: &str =
+    "Shell++ works without an account. A sync server arrives in a later version.";
+pub const CONNECT_SYNC: &str = "Connect sync server";
+pub const DATA: &str = "Your data";
+pub const DATA_HINT: &str = "Export everything to a file, or bring a file back.";
+pub const EXPORT_DATA: &str = "Export Data...";
+pub const IMPORT_DATA: &str = "Import Data...";
+
+// SFTP (UI 12.6).
+pub const SHOW_HIDDEN: &str = "Show hidden files";
+pub const SHOW_HIDDEN_HINT: &str = "Files and folders whose names start with a dot.";
+pub const CONFIRM_DELETE: &str = "Confirm deletion";
+pub const CONFIRM_DELETE_HINT: &str = "Ask before files and folders are deleted.";
+pub const NAME_CONFLICT: &str = "When a file with the same name exists";
+pub const CONFLICT_ASK: &str = "Ask";
+pub const CONFLICT_REPLACE: &str = "Replace";
+pub const CONFLICT_SKIP: &str = "Skip";
+pub const CONFLICT_RENAME: &str = "Rename";
+pub const PARALLEL: &str = "Transfers at the same time";
+pub const OPEN_PROGRAM: &str = "Program for Open";
+pub const OPEN_PROGRAM_HINT: &str =
+    "Empty: the program the system assigns to the file type. Open with always asks.";
+pub const OPEN_PROGRAM_PLACEHOLDER: &str = "The system's program";
+
+// Logs (UI 12.6).
+pub const RETENTION: &str = "Keep the connection log";
+pub const RETENTION_HINT: &str = "Older entries are removed. Saved entries are kept.";
+pub const RECORD_OUTPUT: &str = "Record session output";
+pub const RECORD_OUTPUT_HINT: &str =
+    "Output can contain secrets. Recording arrives with the session recorder in a later version.";
+pub const CLEAR_LOG: &str = "Clear the log";
+pub const CLEAR_LOG_HINT: &str = "Removes every entry of this device, saved ones too.";
+pub const CLEAR_LOG_TITLE: &str = "Clear the connection log?";
+pub const CLEAR_LOG_BODY: &str = "Every entry of this device is removed, saved ones too.";
+pub const CANCEL: &str = "Cancel";
+
+/// "90 days".
+pub fn days(days: u64) -> String {
+    match days {
+        365 => "1 year".to_owned(),
+        days => format!("{days} days"),
+    }
+}
+
+/// "3 entries removed".
+pub fn cleared(count: usize) -> String {
+    match count {
+        1 => "1 entry removed".to_owned(),
+        count => format!("{count} entries removed"),
+    }
+}
+
 // Security (UI 13.4).
 pub const AUTO_LOCK: &str = "Auto-lock";
 pub const AUTO_LOCK_HINT: &str =

@@ -884,3 +884,42 @@ fn the_connection_log_lists_every_entry_and_keeps_the_bookmark() {
     u.core.connection_log_set_saved(first, false).unwrap();
     assert!(!u.core.connection_log_list().unwrap()[1].saved);
 }
+
+/// Retention (UI 12.6): this device's entries past `logs.retention_days`
+/// that are not saved are removed when the log is read; "Clear the log"
+/// removes every entry.
+#[test]
+fn the_connection_log_keeps_its_retention_and_clears() {
+    let u = first_run();
+    let old = start(&u, None, None, "203.0.113.1", 22);
+    u.core
+        .connection_log_end(old, ConnectionEndReason::Closed, None);
+    let kept = start(&u, None, None, "203.0.113.2", 22);
+    u.core
+        .connection_log_end(kept, ConnectionEndReason::Closed, None);
+    u.core.connection_log_set_saved(kept, true).unwrap();
+    u.core
+        .settings_set(shellpp_core::service::dto::SettingsSetInput {
+            values: [("logs.retention_days".to_owned(), json!(1))]
+                .into_iter()
+                .collect(),
+            reset: Vec::new(),
+        })
+        .unwrap();
+    u.env.mem.clock.advance(Duration::from_secs(2 * 86_400));
+    let open = start(&u, None, None, "203.0.113.3", 22);
+    let ids: Vec<_> = u
+        .core
+        .connection_log_list()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.record_id)
+        .collect();
+    assert_eq!(ids, [open, kept], "the old unsaved entry is gone");
+    assert_eq!(u.core.connection_log_clear().unwrap(), 2);
+    assert!(u.core.connection_log_list().unwrap().is_empty());
+    // The end of a cleared open session is not written back.
+    u.core
+        .connection_log_end(open, ConnectionEndReason::Closed, None);
+    assert!(u.core.connection_log_list().unwrap().is_empty());
+}

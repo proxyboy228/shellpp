@@ -836,9 +836,16 @@ impl Core {
     }
 
     /// The connection log of the Logs screen (UI 11.1): every entry, newest
-    /// first.
+    /// first. Entries of this device past `logs.retention_days` that are
+    /// not saved are removed first (UI 12.6).
     pub fn connection_log_list(&self) -> Result<Vec<dto::ConnectionLogView>, CoreError> {
         self.connection_log_list_impl()
+    }
+
+    /// "Clear the log" (UI 12.6): removes every entry of this device;
+    /// returns how many.
+    pub fn connection_log_clear(&self) -> Result<usize, CoreError> {
+        self.connection_log_clear_impl()
     }
 
     /// The bookmark of an entry (UI 11.1): saved entries are kept by the
