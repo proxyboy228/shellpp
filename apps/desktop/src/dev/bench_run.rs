@@ -28,9 +28,12 @@
 //! Timing: a zero-size probe element painted after the terminal records
 //! when each frame is drawn (presentation follows at once). A measurement
 //! arms the probe with a check of the terminal's screen; the first frame
-//! whose paint sees the check pass ends it. The window is activated first;
-//! the output says whether it was active (an inactive window may be
-//! throttled by the platform).
+//! whose paint sees the check pass ends it. The window is activated first.
+//! While a measurement runs, every frame and every wait between frames
+//! checks that the window is active and shown (not minimized): an inactive
+//! window may be throttled by the platform, and a minimized one draws no
+//! frames at all. A run that saw the window otherwise even once is printed
+//! as invalid.
 
 use std::cell::RefCell;
 use std::process::ExitCode;
@@ -381,15 +384,34 @@ struct Probe {
     frames: u64,
     check: Option<Box<dyn Fn() -> bool>>,
     hit: Option<Instant>,
+    /// Why the measurements since the last report are invalid: the window
+    /// was seen inactive or hidden while one of them ran.
+    lapse: Option<&'static str>,
 }
 
 impl Probe {
-    /// Called from the paint of every frame.
-    fn painted(&mut self) {
+    /// Called from the paint of every frame, with the window's state.
+    fn painted(&mut self, active: bool, visible: bool) {
         self.frames += 1;
+        if self.check.is_some() {
+            self.watch(active, visible);
+        }
         if self.hit.is_none() && self.check.as_ref().is_some_and(|check| check()) {
             self.hit = Some(Instant::now());
             self.check = None;
+        }
+    }
+
+    /// Records the window's state while a measurement runs; the first lapse
+    /// is kept.
+    fn watch(&mut self, active: bool, visible: bool) {
+        if self.lapse.is_some() {
+            return;
+        }
+        if !visible {
+            self.lapse = Some("the window was hidden or minimized");
+        } else if !active {
+            self.lapse = Some("the window was not active");
         }
     }
 }
@@ -411,7 +433,11 @@ impl Render for BenchRoot {
         div().size_full().relative().children(terminal).child(
             canvas(
                 |_, _, _| {},
-                move |_, (), _, _| probe.borrow_mut().painted(),
+                move |_, (), window, _| {
+                    probe
+                        .borrow_mut()
+                        .painted(window.is_window_active(), window.is_visible())
+                },
             )
             .absolute()
             .size_0(),
@@ -613,6 +639,13 @@ async fn measure_frame(
         if let Some(hit) = bench.probe.borrow().hit {
             return Ok(hit.saturating_duration_since(t0));
         }
+        // A minimized window draws no frame to check it on.
+        let (active, visible) = cx
+            .update_window(bench.window, |_, window, _| {
+                (window.is_window_active(), window.is_visible())
+            })
+            .map_err(|_| "the benchmark window closed".to_owned())?;
+        bench.probe.borrow_mut().watch(active, visible);
         if Instant::now() > deadline {
             bench.probe.borrow_mut().check = None;
             return Err("timeout waiting for the frame".to_owned());
@@ -645,31 +678,29 @@ async fn drive(
             let mut local = open_terminal(cx, bench, OpenRequest::Local { shell_id: None }).await?;
             wait_connected(cx, &mut local, fingerprints).await?;
             let mut samples = latency(cx, bench, &local, *keys).await?;
-            report_latency("local", &mut samples, cx, bench);
+            report_latency("local", &mut samples, bench);
             local.session.close();
 
             let mut ssh = open_terminal(cx, bench, OpenRequest::Ssh(target)).await?;
             wait_connected(cx, &mut ssh, fingerprints).await?;
             let mut samples = latency(cx, bench, &ssh, *keys).await?;
-            report_latency("ssh", &mut samples, cx, bench);
+            report_latency("ssh", &mut samples, bench);
             ssh.session.close();
             Ok(())
         }
     }
 }
 
-fn active_note(cx: &mut AsyncApp, bench: &Bench) -> String {
-    let active = cx
-        .update_window(bench.window, |_, window, _| window.is_window_active())
-        .unwrap_or(false);
-    if active {
-        String::new()
-    } else {
-        " (window not active)".to_owned()
+/// ` (invalid: <why>)` when the window lapsed during the measurements since
+/// the last note, else nothing; starts the next measurements afresh.
+fn validity_note(bench: &Bench) -> String {
+    match bench.probe.borrow_mut().lapse.take() {
+        Some(why) => format!(" (invalid: {why})"),
+        None => String::new(),
     }
 }
 
-fn report_latency(name: &str, samples: &mut [Duration], cx: &mut AsyncApp, bench: &Bench) {
+fn report_latency(name: &str, samples: &mut [Duration], bench: &Bench) {
     let p50 = percentile(samples, 50.0).unwrap_or_default();
     let p95 = percentile(samples, 95.0).unwrap_or_default();
     say(&format!(
@@ -677,7 +708,7 @@ fn report_latency(name: &str, samples: &mut [Duration], cx: &mut AsyncApp, bench
         millis(p50),
         millis(p95),
         samples.len(),
-        active_note(cx, bench).replace(" (", ", ").replace(')', "")
+        validity_note(bench).replace(" (", ", ").replace(')', "")
     ));
 }
 
@@ -1113,7 +1144,7 @@ async fn output_runs(
         lines,
         "typed into the SSH session; our terminal",
         elapsed,
-        &active_note(cx, bench),
+        &validity_note(bench),
     );
     ssh.session.close();
 
@@ -1124,7 +1155,7 @@ async fn output_runs(
             lines,
             &format!("{}; our terminal", seq.direct_label()),
             elapsed,
-            &active_note(cx, bench),
+            &validity_note(bench),
         );
     } else {
         say(&format!(
@@ -1143,7 +1174,7 @@ async fn output_runs(
         lines,
         &format!("{}; our terminal", seq.shell_label()),
         elapsed,
-        &active_note(cx, bench),
+        &validity_note(bench),
     );
     local.session.close();
     // Nothing of our terminal runs during the baselines.
@@ -1355,5 +1386,61 @@ async fn wait_line(
             return Err("the line was not cleared".to_owned());
         }
         sleep(cx, Duration::from_millis(10)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Probe;
+
+    fn armed() -> Probe {
+        Probe {
+            check: Some(Box::new(|| false)),
+            ..Probe::default()
+        }
+    }
+
+    #[test]
+    fn one_frame_of_an_inactive_window_makes_the_run_invalid() {
+        let mut probe = armed();
+        probe.painted(true, true);
+        assert_eq!(probe.lapse, None);
+        probe.painted(false, true);
+        probe.painted(true, true);
+        assert_eq!(probe.lapse, Some("the window was not active"));
+    }
+
+    #[test]
+    fn a_window_minimized_between_frames_is_seen_too() {
+        let mut probe = armed();
+        probe.watch(false, false);
+        assert_eq!(probe.lapse, Some("the window was hidden or minimized"));
+    }
+
+    #[test]
+    fn frames_outside_a_measurement_are_not_checked() {
+        let mut probe = Probe::default();
+        probe.painted(false, false);
+        assert_eq!(probe.lapse, None);
+        assert_eq!(probe.frames, 1);
+    }
+
+    #[test]
+    fn the_frame_that_ends_the_measurement_is_checked() {
+        let mut probe = Probe {
+            check: Some(Box::new(|| true)),
+            ..Probe::default()
+        };
+        probe.painted(false, true);
+        assert!(probe.hit.is_some());
+        assert_eq!(probe.lapse, Some("the window was not active"));
+    }
+
+    #[test]
+    fn the_first_lapse_is_kept() {
+        let mut probe = armed();
+        probe.watch(false, true);
+        probe.watch(true, false);
+        assert_eq!(probe.lapse, Some("the window was not active"));
     }
 }

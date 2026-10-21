@@ -858,3 +858,14 @@ Status: run 2 decision, 2026-10-21 (plan, item 3.1: three flaky tests made deter
 - Check: each of the three tests passed 50 runs in a row while two full desktop suites ran beside it. Before the change the Hosts test failed once in 20 runs under the same load; the lock test did not fail in 70 runs (it failed twice in about 30 during the night), so its cause is taken from the code: the pane of the local session creates its terminal, and with it the parser thread, even when the session layer is not installed, as in this test.
 
 **Spec impact:** none.
+
+### 53. Benchmark runs with an inactive or minimized window are invalid (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 3.2).
+
+**Decision:**
+
+- While a measurement of `--bench-output` or `--bench-latency` runs, every painted frame checks that the window is active and shown, and so does every wait between frames (a minimized window draws none). The first lapse is kept; the run's output line ends with `(invalid: the window was not active)` or `(invalid: the window was hidden or minimized)` instead of the old check of the window at the end only.
+- `scripts/measure-terminal.ps1` shows such a run as "invalid (… s)", prints a warning and leaves it out of "our terminal's cost".
+
+**Spec impact:** none.

@@ -418,8 +418,17 @@ try {
             if ($line -match '^bench: output (\S+) (.+): ([0-9.]+) s(.*)$') {
                 $kind = $Matches[1]
                 $name = if ($names.ContainsKey($kind)) { $names[$kind] } else { $kind }
-                $seconds[$kind] = [double]::Parse($Matches[3], $invariant)
-                $results.Add([pscustomobject]@{ Measurement = "seq 1 $SeqLines, $name"; Value = "$($Matches[3]) s"; Detail = "$($Matches[2])$($Matches[4])" })
+                # The app marks a run during which a frame saw the window
+                # inactive or minimized: its time is not comparable.
+                if ($Matches[4] -match '\(invalid: ') {
+                    $value = "invalid ($($Matches[3]) s)"
+                    Write-Host "measure-terminal: $kind is invalid:$($Matches[4])" -ForegroundColor Yellow
+                }
+                else {
+                    $value = "$($Matches[3]) s"
+                    $seconds[$kind] = [double]::Parse($Matches[3], $invariant)
+                }
+                $results.Add([pscustomobject]@{ Measurement = "seq 1 $SeqLines, $name"; Value = $value; Detail = "$($Matches[2])$($Matches[4])" })
             }
         }
         # Our terminal's share: the same run through our terminal minus the
