@@ -112,6 +112,13 @@ fn spec_of(config: &SessionConfig) -> ConnectSpec {
 /// documentation): its route, its proxy, its saved credentials, the agent
 /// and the key files.
 pub(crate) async fn connect(shared: &Arc<Shared>, host: RecordRef) -> Result<Connection, SshError> {
+    // A reconnect while the app is locked waits for the unlock
+    // (docs/security.md, section 8): the core cannot resolve the host until
+    // then, and the attempt must not end the rule.
+    let mut unlocked = shared.unlocked();
+    if unlocked.wait_for(|unlocked| *unlocked).await.is_err() {
+        return Err(SshError::new(FailureKind::Cancelled));
+    }
     let target = SessionTarget::Host {
         vault_id: host.vault_id,
         record_id: host.record_id,
@@ -230,6 +237,20 @@ impl ForwardingService {
             vault_id: rule.record.vault_id,
             record_id: rule.host_id,
         };
+        // An edited rule may name another host now: off the old one first.
+        let moved = self
+            .rules
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&rule.record.record_id)
+            .is_some_and(|(_, old_host)| *old_host != rule.host_id);
+        if moved {
+            self.stop(rule.record.record_id).await;
+            self.rules
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&rule.record.record_id);
+        }
         let id = self.rule_id(rule.record.record_id, rule.host_id);
         self.forwarder(shared, host).start(id, spec).await
     }

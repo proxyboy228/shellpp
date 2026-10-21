@@ -223,6 +223,7 @@ fn hosts_keys_and_links_are_imported_once() {
         json!([bastion.record_id.to_string()])
     );
     assert_eq!(data("web-1")["ssh"]["agent_forwarding"], true);
+    assert_eq!(data("web-1")["ssh"]["agent_forward_system"], true);
     // What the import left out is in the host's own notes (D35).
     let notes = data("web-1")["notes"]
         .as_str()
@@ -549,13 +550,14 @@ fn forwardings_become_rules_of_the_host() {
     assert_eq!(
         seen,
         [
+            // All interfaces: imported without autostart.
             (
                 ForwardType::Dynamic,
                 "0.0.0.0".into(),
                 1080,
                 None,
                 None,
-                true
+                false
             ),
             (
                 ForwardType::Local,
@@ -605,6 +607,10 @@ fn forwardings_become_rules_of_the_host() {
         .to_owned();
     assert!(
         notes.contains("RemoteForward 1081 is not imported"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("DynamicForward *:1080 listens on all interfaces"),
         "{notes}"
     );
     assert!(

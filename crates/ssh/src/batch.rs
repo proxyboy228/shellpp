@@ -71,20 +71,26 @@ pub async fn run(
     events: Option<mpsc::UnboundedSender<BatchEvent>>,
 ) -> Vec<TargetOutcome> {
     let command = Arc::new(command);
-    let jobs = targets.into_iter().enumerate().map(|(index, connect)| {
-        let command = Arc::clone(&command);
-        let events = events.clone();
-        async move {
-            if let Some(events) = &events {
-                let _ = events.send(BatchEvent::Started(index));
-            }
-            let outcome = run_one(connect, &command, timeout, max_output).await;
-            if let Some(events) = &events {
-                let _ = events.send(BatchEvent::Finished(index, outcome.clone()));
-            }
-            (index, outcome)
-        }
-    });
+    // Boxed up front: the stream's future is then `Send` for any caller that
+    // spawns it (the closure types would defeat the inference).
+    let jobs: Vec<BoxFuture<'static, (usize, TargetOutcome)>> = targets
+        .into_iter()
+        .enumerate()
+        .map(|(index, connect)| {
+            let command = Arc::clone(&command);
+            let events = events.clone();
+            Box::pin(async move {
+                if let Some(events) = &events {
+                    let _ = events.send(BatchEvent::Started(index));
+                }
+                let outcome = run_one(connect, &command, timeout, max_output).await;
+                if let Some(events) = &events {
+                    let _ = events.send(BatchEvent::Finished(index, outcome.clone()));
+                }
+                (index, outcome)
+            }) as BoxFuture<'static, (usize, TargetOutcome)>
+        })
+        .collect();
     let mut results: Vec<(usize, TargetOutcome)> = futures::stream::iter(jobs)
         .buffer_unordered(MAX_PARALLEL)
         .collect()

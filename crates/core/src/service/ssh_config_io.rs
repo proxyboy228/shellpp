@@ -13,12 +13,14 @@
 //!   otherwise the chain keeps the missing hop (the nil id), the host's
 //!   notes say so and the summary counts it, so the host is refused at
 //!   connect instead of connecting directly (D44);
-//! - `ForwardAgent` → `ssh.agent_forwarding`, `ServerAliveInterval` →
+//! - `ForwardAgent` → `ssh.agent_forwarding` with `agent_forward_system`
+//!   (OpenSSH forwards the system agent, D60), `ServerAliveInterval` →
 //!   `ssh.keepalive_s` (at most 3600), `SetEnv` → `ssh.env`;
 //! - `ProxyCommand` → the host is not imported ("not supported");
 //! - `LocalForward`, `RemoteForward`, `DynamicForward` → forwarding rules
 //!   of the host that start when it connects (`autostart_on_connect`, as
-//!   OpenSSH starts them with every connection); a form the rules cannot
+//!   OpenSSH starts them with every connection), except one that listens
+//!   beyond loopback (noted, the user turns it on); a form the rules cannot
 //!   hold (a Unix socket, a remote SOCKS proxy) is listed in the notes;
 //! - `SendEnv`, `CertificateFile` and every other keyword are listed in the
 //!   host's notes as not imported;
@@ -222,6 +224,21 @@ fn forwards_of(options: &Options, notes: &mut Vec<String>) -> Vec<Map<String, Va
                 ));
                 continue;
             };
+            // A rule that listens beyond loopback needs the user's own
+            // choice (security.md 11.3): a config from elsewhere does not
+            // open such a port on its own.
+            let wide = crate::model::snippet::is_wide_bind(&bind_address);
+            if wide {
+                notes.push(format!(
+                    "{} {} listens on all interfaces: it is imported without autostart",
+                    match kind {
+                        "local" => "LocalForward",
+                        "remote" => "RemoteForward",
+                        _ => "DynamicForward",
+                    },
+                    args.join(" ")
+                ));
+            }
             let mut rule = Map::new();
             rule.insert("type".into(), json!(kind));
             rule.insert("bind_address".into(), json!(bind_address));
@@ -230,7 +247,7 @@ fn forwards_of(options: &Options, notes: &mut Vec<String>) -> Vec<Map<String, Va
                 rule.insert("dest_address".into(), json!(host));
                 rule.insert("dest_port".into(), json!(port));
             }
-            rule.insert("autostart_on_connect".into(), json!(true));
+            rule.insert("autostart_on_connect".into(), json!(!wide));
             rules.push(rule);
         }
     }
@@ -278,6 +295,8 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true")
     }) {
         ssh.insert("agent_forwarding".into(), json!(true));
+        // OpenSSH forwards the user's ssh-agent: the system agent (D60).
+        ssh.insert("agent_forward_system".into(), json!(true));
     }
     if let Some(raw) = first(options, "serveraliveinterval") {
         match raw.parse::<u32>() {

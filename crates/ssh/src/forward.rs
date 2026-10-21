@@ -941,6 +941,21 @@ impl HostForwarder {
             },
         };
         let mut state = self.state.lock().await;
+        // While this start connected, the rule may have been stopped, the
+        // forwarder shut down, or the supervisor begun a reconnect: then
+        // this connection is not needed.
+        if *self.shutdown.borrow() || !state.rules.contains_key(&id) {
+            drop(state);
+            connection.disconnect().await;
+            return RuleStatus::ConnectFailed(FailureKind::Cancelled);
+        }
+        if let Some(attempt) = state.reconnecting {
+            let status = RuleStatus::Reconnecting { attempt };
+            self.set_status(&mut state, id, status.clone());
+            drop(state);
+            connection.disconnect().await;
+            return status;
+        }
         // Another start may have connected meanwhile: keep one connection.
         let connection = match &state.connection {
             Some(current) if !current.is_closed() && !Arc::ptr_eq(current, &connection) => {
@@ -1075,7 +1090,17 @@ impl HostForwarder {
                     match attempt {
                         Ok(connection) => {
                             state.reconnecting = None;
-                            state.connection = Some(Arc::clone(&connection));
+                            // A live connection stored meanwhile wins.
+                            let connection = match &state.connection {
+                                Some(current) if !current.is_closed() => {
+                                    connection.disconnect().await;
+                                    Arc::clone(current)
+                                }
+                                _ => {
+                                    state.connection = Some(Arc::clone(&connection));
+                                    connection
+                                }
+                            };
                             bring_up_waiting(&mut state, &connection, &statuses).await;
                             break;
                         }

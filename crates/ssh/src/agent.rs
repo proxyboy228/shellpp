@@ -519,8 +519,12 @@ async fn sign(
                 return failure_frame();
             }
             let listing = frame_of(vec![SSH_AGENTC_REQUEST_IDENTITIES]);
-            let listed = relay(system, upstream, &listing)
-                .await
+            let listing = relay(system, upstream, &listing).await;
+            if listing.is_none() {
+                // A late answer must not be read as the next request's.
+                *upstream = None;
+            }
+            let listed = listing
                 .as_deref()
                 .and_then(identity_entries)
                 .is_some_and(|entries| entries.iter().any(|(listed, _)| listed == blob));

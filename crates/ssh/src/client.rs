@@ -1016,12 +1016,11 @@ impl Connection {
                     tracing::debug!("agent forwarding refused by the server");
                     core.shared.set_forwarding_requested(false);
                 }
-                Err(kind @ (FailureKind::Disconnected | FailureKind::Protocol)) => {
-                    return Err(SshError::new(kind));
-                }
+                // No answer in time fails the open, like the env replies: a
+                // late reply would be taken for the shell request's.
                 Err(kind) => {
-                    tracing::debug!(kind = kind.reason(), "agent forwarding not confirmed");
                     core.shared.set_forwarding_requested(false);
+                    return Err(core.failure(kind));
                 }
             }
         }

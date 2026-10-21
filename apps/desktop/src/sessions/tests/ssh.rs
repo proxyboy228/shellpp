@@ -512,6 +512,23 @@ async fn agent_forwarding_offers_the_keychain_keys() {
     session.type_line("agent-keys");
     session.output("agent keys: 2").await;
     assert!(server.events().contains(&ServerEvent::AgentForward));
+    // A lock wipes the keys; the unlock loads them again (the review of
+    // stage 5: they stayed gone).
+    harness.manager.set_unlocked(false);
+    harness.manager.set_unlocked(true);
+    let mut back = false;
+    for _ in 0..40 {
+        let from = session.terminal.bytes().len();
+        session.type_line("agent-keys");
+        session.output_from(from, "agent keys: ").await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let text = String::from_utf8_lossy(&session.terminal.bytes()[from..]).into_owned();
+        if text.contains("agent keys: 2") {
+            back = true;
+            break;
+        }
+    }
+    assert!(back, "the keys are offered again after the unlock");
     session.handle.close();
     server.shutdown().await;
 }

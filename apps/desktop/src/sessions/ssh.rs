@@ -959,12 +959,13 @@ async fn wait_unlocked(unlocked: &mut watch::Receiver<bool>) {
 
 /// The keys of the built-in agent for one connection (D60): the Keychain's
 /// keys that open without asking (unencrypted, or with a saved
-/// passphrase). A lock wipes them at once; until then each request reads
-/// them, and none are offered while the app is locked (docs/security.md,
-/// section 8).
+/// passphrase). A lock wipes them at once and an unlock loads them again;
+/// none are offered while the app is locked (docs/security.md, section 8).
 struct AgentKeyStore {
     keys: Mutex<Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>>>,
     unlocked: watch::Receiver<bool>,
+    /// Dropped with the store: ends its lock watcher.
+    _alive: tokio::sync::oneshot::Sender<()>,
 }
 
 impl AgentKeyStore {
@@ -973,6 +974,13 @@ impl AgentKeyStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+    }
+
+    fn set(&self, keys: Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>>) {
+        *self
+            .keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
     }
 }
 
@@ -1001,18 +1009,15 @@ impl shellpp_ssh::ConfirmSignature for NoConfirmationYet {
     }
 }
 
-async fn built_in_agent(
-    shared: &Arc<Shared>,
-    system: bool,
-    confirm: bool,
-) -> shellpp_ssh::ForwardedAgent {
+/// The Keychain's keys that open without asking, decrypted off the
+/// runtime's workers (bcrypt-pbkdf).
+async fn load_agent_keys(shared: &Arc<Shared>) -> Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>> {
     let stored = shared
         .blocking(|core| core.agent_keys())
         .await
         .and_then(Result::ok)
         .unwrap_or_default();
-    // bcrypt-pbkdf of encrypted keys: off the runtime's workers.
-    let keys: Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>> = shared
+    shared
         .rt
         .spawn_blocking(move || {
             stored
@@ -1035,18 +1040,44 @@ async fn built_in_agent(
                 .collect()
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+async fn built_in_agent(
+    shared: &Arc<Shared>,
+    system: bool,
+    confirm: bool,
+) -> shellpp_ssh::ForwardedAgent {
+    let (alive, mut dropped) = tokio::sync::oneshot::channel::<()>();
     let store = Arc::new(AgentKeyStore {
-        keys: Mutex::new(keys),
+        keys: Mutex::new(load_agent_keys(shared).await),
         unlocked: shared.unlocked(),
+        _alive: alive,
     });
-    // Wipe at the lock, not only at the next request.
+    // One watcher per store, ending with it: wipe at the lock, load again
+    // at the unlock.
     let weak = Arc::downgrade(&store);
     let mut unlocked = shared.unlocked();
+    let watcher_shared = Arc::clone(shared);
     drop(shared.rt.spawn(async move {
-        wait_locked(&mut unlocked).await;
-        if let Some(store) = weak.upgrade() {
-            store.wipe();
+        loop {
+            tokio::select! {
+                () = wait_locked(&mut unlocked) => {}
+                _ = &mut dropped => return,
+            }
+            match weak.upgrade() {
+                Some(store) => store.wipe(),
+                None => return,
+            }
+            tokio::select! {
+                () = wait_unlocked(&mut unlocked) => {}
+                _ = &mut dropped => return,
+            }
+            let keys = load_agent_keys(&watcher_shared).await;
+            match weak.upgrade() {
+                Some(store) => store.set(keys),
+                None => return,
+            }
         }
     }));
     shellpp_ssh::ForwardedAgent {

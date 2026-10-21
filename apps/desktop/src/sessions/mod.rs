@@ -194,6 +194,27 @@ pub(crate) struct Shared {
     shut_down: AtomicBool,
     /// Forwarding rules without a tab (stage 5).
     pub(crate) forwarding: background::ForwardingService,
+    /// The rules that start on launch were started in this app run.
+    launch_autostart_done: AtomicBool,
+}
+
+impl Shared {
+    /// Starts the rules marked "on launch", once per app run, when the app
+    /// is unlocked (D9): at start when it already is ("remember on this
+    /// device"), else at the first unlock. Later unlocks do not restart
+    /// rules the user stopped.
+    fn autostart_on_launch(self: &Arc<Self>) {
+        if !self.is_unlocked() || self.launch_autostart_done.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let shared = Arc::clone(self);
+        drop(self.rt.spawn(async move {
+            shared
+                .forwarding
+                .autostart(&shared, |rule| rule.autostart_on_launch)
+                .await;
+        }));
+    }
 }
 
 impl Shared {
@@ -733,12 +754,16 @@ impl SessionManager {
             next_id: AtomicU64::new(1),
             shut_down: AtomicBool::new(false),
             forwarding: background::ForwardingService::default(),
+            launch_autostart_done: AtomicBool::new(false),
         });
         // Shell detection can be slow (WSL): warm the cache early.
         let local = shared.local.clone();
         drop(shared.rt.spawn_blocking(move || {
             let _ = local.shells(false);
         }));
+        // Already unlocked at start ("remember on this device"): the rules
+        // that start on launch start now.
+        shared.autostart_on_launch();
         Ok(Self { shared, runtime })
     }
 
@@ -749,12 +774,26 @@ impl SessionManager {
         &self,
         rule: &shellpp_core::service::snippets::ForwardingRuleView,
     ) -> shellpp_ssh::RuleStatus {
-        self.shared.forwarding.start(&self.shared, rule).await
+        // On the session layer's runtime: the caller may be any executor.
+        let shared = Arc::clone(&self.shared);
+        let rule = rule.clone();
+        self.shared
+            .rt
+            .spawn(async move { shared.forwarding.start(&shared, &rule).await })
+            .await
+            .unwrap_or(shellpp_ssh::RuleStatus::ConnectFailed(
+                shellpp_ssh::FailureKind::Cancelled,
+            ))
     }
 
     /// Stops a forwarding rule.
     pub async fn forward_stop(&self, rule: uuid::Uuid) {
-        self.shared.forwarding.stop(rule).await;
+        let shared = Arc::clone(&self.shared);
+        let _ = self
+            .shared
+            .rt
+            .spawn(async move { shared.forwarding.stop(rule).await })
+            .await;
     }
 
     /// The status of a started forwarding rule.
@@ -775,16 +814,21 @@ impl SessionManager {
         timeout: Duration,
         events: Option<mpsc::UnboundedSender<shellpp_ssh::batch::BatchEvent>>,
     ) -> Vec<shellpp_ssh::batch::TargetOutcome> {
-        let targets = hosts
-            .into_iter()
-            .map(|host| {
-                let shared = Arc::clone(&self.shared);
-                shellpp_ssh::batch::target(move || async move {
-                    background::connect(&shared, host).await
+        // On the session layer's runtime: the caller may be any executor.
+        let shared = Arc::clone(&self.shared);
+        let run = async move {
+            let targets = hosts
+                .into_iter()
+                .map(|host| {
+                    let shared = Arc::clone(&shared);
+                    shellpp_ssh::batch::target(move || async move {
+                        background::connect(&shared, host).await
+                    })
                 })
-            })
-            .collect();
-        shellpp_ssh::batch::run(targets, script, timeout, SNIPPET_OUTPUT_LIMIT, events).await
+                .collect();
+            shellpp_ssh::batch::run(targets, script, timeout, SNIPPET_OUTPUT_LIMIT, events).await
+        };
+        self.shared.rt.spawn(run).await.unwrap_or_default()
     }
 
     /// The lock state changed (call it from the app's lock events).
@@ -796,13 +840,7 @@ impl SessionManager {
         tracing::debug!(unlocked, "sessions follow the lock state");
         if unlocked {
             // The rules that start on launch waited for the unlock (D9).
-            let shared = Arc::clone(&self.shared);
-            drop(self.shared.rt.spawn(async move {
-                shared
-                    .forwarding
-                    .autostart(&shared, |rule| rule.autostart_on_launch)
-                    .await;
-            }));
+            self.shared.autostart_on_launch();
         }
         if !unlocked {
             self.shared.passphrases.clear();
