@@ -136,6 +136,32 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     assert!(ui.visible("top-bar-notifications", cx));
     // The terminal sidebar button only on a session tab (UI 4.2).
     assert!(!ui.visible("top-bar-terminal-sidebar", cx));
+    // Tabs are 32 px inside the 44 px bar (design-system 6 [decision]).
+    for id in ["tab-vaults", "tab-sftp", "tab-new", "vaults-pill"] {
+        let tab = ui.bounds(id, cx).expect(id);
+        assert_eq!(tab.size.height, metrics::HEIGHT_TAB, "{id}");
+        // Centered above the bar's 1 px bottom line.
+        assert_eq!(
+            tab.origin.y,
+            (metrics::HEIGHT_TOP_BAR - px(1.) - metrics::HEIGHT_TAB) / 2.,
+            "{id} centered"
+        );
+    }
+    // The Vaults tab and the vault switcher are one pill; the arrow is a
+    // zone of its own inside it, right after the tab.
+    let pill = ui.bounds("vaults-pill", cx).unwrap();
+    let vaults = ui.bounds("tab-vaults", cx).unwrap();
+    let switcher = ui.bounds("vault-switcher", cx).unwrap();
+    assert_eq!(pill.origin.x, vaults.origin.x);
+    assert_eq!(vaults.right(), switcher.origin.x);
+    assert_eq!(switcher.right(), pill.right());
+    // 4 px between the pill and the SFTP tab.
+    let sftp = ui.bounds("tab-sftp", cx).unwrap();
+    assert_eq!(sftp.origin.x - pill.right(), metrics::SPACE_1);
+    // Vaults is active: the arrow opens the vault menu, Vaults stays.
+    ui.click("vault-switcher", cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Vaults);
+    ui.press("escape", cx);
 
     ui.click("tab-sftp", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Sftp);
@@ -152,24 +178,30 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// UI 1.2: six sections, 220 px, no vault header, placeholders.
+/// UI 1.2: six sections, 196 px, 32 px items 2 px apart, no vault header,
+/// placeholders.
 #[gpui_kit::test]
 fn sidebar_sections(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let sidebar = ui.bounds("sidebar", cx).expect("sidebar");
     assert_eq!(sidebar.size.width, metrics::WIDTH_SIDEBAR);
-    let mut last_y = Pixels::ZERO;
+    let mut last_bottom = None;
     for section in Section::ALL {
         let item = ui
             .bounds(section.element_id().as_ref(), cx)
             .expect("sidebar item");
-        assert!(item.origin.y > last_y, "{section:?} below the previous one");
-        last_y = item.origin.y;
+        assert_eq!(item.size.height, metrics::HEIGHT_NAV_ITEM, "{section:?}");
+        // 8 px from the sidebar's edges.
+        assert_eq!(item.origin.x - sidebar.origin.x, metrics::SPACE_2);
+        assert_eq!(sidebar.right() - item.right(), metrics::SPACE_2 + px(1.));
+        if let Some(bottom) = last_bottom {
+            assert_eq!(item.origin.y - bottom, metrics::GAP_NAV_ITEM, "{section:?}");
+        }
+        last_bottom = Some(item.bottom());
     }
     // The first item sits at the top of the sidebar: no vault header above it.
     let hosts = ui.bounds("nav-hosts", cx).unwrap();
     assert_eq!(hosts.origin.y - sidebar.origin.y, metrics::SPACE_2);
-    assert_eq!(hosts.size.height, metrics::HEIGHT_CONTROL);
 
     // A section whose screen is not built yet shows the placeholder (D28);
     // the Keychain has its screen since stage 3.
@@ -476,10 +508,10 @@ fn details_panel_container(cx: &mut TestAppContext) {
 fn details_panel_leaves_the_main_area_its_minimum() {
     use details::fitted_width;
     let sidebar = metrics::WIDTH_SIDEBAR;
-    // 960 px window: 960 - 220 - 360 = 380.
+    // 960 px window: 960 - 196 - 360 = 404.
     assert_eq!(
         fitted_width(metrics::WIDTH_DETAILS_MAX, px(960.), sidebar),
-        metrics::WIDTH_DETAILS
+        px(404.)
     );
     assert_eq!(
         fitted_width(metrics::WIDTH_DETAILS, px(960.), sidebar),

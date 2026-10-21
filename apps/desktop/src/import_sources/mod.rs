@@ -139,6 +139,16 @@ impl Source {
         }
     }
 
+    /// The file the source reads by default, shown under its name in the
+    /// monospaced font (the name itself is plain words).
+    fn path(self) -> Option<&'static str> {
+        match self {
+            Self::SshConfig => Some(strings::SOURCE_SSH_CONFIG_PATH),
+            Self::KnownHosts => Some(strings::SOURCE_KNOWN_HOSTS_PATH),
+            Self::Json | Self::Putty | Self::Csv => None,
+        }
+    }
+
     /// PuTTY sessions exist on Windows only (UI 2.5).
     fn shown(self) -> bool {
         self != Self::Putty || cfg!(windows)
@@ -446,13 +456,22 @@ impl ImportSourcesDialog {
             .test_support()
             .gap(metrics::SPACE_2);
         for source in Source::ALL.into_iter().filter(|source| source.shown()) {
-            let row = v_flex().gap(metrics::SPACE_1).child(
-                Radio::new(source.id())
-                    .label(source.label())
-                    .checked(self.source == source)
-                    .disabled(!source.available())
-                    .on_click(cx.listener(move |this, _: &bool, _, cx| this.select(source, cx))),
-            );
+            let row = v_flex()
+                .gap(metrics::SPACE_1)
+                .child(
+                    Radio::new(source.id())
+                        .label(source.label())
+                        .checked(self.source == source)
+                        .disabled(!source.available())
+                        .on_click(
+                            cx.listener(move |this, _: &bool, _, cx| this.select(source, cx)),
+                        ),
+                )
+                .children(
+                    source
+                        .path()
+                        .map(|path| div().pl(px(24.)).child(widgets::caption(path, cx))),
+                );
             list = list.child(if source.available() {
                 row
             } else {

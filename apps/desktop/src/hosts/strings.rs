@@ -66,7 +66,9 @@ pub const EMPTY_TITLE: &str = "No hosts yet";
 pub const EMPTY_BODY: &str =
     "Add a host to connect to it, or import your hosts from an SSH config file.";
 pub const CREATE_HOST: &str = "Create host";
-pub const IMPORT_SSH_CONFIG: &str = "Import from ~/.ssh/config";
+pub const IMPORT_SSH_CONFIG: &str = "Import OpenSSH config";
+/// The file Import OpenSSH config reads, in its tooltip.
+pub const SSH_CONFIG_PATH: &str = "~/.ssh/config";
 pub const EMPTY_GROUP: &str = "This group is empty";
 pub const NO_MATCHES: &str = "No hosts match the search";
 // The column headers of the list layout (owner's step 0.4).

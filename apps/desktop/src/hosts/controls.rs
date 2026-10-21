@@ -10,7 +10,8 @@ use std::rc::Rc;
 use gpui::{
     App, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement, Interactivity,
     IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, StyleRefinement, Styled, TextRun, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::DropdownMenu;
@@ -20,6 +21,40 @@ use crate::theme::{self, metrics};
 
 /// Icon size inside controls.
 pub const ICON_SIZE: Pixels = px(16.);
+/// What a 36 px control button adds around its label: the 12 px padding on
+/// both sides, the 16 px icon and the 8 px gap.
+pub const LABEL_BUTTON_EXTRA: f32 = 48.;
+
+/// The width of `text` in the window's current font with 2 % and a pixel to
+/// spare (it plans layouts, so it errs on the wide side).
+pub fn text_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> f32 {
+    if text.is_empty() {
+        return 0.;
+    }
+    let mut font = window.text_style().font();
+    font.weight = weight;
+    let run = TextRun {
+        len: text.len(),
+        font,
+        ..Default::default()
+    };
+    let line =
+        window
+            .text_system()
+            .shape_line(SharedString::from(text.to_owned()), size, &[run], None);
+    (line.width().as_f32() * 1.02).ceil() + 1.
+}
+
+/// The common width of buttons of one group that stand side by side, each
+/// with an icon and one of `labels` (design-system 6 [decision]): as wide
+/// as the widest of them. Give it to each button as its minimum width.
+pub fn group_width(window: &Window, labels: &[&str]) -> Pixels {
+    let widest = labels
+        .iter()
+        .map(|label| text_width(window, label, metrics::FONT_SIZE_BODY, FontWeight::MEDIUM))
+        .fold(0., f32::max);
+    px(widest + LABEL_BUTTON_EXTRA)
+}
 
 /// How a control is painted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +153,8 @@ pub struct ControlButton {
     icon: Option<Icon>,
     trailing_icon: Option<Icon>,
     tooltip: Option<SharedString>,
+    /// The tooltip is a file path, shown in the monospaced font.
+    tooltip_is_path: bool,
     disabled: bool,
     selected: bool,
     height: Pixels,
@@ -149,6 +186,7 @@ impl ControlButton {
             icon: None,
             trailing_icon: None,
             tooltip: None,
+            tooltip_is_path: false,
             disabled: false,
             selected: false,
             height: metrics::HEIGHT_CONTROL,
@@ -176,6 +214,15 @@ impl ControlButton {
     /// Accessible name of an icon-only button.
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// A file path as the tooltip, in the monospaced font: the label says
+    /// what the button does in plain words, the tooltip names the file
+    /// (design-system 6 [decision]).
+    pub fn path_tooltip(mut self, path: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(path.into());
+        self.tooltip_is_path = true;
         self
     }
 
@@ -290,8 +337,20 @@ impl RenderOnce for ControlButton {
                     })
             })
             .when_some(self.tooltip, |this, tooltip| {
+                let is_path = self.tooltip_is_path;
                 this.tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                    use gpui_kit::component::tooltip::Tooltip;
+                    if is_path {
+                        let path = tooltip.clone();
+                        Tooltip::element(move |_, cx| {
+                            div()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .child(path.clone())
+                        })
+                        .build(window, cx)
+                    } else {
+                        Tooltip::new(tooltip.clone()).build(window, cx)
+                    }
                 })
             })
             .when_some(self.icon, |this, icon| {

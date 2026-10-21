@@ -266,13 +266,13 @@ mod tests {
 
     #[test]
     fn columns_follow_the_card_width_limits() {
-        // 1920 px window: 1920 - 220 sidebar - 2 x 24 padding.
-        assert_eq!(columns_for(1652.), 5);
+        // 1920 px window: 1920 - 196 sidebar - 2 x 24 padding.
+        assert_eq!(columns_for(1676.), 5);
         // 1280 px window.
-        assert_eq!(columns_for(1012.), 3);
+        assert_eq!(columns_for(1036.), 3);
         // With the 380 px panel open at 1920 px.
-        assert_eq!(columns_for(1272.), 4);
-        for width in [300., 500., 760., 1012., 1272., 1652., 2400.] {
+        assert_eq!(columns_for(1296.), 4);
+        for width in [300., 500., 760., 1036., 1296., 1676., 2400.] {
             let cols = columns_for(width);
             let card = card_width(width, cols);
             assert!(card <= 360. || cols == 1, "{width}: {cols} x {card}");

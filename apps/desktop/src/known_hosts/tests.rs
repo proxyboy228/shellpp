@@ -360,6 +360,14 @@ fn import_reads_the_suggested_file_and_shows_the_summary(cx: &mut TestAppContext
     let ui = Screen::open(cx, "", &[]);
     assert!(ui.visible(cx, "kh-empty"));
     assert!(ui.visible(cx, "kh-empty-import"));
+    // Import and Export are one group: equally wide (design-system 6).
+    let (import, export) = ui.frame(cx, |window, _| {
+        (
+            window.find("kh-import").bounds().size.width,
+            window.find("kh-export").bounds().size.width,
+        )
+    });
+    assert_eq!(import, export);
     // The suggested file, written at run time.
     let (file, _) = sample_file();
     let key = host_key();

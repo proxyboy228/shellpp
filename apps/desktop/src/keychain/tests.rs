@@ -1123,6 +1123,15 @@ fn the_empty_state_offers_generate_import_and_ssh(cx: &mut TestAppContext) {
     ] {
         assert!(ui.visible(cx, id), "{id}");
     }
+    // One group: the three buttons as wide as the widest, and Certificate
+    // and FIDO2 in the action bar (design-system 6 [decision]).
+    let width = |cx: &mut TestAppContext, id: &'static str| {
+        ui.frame(cx, |window, _| window.find(id).bounds().size.width)
+    };
+    let generate = width(cx, "kc-empty-generate");
+    assert_eq!(generate, width(cx, "kc-empty-import"));
+    assert_eq!(generate, width(cx, "kc-empty-import-ssh"));
+    assert_eq!(width(cx, "kc-certificate"), width(cx, "kc-fido2"));
     ui.click(cx, "kc-empty-generate");
     assert!(ui.visible(cx, "kc-generate"));
     ui.click(cx, "kc-empty-import");

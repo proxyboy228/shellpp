@@ -475,8 +475,8 @@ fn keys_connect_edit_and_move_the_selection(cx: &mut TestAppContext) {
     let records: Vec<Value> = (0..6)
         .map(|n| json!({"address": format!("h{n}.example.com")}))
         .collect();
-    // 1280 - 220 (the sidebar the shell adds) = 1060 px for the screen.
-    let (ui, ids) = Screen::open(cx, 1060., &records);
+    // 1280 - 196 (the sidebar the shell adds) = 1084 px for the screen.
+    let (ui, ids) = Screen::open(cx, 1084., &records);
     let columns = ui.screen.read_with(cx, |screen, _| screen.columns());
     assert_eq!(columns, 3, "1280 px window: 3 columns");
 
@@ -648,8 +648,8 @@ fn grid_columns_follow_the_width(cx: &mut TestAppContext) {
     let records: Vec<Value> = (0..12)
         .map(|n| json!({"address": format!("h{n}.example.com")}))
         .collect();
-    // 1920 - 220 (the sidebar the shell adds) = 1700 px for the screen.
-    let (ui, ids) = Screen::open(cx, 1700., &records);
+    // 1920 - 196 (the sidebar the shell adds) = 1724 px for the screen.
+    let (ui, ids) = Screen::open(cx, 1724., &records);
     let (columns, width) = ui
         .screen
         .read_with(cx, |screen, _| (screen.columns(), screen.card_width()));
@@ -1236,6 +1236,25 @@ fn empty_state_and_action_bar(cx: &mut TestAppContext) {
     ui.frame(cx, |window, cx| window.click("new-host-menu", cx));
     ui.frame(cx, |window, cx| window.click("new-group", cx));
     assert_eq!(ui.take_events(), vec![HostsEvent::NewGroup]);
+    ui.finish(cx);
+}
+
+/// Buttons of one group that stand side by side are as wide as the widest
+/// of them (design-system 6 [decision]): Terminal and Serial in the action
+/// bar, Create host and Import OpenSSH config in the empty state.
+#[gpui_kit::test]
+fn buttons_of_a_group_are_equally_wide(cx: &mut TestAppContext) {
+    let (ui, _) = Screen::open(cx, 1280., &[]);
+    let width = |ui: &Screen, cx: &mut TestAppContext, id: &'static str| {
+        ui.frame(cx, |window, _| window.find(id).bounds().size.width)
+    };
+    let terminal = width(&ui, cx, "terminal");
+    assert_eq!(terminal, width(&ui, cx, "serial"));
+    assert!(terminal > metrics::HEIGHT_CONTROL, "with its label");
+    assert_eq!(
+        width(&ui, cx, "create-host"),
+        width(&ui, cx, "import-ssh-config")
+    );
     ui.finish(cx);
 }
 
@@ -1893,7 +1912,7 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
         .unwrap();
         cx.run_until_parked();
     };
-    // 960 - 220 = 740 px of main area: the full sidebar.
+    // 960 - 196 = 764 px of main area: the full sidebar.
     assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
 
     // The details panel leaves 360 px: the strip of icons.
@@ -1955,11 +1974,12 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
     frame(cx);
     assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
 
-    // 1199 px: 599 px next to the full sidebar; 1200 px: expanded.
-    cx.simulate_window_resize(handle, size(px(1199.), px(700.)));
+    // 1175 px: 599 px next to the 196 px sidebar and the 380 px panel;
+    // 1176 px: expanded.
+    cx.simulate_window_resize(handle, size(px(1175.), px(700.)));
     frame(cx);
     assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
-    cx.simulate_window_resize(handle, size(px(1200.), px(700.)));
+    cx.simulate_window_resize(handle, size(px(1176.), px(700.)));
     frame(cx);
     assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
     let main = cx

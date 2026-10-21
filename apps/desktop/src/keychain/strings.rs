@@ -43,7 +43,9 @@ pub const EMPTY_BODY: &str = "Generate a new key pair, or import a key you alrea
      OpenSSH, PEM and PuTTY (.ppk) files are read.";
 pub const EMPTY_GENERATE: &str = "Generate";
 pub const EMPTY_IMPORT: &str = "Import";
-pub const EMPTY_IMPORT_SSH: &str = "Import from ~/.ssh";
+pub const EMPTY_IMPORT_SSH: &str = "Import from SSH folder";
+/// The folder Import from SSH folder reads, in its tooltip.
+pub const SSH_FOLDER_PATH: &str = "~/.ssh";
 pub const NO_MATCHES: &str = "No keys or identities match the search";
 
 // Key panel (7.3).

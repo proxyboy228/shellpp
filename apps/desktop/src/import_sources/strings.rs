@@ -3,9 +3,13 @@
 pub const TITLE: &str = "Import";
 pub const SUMMARY_TITLE: &str = "Import Finished";
 
-pub const SOURCE_SSH_CONFIG: &str = "OpenSSH config (~/.ssh/config)";
+pub const SOURCE_SSH_CONFIG: &str = "OpenSSH config";
+/// The file of the OpenSSH config source, under its name.
+pub const SOURCE_SSH_CONFIG_PATH: &str = "~/.ssh/config";
 pub const SOURCE_JSON: &str = "Shell++ export (JSON)";
-pub const SOURCE_KNOWN_HOSTS: &str = "known_hosts";
+pub const SOURCE_KNOWN_HOSTS: &str = "Known hosts";
+/// The file of the known hosts source, under its name.
+pub const SOURCE_KNOWN_HOSTS_PATH: &str = "~/.ssh/known_hosts";
 pub const SOURCE_PUTTY: &str = "PuTTY sessions";
 pub const SOURCE_CSV: &str = "CSV";
 pub const SOURCE_LATER: &str = "Arrives in a later version.";

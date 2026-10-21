@@ -5,10 +5,14 @@
 //! terminal sidebar button (session tabs only) and the window buttons (drawn
 //! by gpui-kit's `TitleBar`).
 //!
-//! Tabs: `--text-secondary` text, hover `--bg-raised-hover`, pressed
-//! `--bg-pressed`; the active tab gets the `--accent-subtle` background,
-//! `--text-primary` text and the 2 px `--accent` bar (audit decision 2),
-//! never an accent fill.
+//! Tabs: 32 px (`--height-tab`) inside the 44 px bar, 10 px inside
+//! (`--padding-tab`), 4 px apart; `--text-secondary` text, hover
+//! `--bg-raised-hover`, pressed `--bg-pressed`; the active tab gets the
+//! `--accent-subtle` background, `--text-primary` text and the 2 px
+//! `--accent` bar (audit decision 2), never an accent fill. The Vaults tab
+//! and its vault switcher arrow are one pill: the active state spans both,
+//! and the arrow is a click zone of its own with its own hover
+//! (design-system 6 [decision]).
 //!
 //! Windows: gpui-kit's `TitleBar` makes the whole bar a drag region
 //! (`HTCAPTION`), including whatever sits on top of it. Every interactive
@@ -36,7 +40,9 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, controls, metrics};
 
 /// Height of a tab and of the icon buttons in the bar.
-const TAB_HEIGHT: gpui::Pixels = metrics::HEIGHT_CONTROL;
+const TAB_HEIGHT: gpui::Pixels = metrics::HEIGHT_TAB;
+/// Width of the vault switcher arrow inside the Vaults pill.
+const SWITCHER_WIDTH: gpui::Pixels = px(20.);
 /// Width limits of a session tab (below the minimum the strip scrolls).
 pub(super) const SESSION_TAB_MIN_WIDTH: gpui::Pixels = px(96.);
 const SESSION_TAB_MAX_WIDTH: gpui::Pixels = px(220.);
@@ -71,15 +77,31 @@ fn active_bar(cx: &App) -> impl IntoElement {
         .bg(cx.theme().primary)
 }
 
-/// The shared look of a tab: 36 px, radius 6, states of design-system 6.
+/// The shared look of a tab: 32 px, radius 6, states of design-system 6.
 fn tab_base<I: Into<ElementId>>(
     id: I,
     focus: &FocusHandle,
     active: bool,
     cx: &App,
 ) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<I> {
-    let theme = cx.theme();
     let tokens = theme::tokens(cx);
+    tab_zone(id, focus, active, cx)
+        .rounded(metrics::RADIUS_CONTROL)
+        .when(active, |tab| {
+            tab.bg(tokens.accent_subtle.hsla()).child(active_bar(cx))
+        })
+}
+
+/// A tab's click zone without the active fill: text colors, hover and
+/// pressed while inactive, focus. A plain tab adds the fill and the bar
+/// ([`tab_base`]); the Vaults pill paints them around its two zones.
+fn tab_zone<I: Into<ElementId>>(
+    id: I,
+    focus: &FocusHandle,
+    active: bool,
+    cx: &App,
+) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<I> {
+    let theme = cx.theme();
     let hover = theme.secondary_hover;
     let pressed = theme.secondary_active;
     h_flex()
@@ -89,20 +111,15 @@ fn tab_base<I: Into<ElementId>>(
         .relative()
         .flex_none()
         .h(TAB_HEIGHT)
-        .px(metrics::SPACE_3)
+        .px(metrics::PADDING_TAB)
         .gap(metrics::SPACE_2)
         .items_center()
-        .rounded(metrics::RADIUS_CONTROL)
         .cursor_pointer()
         .track_focus(focus)
         .tab_index(0)
         .text_size(metrics::FONT_SIZE_BODY)
         .focus_ring_visible(theme.title_bar, cx)
-        .when(active, |tab| {
-            tab.bg(tokens.accent_subtle.hsla())
-                .text_color(theme.tab_active_foreground)
-                .child(active_bar(cx))
-        })
+        .when(active, |tab| tab.text_color(theme.tab_active_foreground))
         .when(!active, |tab| {
             tab.text_color(theme.tab_foreground)
                 .hover(move |style| style.bg(hover))
@@ -122,6 +139,50 @@ pub fn top_tab<I: Into<ElementId>, L: Into<SharedString>>(
     tab_base(id, focus, active, cx)
         .child(Icon::new(icon).size(ICON_SIZE))
         .child(label.into())
+}
+
+/// The Vaults tab's click zone (icon and label): the left part of the
+/// Vaults pill ([`vaults_pill`]). Both zones keep radius 6 (the kit button
+/// of the arrow rounds all four corners), so their hovers are two rounded
+/// zones inside the pill.
+pub fn vaults_tab<I: Into<ElementId>, L: Into<SharedString>>(
+    id: I,
+    focus: &FocusHandle,
+    icon: Lucide,
+    label: L,
+    active: bool,
+    cx: &App,
+) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<I, L> {
+    tab_zone(id, focus, active, cx)
+        .rounded(metrics::RADIUS_CONTROL)
+        // The arrow sits right after the label: less padding between them.
+        .pr(metrics::SPACE_1)
+        .child(Icon::new(icon).size(ICON_SIZE))
+        .child(label.into())
+}
+
+/// The Vaults pill (UI 1.1, design-system 6 [decision]): the tab zone and
+/// the vault switcher arrow in one 32 px pill. While Vaults is active, the
+/// `--accent-subtle` fill and the `--accent` bar span both zones.
+pub fn vaults_pill(
+    tab: impl IntoElement,
+    switcher: impl IntoElement,
+    active: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let tokens = theme::tokens(cx);
+    h_flex()
+        .id("vaults-pill")
+        .test_support()
+        .relative()
+        .flex_none()
+        .h(TAB_HEIGHT)
+        .items_center()
+        .rounded(metrics::RADIUS_CONTROL)
+        .when(active, |pill| pill.bg(tokens.accent_subtle.hsla()))
+        .child(tab)
+        .child(switcher)
+        .when(active, |pill| pill.child(active_bar(cx)))
 }
 
 /// A session tab (UI 1.1): the OS icon (the close button replaces it on the
@@ -178,7 +239,6 @@ pub fn session_tab<C: IntoElement>(
         .flex_shrink(1.)
         .min_w(SESSION_TAB_MIN_WIDTH)
         .max_w(SESSION_TAB_MAX_WIDTH)
-        .px(metrics::SPACE_2)
         .child(icon_slot)
         .child(title)
         .children(state.map(|state| state_dot(tab, state, cx)))
@@ -234,7 +294,7 @@ pub fn session_tab_close(
         .child(Icon::new(IconName::Close).xsmall())
 }
 
-/// A ghost icon button of the bar (36 px square, radius 6, hover
+/// A ghost icon button of the bar (32 px square, radius 6, hover
 /// `--bg-raised-hover`, pressed `--bg-pressed`, icon `--text-secondary`).
 pub fn icon_button(id: impl Into<ElementId>, icon: impl Into<Icon>, cx: &App) -> Button {
     let theme = cx.theme();
@@ -259,13 +319,14 @@ pub fn disabled(button: Button, cx: &App) -> Button {
         .opacity(metrics::OPACITY_DISABLED)
 }
 
-/// The vault switcher arrow next to the Vaults tab (narrow button).
+/// The vault switcher arrow: the right zone of the Vaults pill, with its
+/// own hover even inside the active pill.
 pub fn vault_switcher_button(cx: &App) -> Button {
     let theme = cx.theme();
     Button::new("vault-switcher")
         .custom(controls::ghost(cx))
         .icon(Icon::new(IconName::ChevronDown).size(px(14.)))
-        .w(px(20.))
+        .w(SWITCHER_WIDTH)
         .h(TAB_HEIGHT)
         .rounded(metrics::RADIUS_CONTROL)
         .tooltip(i18n::top_bar::SWITCH_VAULT)

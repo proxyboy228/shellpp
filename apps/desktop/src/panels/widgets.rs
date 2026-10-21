@@ -12,7 +12,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, Focusable as _, IntoElement, SharedString, Stateful,
-    Window, div, px,
+    StyledText, Window, div, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::FocusableExt as _;
@@ -74,17 +74,48 @@ pub(crate) fn block(id: &'static str, title: Option<&'static str>, cx: &App) -> 
                     .text_size(metrics::FONT_SIZE_BODY)
                     .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
                     .text_color(theme.foreground)
-                    .child(title),
+                    .child(text_with_paths(title, cx)),
             )
         })
 }
 
-/// A field caption (12 px, `--text-secondary`).
+/// A field caption (12 px, `--text-secondary`); file paths in it are in
+/// the monospaced font ([`text_with_paths`]).
 pub(crate) fn caption(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .text_size(metrics::FONT_SIZE_CAPTION)
         .text_color(cx.theme().muted_foreground)
-        .child(text.into())
+        .child(text_with_paths(text, cx))
+}
+
+/// The byte ranges of the file paths in `text` (`~/.ssh/known_hosts`): a
+/// run of non-space characters from `~/`, without the punctuation that ends
+/// the sentence after it.
+pub(crate) fn path_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("~/") {
+        let start = from + found;
+        let rest = &text[start..];
+        let len = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let path = rest[..len].trim_end_matches(['.', ',', ';', ':', ')', '"', '\'']);
+        ranges.push(start..start + path.len());
+        from = start + len;
+    }
+    ranges
+}
+
+/// Text whose file paths are in the monospaced font: names of files and
+/// paths appear only in descriptions and tooltips, in that font
+/// (design-system 6 [decision]).
+pub(crate) fn text_with_paths(text: impl Into<SharedString>, cx: &App) -> StyledText {
+    let text = text.into();
+    let mono = cx.theme().mono_font_family.clone();
+    let overrides: Vec<_> = path_ranges(&text)
+        .into_iter()
+        .map(|range| (range, mono.clone()))
+        .collect();
+    StyledText::new(text).with_font_family_overrides(overrides)
 }
 
 /// The reason under an invalid field (12 px, `--danger`).
@@ -608,4 +639,29 @@ pub(crate) fn form_button(
             }
         })
         .child(label.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_ranges;
+
+    #[test]
+    fn paths_are_found_without_the_punctuation_after_them() {
+        let text = "Adds the key to ~/.ssh/authorized_keys on the hosts.";
+        let ranges = path_ranges(text);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&text[ranges[0].clone()], "~/.ssh/authorized_keys");
+        let text = "The ~/.ssh folder, then ~/.ssh/config.";
+        let found: Vec<&str> = path_ranges(text)
+            .into_iter()
+            .map(|range| &text[range])
+            .collect();
+        assert_eq!(found, ["~/.ssh", "~/.ssh/config"]);
+        assert!(path_ranges("No paths here").is_empty());
+        let text = "~/.ssh";
+        assert_eq!(
+            path_ranges(text),
+            vec![std::ops::Range { start: 0, end: 6 }]
+        );
+    }
 }

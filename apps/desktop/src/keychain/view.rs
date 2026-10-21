@@ -320,7 +320,7 @@ impl KeychainScreen {
 
     /// The New key split button (▾: Generate key, New identity), then
     /// Certificate and FIDO2, shown disabled until they are built (D30).
-    fn render_bar_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_bar_left(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
         let new_key = ControlButton::new("kc-new-key", ControlKind::Neutral)
@@ -357,6 +357,8 @@ impl KeychainScreen {
             .child(new_key)
             .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
             .child(new_key_menu);
+        // Certificate and FIDO2 are one group: both as wide as the wider.
+        let width = controls::group_width(window, &[strings::CERTIFICATE, strings::FIDO2]);
         h_flex()
             .id("kc-action-bar-left")
             .test_support()
@@ -367,12 +369,14 @@ impl KeychainScreen {
                 ControlButton::new("kc-certificate", ControlKind::Neutral)
                     .icon(IconName::FileText)
                     .label(strings::CERTIFICATE)
+                    .min_w(width)
                     .disabled(true),
             )
             .child(
                 ControlButton::new("kc-fido2", ControlKind::Neutral)
                     .icon(Lucide::Usb)
                     .label(strings::FIDO2)
+                    .min_w(width)
                     .disabled(true),
             )
     }
@@ -394,7 +398,7 @@ impl KeychainScreen {
             .flex_wrap()
             .items_center()
             .gap(metrics::SPACE_2)
-            .child(self.render_bar_left(cx))
+            .child(self.render_bar_left(window, cx))
             .child(
                 h_flex()
                     .id("kc-action-bar-right")
@@ -838,7 +842,7 @@ impl KeychainScreen {
     /// No keys and no identities (Generate as the screen's accent button
     /// while no panel is open; Import; Import from ~/.ssh), or none
     /// matching the search.
-    fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_empty(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let none = self.keys.is_empty() && self.identities.is_empty();
         let (id, title, body) = if none {
@@ -880,6 +884,15 @@ impl KeychainScreen {
                 )
             })
             .when(none, |this| {
+                // One group: all three as wide as the widest.
+                let width = controls::group_width(
+                    window,
+                    &[
+                        strings::EMPTY_GENERATE,
+                        strings::EMPTY_IMPORT,
+                        strings::EMPTY_IMPORT_SSH,
+                    ],
+                );
                 this.child(
                     h_flex()
                         .pt(metrics::SPACE_2)
@@ -890,6 +903,7 @@ impl KeychainScreen {
                             ControlButton::new("kc-empty-generate", generate_kind)
                                 .icon(Lucide::KeyRound)
                                 .label(strings::EMPTY_GENERATE)
+                                .min_w(width)
                                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                     this.open_generate(window, cx)
                                 })),
@@ -898,6 +912,7 @@ impl KeychainScreen {
                             ControlButton::new("kc-empty-import", ControlKind::Neutral)
                                 .icon(Lucide::Import)
                                 .label(strings::EMPTY_IMPORT)
+                                .min_w(width)
                                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                     this.open_import(window, cx)
                                 })),
@@ -906,6 +921,8 @@ impl KeychainScreen {
                             ControlButton::new("kc-empty-import-ssh", ControlKind::Neutral)
                                 .icon(Lucide::FolderOpen)
                                 .label(strings::EMPTY_IMPORT_SSH)
+                                .path_tooltip(strings::SSH_FOLDER_PATH)
+                                .min_w(width)
                                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                     this.open_import_from_ssh(window, cx)
                                 })),
@@ -986,7 +1003,7 @@ impl Render for KeychainScreen {
             // No "No keys yet" while the lists are still on their way.
             div().flex_1().into_any_element()
         } else if self.rows.is_empty() {
-            self.render_empty(cx)
+            self.render_empty(window, cx)
         } else {
             div()
                 .size_full()

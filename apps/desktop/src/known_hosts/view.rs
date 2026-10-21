@@ -311,13 +311,17 @@ impl KnownHostsScreen {
     /// right (10.1). In a narrow area the right group wraps below.
     fn render_action_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let empty = self.items.is_empty();
+        // One group: both as wide as the wider (design-system 6).
+        let width = controls::group_width(window, &[strings::IMPORT, strings::EXPORT]);
         let import = ControlButton::new("kh-import", ControlKind::Neutral)
             .icon(Lucide::Import)
             .label(strings::IMPORT)
+            .min_w(width)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_import(window, cx)));
         let export = ControlButton::new("kh-export", ControlKind::Neutral)
             .icon(Lucide::Upload)
             .label(strings::EXPORT)
+            .min_w(width)
             .disabled(empty)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.export(window, cx)));
         h_flex()
@@ -635,7 +639,7 @@ impl KnownHostsScreen {
                         .max_w(px(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
-                        .child(body),
+                        .child(crate::panels::widgets::text_with_paths(body, cx)),
                 )
             })
             .when(none, |this| {
@@ -644,6 +648,7 @@ impl KnownHostsScreen {
                         ControlButton::new("kh-empty-import", ControlKind::Accent)
                             .icon(Lucide::Import)
                             .label(strings::EMPTY_IMPORT)
+                            .path_tooltip(strings::KNOWN_HOSTS_PATH)
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.open_import(window, cx)
                             })),

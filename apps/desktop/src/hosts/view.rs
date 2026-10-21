@@ -18,7 +18,7 @@ use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, DispatchPhase, DragMoveEvent,
     Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
     MouseUpEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    TextRun, Window, canvas, div, prelude::FluentBuilder as _, px, size,
+    Window, canvas, div, prelude::FluentBuilder as _, px, size,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -34,7 +34,9 @@ use shellpp_core::service::dto::TagColor;
 use uuid::Uuid;
 
 use super::columns::{self, Column, ListColumns, ResizeColumn};
-use super::controls::{self, ControlButton, ControlKind, ICON_SIZE};
+use super::controls::{
+    self, ControlButton, ControlKind, ICON_SIZE, LABEL_BUTTON_EXTRA, text_width,
+};
 use super::layout::{BarLabels, BarMeasure, BarPlan};
 use super::menu::{self, CommandHandler};
 use super::{
@@ -52,30 +54,13 @@ const CONTENT_PADDING: gpui::Pixels = metrics::SPACE_5;
 const LIST_TILE_SIZE: gpui::Pixels = px(28.);
 /// Height of the Connect button inside the 36 px search field.
 const INNER_BUTTON_HEIGHT: gpui::Pixels = px(28.);
-/// What a 36 px control button adds around its label: the 12 px padding on
-/// both sides, the 16 px icon and the 8 px gap (`controls::ControlButton`).
-const LABEL_BUTTON_EXTRA: f32 = 48.;
 /// The kit input's right padding (medium size): the search hint ends before it.
 const SEARCH_INPUT_PAD_RIGHT: f32 = 10.;
 
-/// The width of `text` in the window's current font with 2 % and a pixel to
-/// spare (it plans the action bar, so it errs on the wide side).
-fn text_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> f32 {
-    if text.is_empty() {
-        return 0.;
-    }
-    let mut font = window.text_style().font();
-    font.weight = weight;
-    let run = TextRun {
-        len: text.len(),
-        font,
-        ..Default::default()
-    };
-    let line =
-        window
-            .text_system()
-            .shape_line(SharedString::from(text.to_owned()), size, &[run], None);
-    (line.width().as_f32() * 1.02).ceil() + 1.
+/// The width of Terminal and Serial with their labels: one group, as wide
+/// as the wider of the two (design-system 6 [decision]).
+fn local_group_width(window: &Window) -> Pixels {
+    controls::group_width(window, &[strings::TERMINAL, strings::SERIAL])
 }
 
 /// The floating label under the pointer while cards are dragged.
@@ -238,8 +223,10 @@ impl HostsScreen {
         // The split button: New host, the 1 px divider, the arrow.
         let split = |new_host: f32| new_host + 1. + icon;
         let new_host = label(strings::NEW_HOST);
+        // Terminal and Serial are one group: both as wide as the wider.
+        let local = local_group_width(window).as_f32();
         let left = [
-            split(new_host) + gap + label(strings::TERMINAL) + gap + label(strings::SERIAL),
+            split(new_host) + gap + local + gap + local,
             split(new_host) + gap + icon + gap + icon,
             split(icon) + gap + icon + gap + icon,
         ];
@@ -280,7 +267,9 @@ impl HostsScreen {
         });
         self.bar_plan = Some(plan);
 
-        let left = self.render_bar_left(plan, cx).into_any_element();
+        let left = self
+            .render_bar_left(plan, local_group_width(window), cx)
+            .into_any_element();
         let right = h_flex()
             .id("action-bar-right")
             .test_support()
@@ -314,7 +303,13 @@ impl HostsScreen {
 
     /// Split New host (▾: New Group, Import), Terminal, Serial; labels as
     /// the plan allows (icon buttons carry their names as tooltips).
-    fn render_bar_left(&self, plan: BarPlan, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Terminal and Serial with labels are `local_width` wide each.
+    fn render_bar_left(
+        &self,
+        plan: BarPlan,
+        local_width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
         let new_host = ControlButton::new("new-host", ControlKind::Neutral)
@@ -360,7 +355,7 @@ impl HostsScreen {
             .icon(Lucide::SquareTerminal)
             .map(|button| {
                 if local_labels {
-                    button.label(strings::TERMINAL)
+                    button.label(strings::TERMINAL).min_w(local_width)
                 } else {
                     button.tooltip(strings::TERMINAL)
                 }
@@ -372,7 +367,7 @@ impl HostsScreen {
             .icon(Lucide::Usb)
             .map(|button| {
                 if local_labels {
-                    button.label(strings::SERIAL)
+                    button.label(strings::SERIAL).min_w(local_width)
                 } else {
                     button.tooltip(strings::SERIAL)
                 }
@@ -1155,7 +1150,12 @@ impl HostsScreen {
     /// 0.2; the search bar's Connect is the accent button meanwhile).
     /// While `panel_open` (a host or group panel), the panel holds the
     /// screen's one accent button and "Create host" is neutral.
-    fn render_empty(&self, panel_open: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_empty(
+        &self,
+        panel_open: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let vault_empty = self.hosts.is_empty() && self.groups.is_empty();
         let quick = match &self.search_target {
@@ -1187,40 +1187,48 @@ impl HostsScreen {
                 .gap(metrics::SPACE_2)
                 .pt(metrics::SPACE_2)
         };
-        let actions =
-            if let Some(target) = quick {
-                Some(
-                    buttons().child(
-                        ControlButton::new("save-as-host", ControlKind::Neutral)
+        let actions = if let Some(target) = quick {
+            Some(
+                buttons().child(
+                    ControlButton::new("save-as-host", ControlKind::Neutral)
+                        .icon(Lucide::Plus)
+                        .label(strings::SAVE_AS_HOST)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.save_search_address(&target, window, cx)
+                        })),
+                ),
+            )
+        } else if vault_empty && !self.filter.is_active() {
+            // One group: both as wide as the wider (design-system 6).
+            let width =
+                controls::group_width(window, &[strings::CREATE_HOST, strings::IMPORT_SSH_CONFIG]);
+            Some(
+                buttons()
+                    .child(
+                        ControlButton::new("create-host", create_host_kind(panel_open))
                             .icon(Lucide::Plus)
-                            .label(strings::SAVE_AS_HOST)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.save_search_address(&target, window, cx)
+                            .label(strings::CREATE_HOST)
+                            .min_w(width)
+                            .on_click(
+                                cx.listener(|_, _: &ClickEvent, _, cx| {
+                                    cx.emit(HostsEvent::NewHost)
+                                }),
+                            ),
+                    )
+                    .child(
+                        ControlButton::new("import-ssh-config", ControlKind::Neutral)
+                            .icon(Lucide::Import)
+                            .label(strings::IMPORT_SSH_CONFIG)
+                            .path_tooltip(strings::SSH_CONFIG_PATH)
+                            .min_w(width)
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                crate::import_sources::open(this.state.clone(), window, cx);
                             })),
                     ),
-                )
-            } else if vault_empty && !self.filter.is_active() {
-                Some(
-                    buttons()
-                        .child(
-                            ControlButton::new("create-host", create_host_kind(panel_open))
-                                .icon(Lucide::Plus)
-                                .label(strings::CREATE_HOST)
-                                .on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
-                                    cx.emit(HostsEvent::NewHost)
-                                })),
-                        )
-                        .child(
-                            ControlButton::new("import-ssh-config", ControlKind::Neutral)
-                                .label(strings::IMPORT_SSH_CONFIG)
-                                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    crate::import_sources::open(this.state.clone(), window, cx);
-                                })),
-                        ),
-                )
-            } else {
-                None
-            };
+            )
+        } else {
+            None
+        };
         v_flex()
             .id(id)
             .test_support()
@@ -1342,7 +1350,7 @@ impl Render for HostsScreen {
         .size_full();
 
         let content = if self.rows.is_empty() {
-            self.render_empty(details_panel_open(window, cx), cx)
+            self.render_empty(details_panel_open(window, cx), window, cx)
         } else {
             div()
                 .size_full()

@@ -1256,12 +1256,13 @@ impl Shell {
             .dropdown_menu(move |menu, window, cx| {
                 app_menu::build(menu, focus.clone(), window, cx)
             });
-        let vaults = title_bar::top_tab(
+        let vaults_active = self.top_tab == TopTab::Vaults;
+        let vaults = title_bar::vaults_tab(
             "tab-vaults",
             &self.vaults_focus,
             Lucide::Vault,
             i18n::top_bar::VAULTS,
-            self.top_tab == TopTab::Vaults,
+            vaults_active,
             cx,
         )
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_top_tab(TopTab::Vaults, cx)));
@@ -1397,12 +1398,12 @@ impl Shell {
                         .items_center()
                         // Windows: interactive children occlude the drag area.
                         .child(div().occlude().child(menu))
-                        .child(
-                            h_flex()
-                                .items_center()
-                                .child(vaults)
-                                .child(div().occlude().child(vault_switcher)),
-                        )
+                        .child(title_bar::vaults_pill(
+                            vaults,
+                            div().occlude().child(vault_switcher),
+                            vaults_active,
+                            cx,
+                        ))
                         .child(sftp)
                         .child(
                             // Tabs that do not fit scroll sideways (a vertical

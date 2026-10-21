@@ -21,7 +21,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
 use super::model::{Item, Row};
 use super::picker::{self, COLUMN_WIDTH, Picker, PickerHost};
 use super::{NewTabEvent, OpenTab, model::PickerKind, strings};
-use crate::hosts::controls::{ControlButton, ControlKind};
+use crate::hosts::controls::{self, ControlButton, ControlKind};
 use crate::state::AppState;
 use crate::theme::{self, metrics};
 
@@ -118,17 +118,21 @@ impl NewTabPage {
         self.picker.selected_row()
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let available = self.restore_available;
+        // One group: both as wide as the wider (design-system 6).
+        let width = controls::group_width(window, &[strings::CREATE_WORKSPACE, strings::RESTORE]);
         let workspace = ControlButton::new("new-tab-workspace", ControlKind::Ghost)
             .icon(IconName::Plus)
             .label(strings::CREATE_WORKSPACE)
+            .min_w(width)
             .tooltip(strings::WORKSPACES_LATER)
             .disabled(true);
         let restore = ControlButton::new("new-tab-restore", ControlKind::Ghost)
             .icon(IconName::RotateCcwClock)
             .label(strings::RESTORE)
+            .min_w(width)
             .tooltip(if available {
                 strings::RESTORE_HINT
             } else {
@@ -171,7 +175,7 @@ impl NewTabPage {
 impl Render for NewTabPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let field = self.picker.render_field(Some(SEARCH_SHORTCUT), window, cx);
-        let header = (!self.picker.is_searching()).then(|| self.render_header(cx));
+        let header = (!self.picker.is_searching()).then(|| self.render_header(window, cx));
         let list = self.picker.render_list(None, cx);
         let column = picker::keys(v_flex().id("new-tab-column"), cx)
             .w_full()

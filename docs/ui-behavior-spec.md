@@ -327,8 +327,8 @@ On the right:
   - when dropped onto a group card, the host is moved into that group, in any sort mode.
 - Promo banners are not needed. Instead, an empty state with hints. [decision]
 - Empty state (no hosts): a short explanation and the buttons "Create host"
-  and "Import from ~/.ssh/config". The second one opens the import dialog (2.5) with the
-  `~/.ssh/config` source selected. [decision]
+  and "Import OpenSSH config" (the path `~/.ssh/config` in its tooltip). The second one
+  opens the import dialog (2.5) with the `~/.ssh/config` source selected. [decision]
   - "Create host" is the screen's primary button, in the accent style. While the details
     panel (a host or group panel, 1.3) is open, the primary action is in the panel, so
     "Create host" takes the neutral style: a screen has one accent button
@@ -1052,9 +1052,10 @@ on the Hosts screen. [decision]
   method.
 - Identical keys (matching fingerprint) are detected automatically. A hint
   appears offering to merge them into one key; references from hosts are carried over. [decision]
-- Empty state: buttons "Generate", "Import" and
-  "Import from ~/.ssh". [decision] "Import from ~/.ssh" opens the New key form with the
-  private key files found in `~/.ssh`; a click on one puts its text into the form (D33).
+- Empty state: buttons "Generate", "Import" and "Import from SSH folder" (the path
+  `~/.ssh` in its tooltip). [decision] "Import from SSH folder" opens the New key form
+  with the private key files found in `~/.ssh`; a click on one puts its text into the
+  form (D33).
 
 ### 7.3 Key panel (creation and editing)
 
@@ -1258,8 +1259,8 @@ Blocks from top to bottom:
   - The **Export** button stands next to Import. The view toggle switches between tiles
     and a list with the columns Address, Key type, Fingerprint and Date added. Sorting is
     by address, by date added or by key type. [decision]
-  - With no entries, the screen shows an empty state with an "Import known_hosts"
-    button. [decision]
+  - With no entries, the screen shows an empty state with an "Import known hosts"
+    button (the path `~/.ssh/known_hosts` in its tooltip). [decision]
 - Grid of cards: fingerprint icon and address in OpenSSH format. For port 22
   it is `host`, for others `[host]:port`.
 - Hashed entries (`|1|…`) are stored as they are, because their address cannot be

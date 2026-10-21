@@ -27,8 +27,10 @@ pub const COLUMN_ADDED: &str = "Date added";
 // Empty states.
 pub const EMPTY_TITLE: &str = "No known hosts";
 pub const EMPTY_BODY: &str = "A host's key is saved here when you trust it on the first connection. \
-     You can also import a known_hosts file.";
-pub const EMPTY_IMPORT: &str = "Import known_hosts";
+     You can also import the hosts your OpenSSH client trusts, from ~/.ssh/known_hosts.";
+pub const EMPTY_IMPORT: &str = "Import known hosts";
+/// The file Import known hosts reads by default, in its tooltip.
+pub const KNOWN_HOSTS_PATH: &str = "~/.ssh/known_hosts";
 pub const NO_MATCHES: &str = "No known hosts match the search";
 
 // Details panel.
@@ -67,7 +69,7 @@ pub fn remove_body(title: &str, revoked: bool) -> String {
 }
 
 // Import dialog (2.5 with the known_hosts source).
-pub const IMPORT_TITLE: &str = "Import known_hosts";
+pub const IMPORT_TITLE: &str = "Import known hosts";
 pub const IMPORT_FILE: &str = "File";
 pub const IMPORT_BROWSE: &str = "Choose file";
 pub const IMPORT_RUN: &str = "Import";
