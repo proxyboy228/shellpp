@@ -72,8 +72,10 @@ fn uuid_member(ssh: &Map<String, Value>, key: &str) -> Option<Uuid> {
 }
 
 impl InheritedSsh {
-    /// Fills the fields still empty from one level's `ssh` block.
-    fn absorb(&mut self, ssh: &Map<String, Value>, group_id: Uuid) {
+    /// Fills the fields still empty from one level's `ssh` block; the
+    /// username and the key also from the identity the level names
+    /// (`idf`, data-model 8.3), as a connection resolves them.
+    fn absorb(&mut self, ssh: &Map<String, Value>, group_id: Uuid, idf: Option<&IdentityView>) {
         if self.port.is_none()
             && let Some(port) = ssh
                 .get("port")
@@ -91,6 +93,10 @@ impl InheritedSsh {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    idf.and_then(|identity| identity.username.as_deref())
+                        .filter(|value| !value.is_empty())
+                })
         {
             self.username = Some(InheritedFrom {
                 value: username.to_owned(),
@@ -106,7 +112,8 @@ impl InheritedSsh {
             });
         }
         if self.key_id.is_none()
-            && let Some(id) = uuid_member(ssh, "key_id")
+            && let Some(id) =
+                uuid_member(ssh, "key_id").or_else(|| idf.and_then(|identity| identity.key_id))
         {
             self.key_id = Some(InheritedFrom {
                 value: id,
@@ -896,6 +903,8 @@ impl AppState {
         let mut inherited = InheritedSsh::default();
         let mut level = parent;
         let mut seen = 0;
+        // Only read when a level names an identity.
+        let mut identities: Option<Vec<IdentityView>> = None;
         while let Some(group_id) = level {
             if seen >= MAX_CHAIN {
                 break;
@@ -905,7 +914,15 @@ impl AppState {
                 break;
             };
             if let Some(ssh) = group.data.get("ssh").and_then(Value::as_object) {
-                inherited.absorb(ssh, group_id);
+                let idf = match uuid_member(ssh, "identity_id") {
+                    Some(id) => identities
+                        .get_or_insert_with(|| self.identities())
+                        .iter()
+                        .find(|identity| identity.record_id == id)
+                        .cloned(),
+                    None => None,
+                };
+                inherited.absorb(ssh, group_id, idf.as_ref());
             }
             level = group.parent_id;
         }

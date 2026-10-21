@@ -850,3 +850,40 @@ fn the_identity_hint_moves_shared_credentials_onto_one_identity(cx: &mut TestApp
         assert!(ssh.get("username").is_none_or(Value::is_null));
     }
 }
+
+/// The placeholders of a host follow the connection (data-model 8.3): a
+/// group's identity supplies the username a host inherits.
+#[gpui_kit::test]
+fn a_group_identity_supplies_the_inherited_username(cx: &mut TestAppContext) {
+    use shellpp_core::model::identity::PasswordChange;
+    use shellpp_core::service::keychain::IdentitySaveInput;
+    let state = setup(cx);
+    let core = state.read_with(cx, |state, _| state.core().cloned().unwrap());
+    let vault_id = state.read_with(cx, |state, _| state.vault_id().unwrap());
+    let identity = core
+        .identity_save(IdentitySaveInput {
+            vault_id,
+            record_id: None,
+            label: "ops".into(),
+            username: "ops".into(),
+            key_id: None,
+            password: PasswordChange::Keep,
+        })
+        .unwrap();
+    let group = state.update(cx, |state, cx| {
+        state
+            .save_group(
+                None,
+                map(
+                    json!({"name": "prod", "ssh": {"identity_id": identity.record_id.to_string()}}),
+                ),
+                cx,
+            )
+            .unwrap()
+    });
+    cx.run_until_parked();
+    let inherited = state.read_with(cx, |state, _| state.inherited_ssh(Some(group.record_id)));
+    let username = inherited.username.expect("from the group's identity");
+    assert_eq!(username.value, "ops");
+    assert_eq!(username.group_id, group.record_id);
+}
