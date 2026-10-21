@@ -43,6 +43,9 @@ fn openssh_dir() -> PathBuf {
 pub struct OpenSshServer {
     /// The work directory of a container started by this suite.
     workdir: Option<tempfile::TempDir>,
+    /// The folder of `server.json` (and the `container` file of
+    /// `control.sh`).
+    dir: PathBuf,
     pub addr: SocketAddr,
     /// Host key types and their `SHA256:` fingerprints.
     pub host_keys: Vec<(String, String)>,
@@ -140,7 +143,25 @@ impl OpenSshServer {
                 string(&["users", "keyboard_interactive", "name"]),
                 string(&["users", "keyboard_interactive", "password"]),
             ),
+            dir: path.parent().map(Path::to_path_buf).unwrap_or_default(),
             workdir,
+        }
+    }
+
+    /// `control.sh drop-connections` as a function to run later, on any
+    /// thread: every connection process of the container ends; the server
+    /// keeps accepting new ones.
+    pub fn connection_dropper(&self) -> impl FnOnce() + Send + 'static {
+        let dir = self.dir.clone();
+        move || {
+            let status = Command::new(bash())
+                .arg(openssh_dir().join("control.sh"))
+                .arg(&dir)
+                .arg("drop-connections")
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("bash runs control.sh");
+            assert!(status.success(), "control.sh drop-connections: {status}");
         }
     }
 }
@@ -154,4 +175,27 @@ impl Drop for OpenSshServer {
                 .status();
         }
     }
+}
+
+/// Git's bash on Windows (found next to `git`; WSL's `bash.exe` cannot read
+/// Windows paths), else `bash`.
+fn bash() -> PathBuf {
+    if let Some(path) = std::env::var_os("SHELLPP_BASH") {
+        return PathBuf::from(path);
+    }
+    if cfg!(windows)
+        && let Ok(output) = Command::new("git").arg("--exec-path").output()
+    {
+        // <git>/mingw64/libexec/git-core -> <git>/bin/bash.exe
+        let exec_path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        if let Some(bash) = exec_path
+            .ancestors()
+            .nth(3)
+            .map(|git| git.join("bin").join("bash.exe"))
+            .filter(|bash| bash.is_file())
+        {
+            return bash;
+        }
+    }
+    PathBuf::from("bash")
 }

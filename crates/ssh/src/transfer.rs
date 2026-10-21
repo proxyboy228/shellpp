@@ -151,18 +151,21 @@ pub async fn copy_between(
         let read = reader
             .read(&mut buffer)
             .await
-            .map_err(crate::sftp::remote_io)?;
+            .map_err(|error| from.file_error(error))?;
         if read == 0 {
             break;
         }
         writer
             .write_all(&buffer[..read])
             .await
-            .map_err(crate::sftp::remote_io)?;
+            .map_err(|error| to.file_error(error))?;
         done += read as u64;
         progress(done);
     }
-    writer.shutdown().await.map_err(crate::sftp::remote_io)?;
+    writer
+        .shutdown()
+        .await
+        .map_err(|error| to.file_error(error))?;
     drop(writer);
     let _ = reader.shutdown().await;
     if done != entry.size {

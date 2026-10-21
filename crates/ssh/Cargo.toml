@@ -17,6 +17,7 @@ publish.workspace = true
 [dependencies]
 russh.workspace = true
 russh-sftp.workspace = true
+futures.workspace = true
 tokio = { workspace = true, features = ["net", "io-util", "rt", "sync", "time", "fs"] }
 secrecy.workspace = true
 zeroize.workspace = true

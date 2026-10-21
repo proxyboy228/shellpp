@@ -547,7 +547,7 @@ async fn keepalive_loop(core: Weak<ConnCore>, interval: Duration) {
 }
 
 /// What a connection and its channels share.
-struct ConnCore {
+pub(crate) struct ConnCore {
     handle: Handle<ClientHandler>,
     shared: Arc<Shared>,
     switch: Arc<KillSwitch>,
@@ -556,7 +556,7 @@ struct ConnCore {
 }
 
 impl ConnCore {
-    fn is_closed(&self) -> bool {
+    pub(crate) fn is_closed(&self) -> bool {
         self.handle.is_closed()
             || self.shared.transport_closed()
             || self.shared.is_lost()
@@ -912,11 +912,19 @@ impl Connection {
                 let _ = channel.close().await;
                 return Err(SshError::new(FailureKind::ChannelFailed));
             }
-            Err(kind) => return Err(core.failure(kind)),
+            Err(kind) => {
+                let _ = channel.close().await;
+                return Err(core.failure(kind));
+            }
         }
-        crate::sftp::Sftp::start(channel.into_stream(), core.request_timeout)
+        // The server sends nothing before the client's INIT: `pending` is
+        // empty here.
+        crate::sftp::Sftp::start(channel.into_stream(), Arc::clone(core))
             .await
-            .map_err(|_| core.failure(FailureKind::ChannelFailed))
+            .map_err(|error| match error {
+                crate::sftp::SftpError::Timeout => SshError::new(FailureKind::Timeout),
+                _ => core.failure(FailureKind::ChannelFailed),
+            })
     }
 
     /// `true` once the transport is gone.

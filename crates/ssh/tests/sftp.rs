@@ -6,7 +6,8 @@
 //! spaces and emoji in names, a tree of small files, permissions, rename,
 //! a recursive delete that leaves the target of a symbolic link alone,
 //! folder transfers of 2000 files that leave links out, and a copy from
-//! one session to another (remote ↔ remote).
+//! one session to another (remote ↔ remote), and a download that a dropped
+//! connection cut, resumed over a new connection.
 //! Every file is made of random bytes at run time.
 
 mod support;
@@ -92,6 +93,14 @@ async fn transfers_keep_every_byte(sftp: &Sftp, dir: &str, local: &Path) {
         .unwrap()
         .as_secs();
     assert_eq!(remote_time, local_secs);
+    let back_secs = std::fs::metadata(&back)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert_eq!(back_secs, remote_time, "and back");
 }
 
 async fn interrupted_transfers_resume(sftp: &Sftp, dir: &str, local: &Path) {
@@ -126,6 +135,17 @@ async fn interrupted_transfers_resume(sftp: &Sftp, dir: &str, local: &Path) {
     .expect("resumed download");
     assert_eq!(started, Some(1000));
     assert_eq!(std::fs::read(&back).unwrap(), data);
+    // A .part of another file (its last block differs) starts over.
+    let other = local.join("other.back");
+    std::fs::write(shellpp_ssh::sftp::local_part(&other), vec![0x55u8; 1000]).unwrap();
+    let mut started = None;
+    sftp.download(&remote, &other, true, &mut |done| {
+        started.get_or_insert(done);
+    })
+    .await
+    .expect("download over a foreign .part");
+    assert_eq!(started, Some(0));
+    assert_eq!(std::fs::read(&other).unwrap(), data);
 }
 
 async fn names_and_many_small_files(sftp: &Sftp, dir: &str, local: &Path) {
@@ -168,6 +188,31 @@ async fn permissions_rename_and_errors(sftp: &Sftp, dir: &str) {
         .unwrap();
     sftp.set_permissions(&path, 0o640).await.unwrap();
     assert_eq!(sftp.stat(&path).await.unwrap().permissions, Some(0o640));
+    // Uploading over a private file replaces its content and keeps it
+    // private (SFTP v3 cannot rename over it: the old one is put aside).
+    let secret = shellpp_ssh::sftp::join(dir, "secret.env");
+    sftp.upload(local.path(), &secret, false, &mut |_| {})
+        .await
+        .unwrap();
+    sftp.set_permissions(&secret, 0o600).await.unwrap();
+    std::fs::write(local.path(), "edited").unwrap();
+    sftp.upload(local.path(), &secret, false, &mut |_| {})
+        .await
+        .expect("upload over a file");
+    let replaced = sftp.stat(&secret).await.unwrap();
+    assert_eq!(replaced.permissions, Some(0o600));
+    assert_eq!(replaced.size, "edited".len() as u64);
+    let names: Vec<String> = sftp
+        .list(dir)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(
+        !names.iter().any(|name| name.starts_with("secret.env.")),
+        "{names:?}"
+    );
     let renamed = shellpp_ssh::sftp::join(dir, "renamed.txt");
     sftp.rename(&path, &renamed).await.unwrap();
     assert_eq!(sftp.stat(&path).await.err(), Some(SftpError::NotFound));
@@ -211,6 +256,26 @@ async fn a_recursive_delete_leaves_link_targets_alone(
             to_dir: true
         }
     );
+    // A trailing slash would make lstat follow the link: removing
+    // "doomed/link/" removes the link only.
+    let removed = sftp
+        .remove_tree(&format!("{doomed}/link/"))
+        .await
+        .expect("remove a link with a slash");
+    assert_eq!(removed, 1);
+    let kept = sftp
+        .stat(&shellpp_ssh::sftp::join(&outside, "keep.txt"))
+        .await;
+    assert_eq!(kept.map(|entry| entry.size), Ok(5));
+    let output = connection
+        .exec(
+            &format!("ln -s '{outside}' '{doomed}/link'"),
+            std::time::Duration::from_secs(10),
+            4096,
+        )
+        .await
+        .expect("exec");
+    assert_eq!(output.exit_status, Some(0));
     let removed = sftp.remove_tree(&doomed).await.expect("remove tree");
     assert_eq!(removed, 4, "sub/x.txt, sub, link, doomed");
     assert_eq!(sftp.stat(&doomed).await.err(), Some(SftpError::NotFound));
@@ -285,6 +350,60 @@ async fn trees_and_remote_to_remote(
     assert_eq!(std::fs::read_to_string(&check).unwrap(), "file 0");
 }
 
+/// A download cut by a dropped connection resumes over a new one from its
+/// `.part`. Last: the drop ends every connection of the server.
+async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &Path) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let remote = shellpp_ssh::sftp::join(dir, "large.bin");
+    let target = local.join("dropped.bin");
+    let connection = key_connection(server).await;
+    let sftp = connection.open_sftp().await.expect("sftp");
+    let cut = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let mut tx = Some(tx);
+    let flag = Arc::clone(&cut);
+    // After 4 MB the download slows down until the drop lands.
+    let mut slow = move |done: u64| {
+        if done >= 4 * 1024 * 1024 {
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(());
+            }
+            if !flag.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    };
+    // On its own task: the download's task is slowed down by the callback.
+    let drop_now = server.connection_dropper();
+    let dropper = tokio::spawn(async move {
+        let _ = rx.await;
+        tokio::task::spawn_blocking(drop_now)
+            .await
+            .expect("control.sh ran");
+        cut.store(true, Ordering::SeqCst);
+    });
+    let result = sftp.download(&remote, &target, false, &mut slow).await;
+    dropper.await.expect("dropper");
+    assert!(result.is_err(), "the drop ends the download");
+    let part = shellpp_ssh::sftp::local_part(&target);
+    let kept = std::fs::metadata(&part).expect("the .part stays").len();
+    assert!(kept >= 4 * 1024 * 1024, "{kept}");
+    // A new connection goes on from there.
+    let connection = key_connection(server).await;
+    let sftp = connection.open_sftp().await.expect("sftp again");
+    let mut started = None;
+    sftp.download(&remote, &target, true, &mut |done| {
+        started.get_or_insert(done);
+    })
+    .await
+    .expect("resumed after the drop");
+    assert_eq!(started, Some(kept));
+    assert_eq!(sha256_file(&target), sha256_file(&local.join("large.bin")));
+    sftp.remove_tree(dir).await.expect("clean up");
+    connection.disconnect().await;
+}
+
 #[allow(clippy::print_stderr)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sftp_against_openssh() {
@@ -312,9 +431,9 @@ async fn sftp_against_openssh() {
     trees_and_remote_to_remote(&connection, &sftp, &other, &dir, local.path()).await;
     other.close().await;
     second.disconnect().await;
-    sftp.remove_tree(&dir).await.expect("clean up");
     sftp.close().await;
     connection.disconnect().await;
+    a_dropped_download_resumes(&server, &dir, local.path()).await;
     drop(server);
 }
 

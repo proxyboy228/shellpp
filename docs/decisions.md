@@ -703,15 +703,18 @@ Status: night decision, 2026-10-21 (second review of stage 3; D35; jump hosts ar
 
 ### 45. The SFTP engine (night)
 
-Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 1; UI 5).
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 1; UI 5); amended after the review of the engine.
 
 **Decision:**
 
-- SFTP is `russh-sftp` 3.0.1 (Apache-2.0; with `dashmap`, MIT) over a new channel of the existing `Connection` (`Connection::open_sftp`, the `sftp` subsystem): a host with an open terminal tab needs no second login. Up to 64 reads and 64 writes of 32 KiB are in flight per file, as OpenSSH's `sftp -R 64`.
-- `shellpp_ssh::sftp::Sftp`: list (a symbolic link is shown as a link with its target and whether that is a folder), stat, create and remove folders, remove files, rename, set permissions, a recursive delete that removes a link itself and never enters it, and download and upload through `<name>.part`, renamed when complete; `resume` continues a `.part` from its length. The modification time is kept; an upload's permissions follow the server's umask (the "keep permissions" option comes with the transfer queue). SFTP v3 cannot rename over a file: the old one is removed right before the rename.
-- Errors are `not found`, `permission denied`, `the connection was lost`, `timeout`, a local file error, or the server's own message (SFTP v3 has no code for a full disk).
-- Names that are not UTF-8 on the server are shown with U+FFFD (russh-sftp decodes them lossily) and cannot be opened; Windows long paths, invalid Windows names and the queue, panels and Open with come with the next parts of stage 4.
-- Measured (`SHELLPP_SFTP_BENCH=1`, 200 MB, release build): to the dev server over a ~50 ms link, upload 9.4 MB/s and download 8.1 MB/s against 8.2 and 8.5 MB/s for OpenSSH's `sftp` with the same key (115 % and 95 %; with russh-sftp's default of 16 requests the upload was 3.9 MB/s); to OpenSSH in local Docker, 158–177 and 135–145 MB/s against 108–120 and 138–148 MB/s.
+- SFTP is `russh-sftp` 3.0.1 (Apache-2.0; with `dashmap`, MIT) over a new channel of the existing `Connection` (`Connection::open_sftp`, the `sftp` subsystem): a host with an open terminal tab needs no second login, and the SFTP session keeps the connection alive while it is open.
+- About 2 MiB are in flight per file each way: 8 reads of up to 255 KiB (the size OpenSSH allows) and 64 writes of 32 KiB, as OpenSSH's `sftp -R 64`. Requests are answered in order, so each waits behind what is in flight: their timeout is 60 s, which still lets a 300 kbit/s link through; a dead link ends sooner through the connection's keepalive. (16 MiB in flight, the first setting, would time out on links below about 9 Mbit/s.)
+- `shellpp_ssh::sftp::Sftp`: list (a symbolic link is shown as a link with its target and whether that is a folder; links are resolved 16 at a time), stat, create and remove folders, remove files, rename, set permissions, and a recursive delete that removes a link itself and never enters it (trailing slashes are dropped, each folder is checked with its own lstat before it is entered).
+- Download and upload go through `<name>.part`, renamed when complete. `resume` continues a `.part` from its length once its last 64 KiB match the source; otherwise the transfer starts over. The modification time is kept where the server allows (best effort). A new upload's permissions follow the server's umask; a replaced file keeps its own, already on its `.part`.
+- SFTP v3 does not rename over a file. Only when the server refuses the rename and both files are there, the old file is renamed aside, the `.part` takes its name and the old one is removed; if that fails, the old one gets its name back. A timeout or a lost connection never removes anything. Replacing a symbolic link replaces the link with the file.
+- Errors are `not found`, `permission denied`, `the connection was lost` (also whenever the connection is gone, whatever the library reports), `timeout`, a local file error, or the server's own message (SFTP v3 has no code for a full disk).
+- Names that are not UTF-8 on the server are shown with U+FFFD (russh-sftp decodes them lossily) and cannot be opened.
+- Measured (`SHELLPP_SFTP_BENCH=1`, 200 MB, release build), to the dev server over a ~50 ms link: upload 7.0–7.2 MB/s and download 6.9–8.4 MB/s against 8.2 and 8.5 MB/s for OpenSSH's `sftp` with the same key (85–88 % and 81–99 %); to OpenSSH in local Docker about 150 and 170 MB/s against 108–120 and 138–148 MB/s.
 
 **Spec impact:** none yet (UI 5 is unchanged; the engine has no UI tonight).
 
