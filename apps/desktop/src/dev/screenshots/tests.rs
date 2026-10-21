@@ -112,6 +112,9 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "keychain-generate",
         "keychain-import-unknown",
         "keychain-empty",
+        // Export Data as it opens and with encryption off (run 3, D64).
+        "export-data",
+        "export-data-plain",
     ] {
         for theme in ["dark", "light"] {
             let name = format!("1280x800-{theme}-{state}.png");
@@ -127,7 +130,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 45);
+    assert_eq!(ShotState::ALL.len(), 46);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");
