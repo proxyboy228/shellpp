@@ -972,3 +972,20 @@ Status: run 2 decision, 2026-10-21 (plan, items 5.7 and 5.8, without their scree
 - Imported `LocalForward`, `RemoteForward` and `DynamicForward` become rules with `autostart_on_connect` (OpenSSH starts them with every connection).
 
 **Spec impact:** none (UI 8, 9 and data-model 11 are followed; the TOFU dialog without a tab is stage 4).
+
+## The owner's answers to run 2
+
+### 62. The owner's answers to the questions of run 2
+
+Status: accepted, 2026-10-21 (owner's choice; the six questions in section 3 of the run 2 report). Keeps D60 and D61 as written; Import Data of snippets, snippet packages and forwarding rules is item 1 of the plan of run 3.
+
+**Decision:**
+
+1. Agent forwarding (D60): accepted. The forwarded agent offers the Keychain's keys through the built-in agent; the system agent only with the host option `agent_forward_system`. `ForwardAgent yes` in an imported `~/.ssh/config` turns the system agent on as well.
+2. The startup snippet runs after every login of the session, a reconnect included: accepted.
+3. Connections without a tab (D61) accept only host keys already in Known Hosts until the TOFU dialog of the stage 4 service "SSH connection without a tab" (plan, item 4.1) exists: accepted.
+4. Import Data without snippets, snippet packages and forwarding rules: not accepted. Export Data writes them and Import Data skips them, so a backup does not come back whole, which breaks principle 4 (SPEC.md). Import Data imports these three record types by the rules of D34 (a conflict of ids keeps both versions, and references inside the import, such as a package's snippets and the hosts a snippet or a rule targets, point to the imported copy). It is item 1 of the plan of run 3; a round-trip test (Export Data, then Import Data) covers snippets, packages and rules.
+5. Rules imported from `LocalForward`, `RemoteForward` and `DynamicForward` (D61) start on their own when a session to their host connects, as in OpenSSH (`autostart_on_connect`); they do not start on app launch (`autostart_on_launch` stays off). The import keeps its exception: a rule that listens beyond loopback is imported without autostart, with a note (security.md 11.3).
+6. Locking does not stop running forwarding rules, as it does not close open sessions (UI 13.3). While the app is locked no rule starts: autostart on connect and on launch waits for unlock, and so does the restart of a rule whose connection dropped.
+
+**Spec impact:** with the implementation: `docs/export-format.md` section 4 and `docs/data-model.md` 18.4 (the record types Import Data takes), `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).
