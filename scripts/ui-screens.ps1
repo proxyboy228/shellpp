@@ -117,8 +117,11 @@ param(
     [string[]] $Sizes = @('1920x1200', '1280x800', '960x600'),
     # Output folder; default <repo>\target\ui-screens.
     [string] $OutDir,
-    # A launch that takes longer is killed and counts as a failure.
-    [int] $TimeoutSeconds = 900,
+    # A launch that takes longer is killed and counts as a failure. A full
+    # run of every state takes well over 10 minutes; the app limits each
+    # state itself (120 s, one retry) and gives up after 300 s without
+    # progress (D72).
+    [int] $TimeoutSeconds = 3600,
     # SSH test server of the terminal states.
     [ValidateSet('auto', 'openssh', 'russh')]
     [string] $Server = 'auto',

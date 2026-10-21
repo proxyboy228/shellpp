@@ -29,7 +29,10 @@
 //!   that no hover state is captured, and the state is checked
 //!   ([`check_state`]) before the capture.
 //! - Exit code 0 when every PNG was written with the expected size, 1 on any
-//!   failure; a watchdog ends a run that hangs after [`WATCHDOG`].
+//!   failure. Each state has [`STATE_TIMEOUT`] per theme and is tried once
+//!   more when it fails or runs out of time (D72); a watchdog ends a run
+//!   that makes no progress at all for [`WATCHDOG`]. A full run takes far
+//!   longer than either: the limits are per state, not per run.
 //! - Smoke runs: `SHELLPP_SCREENSHOT_STATES=<name>[,<name>...]` ([`STATES_ENV`],
 //!   `scripts/ui-screens.ps1 -States`) captures only those states (their
 //!   [`ShotState::name`]s) at the sizes that have them, both themes.
@@ -151,8 +154,33 @@ impl std::fmt::Display for ShotSize {
     }
 }
 
-/// A run that has not finished after this long is ended with exit code 3.
-pub const WATCHDOG: Duration = Duration::from_secs(600);
+/// A run that makes no progress (no state begun) for this long is ended
+/// with exit code 3: the app's thread is stuck, so no timeout of its own
+/// can fire. Longer than a state's two attempts.
+pub const WATCHDOG: Duration = Duration::from_secs(300);
+/// One attempt at a state in one theme (reaching it, settling, checking).
+/// The slowest state (a connection through the test server's 45 s timeout)
+/// stays well under it.
+pub const STATE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// When the run last made progress (ms since the Unix epoch) and the state
+/// it was at, for the watchdog thread.
+static PROGRESS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CURRENT: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+/// The run is at `state` now (the watchdog counts from here).
+fn mark_progress(state: Option<ShotState>) {
+    PROGRESS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut current) = CURRENT.lock() {
+        *current = state.map(ShotState::name);
+    }
+}
 /// Settling time after a state change before the frame is captured (covers
 /// the 180 ms panel motion of the design system and asset loading).
 const SETTLE: Duration = Duration::from_millis(700);
@@ -802,15 +830,24 @@ pub fn run(options: ScreenshotOptions) -> std::process::ExitCode {
 }
 
 fn start_watchdog(profile_path: PathBuf) {
+    mark_progress(None);
     std::thread::spawn(move || {
-        std::thread::sleep(WATCHDOG);
-        complain(&format!(
-            "no result after {} s, giving up",
-            WATCHDOG.as_secs()
-        ));
-        // Best effort: the database may still be open.
-        let _ = std::fs::remove_dir_all(&profile_path);
-        std::process::exit(3);
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let idle = now_ms().saturating_sub(PROGRESS.load(std::sync::atomic::Ordering::Relaxed));
+            if u128::from(idle) < WATCHDOG.as_millis() {
+                continue;
+            }
+            let at = CURRENT.lock().ok().and_then(|current| *current);
+            complain(&format!(
+                "no progress for {} s (at {}), giving up",
+                WATCHDOG.as_secs(),
+                at.unwrap_or("the start")
+            ));
+            // Best effort: the database may still be open.
+            let _ = std::fs::remove_dir_all(&profile_path);
+            std::process::exit(3);
+        }
     });
 }
 
@@ -1028,25 +1065,46 @@ impl Run {
         for (appearance, theme_name) in THEMES {
             set_theme(cx, handle, appearance).map_err(|error| vec![error])?;
             let file = file_name_on(size, theme_name, state, self.real_shell);
-            let reached = async {
-                if terminal {
-                    let rig = self
-                        .rig
-                        .borrow()
-                        .clone()
-                        .ok_or_else(|| ScreenshotError::state(state, "no test server"))?;
-                    terminal::set_terminal_theme(cx, &self.demo, appearance)?;
-                    reset_demo(cx, handle, root, &self.demo).await?;
-                    terminal::reach(cx, handle, root, &self.demo, &rig, state).await?;
-                    settle(cx, handle).await?;
-                    terminal::check(cx, handle, root, &rig, state)
-                } else {
-                    reach_state(cx, handle, root, &self.demo, self.first_group, state).await?;
-                    settle(cx, handle).await?;
-                    check_state(cx, handle, root, state)
+            // One attempt runs out after STATE_TIMEOUT; a failed or timed
+            // out state is tried once more from the demo data (D72).
+            let mut attempt = 0;
+            let reached = loop {
+                attempt += 1;
+                mark_progress(Some(state));
+                let timeout = cx.background_executor().timer(STATE_TIMEOUT);
+                let try_reach = async {
+                    if terminal {
+                        let rig = self
+                            .rig
+                            .borrow()
+                            .clone()
+                            .ok_or_else(|| ScreenshotError::state(state, "no test server"))?;
+                        terminal::set_terminal_theme(cx, &self.demo, appearance)?;
+                        reset_demo(cx, handle, root, &self.demo).await?;
+                        terminal::reach(cx, handle, root, &self.demo, &rig, state).await?;
+                        settle(cx, handle).await?;
+                        terminal::check(cx, handle, root, &rig, state)
+                    } else {
+                        reach_state(cx, handle, root, &self.demo, self.first_group, state).await?;
+                        settle(cx, handle).await?;
+                        check_state(cx, handle, root, state)
+                    }
+                };
+                let outcome =
+                    match futures::future::select(std::pin::pin!(try_reach), timeout).await {
+                        futures::future::Either::Left((outcome, _)) => outcome,
+                        futures::future::Either::Right(_) => Err(ScreenshotError::state(
+                            state,
+                            &format!("not reached in {} s", STATE_TIMEOUT.as_secs()),
+                        )),
+                    };
+                match outcome {
+                    Err(error) if attempt == 1 => {
+                        complain(&format!("{file}: {error}; trying once more"));
+                    }
+                    outcome => break outcome,
                 }
-            }
-            .await;
+            };
             if let Err(error) = reached {
                 errors.push(error);
                 continue;
