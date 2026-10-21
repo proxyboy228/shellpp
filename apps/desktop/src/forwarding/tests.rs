@@ -208,8 +208,11 @@ fn the_empty_screen_offers_a_new_rule(cx: &mut TestAppContext) {
     let ui = Screen::open(cx, &[json!({"address": "web.example.com"})]);
     assert!(ui.visible(cx, "fwd-empty"));
     assert!(!ui.visible(cx, "fwd-panel"));
+    // New forwarding is the wizard (8.3); Skip wizard is the full form.
     ui.click(cx, "fwd-empty-new");
     assert!(ui.visible(cx, "fwd-panel"));
+    assert!(ui.visible(cx, "fwd-wizard-type"));
+    ui.click(cx, "fwd-wizard-skip");
     let form = ui.form(cx);
     form.read_with(cx, |form, _| {
         assert_eq!(form.mode(), FormMode::New);
@@ -246,7 +249,9 @@ fn the_empty_screen_offers_a_new_rule(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_local_rule_is_created_from_the_form(cx: &mut TestAppContext) {
     let ui = Screen::open(cx, &[json!({"address": "web.example.com", "label": "Web"})]);
-    ui.click(cx, "fwd-new");
+    ui.act(cx, |screen, window, cx| {
+        screen.new_rule(ForwardType::Local, window, cx)
+    });
     ui.type_into(cx, "fwd-label", "Database");
     ui.type_into(cx, "fwd-bind-port", "15432");
     ui.type_into(cx, "fwd-dest-address", "db.internal");
@@ -306,7 +311,9 @@ fn the_form_names_the_missing_fields(cx: &mut TestAppContext) {
             json!({"address": "db.example.com"}),
         ],
     );
-    ui.click(cx, "fwd-new");
+    ui.act(cx, |screen, window, cx| {
+        screen.new_rule(ForwardType::Local, window, cx)
+    });
     // Two hosts: none is chosen for the user.
     let form = ui.form(cx);
     assert_eq!(form.read_with(cx, |form, _| form.host_id()), None);
@@ -352,7 +359,9 @@ fn the_form_names_the_missing_fields(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_wide_bind_warns_and_remote_names_gateway_ports(cx: &mut TestAppContext) {
     let ui = Screen::open(cx, &[json!({"address": "web.example.com"})]);
-    ui.click(cx, "fwd-new");
+    ui.act(cx, |screen, window, cx| {
+        screen.new_rule(ForwardType::Local, window, cx)
+    });
     ui.type_into(cx, "fwd-bind-address", "0.0.0.0");
     assert!(ui.visible(cx, "fwd-wide-warning"));
     let form = ui.form(cx);
@@ -486,5 +495,160 @@ fn cards_show_statuses_search_duplicate_and_remove(cx: &mut TestAppContext) {
             .any(|rule| rule.record.record_id == db_id)
     );
     assert!(ui.visible(cx, card_id(db_id)));
+    ui.finish(cx);
+}
+
+/// The wizard (8.3): a Local rule one question at a time, each step
+/// checked by Continue, Back keeping what is typed, the rule in one line at
+/// the end, and Create.
+#[gpui_kit::test]
+fn the_wizard_makes_a_local_rule_step_by_step(cx: &mut TestAppContext) {
+    let ui = Screen::open(
+        cx,
+        &[
+            json!({"address": "web.example.com", "label": "Web"}),
+            json!({"address": "db.example.com", "label": "DB"}),
+        ],
+    );
+    let web = ui.host_id(cx, "web.example.com");
+    ui.click(cx, "fwd-new");
+    let form = ui.form(cx);
+    let step = |cx: &mut TestAppContext| form.read_with(cx, |form, _| form.step());
+    assert_eq!(step(cx), Some(Step::Type));
+    assert!(ui.visible(cx, "fwd-diagram-local"));
+    assert_eq!(
+        form.read_with(cx, |form, _| form.step_number()),
+        Some((1, 5))
+    );
+    assert!(!ui.visible(cx, "fwd-wizard-back"));
+    ui.click(cx, "fwd-wizard-next");
+    // The host: two hosts, none chosen; Continue names it.
+    assert_eq!(step(cx), Some(Step::Host));
+    ui.click(cx, "fwd-wizard-next");
+    assert_eq!(step(cx), Some(Step::Host));
+    assert_eq!(
+        form.read_with(cx, |form, _| form.errors().get("host_id").copied()),
+        Some(strings::ERROR_HOST)
+    );
+    form.update(cx, |form, cx| form.set_host(web, cx));
+    ui.click(cx, "fwd-wizard-next");
+    // Where it listens: 127.0.0.1 already; the port is asked.
+    assert_eq!(step(cx), Some(Step::Listen));
+    ui.click(cx, "fwd-wizard-next");
+    assert_eq!(step(cx), Some(Step::Listen));
+    ui.type_into(cx, "fwd-bind-port", "15432");
+    // Enter in a field is Continue.
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert_eq!(step(cx), Some(Step::Destination));
+    ui.type_into(cx, "fwd-dest-address", "db.internal");
+    ui.type_into(cx, "fwd-dest-port", "5432");
+    ui.click(cx, "fwd-wizard-next");
+    assert_eq!(step(cx), Some(Step::Summary));
+    assert!(ui.visible(cx, "fwd-create"));
+    assert!(ui.visible(cx, "fwd-create-start"));
+    assert_eq!(
+        form.read_with(cx, |form, cx| form.summary_line(cx)),
+        "127.0.0.1:15432 → db.internal:5432 via Web"
+    );
+    // Back keeps what is typed.
+    ui.click(cx, "fwd-wizard-back");
+    assert_eq!(step(cx), Some(Step::Destination));
+    assert_eq!(
+        form.read_with(cx, |form, cx| form
+            .dest_port_input()
+            .read(cx)
+            .value()
+            .to_string()),
+        "5432"
+    );
+    ui.click(cx, "fwd-wizard-next");
+    ui.type_into(cx, "fwd-label", "Database");
+    ui.click(cx, "fwd-create");
+    let rules = ui.rules(cx);
+    assert_eq!(rules.len(), 1);
+    let rule = &rules[0];
+    assert_eq!(rule.kind, ForwardType::Local);
+    assert_eq!(rule.label.as_deref(), Some("Database"));
+    assert_eq!(rule.host_id, web);
+    assert_eq!(
+        (rule.bind_address.as_str(), rule.bind_port),
+        ("127.0.0.1", 15432)
+    );
+    assert_eq!(rule.dest_address.as_deref(), Some("db.internal"));
+    assert_eq!(rule.dest_port, Some(5432));
+    // The saved rule opens in its full form.
+    assert_eq!(ui.form(cx).read_with(cx, |form, _| form.step()), None);
+    ui.finish(cx);
+}
+
+/// Remote and Dynamic in the wizard: the diagram of each type, the warning
+/// of an address beyond loopback with GatewayPorts, four steps for
+/// Dynamic, a refusal of the core bringing its step back, and Skip wizard
+/// keeping the values.
+#[gpui_kit::test]
+fn the_wizard_follows_the_type(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[json!({"address": "web.example.com", "label": "Web"})]);
+    ui.click(cx, "fwd-new");
+    let form = ui.form(cx);
+    let step = |cx: &mut TestAppContext| form.read_with(cx, |form, _| form.step());
+    ui.click(cx, "fwd-type-remote");
+    assert!(ui.visible(cx, "fwd-diagram-remote"));
+    ui.click(cx, "fwd-wizard-next");
+    // The only host is chosen already.
+    ui.click(cx, "fwd-wizard-next");
+    assert_eq!(step(cx), Some(Step::Listen));
+    ui.type_into(cx, "fwd-bind-address", "0.0.0.0");
+    assert!(ui.visible(cx, "fwd-wide-warning"));
+    ui.type_into(cx, "fwd-bind-address", "not an address");
+    ui.type_into(cx, "fwd-bind-port", "9000");
+    ui.click(cx, "fwd-wizard-next");
+    ui.type_into(cx, "fwd-dest-port", "3000");
+    ui.click(cx, "fwd-wizard-next");
+    assert_eq!(step(cx), Some(Step::Summary));
+    // The core refuses the address: its step comes back with the reason.
+    ui.click(cx, "fwd-create");
+    assert!(ui.rules(cx).is_empty());
+    assert_eq!(step(cx), Some(Step::Listen));
+    assert!(form.read_with(cx, |form, _| form.errors().contains_key("bind_address")));
+    // Skip wizard: the full form with the values so far.
+    form.update(cx, |form, cx| form.back(cx));
+    form.update(cx, |form, cx| form.back(cx));
+    form.update(cx, |form, cx| form.back(cx));
+    assert_eq!(step(cx), Some(Step::Type));
+    ui.click(cx, "fwd-wizard-skip");
+    assert_eq!(step(cx), None);
+    assert!(ui.visible(cx, "fwd-form"));
+    form.read_with(cx, |form, cx| {
+        assert_eq!(form.kind(), ForwardType::Remote);
+        assert_eq!(form.bind_port_input().read(cx).value().to_string(), "9000");
+        assert_eq!(form.dest_port_input().read(cx).value().to_string(), "3000");
+    });
+    ui.act(cx, |screen, _, cx| screen.close_panel(cx));
+
+    // Dynamic: SOCKS on 1080, no destination step.
+    ui.click(cx, "fwd-new");
+    let form = ui.form(cx);
+    ui.click(cx, "fwd-type-dynamic");
+    assert!(ui.visible(cx, "fwd-diagram-dynamic"));
+    assert_eq!(
+        form.read_with(cx, |form, _| form.step_number()),
+        Some((1, 4))
+    );
+    assert_eq!(steps(ForwardType::Dynamic).len(), 4);
+    for _ in 0..3 {
+        ui.click(cx, "fwd-wizard-next");
+    }
+    assert_eq!(
+        form.read_with(cx, |form, _| form.step()),
+        Some(Step::Summary)
+    );
+    assert_eq!(
+        form.read_with(cx, |form, cx| form.summary_line(cx)),
+        "SOCKS 127.0.0.1:1080 via Web"
+    );
+    ui.click(cx, "fwd-create-start");
+    let rules = ui.rules(cx);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].summary, "SOCKS 127.0.0.1:1080 via Web");
     ui.finish(cx);
 }

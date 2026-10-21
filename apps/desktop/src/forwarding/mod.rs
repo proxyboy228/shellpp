@@ -21,6 +21,7 @@
 //! layer's forwarding service; the screen reads them once a second while
 //! any rule is started. Nothing here logs addresses or ports.
 
+mod diagram;
 mod form;
 pub mod strings;
 mod view;
@@ -40,7 +41,7 @@ use shellpp_core::service::snippets::{ForwardType, ForwardingRuleView};
 use shellpp_ssh::{ForwardError, RuleStatus};
 use uuid::Uuid;
 
-pub use form::{FormMode, RuleForm};
+pub use form::{FormMode, RuleForm, Step, steps};
 
 use crate::shell::Toast;
 use crate::state::{AppState, AppStateEvent};
@@ -423,7 +424,16 @@ impl ForwardingScreen {
         cx.notify();
     }
 
-    /// Opens the form of a new rule of `kind` (the wizard's "Skip wizard").
+    /// New forwarding (8.1): the wizard of a new rule (8.3).
+    pub fn new_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = None;
+        let state = self.state.clone();
+        self.form = Some(cx.new(|cx| RuleForm::wizard(state, window, cx)));
+        cx.notify();
+    }
+
+    /// Opens the form of a new rule of `kind` (the menu of New forwarding:
+    /// without the wizard).
     pub fn new_rule(&mut self, kind: ForwardType, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = None;
         let state = self.state.clone();

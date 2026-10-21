@@ -207,7 +207,9 @@ $stage5States = @('forwarding-empty', 'forwarding-cards', 'forwarding-form', 'sn
 # SettingsLogs).
 $stage6States = @('logs', 'settings-logs', 'settings-shortcuts')
 # Run 4 (D68 and the rest of run 3).
-$run4States = @('snippet-leave')
+$run4States = @('snippet-leave', 'forwarding-wizard-type', 'forwarding-wizard-remote',
+    'forwarding-wizard-dynamic', 'forwarding-wizard-host', 'forwarding-wizard-listen', 'forwarding-wizard-dest',
+    'forwarding-wizard-summary')
 $allStates += $run4States
 $allStates += $stage6States
 $allStates += $stage5States

@@ -10,20 +10,42 @@
 use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, Entity};
 use gpui_kit::test::TestWindowExt as _;
 use serde_json::{Value, json};
-use shellpp_core::service::snippets::{ForwardingRuleView, RecordInput};
+use shellpp_core::service::snippets::{ForwardType, ForwardingRuleView, RecordInput};
 use shellpp_ssh::{Bound, ForwardError, RuleStatus};
 
 use super::{ScreenshotError, ShotState, settle, shell_of};
 use crate::app::RootView;
+use crate::forwarding::Step;
 use crate::shell::{Section, TopTab};
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 3] = [
+pub const STATES: [ShotState; 10] = [
     ShotState::ForwardingEmpty,
     ShotState::ForwardingCards,
     ShotState::ForwardingForm,
+    ShotState::ForwardingWizardType,
+    ShotState::ForwardingWizardRemote,
+    ShotState::ForwardingWizardDynamic,
+    ShotState::ForwardingWizardHost,
+    ShotState::ForwardingWizardListen,
+    ShotState::ForwardingWizardDest,
+    ShotState::ForwardingWizardSummary,
 ];
+
+/// The wizard's type and step of a wizard state (UI 8.3).
+fn wizard_of(shot: ShotState) -> Option<(ForwardType, Step)> {
+    Some(match shot {
+        ShotState::ForwardingWizardType => (ForwardType::Local, Step::Type),
+        ShotState::ForwardingWizardRemote => (ForwardType::Remote, Step::Type),
+        ShotState::ForwardingWizardDynamic => (ForwardType::Dynamic, Step::Type),
+        ShotState::ForwardingWizardHost => (ForwardType::Local, Step::Host),
+        ShotState::ForwardingWizardListen => (ForwardType::Local, Step::Listen),
+        ShotState::ForwardingWizardDest => (ForwardType::Local, Step::Destination),
+        ShotState::ForwardingWizardSummary => (ForwardType::Local, Step::Summary),
+        _ => return None,
+    })
+}
 
 fn not_reached(state: ShotState, reason: &str) -> ScreenshotError {
     ScreenshotError::state(state, reason)
@@ -136,12 +158,45 @@ pub async fn reach(
             screen.show_statuses(statuses, cx);
             if shot == ShotState::ForwardingForm {
                 screen.select(Some(webhook), window, cx);
+            } else if wizard_of(shot).is_some() {
+                screen.new_wizard(window, cx);
             } else {
                 screen.close_panel(cx);
             }
         });
     })
     .map_err(|_| ScreenshotError::WindowClosed)?;
+    if let Some((kind, step)) = wizard_of(shot) {
+        settle(cx, handle).await?;
+        let host = rules
+            .iter()
+            .find(|rule| rule.record.record_id == database)
+            .map(|rule| rule.host_id);
+        cx.update_window(handle, |_, window, cx| {
+            let Some(form) = screen.read(cx).form().cloned() else {
+                return;
+            };
+            form.update(cx, |form, cx| {
+                form.set_kind(kind, window, cx);
+                if step == Step::Type {
+                    return;
+                }
+                if let Some(host) = host {
+                    form.set_host(host, cx);
+                }
+                for (input, value) in [
+                    (form.bind_port_input().clone(), "15432"),
+                    (form.dest_address_input().clone(), "db.internal"),
+                    (form.dest_port_input().clone(), "5432"),
+                    (form.label_input().clone(), "Database"),
+                ] {
+                    input.update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+                while form.step() != Some(step) && form.next(cx) {}
+            });
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+    }
     settle(cx, handle).await
 }
 
@@ -155,6 +210,13 @@ pub fn check(
         ShotState::ForwardingEmpty => &["fwd-empty"],
         ShotState::ForwardingCards => &["fwd-grid"],
         ShotState::ForwardingForm => &["fwd-panel", "fwd-wide-warning", "fwd-panel-status"],
+        ShotState::ForwardingWizardType => &["fwd-wizard-type", "fwd-diagram-local"],
+        ShotState::ForwardingWizardRemote => &["fwd-wizard-type", "fwd-diagram-remote"],
+        ShotState::ForwardingWizardDynamic => &["fwd-wizard-type", "fwd-diagram-dynamic"],
+        ShotState::ForwardingWizardHost => &["fwd-wizard-host"],
+        ShotState::ForwardingWizardListen => &["fwd-wizard-listen"],
+        ShotState::ForwardingWizardDest => &["fwd-wizard-dest"],
+        ShotState::ForwardingWizardSummary => &["fwd-wizard-summary", "fwd-wizard-line"],
         _ => return Err(not_reached(shot, "not a stage 5 state")),
     };
     for id in wanted {

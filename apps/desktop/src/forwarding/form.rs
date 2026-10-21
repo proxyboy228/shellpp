@@ -7,11 +7,20 @@
 //!   Remote it names `GatewayPorts` (8.3, 8.4).
 //! - Ports are checked here (1-65535); the core checks the rest and its
 //!   errors appear under their fields.
+//! - The wizard (8.3) is the same form one question at a time ([`Step`]):
+//!   the type with its diagram, the host, where it listens, where it leads
+//!   (not for Dynamic), then the label with the rule in one line. Continue
+//!   checks the fields of its step; Back keeps what is typed; Skip wizard
+//!   shows the full form with the values so far. A refusal of the core
+//!   brings back the step of the field it names.
 
 use std::collections::BTreeMap;
 
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Context, Entity, IntoElement, Render, Subscription, Window, div, px};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, Entity, IntoElement, Render, Subscription, Window, div,
+    px,
+};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
@@ -55,6 +64,69 @@ pub fn is_wide(address: &str) -> bool {
         )
 }
 
+/// A step of the wizard (8.3): one question per screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Type,
+    Host,
+    Listen,
+    Destination,
+    Summary,
+}
+
+impl Step {
+    /// The element id of the step's content.
+    pub fn element_id(self) -> &'static str {
+        match self {
+            Step::Type => "fwd-wizard-type",
+            Step::Host => "fwd-wizard-host",
+            Step::Listen => "fwd-wizard-listen",
+            Step::Destination => "fwd-wizard-dest",
+            Step::Summary => "fwd-wizard-summary",
+        }
+    }
+
+    /// The fields the step asks (data-model members).
+    fn members(self) -> &'static [&'static str] {
+        match self {
+            Step::Type => &[],
+            Step::Host => &["host_id"],
+            Step::Listen => &["bind_address", "bind_port"],
+            Step::Destination => &["dest_address", "dest_port"],
+            Step::Summary => &["label"],
+        }
+    }
+}
+
+/// The steps of a type: Dynamic has no destination.
+pub fn steps(kind: ForwardType) -> &'static [Step] {
+    match kind {
+        ForwardType::Dynamic => &[Step::Type, Step::Host, Step::Listen, Step::Summary],
+        ForwardType::Local | ForwardType::Remote => &[
+            Step::Type,
+            Step::Host,
+            Step::Listen,
+            Step::Destination,
+            Step::Summary,
+        ],
+    }
+}
+
+/// `address:port`, an IPv6 address in brackets (empty is 127.0.0.1).
+fn endpoint_text(address: &str, port: &str) -> String {
+    let address = address.trim();
+    let address = if address.is_empty() {
+        "127.0.0.1"
+    } else {
+        address
+    };
+    if address.contains(':') && !address.starts_with('[') {
+        format!("[{address}]:{}", port.trim())
+    } else {
+        format!("{address}:{}", port.trim())
+    }
+}
+
 /// A port typed in a field: 1-65535.
 pub fn parse_port(text: &str) -> Option<u16> {
     text.trim().parse::<u16>().ok().filter(|port| *port > 0)
@@ -86,6 +158,8 @@ pub struct RuleForm {
     on_launch: bool,
     /// The reasons under refused fields, by data-model member.
     errors: BTreeMap<&'static str, &'static str>,
+    /// The wizard's step (8.3); `None`: the full form (8.4).
+    wizard: Option<Step>,
     state: Entity<AppState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -166,6 +240,13 @@ impl RuleForm {
         Self::build(start, state, window, cx)
     }
 
+    /// The wizard of a new rule (8.3): a Local rule at its first step.
+    pub fn wizard(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut form = Self::new(ForwardType::Local, state, window, cx);
+        form.wizard = Some(Step::Type);
+        form
+    }
+
     /// A saved rule.
     pub fn edit(
         rule: &ForwardingRuleView,
@@ -206,14 +287,21 @@ impl RuleForm {
                     .default_value(value)
                     .placeholder(placeholder)
             });
-            // A change clears the field's error and redraws the warnings.
+            // A change clears the field's error and redraws the warnings;
+            // Enter in the wizard is Continue (not on its last step).
             subscriptions.push(cx.subscribe(
                 &input,
-                move |form: &mut Self, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
+                move |form: &mut Self, _, event: &InputEvent, cx| match event {
+                    InputEvent::Change => {
                         form.errors.remove(member);
                         cx.notify();
                     }
+                    InputEvent::PressEnter { .. }
+                        if form.wizard.is_some_and(|step| step != Step::Summary) =>
+                    {
+                        form.next(cx);
+                    }
+                    _ => {}
                 },
             ));
             input
@@ -236,6 +324,7 @@ impl RuleForm {
             on_connect: start.on_connect,
             on_launch: start.on_launch,
             errors: BTreeMap::new(),
+            wizard: None,
             state,
             _subscriptions: subscriptions,
         }
@@ -277,6 +366,107 @@ impl RuleForm {
 
     pub fn dest_port_input(&self) -> &Entity<InputState> {
         &self.dest_port
+    }
+
+    /// The wizard's step; `None` for the full form.
+    pub fn step(&self) -> Option<Step> {
+        self.wizard
+    }
+
+    /// The step's number and the number of steps of the rule's type.
+    pub fn step_number(&self) -> Option<(usize, usize)> {
+        let step = self.wizard?;
+        let steps = steps(self.kind);
+        let index = steps.iter().position(|each| *each == step)?;
+        Some((index + 1, steps.len()))
+    }
+
+    /// The rule in one line, as its card will say it.
+    pub fn summary_line(&self, cx: &App) -> String {
+        let value = |input: &Entity<InputState>| input.read(cx).value().to_string();
+        let host = self
+            .host_id
+            .and_then(|id| {
+                self.state
+                    .read(cx)
+                    .host(id)
+                    .map(|host| host.title().to_owned())
+            })
+            .unwrap_or_default();
+        let listen = endpoint_text(&value(&self.bind_address), &value(&self.bind_port));
+        match self.kind {
+            ForwardType::Dynamic => format!("SOCKS {listen} via {host}"),
+            ForwardType::Local | ForwardType::Remote => format!(
+                "{listen} → {} via {host}",
+                endpoint_text(&value(&self.dest_address), &value(&self.dest_port))
+            ),
+        }
+    }
+
+    /// Continue: the fields of the step are checked first; true when the
+    /// wizard moved on.
+    pub fn next(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(step) = self.wizard else {
+            return false;
+        };
+        let errors: BTreeMap<&'static str, &'static str> = match self.data(cx) {
+            Ok(_) => BTreeMap::new(),
+            Err(errors) => errors
+                .into_iter()
+                .filter(|(member, _)| step.members().contains(member))
+                .collect(),
+        };
+        if !errors.is_empty() {
+            self.errors = errors;
+            cx.notify();
+            return false;
+        }
+        self.errors.clear();
+        let steps = steps(self.kind);
+        let index = steps.iter().position(|each| *each == step).unwrap_or(0);
+        let Some(following) = steps.get(index + 1) else {
+            return false;
+        };
+        self.wizard = Some(*following);
+        cx.notify();
+        true
+    }
+
+    /// Back: the step before, with everything typed kept.
+    pub fn back(&mut self, cx: &mut Context<Self>) {
+        let Some(step) = self.wizard else {
+            return;
+        };
+        let steps = steps(self.kind);
+        if let Some(index) = steps.iter().position(|each| *each == step)
+            && index > 0
+        {
+            self.wizard = Some(steps[index - 1]);
+            self.errors.clear();
+            cx.notify();
+        }
+    }
+
+    /// Skip wizard: the full form with the values so far.
+    pub fn skip_wizard(&mut self, cx: &mut Context<Self>) {
+        if self.wizard.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// In the wizard, the step of the first field with a reason.
+    fn show_step_of_errors(&mut self) {
+        if self.wizard.is_none() {
+            return;
+        }
+        let steps = steps(self.kind);
+        if let Some(step) = steps.iter().find(|step| {
+            step.members()
+                .iter()
+                .any(|member| self.errors.contains_key(member))
+        }) {
+            self.wizard = Some(*step);
+        }
     }
 
     /// Whether the typed bind address opens the port beyond loopback.
@@ -349,6 +539,7 @@ impl RuleForm {
         cx: &mut Context<Self>,
     ) {
         self.errors = errors;
+        self.show_step_of_errors();
         cx.notify();
     }
 
@@ -373,6 +564,7 @@ impl RuleForm {
                 (member, reason_text(member, error.reason))
             })
             .collect();
+        self.show_step_of_errors();
         cx.notify();
     }
 
@@ -415,7 +607,7 @@ impl RuleForm {
 
     // -- Rendering -------------------------------------------------------------------
 
-    fn render_type(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_type(&self, with_diagram: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let segment =
             |id: &'static str, label: &'static str, kind: ForwardType, cx: &mut Context<Self>| {
                 widgets::segment(id, label, self.kind == kind, cx)
@@ -429,6 +621,7 @@ impl RuleForm {
             ForwardType::Remote => strings::EXPLAIN_REMOTE,
             ForwardType::Dynamic => strings::EXPLAIN_DYNAMIC,
         };
+        let diagram = with_diagram.then(|| super::diagram::diagram(self.kind, cx));
         widgets::block("fwd-form-type", None, cx)
             .child(widgets::field(
                 strings::TYPE,
@@ -455,6 +648,7 @@ impl RuleForm {
                 None,
                 cx,
             ))
+            .children(diagram)
             .child(
                 widgets::caption(explain, cx)
                     .id("fwd-type-explain")
@@ -463,6 +657,28 @@ impl RuleForm {
     }
 
     fn render_host(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        widgets::block("fwd-form-host", None, cx)
+            .child(self.host_field(cx))
+            .child(self.label_field(window, cx))
+    }
+
+    fn label_field(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        widgets::field(
+            strings::LABEL,
+            widgets::text_input(
+                &self.label,
+                "fwd-label",
+                self.errors.contains_key("label"),
+                window,
+                cx,
+            ),
+            self.errors.get("label").copied(),
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn host_field(&self, cx: &mut Context<Self>) -> AnyElement {
         let hosts = self.state.read(cx).hosts();
         let chosen = self
             .host_id
@@ -515,25 +731,13 @@ impl RuleForm {
                 .children(list)
                 .into_any_element()
         };
-        widgets::block("fwd-form-host", None, cx)
-            .child(widgets::field(
-                strings::HOST,
-                control,
-                self.errors.get("host_id").copied(),
-                cx,
-            ))
-            .child(widgets::field(
-                strings::LABEL,
-                widgets::text_input(
-                    &self.label,
-                    "fwd-label",
-                    self.errors.contains_key("label"),
-                    window,
-                    cx,
-                ),
-                self.errors.get("label").copied(),
-                cx,
-            ))
+        widgets::field(
+            strings::HOST,
+            control,
+            self.errors.get("host_id").copied(),
+            cx,
+        )
+        .into_any_element()
     }
 
     /// Address and port side by side, each with its reason below.
@@ -579,12 +783,17 @@ impl RuleForm {
             )))
     }
 
-    fn render_endpoints(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (listen, dest) = match self.kind {
+    /// Where it listens and where it leads (the headings of the type).
+    fn headings(&self) -> (&'static str, Option<&'static str>) {
+        match self.kind {
             ForwardType::Local => (strings::LISTEN_HERE, Some(strings::DEST_THERE)),
             ForwardType::Remote => (strings::LISTEN_THERE, Some(strings::DEST_HERE)),
             ForwardType::Dynamic => (strings::SOCKS_HERE, None),
-        };
+        }
+    }
+
+    /// The bind endpoint with the warning of an address beyond loopback.
+    fn listen_part(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let warning = self.wide_bind(cx).then(|| {
             div()
                 .id("fwd-wide-warning")
@@ -597,7 +806,9 @@ impl RuleForm {
                     strings::WIDE_LOCAL
                 })
         });
-        widgets::block("fwd-form-listen", Some(listen), cx)
+        v_flex()
+            .w_full()
+            .gap(metrics::SPACE_2)
             .child(self.endpoint(
                 "fwd-bind",
                 (&self.bind_address, "fwd-bind-address", "bind_address"),
@@ -606,7 +817,27 @@ impl RuleForm {
                 cx,
             ))
             .children(warning)
-            .when_some(dest, |this, dest| {
+            .into_any_element()
+    }
+
+    fn dest_part(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        self.endpoint(
+            "fwd-dest",
+            (&self.dest_address, "fwd-dest-address", "dest_address"),
+            (&self.dest_port, "fwd-dest-port", "dest_port"),
+            window,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn render_endpoints(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (listen, dest) = self.headings();
+        let listen_part = self.listen_part(window, cx);
+        let dest_part = dest.map(|_| self.dest_part(window, cx));
+        widgets::block("fwd-form-listen", Some(listen), cx)
+            .child(listen_part)
+            .when_some(dest.zip(dest_part), |this, (dest, part)| {
                 this.child(widgets::divider(cx)).child(
                     v_flex()
                         .w_full()
@@ -617,15 +848,82 @@ impl RuleForm {
                                 .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
                                 .child(dest),
                         )
-                        .child(self.endpoint(
-                            "fwd-dest",
-                            (&self.dest_address, "fwd-dest-address", "dest_address"),
-                            (&self.dest_port, "fwd-dest-port", "dest_port"),
-                            window,
-                            cx,
-                        )),
+                        .child(part),
                 )
             })
+    }
+
+    /// One question of the wizard: "Step 2 of 5", the question, its fields.
+    fn render_wizard(&self, step: Step, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let (number, total) = self.step_number().unwrap_or((1, 1));
+        let (listen, dest) = self.headings();
+        let question = match (step, self.kind) {
+            (Step::Type, _) => strings::ASK_TYPE,
+            (Step::Host, _) => strings::ASK_HOST,
+            (Step::Listen, ForwardType::Local) => strings::ASK_LISTEN_LOCAL,
+            (Step::Listen, ForwardType::Remote) => strings::ASK_LISTEN_REMOTE,
+            (Step::Listen, ForwardType::Dynamic) => strings::ASK_LISTEN_DYNAMIC,
+            (Step::Destination, ForwardType::Remote) => strings::ASK_DEST_REMOTE,
+            (Step::Destination, _) => strings::ASK_DEST_LOCAL,
+            (Step::Summary, _) => strings::ASK_SUMMARY,
+        };
+        let content = match step {
+            Step::Type => v_flex()
+                .w_full()
+                .gap(metrics::SPACE_3)
+                .child(self.render_type(true, cx))
+                .child(widgets::caption(strings::VAULT_NOTE, cx))
+                .into_any_element(),
+            Step::Host => widgets::block("fwd-form-host", None, cx)
+                .child(self.host_field(cx))
+                .into_any_element(),
+            Step::Listen => widgets::block("fwd-form-listen", Some(listen), cx)
+                .child(self.listen_part(window, cx))
+                .into_any_element(),
+            Step::Destination => widgets::block("fwd-form-dest", dest, cx)
+                .child(self.dest_part(window, cx))
+                .into_any_element(),
+            Step::Summary => {
+                let line = self.summary_line(cx);
+                widgets::block("fwd-form-summary", None, cx)
+                    .child(self.label_field(window, cx))
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap(metrics::SPACE_1)
+                            .child(widgets::caption(strings::SUMMARY, cx))
+                            .child(
+                                div()
+                                    .id("fwd-wizard-line")
+                                    .test_support()
+                                    .w_full()
+                                    .truncate()
+                                    .font_family(crate::terminal::fonts::JETBRAINS_MONO)
+                                    .text_size(metrics::FONT_SIZE_DENSE)
+                                    .child(line),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        };
+        v_flex()
+            .id(step.element_id())
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_3)
+            .child(
+                v_flex()
+                    .gap(metrics::SPACE_1)
+                    .child(widgets::caption(strings::step_of(number, total), cx))
+                    .child(
+                        div()
+                            .text_size(metrics::FONT_SIZE_HEADING)
+                            .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                            .child(question),
+                    ),
+            )
+            .child(content)
+            .into_any_element()
     }
 
     fn render_autostart(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -650,12 +948,19 @@ impl RuleForm {
 
 impl Render for RuleForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(step) = self.wizard {
+            return v_flex()
+                .id("fwd-wizard")
+                .test_support()
+                .w_full()
+                .child(self.render_wizard(step, window, cx));
+        }
         v_flex()
             .id("fwd-form")
             .test_support()
             .w_full()
             .gap(metrics::SPACE_3)
-            .child(self.render_type(cx))
+            .child(self.render_type(false, cx))
             .child(self.render_host(window, cx))
             .child(self.render_endpoints(window, cx))
             .child(self.render_autostart(cx))

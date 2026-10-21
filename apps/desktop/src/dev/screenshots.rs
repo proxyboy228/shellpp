@@ -272,6 +272,20 @@ pub enum ShotState {
     ForwardingCards,
     /// The full form of a Remote rule on all interfaces, with its status.
     ForwardingForm,
+    /// The wizard's first step: a Local rule with its diagram (UI 8.3).
+    ForwardingWizardType,
+    /// The wizard's first step for Remote.
+    ForwardingWizardRemote,
+    /// The wizard's first step for Dynamic.
+    ForwardingWizardDynamic,
+    /// The wizard's host step.
+    ForwardingWizardHost,
+    /// The wizard's listen step.
+    ForwardingWizardListen,
+    /// The wizard's destination step.
+    ForwardingWizardDest,
+    /// The wizard's last step: the rule in one line.
+    ForwardingWizardSummary,
     /// The Snippets screen: a package and snippet cards (UI 9).
     Snippets,
     /// A snippet's panel with its targets.
@@ -403,7 +417,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 68] = [
+    pub const ALL: [Self; 75] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -431,6 +445,13 @@ impl ShotState {
         Self::ForwardingEmpty,
         Self::ForwardingCards,
         Self::ForwardingForm,
+        Self::ForwardingWizardType,
+        Self::ForwardingWizardRemote,
+        Self::ForwardingWizardDynamic,
+        Self::ForwardingWizardHost,
+        Self::ForwardingWizardListen,
+        Self::ForwardingWizardDest,
+        Self::ForwardingWizardSummary,
         Self::Snippets,
         Self::SnippetPanel,
         Self::SnippetVariables,
@@ -552,6 +573,13 @@ impl ShotState {
             Self::ForwardingEmpty => "forwarding-empty",
             Self::ForwardingCards => "forwarding-cards",
             Self::ForwardingForm => "forwarding-form",
+            Self::ForwardingWizardType => "forwarding-wizard-type",
+            Self::ForwardingWizardRemote => "forwarding-wizard-remote",
+            Self::ForwardingWizardDynamic => "forwarding-wizard-dynamic",
+            Self::ForwardingWizardHost => "forwarding-wizard-host",
+            Self::ForwardingWizardListen => "forwarding-wizard-listen",
+            Self::ForwardingWizardDest => "forwarding-wizard-dest",
+            Self::ForwardingWizardSummary => "forwarding-wizard-summary",
             Self::Snippets => "snippets",
             Self::SnippetPanel => "snippet-panel",
             Self::SnippetVariables => "snippet-variables",
@@ -1551,7 +1579,16 @@ pub async fn reach_state(
         | ShotState::KeychainImportUnknown => {
             keychain_shot::reach(cx, handle, root, shot_state).await
         }
-        ShotState::ForwardingEmpty | ShotState::ForwardingCards | ShotState::ForwardingForm => {
+        ShotState::ForwardingEmpty
+        | ShotState::ForwardingCards
+        | ShotState::ForwardingForm
+        | ShotState::ForwardingWizardType
+        | ShotState::ForwardingWizardRemote
+        | ShotState::ForwardingWizardDynamic
+        | ShotState::ForwardingWizardHost
+        | ShotState::ForwardingWizardListen
+        | ShotState::ForwardingWizardDest
+        | ShotState::ForwardingWizardSummary => {
             forwarding_shot::reach(cx, handle, root, state, shot_state).await
         }
         ShotState::Snippets
@@ -1764,6 +1801,13 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::ForwardingEmpty
             | ShotState::ForwardingCards
             | ShotState::ForwardingForm
+            | ShotState::ForwardingWizardType
+            | ShotState::ForwardingWizardRemote
+            | ShotState::ForwardingWizardDynamic
+            | ShotState::ForwardingWizardHost
+            | ShotState::ForwardingWizardListen
+            | ShotState::ForwardingWizardDest
+            | ShotState::ForwardingWizardSummary
             | ShotState::Snippets
             | ShotState::SnippetPanel
             | ShotState::SnippetVariables

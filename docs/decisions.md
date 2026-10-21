@@ -1159,3 +1159,16 @@ Status: run 4 decision, 2026-10-22 (plan, item 4.7; D68, item 7).
 - `CLAUDE.md` records the cause under "Подводные камни".
 
 **Spec impact:** none.
+
+### 73. The Port Forwarding wizard (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.1; UI 8.1, 8.3; completes D66).
+
+**Decision:**
+
+- New forwarding (its main part, and the button of the empty screen) opens the wizard in the details panel; its menu still opens the full form of a Local, Remote or Dynamic rule directly (8.1).
+- The wizard is the full form shown one question at a time, so its values are the form's: "Step N of M" and the question above the fields of the step. Steps: the type (the Local / Remote / Dynamic segments, the diagram and the explanation, and a note that the rule goes to the personal vault, the only vault in local mode), the host, where it listens (with the warning of an address beyond loopback, naming `GatewayPorts` for Remote), where it leads (not for Dynamic), and the label with the rule in one line (as its card will show it) and Create or Create and start.
+- The footer: Back on the left from the second step; Skip wizard on the first step and Continue on every step but the last. Continue checks the fields of its step (a host chosen, ports 1-65535, a destination); Enter in a field is Continue. Back keeps everything typed. Skip wizard shows the full form with the values so far. When the core refuses a value at Create (an address it does not take, say), the step of that field comes back with the reason under it.
+- The diagram is drawn by the app (`forwarding/diagram.rs`): Lucide icons for this computer, the firewall, the SSH host and the service or the internet, arrows the way the forwarded connections go, and the participant that holds the port marked ("port", "SOCKS").
+
+**Spec impact:** none; UI 8.1 and 8.3 are followed as written.

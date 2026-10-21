@@ -24,7 +24,12 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 
 gpui_kit::assets::icon_assets!(pub AppIcons, [
+    ArrowLeft,
     ArrowLeftRight,
+    ArrowRight,
+    BrickWall,
+    Database,
+    Globe,
     ArrowUpDown,
     Bookmark,
     BookmarkCheck,

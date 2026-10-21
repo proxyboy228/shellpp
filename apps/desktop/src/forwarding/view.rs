@@ -289,13 +289,12 @@ impl ForwardingScreen {
     fn render_action_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
+        // The main part is the wizard (8.3); the menu skips it.
         let new_rule = ControlButton::new("fwd-new", ControlKind::Neutral)
             .icon(Lucide::Plus)
             .label(strings::NEW_RULE)
             .rounded_sides(true, false)
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                this.new_rule(ForwardType::Local, window, cx)
-            }));
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.new_wizard(window, cx)));
         let new_menu = ControlButton::new("fwd-new-menu", ControlKind::Neutral)
             .icon(IconName::ChevronDown)
             .tooltip(strings::NEW_RULE_MENU)
@@ -479,7 +478,7 @@ impl ForwardingScreen {
                             .icon(Lucide::Plus)
                             .label(strings::NEW_RULE)
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.new_rule(ForwardType::Local, window, cx)
+                                this.new_wizard(window, cx)
                             })),
                     ),
                 )
@@ -605,8 +604,41 @@ impl ForwardingScreen {
         let danger_hover = theme.danger_hover;
         let hover = theme.secondary_hover;
         let pressed = theme.secondary_active;
-        let save =
-            match mode {
+        let step = form.read(cx).step();
+        let last_step = step.is_some_and(|step| step == super::Step::Summary);
+        // The wizard: Back on the left; Skip wizard on its first step,
+        // Continue, and Create on its last (8.3).
+        let back = step.filter(|step| *step != super::Step::Type).map(|_| {
+            let form = form.clone();
+            ControlButton::new("fwd-wizard-back", ControlKind::Neutral)
+                .label(strings::BACK)
+                .on_click(move |_, _, cx| form.update(cx, |form, cx| form.back(cx)))
+        });
+        let wizard_buttons: Option<Vec<ControlButton>> = step.filter(|_| !last_step).map(|step| {
+            let mut buttons = Vec::new();
+            if step == super::Step::Type {
+                let form = form.clone();
+                buttons.push(
+                    ControlButton::new("fwd-wizard-skip", ControlKind::Neutral)
+                        .label(strings::SKIP_WIZARD)
+                        .on_click(move |_, _, cx| form.update(cx, |form, cx| form.skip_wizard(cx))),
+                );
+            }
+            let form = form.clone();
+            buttons.push(
+                ControlButton::new("fwd-wizard-next", ControlKind::Accent)
+                    .label(strings::CONTINUE)
+                    .on_click(move |_, _, cx| {
+                        form.update(cx, |form, cx| {
+                            form.next(cx);
+                        })
+                    }),
+            );
+            buttons
+        });
+        let save = match wizard_buttons {
+            Some(buttons) => buttons,
+            None => match mode {
                 FormMode::New => vec![
                     ControlButton::new("fwd-create", ControlKind::Neutral)
                         .label(strings::CREATE)
@@ -626,7 +658,8 @@ impl ForwardingScreen {
                             this.save(false, window, cx)
                         })),
                 ],
-            };
+            },
+        };
         let remove = edited.map(|id| {
             div()
                 .id("fwd-panel-remove")
@@ -695,6 +728,7 @@ impl ForwardingScreen {
                                 .border_t_1()
                                 .border_color(theme.border)
                                 .children(remove)
+                                .children(back)
                                 .child(div().flex_1())
                                 .children(save),
                         ),

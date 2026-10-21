@@ -98,6 +98,33 @@ pub const CREATE: &str = "Create";
 pub const CREATE_AND_START: &str = "Create and start";
 pub const SAVE: &str = "Save";
 
+// Wizard (8.3).
+pub const CONTINUE: &str = "Continue";
+pub const BACK: &str = "Back";
+pub const SKIP_WIZARD: &str = "Skip wizard";
+pub const VAULT_NOTE: &str = "The rule is saved in your personal vault.";
+pub const ASK_TYPE: &str = "What should the rule do?";
+pub const ASK_HOST: &str = "Which SSH host does it go through?";
+pub const ASK_LISTEN_LOCAL: &str = "Where does the port open on this computer?";
+pub const ASK_LISTEN_REMOTE: &str = "Where does the port open on the SSH host?";
+pub const ASK_LISTEN_DYNAMIC: &str = "Where does the SOCKS proxy listen on this computer?";
+pub const ASK_DEST_LOCAL: &str = "Where do its connections go, as the SSH host sees it?";
+pub const ASK_DEST_REMOTE: &str = "Where do its connections go, as this computer sees it?";
+pub const ASK_SUMMARY: &str = "Name the rule and check it";
+pub const SUMMARY: &str = "The rule";
+pub const NODE_COMPUTER: &str = "This computer";
+pub const NODE_FIREWALL: &str = "Firewall";
+pub const NODE_HOST: &str = "SSH host";
+pub const NODE_SERVICE: &str = "Service";
+pub const NODE_INTERNET: &str = "Internet";
+pub const PORT_MARK: &str = "port";
+pub const SOCKS_MARK: &str = "SOCKS";
+
+/// "Step 2 of 5".
+pub fn step_of(number: usize, total: usize) -> String {
+    format!("Step {number} of {total}")
+}
+
 // Field errors.
 pub const ERROR_HOST: &str = "Choose the host the rule goes through.";
 pub const ERROR_PORT: &str = "Enter a port from 1 to 65535.";
