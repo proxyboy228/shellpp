@@ -96,7 +96,7 @@ pub enum Failure {
     HostMissing,
     /// The quick-connect address, port or username is not valid.
     InvalidTarget,
-    /// The host has jump hosts, which arrive with stage 5.
+    /// A jump host of the route is missing or listed twice.
     JumpHosts,
     /// The local shell could not be started.
     LocalShell,

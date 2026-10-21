@@ -345,7 +345,7 @@ pub fn failure_of(error: SessionError) -> Failure {
         SessionError::Locked => Failure::Locked,
         SessionError::HostMissing => Failure::HostMissing,
         SessionError::InvalidTarget => Failure::InvalidTarget,
-        SessionError::JumpHostsUnsupported => Failure::JumpHosts,
+        SessionError::RouteInvalid => Failure::JumpHosts,
         SessionError::ShellUnavailable => Failure::LocalShell,
         SessionError::Internal => Failure::Other,
     }

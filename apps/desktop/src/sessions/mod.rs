@@ -671,13 +671,14 @@ fn clamp_size(value: u16) -> u16 {
 /// A host with jump hosts is refused until they are supported (stage 5):
 /// connecting directly would send its credentials to whatever answers at
 /// that address from here.
-pub(crate) fn refuse_jump_hosts(
+/// A route the core could not build (a missing or repeated hop) fails
+/// before anything connects (data-model 8.3).
+pub(crate) fn check_route(
     config: &shellpp_core::service::host_api::SessionConfig,
 ) -> Result<(), SessionError> {
-    if config.jump_hosts > 0 {
-        Err(SessionError::JumpHostsUnsupported)
-    } else {
-        Ok(())
+    match config.route_problem {
+        Some(_) => Err(SessionError::RouteInvalid),
+        None => Ok(()),
     }
 }
 
@@ -768,7 +769,7 @@ impl SessionManager {
                     .core
                     .session_config(&target)
                     .map_err(|error| core_error(&error))?;
-                refuse_jump_hosts(&config)?;
+                check_route(&config)?;
                 let settings = SessionSettings::read(&*self.shared.core);
                 let view = SessionView {
                     id: self.next_id(),
@@ -787,6 +788,7 @@ impl SessionManager {
                     prompt: None,
                     error: None,
                     host_key: None,
+                    error_place: None,
                     exit_status: None,
                     exit_signal: None,
                     reconnect: None,
@@ -820,6 +822,7 @@ impl SessionManager {
                     prompt: None,
                     error: None,
                     host_key: None,
+                    error_place: None,
                     exit_status: None,
                     exit_signal: None,
                     reconnect: None,

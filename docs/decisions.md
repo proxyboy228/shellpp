@@ -907,3 +907,41 @@ Status: run 2 decision, 2026-10-21 (plan, items 3.3 and 3.4; how D50, items 12 a
 - A name that is not UTF-8 on the server arrives in the listing with U+FFFD (russh-sftp decodes lossily, D45): such an entry that cannot be found under that name is left out of a download instead of ending it with "not found". The limitation is in the README ("Known limitations").
 
 **Spec impact:** none yet (UI 5.6, the transfer queue, comes with stage 4).
+
+### 57. Routes: jump hosts and the proxy in the SSH layer (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 5.1 and 5.2; the core of stage 5 without its interface; replaces D44).
+
+**Decision:**
+
+- `shellpp-ssh` connects a route itself: `ConnectSpec::jump_hosts` are connected first, in order, each over a `direct-tcpip` channel of the one before; the first one over TCP, through `ConnectSpec::proxy` when one is set; the host last. Every connection of the route has its own spec and its own `Interaction`, so each host key is decided on its own address (TOFU per hop, the same known hosts rules, docs/security.md 11.1) and each hop's prompts are its own. The returned `Connection` owns the jump connections: disconnecting or dropping it closes the whole route; a dead hop ends the connections behind it.
+- `SshError::place` says where it failed: the host, jump host N (0-based index of the chain) or the proxy. A jump host that refuses the channel (OpenSSH `AllowTcpForwarding no`) is `forwarding_refused` at that hop; a host the jump host cannot reach is `refused` at the host.
+- The core expands the effective `jump_chain` (own, else inherited; `[]` stops the lookup; the host itself is never its own hop, as in D44) into the hops' own session configurations: effective port and credentials, known key types; their own chains and proxies are ignored, and a hop runs no session (no OS detection, no env). A hop that is not a live host of the vault, a hop named twice and more than 8 hops are a `route_problem`: the connection fails before it starts ("A jump host of this host is missing or listed twice"), never directly. The model already refuses a chain with a hop named twice when it is saved; the route check repeats that for data that bypassed it.
+- Prompts of a jump host may not save (the session saves only for its own host); a jump host's typed password is asked again on the next attempt.
+- The proxy is the host's own `ssh.proxy` (not inherited, data-model 8.1); its password is a record secret like `ssh.password`, so it is stored encrypted in the vault. HTTP uses `CONNECT host:port` with Basic authentication; SOCKS5 sends the host name for the proxy to resolve and authenticates with RFC 1929. The proxy's reply is read only up to its end (an HTTP reply over 8 KiB ends the attempt); nothing of it is kept or logged. New failure kinds: `proxy_failed`, `proxy_auth_failed`; a proxy that reports the host unreachable makes it the host's failure.
+- The desktop's session view carries the place (`error_place`: jump host with its index, count and title, the proxy, or the chain); showing it is part of the stage 5 interface.
+
+**Spec impact:** none (data-model 7.3, 7.5 and 8.3 are followed as written; D44 no longer applies).
+
+### 58. Port forwarding in the SSH layer (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 5.7, without the interface).
+
+**Decision:**
+
+- `Connection::forward` starts a rule: Local (a listener here, a `direct-tcpip` channel per connection), Remote (`tcpip-forward`; the server's `forwarded-tcpip` channels are accepted only for an active rule with that address and port, docs/security.md 11.4) and Dynamic (a SOCKS5 proxy here without authentication, CONNECT only; the requested name goes unresolved into the channel, so the SSH host resolves it). An empty bind address is `127.0.0.1`; `localhost` is `127.0.0.1` too.
+- A local port in use is `PortBusy(port)` ("port N is already in use"); a port that needs elevated rights is `PortDenied(port)`; a remote listener the server refuses is `refused` (OpenSSH does not say why: its port in use, or forwarding not allowed).
+- Stopping a rule closes its listener and its open connections (Remote: `cancel-tcpip-forward` too). A lost connection ends every rule on it with `ConnectionLost`.
+- `HostForwarder` keeps the rules of one host on one shared connection (UI 8: several rules of a host use one SSH connection). After a drop it marks them `Reconnecting`, reconnects with the session reconnect backoff (1, 2, 4 … 60 s) and starts them again; a rule that cannot start (its port taken meanwhile) shows `Failed` with the reason. The connection closes with the last rule. The desktop service that owns these per host, autostart on connect and on launch (after unlock), and the rules from imported ssh config come with the forwarding screen.
+
+**Spec impact:** none.
+
+### 59. A reachable TEST-NET address on the dev server (run 2)
+
+Status: run 2 note, 2026-10-21.
+
+**Context.** On the dev server a TCP connection to `192.0.2.1:22` (TEST-NET-1, RFC 5737, never routed) is answered, by an SSH server even: the network routes or intercepts it. Two tests of "an address that never answers" relied on that address and failed there; one of them reached authentication with a made-up user and no secret.
+
+**Decision:** those tests use a silence that does not depend on the network: the connect step is injected in the unit test, and the integration test uses a local listener whose accept queue is full (Linux and macOS drop further SYNs). On Windows the integration test keeps TEST-NET-1.
+
+**Spec impact:** none.

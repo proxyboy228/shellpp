@@ -432,7 +432,12 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
                 record_id: host.record_id,
             })
             .unwrap();
-        assert_eq!(config.jump_hosts, 1, "{label}");
+        // The missing hop is named: the connection fails before it starts.
+        assert_eq!(
+            config.route_problem,
+            Some(shellpp_core::service::host_api::RouteProblem::MissingHop { index: 0 }),
+            "{label}"
+        );
     }
 }
 

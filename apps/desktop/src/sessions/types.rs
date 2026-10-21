@@ -75,6 +75,9 @@ pub struct SessionView {
     pub error: Option<SessionError>,
     /// The presented key when `error` is [`SessionError::HostKeyRevoked`].
     pub host_key: Option<HostKeyInfo>,
+    /// Where on the route `error` happened, when not on the host itself
+    /// (stage 5: a jump host or the proxy).
+    pub error_place: Option<ErrorPlace>,
     /// `Ended`: the exit status (255 when the shell was ended by a signal or
     /// its code is unknown).
     pub exit_status: Option<u32>,
@@ -286,6 +289,21 @@ pub enum HostKeyChoice {
     Cancel,
 }
 
+/// Where on a route a failure happened (the host itself has none).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ErrorPlace {
+    /// The jump host at `index` (0-based) of `count`, with its title.
+    JumpHost {
+        index: usize,
+        count: usize,
+        title: String,
+    },
+    /// The proxy of the first connection.
+    Proxy,
+    /// The hop at `index` (0-based) of the chain is missing or repeated.
+    Chain { index: Option<usize> },
+}
+
 /// Why a session failed or dropped. [`SessionError::message`] is the text
 /// shown in the tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -308,9 +326,9 @@ pub enum SessionError {
     HostMissing,
     /// The quick-connect address, port or username is not valid.
     InvalidTarget,
-    /// The host connects through jump hosts, which arrive with stage 5; it
-    /// is never connected directly instead.
-    JumpHostsUnsupported,
+    /// A jump host of the route is missing or named twice (data-model 8.3):
+    /// the host is never connected directly instead.
+    RouteInvalid,
     /// The local shell could not be started.
     ShellUnavailable,
     /// Something else went wrong (storage error).

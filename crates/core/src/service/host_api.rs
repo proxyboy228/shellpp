@@ -55,10 +55,56 @@ pub struct SessionConfig {
     pub known_key_types: Vec<String>,
     /// A prompted password may be saved: a saved host in the personal vault.
     pub can_save_password: bool,
-    /// Hops of the effective `jump_chain` (own, else inherited; `[]` stops
-    /// the lookup). Jump hosts arrive with stage 5: until then a host with
-    /// hops is refused instead of connected directly.
-    pub jump_hosts: usize,
+    /// The hops of the effective `jump_chain` (own, else inherited; `[]`
+    /// stops the lookup; the host itself is never its own hop), in
+    /// connection order. Each is the hop's own configuration (its effective
+    /// port and credentials, its known key types); its own chain and proxy
+    /// are ignored (docs/data-model.md, section 7.3), so it has no hops and
+    /// no proxy. Empty while `route_problem` is set.
+    pub jump_hosts: Vec<SessionConfig>,
+    /// Why the route cannot be built; the connection then fails before it
+    /// starts, naming the hop (docs/data-model.md, section 8.3).
+    pub route_problem: Option<RouteProblem>,
+    /// The host's own `ssh.proxy` (not inherited) for the route's first
+    /// connection: the first hop, else this host.
+    pub proxy: Option<SessionProxy>,
+}
+
+/// Why a route cannot be built (`index`: 0-based position in the chain).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteProblem {
+    /// The hop is not a live host of this vault (removed, or an imported
+    /// ProxyJump host that was not imported).
+    MissingHop { index: usize },
+    /// The hop appears earlier in the chain (a loop).
+    RepeatedHop { index: usize },
+    /// More hops than a chain may hold (8).
+    TooManyHops,
+}
+
+/// The kind of a proxy (`host.ssh.proxy.type`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProxyType {
+    Http,
+    Socks5,
+}
+
+/// `host.ssh.proxy` with its password (docs/data-model.md, section 7.5).
+pub struct SessionProxy {
+    pub kind: ProxyType,
+    pub address: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<SecretString>,
+}
+
+impl fmt::Debug for SessionProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionProxy")
+            .field("kind", &self.kind)
+            .field("password", &self.password.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for SessionConfig {

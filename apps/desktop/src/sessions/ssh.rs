@@ -24,9 +24,9 @@ use shellpp_core::service::host_api::{
     ConnectionEndReason, ConnectionLogStart, HostKeyCheck, HostKeyStatus, SessionConfig,
 };
 use shellpp_ssh::{
-    AuthPlan, Backoff, BoxFuture, ConnectSpec, ConnectStep as SshStep, FailureKind,
-    HostKeyDecision, HostKeyInfo as SshKey, Interaction, KeyCredential, Prompt, PromptAnswer,
-    ShellRequest, SshError,
+    AuthPlan, Backoff, BoxFuture, ConnectSpec, ConnectStep as SshStep, FailureKind, FailurePlace,
+    HostKeyDecision, HostKeyInfo as SshKey, Interaction, JumpHost, KeyCredential, Prompt,
+    PromptAnswer, ProxyKind, ProxySpec, ShellRequest, SshError,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -35,8 +35,8 @@ use super::charset::{self, InputEncoder, OutputDecoder};
 use super::keys;
 use super::transport::{AuthResult, RemoteConnection, TermEnd, TermParts, closed_while_deciding};
 use super::types::{
-    ConnectStep, HostKeyChoice, HostKeyInfo, PromptKind, PromptReply, ReconnectView, SaveOption,
-    SessionError, SessionState,
+    ConnectStep, ErrorPlace, HostKeyChoice, HostKeyInfo, PromptKind, PromptReply, ReconnectView,
+    SaveOption, SessionError, SessionState,
 };
 use super::{
     CLOSE_TIMEOUT, CONNECT_TIMEOUT, Control, KeptCredentials, PumpEnd, Session, SessionMut, Shared,
@@ -86,6 +86,8 @@ enum Outcome {
         error: SessionError,
         host_key: Option<HostKeyInfo>,
         retry_once: bool,
+        /// Where on the route it failed, when not on the host itself.
+        place: Option<ErrorPlace>,
     },
     Cancelled,
     Closed,
@@ -233,6 +235,7 @@ impl SshTask {
                     error,
                     host_key,
                     retry_once,
+                    place,
                 } => {
                     if retry_once && !retried {
                         retried = true;
@@ -243,7 +246,7 @@ impl SshTask {
                         continue;
                     }
                     tracing::info!(session = self.session.id, ?error, "attempt failed");
-                    return self.failed(kind, error, host_key).await;
+                    return self.failed(kind, error, host_key, place).await;
                 }
                 Outcome::Cancelled => return self.stopped(kind, SessionError::Cancelled),
                 Outcome::Closed => return Next::Exit,
@@ -269,10 +272,13 @@ impl SshTask {
                 // settings were read: like an attempt the lock aborted.
                 Err(SessionError::Locked) => return self.locked().await,
                 Err(error) => {
+                    let place = (error == SessionError::RouteInvalid)
+                        .then_some(ErrorPlace::Chain { index: None });
                     return Outcome::Failed {
                         error,
                         host_key: None,
                         retry_once: false,
+                        place,
                     };
                 }
             },
@@ -332,8 +338,38 @@ impl SshTask {
             connect_timeout: CONNECT_TIMEOUT,
             preferred_host_key_types: config.known_key_types.clone(),
             jump_hosts: Vec::new(),
-            proxy: None,
+            proxy: config.proxy.as_ref().map(|proxy| ProxySpec {
+                kind: match proxy.kind {
+                    shellpp_core::service::host_api::ProxyType::Http => ProxyKind::Http,
+                    shellpp_core::service::host_api::ProxyType::Socks5 => ProxyKind::Socks5,
+                },
+                address: proxy.address.clone(),
+                port: proxy.port,
+                username: proxy.username.clone(),
+                password: proxy.password.clone(),
+            }),
         };
+        // The jump hosts (stage 5): each with its own settings and its own
+        // interaction (its host key is checked against its own address).
+        let hops: Vec<(JumpHost, Arc<SessionInteraction>, String)> = config
+            .jump_hosts
+            .iter()
+            .map(|hop| {
+                let interaction = Arc::new(SessionInteraction::new(
+                    self.shared.clone(),
+                    self.session.clone(),
+                    hop.address.clone(),
+                    hop.port,
+                ));
+                let jump = JumpHost {
+                    spec: hop_spec(hop),
+                    interaction: interaction.clone(),
+                };
+                (jump, interaction, hop.title.clone())
+            })
+            .collect();
+        let mut spec = spec;
+        spec.jump_hosts = hops.iter().map(|(jump, _, _)| jump.clone()).collect();
         let shell = ShellSetup {
             term: config.term.clone(),
             env: config.env.clone(),
@@ -381,14 +417,37 @@ impl SshTask {
                 Outcome::Connected(established)
             }
             Err(error) => {
-                if let Some(key) = interaction.take_revoked() {
+                let count = hops.len();
+                let place = match error.place {
+                    FailurePlace::Target => None,
+                    FailurePlace::Proxy => Some(ErrorPlace::Proxy),
+                    FailurePlace::JumpHost(index) => Some(ErrorPlace::JumpHost {
+                        index,
+                        count,
+                        title: hops
+                            .get(index)
+                            .map(|(_, _, title)| title.clone())
+                            .unwrap_or_default(),
+                    }),
+                };
+                // The interaction of the place that failed (a revoked key, a
+                // core failure during its decision).
+                let failed_interaction = match error.place {
+                    FailurePlace::JumpHost(index) => hops
+                        .get(index)
+                        .map(|(_, interaction, _)| interaction.clone())
+                        .unwrap_or_else(|| interaction.clone()),
+                    _ => interaction.clone(),
+                };
+                if let Some(key) = failed_interaction.take_revoked() {
                     return Outcome::Failed {
                         error: SessionError::HostKeyRevoked,
                         host_key: Some(key),
                         retry_once: false,
+                        place,
                     };
                 }
-                if let Some(failure) = interaction.take_failure() {
+                if let Some(failure) = failed_interaction.take_failure() {
                     if failure == SessionError::Locked {
                         // The core locked during the attempt (a known host
                         // check, a save) before the lock state reached it.
@@ -398,12 +457,14 @@ impl SshTask {
                         error: failure,
                         host_key: None,
                         retry_once: false,
+                        place,
                     };
                 }
                 Outcome::Failed {
                     error: SessionError::from_failure(error.kind),
                     host_key: None,
-                    retry_once: interaction.decided() && closed_while_deciding(error.kind),
+                    retry_once: failed_interaction.decided() && closed_while_deciding(error.kind),
+                    place,
                 }
             }
         }
@@ -429,7 +490,7 @@ impl SshTask {
             Some(Err(error)) => return Err(core_error(&error)),
             None => return Err(SessionError::Internal),
         };
-        super::refuse_jump_hosts(&config)?;
+        super::check_route(&config)?;
         let encoding = charset::encoding_for(&config.charset);
         let session_id = self.session.id;
         let default_theme = self.settings.default_theme.clone();
@@ -641,6 +702,7 @@ impl SshTask {
         kind: AttemptKind,
         error: SessionError,
         host_key: Option<HostKeyInfo>,
+        place: Option<ErrorPlace>,
     ) -> Next {
         let revoked = error == SessionError::HostKeyRevoked;
         if !kind.is_reconnect() || revoked {
@@ -651,6 +713,7 @@ impl SshTask {
                 view.prompt = None;
                 view.error = Some(error);
                 view.host_key = host_key;
+                view.error_place = place;
                 view.reconnect = None;
             });
             return Next::Idle;
@@ -1082,6 +1145,36 @@ async fn detect_os(
         detected_at: shellpp_core::model::time::format_timestamp(std::time::SystemTime::now()),
     };
     session.update(|st| st.view.os = Some(os));
+}
+
+/// The connect spec of a jump host from its own configuration (stage 5):
+/// its effective port and credentials; prompts may not save (the session
+/// saves only for its own host), its own chain and proxy are not used.
+fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
+    ConnectSpec {
+        address: hop.address.clone(),
+        port: hop.port,
+        username: hop.username.clone(),
+        auth: AuthPlan {
+            key: hop.key.as_ref().map(|key| KeyCredential {
+                label: key.label.clone(),
+                private_key: key.private_key.clone(),
+                passphrase: key.passphrase.clone(),
+            }),
+            use_agent: false,
+            password: hop.password.clone(),
+            keyboard_interactive: true,
+            can_save_password: false,
+            can_save_passphrase: false,
+            file_keys: Vec::new(),
+        },
+        agent: None,
+        keepalive: (hop.keepalive_s > 0).then(|| Duration::from_secs(u64::from(hop.keepalive_s))),
+        connect_timeout: CONNECT_TIMEOUT,
+        preferred_host_key_types: hop.known_key_types.clone(),
+        jump_hosts: Vec::new(),
+        proxy: None,
+    }
 }
 
 /// The [`Interaction`] of one attempt: steps, host key decision, prompts.

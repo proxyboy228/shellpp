@@ -28,7 +28,8 @@ use super::dto::{
 };
 use super::host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryDropReason,
-    HistoryRecordInput, HostKeyCheck, HostKeyStatus, SessionConfig, SessionKey,
+    HistoryRecordInput, HostKeyCheck, HostKeyStatus, ProxyType, RouteProblem, SessionConfig,
+    SessionKey, SessionProxy,
 };
 use super::records::{self, Parts, check_vault, parts};
 use super::session::Session;
@@ -264,12 +265,166 @@ fn distinct(ids: &[Uuid]) -> Vec<Uuid> {
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
 }
 
-/// The hops of a host's own `ssh.jump_chain`; `None` when it sets none
-/// (`[]` is set: it stops the lookup).
-fn jump_chain_len(ssh: Option<&Map<String, Value>>) -> Option<usize> {
-    ssh.and_then(|ssh| ssh.get("jump_chain"))
+/// The configuration of the saved host `record_id` alone: its effective
+/// address, port, credentials and session settings, without its route
+/// (no hops, no proxy; [`Core::session_config_impl`] adds them for the
+/// target and uses this for each hop).
+fn host_session_config(
+    session: &Session,
+    defaults: &SessionDefaults,
+    entries: &[(Uuid, Entry)],
+    vault_id: Uuid,
+    record_id: &Uuid,
+) -> Result<SessionConfig, CoreError> {
+    let record = live(session, record_id, RecordKind::Host)?;
+    let data = record.data();
+    let index = &session.index;
+    let tree = index.tree();
+    let ssh = ssh_block(data);
+    let inherited = index.inherited_for_host(&tree, data);
+    let address = data
+        .get("address")
+        .and_then(Value::as_str)
+        .filter(|address| !address.is_empty())
+        .ok_or(CoreError::Damaged)?
+        .to_owned();
+    let port = port_member(ssh)
+        .or_else(|| inherited.port.as_ref().map(|port| port.value))
+        .unwrap_or(22);
+    // Data-model 8.3: the host's own value, else its own
+    // identity's, else the groups' (each level with its identity).
+    let own_identity = own_identity(session, data);
+    let username = username_member(ssh)
+        .or_else(|| own_identity.and_then(identity::username).map(str::to_owned))
+        .or_else(|| inherited.username.map(|name| name.value));
+    // password = host.ssh.password ?? identity.password, where
+    // identity = first(identity_id): a host that names an identity
+    // uses that one, even when it is missing (no silent fallback
+    // to a group's credentials, data-model 8.3).
+    let linked = if uuid_member(ssh, "identity_id").is_some() {
+        own_identity
+    } else {
+        inherited
+            .identity_id
+            .as_ref()
+            .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
+            .map(|record| record.data())
+    };
+    let password = host::secret_value(data, "ssh.password")
+        .or_else(|| linked.and_then(identity::password))
+        .map(|password| SecretString::from(password.to_owned()));
+    let os = host_os(data);
+    let os_detection_script = (defaults.os_detection_enabled && os.is_none())
+        .then(|| defaults.os_detection_script.clone());
+    Ok(SessionConfig {
+        host: Some(RecordRef {
+            vault_id,
+            record_id: *record_id,
+        }),
+        title: host::title(data).to_owned(),
+        port,
+        username,
+        password,
+        key: session_key(session, data),
+        keepalive_s: ssh
+            .and_then(|ssh| ssh.get("keepalive_s"))
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value <= 3600)
+            .unwrap_or(defaults.keepalive_s),
+        term: defaults.term.clone(),
+        agent_forwarding: ssh
+            .and_then(|ssh| ssh.get("agent_forwarding"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        env: session_env(data),
+        charset: charset_of(data),
+        backspace: backspace_of(data),
+        terminal_theme: effective_theme(data.get("terminal_theme"), &defaults.default_theme),
+        record_history: record_history_of(data, defaults.record_history),
+        os_detection_script,
+        os,
+        known_key_types: known_hosts::known_key_types(entries, &address, port),
+        can_save_password: true,
+        jump_hosts: Vec::new(),
+        route_problem: None,
+        proxy: None,
+        address,
+    })
+}
+
+/// Most hops of a chain (docs/data-model.md, section 7.3).
+const MAX_HOPS: usize = 8;
+
+/// The hops of a host's effective `jump_chain` (own, else inherited; `[]`
+/// stops the lookup): live hosts of this vault in chain order. A host is
+/// never its own hop (a bastion inside the group whose chain names it).
+fn route_hops(
+    session: &Session,
+    record_id: &Uuid,
+    data: &Map<String, Value>,
+) -> Result<Vec<Uuid>, RouteProblem> {
+    let own: Option<Vec<Uuid>> = ssh_block(data)
+        .and_then(|ssh| ssh.get("jump_chain"))
         .and_then(Value::as_array)
-        .map(Vec::len)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|raw| Uuid::parse_str(raw).ok())
+                .collect()
+        });
+    let chain: Vec<Uuid> = match own {
+        Some(chain) => chain,
+        None => {
+            let tree = session.index.tree();
+            session
+                .index
+                .inherited_for_host(&tree, data)
+                .jump_chain
+                .map(|chain| chain.value)
+                .unwrap_or_default()
+        }
+    };
+    let chain: Vec<Uuid> = chain.into_iter().filter(|hop| hop != record_id).collect();
+    if chain.len() > MAX_HOPS {
+        return Err(RouteProblem::TooManyHops);
+    }
+    for (index, hop) in chain.iter().enumerate() {
+        if chain[..index].contains(hop) {
+            return Err(RouteProblem::RepeatedHop { index });
+        }
+        if session.index.get_kind(hop, RecordKind::Host).is_none() {
+            return Err(RouteProblem::MissingHop { index });
+        }
+    }
+    Ok(chain)
+}
+
+/// `host.ssh.proxy` with its password (data-model 7.5).
+fn session_proxy(data: &Map<String, Value>) -> Option<SessionProxy> {
+    let proxy = ssh_block(data)?.get("proxy")?.as_object()?;
+    let kind = match proxy.get("type")?.as_str()? {
+        "http" => ProxyType::Http,
+        "socks5" => ProxyType::Socks5,
+        _ => return None,
+    };
+    Some(SessionProxy {
+        kind,
+        address: proxy.get("address")?.as_str()?.to_owned(),
+        port: proxy
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port > 0)?,
+        username: proxy
+            .get("username")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned),
+        password: host::secret_value(data, "ssh.proxy.password")
+            .map(|password| SecretString::from(password.to_owned())),
+    })
 }
 
 /// The identity a host's own `ssh.identity_id` names (`idf(0)`,
@@ -569,88 +724,26 @@ impl Core {
                 record_id,
             } => {
                 check_vault(session, Some(*vault_id))?;
+                let mut config =
+                    host_session_config(session, &defaults, &entries, *vault_id, record_id)?;
                 let record = live(session, record_id, RecordKind::Host)?;
                 let data = record.data();
-                let index = &session.index;
-                let tree = index.tree();
-                let ssh = ssh_block(data);
-                let inherited = index.inherited_for_host(&tree, data);
-                let address = data
-                    .get("address")
-                    .and_then(Value::as_str)
-                    .filter(|address| !address.is_empty())
-                    .ok_or(CoreError::Damaged)?
-                    .to_owned();
-                let port = port_member(ssh)
-                    .or_else(|| inherited.port.as_ref().map(|port| port.value))
-                    .unwrap_or(22);
-                // Data-model 8.3: the host's own value, else its own
-                // identity's, else the groups' (each level with its identity).
-                let own_identity = own_identity(session, data);
-                let username = username_member(ssh)
-                    .or_else(|| own_identity.and_then(identity::username).map(str::to_owned))
-                    .or_else(|| inherited.username.map(|name| name.value));
-                // password = host.ssh.password ?? identity.password, where
-                // identity = first(identity_id): a host that names an identity
-                // uses that one, even when it is missing (no silent fallback
-                // to a group's credentials, data-model 8.3).
-                let linked = if uuid_member(ssh, "identity_id").is_some() {
-                    own_identity
-                } else {
-                    inherited
-                        .identity_id
-                        .as_ref()
-                        .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
-                        .map(|record| record.data())
-                };
-                let password = host::secret_value(data, "ssh.password")
-                    .or_else(|| linked.and_then(identity::password))
-                    .map(|password| SecretString::from(password.to_owned()));
-                let os = host_os(data);
-                let os_detection_script = (defaults.os_detection_enabled && os.is_none())
-                    .then(|| defaults.os_detection_script.clone());
-                Ok(SessionConfig {
-                    host: Some(RecordRef {
-                        vault_id: *vault_id,
-                        record_id: *record_id,
-                    }),
-                    title: host::title(data).to_owned(),
-                    port,
-                    username,
-                    password,
-                    key: session_key(session, data),
-                    keepalive_s: ssh
-                        .and_then(|ssh| ssh.get("keepalive_s"))
-                        .and_then(Value::as_u64)
-                        .and_then(|value| u32::try_from(value).ok())
-                        .filter(|value| *value <= 3600)
-                        .unwrap_or(defaults.keepalive_s),
-                    term: defaults.term,
-                    agent_forwarding: ssh
-                        .and_then(|ssh| ssh.get("agent_forwarding"))
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    env: session_env(data),
-                    charset: charset_of(data),
-                    backspace: backspace_of(data),
-                    terminal_theme: effective_theme(
-                        data.get("terminal_theme"),
-                        &defaults.default_theme,
-                    ),
-                    record_history: record_history_of(data, defaults.record_history),
-                    os_detection_script,
-                    os,
-                    known_key_types: known_hosts::known_key_types(&entries, &address, port),
-                    can_save_password: true,
-                    // A bastion in the group whose chain names it is not its
-                    // own hop.
-                    jump_hosts: jump_chain_len(ssh).unwrap_or_else(|| {
-                        inherited.jump_chain.map_or(0, |chain| {
-                            chain.value.iter().filter(|hop| *hop != record_id).count()
-                        })
-                    }),
-                    address,
-                })
+                config.proxy = session_proxy(data);
+                match route_hops(session, record_id, data) {
+                    Ok(hops) => {
+                        for hop in hops {
+                            let mut hop =
+                                host_session_config(session, &defaults, &entries, *vault_id, &hop)?;
+                            // A hop runs no session: no detection, no env.
+                            hop.os_detection_script = None;
+                            hop.env.clear();
+                            hop.agent_forwarding = false;
+                            config.jump_hosts.push(hop);
+                        }
+                    }
+                    Err(problem) => config.route_problem = Some(problem),
+                }
+                Ok(config)
             }
             SessionTarget::Quick {
                 address,
@@ -708,7 +801,9 @@ impl Core {
                     os: None,
                     known_key_types: known_hosts::known_key_types(&entries, &address, port),
                     can_save_password: false,
-                    jump_hosts: 0,
+                    jump_hosts: Vec::new(),
+                    route_problem: None,
+                    proxy: None,
                     address,
                 })
             }

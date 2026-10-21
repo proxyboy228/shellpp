@@ -690,10 +690,9 @@ fn last_session_round_trip() {
 }
 
 /// The hops of the effective jump chain (own, else inherited; `[]` stops
-/// the lookup): the session layer refuses a host with hops until jump
-/// hosts are supported (stage 5).
+/// the lookup), each with its own configuration (stage 5).
 #[test]
-fn the_effective_jump_chain_is_counted() {
+fn the_effective_jump_chain_becomes_the_route() {
     let u = first_run();
     let bastion = u.host(json!({"address": "192.0.2.60"}));
     let chain = json!([bastion.record_id.to_string()]);
@@ -705,10 +704,19 @@ fn the_effective_jump_chain_is_counted() {
         "group_id": group.record_id.to_string(),
         "ssh": {"jump_chain": []}
     }));
-    assert_eq!(config(&u, own.record_id).jump_hosts, 1);
-    assert_eq!(config(&u, inherited.record_id).jump_hosts, 1);
-    assert_eq!(config(&u, stopped.record_id).jump_hosts, 0);
-    assert_eq!(config(&u, bastion.record_id).jump_hosts, 0);
+    let hops = |id: Uuid| -> Vec<String> {
+        let config = config(&u, id);
+        assert_eq!(config.route_problem, None);
+        config
+            .jump_hosts
+            .iter()
+            .map(|hop| hop.address.clone())
+            .collect()
+    };
+    assert_eq!(hops(own.record_id), ["192.0.2.60"]);
+    assert_eq!(hops(inherited.record_id), ["192.0.2.60"]);
+    assert!(hops(stopped.record_id).is_empty());
+    assert!(hops(bastion.record_id).is_empty());
     // A bastion inside the group whose chain names it is not its own hop.
     let own = u.group(json!({"name": "with its bastion"}));
     let inner = u.host(json!({"address": "192.0.2.61", "group_id": own.record_id.to_string()}));
@@ -722,6 +730,124 @@ fn the_effective_jump_chain_is_counted() {
         &[],
     )
     .unwrap();
-    assert_eq!(config(&u, inner.record_id).jump_hosts, 0);
-    assert_eq!(config(&u, neighbour.record_id).jump_hosts, 1);
+    assert!(hops(inner.record_id).is_empty());
+    assert_eq!(hops(neighbour.record_id), ["192.0.2.61"]);
+}
+
+/// Each hop uses its own effective port and credentials and has no route of
+/// its own; a missing or repeated hop is named (data-model 7.3, 8.3).
+#[test]
+fn hops_have_their_own_credentials_and_bad_chains_are_named() {
+    use shellpp_core::service::host_api::RouteProblem;
+    let u = first_run();
+    let group = u.group(json!({"name": "dmz", "ssh": {"port": 2200, "username": "ops"}}));
+    let first =
+        u.host(json!({"address": "bastion.example", "group_id": group.record_id.to_string()}));
+    let second = common::save(
+        &u.core,
+        u.vault_id,
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        json!({"address": "inner.example", "ssh": {"port": 2222, "username": "jump",
+            "jump_chain": [first.record_id.to_string()]}}),
+        &[("ssh.password", Some("hop-secret"))],
+    )
+    .unwrap();
+    let target = u.host(json!({"address": "app.example", "ssh": {"username": "app",
+        "env": [{"name": "LANG", "value": "C"}],
+        "jump_chain": [first.record_id.to_string(), second.record_id().to_string()]}}));
+    let route = config(&u, target.record_id);
+    assert_eq!(route.route_problem, None);
+    assert_eq!(route.jump_hosts.len(), 2);
+    let (hop1, hop2) = (&route.jump_hosts[0], &route.jump_hosts[1]);
+    // The first hop inherits from its group; the second has its own values.
+    assert_eq!(
+        (hop1.address.as_str(), hop1.port),
+        ("bastion.example", 2200)
+    );
+    assert_eq!(hop1.username.as_deref(), Some("ops"));
+    assert_eq!((hop2.address.as_str(), hop2.port), ("inner.example", 2222));
+    assert_eq!(hop2.username.as_deref(), Some("jump"));
+    assert_eq!(
+        hop2.password
+            .as_ref()
+            .map(|p| p.expose_secret().to_owned())
+            .as_deref(),
+        Some("hop-secret")
+    );
+    // A hop's own chain and proxy are ignored; it runs no session.
+    assert!(hop2.jump_hosts.is_empty() && hop2.proxy.is_none());
+    assert!(hop2.env.is_empty() && hop2.os_detection_script.is_none());
+    assert_eq!(route.env.len(), 1);
+
+    // A hop that is gone.
+    let gone = u.host(json!({"address": "gone.example"}));
+    let behind_gone = u.host(json!({"address": "x.example",
+        "ssh": {"jump_chain": [first.record_id.to_string(), gone.record_id.to_string()]}}));
+    u.core
+        .record_delete(shellpp_core::service::dto::RecordsRef {
+            vault_id: u.vault_id,
+            record_ids: vec![gone.record_id],
+        })
+        .unwrap();
+    let route = config(&u, behind_gone.record_id);
+    assert_eq!(
+        route.route_problem,
+        Some(RouteProblem::MissingHop { index: 1 })
+    );
+    assert!(route.jump_hosts.is_empty());
+    // A hop named twice (a loop) is refused when it is saved; the route
+    // check refuses it too, for data that bypassed the model.
+    let looped = common::save(
+        &u.core,
+        u.vault_id,
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        json!({"address": "y.example",
+            "ssh": {"jump_chain": [first.record_id.to_string(), second.record_id().to_string(),
+                first.record_id.to_string()]}}),
+        &[],
+    );
+    assert!(
+        matches!(looped, Err(CoreError::Validation(ref errors))
+            if errors.iter().any(|error| error.field == "ssh.jump_chain")),
+        "{looped:?}"
+    );
+}
+
+/// `host.ssh.proxy` with its password reaches the session; groups do not
+/// pass it on (data-model 8.1).
+#[test]
+fn the_proxy_is_the_hosts_own() {
+    use shellpp_core::service::host_api::ProxyType;
+    let u = first_run();
+    let host = common::save(
+        &u.core,
+        u.vault_id,
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        json!({"address": "behind-proxy.example", "ssh": {"proxy": {"type": "socks5",
+            "address": "proxy.example", "port": 1080, "username": "puser"}}}),
+        &[("ssh.proxy.password", Some("proxy-secret"))],
+    )
+    .unwrap();
+    let route = config(&u, host.record_id());
+    let proxy = route.proxy.expect("proxy");
+    assert_eq!(proxy.kind, ProxyType::Socks5);
+    assert_eq!(
+        (proxy.address.as_str(), proxy.port),
+        ("proxy.example", 1080)
+    );
+    assert_eq!(proxy.username.as_deref(), Some("puser"));
+    assert_eq!(
+        proxy
+            .password
+            .as_ref()
+            .map(|p| p.expose_secret().to_owned())
+            .as_deref(),
+        Some("proxy-secret")
+    );
+    assert!(!format!("{proxy:?}").contains("proxy-secret"));
+    let plain = u.host(json!({"address": "direct.example"}));
+    assert!(config(&u, plain.record_id).proxy.is_none());
 }

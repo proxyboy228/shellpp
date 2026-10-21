@@ -340,24 +340,66 @@ async fn quick_connect_targets_are_validated() {
     assert_eq!(missing.err(), Some(SessionError::HostMissing));
 }
 
-/// A host with jump hosts is refused until they are supported (stage 5):
-/// it is never connected directly instead.
+/// A host behind a jump host connects through it (stage 5): the jump host's
+/// key is decided first, on its own address, then the host's; each uses
+/// its own saved credentials.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_host_with_jump_hosts_is_not_connected_directly() {
+async fn a_host_behind_a_jump_host_connects_through_it() {
     let harness = Harness::new();
-    let bastion = harness.host(2222, json!({}), None);
+    let jump_password = random_secret("jump");
+    let mut config = ServerConfig::new(vec![
+        UserConfig::new("ops").with_password(secret(&jump_password)),
+    ]);
+    config.forwarding = true;
+    let jump = start_with(config).await;
+    let password = random_secret("pw");
+    let server = start_server(vec![
+        UserConfig::new("alice").with_password(secret(&password)),
+    ])
+    .await;
+    let bastion = harness.host(
+        jump.port(),
+        json!({"label": "bastion", "ssh": {"username": "ops"}}),
+        Some(&jump_password),
+    );
     let SessionTarget::Host { record_id, .. } = bastion else {
         panic!("a saved host");
     };
     let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice", "jump_chain": [record_id.to_string()]}}),
+        Some(&password),
+    );
+    let mut session = harness.open(target);
+    let jump_key = session.accept_key().await;
+    assert_eq!(jump_key, jump.host_key_fingerprint(), "the jump host first");
+    let target_key = session.accept_key().await;
+    assert_eq!(target_key, server.host_key_fingerprint());
+    let view = session.state(SessionState::Connected).await;
+    assert_eq!(view.username.as_deref(), Some("alice"));
+    assert!(jump.events().iter().any(|event| matches!(
+        event,
+        ServerEvent::DirectTcpip { port, .. } if *port == u32::from(server.port())
+    )));
+    session.handle.close();
+    server.shutdown().await;
+    jump.shutdown().await;
+}
+
+/// A host whose chain names a host that does not exist is refused, never
+/// connected directly instead (data-model 8.3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_with_a_missing_jump_host_is_not_connected_directly() {
+    let harness = Harness::new();
+    let target = harness.host(
         22,
-        json!({"ssh": {"jump_chain": [record_id.to_string()]}}),
+        json!({"ssh": {"jump_chain": [Uuid::now_v7().to_string()]}}),
         None,
     );
     let error = harness
         .open_with(OpenRequest::Ssh(target), Arc::new(TestTerminal::default()))
         .err();
-    assert_eq!(error, Some(SessionError::JumpHostsUnsupported));
+    assert_eq!(error, Some(SessionError::RouteInvalid));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

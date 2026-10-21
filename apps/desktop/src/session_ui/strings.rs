@@ -40,7 +40,7 @@ pub const REASON_FORWARDING_REFUSED: &str =
 pub const REASON_LOCKED: &str = "Shell++ is locked. Unlock it and try again.";
 pub const REASON_HOST_MISSING: &str = "The host no longer exists.";
 pub const REASON_INVALID_TARGET: &str = "The address, port or username is not valid.";
-pub const REASON_JUMP_HOSTS: &str = "This host connects through jump hosts, which Shell++ does not support yet. It is not connected directly.";
+pub const REASON_JUMP_HOSTS: &str = "A jump host of this host is missing or listed twice, so it is not connected. Check Host Chaining in the host panel.";
 pub const REASON_LOCAL_SHELL: &str = "The local shell could not be started.";
 pub const REASON_OTHER: &str = "Something went wrong. Try again.";
 

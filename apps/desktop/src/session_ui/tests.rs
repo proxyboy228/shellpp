@@ -1147,6 +1147,7 @@ fn layer_view(state: crate::sessions::SessionState) -> crate::sessions::SessionV
         prompt: None,
         error: None,
         host_key: None,
+        error_place: None,
         exit_status: None,
         exit_signal: None,
         reconnect: None,
