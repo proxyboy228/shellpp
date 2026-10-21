@@ -247,6 +247,10 @@ pub struct SessionPane {
     /// The active pane of its tab (UI 4.7): only it takes the keyboard
     /// focus; a request of another pane waits until it becomes active.
     active: bool,
+    /// The window the pane was last drawn in.
+    window: Option<gpui::AnyWindowHandle>,
+    /// A system notification of the signature question is shown (D68).
+    signature_notice: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -296,6 +300,8 @@ impl SessionPane {
             startup_pending: None,
             startup_asked: 0,
             startup_live: None,
+            window: None,
+            signature_notice: false,
             reconnect: None,
             ask: None,
             paste: None,
@@ -643,7 +649,37 @@ impl SessionPane {
         }
         self.ask = Some(Ask::Signature { id, fingerprint });
         self.focus_request = true;
+        self.notify_signature(cx);
         cx.notify();
+    }
+
+    /// While the pane's window is not focused, the signature question is
+    /// also a system notification naming the host (D68): nothing of the
+    /// key is in it. With no window known yet, any focused window of the
+    /// app counts.
+    fn notify_signature(&mut self, cx: &mut Context<Self>) {
+        let active = cx.active_window();
+        let focused = match self.window {
+            Some(window) => active.is_some_and(|active| active.window_id() == window.window_id()),
+            None => active.is_some(),
+        };
+        if focused {
+            return;
+        }
+        cx.show_system_notification(gpui::SystemNotification {
+            tag: signature_tag(cx.entity_id()),
+            title: strings::sign_notice_title(self.info.title()).into(),
+            body: strings::SIGN_NOTICE_BODY.into(),
+            actions: Vec::new(),
+        });
+        self.signature_notice = true;
+    }
+
+    /// The question was answered or withdrawn: its notification goes too.
+    fn withdraw_signature_notice(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.signature_notice) {
+            cx.dismiss_system_notification(&signature_tag(cx.entity_id()));
+        }
     }
 
     /// The fingerprint of the signature question on display.
@@ -661,6 +697,7 @@ impl SessionPane {
         }
         self.ask = None;
         self.focus_request = true;
+        self.withdraw_signature_notice(cx);
         if let Some(control) = self.control.clone() {
             let reply = if allow {
                 PromptReply::Allow
@@ -674,6 +711,7 @@ impl SessionPane {
 
     /// The session layer withdrew its question.
     pub fn clear_ask(&mut self, cx: &mut Context<Self>) {
+        self.withdraw_signature_notice(cx);
         if self.ask.take().is_some() {
             self.focus_request = true;
             cx.notify();
@@ -887,8 +925,14 @@ impl SessionPane {
     }
 }
 
+/// The tag of the signature notification of the pane `entity`.
+pub fn signature_tag(entity: gpui::EntityId) -> SharedString {
+    format!("agent-signature-{}", entity.as_u64()).into()
+}
+
 impl Render for SessionPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window = Some(window.window_handle());
         // The prompt form needs the window: created here, once per prompt.
         if let Some(Ask::Prompt { prompt, form }) = &mut self.ask
             && form.is_none()

@@ -457,6 +457,14 @@ impl PaneGroup {
     /// The worst state of the panes for the tab's dot (UI 4.7): a drop,
     /// then connecting, then an ended session, then connected; `None` when
     /// no pane has a session (only pickers).
+    /// Whether a pane waits for the answer to a signature question of the
+    /// forwarded agent (D68: the tab shows a key).
+    pub fn asks_signature(&self, cx: &App) -> bool {
+        self.sessions()
+            .iter()
+            .any(|pane| pane.read(cx).signature_asked().is_some())
+    }
+
     pub fn worst_status(&self, cx: &App) -> Option<PaneStatus> {
         self.sessions()
             .into_iter()

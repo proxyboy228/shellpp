@@ -925,9 +925,9 @@ impl SnippetsScreen {
             .icon(Lucide::Play)
             .label(strings::RUN)
             .disabled(!can_run)
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                this.run_from_panel(window, cx)
-            }));
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.run_from_panel(window, cx)),
+            );
         let room = px(total) - details::MAIN_AREA_MIN;
         let width =
             details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN));

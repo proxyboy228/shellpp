@@ -1713,3 +1713,76 @@ fn the_signature_question_allows_or_denies(cx: &mut TestAppContext) {
     assert_eq!(ui.record.calls().last(), Some(&Call::CancelPrompt));
     ui.finish(cx);
 }
+
+/// D68: while the signature question waits, its tab shows a key; with the
+/// window not focused a system notification names the host, a click on it
+/// brings the tab back, and the answer takes it away.
+#[gpui_kit::test]
+fn a_waiting_signature_marks_its_tab_and_notifies_an_unfocused_window(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    use gpui::{SystemNotificationResponse, VisualTestContext};
+
+    use crate::sessions::{PromptKind, SessionPrompt, SessionState};
+
+    cx.update(|cx| cx.set_app_identity("Shellpp.Test", "Shell++"));
+    let ui = Ui::open(cx);
+    let target = crate::hosts::parse_address("192.0.2.20:2200").unwrap();
+    let (id, pane) = ui.open_session(SessionRequest::new(SessionKind::Ssh).quick(target), cx);
+    let key = format!("session-tab-{id}-signature");
+    cx.update_window(ui.handle, |_, window, _| window.activate_window())
+        .unwrap();
+    ui.frame(cx);
+    let shown = Cell::new(None);
+    let mut view = layer_view(SessionState::Connected);
+    let ask = |view: &mut crate::sessions::SessionView, number: u64| {
+        view.prompt = Some(SessionPrompt {
+            id: number,
+            kind: PromptKind::AgentSignature {
+                fingerprint: "SHA256:agentkey".into(),
+            },
+        });
+    };
+    // The window is focused: the key on the tab, no notification.
+    ask(&mut view, 3);
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(ui.visible(&key, cx));
+    assert!(cx.shown_system_notifications().is_empty());
+    ui.click("signature-allow", cx);
+    view.prompt = None;
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(!ui.visible(&key, cx));
+
+    // Not focused (and another tab shown): a notification with the host's
+    // name and nothing of the key.
+    VisualTestContext::from_window(ui.handle, cx).deactivate_window();
+    let shell = ui.shell(cx);
+    shell.update(cx, |shell, cx| shell.set_top_tab(TopTab::Vaults, cx));
+    ask(&mut view, 4);
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    let tag = signature_tag(pane.entity_id());
+    let delivered = cx.delivered_system_notifications();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].tag, tag);
+    // The host as the tab names it (the session layer reports "web").
+    assert_eq!(delivered[0].title.as_ref(), "web asks for a signature");
+    assert!(!delivered[0].body.contains("SHA256"));
+    assert!(!delivered[0].title.contains("SHA256"));
+    // The key shows on the tab while another screen is open.
+    assert!(ui.visible(&key, cx));
+    // A click on the notification: the tab comes back.
+    cx.simulate_system_notification_response(SystemNotificationResponse {
+        tag: tag.clone(),
+        action_id: None,
+    });
+    ui.frame(cx);
+    assert_eq!(ui.top_tab(cx), TopTab::Session(id));
+    // The answer withdraws the notification.
+    ui.click("signature-deny", cx);
+    assert!(cx.dismissed_system_notifications().contains(&tag));
+    assert!(cx.delivered_system_notifications().is_empty());
+    ui.finish(cx);
+}

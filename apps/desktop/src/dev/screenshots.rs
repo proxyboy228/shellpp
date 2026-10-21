@@ -375,7 +375,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 68] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,

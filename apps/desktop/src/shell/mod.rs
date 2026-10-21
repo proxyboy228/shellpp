@@ -218,6 +218,28 @@ fn all_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Shell>)> {
         .unwrap_or_default()
 }
 
+/// A click on a system notification: the signature question of a pane
+/// (D68) brings its window to the front with the pane's tab.
+pub fn open_notification(tag: &str, cx: &mut App) {
+    for (handle, shell) in all_windows(cx) {
+        let pane = shell.read(cx).groups().into_iter().find_map(|group| {
+            group
+                .read(cx)
+                .sessions()
+                .into_iter()
+                .map(|pane| pane.entity_id())
+                .find(|pane| crate::session_ui::signature_tag(*pane) == tag)
+        });
+        let Some(pane) = pane else {
+            continue;
+        };
+        if shell.update(cx, |shell, cx| shell.show_pane_of(pane, cx)) {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+            return;
+        }
+    }
+}
+
 /// The shell of every open window.
 fn all_shells(cx: &App) -> Vec<Entity<Shell>> {
     cx.try_global::<ShellRegistry>()
@@ -645,6 +667,36 @@ impl Shell {
     /// panes; `None` without a live or dropped session.
     pub fn tab_status(&self, id: SessionId, cx: &App) -> Option<PaneStatus> {
         self.group(id)?.read(cx).worst_status(cx)
+    }
+
+    /// Whether tab `id` waits for the answer to a signature question
+    /// (D68).
+    pub fn tab_asks_signature(&self, id: SessionId, cx: &App) -> bool {
+        self.group(id)
+            .is_some_and(|group| group.read(cx).asks_signature(cx))
+    }
+
+    /// Brings tab `id` forward with its pane `pane` active (a click on a
+    /// system notification, D68).
+    fn show_pane_of(&mut self, pane: gpui::EntityId, cx: &mut Context<Self>) -> bool {
+        for tab in self.sessions.tabs().to_vec() {
+            let id = tab.id();
+            let Some(group) = self.group(id).cloned() else {
+                continue;
+            };
+            let found = group.read(cx).pane_ids().into_iter().find(|pane_id| {
+                group
+                    .read(cx)
+                    .session(*pane_id)
+                    .is_some_and(|session| session.entity_id() == pane)
+            });
+            if let Some(pane_id) = found {
+                self.set_top_tab(TopTab::Session(id), cx);
+                group.update(cx, |group, cx| group.activate(pane_id, cx));
+                return true;
+            }
+        }
+        false
     }
 
     /// Sessions that count for the exit confirmation (UI 4.6): connecting,
@@ -1367,6 +1419,7 @@ impl Shell {
                 title_bar::session_tab(
                     tab,
                     self.tab_status(id, cx),
+                    self.tab_asks_signature(id, cx),
                     rename,
                     &focus,
                     self.top_tab == TopTab::Session(id),

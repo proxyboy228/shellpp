@@ -1121,3 +1121,16 @@ Status: run 4 decision, 2026-10-22 (plan, item 4.1; how D68, item 1, is built).
 - Run in the panel, and Run in the menu of the snippet open in the panel, ask "Save and run" only when there are changes; without them Run runs the saved snippet at once.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.3 (and `docs/ru`).
+
+### 70. The signature question while the user looks elsewhere (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 4.3; how D68, item 3, is built).
+
+**Decision:**
+
+- The key of a waiting signature question sits on the tab after the state dot, in `--warning`, with the tooltip "Waiting for your answer: sign with your key?". The pane that asks shows the dialog itself, so a split needs no mark of its own.
+- The system notification goes through GPUI's notifications (the Windows toast, macOS and Linux notification centers): no new dependency. Its title names the host as the tab does, its body says what to do; the fingerprint stays in the app. "Not focused" is: the app's active window is not the one the pane was drawn in (no window drawn yet: no window of the app is active).
+- Windows needs the app's identity for a notification (`Shellpp.Desktop`), which it registers for the user (HKCU) at the first one. A test run (`SHELLPP_TEST=1`) and a temporary profile (`--demo`) set no identity, so they show no notification and write nothing to the system; the GPUI tests check the notification on the test platform.
+- A click on the notification brings its window forward with the tab, and the pane that asks becomes the active one. The answer, the end of the question (a drop, the timeout) and a new question replace or withdraw it.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru`).

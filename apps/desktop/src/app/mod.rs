@@ -39,6 +39,10 @@ pub const MIN_WINDOW_HEIGHT: f32 = 600.;
 /// Application id (Wayland app id, X11 class).
 pub const APP_ID: &str = "shellpp";
 
+/// The app's identity for system notifications (the Windows
+/// AppUserModelID).
+pub const APP_USER_MODEL_ID: &str = "Shellpp.Desktop";
+
 /// What `main` hands to [`run`].
 #[derive(Debug)]
 pub struct Launch {
@@ -57,6 +61,16 @@ pub fn run(launch: Launch) {
             theme::install(appearance, cx);
             root::bind_keys(cx);
             crate::terminal::init(cx);
+
+            // System notifications (the signature question while the window
+            // is not focused, D68) need the app's identity, which Windows
+            // registers for the user at the first notification: a temporary
+            // profile or a test run sets none, so it shows none.
+            let real_profile = matches!(&opened, Ok(opened) if opened.temp_profile.is_none())
+                && !crate::dirs::is_test_run();
+            if real_profile {
+                cx.set_app_identity(APP_USER_MODEL_ID, i18n::APP_NAME);
+            }
 
             // A temporary profile (`--demo`) or a test run never uses the
             // user's ~/.ssh keys or SSH agent, its Known Hosts import
@@ -158,6 +172,11 @@ pub fn open_window_with(
     options: WindowOptions,
     cx: &mut App,
 ) -> gpui::Result<(AnyWindowHandle, Entity<RootView>)> {
+    // A click on a system notification finds its window (D68; the last
+    // registration replaces the earlier ones).
+    cx.on_system_notification_response(|response, cx| {
+        crate::shell::open_notification(&response.tag, cx)
+    });
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| RootView::new(state, window, cx))
     })

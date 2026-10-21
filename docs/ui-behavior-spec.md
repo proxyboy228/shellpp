@@ -490,7 +490,12 @@ The same form is used for creating and editing; it opens in the details panel.
        "Ask before every signature": each signature the server asks of the forwarded
        agent shows a dialog in the session's tab with the key's SHA256 fingerprint,
        "Deny" and "Allow"; Enter and Esc deny, and no answer (the tab closed, another
-       question open, the app locked) refuses. [decision, D60, D66]
+       question open, the app locked) refuses. [decision, D60, D66] While the question
+       waits (at most two minutes), its tab shows a key in `--warning` next to the state
+       dot, also when another tab or screen is shown; when the app's window is not
+       focused, a system notification names the host ("web-1 asks for a signature",
+       nothing of the key), and a click on it brings the window and the tab forward. The
+       answer takes both away. [decision, D68]
      - Startup snippet with `{{name}}` variables: after each login the session's tab asks
        their values in the form of the Snippets screen (9.4) and then runs it; Cancel skips
        it for that login. [decision, D66]

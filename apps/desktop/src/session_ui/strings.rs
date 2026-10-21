@@ -119,6 +119,17 @@ pub const SIGN_TITLE: &str = "Sign with your key?";
 pub const SIGN_BODY: &str = "The server asks your forwarded agent to sign with this key. \
      Allow it only for something you started there, such as git or ssh to another host.";
 pub const SIGN_ALLOW: &str = "Allow";
+/// The key mark of a tab whose session waits for the answer (D68).
+pub const SIGN_WAITING: &str = "Waiting for your answer: sign with your key?";
+/// The body of the system notification while the window is not focused
+/// (D68; its title names the host).
+pub const SIGN_NOTICE_BODY: &str =
+    "The server asks to sign with your key. Open Shell++ to allow or deny.";
+
+/// "web-1 asks for a signature".
+pub fn sign_notice_title(host: &str) -> String {
+    format!("{host} asks for a signature")
+}
 pub const SIGN_DENY: &str = "Deny";
 
 // Where a route failed (stage 5, D57).

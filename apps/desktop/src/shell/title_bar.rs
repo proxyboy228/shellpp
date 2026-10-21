@@ -29,6 +29,7 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{
     ActiveTheme as _, FocusableExt as _, Icon, IconName, Sizable as _, TitleBar, h_flex,
 };
@@ -187,14 +188,16 @@ pub fn vaults_pill(
 
 /// A session tab (UI 1.1): the OS icon (the close button replaces it on the
 /// active tab and under the pointer), the name, the 8 px state dot right
-/// after it (design-system 3.3; none while the tab has no session) and the
-/// session type icon on the right. `rename` replaces the name with the
+/// after it (design-system 3.3; none while the tab has no session), a key
+/// in `--warning` while a pane waits for the answer to a signature question
+/// (`asks_signature`, D68) and the session type icon on the right. `rename` replaces the name with the
 /// inline Rename field (UI 4.4). `close` is the tab's close button
 /// ([`session_tab_close`] with the caller's click handler); the caller
 /// attaches the tab's own click handler.
 pub fn session_tab<C: IntoElement>(
     tab: &SessionTab,
     state: Option<PaneStatus>,
+    asks_signature: bool,
     rename: Option<AnyElement>,
     focus: &FocusHandle,
     active: bool,
@@ -242,6 +245,22 @@ pub fn session_tab<C: IntoElement>(
         .child(icon_slot)
         .child(title)
         .children(state.map(|state| state_dot(tab, state, cx)))
+        .when(asks_signature, |this| {
+            this.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "{}-signature",
+                        tab.element_id()
+                    )))
+                    .test_support()
+                    .flex_none()
+                    .text_color(theme.warning)
+                    .child(Icon::new(Lucide::KeyRound).size(px(14.)))
+                    .tooltip(|window, cx| {
+                        Tooltip::new(crate::session_ui::strings::SIGN_WAITING).build(window, cx)
+                    }),
+            )
+        })
         // The type icon keeps to the right edge; the dot stays by the name.
         .child(div().flex_1())
         .children(tab.kind().type_icon().map(|icon| {
