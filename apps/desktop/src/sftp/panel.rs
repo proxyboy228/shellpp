@@ -277,6 +277,17 @@ pub fn valid_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
 }
 
+/// `sftp.show_hidden` (UI 12.6): the starting choice of a panel and of each
+/// source it opens; the panel's own toggle changes it until then.
+fn hidden_setting(state: &Entity<AppState>, cx: &App) -> bool {
+    state
+        .read(cx)
+        .core()
+        .and_then(|core| core.settings_get().ok())
+        .and_then(|values| values.get("sftp.show_hidden").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
 impl FilePanel {
     pub fn new(
         side: Side,
@@ -294,14 +305,7 @@ impl FilePanel {
                     }
                 }),
             ];
-        // `sftp.show_hidden` (UI 12.6): the starting choice; the panel's
-        // own toggle changes it for this panel only.
-        let show_hidden = state
-            .read(cx)
-            .core()
-            .and_then(|core| core.settings_get().ok())
-            .and_then(|values| values.get("sftp.show_hidden").and_then(|v| v.as_bool()))
-            .unwrap_or(false);
+        let show_hidden = hidden_setting(&state, cx);
         let mut panel = Self {
             side,
             state,
@@ -439,6 +443,7 @@ impl FilePanel {
     /// Shows the local file system at `start`.
     pub fn open_local(&mut self, start: PathBuf, cx: &mut Context<Self>) {
         self.close_remote();
+        self.show_hidden = hidden_setting(&self.state, cx);
         self.source = Source::Local;
         self.picker = None;
         self.style = local_style();
@@ -464,6 +469,7 @@ impl FilePanel {
             vault_id: host.vault_id,
             record_id: host.record_id,
         });
+        self.show_hidden = hidden_setting(&self.state, cx);
         let opened = match opened {
             Ok(opened) => opened,
             Err(error) => {

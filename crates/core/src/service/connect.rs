@@ -609,6 +609,20 @@ fn current_record_history(session: &Session, host: Option<RecordRef>, setting: b
     }
 }
 
+/// The oldest end (or start, while open) a log entry keeps after `days`
+/// of retention, as a stored timestamp (empty: nothing expires).
+fn retention_cutoff(days: u64, now: SystemTime) -> String {
+    now.checked_sub(std::time::Duration::from_secs(days.saturating_mul(86_400)))
+        .map(format_timestamp)
+        .unwrap_or_default()
+}
+
+/// An unsaved log entry whose end (or start) is older than `cutoff`.
+fn expired(data: &Map<String, Value>, cutoff: &str) -> bool {
+    let last = connection_log::ended_at(data).unwrap_or_else(|| connection_log::started_at(data));
+    !connection_log::saved(data) && last < cutoff
+}
+
 /// `terminal.record_history` (default on).
 fn record_history_setting(settings: &Settings) -> bool {
     settings
@@ -1772,11 +1786,15 @@ impl Core {
         let mut parts = parts(&mut guard)?;
         self.ensure_connlog(&mut parts, now)?;
         self.prune_connlog(&mut parts, retention_days, now)?;
+        let cutoff = retention_cutoff(retention_days, now);
         let session = &*parts.session;
         let index = &session.index;
         let personal = session.ring.vault_id();
         let mut views: Vec<ConnectionLogView> = index
             .of_kind(RecordKind::ConnectionLogEntry)
+            // Other devices' expired entries are hidden (their devices
+            // remove them, data-model 13.3).
+            .filter(|record| !expired(record.data(), &cutoff))
             .map(|record| {
                 let data = record.data();
                 let host = connection_log::host(data);
@@ -1829,23 +1847,16 @@ impl Core {
         days: u64,
         now: SystemTime,
     ) -> Result<(), CoreError> {
-        let cutoff = now
-            .checked_sub(std::time::Duration::from_secs(days.saturating_mul(86_400)))
-            .map(format_timestamp)
-            .unwrap_or_default();
+        let cutoff = retention_cutoff(days, now);
         let device = parts.session.device_id;
         let expired: Vec<(Uuid, RecordKind)> = parts
             .session
             .index
             .of_kind(RecordKind::ConnectionLogEntry)
             .filter(|record| {
-                let data = record.data();
-                let last = connection_log::ended_at(data)
-                    .unwrap_or_else(|| connection_log::started_at(data));
-                connection_log::device_id(data) == Some(device)
-                    && !connection_log::saved(data)
+                connection_log::device_id(record.data()) == Some(device)
                     && !parts.connlog.is_active(&record.record_id)
-                    && last < cutoff.as_str()
+                    && expired(record.data(), &cutoff)
             })
             .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
             .collect();
@@ -1859,19 +1870,18 @@ impl Core {
         self.remove_rows(parts, &expired, now)
     }
 
-    /// "Clear the log" (UI 12.6): every entry of this device, saved or not;
-    /// the open sessions' entries too (their end is then not written).
+    /// "Clear the log" (UI 12.6; data-model 13.3): every personal entry,
+    /// saved or not, whatever device wrote it (an imported log too); the
+    /// open sessions' entries as well (their end is then not written).
     pub(super) fn connection_log_clear_impl(&self) -> Result<usize, CoreError> {
         let now = self.now();
         let mut guard = self.inner();
         let mut parts = parts(&mut guard)?;
         self.ensure_connlog(&mut parts, now)?;
-        let device = parts.session.device_id;
         let ids: Vec<(Uuid, RecordKind)> = parts
             .session
             .index
             .of_kind(RecordKind::ConnectionLogEntry)
-            .filter(|record| connection_log::device_id(record.data()) == Some(device))
             .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
             .collect();
         let count = ids.len();

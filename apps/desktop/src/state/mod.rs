@@ -503,6 +503,12 @@ impl AppState {
         Ok(view)
     }
 
+    /// Tells the screens to read the records again (a setting that changes
+    /// what they list, such as `logs.retention_days`).
+    pub fn reload_records(&mut self, cx: &mut Context<Self>) {
+        self.records_written(cx);
+    }
+
     fn records_written(&mut self, cx: &mut Context<Self>) {
         self.records_generation += 1;
         self.reload_and_notify(cx);

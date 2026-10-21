@@ -364,7 +364,9 @@ impl SettingsView {
                 cx,
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.set_value("logs.retention_days", json!(days), cx)
+                this.set_value("logs.retention_days", json!(days), cx);
+                // The Logs screen reads the log again under the new period.
+                this.state.update(cx, |state, cx| state.reload_records(cx));
             }))
             .into_any_element()
         }));
