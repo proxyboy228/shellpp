@@ -945,3 +945,16 @@ Status: run 2 note, 2026-10-21.
 **Decision:** those tests use a silence that does not depend on the network: the connect step is injected in the unit test, and the integration test uses a local listener whose accept queue is full (Linux and macOS drop further SYNs). On Windows the integration test keeps TEST-NET-1.
 
 **Spec impact:** none.
+
+### 60. Agent forwarding with the built-in agent (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 5.3, without its interface; D5 "the built-in agent").
+
+**Decision:**
+
+- With Agent Forwarding on, the forwarded agent offers the Keychain's keys through the built-in agent: every stored private key of the vault that opens without asking (unencrypted, or with a saved passphrase). They are decrypted for the connection off the runtime's workers, signed with here and never sent; a lock wipes them at once, and none are offered while the app is locked (docs/security.md, sections 8 and 11.2). RSA keys sign with SHA-512 or SHA-256 as the request asks; a request for a SHA-1 `ssh-rsa` signature is refused.
+- Two host options next to the switch, both off by default, stored in `host.ssh` (not inherited, like `agent_forwarding`): `agent_forward_system` also offers the system agent's keys (its listing merged after the built-in keys, its signatures relayed as before), and `agent_confirm` asks before every signature, naming the key's fingerprint.
+- Until the confirmation dialog exists (stage 5 interface), a host with `agent_confirm` gets no forwarded signature at all: never one without the user's yes.
+- Before this decision a host with Agent Forwarding forwarded the system agent; now it needs `agent_forward_system` for that.
+
+**Spec impact:** `docs/data-model.md` 7.3 gains `agent_forward_system` and `agent_confirm` (with the interface).

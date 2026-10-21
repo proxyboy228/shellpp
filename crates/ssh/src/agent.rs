@@ -31,6 +31,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::client::BoxFuture;
 use crate::error::{FailureKind, SshError};
 
+/// The private key type of [`AgentKeys`] (re-exported for hosts that build
+/// a [`ForwardedAgent`]).
+pub use russh::keys::ssh_key::PrivateKey as PrivateKeyArc;
+
 /// The keys of the built-in agent, read at every request (so a lock, which
 /// empties it, takes effect at once).
 pub trait AgentKeys: Send + Sync {

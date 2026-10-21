@@ -377,6 +377,18 @@ impl SshTask {
             .collect();
         let mut spec = spec;
         spec.jump_hosts = hops.iter().map(|(jump, _, _)| jump.clone()).collect();
+        // Agent forwarding (stage 5, D60): the built-in agent with the
+        // Keychain's keys, the system agent's too when the host says so.
+        if config.agent_forwarding {
+            spec.forward_agent = Some(
+                built_in_agent(
+                    &self.shared,
+                    config.agent_forward_system,
+                    config.agent_confirm,
+                )
+                .await,
+            );
+        }
         let shell = ShellSetup {
             term: config.term.clone(),
             env: config.env.clone(),
@@ -926,6 +938,110 @@ async fn wait_locked(unlocked: &mut watch::Receiver<bool>) {
 async fn wait_unlocked(unlocked: &mut watch::Receiver<bool>) {
     if unlocked.wait_for(|unlocked| *unlocked).await.is_err() {
         std::future::pending::<()>().await;
+    }
+}
+
+/// The keys of the built-in agent for one connection (D60): the Keychain's
+/// keys that open without asking (unencrypted, or with a saved
+/// passphrase). A lock wipes them at once; until then each request reads
+/// them, and none are offered while the app is locked (docs/security.md,
+/// section 8).
+struct AgentKeyStore {
+    keys: Mutex<Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>>>,
+    unlocked: watch::Receiver<bool>,
+}
+
+impl AgentKeyStore {
+    fn wipe(&self) {
+        self.keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+impl shellpp_ssh::AgentKeys for AgentKeyStore {
+    fn keys(&self) -> Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>> {
+        if !*self.unlocked.borrow() {
+            self.wipe();
+            return Vec::new();
+        }
+        self.keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Confirmation of forwarded signatures needs the stage 5 interface: until
+/// then a host that asks for it gets no signature at all (never one
+/// without the user's yes).
+struct NoConfirmationYet;
+
+impl shellpp_ssh::ConfirmSignature for NoConfirmationYet {
+    fn confirm<'a>(&'a self, _fingerprint: &'a str) -> BoxFuture<'a, bool> {
+        tracing::info!("forwarded signature declined: confirmation needs its dialog");
+        Box::pin(async { false })
+    }
+}
+
+async fn built_in_agent(
+    shared: &Arc<Shared>,
+    system: bool,
+    confirm: bool,
+) -> shellpp_ssh::ForwardedAgent {
+    let stored = shared
+        .blocking(|core| core.agent_keys())
+        .await
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    // bcrypt-pbkdf of encrypted keys: off the runtime's workers.
+    let keys: Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>> = shared
+        .rt
+        .spawn_blocking(move || {
+            stored
+                .into_iter()
+                .filter_map(|key| {
+                    use secrecy::ExposeSecret as _;
+                    let parsed = shellpp_ssh::agent::PrivateKeyArc::from_openssh(
+                        key.private_key.expose_secret().as_bytes(),
+                    )
+                    .ok()?;
+                    let opened = if parsed.is_encrypted() {
+                        parsed
+                            .decrypt(key.passphrase?.expose_secret().as_bytes())
+                            .ok()?
+                    } else {
+                        parsed
+                    };
+                    Some(Arc::new(opened))
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+    let store = Arc::new(AgentKeyStore {
+        keys: Mutex::new(keys),
+        unlocked: shared.unlocked(),
+    });
+    // Wipe at the lock, not only at the next request.
+    let weak = Arc::downgrade(&store);
+    let mut unlocked = shared.unlocked();
+    drop(shared.rt.spawn(async move {
+        wait_locked(&mut unlocked).await;
+        if let Some(store) = weak.upgrade() {
+            store.wipe();
+        }
+    }));
+    shellpp_ssh::ForwardedAgent {
+        keys: store,
+        system: if system {
+            shared.keys.agent.resolve().await
+        } else {
+            None
+        },
+        confirm: confirm
+            .then(|| Arc::new(NoConfirmationYet) as Arc<dyn shellpp_ssh::ConfirmSignature>),
     }
 }
 

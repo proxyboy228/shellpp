@@ -35,6 +35,12 @@ pub struct SessionConfig {
     /// Setting `terminal.term`.
     pub term: String,
     pub agent_forwarding: bool,
+    /// Agent forwarding also offers the system agent's keys
+    /// (`ssh.agent_forward_system`, off by default; D60).
+    pub agent_forward_system: bool,
+    /// Every forwarded signature waits for the user's yes
+    /// (`ssh.agent_confirm`, off by default; D60).
+    pub agent_confirm: bool,
     /// `ssh.env`, values as stored.
     pub env: Vec<(String, SecretString)>,
     /// Host `charset` (WHATWG label, lowercase), default `utf-8`.

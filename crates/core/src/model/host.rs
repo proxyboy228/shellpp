@@ -58,6 +58,8 @@ const SSH_KNOWN: &[&str] = &[
     "jump_chain",
     "proxy",
     "agent_forwarding",
+    "agent_forward_system",
+    "agent_confirm",
     "startup_snippet_id",
     "env",
     "keepalive_s",
@@ -329,7 +331,12 @@ fn normalize_ssh(
     {
         out.insert("proxy".into(), Value::Object(proxy));
     }
-    for member in ["agent_forwarding", "mosh"] {
+    for member in [
+        "agent_forwarding",
+        "agent_forward_system",
+        "agent_confirm",
+        "mosh",
+    ] {
         let field = format!("ssh.{member}");
         if let Some(flag) = opt_bool(ssh, member, &field, errors) {
             out.insert(member.into(), Value::Bool(flag));

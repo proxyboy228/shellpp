@@ -477,6 +477,45 @@ async fn the_startup_snippet_runs_after_login() {
     server.shutdown().await;
 }
 
+/// Agent forwarding offers the Keychain's keys through the built-in agent
+/// (D60): the server's agent channel lists them; a key with a passphrase
+/// that is not saved is left out (it cannot be opened without asking).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_forwarding_offers_the_keychain_keys() {
+    let harness = Harness::new();
+    for (comment, passphrase, save) in [
+        ("plain", None, false),
+        ("saved", Some("pp-1"), true),
+        ("asked", Some("pp-2"), false),
+    ] {
+        let key =
+            generate_key(KeyType::Ed25519, comment, passphrase.map(secret).as_ref()).expect("key");
+        harness
+            .core
+            .key_import(shellpp_core::service::dto::KeyImportInput {
+                vault_id: harness.vault_id,
+                label: None,
+                private_key: key.private_openssh.clone(),
+                passphrase: passphrase.map(secret),
+                save_passphrase: save,
+            })
+            .expect("imported");
+    }
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice", "agent_forwarding": true}}),
+        Some(&password),
+    );
+    let mut session = harness.connect(target, true).await;
+    session.type_line("agent-keys");
+    session.output("agent keys: 2").await;
+    assert!(server.events().contains(&ServerEvent::AgentForward));
+    session.handle.close();
+    server.shutdown().await;
+}
+
 /// A host whose chain names a host that does not exist is refused, never
 /// connected directly instead (data-model 8.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

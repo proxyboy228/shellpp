@@ -45,6 +45,11 @@ pub trait SessionCore: Send + Sync + 'static {
         reason: ConnectionEndReason,
         exit_status: Option<u32>,
     );
+    /// The Keychain keys of the built-in agent (stage 5, D60). Fakes have
+    /// none.
+    fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
+        Ok(Vec::new())
+    }
     /// A command line the terminal's history capture passed
     /// (docs/security.md, section 10.1): the core checks every rule again
     /// and writes a `history_entry` when they all pass. Fakes drop it.
@@ -130,6 +135,10 @@ impl SessionCore for Core {
 
     fn record_history_now(&self, host: RecordRef) -> bool {
         Core::record_history_now(self, Some(host)).unwrap_or(false)
+    }
+
+    fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
+        Core::agent_keys(self)
     }
 }
 

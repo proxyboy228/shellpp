@@ -337,6 +337,14 @@ fn host_session_config(
             .and_then(|ssh| ssh.get("agent_forwarding"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        agent_forward_system: ssh
+            .and_then(|ssh| ssh.get("agent_forward_system"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        agent_confirm: ssh
+            .and_then(|ssh| ssh.get("agent_confirm"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         env: session_env(data),
         charset: charset_of(data),
         backspace: backspace_of(data),
@@ -483,6 +491,57 @@ fn session_key(session: &Session, data: &Map<String, Value>) -> Option<SessionKe
         passphrase: key::passphrase(key_data).map(|value| SecretString::from(value.to_owned())),
         can_save_passphrase: true,
     })
+}
+
+/// A `stored` key record as a session key (its label, else the public
+/// key's type).
+fn key_record_as_session_key(session: &Session, key_id: Uuid) -> Option<SessionKey> {
+    let record = session.index.get_kind(&key_id, RecordKind::Key)?;
+    let key_data = record.data();
+    if key::source(key_data) != "stored" {
+        return None;
+    }
+    let private_key = key::private_key(key_data)?;
+    let label = match key::label(key_data) {
+        "" => key::public_key(key_data)
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap_or("key")
+            .to_owned(),
+        label => label.to_owned(),
+    };
+    Some(SessionKey {
+        key: RecordRef {
+            vault_id: session.ring.vault_id(),
+            record_id: key_id,
+        },
+        label,
+        private_key: SecretString::from(private_key.to_owned()),
+        passphrase: key::passphrase(key_data).map(|value| SecretString::from(value.to_owned())),
+        can_save_passphrase: false,
+    })
+}
+
+impl Core {
+    /// The Keychain keys the built-in agent offers to agent forwarding
+    /// (stage 5, D60): every stored private key of the vault, as stored
+    /// (possibly encrypted) with its saved passphrase. The caller decrypts
+    /// them, without the core mutex, and drops those it cannot open
+    /// without asking; it wipes them on lock.
+    pub fn agent_keys(&self) -> Result<Vec<SessionKey>, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        let mut keys: Vec<SessionKey> = session
+            .index
+            .of_kind(RecordKind::Key)
+            .filter_map(|record| key_record_as_session_key(session, record.record_id))
+            .collect();
+        keys.sort_by(|a, b| {
+            fold(&a.label)
+                .cmp(&fold(&b.label))
+                .then_with(|| a.key.record_id.cmp(&b.key.record_id))
+        });
+        Ok(keys)
+    }
 }
 
 /// `ssh.env` as name and value pairs.
@@ -748,6 +807,7 @@ impl Core {
                             hop.env.clear();
                             hop.startup_snippet = None;
                             hop.agent_forwarding = false;
+                            hop.agent_forward_system = false;
                             config.jump_hosts.push(hop);
                         }
                     }
@@ -802,6 +862,8 @@ impl Core {
                     keepalive_s: defaults.keepalive_s,
                     term: defaults.term,
                     agent_forwarding: false,
+                    agent_forward_system: false,
+                    agent_confirm: false,
                     env: Vec::new(),
                     charset: "utf-8".to_owned(),
                     backspace: Backspace::Default,

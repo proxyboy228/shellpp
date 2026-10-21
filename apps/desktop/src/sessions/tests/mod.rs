@@ -129,6 +129,10 @@ impl SessionCore for RecordingCore {
         self.core.is_unlocked()
     }
 
+    fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
+        self.core.agent_keys()
+    }
+
     fn settings(&self) -> Result<SettingsValues, CoreError> {
         SessionCore::settings(&*self.core)
     }
