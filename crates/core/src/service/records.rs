@@ -102,7 +102,14 @@ fn kinds_of(session: &Session, ids: &[Uuid]) -> Result<HashMap<Uuid, RecordKind>
     let mut kinds = HashMap::new();
     for id in ids {
         match session.index.get(id).map(|record| record.kind) {
-            Some(kind @ (RecordKind::Host | RecordKind::Group | RecordKind::Key)) => {
+            Some(
+                kind @ (RecordKind::Host
+                | RecordKind::Group
+                | RecordKind::Key
+                | RecordKind::Snippet
+                | RecordKind::SnippetPackage
+                | RecordKind::ForwardingRule),
+            ) => {
                 kinds.insert(*id, kind);
             }
             _ => return Err(CoreError::NotFound),
@@ -437,6 +444,27 @@ impl Core {
         }
         let moved: Vec<Uuid> = moves.iter().map(|(_, _, id)| *id).collect();
         let mut plan = Plan::default();
+        // The snippets of a removed package move out of it (data-model 10.2).
+        for id in ids
+            .iter()
+            .filter(|id| kinds[*id] == RecordKind::SnippetPackage)
+        {
+            let members: Vec<Uuid> = parts
+                .session
+                .index
+                .of_kind(RecordKind::Snippet)
+                .filter(|record| {
+                    !removed.contains(&record.record_id)
+                        && crate::model::snippet::uuid_member(record.data(), "package_id")
+                            == Some(*id)
+                })
+                .map(|record| record.record_id)
+                .collect();
+            for member in members {
+                plan.entry(parts.session, RecordKind::Snippet, member)
+                    .remove("package_id");
+            }
+        }
         let mut buckets: Vec<(Container, Vec<Uuid>)> = Vec::new();
         for (target, kind, id) in &moves {
             set_container(*kind, plan.entry(parts.session, *kind, *id), *target);

@@ -27,10 +27,13 @@ pub enum RecordKind {
     KnownHost,
     Identity,
     LastSession,
+    Snippet,
+    SnippetPackage,
+    ForwardingRule,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 12] = [
+    pub const ALL: [RecordKind; 15] = [
         RecordKind::VaultMeta,
         RecordKind::RecoveryKey,
         RecordKind::DeviceInfo,
@@ -43,6 +46,9 @@ impl RecordKind {
         RecordKind::KnownHost,
         RecordKind::Identity,
         RecordKind::LastSession,
+        RecordKind::Snippet,
+        RecordKind::SnippetPackage,
+        RecordKind::ForwardingRule,
     ];
 
     /// The u16 type code.
@@ -60,6 +66,9 @@ impl RecordKind {
             Self::ConnectionLogEntry => 0x0701,
             Self::KnownHost => 0x0801,
             Self::LastSession => 0x0A02,
+            Self::Snippet => 0x0401,
+            Self::SnippetPackage => 0x0402,
+            Self::ForwardingRule => 0x0501,
         }
     }
 
@@ -83,6 +92,9 @@ impl RecordKind {
             Self::ConnectionLogEntry => "connection_log_entry",
             Self::KnownHost => "known_host",
             Self::LastSession => "last_session",
+            Self::Snippet => "snippet",
+            Self::SnippetPackage => "snippet_package",
+            Self::ForwardingRule => "forwarding_rule",
         }
     }
 
@@ -183,7 +195,12 @@ mod tests {
             Some(RecordKind::Identity)
         );
         assert_eq!(RecordKind::Identity.code(), 0x0302);
-        assert_eq!(RecordKind::from_name("snippet"), None);
+        assert_eq!(RecordKind::from_name("snippet"), Some(RecordKind::Snippet));
+        assert_eq!(RecordKind::Snippet.code(), 0x0401);
+        assert_eq!(RecordKind::SnippetPackage.code(), 0x0402);
+        assert_eq!(RecordKind::ForwardingRule.code(), 0x0501);
+        assert_eq!(RecordKind::ForwardingRule.class(), classes::FORWARDING);
+        assert_eq!(RecordKind::from_name("workspace"), None);
         assert_eq!(class_of_type_name("key"), Some(0x03));
         assert_eq!(class_of_type_name("conflict"), None);
         assert_eq!(class_of_type_name("unknown_type"), None);

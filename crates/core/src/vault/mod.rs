@@ -549,10 +549,10 @@ mod tests {
             Opened::Unsupported
         ));
 
-        // A snippet (a later stage) in its own class is kept but not indexed.
+        // A workspace (a later stage) in its own class is kept but not indexed.
         let mut later = payload(RecordKind::Host, json!({}));
-        later.type_name = "snippet".into();
-        let later_row = seal_row(&mut ring, 0x04, Uuid::now_v7(), &later, None, "t").unwrap();
+        later.type_name = "workspace".into();
+        let later_row = seal_row(&mut ring, 0x0A, Uuid::now_v7(), &later, None, "t").unwrap();
         assert!(matches!(
             open_row(&mut ring, &later_row),
             Opened::Unsupported
