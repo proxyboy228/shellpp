@@ -1022,3 +1022,20 @@ Status: run 3 decision, 2026-10-21 (plan, section 6).
 - History tab: one row per command, at its newest use (`history_list_distinct`), and deleting the row deletes every repeat. The "save as snippets" hint leaves out trivial commands: one simple command (no `;`, `&`, pipe, redirection or `$`) of `cd`, `ls`, `ll`, `la`, `l`, `dir`, `pwd`, `clear`, `cls`, `reset`, `exit`, `logout`, `history`, `whoami`, `top` or `htop`, whatever its arguments. "Save" works: each (edited) command becomes a snippet of the host (`history_hint_save`, run 2).
 
 **Spec impact:** `docs/ui-behavior-spec.md` 4.2 and 7.1-7.3 (and `docs/ru`).
+
+### 65. The SFTP tab (run 3)
+
+Status: run 3 decision, 2026-10-21 (plan, section 7: stage 4, the interface of SFTP; UI 5, 7.3).
+
+**Decision:**
+
+- The shared service of SSH connections without a terminal tab (item 1) is an SFTP session of the session layer (`SessionManager::open_sftp`): the route, the credentials, the prompts, the first connection and changed key dialogs and the connection log of a terminal session, then the `sftp` subsystem instead of a shell. A remote panel shows its connection, its questions (the same prompt form and host key dialogs as a terminal tab) and its failure with Retry or Reconnect inside the panel. An SFTP session does not reconnect by itself: a dropped connection shows the reason with Reconnect. The panel's session ends with the panel (another source, Close, a closed tab).
+- Connect via SFTP opens a session tab with the same two panels, Local on the left and the host connecting on the right (UI 5.1); the SFTP tab of the top bar stays for manual work.
+- Dates in the table are `YYYY-MM-DD HH:MM UTC` (the format of Known Hosts) until the app formats dates in the local time zone; the column widths are fixed (resizing them comes later).
+- Transfers: upload, download, between two hosts (files; a folder between two hosts is refused with a reason for now) and local copies (both panels local). A transfer that fails (a dropped connection included) shows its reason with Retry, which continues from its `.part`; Pause stops it the same way. Folders go with everything inside by D56, and the row of a finished folder counts what was left out.
+- Open: a remote file is downloaded to `tmp/` (storage-format 9), opened in "Program for Open" or the system's program, and a notification says the copy is not encrypted. The copy is checked every 2 seconds; a saved copy is uploaded with a notification; when the server's file changed meanwhile, a dialog offers to overwrite it or keep the server's file. Open with asks for the program in the system's open dialog.
+- The drive selection of a local panel on Windows (D55): a click on the drive crumb shows the drives under the path bar.
+- Export to host (item 8) runs over connections without a tab (D61: saved credentials, the agent and key files, only a host key Known Hosts holds), at most four hosts at once; a host whose key is not saved yet is reported as "Connect once to save its host key first".
+- Certificate (item 9): the Keychain's Certificate adds a `*-cert.pub` to the key it certifies (UI 7.1, 7.3; see the UI text).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 7.1, 7.3 (and `docs/ru`); UI 5 is followed as written otherwise.
