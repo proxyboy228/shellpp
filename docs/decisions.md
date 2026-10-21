@@ -744,3 +744,19 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, items 3 
 - Remote ↔ remote (`copy_between`): the bytes pass from one session's read to the other's write through this machine, without a local file, into `<target>.part` renamed when complete.
 
 **Spec impact:** none yet.
+
+### 48. The rows of a file panel (night)
+
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 2; UI 5.3, 5.5).
+
+**Decision:**
+
+- The logic of a panel is kept apart from its view (`apps/desktop/src/sftp/{listing,local}.rs`), the same for the local and the remote panel.
+- Sorting: folders and links to folders always come first, in both directions; then the column (Name, Date Modified, Size, Kind); names in natural order ignoring case (`file2` before `file10`); equal values by name. A click on the active column flips the direction; on another column it sorts by that one ascending.
+- The filter matches a part of the name, ignoring case. Hidden entries (a dot-file; on Windows the hidden or system attribute) show only with Show Hidden Files.
+- Back and forward as in a browser: opening a folder clears Forward; opening the folder that is open changes nothing.
+- The ".." row opens the parent; there is none at a root (`/`, `C:\`). The breadcrumbs start with `/` or the drive (`C:`), whose click opens the drive selection (the letters that have a root folder now).
+- Sizes are 1024-based (`512 bytes`, `1.5 KB`, `12 MB`, `1.2 GB`: one decimal below 10); folders show a dash and the kind "folder"; a file's kind is its extension in lowercase, or "file". Permissions read `-rw-r--r--` (`d` for a folder, `l` for a link), remote panel only.
+- A symbolic link (or a junction) is listed as a link, never as what it points to.
+
+**Spec impact:** none (these are the rules of UI 5.3 written out).

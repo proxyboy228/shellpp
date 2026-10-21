@@ -59,6 +59,7 @@ pub mod profile;
 pub mod session_ui;
 pub mod sessions;
 pub mod settings;
+pub mod sftp;
 pub mod shell;
 pub mod state;
 pub mod terminal;
