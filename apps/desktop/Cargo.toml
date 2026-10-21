@@ -32,6 +32,7 @@ dev-tools = []
 screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key"]
 
 [dependencies]
+regex.workspace = true
 # Only for the screenshot run's demo certificate (feature `screenshots`).
 ssh-key = { workspace = true, optional = true }
 shellpp-core.workspace = true

@@ -959,6 +959,7 @@ impl TerminalView {
             min_contrast: self.settings.min_contrast,
             cursor_hidden: self.dimmed,
             search: self.search.clone(),
+            highlighting: self.settings.highlighting,
         }
     }
 }

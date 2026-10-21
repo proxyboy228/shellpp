@@ -20,9 +20,10 @@ use std::rc::Rc;
 use alacritty_terminal::grid::{Dimensions, Row};
 use alacritty_terminal::index::{Column, Line, Point as GridPoint};
 use alacritty_terminal::selection::SelectionRange;
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{COUNT, Colors};
-use alacritty_terminal::vte::ansi::{Color, CursorShape, Rgb};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::{
     App, Bounds, Hsla, Pixels, Point, ShapedLine, SharedString, StrikethroughStyle, TextAlign,
     TextRun, UnderlineStyle, Window, fill, outline, point, px, size,
@@ -64,6 +65,8 @@ pub struct FrameStyle {
     pub cursor_hidden: bool,
     /// The search whose matches are highlighted (UI 4.2 Tools).
     pub search: Option<SearchState>,
+    /// Keyword highlighting (`terminal.highlighting_enabled`, UI 12.4).
+    pub highlighting: bool,
 }
 
 /// Geometry and caches shared by the view (events) and the element (frames).
@@ -269,8 +272,14 @@ fn rgb_bits(rgb: Rgb) -> u64 {
 
 /// What every row of a frame is shaped with: the font, the palette and the
 /// remote color overrides.
-fn style_words(style: &FrameStyle, metrics: &Metrics, colors: &Colors) -> Vec<u64> {
+fn style_words(
+    style: &FrameStyle,
+    metrics: &Metrics,
+    colors: &Colors,
+    highlight: bool,
+) -> Vec<u64> {
     let mut words = Words::default();
+    words.write(u64::from(highlight));
     let family = style.fonts.family();
     words.write(family.len() as u64);
     for byte in family.bytes() {
@@ -367,7 +376,10 @@ pub fn prepaint(
     {
         let term = term.lock();
         let content = term.renderable_content();
-        let key = style_words(style, &metrics, content.colors);
+        // Keyword highlighting: never in the alternate screen (UI 12.4).
+        let highlight = (style.highlighting && !content.mode.contains(TermMode::ALT_SCREEN))
+            .then(|| super::contrast::luminance(style.palette.background()) < 0.5);
+        let key = style_words(style, &metrics, content.colors, highlight.is_some());
         if key != layout.cache_key {
             layout.cache.clear();
             layout.cache_key = key;
@@ -420,6 +432,7 @@ pub fn prepaint(
                 style,
                 content.colors,
                 selection_fg.zip(selected),
+                highlight,
                 &mut layout.contrast,
             );
             inputs.push(RowInput::Miss(hash, words.0.as_slice().into(), cells));
@@ -562,9 +575,13 @@ fn row_cells(
     style: &FrameStyle,
     colors: &Colors,
     selected: Option<(Rgb, (usize, usize))>,
+    highlight: Option<bool>,
     contrast: &mut ContrastCache,
 ) -> Vec<CellOut> {
     let mut cells = Vec::with_capacity(columns);
+    // Cells keyword highlighting may recolor: the default text color, not
+    // hidden, not selected.
+    let mut plain = Vec::with_capacity(columns);
     for column in 0..columns {
         let cell = &row[Column(column)];
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -589,13 +606,17 @@ fn row_cells(
         } else {
             column
         };
+        let mut is_plain = matches!(cell.fg, Color::Named(NamedColor::Foreground))
+            && !cell.flags.contains(Flags::HIDDEN);
         if let Some((color, (first, last))) = selected
             && last_cell >= first
             && column <= last
             && !cell.flags.contains(Flags::HIDDEN)
         {
             fg = color;
+            is_plain = false;
         }
+        plain.push(is_plain);
         let mut text = String::new();
         text.push(
             if cell
@@ -617,6 +638,21 @@ fn row_cells(
             bg,
             flags: cell.flags,
         });
+    }
+    if let Some(dark) = highlight {
+        // One character per cell (spacers are left out above).
+        let line: String = cells
+            .iter()
+            .map(|cell| cell.text.0.chars().next().unwrap_or(' '))
+            .collect();
+        for (range, category) in super::highlight::spans(&line) {
+            let color = category.color(dark);
+            for index in range {
+                if plain.get(index).copied().unwrap_or(false) {
+                    cells[index].fg = color;
+                }
+            }
+        }
     }
     cells
 }
@@ -1008,6 +1044,7 @@ mod tests {
             min_contrast: MinContrast::Off,
             cursor_hidden: false,
             search: None,
+            highlighting: false,
         }
     }
 
@@ -1038,6 +1075,7 @@ mod tests {
             &style,
             term.colors(),
             None,
+            None,
             &mut ContrastCache::default(),
         );
         let texts: Vec<(usize, &str)> = cells[..4]
@@ -1049,6 +1087,43 @@ mod tests {
         let red = token_rgb(builtin()[0].ansi.0[1]);
         assert_eq!(cells[3].fg, red);
         assert_eq!(cells[0].fg, style.palette.foreground());
+    }
+
+    /// Keyword highlighting (UI 12.4, D67): words in the default text color
+    /// take their category's color; text a program colored keeps it.
+    #[test]
+    fn keyword_highlighting_recolors_plain_text_only() {
+        use crate::terminal::highlight::Category;
+
+        let term = term("ok \x1b[31merror\x1b[0m");
+        let style = style(false);
+        let cells = row_cells(
+            &term.grid()[Line(0)],
+            12,
+            &style,
+            term.colors(),
+            None,
+            Some(true),
+            &mut ContrastCache::default(),
+        );
+        let ok = Category::Ok.color(true);
+        let red = token_rgb(builtin()[0].ansi.0[1]);
+        assert_eq!(cells[0].fg, ok);
+        assert_eq!(cells[1].fg, ok);
+        assert_eq!(cells[2].fg, style.palette.foreground());
+        // "error" is red from the program: not recolored.
+        assert!(cells[3..8].iter().all(|cell| cell.fg == red));
+        // Off: nothing changes.
+        let off = row_cells(
+            &term.grid()[Line(0)],
+            12,
+            &style,
+            term.colors(),
+            None,
+            None,
+            &mut ContrastCache::default(),
+        );
+        assert_eq!(off[0].fg, style.palette.foreground());
     }
 
     /// design-system 7.2: `selectionForeground` recolors selected text (a
@@ -1067,6 +1142,7 @@ mod tests {
             &with,
             term.colors(),
             Some((selected_fg, (1, 2))),
+            None,
             &mut ContrastCache::default(),
         );
         assert_eq!(
@@ -1086,6 +1162,7 @@ mod tests {
             &with,
             term.colors(),
             Some((selected_fg, (3, 3))),
+            None,
             &mut ContrastCache::default(),
         );
         assert_eq!(fg_of(&cells)[2], (2, selected_fg));
@@ -1111,7 +1188,7 @@ mod tests {
         assert!(ratio(black, blue) < MIN_RATIO, "the pair is hard to read");
         // Palette black on palette blue, the same colors as truecolor, and
         // hidden palette text.
-        let term = term("[30;44mP[0m[38;2;42;42;39;48;2;47;98;160mT[0m[8;30;44mH");
+        let term = term("\x1b[30;44mP\x1b[0m\x1b[38;2;42;42;39;48;2;47;98;160mT\x1b[0m\x1b[8;30;44mH");
         let colors = |mode: MinContrast| {
             let mut style = style.clone();
             style.min_contrast = mode;
@@ -1120,6 +1197,7 @@ mod tests {
                 12,
                 &style,
                 term.colors(),
+                None,
                 None,
                 &mut ContrastCache::default(),
             );
@@ -1141,7 +1219,7 @@ mod tests {
         assert!(ratio(always[1].0, blue) >= MIN_RATIO, "truecolor adjusted");
         assert_eq!(always[2].0, blue);
         // Readable pairs are left alone in every mode.
-        let term = super::tests::term("[31mred");
+        let term = super::tests::term("\x1b[31mred");
         for mode in MinContrast::ALL {
             let mut style = style.clone();
             style.min_contrast = mode;
@@ -1150,6 +1228,7 @@ mod tests {
                 12,
                 &style,
                 term.colors(),
+                None,
                 None,
                 &mut ContrastCache::default(),
             );

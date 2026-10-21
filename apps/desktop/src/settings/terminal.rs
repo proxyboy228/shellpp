@@ -54,6 +54,7 @@ pub const KEY_RECORD_HISTORY: &str = "terminal.record_history";
 pub const KEY_COPY_ON_SELECT: &str = "terminal.copy_on_select";
 pub const KEY_BELL_SOUND: &str = "terminal.bell_sound";
 pub const KEY_BOLD_IS_BRIGHT: &str = "terminal.bold_is_bright";
+pub const KEY_HIGHLIGHTING: &str = "terminal.highlighting_enabled";
 pub const KEY_TERM: &str = "terminal.term";
 pub const KEY_FONT_FAMILY: &str = "terminal.font_family";
 pub const KEY_FONT_SIZE: &str = "terminal.font_size";
@@ -191,6 +192,8 @@ pub struct TerminalPrefs {
     pub default_theme: BuiltinTheme,
     /// Seconds between keepalives; 0 = off.
     pub keepalive_s: u32,
+    /// Keyword highlighting (UI 12.4).
+    pub highlighting: bool,
 }
 
 impl Default for TerminalPrefs {
@@ -208,6 +211,7 @@ impl Default for TerminalPrefs {
             min_contrast: MinContrast::default(),
             default_theme: BuiltinTheme::GRAPHITE,
             keepalive_s: DEFAULT_KEEPALIVE,
+            highlighting: true,
         }
     }
 }
@@ -271,6 +275,7 @@ impl TerminalPrefs {
                 .and_then(BuiltinTheme::from_ref)
                 .unwrap_or_default(),
             keepalive_s: number(KEY_KEEPALIVE, defaults.keepalive_s),
+            highlighting: flag(KEY_HIGHLIGHTING, defaults.highlighting),
         }
     }
 
@@ -608,6 +613,11 @@ impl TerminalSection {
         self.write(KEY_BOLD_IS_BRIGHT, json!(on), cx);
     }
 
+    /// Keyword highlighting (UI 12.4).
+    pub fn set_highlighting(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.write(KEY_HIGHLIGHTING, json!(on), cx);
+    }
+
     /// "Adjust indistinguishable colors" (UI 12.4).
     pub fn set_min_contrast(&mut self, mode: MinContrast, cx: &mut Context<Self>) {
         self.open = None;
@@ -885,6 +895,14 @@ impl TerminalSection {
                 strings::BOLD_IS_BRIGHT_HINT,
                 prefs.bold_is_bright,
                 Self::set_bold_is_bright,
+                cx,
+            ))
+            .child(toggle_row(
+                "settings-highlighting",
+                strings::HIGHLIGHTING,
+                strings::HIGHLIGHTING_HINT,
+                prefs.highlighting,
+                Self::set_highlighting,
                 cx,
             ))
             .child(contrast_row)

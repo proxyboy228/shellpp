@@ -59,6 +59,8 @@ pub struct TerminalSettings {
     pub min_contrast: MinContrast,
     /// `terminal.default_theme`: the theme of terminals whose host has none.
     pub default_theme: TerminalTheme,
+    /// `terminal.highlighting_enabled`: keyword highlighting (UI 12.4).
+    pub highlighting: bool,
 }
 
 impl Default for TerminalSettings {
@@ -74,6 +76,7 @@ impl Default for TerminalSettings {
             cursor_style: CursorStyleSetting::Block,
             min_contrast: MinContrast::default(),
             default_theme: builtin()[0].clone(),
+            highlighting: true,
         }
     }
 }
@@ -103,6 +106,7 @@ impl TerminalSettings {
             copy_on_select: prefs.copy_on_select,
             bold_is_bright: prefs.bold_is_bright,
             bell_sound: prefs.bell_sound,
+            highlighting: prefs.highlighting,
             default_theme: prefs
                 .default_theme
                 .theme()

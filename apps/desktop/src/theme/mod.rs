@@ -31,6 +31,7 @@
 
 pub mod controls;
 pub mod focus;
+pub mod highlight;
 pub mod metrics;
 pub mod motion;
 pub mod palette;

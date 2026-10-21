@@ -47,6 +47,7 @@
 pub mod colors;
 pub mod contrast;
 pub mod fonts;
+pub mod highlight;
 pub mod history_capture;
 pub mod input;
 pub mod limits;

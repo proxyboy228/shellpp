@@ -100,6 +100,9 @@ pub const BELL_SOUND: &str = "Bell sound";
 pub const BELL_SOUND_HINT: &str = "Play the system sound when a program rings the terminal bell.";
 pub const BOLD_IS_BRIGHT: &str = "Bright colors for bold text";
 pub const BOLD_IS_BRIGHT_HINT: &str = "Show bold text in the bright variant of its color.";
+pub const HIGHLIGHTING: &str = "Keyword highlighting";
+pub const HIGHLIGHTING_HINT: &str = "Color errors, warnings, OK, info and debug words, IP and MAC \
+     addresses in plain output. Programs' own colors and full-screen programs are left as they are.";
 pub const MIN_CONTRAST: &str = "Adjust indistinguishable colors";
 pub const MIN_CONTRAST_HINT: &str = "When text is hard to tell from its background, make it lighter or darker until it is readable.";
 pub const MIN_CONTRAST_OFF: &str = "Off";
