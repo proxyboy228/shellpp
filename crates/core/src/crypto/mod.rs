@@ -46,6 +46,8 @@ pub use wrap::{
     WRAP_NONCE_LEN, WRAP_OVERHEAD, WRAP_VERSION, WRAPPED_KEY_LEN, WrapPurpose, refresh_token_aad,
     unwrap_key, vault_wrap_aad, wrap_key, wrap_open, wrap_seal,
 };
+/// XChaCha20-Poly1305 for the recordings' chunks (`crate::recording`).
+pub(crate) use xchacha::{open as xchacha_open, seal_append as xchacha_seal_append};
 
 use shellpp_sync_api::envelope::EnvelopeError;
 

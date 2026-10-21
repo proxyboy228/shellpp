@@ -1573,6 +1573,8 @@ pub struct ConnectionLogView {
     pub saved: bool,
     /// The session ran on this device.
     pub this_device: bool,
+    /// Its output was recorded (the file may be on another device).
+    pub recorded: bool,
 }
 
 impl ConnectionLogView {

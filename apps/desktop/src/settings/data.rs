@@ -5,8 +5,9 @@
 //!   sync arrives, stage 7) and Export Data / Import Data.
 //! - SFTP: hidden files, delete confirmation, the answer to name
 //!   conflicts, parallel transfers and the program for Open.
-//! - Logs: the retention period, session output recording (disabled until
-//!   the recorder arrives) and Clear the log with a confirmation.
+//! - Logs: the retention period, session output recording (off by
+//!   default; turning it on asks first, since output can hold secrets;
+//!   D75) and Clear the log with a confirmation.
 //!
 //! Every change is written at once (`settings_set`); there is no Save.
 
@@ -121,6 +122,67 @@ impl SettingsView {
     }
 
     /// Clear the log (12.6): asks first.
+    /// "Record session output" (UI 12.6, D16): turning it on asks first.
+    pub fn set_record_output(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !on {
+            self.set_value("logs.record_output", json!(false), cx);
+            return;
+        }
+        let view = cx.entity().downgrade();
+        let record = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |view, cx| {
+                view.set_value("logs.record_output", json!(true), cx)
+            });
+        });
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let confirm = record.clone();
+            let on_ok = record.clone();
+            dialog
+                .w(px(420.))
+                .bg(cx.theme().popover)
+                .rounded(metrics::RADIUS_OVERLAY)
+                .close_button(false)
+                .title(
+                    div()
+                        .text_size(metrics::FONT_SIZE_TITLE)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(strings::RECORD_TITLE),
+                )
+                .child(
+                    div()
+                        .id("settings-record-dialog")
+                        .test_support()
+                        .text_size(metrics::FONT_SIZE_BODY)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(strings::RECORD_BODY),
+                )
+                .on_ok(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    on_ok(window, cx);
+                    false
+                })
+                .footer(
+                    h_flex()
+                        .w_full()
+                        .justify_end()
+                        .gap(metrics::SPACE_2)
+                        .child(
+                            ControlButton::new("settings-record-cancel", ControlKind::Neutral)
+                                .label(strings::CANCEL)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            ControlButton::new("settings-record-confirm", ControlKind::Accent)
+                                .label(strings::RECORD_CONFIRM)
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    confirm(window, cx);
+                                }),
+                        ),
+                )
+        });
+    }
+
     pub fn confirm_clear_log(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         let clear = Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -370,9 +432,15 @@ impl SettingsView {
             }))
             .into_any_element()
         }));
+        let recording = values
+            .get("logs.record_output")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let record = Switch::new("settings-logs-record")
-            .checked(false)
-            .disabled(true);
+            .checked(recording)
+            .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                this.set_record_output(*checked, window, cx)
+            }));
         let danger = theme.danger;
         let hover = theme.secondary_hover;
         let clear = div()

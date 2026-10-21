@@ -32,6 +32,7 @@ pub mod model;
 pub mod notify;
 pub mod os_detect;
 pub mod platform;
+pub mod recording;
 pub mod service;
 pub mod settings;
 pub mod snippet;

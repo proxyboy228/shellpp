@@ -31,6 +31,32 @@ pub const FIELD_ENDED: &str = "Ended";
 pub const FIELD_END: &str = "How it ended";
 pub const FIELD_DEVICE: &str = "Device";
 pub const NOT_RECORDED: &str = "The output of this session was not recorded.";
+
+// The recording (11.2, D75).
+pub const RECORDED: &str = "The output of this session was recorded.";
+pub const OPEN_RECORDING: &str = "Open recording";
+pub const RECORDING_TITLE: &str = "Session recording";
+pub const RECORDING_SEARCH: &str = "Search the output";
+pub const RECORDING_INCOMPLETE: &str = "Incomplete recording: the app stopped before the session ended. Its last output may be missing.";
+pub const RECORDING_ELSEWHERE: &str = "The recording is not available on this device.";
+pub const RECORDING_FAILED: &str = "The recording could not be opened.";
+pub const EXPORT_TXT: &str = "Export to .txt";
+pub const EXPORT_TITLE: &str = "Export the recording as plain text?";
+pub const EXPORT_BODY: &str = "The .txt file is not encrypted, and session output can contain passwords, keys and tokens. Keep it where only you can read it.";
+pub const EXPORT_CONFIRM: &str = "Export";
+pub const EXPORT_FILE_NAME: &str = "session.txt";
+pub const EXPORTED: &str = "Recording exported";
+pub const EXPORT_FAILED: &str = "The recording could not be exported";
+pub const CLOSE: &str = "Close";
+pub const CANCEL: &str = "Cancel";
+
+/// "3 lines match".
+pub fn matching_lines(count: usize) -> String {
+    match count {
+        1 => "1 line matches".to_owned(),
+        n => format!("{n} lines match"),
+    }
+}
 pub const ACTIVE: &str = "Still open";
 pub const END_CLOSED: &str = "Closed";
 pub const END_DROPPED: &str = "The connection dropped";

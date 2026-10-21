@@ -1183,3 +1183,18 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.2; UI 9.3; completes D66).
 - The script field is GPUI Kit's code editor (`Editor`) with the app's own shell highlighting (`snippets/shell_highlight.rs`) through its parser-independent `InputHighlighter`: comments, quoted strings, `$variables` and `${...}`, the snippet's `{{name}}` variables (also inside double quotes, in the theme's "embedded" color), shell keywords (`if`, `then`, `for`, `do`, `case`...), numbers and operators. No grammar crate: GPUI Kit's `tree-sitter` features are not exposed through `gpui-kit` (depending on `gpui-component` directly would break GPUI Kit's rule that an application depends on `gpui-kit` alone) and would build C grammars. Highlighting only colors the text; the script is stored and run as typed. The editor shows no line numbers and no folding, six lines high.
 
 **Spec impact:** none; UI 9.3 is followed as written.
+
+### 75. Session output recording and its viewer (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.3; UI 11.2, 12.6; storage-format 8; D16, D20).
+
+**Decision:**
+
+- The core writes and reads `recordings/<file_id>.shpprec` exactly as storage-format 8.1-8.3 says (`crates/core/src/recording.rs`): the 63-byte header as AAD, 64 KiB chunks sealed with XChaCha20-Poly1305 under `recording_key[file]` (HKDF of the personal vault key and the file id, D16), nonce = the random 19-byte prefix ‖ be32(index) ‖ the last flag. `aead` 0.6 no longer carries its STREAM module, and the construction is fixed by the format, so the core builds the nonces itself over the AEAD it already uses; no crate is added. Tests: round trip with a UTF-8 character cut between two outputs, several chunks, a file without its final chunk (read as incomplete), and a wrong key, a changed byte, a changed header, a cut or dropped chunk (all refused).
+- A session is recorded when its host says so ("Record output" On or Off), else when `logs.record_output` is on (off by default). The connection log entry names its `recording_file_id` first, then the file is created (0600 on Unix, in the data directory). The session layer gives the decoded output, and only output, to the writer as it reaches the terminal; the writer keeps its own key, so output that arrives while the app is locked is still recorded; the file is closed (its final chunk written) when the session's output ends. A file that cannot be written stops the recording, not the session.
+- Recordings go with their entry: retention and "Clear the log" remove the entries first and their files second.
+- Settings → Logs: "Record session output" is a working switch; turning it on asks first ("Record session output?", naming passwords, keys and tokens a program prints); turning it off does not ask.
+- Logs: the details of a recorded entry say so and offer "Open recording". The viewer is a dialog over the screen: the output as plain text (escape sequences and control characters removed), a search over its lines with the number that match, "Incomplete recording" for a file that was not closed, and "Export to .txt", which warns that the file is not encrypted before it asks where to save it. A recording that is not on this device says so. The file is read and decrypted off the app's thread.
+- Not built: the listing of recordings without a log entry (storage-format 8.4), re-encryption at sign-in (stage 7), the background scan for files whose entry is a tombstone (no tombstones are kept in local mode yet: entries are removed outright, and their files with them).
+
+**Spec impact:** none; UI 11.2 and 12.6 and storage-format 8 are followed as written, with the parts above left for their stages.

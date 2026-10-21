@@ -139,7 +139,23 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 67);
+    // Run 4: snippet-leave and the seven steps of the forwarding wizard.
+    for state in [
+        "snippet-leave",
+        "forwarding-wizard-type",
+        "forwarding-wizard-remote",
+        "forwarding-wizard-dynamic",
+        "forwarding-wizard-host",
+        "forwarding-wizard-listen",
+        "forwarding-wizard-dest",
+        "forwarding-wizard-summary",
+    ] {
+        for theme in ["dark", "light"] {
+            let name = format!("1280x800-{theme}-{state}.png");
+            assert!(files.contains(&name), "{name}");
+        }
+    }
+    assert_eq!(ShotState::ALL.len(), 75);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");

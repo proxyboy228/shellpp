@@ -1254,8 +1254,9 @@ pub(crate) const MODE_RESET: &[u8] = b"\x1b[?1049l\
 \x1b(B\x1b[0m\r\n";
 
 /// Runs a terminal until it ends or the session is closed: output to the
-/// terminal (decoded, with flow control), input from the queue of
-/// [`open_input`]. Closes the input queue at the end.
+/// terminal (decoded, with flow control) and to its recording, if any
+/// (D75), input from the queue of [`open_input`]. Closes the input queue
+/// at the end; the recording closes when it is dropped.
 pub(crate) async fn pump(
     shared: &Arc<Shared>,
     session: &Arc<Session>,
@@ -1263,6 +1264,7 @@ pub(crate) async fn pump(
     parts: TermParts,
     mut decoder: charset::OutputDecoder,
     input_rx: InputReceiver,
+    mut recording: Option<shellpp_core::recording::RecordingWriter>,
 ) -> PumpEnd {
     let TermParts {
         mut events, input, ..
@@ -1281,6 +1283,13 @@ pub(crate) async fn pump(
         match event {
             TermEvent::Data(data) => {
                 let data = decoder.decode(data);
+                // Output only (input is never recorded, security.md 10.4).
+                if let Some(writer) = recording.as_mut()
+                    && let Err(error) = writer.output(&data)
+                {
+                    tracing::warn!(%error, "session recording stopped");
+                    recording = None;
+                }
                 let Some(terminal) = terminal.as_ref().filter(|_| terminal_open) else {
                     continue;
                 };

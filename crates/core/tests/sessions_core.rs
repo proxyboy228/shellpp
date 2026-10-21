@@ -927,3 +927,99 @@ fn the_connection_log_keeps_its_retention_and_clears() {
         .connection_log_end(open, ConnectionEndReason::Closed, None);
     assert!(u.core.connection_log_list().unwrap().is_empty());
 }
+
+/// Session recordings (UI 11.2, 12.6; D16, D75): off by default, on by the
+/// setting or a host's "Record output"; the entry names its file; the
+/// output reads back as text, is not in the file in the clear, and goes
+/// with its entry (retention and "Clear the log").
+#[test]
+fn recordings_follow_the_setting_and_go_with_their_entries() {
+    let u = first_run();
+    let host = u.host(json!({"address": "rec.example.com", "label": "Rec"}));
+    let host_ref = Some(RecordRef {
+        vault_id: u.vault_id,
+        record_id: host.record_id,
+    });
+    let set = |value: bool| {
+        u.core
+            .settings_set(shellpp_core::service::dto::SettingsSetInput {
+                values: [("logs.record_output".to_owned(), json!(value))]
+                    .into_iter()
+                    .collect(),
+                reset: Vec::new(),
+            })
+            .unwrap();
+    };
+    assert!(!u.core.record_output_for(host_ref));
+    assert!(!u.core.record_output_for(None));
+    set(true);
+    assert!(u.core.record_output_for(host_ref) && u.core.record_output_for(None));
+    let off = u.host(json!({"address": "quiet.example.com", "record_output": "off"}));
+    assert!(!u.core.record_output_for(Some(RecordRef {
+        vault_id: u.vault_id,
+        record_id: off.record_id,
+    })));
+
+    let log_id = start(&u, host_ref, Some("Rec"), "rec.example.com", 22);
+    let mut writer = u.core.recording_start(log_id, (100, 30)).unwrap();
+    writer.output(b"canary-recorded-output\r\n").unwrap();
+    writer.output(b"\x1b[31mred\x1b[0m done\n").unwrap();
+    let file_id = writer.file_id();
+    writer.finish().unwrap();
+    u.core
+        .connection_log_end(log_id, ConnectionEndReason::Closed, None);
+    let rows = u.core.connection_log_list().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row.record_id == log_id && row.recorded)
+    );
+    let path = u
+        .env
+        .config()
+        .data_dir
+        .join("recordings")
+        .join(format!("{file_id}.shpprec"));
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("canary-recorded-output"));
+    let recording = u.core.recording_read(log_id).unwrap().expect("recorded");
+    assert!(recording.complete);
+    assert_eq!(recording.size, (100, 30));
+    assert_eq!(recording.plain_text(), "canary-recorded-output\nred done\n");
+    // Export to .txt: plain text.
+    let txt = u.env.config().data_dir.join("export.txt");
+    u.core.recording_export_txt(log_id, &txt).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&txt).unwrap(),
+        "canary-recorded-output\nred done\n"
+    );
+    // An entry without a recording.
+    let plain = start(&u, None, None, "203.0.113.9", 22);
+    assert!(u.core.recording_read(plain).unwrap().is_none());
+
+    // Retention removes the entry, then its file.
+    u.core
+        .settings_set(shellpp_core::service::dto::SettingsSetInput {
+            values: [("logs.retention_days".to_owned(), json!(1))]
+                .into_iter()
+                .collect(),
+            reset: Vec::new(),
+        })
+        .unwrap();
+    u.env.mem.clock.advance(Duration::from_secs(2 * 86_400));
+    assert!(u.core.connection_log_prune().unwrap() >= 1);
+    assert!(!path.exists(), "the recording goes with its entry");
+
+    // "Clear the log" removes the files too.
+    let next = start(&u, host_ref, Some("Rec"), "rec.example.com", 22);
+    let writer = u.core.recording_start(next, (80, 24)).unwrap();
+    let next_path = u
+        .env
+        .config()
+        .data_dir
+        .join("recordings")
+        .join(format!("{}.shpprec", writer.file_id()));
+    drop(writer);
+    assert!(next_path.exists());
+    u.core.connection_log_clear().unwrap();
+    assert!(!next_path.exists());
+}

@@ -33,6 +33,7 @@ mod known_hosts_io;
 pub mod last_session;
 mod lock_ops;
 pub mod merge;
+mod recordings;
 mod records;
 mod session;
 pub mod snippets;

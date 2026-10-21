@@ -119,6 +119,7 @@ fn entry(started: &str, ended: Option<&str>, reason: Option<&str>) -> Connection
         os: None,
         saved: false,
         this_device: true,
+        recorded: false,
     }
 }
 
@@ -244,5 +245,75 @@ fn the_log_lists_sorts_saves_and_shows_details(cx: &mut TestAppContext) {
     }
     ui.click(cx, "panel-close");
     assert!(!ui.visible(cx, "log-panel"));
+    ui.finish(cx);
+}
+
+/// D75: a recorded entry offers its recording; the viewer shows the output
+/// as text, searches it and exports it to .txt.
+#[gpui_kit::test]
+fn a_recorded_entry_opens_its_recording(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let ui = Screen::open(cx);
+    let plain = ui.start(cx, None, "203.0.113.4");
+    let recorded = ui.start(cx, None, "203.0.113.5");
+    let core = ui.core(cx);
+    let mut writer = core.recording_start(recorded, (80, 24)).unwrap();
+    writer.output(b"$ uptime\r\n").unwrap();
+    writer
+        .output(b"\x1b[1m up 3 days\x1b[0m\r\nload average: 0.10\r\n")
+        .unwrap();
+    writer.finish().unwrap();
+    ui.reload(cx);
+    ui.screen
+        .update(cx, |screen, cx| screen.select(Some(plain), cx));
+    assert!(!ui.visible(cx, "log-panel-recording"));
+    ui.screen
+        .update(cx, |screen, cx| screen.select(Some(recorded), cx));
+    assert!(ui.visible(cx, "log-panel-recording"));
+    ui.click(cx, "log-open-recording");
+    let mut viewer = None;
+    for _ in 0..100 {
+        viewer = ui
+            .screen
+            .read_with(cx, |screen, _| screen.viewer().cloned());
+        if viewer.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.frame(cx, |_, _| {});
+    }
+    let viewer = viewer.expect("the recording opens");
+    assert!(ui.visible(cx, "recording-viewer"));
+    assert!(!ui.visible(cx, "recording-incomplete"));
+    assert_eq!(
+        viewer.read_with(cx, |viewer, _| viewer
+            .shown_lines()
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()),
+        ["$ uptime", " up 3 days", "load average: 0.10"]
+    );
+    ui.frame(cx, |window, cx| {
+        window.click("recording-search", cx);
+        window.input("LOAD", cx);
+    });
+    assert_eq!(
+        viewer.read_with(cx, |viewer, _| viewer.shown_lines().len()),
+        1
+    );
+    // Export asks first (the file is not encrypted), then writes the text.
+    ui.click(cx, "recording-export");
+    assert!(ui.visible(cx, "recording-export-dialog"));
+    ui.click(cx, "recording-export-cancel");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.txt");
+    let target = path.clone();
+    ui.frame(cx, |window, cx| {
+        viewer.update(cx, |viewer, cx| viewer.export_to(target, window, cx))
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "$ uptime\n up 3 days\nload average: 0.10\n"
+    );
     ui.finish(cx);
 }

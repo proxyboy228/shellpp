@@ -1418,8 +1418,10 @@ impl Shell {
                 let shell = cx.weak_entity();
                 title_bar::session_tab(
                     tab,
-                    self.tab_status(id, cx),
-                    self.tab_asks_signature(id, cx),
+                    title_bar::TabMarks {
+                        state: self.tab_status(id, cx),
+                        asks_signature: self.tab_asks_signature(id, cx),
+                    },
                     rename,
                     &focus,
                     self.top_tab == TopTab::Session(id),

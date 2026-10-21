@@ -45,6 +45,17 @@ pub trait SessionCore: Send + Sync + 'static {
         reason: ConnectionEndReason,
         exit_status: Option<u32>,
     );
+    /// The recording of the session of log entry `log_id`, when its output
+    /// is recorded (UI 12.6, 3.1; D75); `None` when it is not or its file
+    /// could not be made. Fakes record nothing.
+    fn recording_for(
+        &self,
+        _host: Option<RecordRef>,
+        _log_id: Uuid,
+        _size: (u16, u16),
+    ) -> Option<shellpp_core::recording::RecordingWriter> {
+        None
+    }
     /// The forwarding rules of the personal vault (stage 5). Fakes have
     /// none.
     fn forwarding_rules(
@@ -134,6 +145,24 @@ impl SessionCore for Core {
         exit_status: Option<u32>,
     ) {
         Core::connection_log_end(self, log_id, reason, exit_status);
+    }
+
+    fn recording_for(
+        &self,
+        host: Option<RecordRef>,
+        log_id: Uuid,
+        size: (u16, u16),
+    ) -> Option<shellpp_core::recording::RecordingWriter> {
+        if !Core::record_output_for(self, host) {
+            return None;
+        }
+        match Core::recording_start(self, log_id, size) {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                tracing::warn!(code = error.code(), "session output not recorded");
+                None
+            }
+        }
     }
 
     fn history_record(&self, input: HistoryRecordInput) -> Result<HistoryDecision, CoreError> {

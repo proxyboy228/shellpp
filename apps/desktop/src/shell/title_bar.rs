@@ -194,16 +194,27 @@ pub fn vaults_pill(
 /// inline Rename field (UI 4.4). `close` is the tab's close button
 /// ([`session_tab_close`] with the caller's click handler); the caller
 /// attaches the tab's own click handler.
+/// The marks of a session tab next to its name: the state dot and the key
+/// of a waiting signature question (D68).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TabMarks {
+    pub state: Option<PaneStatus>,
+    pub asks_signature: bool,
+}
+
 pub fn session_tab<C: IntoElement>(
     tab: &SessionTab,
-    state: Option<PaneStatus>,
-    asks_signature: bool,
+    marks: TabMarks,
     rename: Option<AnyElement>,
     focus: &FocusHandle,
     active: bool,
     close: C,
     cx: &App,
 ) -> impl StatefulInteractiveElement + ParentElement + Styled + IntoElement + use<C> {
+    let TabMarks {
+        state,
+        asks_signature,
+    } = marks;
     let theme = cx.theme();
     let group: SharedString = format!("{}-group", tab.element_id()).into();
     let icon_slot = div()

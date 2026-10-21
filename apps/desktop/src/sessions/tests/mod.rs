@@ -148,6 +148,15 @@ impl SessionCore for RecordingCore {
         self.core.is_unlocked()
     }
 
+    fn recording_for(
+        &self,
+        host: Option<shellpp_core::service::dto::RecordRef>,
+        log_id: Uuid,
+        size: (u16, u16),
+    ) -> Option<shellpp_core::recording::RecordingWriter> {
+        SessionCore::recording_for(&*self.core, host, log_id, size)
+    }
+
     fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
         self.core.agent_keys()
     }

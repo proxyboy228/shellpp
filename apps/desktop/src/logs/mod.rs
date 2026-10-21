@@ -16,6 +16,7 @@
 //! The log is read on a background thread and again when records change.
 //! Nothing here logs addresses or names.
 
+pub mod recording;
 pub mod strings;
 
 #[cfg(test)]
@@ -113,6 +114,8 @@ pub struct LogsScreen {
     /// The records changed while a load ran: one more after it.
     stale: bool,
     failed: bool,
+    /// The recording viewer opened last.
+    viewer: Option<Entity<recording::RecordingViewer>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -146,6 +149,7 @@ impl LogsScreen {
             loading: None,
             stale: false,
             failed: false,
+            viewer: None,
             _subscriptions: vec![subscription],
         };
         screen.reload(cx);
@@ -253,6 +257,57 @@ impl LogsScreen {
     }
 
     /// The bookmark of an entry (11.1).
+    /// The recording viewer of the selected entry (UI 11.2): read and
+    /// decrypted off the app's thread, then shown in a dialog.
+    pub fn open_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            return;
+        };
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let log_id = entry.record_id;
+        let read = cx.background_spawn(async move {
+            core.recording_read(log_id).map(|recording| {
+                recording.map(|recording| (recording.plain_text(), recording.complete))
+            })
+        });
+        let title = format!(
+            "{} · {}",
+            entry.title,
+            crate::dates::timestamp_text(&entry.started_at)
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let read = read.await;
+            let _ = this.update_in(cx, |screen, window, cx| match read {
+                Ok(Some((text, complete))) => {
+                    let state = screen.state.clone();
+                    let viewer = cx.new(|cx| {
+                        recording::RecordingViewer::new(
+                            log_id, title, &text, complete, state, window, cx,
+                        )
+                    });
+                    screen.viewer = Some(viewer.clone());
+                    recording::open(viewer, window, cx);
+                }
+                Ok(None) => crate::shell::show_toast(strings::NOT_RECORDED, window, cx),
+                Err(shellpp_core::error::CoreError::NotFound) => {
+                    crate::shell::show_toast(strings::RECORDING_ELSEWHERE, window, cx)
+                }
+                Err(error) => {
+                    tracing::warn!(code = error.code(), "recording not opened");
+                    crate::shell::show_toast(strings::RECORDING_FAILED, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The viewer opened last (tests).
+    pub fn viewer(&self) -> Option<&Entity<recording::RecordingViewer>> {
+        self.viewer.as_ref()
+    }
+
     pub fn toggle_saved(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.record_id == id) else {
             return;
@@ -524,6 +579,31 @@ impl LogsScreen {
                 }
                 .to_owned(),
             ));
+        // The recording, when the output was recorded (11.2, D75).
+        let recording = if entry.recorded {
+            v_flex()
+                .id("log-panel-recording")
+                .test_support()
+                .gap(metrics::SPACE_2)
+                .child(widgets::caption(strings::RECORDED, cx))
+                .child(
+                    h_flex().child(
+                        crate::hosts::controls::ControlButton::new(
+                            "log-open-recording",
+                            crate::hosts::controls::ControlKind::Neutral,
+                        )
+                        .label(strings::OPEN_RECORDING)
+                        .on_click(cx.listener(
+                            |this, _: &gpui::ClickEvent, window, cx| {
+                                this.open_recording(window, cx)
+                            },
+                        )),
+                    ),
+                )
+                .into_any_element()
+        } else {
+            widgets::caption(strings::NOT_RECORDED, cx).into_any_element()
+        };
         Some(
             div()
                 .id("log-panel")
@@ -545,7 +625,7 @@ impl LogsScreen {
                             .pb(metrics::SPACE_4)
                             .gap(metrics::SPACE_3)
                             .child(block)
-                            .child(widgets::caption(strings::NOT_RECORDED, cx)),
+                            .child(recording),
                     ),
                 )
                 .into_any_element(),

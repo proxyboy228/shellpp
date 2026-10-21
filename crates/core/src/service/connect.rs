@@ -715,7 +715,7 @@ impl Core {
     }
 
     /// Writes one record version with the given data.
-    fn write_record(
+    pub(super) fn write_record(
         &self,
         parts: &mut Parts<'_>,
         kind: RecordKind,
@@ -1842,6 +1842,7 @@ impl Core {
                     os: connection_log::os(data),
                     saved: connection_log::saved(data),
                     this_device: connection_log::device_id(data) == Some(session.device_id),
+                    recorded: super::recordings::file_id_of(data).is_some(),
                 }
             })
             .collect();
@@ -1864,7 +1865,7 @@ impl Core {
     ) -> Result<usize, CoreError> {
         let cutoff = retention_cutoff(days, now);
         let device = parts.session.device_id;
-        let expired: Vec<(Uuid, RecordKind)> = parts
+        let (expired, files): (Vec<(Uuid, RecordKind)>, Vec<Option<Uuid>>) = parts
             .session
             .index
             .of_kind(RecordKind::ConnectionLogEntry)
@@ -1873,8 +1874,13 @@ impl Core {
                     && !parts.connlog.is_active(&record.record_id)
                     && expired(record.data(), &cutoff)
             })
-            .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
-            .collect();
+            .map(|record| {
+                (
+                    (record.record_id, RecordKind::ConnectionLogEntry),
+                    super::recordings::file_id_of(record.data()),
+                )
+            })
+            .unzip();
         if expired.is_empty() {
             return Ok(0);
         }
@@ -1883,6 +1889,9 @@ impl Core {
             "expired connection log entries removed"
         );
         self.remove_rows(parts, &expired, now)?;
+        // The entries first, their recordings second (storage-format 8.4).
+        let files: Vec<Uuid> = files.into_iter().flatten().collect();
+        super::recordings::delete_files(parts.store, &files);
         Ok(expired.len())
     }
 
@@ -1894,14 +1903,21 @@ impl Core {
         let mut guard = self.inner();
         let mut parts = parts(&mut guard)?;
         self.ensure_connlog(&mut parts, now)?;
-        let ids: Vec<(Uuid, RecordKind)> = parts
+        let (ids, files): (Vec<(Uuid, RecordKind)>, Vec<Option<Uuid>>) = parts
             .session
             .index
             .of_kind(RecordKind::ConnectionLogEntry)
-            .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
-            .collect();
+            .map(|record| {
+                (
+                    (record.record_id, RecordKind::ConnectionLogEntry),
+                    super::recordings::file_id_of(record.data()),
+                )
+            })
+            .unzip();
         let count = ids.len();
         self.remove_rows(&mut parts, &ids, now)?;
+        let files: Vec<Uuid> = files.into_iter().flatten().collect();
+        super::recordings::delete_files(parts.store, &files);
         tracing::info!(count, "connection log cleared");
         Ok(count)
     }

@@ -274,7 +274,7 @@ pub(crate) async fn run(
     loop {
         if let Some((parts, input)) = running.take() {
             let decoder = OutputDecoder::new(encoding_rs::UTF_8);
-            let end = pump(&shared, &session, &mut ctrl, parts, decoder, input).await;
+            let end = pump(&shared, &session, &mut ctrl, parts, decoder, input, None).await;
             match end {
                 PumpEnd::Closed => return,
                 PumpEnd::Ended(TermEnd::ExitStatus(0)) => {

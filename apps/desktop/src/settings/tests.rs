@@ -240,6 +240,19 @@ fn sftp_and_logs_settings_are_written(cx: &mut TestAppContext) {
     ui.click("settings-nav-logs", cx);
     ui.click("settings-logs-retention-30", cx);
     assert_eq!(value("logs.retention_days"), Some(serde_json::json!(30)));
+    // Recording asks first (D75); Cancel leaves it off, Record turns it on,
+    // off needs no question.
+    assert!(reveal(&ui, "settings-logs-record", cx));
+    ui.click("settings-logs-record", cx);
+    assert!(ui.visible("settings-record-dialog", cx));
+    ui.click("settings-record-cancel", cx);
+    assert_ne!(value("logs.record_output"), Some(serde_json::json!(true)));
+    ui.click("settings-logs-record", cx);
+    ui.click("settings-record-confirm", cx);
+    assert_eq!(value("logs.record_output"), Some(serde_json::json!(true)));
+    ui.click("settings-logs-record", cx);
+    assert!(!ui.visible("settings-record-dialog", cx));
+    assert_eq!(value("logs.record_output"), Some(serde_json::json!(false)));
     let started = core
         .connection_log_start(shellpp_core::service::host_api::ConnectionLogStart {
             host: None,

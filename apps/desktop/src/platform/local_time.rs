@@ -36,7 +36,7 @@ mod system {
         let ticks = time.duration_since(UNIX_EPOCH).ok()?.as_nanos() / 100;
         let ticks = u64::try_from(ticks).ok()?.checked_add(EPOCH_DIFFERENCE)?;
         let file_time = FILETIME {
-            dwLowDateTime: (ticks & 0xffff_ffff) as u32,
+            dwLowDateTime: (ticks & u64::from(u32::MAX)) as u32,
             dwHighDateTime: (ticks >> 32) as u32,
         };
         let mut out = SYSTEMTIME::default();

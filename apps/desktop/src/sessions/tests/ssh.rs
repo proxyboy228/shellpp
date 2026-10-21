@@ -923,3 +923,63 @@ async fn an_unreachable_agent_does_not_stop_other_methods() {
     session.handle.close();
     server.shutdown().await;
 }
+
+/// Session output recording (UI 12.6, D75): with the setting on, the
+/// server's output of a session is recorded in its log entry's file, which
+/// opens back as text once the session ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recorded_session_keeps_its_output() {
+    let harness = Harness::new();
+    harness
+        .core
+        .settings_set(shellpp_core::service::dto::SettingsSetInput {
+            values: [("logs.record_output".to_owned(), json!(true))]
+                .into_iter()
+                .collect(),
+            reset: Vec::new(),
+        })
+        .unwrap();
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let snippet = harness
+        .core
+        .snippet_save(shellpp_core::service::snippets::RecordInput {
+            vault_id: harness.vault_id,
+            record_id: None,
+            data: json!({"script": "echo recorded-output"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice",
+            "startup_snippet_id": snippet.record.record_id.to_string()}}),
+        Some(&password),
+    );
+    let mut session = harness.connect(target, true).await;
+    // The test server's shell shows the line it gets.
+    session.output("recorded-output").await;
+    session.handle.close();
+    // The recording closes when the session's output ends.
+    let mut text = String::new();
+    for _ in 0..200 {
+        let entry = harness
+            .core
+            .connection_log_list()
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.recorded);
+        if let Some(entry) = entry
+            && let Ok(Some(recording)) = harness.core.recording_read(entry.record_id)
+            && recording.complete
+        {
+            text = recording.plain_text();
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(text.contains("recorded-output"), "{text:?}");
+    server.shutdown().await;
+}

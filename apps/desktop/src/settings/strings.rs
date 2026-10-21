@@ -44,8 +44,10 @@ pub const OPEN_PROGRAM_PLACEHOLDER: &str = "The system's program";
 pub const RETENTION: &str = "Keep the connection log";
 pub const RETENTION_HINT: &str = "Older entries are removed. Saved entries are kept.";
 pub const RECORD_OUTPUT: &str = "Record session output";
-pub const RECORD_OUTPUT_HINT: &str =
-    "Output can contain secrets. Recording arrives with the session recorder in a later version.";
+pub const RECORD_OUTPUT_HINT: &str = "Keeps what servers print in each session, encrypted on this device and never synced. A host can decide for itself (its Record output). Output can contain secrets.";
+pub const RECORD_TITLE: &str = "Record session output?";
+pub const RECORD_BODY: &str = "Everything the servers print is kept, also passwords, keys and tokens a program prints or a command echoes. Recordings are encrypted on this device, never synced, and go with their log entry.";
+pub const RECORD_CONFIRM: &str = "Record output";
 pub const CLEAR_LOG: &str = "Clear the log";
 pub const CLEAR_LOG_HINT: &str = "Removes every entry of this device, saved ones too.";
 pub const CLEAR_LOG_TITLE: &str = "Clear the connection log?";

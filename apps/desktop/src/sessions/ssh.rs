@@ -642,6 +642,17 @@ impl SshTask {
                 st.log_id = log_id;
             }
         }
+        // Its recording, when output is recorded (UI 12.6, 3.1; D75).
+        let recording = match log_id {
+            Some(log_id) => {
+                let (host, dims) = (info.host, size);
+                self.shared
+                    .blocking(move |core| core.recording_for(host, log_id, dims))
+                    .await
+                    .flatten()
+            }
+            None => None,
+        };
 
         // Forwarding rules of this host that start when it connects
         // (data-model 11; personal vault only).
@@ -714,6 +725,7 @@ impl SshTask {
             parts,
             decoder,
             input,
+            recording,
         )
         .await;
         let log_id = self.session.lock().log_id.take();
