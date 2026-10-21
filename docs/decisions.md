@@ -813,7 +813,7 @@ Status: accepted, 2026-10-21 (owner's choice; the 15 questions in section 3 of t
 1. The Keychain branch is merged into main (2026-10-21, with D33).
 2. Keys (D33): the key panel's "…" menu gets Remove, with a confirmation. When hosts or identities use the key, the confirmation lists them and warns that they lose it. The rule of D33 for creating a key (an explicit Import or Generate) is accepted.
 3. Unrecognized keys (D32): a key imported by hand (the New key form) that is not recognized is never saved; the form shows the reason and keeps the text. Import Data of our JSON saves such a key as a key record of type "unknown", so nothing from the file is lost (data-model 9.1).
-4. History in the export (D34, D38): Export Data gets two checkboxes, "Include command history" and "Include the connection log", both off by default.
+4. History in the export (D34, D38): Export Data gets two checkboxes, "Include command history" and "Include the connection log", both off by default. Their import is D51.
 5. Settings on import (D41): D41 stays. Import Data gets the mode "Full restore from my backup", off by default: it applies every setting of the file, including those D41 leaves out. Turning it on shows a warning that the file may hold a script that will then run on the servers.
 6. `~/.ssh/config` (D35): stays as it is: only the first alias of a `Host a b` line becomes a host, and SendEnv goes only into the host's notes.
 7. Public keys per authentication (D36): the limit stays 4 and is not a setting.
@@ -823,6 +823,20 @@ Status: accepted, 2026-10-21 (owner's choice; the 15 questions in section 3 of t
 11. Export to host: built with the SFTP panels, over a shared service of SSH connections without a terminal tab, which the panels use too.
 12. SFTP engine (D45): `russh-sftp` stays. Names that are not UTF-8 on the server (shown with U+FFFD, not openable) are a known limitation and are described as such in the documentation.
 13. Links in folder transfers (D47): inside a copied folder, a link to a file is copied as the content of its target, and a link to a folder is skipped; at the end of the transfer the user sees the list of what was skipped.
-14. `CODE_OF_CONDUCT.md`: the enforcement contact is replaced with the address the owner gives.
+14. `CODE_OF_CONDUCT.md`: the enforcement contact stays `iinfocertx@gmail.com`, the address the owner chose.
 
 **Spec impact:** with the implementation: `docs/ui-behavior-spec.md` 1.4 (Export Data, Import Data) and 7.3 (Remove), `docs/export-format.md` section 4 and `docs/data-model.md` 9.1 and 18.4 (unknown keys, the full restore); now: `CONTRIBUTING.md` ("Unsafe code").
+
+### 51. History and the connection log in Import Data
+
+Status: accepted, 2026-10-21 (owner's choice; completes D50, item 4; amends D34).
+
+**Context.** D34 has Import Data skip the command history and the connection log of a file, so that a backup never mixes another device's log into this one. With D50 both are parts of Export Data that are off by default, so a file that holds them was exported with them on purpose.
+
+**Decision:**
+
+- When the file holds command history or a connection log, Import Data shows "Import command history" and "Import the connection log" (each only when the file holds that part), both on by default. A part turned off is skipped and counted, as in D34.
+- Imported history goes through the same secret filter as history recorded live (UI 4.2; `docs/security.md` 10.1, 10.2): an entry that the filter would not record is not imported.
+- Device and vault records stay skipped (D34).
+
+**Spec impact:** with the implementation: `docs/ui-behavior-spec.md` 1.4 (Import Data), `docs/export-format.md` section 4, `docs/data-model.md` 18.4.
