@@ -44,6 +44,7 @@
 //! never addresses, usernames, prompts, server texts or terminal data.
 
 mod backend;
+mod background;
 pub mod charset;
 pub mod keys;
 pub mod local;
@@ -110,6 +111,9 @@ pub trait SessionTerminal: Send + Sync + 'static {
 /// The terminal of a session is gone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalClosed;
+
+/// Output kept per host of a snippet run on many hosts.
+const SNIPPET_OUTPUT_LIMIT: usize = 256 * 1024;
 
 /// How the session layer is built.
 pub struct ManagerOptions {
@@ -188,6 +192,8 @@ pub(crate) struct Shared {
     sessions: Mutex<BTreeMap<SessionId, Arc<Session>>>,
     next_id: AtomicU64,
     shut_down: AtomicBool,
+    /// Forwarding rules without a tab (stage 5).
+    pub(crate) forwarding: background::ForwardingService,
 }
 
 impl Shared {
@@ -726,6 +732,7 @@ impl SessionManager {
             sessions: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
             shut_down: AtomicBool::new(false),
+            forwarding: background::ForwardingService::default(),
         });
         // Shell detection can be slow (WSL): warm the cache early.
         let local = shared.local.clone();
@@ -735,6 +742,51 @@ impl SessionManager {
         Ok(Self { shared, runtime })
     }
 
+    /// Starts a forwarding rule of the personal vault on its host's shared
+    /// connection (stage 5; the screen comes with the interface). The
+    /// connection uses only saved credentials and known host keys.
+    pub async fn forward_start(
+        &self,
+        rule: &shellpp_core::service::snippets::ForwardingRuleView,
+    ) -> shellpp_ssh::RuleStatus {
+        self.shared.forwarding.start(&self.shared, rule).await
+    }
+
+    /// Stops a forwarding rule.
+    pub async fn forward_stop(&self, rule: uuid::Uuid) {
+        self.shared.forwarding.stop(rule).await;
+    }
+
+    /// The status of a started forwarding rule.
+    pub fn forward_status(&self, rule: uuid::Uuid) -> Option<shellpp_ssh::RuleStatus> {
+        self.shared.forwarding.status(rule)
+    }
+
+    /// Runs `script` (its variables filled in) on the saved hosts `hosts`
+    /// through exec channels, at most 8 at a time, each with `timeout`
+    /// (UI 9.4, more than 4 targets; the table and the confirmation are the
+    /// interface's). Progress goes to `events`; the results are in host
+    /// order. The connections use only saved credentials and known host
+    /// keys, and close when their command ended.
+    pub async fn run_on_hosts(
+        &self,
+        script: String,
+        hosts: Vec<RecordRef>,
+        timeout: Duration,
+        events: Option<mpsc::UnboundedSender<shellpp_ssh::batch::BatchEvent>>,
+    ) -> Vec<shellpp_ssh::batch::TargetOutcome> {
+        let targets = hosts
+            .into_iter()
+            .map(|host| {
+                let shared = Arc::clone(&self.shared);
+                shellpp_ssh::batch::target(move || async move {
+                    background::connect(&shared, host).await
+                })
+            })
+            .collect();
+        shellpp_ssh::batch::run(targets, script, timeout, SNIPPET_OUTPUT_LIMIT, events).await
+    }
+
     /// The lock state changed (call it from the app's lock events).
     pub fn set_unlocked(&self, unlocked: bool) {
         let changed = self.shared.unlocked.send_replace(unlocked) != unlocked;
@@ -742,6 +794,16 @@ impl SessionManager {
             return;
         }
         tracing::debug!(unlocked, "sessions follow the lock state");
+        if unlocked {
+            // The rules that start on launch waited for the unlock (D9).
+            let shared = Arc::clone(&self.shared);
+            drop(self.shared.rt.spawn(async move {
+                shared
+                    .forwarding
+                    .autostart(&shared, |rule| rule.autostart_on_launch)
+                    .await;
+            }));
+        }
         if !unlocked {
             self.shared.passphrases.clear();
             let sessions: Vec<Arc<Session>> = self.shared.registry().values().cloned().collect();
@@ -942,6 +1004,14 @@ impl SessionManager {
                 .connection_log_end(log_id, ConnectionEndReason::Closed, None);
         }
         self.shared.passphrases.clear();
+        // Forwarding rules: listeners and their connections close (bounded,
+        // so a dead link does not hold the exit).
+        let shared = Arc::clone(&self.shared);
+        let stopping = self.shared.rt.spawn(async move {
+            let _ =
+                tokio::time::timeout(Duration::from_secs(2), shared.forwarding.stop_all()).await;
+        });
+        drop(stopping);
         if let Some(runtime) = self.runtime.take() {
             // Tasks are dropped: connections and shells end with them.
             runtime.shutdown_timeout(Duration::from_millis(500));

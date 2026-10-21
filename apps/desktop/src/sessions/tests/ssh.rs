@@ -516,6 +516,46 @@ async fn agent_forwarding_offers_the_keychain_keys() {
     server.shutdown().await;
 }
 
+/// A jump host logs in with the user's key files like a direct connection
+/// to it would (the review of stage 5: hops had no key sources).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jump_host_logs_in_with_the_key_files() {
+    let harness = Harness::new();
+    let key = generate_key(KeyType::Ed25519, "jump key", None).expect("key");
+    std::fs::write(
+        harness.key_dir.path().join("id_ed25519"),
+        key.private_openssh.expose_secret(),
+    )
+    .unwrap();
+    let mut config = ServerConfig::new(vec![
+        UserConfig::new("ops").with_authorized_key(&key.public_openssh),
+    ]);
+    config.forwarding = true;
+    let jump = start_with(config).await;
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let bastion = harness.host(
+        jump.port(),
+        json!({"label": "bastion", "ssh": {"username": "ops"}}),
+        None,
+    );
+    let SessionTarget::Host { record_id, .. } = bastion else {
+        panic!("a saved host");
+    };
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice", "jump_chain": [record_id.to_string()]}}),
+        Some(&password),
+    );
+    let mut session = harness.open(target);
+    session.accept_key().await;
+    session.accept_key().await;
+    session.state(SessionState::Connected).await;
+    session.handle.close();
+    server.shutdown().await;
+    jump.shutdown().await;
+}
+
 /// A host whose chain names a host that does not exist is refused, never
 /// connected directly instead (data-model 8.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

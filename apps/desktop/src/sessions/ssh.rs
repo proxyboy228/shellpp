@@ -605,6 +605,22 @@ impl SshTask {
             }
         }
 
+        // Forwarding rules of this host that start when it connects
+        // (data-model 11; personal vault only).
+        if let Some(host) = info.host {
+            let shared = self.shared.clone();
+            drop(self.shared.rt.spawn(async move {
+                shared
+                    .forwarding
+                    .autostart(&shared, |rule| {
+                        rule.host_id == host.record_id
+                            && rule.record.vault_id == host.vault_id
+                            && rule.autostart_on_connect
+                    })
+                    .await;
+            }));
+        }
+
         // OS detection after the first successful connection (UI 12.4).
         if !self.os_checked {
             self.os_checked = true;
@@ -1047,7 +1063,7 @@ async fn built_in_agent(
 
 /// The key files and the agent of one attempt (lead decision 4), with the
 /// passphrases remembered for this app session or kept for this session.
-async fn add_key_sources(
+pub(crate) async fn add_key_sources(
     shared: &Arc<Shared>,
     spec: &mut ConnectSpec,
     kept_file_passphrase: Option<(String, SecretString)>,
@@ -1085,6 +1101,12 @@ async fn establish(
     kept_file_passphrase: Option<(String, SecretString)>,
 ) -> Result<Established, SshError> {
     add_key_sources(&shared, &mut spec, kept_file_passphrase).await;
+    // Jump hosts log in with the same sources (agent, key files and their
+    // remembered passphrases) as a direct connection to them would; their
+    // prompts still never save.
+    for hop in &mut spec.jump_hosts {
+        add_key_sources(&shared, &mut hop.spec, None).await;
+    }
     let file_labels: Vec<String> = spec
         .auth
         .file_keys

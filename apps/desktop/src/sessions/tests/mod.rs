@@ -14,6 +14,7 @@
 //! temporary directory and no agent is used, so nothing touches the real
 //! `~/.ssh`, the real agent or a real host. Servers listen on 127.0.0.1.
 
+mod background;
 mod ends;
 mod history;
 mod local;
@@ -60,6 +61,24 @@ pub(super) fn random_secret(prefix: &str) -> String {
 }
 
 /// Starts the russh test server with these users.
+/// Polls `condition` until it holds or [`WAIT`] passes.
+pub(super) async fn eventually_async<F, Fut>(mut condition: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        if condition().await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 pub(super) async fn start_server(users: Vec<UserConfig>) -> TestServer {
     start_with(ServerConfig::new(users)).await
 }
@@ -131,6 +150,12 @@ impl SessionCore for RecordingCore {
 
     fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
         self.core.agent_keys()
+    }
+
+    fn forwarding_rules(
+        &self,
+    ) -> Result<Vec<shellpp_core::service::snippets::ForwardingRuleView>, CoreError> {
+        self.core.forwarding_rules_personal()
     }
 
     fn settings(&self) -> Result<SettingsValues, CoreError> {

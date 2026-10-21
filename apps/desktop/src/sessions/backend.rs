@@ -45,6 +45,13 @@ pub trait SessionCore: Send + Sync + 'static {
         reason: ConnectionEndReason,
         exit_status: Option<u32>,
     );
+    /// The forwarding rules of the personal vault (stage 5). Fakes have
+    /// none.
+    fn forwarding_rules(
+        &self,
+    ) -> Result<Vec<shellpp_core::service::snippets::ForwardingRuleView>, CoreError> {
+        Ok(Vec::new())
+    }
     /// The Keychain keys of the built-in agent (stage 5, D60). Fakes have
     /// none.
     fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
@@ -139,6 +146,12 @@ impl SessionCore for Core {
 
     fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {
         Core::agent_keys(self)
+    }
+
+    fn forwarding_rules(
+        &self,
+    ) -> Result<Vec<shellpp_core::service::snippets::ForwardingRuleView>, CoreError> {
+        Core::forwarding_rules_personal(self)
     }
 }
 
