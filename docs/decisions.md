@@ -884,3 +884,14 @@ Status: run 2 decision, 2026-10-21 (plan, item 3.3; how D50, items 3-5, and D51 
 - "Full restore from my backup" also turns "Apply the settings in the file" on (shown on and disabled).
 
 **Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).
+
+### 55. The drive list without touching the drives (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 3.3; D50, items 9 and 15; amends D48).
+
+**Decision:**
+
+- The drive selection of the local file panel lists the letters `GetLogicalDrives` returns, in letter order, without touching any drive; before, each letter's root was checked with `is_dir`, which waits for a disconnected network drive. A drive that is not ready (an empty card reader) is listed and fails when it is opened, as any folder that cannot be read.
+- The call is the only `unsafe` code of the new platform module `apps/desktop/src/platform/drives.rs`, with its `SAFETY` comment and a Windows test that calls it; `windows-sys` (already in the lockfile through `crates/private-file`) becomes a Windows dependency of the desktop crate with the feature `Win32_Storage_FileSystem`.
+
+**Spec impact:** none (UI 5.3 does not say how the drives are found).

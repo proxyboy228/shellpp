@@ -83,18 +83,11 @@ pub fn list(dir: &Path) -> std::io::Result<Vec<Entry>> {
     Ok(out)
 }
 
-/// The drives of the drive selection (Windows: each letter that has a root
-/// folder now; elsewhere `/`). It touches each drive: call it off the UI
-/// thread (a disconnected network drive can take seconds, D48).
+/// The drives of the drive selection (Windows: the letters the system has,
+/// read without touching any drive; elsewhere `/`; D48, D55). A drive that
+/// is not ready fails when it is opened, as any folder that cannot be read.
 pub fn drives() -> Vec<PathBuf> {
-    if cfg!(windows) {
-        ('A'..='Z')
-            .map(|letter| PathBuf::from(format!("{letter}:\\")))
-            .filter(|root| root.is_dir())
-            .collect()
-    } else {
-        vec![PathBuf::from("/")]
-    }
+    crate::platform::drives::roots()
 }
 
 /// The row of a remote entry.
@@ -175,7 +168,7 @@ mod tests {
     fn drives_and_remote_rows() {
         let drives = drives();
         assert!(!drives.is_empty());
-        assert!(drives.iter().all(|root| root.is_dir()));
+        assert!(drives.iter().all(|root| root.is_absolute()));
         let remote = RemoteEntry {
             name: ".profile".to_owned(),
             kind: EntryKind::Symlink {

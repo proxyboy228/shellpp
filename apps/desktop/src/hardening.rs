@@ -5,8 +5,9 @@
 //! - macOS: `setrlimit(RLIMIT_CORE, 0)`.
 //! - Windows: nothing; Windows Error Reporting dumps are a residual risk.
 //!
-//! This is one of the two modules allowed to use `unsafe` (the other is the
-//! `gethostname` call in `platform::device_name`).
+//! A platform module (CONTRIBUTING.md, "Unsafe code"), with the
+//! `gethostname` call of `platform::device_name` and the drive letters of
+//! `platform::drives`.
 #![allow(unsafe_code)]
 
 /// What was applied, for one log line at startup.

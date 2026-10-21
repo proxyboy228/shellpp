@@ -180,10 +180,10 @@ Every `unsafe` block has:
 - a test that runs the code path of that block on its platform.
 
 The platform modules today: the advapi32 security calls of
-`crates/private-file` (`src/windows.rs`) and the `libc` calls of process
+`crates/private-file` (`src/windows.rs`), the `libc` calls of process
 hardening (`apps/desktop/src/hardening.rs`) and of the device name
-(`apps/desktop/src/platform/device_name.rs`). `GetLogicalDrives`, for the
-drive list of the local file panel, is allowed in such a module too.
+(`apps/desktop/src/platform/device_name.rs`), and `GetLogicalDrives` for the
+drive list of the local file panel (`apps/desktop/src/platform/drives.rs`).
 
 ## Tests
 

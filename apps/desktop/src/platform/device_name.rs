@@ -1,8 +1,8 @@
 //! Default `device_info.name`: the OS computer name, else `<Platform> device`
 //! (docs/data-model.md, `device_info`).
 //!
-//! The Unix branch calls `gethostname`; together with `hardening` this is the
-//! only `unsafe` code of the crate.
+//! The Unix branch calls `gethostname`: a platform module (CONTRIBUTING.md,
+//! "Unsafe code"), with `hardening` and `drives`.
 #![cfg_attr(unix, allow(unsafe_code))]
 
 use shellpp_core::platform::OsKind;

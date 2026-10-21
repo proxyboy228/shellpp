@@ -14,6 +14,7 @@
 pub mod base64url;
 pub mod clipboard;
 pub mod device_name;
+pub mod drives;
 pub mod events;
 pub mod keychain;
 

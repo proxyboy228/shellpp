@@ -71,6 +71,9 @@ gpui-pre-platform-pin.workspace = true
 # Never the features sync-secret-service or vendored (libdbus, D4).
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
+# The drive letters of the local file panel without touching a drive
+# (GetLogicalDrives in platform/drives.rs; CONTRIBUTING.md, "Unsafe code").
+windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }
