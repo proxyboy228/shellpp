@@ -66,6 +66,9 @@ pub fn result_text(result: &Result<ExportOutcome, FailureKind>) -> &'static str 
     }
 }
 
+/// The height of a host row (and of the "Select all" row).
+const ROW_HEIGHT: gpui::Pixels = px(32.);
+
 impl ExportToHost {
     pub fn new(
         state: Entity<AppState>,
@@ -124,6 +127,34 @@ impl ExportToHost {
     pub fn toggle(&mut self, host: uuid::Uuid, cx: &mut Context<Self>) {
         if !self.chosen.remove(&host) {
             self.chosen.insert(host);
+        }
+        cx.notify();
+    }
+
+    /// Whether every host the search shows is chosen.
+    pub fn all_shown_chosen(&self, cx: &App) -> bool {
+        let shown = self.hosts(cx);
+        !shown.is_empty()
+            && shown
+                .iter()
+                .all(|(host, _)| self.chosen.contains(&host.record_id))
+    }
+
+    /// "Select all": every host the search shows; when they all are
+    /// chosen already, none of them (hosts chosen under another search
+    /// stay).
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        let shown: Vec<uuid::Uuid> = self
+            .hosts(cx)
+            .into_iter()
+            .map(|(host, _)| host.record_id)
+            .collect();
+        if self.all_shown_chosen(cx) {
+            for id in &shown {
+                self.chosen.remove(id);
+            }
+        } else {
+            self.chosen.extend(shown);
         }
         cx.notify();
     }
@@ -219,6 +250,30 @@ impl Render for ExportToHost {
                 .into_any_element(),
             Step::Choosing => {
                 let hosts = self.hosts(cx);
+                let all = self.all_shown_chosen(cx);
+                let hover = cx.theme().secondary_hover;
+                let select_all = h_flex()
+                    .id("kc-export-select-row")
+                    .test_support()
+                    .h(ROW_HEIGHT)
+                    .px(metrics::SPACE_2)
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        Checkbox::new("kc-export-select-all")
+                            .checked(all)
+                            .label(strings::EXPORT_SELECT_ALL)
+                            .disabled(hosts.is_empty())
+                            .on_click(cx.listener(|this, _: &bool, _, cx| this.select_all(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("kc-export-count")
+                            .test_support()
+                            .text_size(metrics::FONT_SIZE_DENSE)
+                            .text_color(muted)
+                            .child(strings::export_selected(self.chosen.len())),
+                    );
                 v_flex()
                     .gap(metrics::SPACE_2)
                     .child(widgets::caption(strings::EXPORT_HOSTS_HINT, cx))
@@ -229,13 +284,13 @@ impl Render for ExportToHost {
                         window,
                         cx,
                     ))
+                    .child(select_all)
                     .child(
                         v_flex()
                             .id("kc-export-hosts")
                             .test_support()
-                            .h(px(220.))
+                            .h(px(224.))
                             .overflow_y_scroll()
-                            .gap(px(2.))
                             .when(hosts.is_empty(), |this| {
                                 this.child(
                                     div()
@@ -247,13 +302,28 @@ impl Render for ExportToHost {
                             })
                             .children(hosts.into_iter().map(|(host, title)| {
                                 let id = host.record_id;
-                                Checkbox::new(SharedString::from(format!("kc-export-host-{id}")))
-                                    .checked(self.chosen.contains(&id))
-                                    .label(title)
-                                    .on_click(
-                                        cx.listener(move |this, _: &bool, _, cx| {
-                                            this.toggle(id, cx)
-                                        }),
+                                // One row of 32 px per host, highlighted under
+                                // the pointer.
+                                h_flex()
+                                    .id(SharedString::from(format!("kc-export-row-{id}")))
+                                    .test_support()
+                                    .flex_none()
+                                    .h(ROW_HEIGHT)
+                                    .px(metrics::SPACE_2)
+                                    .items_center()
+                                    .rounded(metrics::RADIUS_CONTROL)
+                                    .hover(move |style| style.bg(hover))
+                                    .child(
+                                        Checkbox::new(SharedString::from(format!(
+                                            "kc-export-host-{id}"
+                                        )))
+                                        .checked(self.chosen.contains(&id))
+                                        .label(title)
+                                        .on_click(
+                                            cx.listener(move |this, _: &bool, _, cx| {
+                                                this.toggle(id, cx)
+                                            }),
+                                        ),
                                     )
                             })),
                     )
@@ -312,4 +382,99 @@ pub fn open(state: Entity<AppState>, public_key: String, window: &mut Window, cx
             .close_button(false)
             .child(dialog.clone())
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Bounds, TestAppContext, WindowBounds, WindowOptions, size};
+    use gpui_kit::test::TestWindowExt as _;
+    use serde_json::{Map, Value, json};
+
+    use super::*;
+    use crate::testing::TestProfile;
+
+    /// Plan of run 4, item 6: host rows are 32 px high; "Select all" takes
+    /// the hosts the search shows (and clears them when all are chosen);
+    /// the counter follows.
+    #[gpui_kit::test]
+    fn rows_select_all_and_the_counter(cx: &mut TestAppContext) {
+        cx.update(crate::testing::init_ui);
+        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        state.update(cx, |state, cx| {
+            for host in [
+                json!({"address": "web1.example.com"}),
+                json!({"address": "web2.example.com"}),
+                json!({"address": "db.example.com"}),
+            ] {
+                let data: Map<String, Value> = host.as_object().cloned().unwrap();
+                state.save_host(None, data, cx).unwrap();
+            }
+        });
+        let dialog_state = state.clone();
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                Default::default(),
+                size(px(800.), px(700.)),
+            ))),
+            ..Default::default()
+        };
+        let (handle, dialog) = cx
+            .update(|cx| {
+                gpui_kit::open_window(options, cx, |window, cx| {
+                    cx.new(|cx| {
+                        ExportToHost::new(dialog_state, "ssh-ed25519 AAAA test".into(), window, cx)
+                    })
+                })
+            })
+            .unwrap();
+        let frame = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        frame(cx);
+        let ids: Vec<uuid::Uuid> = cx.update(|cx| {
+            dialog
+                .read(cx)
+                .hosts(cx)
+                .into_iter()
+                .map(|(host, _)| host.record_id)
+                .collect()
+        });
+        assert_eq!(ids.len(), 3);
+        let row = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window
+                    .try_find(SharedString::from(format!("kc-export-row-{}", ids[0])))
+                    .map(|found| found.bounds().size.height)
+            })
+            .unwrap();
+        assert_eq!(row, Some(ROW_HEIGHT));
+        // The search shows the two web hosts; Select all takes them.
+        cx.update_window(handle, |_, window, cx| {
+            window.click("kc-export-search", cx);
+            window.input("web", cx);
+        })
+        .unwrap();
+        frame(cx);
+        dialog.update(cx, |dialog, cx| dialog.select_all(cx));
+        assert_eq!(dialog.read_with(cx, |dialog, _| dialog.chosen()), 2);
+        assert!(cx.update(|cx| dialog.read(cx).all_shown_chosen(cx)));
+        assert_eq!(strings::export_selected(2), "2 selected");
+        // Again: the shown hosts are cleared.
+        dialog.update(cx, |dialog, cx| dialog.select_all(cx));
+        assert_eq!(dialog.read_with(cx, |dialog, _| dialog.chosen()), 0);
+        // The click on the checkbox itself.
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("kc-export-select-all", cx);
+        })
+        .unwrap();
+        frame(cx);
+        assert_eq!(dialog.read_with(cx, |dialog, _| dialog.chosen()), 2);
+        let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+        cx.run_until_parked();
+        state.update(cx, |state, _| state.shutdown());
+    }
 }

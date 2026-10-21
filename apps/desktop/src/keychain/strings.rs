@@ -78,6 +78,12 @@ pub const EXPORT_HELP: &str = "Adds the public key to ~/.ssh/authorized_keys on 
      choose, without duplicates.";
 pub const EXPORT_TO_HOST: &str = "Export to host…";
 pub const EXPORT_DIALOG_TITLE: &str = "Export to host";
+pub const EXPORT_SELECT_ALL: &str = "Select all";
+
+/// "3 selected".
+pub fn export_selected(count: usize) -> String {
+    format!("{count} selected")
+}
 pub const EXPORT_HOSTS_HINT: &str = "Hosts sign in with their saved credentials; a host whose key \
      is not in Known Hosts yet is left as it is.";
 pub const EXPORT_SEARCH: &str = "Search hosts";
