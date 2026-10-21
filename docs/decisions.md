@@ -1147,3 +1147,15 @@ Status: run 4 decision, 2026-10-22 (plan, item 4.6; how D68, item 6, is built; r
 - Tests fix the zone and the format per thread (`set_fixed_display`: dates `21.10.2026`, times `18:04`), so their expectations do not depend on the machine; the Windows calls have their own tests (a zone with fixed daylight saving rules, the `de-DE` and `en-US` formats).
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.5, 1.6 (new) and 10.1 (and `docs/ru`); CONTRIBUTING.md (the new platform module).
+
+### 72. The screenshot run's limits are per state (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 4.7; D68, item 7).
+
+**Decision:**
+
+- The cause was in the harness, not in the app: the 600 s watchdog of `shellpp --screenshots` counted from the start of the whole run, and a full run of every state (146 files) takes longer since run 3 added its states. It ended the run wherever it was at that moment, twice at `new-tab-search`, which a short run captures at once. No leak or lock after many sessions was involved: the same states pass in a run that starts later in the list.
+- Each state now has `STATE_TIMEOUT` (120 s) per theme and is tried once more, from the demo data, when it fails or runs out of time; the run says so ("trying once more"). The watchdog ends the run only after 300 s without any state begun (the app's thread stuck, where no timeout of its own can fire). `scripts/ui-screens.ps1` waits up to an hour for the launch (was 900 s).
+- `CLAUDE.md` records the cause under "Подводные камни".
+
+**Spec impact:** none.
