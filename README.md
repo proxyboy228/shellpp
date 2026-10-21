@@ -56,6 +56,7 @@ The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELL
 ## Known limitations
 
 - SFTP: a file or folder name on the server that is not valid UTF-8 is shown with the replacement character `�` (U+FFFD) and cannot be opened, renamed or downloaded; a folder transfer leaves it out and lists it at the end. The SFTP library decodes names that way (`docs/decisions.md`, D45, D50).
+- Port forwarding rules and scripts on many hosts connect without a tab: until their dialogs exist, they reach only hosts whose key is already in Known Hosts and log in with saved credentials, the agent or key files only (`docs/decisions.md`, D61).
 
 ## Specifications
 
