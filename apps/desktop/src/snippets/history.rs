@@ -76,7 +76,17 @@ impl ShellHistory {
                 }
             }),
             cx.subscribe(&state, |this: &mut Self, _, event, cx| {
-                if matches!(event, AppStateEvent::LockChanged(_)) {
+                if matches!(
+                    event,
+                    AppStateEvent::LockChanged(_) | AppStateEvent::RecordsChanged
+                ) {
+                    // A host filtered by is gone: every entry again.
+                    if this
+                        .host
+                        .is_some_and(|id| this.state.read(cx).host(id).is_none())
+                    {
+                        this.host = None;
+                    }
                     this.reload(cx);
                 }
             }),

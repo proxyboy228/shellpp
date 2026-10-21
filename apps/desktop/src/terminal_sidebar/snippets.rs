@@ -142,23 +142,30 @@ impl SnippetsTab {
         else {
             return;
         };
-        if self.terminal().is_none() {
-            return;
-        }
-        if snippet.variables.is_empty() {
-            self.send(&snippet.script, run, window, cx);
-            return;
-        }
-        let tab = cx.entity().downgrade();
-        crate::snippets::ask_values(&snippet, window, cx, move |script, window, cx| {
-            let _ = tab.update(cx, |tab, cx| tab.send(&script, run, window, cx));
-        });
-    }
-
-    fn send(&mut self, script: &str, run: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // The pane of the click, even if another becomes active while the
+        // values are typed (its tab may close meanwhile: nothing is sent).
         let Some(terminal) = self.terminal() else {
             return;
         };
+        if snippet.variables.is_empty() {
+            Self::send(&terminal, &snippet.script, run, window, cx);
+            return;
+        }
+        let terminal = terminal.downgrade();
+        crate::snippets::ask_values(&snippet, window, cx, move |script, window, cx| {
+            if let Some(terminal) = terminal.upgrade() {
+                Self::send(&terminal, &script, run, window, cx);
+            }
+        });
+    }
+
+    fn send(
+        terminal: &Entity<TerminalView>,
+        script: &str,
+        run: bool,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
         let sent = terminal.update(cx, |terminal, cx| {
             let sent = terminal.insert_snippet(script, run, cx);
             terminal.focus(window, cx);

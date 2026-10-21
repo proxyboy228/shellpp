@@ -200,8 +200,12 @@ enum Ask {
         form: Option<Entity<PromptForm>>,
     },
     HostKey(HostKeyAsk),
-    /// A signature of the forwarded agent: the key's fingerprint (D60).
-    Signature(String),
+    /// A signature of the forwarded agent: the prompt and the key's
+    /// fingerprint (D60).
+    Signature {
+        id: u64,
+        fingerprint: String,
+    },
 }
 
 /// The content of one session tab.
@@ -218,6 +222,9 @@ pub struct SessionPane {
     /// A startup snippet waiting for its values, and the last login asked.
     startup_pending: Option<crate::sessions::StartupAsk>,
     startup_asked: u64,
+    /// The login whose startup snippet the session reports now (`None`
+    /// once that login ended).
+    startup_live: Option<u64>,
     reconnect: Option<ReconnectInfo>,
     ask: Option<Ask>,
     paste: Option<PendingPaste>,
@@ -288,6 +295,7 @@ impl SessionPane {
             place: None,
             startup_pending: None,
             startup_asked: 0,
+            startup_live: None,
             reconnect: None,
             ask: None,
             paste: None,
@@ -531,21 +539,32 @@ impl SessionPane {
         ask: Option<&crate::sessions::StartupAsk>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(ask) = ask
-            && ask.login > self.startup_asked
-            && self
-                .startup_pending
-                .as_ref()
-                .is_none_or(|pending| pending.login != ask.login)
-        {
-            self.startup_pending = Some(ask.clone());
-            cx.notify();
+        self.startup_live = ask.map(|ask| ask.login);
+        match ask {
+            Some(ask)
+                if ask.login > self.startup_asked
+                    && self
+                        .startup_pending
+                        .as_ref()
+                        .is_none_or(|pending| pending.login != ask.login) =>
+            {
+                self.startup_pending = Some(ask.clone());
+                cx.notify();
+            }
+            // The login ended (a drop, an end, a new attempt): not asked.
+            None => self.startup_pending = None,
+            Some(_) => {}
         }
     }
 
     /// Whether a startup snippet waits for its values form.
     pub fn startup_pending(&self) -> bool {
         self.startup_pending.is_some()
+    }
+
+    /// The shell of login `login` still runs here (its values may be sent).
+    fn startup_current(&self, login: u64) -> bool {
+        self.phase == Phase::Running && self.startup_live == Some(login)
     }
 
     pub fn set_place(&mut self, place: Option<SharedString>, cx: &mut Context<Self>) {
@@ -617,11 +636,12 @@ impl SessionPane {
 
     /// The forwarded agent asks to sign with the key of `fingerprint`
     /// (Agent Forwarding, "Ask before every signature", D60).
-    pub fn ask_signature(&mut self, fingerprint: String, cx: &mut Context<Self>) {
-        if matches!(&self.ask, Some(Ask::Signature(shown)) if *shown == fingerprint) {
+    pub fn ask_signature(&mut self, id: u64, fingerprint: String, cx: &mut Context<Self>) {
+        // Each request is its own dialog, even for the same key.
+        if matches!(&self.ask, Some(Ask::Signature { id: shown, .. }) if *shown == id) {
             return;
         }
-        self.ask = Some(Ask::Signature(fingerprint));
+        self.ask = Some(Ask::Signature { id, fingerprint });
         self.focus_request = true;
         cx.notify();
     }
@@ -629,14 +649,14 @@ impl SessionPane {
     /// The fingerprint of the signature question on display.
     pub fn signature_asked(&self) -> Option<&str> {
         match &self.ask {
-            Some(Ask::Signature(fingerprint)) => Some(fingerprint),
+            Some(Ask::Signature { fingerprint, .. }) => Some(fingerprint),
             _ => None,
         }
     }
 
     /// Allow or Deny of the signature question.
     pub fn answer_signature(&mut self, allow: bool, cx: &mut Context<Self>) {
-        if !matches!(self.ask, Some(Ask::Signature(_))) {
+        if !matches!(self.ask, Some(Ask::Signature { .. })) {
             return;
         }
         self.ask = None;
@@ -891,6 +911,8 @@ impl Render for SessionPane {
             && let Some(terminal) = self.terminal.clone()
         {
             self.startup_asked = ask.login;
+            let pane = cx.weak_entity();
+            let login = ask.login;
             window.defer(cx, move |window, cx| {
                 crate::snippets::ask_script_values(
                     ask.script.clone(),
@@ -898,9 +920,15 @@ impl Render for SessionPane {
                     window,
                     cx,
                     move |script, _, cx| {
-                        terminal.update(cx, |terminal, cx| {
-                            terminal.insert_snippet(&script, true, cx);
-                        });
+                        // Only into the shell of the login it was asked for.
+                        let current = pane
+                            .upgrade()
+                            .is_some_and(|pane| pane.read(cx).startup_current(login));
+                        if current {
+                            terminal.update(cx, |terminal, cx| {
+                                terminal.insert_snippet(&script, true, cx);
+                            });
+                        }
                     },
                 );
             });
@@ -933,7 +961,7 @@ impl Render for SessionPane {
             Some(Ask::HostKey(ask)) => {
                 Some(host_key::render(ask, &self.dialog_focus, cx).into_any_element())
             }
-            Some(Ask::Signature(fingerprint)) => Some(
+            Some(Ask::Signature { fingerprint, .. }) => Some(
                 signature::render(fingerprint.clone(), &self.dialog_focus, cx).into_any_element(),
             ),
             None => None,

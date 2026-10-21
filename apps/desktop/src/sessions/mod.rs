@@ -547,10 +547,16 @@ impl Session {
         log_id
     }
 
-    /// Shows a prompt; the reply arrives on `reply`. `None` when closed.
-    fn open_prompt(&self, kind: PromptKind, reply: oneshot::Sender<PromptReply>) -> Option<u64> {
+    /// Shows a prompt; the reply arrives on `reply`. `None` when closed, or
+    /// (`exclusive`) when another prompt is waiting.
+    fn open_prompt(
+        &self,
+        kind: PromptKind,
+        reply: oneshot::Sender<PromptReply>,
+        exclusive: bool,
+    ) -> Option<u64> {
         let mut st = self.lock();
-        if st.closed {
+        if st.closed || (exclusive && st.prompt.is_some()) {
             return None;
         }
         let id = st.next_prompt_id;
@@ -1345,6 +1351,15 @@ pub(crate) async fn ask(
     session: &Arc<Session>,
     kind: PromptKind,
 ) -> Option<PromptReply> {
+    ask_with(shared, session, kind, false).await
+}
+
+async fn ask_with(
+    shared: &Arc<Shared>,
+    session: &Arc<Session>,
+    kind: PromptKind,
+    exclusive: bool,
+) -> Option<PromptReply> {
     struct Shown<'a> {
         session: &'a Arc<Session>,
         id: u64,
@@ -1358,9 +1373,19 @@ pub(crate) async fn ask(
         return None;
     }
     let (tx, rx) = oneshot::channel();
-    let id = session.open_prompt(kind, tx)?;
+    let id = session.open_prompt(kind, tx, exclusive)?;
     let _shown = Shown { session, id };
     rx.await.ok()
+}
+
+/// [`ask`] that never replaces a question already waiting: `None` at once
+/// then (a forwarded signature while another is asked, D60).
+pub(crate) async fn ask_exclusive(
+    shared: &Arc<Shared>,
+    session: &Arc<Session>,
+    kind: PromptKind,
+) -> Option<PromptReply> {
+    ask_with(shared, session, kind, true).await
 }
 
 #[cfg(test)]

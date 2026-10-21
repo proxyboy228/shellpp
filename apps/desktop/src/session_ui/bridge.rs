@@ -231,7 +231,7 @@ pub fn apply(
                     cx,
                 ),
                 PromptKind::AgentSignature { fingerprint } => {
-                    pane.ask_signature(fingerprint.clone(), cx)
+                    pane.ask_signature(shown.id, fingerprint.clone(), cx)
                 }
                 kind => pane.ask_prompt(prompt_of(kind), cx),
             }

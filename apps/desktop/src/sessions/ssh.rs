@@ -249,6 +249,8 @@ impl SshTask {
             view.exit_status = None;
             view.exit_signal = None;
             view.prompt = None;
+            // A startup snippet waits for the values of its own login only.
+            view.startup_ask = None;
             view.reconnect = reconnect;
         });
         tracing::info!(session = self.session.id, ?kind, "connection attempt");
@@ -839,12 +841,17 @@ impl SshTask {
         self.shared
             .end_log(log_id, ConnectionEndReason::ExitStatus, Some(status));
         self.update(|st| {
+            // A question of the shell's time (a forwarded signature) ends
+            // with it: dropping its sender refuses it.
+            st.prompt = None;
             let view = &mut st.view;
             view.state = SessionState::Ended;
             view.exit_status = Some(status);
             view.exit_signal = signal;
             view.error = None;
             view.reconnect = None;
+            view.prompt = None;
+            view.startup_ask = None;
         });
     }
 
@@ -854,10 +861,13 @@ impl SshTask {
         self.last_drop = SessionError::from_drop(kind);
         let error = self.last_drop;
         self.update(|st| {
+            st.prompt = None;
             let view = &mut st.view;
             view.state = SessionState::Dropped;
             view.error = Some(error);
             view.reconnect = None;
+            view.prompt = None;
+            view.startup_ask = None;
         });
         if self.autoreconnect().await {
             Next::Schedule
@@ -1118,6 +1128,9 @@ impl shellpp_ssh::AgentKeys for AgentKeyStore {
     }
 }
 
+/// How long a forwarded signature waits for the user's answer.
+const SIGNATURE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// "Ask before every signature" (D60): each signature of the forwarded
 /// agent waits for the user's answer in the session's tab. No answer (the
 /// tab closed, another question open, the app locked) refuses it.
@@ -1135,7 +1148,14 @@ impl shellpp_ssh::ConfirmSignature for AskSignature {
             let kind = PromptKind::AgentSignature {
                 fingerprint: fingerprint.to_owned(),
             };
-            let reply = super::ask(&self.shared, &session, kind).await;
+            // Never in place of a question already shown (the user would
+            // allow a request other than the one read); no answer within
+            // two minutes refuses.
+            let asked = super::ask_exclusive(&self.shared, &session, kind);
+            let reply = tokio::time::timeout(SIGNATURE_WAIT, asked)
+                .await
+                .ok()
+                .flatten();
             let allowed = matches!(reply, Some(PromptReply::Allow));
             tracing::info!(allowed, "forwarded signature answered");
             allowed
