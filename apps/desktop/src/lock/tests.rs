@@ -21,7 +21,6 @@ use crate::shell::{SessionKind, SessionRequest};
 use crate::state::AppState;
 use crate::state::security::ArchivedDataFile;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 struct Ui {
     state: Entity<AppState>,
@@ -41,8 +40,7 @@ impl Ui {
         height: f32,
     ) -> Self {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
         });
         let state = cx.new(|cx| AppState::new(opened, cx));
@@ -372,6 +370,11 @@ fn forgot_password_mentions_the_remembered_key(cx: &mut TestAppContext) {
 /// same; the open session tab survives both.
 #[gpui::test]
 fn lock_and_auto_lock_keep_sessions_and_close_overlays(cx: &mut TestAppContext) {
+    // The local session tab has a terminal that parses on its own thread and
+    // wakes its view from there; without this the test scheduler reports
+    // that activity as non-determinism whenever the parser runs while the
+    // view waits (D52).
+    cx.executor().allow_parking();
     let mut profile = TestProfile::new();
     let password = profile.password().expose_secret().to_owned();
     let opened = profile.open_unlocked();

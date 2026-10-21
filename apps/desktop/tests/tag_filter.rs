@@ -240,7 +240,6 @@ fn chips_that_do_not_fit_collapse_into_plus_n(cx: &mut TestAppContext) {
         (960., 600., true),
     ] {
         let (ui, hosts) = Ui::open_sized(cx, width, height, &records);
-        ui.reduce_motion(cx);
         if with_panel {
             ui.frame(cx, |window, cx| window.click(host_card_id(hosts[0]), cx));
             ui.settle(cx);

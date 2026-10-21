@@ -26,6 +26,19 @@ use crate::state::OpenedCore;
 /// Directory name prefix of test profiles under the OS temporary directory.
 pub const TEST_PROFILE_PREFIX: &str = "shellpp-test";
 
+/// Sets up GPUI Kit and the dark theme for a UI test, with motion reduced.
+/// GPUI's animations run on the real clock, not on the test executor's, and
+/// a test click draws a frame after the pointer move, the press and the
+/// release: a dialog still sliding into place on a loaded machine moves its
+/// button between them, so the click is lost (D52).
+/// Every UI test starts with this instead of `gpui_kit::init` and
+/// `theme::install`.
+pub fn init_ui(cx: &mut gpui::App) {
+    gpui_kit::init(cx);
+    crate::theme::install(crate::theme::Appearance::Dark, cx);
+    cx.set_reduce_motion(true);
+}
+
 /// A master password generated at run time (never a fixed test value).
 pub fn generated_password() -> SecretString {
     let suffix = random_suffix().expect("the OS random generator works");

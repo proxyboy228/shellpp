@@ -840,3 +840,21 @@ Status: accepted, 2026-10-21 (owner's choice; completes D50, item 4; amends D34)
 - Device and vault records stay skipped (D34).
 
 **Spec impact:** with the implementation: `docs/ui-behavior-spec.md` 1.4 (Import Data), `docs/export-format.md` section 4, `docs/data-model.md` 18.4.
+
+## Run 2 of 2026-10-21
+
+The decisions below were taken during the owner's second long run (its plan, section 1.1): the lead chose where the plan and the specification leave the details open, marked each one "run 2", and lists the disputable ones for the owner in the run report.
+
+### 52. Deterministic UI tests: no motion, threads that wake the UI (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 3.1: three flaky tests made deterministic).
+
+**Context.** Three desktop tests failed now and then: `hosts::tests::empty_state_and_action_bar` and `hosts::tests::context_menu_runs_the_card_actions` (a click on a dialog's button had no effect) and `lock::tests::lock_and_auto_lock_keep_sessions_and_close_overlays` (the GPUI test scheduler's "not deterministic" panic). GPUI animations run on the real clock, not on the test executor's clock; a test click draws a frame after the pointer move, after the press and after the release, so a dialog that is still sliding into place moves its button between them on a loaded machine. Half of the UI test fixtures did not reduce motion. The lock test opens a local session tab whose terminal parses on its own thread and wakes its view from there, which the test scheduler reports whenever that happens while the view waits.
+
+**Decision:**
+
+- Every UI test fixture starts with `testing::init_ui` (GPUI Kit, the dark theme and reduced motion) instead of `gpui_kit::init` and `theme::install`; animations are off in tests. A test that checks an animation sets motion on itself.
+- A test with a terminal that parses on its own thread allows parking (`cx.executor().allow_parking()`), as the session and pane tests already did; the other lock tests stay strict.
+- Check: each of the three tests passed 50 runs in a row while two full desktop suites ran beside it. Before the change the Hosts test failed once in 20 runs under the same load; the lock test did not fail in 70 runs (it failed twice in about 30 during the night), so its cause is taken from the code: the pane of the local session creates its terminal, and with it the parser thread, even when the session layer is not installed, as in this test.
+
+**Spec impact:** none.

@@ -23,7 +23,7 @@ use super::*;
 use crate::state::hosts_view::{HostsLayout, HostsSort};
 use crate::state::{AppState, OpenedCore};
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance, metrics};
+use crate::theme::{self, metrics};
 use columns::{Column, ListColumns};
 
 /// What the screen emitted, in order.
@@ -46,8 +46,7 @@ fn map(value: Value) -> Map<String, Value> {
 
 fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        crate::testing::init_ui(cx);
     });
 }
 
@@ -944,8 +943,7 @@ fn open_app_with(
     Vec<Uuid>,
 ) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        crate::testing::init_ui(cx);
         crate::app::root::bind_keys(cx);
     });
     let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));

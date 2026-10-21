@@ -17,7 +17,7 @@ use super::*;
 use crate::app::{self, RootView};
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::{Appearance, metrics};
+use crate::theme::metrics;
 
 struct Ui {
     state: Entity<AppState>,
@@ -30,8 +30,7 @@ impl Ui {
         // Session tabs have terminals that parse on their own threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
         });

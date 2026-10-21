@@ -11,7 +11,6 @@ use crate::app::{self, RootView};
 use crate::state::AppState;
 use crate::state::security::AUTO_LOCK_CHOICES;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 struct Ui {
     state: Entity<AppState>,
@@ -22,8 +21,7 @@ struct Ui {
 impl Ui {
     fn open(cx: &mut TestAppContext, opened: crate::state::OpenedCore) -> Self {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
         });
         let state = cx.new(|cx| AppState::new(opened, cx));

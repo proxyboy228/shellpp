@@ -20,7 +20,6 @@ use crate::session_ui::fake::{Call, FakeLauncher, Record};
 use crate::session_ui::{ConnectStep, ExitStatus, Failure};
 use crate::sessions::OpenRequest;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 /// The window's root: the group, filling the window, and the events it
 /// emitted.
@@ -59,8 +58,7 @@ impl Tab {
     ) -> Self {
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
         });

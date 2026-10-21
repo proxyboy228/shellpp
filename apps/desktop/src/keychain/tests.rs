@@ -25,7 +25,6 @@ use super::*;
 use crate::state::AppState;
 use crate::state::records_edit::{KeyKind, PasswordChange};
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 /// A passphrase generated at run time.
 fn new_passphrase() -> String {
@@ -53,8 +52,7 @@ struct Ui {
 
 fn install(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        crate::testing::init_ui(cx);
         // Dialogs and panels without animation, so clicks never miss.
         cx.set_reduce_motion(true);
     });

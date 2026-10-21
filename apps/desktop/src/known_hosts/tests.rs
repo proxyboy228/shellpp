@@ -21,7 +21,6 @@ use uuid::Uuid;
 use super::*;
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 /// A fresh Ed25519 host key: (key type, base64 blob).
 fn host_key() -> (String, String) {
@@ -63,8 +62,7 @@ impl Screen {
     /// the entries of `file` (imported through the core) and `hosts`.
     fn open(cx: &mut TestAppContext, file: &str, hosts: &[Value]) -> Self {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             // Dialogs animate on the real clock: with motion on, a button's
             // position depends on timing and a click can miss it under load.
             cx.set_reduce_motion(true);
@@ -626,8 +624,7 @@ impl App2 {
     fn open(cx: &mut TestAppContext, width: f32) -> Self {
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             crate::app::root::bind_keys(cx);
             crate::terminal::init(cx);
             set_import_source(None, cx);

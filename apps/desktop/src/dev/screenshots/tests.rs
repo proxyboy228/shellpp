@@ -236,8 +236,7 @@ fn demo_profiles_can_live_in_a_given_folder() {
 
 fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        crate::testing::init_ui(cx);
         app::root::bind_keys(cx);
     });
 }

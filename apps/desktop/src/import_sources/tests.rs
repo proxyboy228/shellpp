@@ -14,7 +14,6 @@ use secrecy::ExposeSecret as _;
 
 use super::*;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 struct Blank;
 
@@ -33,9 +32,7 @@ struct Ui {
 impl Ui {
     fn open(cx: &mut TestAppContext) -> Self {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
-            cx.set_reduce_motion(true);
+            crate::testing::init_ui(cx);
         });
         let home = tempfile::tempdir().unwrap();
         let config = home.path().join(".ssh").join("config");

@@ -25,7 +25,6 @@ use super::model::Item;
 use super::*;
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 /// The root of a test window: a focusable frame that shows one view.
 struct Frame {
@@ -71,8 +70,7 @@ impl Ui {
     /// A test window over a fresh unlocked profile holding `hosts`.
     fn open(cx: &mut TestAppContext, hosts: &[Value]) -> (Self, Vec<Uuid>) {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
         });
         let mut profile = TestProfile::new();
         let opened = profile.open_unlocked();

@@ -25,7 +25,6 @@ use crate::session_ui::{ConnectStep, ExitStatus, Failure};
 use crate::sessions::OpenRequest;
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::Appearance;
 use shellpp_core::service::dto::SessionTarget;
 
 struct Ui {
@@ -41,8 +40,7 @@ impl Ui {
         // Terminals parse on their own threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
         });

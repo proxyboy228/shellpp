@@ -18,7 +18,6 @@ use super::*;
 use crate::settings::terminal::TerminalPrefs;
 use crate::terminal::{HistorySink, TerminalOptions, TerminalSink, TerminalSize};
 use crate::testing::TestProfile;
-use crate::theme::Appearance;
 
 /// What reached the session.
 #[derive(Default)]
@@ -77,8 +76,7 @@ impl Ui {
     fn open(cx: &mut TestAppContext) -> Self {
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             crate::terminal::init(cx);
         });
         let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));

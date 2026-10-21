@@ -21,7 +21,6 @@ use shellpp_desktop::app::{self, RootView};
 use shellpp_desktop::shell::Shell;
 use shellpp_desktop::state::{AppState, HostItem};
 use shellpp_desktop::testing::TestProfile;
-use shellpp_desktop::theme::{self, Appearance};
 use uuid::Uuid;
 
 /// The autosave delay plus a margin (`metrics::AUTOSAVE_DEBOUNCE` = 500 ms).
@@ -32,8 +31,7 @@ pub const BEFORE_DEBOUNCE: Duration = Duration::from_millis(200);
 /// gpui-kit, our theme and key bindings, as `app::run` installs them.
 pub fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        shellpp_desktop::testing::init_ui(cx);
         app::root::bind_keys(cx);
     });
 }
@@ -189,13 +187,6 @@ impl Ui {
             f(window, cx)
         })
         .expect("the test window is open")
-    }
-
-    /// Turns motion off (the system's reduced-motion preference, design
-    /// system 6: every duration 0 ms), for tests that compare painted
-    /// colors: a panel fading in is not at full opacity yet.
-    pub fn reduce_motion(&self, cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
     }
 
     /// Lets subscriptions and effects run.

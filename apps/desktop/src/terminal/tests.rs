@@ -21,7 +21,6 @@ use crate::shell::actions::{
     self as shell_actions, ActivateTab, CloseTab, NewLocalTerminal, NextTab, PreviousTab,
     ShowVaults,
 };
-use crate::theme::{self, Appearance};
 
 /// Records what the terminal sends.
 #[derive(Default)]
@@ -114,8 +113,7 @@ impl Fixture {
         // The parser runs on its own thread and wakes the view from there.
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             shell_actions::bind_keys(cx);
             super::init(cx);
         });

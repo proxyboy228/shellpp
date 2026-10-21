@@ -20,7 +20,6 @@ use crate::shell::{SessionId, SessionKind, SessionRequest, Shell, TopTab};
 use crate::state::AppState;
 use crate::terminal::{TerminalSink, TerminalSize};
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 pub(crate) struct Ui {
     pub state: Entity<AppState>,
@@ -54,8 +53,7 @@ impl Ui {
         // there; the real session layer reports from its runtime's threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
+            crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
         });

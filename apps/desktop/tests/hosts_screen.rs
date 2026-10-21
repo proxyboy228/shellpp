@@ -207,7 +207,6 @@ fn quick_connect_opens_a_session_without_saving(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn only_one_connect_is_accent_filled(cx: &mut TestAppContext) {
     let (ui, ids) = Ui::open_sized(cx, 1920., 1200., &sample());
-    ui.reduce_motion(cx);
     let web = ids[0];
     ui.frame(cx, |window, cx| window.click(host_card_id(web), cx));
     ui.settle(cx);
@@ -560,7 +559,6 @@ fn grid_columns_and_the_details_panel_share_the_width(cx: &mut TestAppContext) {
         .map(|index| json!({"address": format!("h{index:02}.example.com")}))
         .collect();
     let (ui, ids) = Ui::open_sized(cx, 1920., 1200., &hosts);
-    ui.reduce_motion(cx);
     ui.frame(cx, |window, _| assert_eq!(check_grid(window), 5));
 
     ui.frame(cx, |window, cx| window.click(host_card_id(ids[0]), cx));

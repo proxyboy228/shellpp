@@ -19,7 +19,6 @@ use shellpp_desktop::app::root::Screen;
 use shellpp_desktop::app::{self};
 use shellpp_desktop::state::AppState;
 use shellpp_desktop::testing::TestProfile;
-use shellpp_desktop::theme::{self, Appearance};
 use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone, Default)]
@@ -59,8 +58,7 @@ fn the_master_password_never_reaches_the_log(cx: &mut TestAppContext) {
     let wrong = format!("Wrong-{suffix}-pw");
 
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        shellpp_desktop::testing::init_ui(cx);
         app::root::bind_keys(cx);
     });
     let (opened, _) = TestProfile::new().into_opened();

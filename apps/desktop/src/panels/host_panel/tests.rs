@@ -25,7 +25,7 @@ use super::{CredentialKind, HostPanel};
 use crate::panels::menus::HostPanelAction;
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance, metrics};
+use crate::theme::metrics;
 
 /// A bit more than the autosave debounce.
 const AFTER_DEBOUNCE: Duration = Duration::from_millis(600);
@@ -101,8 +101,7 @@ fn map(value: Value) -> Map<String, Value> {
 
 fn install(cx: &mut TestAppContext) {
     cx.update(|cx| {
-        gpui_kit::init(cx);
-        theme::install(Appearance::Dark, cx);
+        crate::testing::init_ui(cx);
     });
 }
 
