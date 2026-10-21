@@ -26,6 +26,15 @@ pub const RADIUS_OVERLAY: Pixels = px(12.);
 // Heights.
 /// The top bar (`--height-top-bar`).
 pub const HEIGHT_TOP_BAR: Pixels = px(44.);
+/// Tabs of the top bar and its icon buttons (`--height-tab`).
+pub const HEIGHT_TAB: Pixels = px(32.);
+/// Inside a tab, left and right (`--padding-tab`).
+pub const PADDING_TAB: Pixels = px(10.);
+/// Sidebar items (`--height-nav-item`), this far apart (`--gap-nav-item`),
+/// with this much between the icon and the name (`--gap-nav-icon`).
+pub const HEIGHT_NAV_ITEM: Pixels = px(32.);
+pub const GAP_NAV_ITEM: Pixels = px(2.);
+pub const GAP_NAV_ICON: Pixels = px(10.);
 /// Buttons and fields (`--height-control`).
 pub const HEIGHT_CONTROL: Pixels = px(36.);
 /// Table rows (`--height-row`).
@@ -35,7 +44,7 @@ pub const HEIGHT_HOST_CARD: Pixels = px(64.);
 
 // Widths.
 /// The sidebar (`--width-sidebar`).
-pub const WIDTH_SIDEBAR: Pixels = px(220.);
+pub const WIDTH_SIDEBAR: Pixels = px(196.);
 /// The details panel (`--width-details`), resizable within the two limits below.
 pub const WIDTH_DETAILS: Pixels = px(380.);
 pub const WIDTH_DETAILS_MIN: Pixels = px(320.);

@@ -1,7 +1,8 @@
 //! The sidebar of the Vaults tab (UI 1.2, design-system 2.1, 6): six
-//! sections, 220 px (`--width-sidebar`), `--bg-sidebar` with a
+//! sections, 196 px (`--width-sidebar`), `--bg-sidebar` with a
 //! `--border-subtle` line on the right, no vault header (the vault is chosen
-//! on the Vaults tab). Items are 36 px, radius 6: `--text-secondary`, hover
+//! on the Vaults tab), 8 px from its edges. Items are 32 px and 2 px apart
+//! (12 px inside, a 16 px icon, 10 px to the name), radius 6: `--text-secondary`, hover
 //! `--bg-raised-hover`, pressed `--bg-pressed`; the active one has the
 //! `--accent-subtle` background and `--text-primary`. Keyboard focus shows
 //! the design-system focus ring. Sections without a screen yet (all but
@@ -148,10 +149,10 @@ pub fn sidebar(
         h_flex()
             .id(section.element_id())
             .test_support()
-            .h(metrics::HEIGHT_CONTROL)
+            .h(metrics::HEIGHT_NAV_ITEM)
             .flex_none()
             .px(metrics::SPACE_3)
-            .gap(metrics::SPACE_2)
+            .gap(metrics::GAP_NAV_ICON)
             .items_center()
             .when(collapsed, |item| {
                 let label = section.label();
@@ -191,7 +192,7 @@ pub fn sidebar(
         .w(width(collapsed))
         .h_full()
         .p(metrics::SPACE_2)
-        .gap(metrics::SPACE_1)
+        .gap(metrics::GAP_NAV_ITEM)
         .bg(surface)
         .border_r_1()
         .border_color(theme.sidebar_border)
@@ -242,12 +243,12 @@ mod tests {
         // The 380 px panel at 960 px leaves 360: the strip of icons.
         assert!(is_collapsed(px(960.), Some(metrics::WIDTH_DETAILS)));
         // It expands once the full sidebar leaves the main area 600 px:
-        // 220 + 380 + 600 = 1200.
-        assert!(is_collapsed(px(1199.), Some(metrics::WIDTH_DETAILS)));
-        assert!(!is_collapsed(px(1200.), Some(metrics::WIDTH_DETAILS)));
-        // A wider panel collapses it in a wider window.
+        // 196 + 380 + 600 = 1176.
+        assert!(is_collapsed(px(1175.), Some(metrics::WIDTH_DETAILS)));
+        assert!(!is_collapsed(px(1176.), Some(metrics::WIDTH_DETAILS)));
+        // A wider panel collapses it in a wider window: 196 + 560 + 600.
         assert!(is_collapsed(px(1300.), Some(metrics::WIDTH_DETAILS_MAX)));
-        assert!(!is_collapsed(px(1380.), Some(metrics::WIDTH_DETAILS_MAX)));
+        assert!(!is_collapsed(px(1356.), Some(metrics::WIDTH_DETAILS_MAX)));
         assert_eq!(width(true), px(56.));
         assert_eq!(width(false), metrics::WIDTH_SIDEBAR);
     }

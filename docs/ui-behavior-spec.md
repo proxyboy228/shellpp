@@ -54,7 +54,10 @@
 - From left to right:
   1. App menu button.
   2. Persistent **Vaults** tab: the data management workspace.
-     Next to it is an arrow switcher for the current vault (personal, team).
+     Next to it is an arrow switcher for the current vault (personal, team). The tab and
+     the arrow are one pill: the active highlight (the `--accent-subtle` pill and the bar
+     under it) spans the arrow too; the arrow stays a click zone of its own inside the
+     pill and is highlighted on hover. [decision]
   3. Persistent **SFTP** tab: the SFTP manager for manual work (section 5). [decision]
   4. Open session tabs: from left to right, the host's OS icon, the title, the state dot
      and the session type icon. [decision on the icons and the dot]
@@ -87,6 +90,8 @@
        4.6). The "+" button stays right after the row.
   5. "+" button: a new tab with the start page (see section 6; Ctrl+T and Ctrl+Shift+T,
      see 12.5).
+  Tabs are 32 px high inside the 44 px bar, with 10 px inside and 4 px between them
+  (`docs/design-system.md`, 6). [decision]
 - On the right:
   - update button (visible only when a check has found an update, see 12.7);
   - notification center (see 1.5);
@@ -99,6 +104,9 @@
 - Sections from top to bottom: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
   **Known Hosts**, **Logs**.
 - The active section is highlighted. Each section opens its own screen in the main area.
+- The sidebar is 196 px wide; its items are 32 px high and 2 px apart, with 12 px inside,
+  a 16 px icon and 10 px between the icon and the name; the sidebar keeps 8 px from its
+  edges (`docs/design-system.md`, 6). [decision]
 - Narrow window [decision]: when the main area would be narrower than 600 px next to the
   full sidebar (for example, a small window with the details panel open), the sidebar
   collapses into a 56 px strip with only the section icons. Hovering an icon shows the

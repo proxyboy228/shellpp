@@ -318,12 +318,19 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
   - menus and modal windows: 12 px (`--radius-overlay`).
 - Heights:
   - top bar: 44 px (`--height-top-bar`);
+  - tabs in the top bar and its icon buttons: 32 px (`--height-tab`), 10 px
+    (`--padding-tab`) inside on the left and right, 4 px between tabs (`--space-1`)
+    [decision];
   - buttons and fields: 36 px (`--height-control`);
   - table rows: 44 px (`--height-row`);
-  - host cards: 64 px (`--height-host-card`).
+  - host cards: 64 px (`--height-host-card`);
+  - sidebar items: 32 px (`--height-nav-item`), 2 px apart (`--gap-nav-item`), 12 px
+    inside on the left and right (`--space-3`), a 16 px icon and 10 px
+    (`--gap-nav-icon`) between the icon and the text; the sidebar keeps 8 px
+    (`--space-2`) from its edges [decision].
 - Widths:
-  - sidebar: 220 px (`--width-sidebar`); a 56 px icon strip in a narrow window
-    (UI 1.2) [decision];
+  - sidebar: 196 px (`--width-sidebar`) [decision]; a 56 px icon strip in a narrow
+    window (UI 1.2) [decision];
   - details panel: 380 px (`--width-details`), the width can be changed by
     dragging from 320 px (`--width-details-min`) to 560 px (`--width-details-max`), but
     never so wide that the main area gets narrower than 360 px; the chosen width comes back
@@ -349,9 +356,20 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 - Indicators and derived states [decision]:
   - active session tab: a bar of 2 px (`--size-tab-indicator`) in `--accent`; the
     colors of the host's terminal theme are not used for it;
+  - the Vaults tab and its vault switcher arrow are one pill: the active state
+    (`--accent-subtle` and the `--accent` bar) spans both, and the arrow is a click zone
+    of its own inside the pill with its own hover state;
   - toggle: on, an `--accent` track; off, a `--border-strong` track;
   - progress: `--accent` fill on a `--border-subtle` track;
   - toast: `--bg-overlay` with `--shadow-overlay`.
+- Buttons [decision]:
+  - every button of an action bar or an empty state has a 16 px Lucide icon to the left
+    of its text; buttons of dialogs (OK, Cancel, Save, Import, Close) have none;
+  - buttons of one group that stand side by side (Import and Export, Terminal and
+    Serial) are equally wide: as wide as the widest of them;
+  - labels of buttons and menu items are plain words ("Import known hosts", not
+    "known_hosts"); file names and paths (`~/.ssh/known_hosts`) appear only in tooltips
+    and descriptions, in the monospaced font.
 - Animations: 120 ms (`--duration-fast`: hover, press, toggles) to 180 ms
   (`--duration-normal`: menus, panels, modal windows), ease-out
   (`--easing-standard`). Under `prefers-reduced-motion: reduce` the durations are
