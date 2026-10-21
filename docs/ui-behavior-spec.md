@@ -1686,7 +1686,9 @@ terminal is opened with the "+" button or the app menu (D29).
     the file type (see 5.4). "Open with…" always asks for a program.
 - **Logs:**
   - connection log retention period: 90 days by default. Saved entries are kept
-    (see 11.1);
+    (see 11.1). Expired entries of this device are removed when the app starts (once
+    the data is unlocked), every 24 hours after while it stays unlocked, and when the
+    Logs screen reads the log [decision] (D68);
   - session output recording: a global toggle, off by default, with a warning
     that output can contain secrets. A host can override it (see 3.1). Recordings are
     stored encrypted and are never synced;

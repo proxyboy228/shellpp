@@ -842,6 +842,14 @@ impl Core {
         self.connection_log_list_impl()
     }
 
+    /// Retention without reading the log (UI 12.6, D68: the app runs it
+    /// when it starts and every 24 hours): this device's entries past
+    /// `logs.retention_days` that are not saved are removed; returns how
+    /// many.
+    pub fn connection_log_prune(&self) -> Result<usize, CoreError> {
+        self.connection_log_prune_impl()
+    }
+
     /// "Clear the log" (UI 12.6): removes every entry of this device;
     /// returns how many.
     pub fn connection_log_clear(&self) -> Result<usize, CoreError> {

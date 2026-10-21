@@ -617,6 +617,14 @@ fn retention_cutoff(days: u64, now: SystemTime) -> String {
         .unwrap_or_default()
 }
 
+/// `logs.retention_days` (default 90).
+fn retention_days(settings: &Settings) -> u64 {
+    settings
+        .get("logs.retention_days")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(90)
+}
+
 /// An unsaved log entry whose end (or start) is older than `cutoff`.
 fn expired(data: &Map<String, Value>, cutoff: &str) -> bool {
     let last = connection_log::ended_at(data).unwrap_or_else(|| connection_log::started_at(data));
@@ -1775,14 +1783,21 @@ impl Core {
         Ok(())
     }
 
+    /// Retention on its own (UI 12.6, D68: at app start and every 24 hours):
+    /// how many entries of this device were removed.
+    pub(super) fn connection_log_prune_impl(&self) -> Result<usize, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let retention_days = retention_days(&guard.settings);
+        let mut parts = parts(&mut guard)?;
+        self.ensure_connlog(&mut parts, now)?;
+        self.prune_connlog(&mut parts, retention_days, now)
+    }
+
     pub(super) fn connection_log_list_impl(&self) -> Result<Vec<ConnectionLogView>, CoreError> {
         let now = self.now();
         let mut guard = self.inner();
-        let retention_days = guard
-            .settings
-            .get("logs.retention_days")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(90);
+        let retention_days = retention_days(&guard.settings);
         let mut parts = parts(&mut guard)?;
         self.ensure_connlog(&mut parts, now)?;
         self.prune_connlog(&mut parts, retention_days, now)?;
@@ -1846,7 +1861,7 @@ impl Core {
         parts: &mut Parts<'_>,
         days: u64,
         now: SystemTime,
-    ) -> Result<(), CoreError> {
+    ) -> Result<usize, CoreError> {
         let cutoff = retention_cutoff(days, now);
         let device = parts.session.device_id;
         let expired: Vec<(Uuid, RecordKind)> = parts
@@ -1861,13 +1876,14 @@ impl Core {
             .map(|record| (record.record_id, RecordKind::ConnectionLogEntry))
             .collect();
         if expired.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         tracing::info!(
             count = expired.len(),
             "expired connection log entries removed"
         );
-        self.remove_rows(parts, &expired, now)
+        self.remove_rows(parts, &expired, now)?;
+        Ok(expired.len())
     }
 
     /// "Clear the log" (UI 12.6; data-model 13.3): every personal entry,

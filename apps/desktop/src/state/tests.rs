@@ -308,3 +308,35 @@ fn copy_to_copies_fields_and_secrets(cx: &mut TestAppContext) {
     });
     state.update(cx, |state, _| state.shutdown());
 }
+
+/// D68: retention of the connection log runs when the data is available
+/// and every 24 hours after, not while locked, and again after an unlock.
+#[gpui_kit::test]
+async fn retention_runs_at_start_every_day_and_after_an_unlock(cx: &mut TestAppContext) {
+    let (opened, password) = TestProfile::new().into_opened();
+    let state = cx.new(|cx| AppState::new(opened, cx));
+    let runs = |cx: &mut TestAppContext| state.read_with(cx, |state, _| state.retention_runs());
+    // Started before the first unlock: it waits for the data.
+    state.update(cx, |state, cx| state.start_retention(cx));
+    cx.run_until_parked();
+    assert_eq!(runs(cx), 0);
+    let setup = state.update(cx, |state, cx| state.first_run_setup(password.clone(), cx));
+    assert!(setup.await.is_ok());
+    cx.run_until_parked();
+    assert_eq!(runs(cx), 1);
+    cx.executor()
+        .advance_clock(super::RETENTION_INTERVAL - std::time::Duration::from_secs(60));
+    assert_eq!(runs(cx), 1);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(61));
+    assert_eq!(runs(cx), 2);
+    // Locked: nothing runs.
+    state.update(cx, |state, cx| state.lock(cx).unwrap());
+    cx.executor().advance_clock(super::RETENTION_INTERVAL * 2);
+    assert_eq!(runs(cx), 2);
+    let unlock = state.update(cx, |state, cx| state.unlock(password, cx));
+    assert!(unlock.await.is_ok());
+    cx.run_until_parked();
+    assert_eq!(runs(cx), 3);
+    state.update(cx, |state, _| state.shutdown());
+}

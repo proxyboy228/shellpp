@@ -121,8 +121,18 @@ pub struct AppState {
     shut_down: bool,
     _event_task: Option<Task<()>>,
     tick_task: Option<Task<()>>,
+    /// Retention of the connection log runs (D68): started with the tick.
+    retention_on: bool,
+    /// Prunes the log now and every [`RETENTION_INTERVAL`] while unlocked.
+    retention_task: Option<Task<()>>,
+    /// How many times retention ran (the tests read it).
+    retention_runs: u64,
     temp_profile: Option<TempProfile>,
 }
+
+/// How often retention of the connection log runs while the app is
+/// unlocked (D68; it also runs when the data becomes available).
+pub const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -188,6 +198,9 @@ impl AppState {
             shut_down: false,
             _event_task: Some(event_task),
             tick_task: None,
+            retention_on: false,
+            retention_task: None,
+            retention_runs: 0,
             temp_profile,
         };
         if state.lock == LockState::Unlocked {
@@ -215,6 +228,9 @@ impl AppState {
             shut_down: false,
             _event_task: None,
             tick_task: None,
+            retention_on: false,
+            retention_task: None,
+            retention_runs: 0,
             temp_profile: None,
         }
     }
@@ -228,6 +244,7 @@ impl AppState {
         let Some(core) = self.core.clone() else {
             return;
         };
+        self.start_retention(cx);
         self.tick_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
@@ -242,6 +259,49 @@ impl AppState {
                 }
                 let core = core.clone();
                 cx.background_spawn(async move { core.tick() }).await;
+            }
+        }));
+    }
+
+    /// Retention of the connection log (UI 12.6, D68): when the data is
+    /// available (now, or at the next unlock) and every
+    /// [`RETENTION_INTERVAL`] after, not only when the Logs screen reads
+    /// the log. The app starts it with the tick.
+    pub fn start_retention(&mut self, cx: &mut Context<Self>) {
+        self.retention_on = true;
+        self.restart_retention(cx);
+    }
+
+    /// How many times retention ran.
+    pub fn retention_runs(&self) -> u64 {
+        self.retention_runs
+    }
+
+    /// Starts retention over while unlocked; stops it otherwise.
+    fn restart_retention(&mut self, cx: &mut Context<Self>) {
+        self.retention_task = None;
+        if !self.retention_on || self.lock != LockState::Unlocked {
+            return;
+        }
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        self.retention_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let pruning = core.clone();
+                let pruned = cx
+                    .background_spawn(async move { pruning.connection_log_prune() })
+                    .await;
+                if let Err(error) = pruned {
+                    tracing::warn!(code = error.code(), "connection log retention failed");
+                }
+                if this
+                    .update(cx, |state, _| state.retention_runs += 1)
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor().timer(RETENTION_INTERVAL).await;
             }
         }));
     }
@@ -605,6 +665,7 @@ impl AppState {
         }
         self.shut_down = true;
         self.tick_task = None;
+        self.retention_task = None;
         self.removals.clear();
         if let Some(core) = self.core.take() {
             core.on_exit();
@@ -694,6 +755,7 @@ impl AppState {
             self.removals.clear();
         }
         tracing::info!(state = ?state, "lock state changed");
+        self.restart_retention(cx);
         self.records_generation += 1;
         cx.emit(AppStateEvent::LockChanged(state));
         cx.emit(AppStateEvent::RecordsChanged);

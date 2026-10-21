@@ -908,6 +908,10 @@ fn the_connection_log_keeps_its_retention_and_clears() {
         .unwrap();
     u.env.mem.clock.advance(Duration::from_secs(2 * 86_400));
     let open = start(&u, None, None, "203.0.113.3", 22);
+    // Retention on its own (D68: at app start and every 24 hours) removes
+    // the old unsaved entry; once is enough.
+    assert_eq!(u.core.connection_log_prune().unwrap(), 1);
+    assert_eq!(u.core.connection_log_prune().unwrap(), 0);
     let ids: Vec<_> = u
         .core
         .connection_log_list()
