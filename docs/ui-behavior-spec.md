@@ -617,7 +617,9 @@ The same form is used for creating and editing; it opens in the details panel.
 - both go as injected input, never recorded in history (`docs/security.md`, 10.1). A
   script of several lines goes as one bracketed paste, so the shell holds it until
   Enter; when the shell has no bracketed paste, each line would run as it arrives, so
-  only "run" takes such a script and a click says so. [decision, D66]
+  only "run" takes such a script: its insert (the click on the row) is unavailable, the
+  row is shown muted, and its tooltip says to use "run"; it is available again once the
+  shell turns bracketed paste on. [decision, D66, D68]
 
 **History tab:**
 

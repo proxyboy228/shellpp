@@ -196,18 +196,23 @@ fn snippets_are_inserted_or_run_in_the_pane(cx: &mut TestAppContext) {
     assert_eq!(ui.take_sent(), "uptime\r");
 
     // Several lines without bracketed paste: Insert would run them, so it
-    // sends nothing; Run sends each line.
+    // is unavailable (D68: its tooltip says why) and sends nothing; Run
+    // sends each line.
+    let tab = ui.tab(cx);
+    assert!(cx.update(|cx| tab.read(cx).can_insert(uptime, cx)));
+    assert!(!cx.update(|cx| tab.read(cx).can_insert(multi, cx)));
     ui.click(row_id(multi), cx);
     assert_eq!(ui.take_sent(), "");
     ui.click(run_id(multi), cx);
     assert_eq!(ui.take_sent(), "cd /srv/app\rls -la\r");
-    // With bracketed paste the shell holds the lines until Enter.
+    // With bracketed paste the shell holds the lines until Enter, and the
+    // insert is there again.
     ui.output("\x1b[?2004h", cx);
+    assert!(cx.update(|cx| tab.read(cx).can_insert(multi, cx)));
     ui.click(row_id(multi), cx);
     assert_eq!(ui.take_sent(), "\x1b[200~cd /srv/app\rls -la\x1b[201~");
 
     // A search by label or script.
-    let tab = ui.tab(cx);
     cx.update_window(ui.window, |_, window, cx| {
         window.click("sidebar-snippets-search", cx);
         window.input("srv", cx);

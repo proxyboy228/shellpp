@@ -6,7 +6,8 @@
 //! Both go as injected input (never recorded in history, docs/security.md
 //! 10.1). A script of several lines is pasted as one bracketed paste; a
 //! shell without bracketed paste would run each line at once, so there
-//! only Run takes it ([`TerminalView::insert_snippet`]).
+//! only Run takes it ([`TerminalView::insert_snippet`]): its insert is
+//! unavailable, and the tooltip says why (D68).
 
 use gpui::prelude::*;
 use gpui::{
@@ -126,6 +127,20 @@ impl SnippetsTab {
         self.target.as_ref().and_then(SidebarTarget::terminal)
     }
 
+    /// Whether a click can put the snippet `id` at the prompt now (D68: a
+    /// script of several lines only with bracketed paste).
+    pub fn can_insert(&self, id: Uuid, cx: &gpui::App) -> bool {
+        let Some(snippet) = self
+            .snippets
+            .iter()
+            .find(|snippet| snippet.record.record_id == id)
+        else {
+            return false;
+        };
+        self.terminal()
+            .is_some_and(|terminal| terminal.read(cx).can_insert(&snippet.script))
+    }
+
     /// Insert (`run` false) or Run: the variables' values first.
     pub fn use_snippet(
         &mut self,
@@ -177,11 +192,13 @@ impl SnippetsTab {
     }
 
     fn render_row(&self, snippet: &SnippetView, cx: &mut Context<Self>) -> AnyElement {
+        let id = snippet.record.record_id;
+        let insertable = self.can_insert(id, cx);
+        let muted = crate::theme::tokens(cx).text_muted.hsla();
         let theme = cx.theme();
         let surface = theme.colors.list;
         let hover = theme.secondary_hover;
         let pressed = theme.secondary_active;
-        let id = snippet.record.record_id;
         let first_line = snippet
             .script
             .lines()
@@ -207,6 +224,33 @@ impl SnippetsTab {
                 cx.stop_propagation();
                 this.use_snippet(id, true, window, cx);
             }));
+        // Insert unavailable (several lines, no bracketed paste): the row
+        // takes no click, and its tooltip says to use Run (D68).
+        let texts = v_flex()
+            .id(SharedString::from(format!("{}-insert", row_id(id))))
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .child(
+                div()
+                    .truncate()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .text_color(if insertable { theme.foreground } else { muted })
+                    .child(crate::snippets::card_title(snippet)),
+            )
+            .child(
+                div()
+                    .truncate()
+                    .font_family(JETBRAINS_MONO)
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .child(first_line),
+            )
+            .when(!insertable, |this| {
+                this.tooltip(|window, cx| {
+                    Tooltip::new(strings::SNIPPET_NEEDS_RUN).build(window, cx)
+                })
+            });
         h_flex()
             .id(row_id(id))
             .test_support()
@@ -216,34 +260,19 @@ impl SnippetsTab {
             .gap(metrics::SPACE_1)
             .items_center()
             .rounded(metrics::RADIUS_CONTROL)
-            .cursor_pointer()
             .tab_index(0)
             .focus_ring_visible(surface, cx)
-            .hover(move |style| style.bg(hover))
-            .active(move |style| style.bg(pressed))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(metrics::FONT_SIZE_BODY)
-                            .text_color(theme.foreground)
-                            .child(crate::snippets::card_title(snippet)),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .font_family(JETBRAINS_MONO)
-                            .text_size(metrics::FONT_SIZE_CAPTION)
-                            .text_color(theme.muted_foreground)
-                            .child(first_line),
-                    ),
-            )
+            .when(insertable, |this| {
+                this.cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(pressed))
+            })
+            .child(texts)
             .child(run)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.use_snippet(id, false, window, cx)
+                if this.can_insert(id, cx) {
+                    this.use_snippet(id, false, window, cx)
+                }
             }))
             .into_any_element()
     }

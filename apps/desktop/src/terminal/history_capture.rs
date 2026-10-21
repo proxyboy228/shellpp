@@ -845,6 +845,21 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Whether [`Self::insert_snippet`] takes `script` without Enter now: a
+    /// script of several lines needs the shell's bracketed paste (D68: the
+    /// sidebar shows its insert as unavailable otherwise).
+    pub fn can_insert(&self, script: &str) -> bool {
+        let text = paste::sanitize(script).replace("\r\n", "\n");
+        let text = text.trim_end_matches(['\n', '\r']);
+        !paste::has_line_break(text)
+            || self
+                .handle()
+                .term()
+                .lock()
+                .mode()
+                .contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// A snippet from the terminal sidebar (UI 4.2), as injected input:
     /// `run` sends Enter after it. A script of several lines goes as one
     /// bracketed paste when the shell takes one, so nothing runs before
