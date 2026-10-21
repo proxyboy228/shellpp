@@ -162,6 +162,8 @@ pub(crate) struct SshTask {
     settings: SessionSettings,
     backoff: Backoff,
     os_checked: bool,
+    /// Logins whose startup snippet asked for values.
+    startup_asks: u64,
     unlocked: watch::Receiver<bool>,
     /// The error of the last drop, shown while automatic attempts are stopped.
     last_drop: SessionError,
@@ -195,6 +197,7 @@ impl SshTask {
             settings,
             backoff: Backoff::new(),
             os_checked: false,
+            startup_asks: 0,
             unlocked,
             last_drop: SessionError::ClosedByServer,
             info: None,
@@ -668,17 +671,24 @@ impl SshTask {
 
         // The startup snippet, after every login (UI 3.1): as injected
         // input, so its lines are never recorded in history. One with
-        // variables waits for the run form of the stage 5 interface.
+        // variables asks their values through the pane first (stage 5).
         if let Some(snippet) = &info.startup_snippet {
             if snippet.variables.is_empty() {
                 if let Some(terminal) = self.session.terminal() {
                     terminal.inject(super::strings::startup_input(&snippet.script));
                 }
             } else {
+                self.startup_asks += 1;
+                let ask = super::StartupAsk {
+                    login: self.startup_asks,
+                    script: snippet.script.clone(),
+                    variables: snippet.variables.clone(),
+                };
                 tracing::info!(
                     session = self.session.id,
-                    "startup snippet not run: it has variables"
+                    "startup snippet waits for its values"
                 );
+                self.update(|st| st.view.startup_ask = Some(ask));
             }
         }
         // Refused environment variables: one message per session (stage 5),

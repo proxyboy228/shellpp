@@ -473,6 +473,19 @@ async fn the_startup_snippet_runs_after_login() {
     );
     let session = harness.connect(target, false).await;
     assert!(session.terminal.injected().is_empty());
+    // It waits for its values: the pane asks them (stage 5).
+    let mut asked = None;
+    for _ in 0..100 {
+        asked = session.handle.view().startup_ask;
+        if asked.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let asked = asked.expect("the startup snippet asks its values");
+    assert_eq!(asked.variables, ["dir"]);
+    assert_eq!(asked.login, 1);
+    assert!(session.terminal.injected().is_empty());
     session.handle.close();
     server.shutdown().await;
 }

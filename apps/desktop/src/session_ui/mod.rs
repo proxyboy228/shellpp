@@ -212,6 +212,9 @@ pub struct SessionPane {
     /// Where on the route the failure happened (a jump host, the proxy, the
     /// chain; stage 5, D57); `None` on the host itself.
     place: Option<SharedString>,
+    /// A startup snippet waiting for its values, and the last login asked.
+    startup_pending: Option<crate::sessions::StartupAsk>,
+    startup_asked: u64,
     reconnect: Option<ReconnectInfo>,
     ask: Option<Ask>,
     paste: Option<PendingPaste>,
@@ -280,6 +283,8 @@ impl SessionPane {
             phase: Phase::Connecting(first),
             revoked: None,
             place: None,
+            startup_pending: None,
+            startup_asked: 0,
             reconnect: None,
             ask: None,
             paste: None,
@@ -516,6 +521,30 @@ impl SessionPane {
     /// The presented key of a revoked-key failure (shown on the failure
     /// screen).
     /// Where on the route the shown failure happened.
+    /// The startup snippet of a login waits for its values: asked once per
+    /// login, while the pane is active (see `render`).
+    pub fn set_startup_ask(
+        &mut self,
+        ask: Option<&crate::sessions::StartupAsk>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ask) = ask
+            && ask.login > self.startup_asked
+            && self
+                .startup_pending
+                .as_ref()
+                .is_none_or(|pending| pending.login != ask.login)
+        {
+            self.startup_pending = Some(ask.clone());
+            cx.notify();
+        }
+    }
+
+    /// Whether a startup snippet waits for its values form.
+    pub fn startup_pending(&self) -> bool {
+        self.startup_pending.is_some()
+    }
+
     pub fn set_place(&mut self, place: Option<SharedString>, cx: &mut Context<Self>) {
         if self.place != place {
             self.place = place;
@@ -811,6 +840,30 @@ impl Render for SessionPane {
             });
             let prompt = prompt.clone();
             *form = Some(cx.new(|cx| PromptForm::new(prompt, target, on_reply, window, cx)));
+        }
+        // A startup snippet's values (UI 3.1): asked in the active pane,
+        // not over another dialog; the filled script goes to the terminal
+        // as injected input with Enter.
+        if self.active
+            && self.phase == Phase::Running
+            && !window.has_active_dialog(cx)
+            && let Some(ask) = self.startup_pending.take()
+            && let Some(terminal) = self.terminal.clone()
+        {
+            self.startup_asked = ask.login;
+            window.defer(cx, move |window, cx| {
+                crate::snippets::ask_script_values(
+                    ask.script.clone(),
+                    &ask.variables,
+                    window,
+                    cx,
+                    move |script, _, cx| {
+                        terminal.update(cx, |terminal, cx| {
+                            terminal.insert_snippet(&script, true, cx);
+                        });
+                    },
+                );
+            });
         }
         // Not from under a modal kit dialog (Settings, a confirmation), nor
         // from the Rename field of the tab: the request waits until it is

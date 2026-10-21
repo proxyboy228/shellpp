@@ -65,9 +65,19 @@ pub fn ask_values(
         then(snippet.script.clone(), window, cx);
         return;
     }
-    let script = snippet.script.clone();
-    let inputs: Vec<(String, Entity<InputState>)> = snippet
-        .variables
+    ask_script_values(snippet.script.clone(), &snippet.variables, window, cx, then);
+}
+
+/// The values form for `script` and its `variables` (a host's startup
+/// snippet too, UI 3.1).
+pub fn ask_script_values(
+    script: String,
+    variables: &[String],
+    window: &mut Window,
+    cx: &mut App,
+    then: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
+    let inputs: Vec<(String, Entity<InputState>)> = variables
         .iter()
         .map(|name| {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(name.clone()));

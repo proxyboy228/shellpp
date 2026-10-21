@@ -1152,8 +1152,48 @@ fn layer_view(state: crate::sessions::SessionState) -> crate::sessions::SessionV
         exit_signal: None,
         reconnect: None,
         shell_id: None,
+        startup_ask: None,
         rev: 0,
     }
+}
+
+/// A startup snippet with variables (UI 3.1, stage 5): the active pane asks
+/// the values once per login, after the shell opened.
+#[gpui_kit::test]
+fn a_startup_snippet_asks_its_values_once_per_login(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+
+    use crate::sessions::{SessionState, StartupAsk};
+
+    let ui = Ui::open(cx);
+    let target = crate::hosts::parse_address("192.0.2.20:2200").unwrap();
+    let (_, pane) = ui.open_session(SessionRequest::new(SessionKind::Ssh).quick(target), cx);
+    let shown = Cell::new(None);
+    let mut view = layer_view(SessionState::Connected);
+    view.startup_ask = Some(StartupAsk {
+        login: 1,
+        script: "cd {{dir}}".into(),
+        variables: vec!["dir".into()],
+    });
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    ui.frame(cx);
+    assert!(ui.visible("snippet-variables-form", cx));
+    assert!(!cx.update(|cx| pane.read(cx).startup_pending()));
+    ui.click("snippet-variables-cancel", cx);
+    assert!(!ui.visible("snippet-variables-form", cx));
+    // The same login again: not asked twice.
+    view.rev += 1;
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(!ui.visible("snippet-variables-form", cx));
+    // The next login asks again.
+    view.startup_ask.as_mut().unwrap().login = 2;
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    ui.frame(cx);
+    assert!(ui.visible("snippet-variables-form", cx));
+    ui.finish(cx);
 }
 
 /// UI 4.4: a local terminal opened with the default shell takes over the

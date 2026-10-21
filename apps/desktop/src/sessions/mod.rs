@@ -74,7 +74,7 @@ pub use transport::{BoxFuture, Connector, SshConnector};
 pub use types::{
     ConnectStep, HostKeyChoice, HostKeyInfo, OpenRequest, PromptKind, PromptReply, ReconnectView,
     SaveOption, SessionError, SessionEvent, SessionId, SessionKind, SessionPrompt, SessionState,
-    SessionTarget, SessionView, WriteError,
+    SessionTarget, SessionView, StartupAsk, WriteError,
 };
 
 use charset::InputEncoder;
@@ -985,6 +985,7 @@ impl SessionManager {
                     exit_signal: None,
                     reconnect: None,
                     shell_id: None,
+                    startup_ask: None,
                     rev: 1,
                 };
                 let (session, ctrl, opened) =
@@ -1052,6 +1053,7 @@ impl SessionManager {
             exit_signal: None,
             reconnect: None,
             shell_id: None,
+            startup_ask: None,
             rev: 1,
         };
         let encoding = charset::encoding_for(&config.charset);

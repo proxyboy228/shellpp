@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 pub use form::{FormMode, SnippetForm};
 pub use history::ShellHistory;
-pub use run::{RunResults, RunRow, RunState, ask_values};
+pub use run::{RunResults, RunRow, RunState, ask_script_values, ask_values};
 
 use crate::shell::Toast;
 use crate::state::{AppState, AppStateEvent};

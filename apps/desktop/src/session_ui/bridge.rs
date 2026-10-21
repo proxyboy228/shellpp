@@ -195,6 +195,7 @@ pub fn apply(
         .then(|| view.host_key.as_ref().map(host_key_of))
         .flatten();
     pane.set_phase(phase, reconnect, cx);
+    pane.set_startup_ask(view.startup_ask.as_ref(), cx);
     pane.set_place(
         matches!(view.state, SessionState::Failed | SessionState::Dropped)
             .then(|| view.error_place.as_ref().map(place_of))

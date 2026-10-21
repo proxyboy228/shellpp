@@ -90,8 +90,30 @@ pub struct SessionView {
     /// for a custom shell path. Duplicate, a new split pane and Restore
     /// open the same shell with it (UI 4.4).
     pub shell_id: Option<String>,
+    /// The startup snippet of the last login waits for the values of its
+    /// variables (UI 3.1, 9.3; stage 5): the pane asks them and sends the
+    /// filled script.
+    pub startup_ask: Option<StartupAsk>,
     /// Increases with every change.
     pub rev: u64,
+}
+
+/// A startup snippet whose variables need values; `login` counts the
+/// logins of the session, so each is asked once.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StartupAsk {
+    pub login: u64,
+    pub script: String,
+    pub variables: Vec<String>,
+}
+
+impl std::fmt::Debug for StartupAsk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartupAsk")
+            .field("login", &self.login)
+            .field("variables", &self.variables.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for SessionView {
