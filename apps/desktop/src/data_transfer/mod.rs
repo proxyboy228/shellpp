@@ -233,8 +233,8 @@ impl ExportDialog {
         if !(self.secret_asked() && self.encrypt) {
             return Ok(None);
         }
-        let first = self.password.read(cx).value().to_string();
-        let second = self.repeat.read(cx).value().to_string();
+        let first = Zeroizing::new(self.password.read(cx).value().to_string());
+        let second = Zeroizing::new(self.repeat.read(cx).value().to_string());
         let mismatch = match self.format {
             ExportFormat::Data => strings::PASSWORD_MISMATCH,
             ExportFormat::OpenSsh => strings::PASSPHRASE_MISMATCH,
@@ -246,7 +246,7 @@ impl ExportDialog {
             cx.notify();
             return Err(());
         }
-        Ok(Some(SecretString::from(first)))
+        Ok(Some(SecretString::from(first.to_string())))
     }
 
     /// Checks the form, builds the file off the UI thread, then asks where

@@ -220,8 +220,9 @@ impl HostPanel {
 
     /// "Create an identity" of the hint (UI 3.1): saves a pending edit, lets
     /// the core create the identity and move every host of the hint onto it,
-    /// then shows this host as the core left it (identity linked; username,
-    /// password and key cleared), so a later autosave writes the same.
+    /// then shows this host as the core left it (identity linked, username
+    /// cleared, and the password and the key only where the identity now
+    /// holds them), so a later autosave writes the same.
     pub fn accept_identity_hint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(record_id) = self.record_id else {
             return;
@@ -244,15 +245,33 @@ impl HostPanel {
             record_id,
         }) {
             Ok(identity_id) => {
+                // The core keeps on the host what the identity does not hold
+                // (a key, the host's own password): the draft follows the
+                // stored host, so a later autosave does not clear them.
+                let stored = core
+                    .record_get(RecordRef {
+                        vault_id,
+                        record_id,
+                    })
+                    .ok()
+                    .and_then(|view| match view {
+                        shellpp_core::service::dto::RecordView::Host(host) => Some(host),
+                        _ => None,
+                    });
+                let ssh = stored.as_ref().and_then(|host| host.data.get("ssh"));
                 self.draft.identity_id = Some(identity_id);
-                self.draft.key_id = None;
+                self.draft.key_id = ssh
+                    .and_then(|ssh| ssh.get("key_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|raw| uuid::Uuid::parse_str(raw).ok());
                 self.draft.username.clear();
                 self.username
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 self.password
                     .update(cx, |input, cx| input.set_value("", window, cx));
                 self.password_dirty = false;
-                self.password_stored = false;
+                self.password_stored = stored
+                    .is_some_and(|host| host.secrets_set.iter().any(|path| path == "ssh.password"));
                 self.autosave.cancel();
                 self.credentials.hint = None;
                 self.refresh_keychain(cx);

@@ -58,11 +58,12 @@ pub struct IdentityHint {
     pub hosts: Vec<Uuid>,
 }
 
-/// The credentials of a host that a hint compares.
+/// The credentials of a host that a hint compares (the password wiped on
+/// drop).
 struct Credentials {
     id: Uuid,
     username: String,
-    password: Option<String>,
+    password: Option<zeroize::Zeroizing<String>>,
     key: Option<Uuid>,
 }
 
@@ -103,7 +104,7 @@ impl Core {
                     password: ssh_member(data, "password")
                         .and_then(Value::as_str)
                         .filter(|password| !password.is_empty())
-                        .map(str::to_owned),
+                        .map(|password| zeroize::Zeroizing::new(password.to_owned())),
                     key: uuid_member(data, "key_id")
                         .or_else(|| inherited.key_id.map(|value| value.value)),
                 })
@@ -207,7 +208,7 @@ impl Core {
             input.insert("key_id".into(), json!(key.to_string()));
         }
         let password = match shared_password {
-            Some(password) => PasswordChange::Set(SecretString::from(password.clone())),
+            Some(password) => PasswordChange::Set(SecretString::from(password.as_str().to_owned())),
             None => PasswordChange::Keep,
         };
         let built = identity::build(&input, None, &password).map_err(CoreError::Validation)?;

@@ -709,4 +709,19 @@ fn the_effective_jump_chain_is_counted() {
     assert_eq!(config(&u, inherited.record_id).jump_hosts, 1);
     assert_eq!(config(&u, stopped.record_id).jump_hosts, 0);
     assert_eq!(config(&u, bastion.record_id).jump_hosts, 0);
+    // A bastion inside the group whose chain names it is not its own hop.
+    let own = u.group(json!({"name": "with its bastion"}));
+    let inner = u.host(json!({"address": "192.0.2.61", "group_id": own.record_id.to_string()}));
+    let neighbour = u.host(json!({"address": "192.0.2.62", "group_id": own.record_id.to_string()}));
+    common::save(
+        &u.core,
+        u.vault_id,
+        Some(own.record_id),
+        shellpp_core::service::dto::RecordType::Group,
+        json!({"name": "with its bastion", "ssh": {"jump_chain": [inner.record_id.to_string()]}}),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(config(&u, inner.record_id).jump_hosts, 0);
+    assert_eq!(config(&u, neighbour.record_id).jump_hosts, 1);
 }

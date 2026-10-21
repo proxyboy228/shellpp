@@ -431,3 +431,59 @@ fn a_group_identity_supplies_its_hosts_and_own_values_win() {
         Some("own password".to_owned())
     );
 }
+
+/// A host that names an identity uses that one: when it is missing (for
+/// example deleted on another device), the host does not fall back to its
+/// group's identity (data-model 8.3).
+#[test]
+fn a_missing_own_identity_does_not_fall_back_to_the_group() {
+    let u = first_run();
+    let vault = u.vault_id;
+    let group_secret = format!("pw-{}", common::random_hex());
+    let group_identity = u
+        .core
+        .identity_save(IdentitySaveInput {
+            vault_id: vault,
+            record_id: None,
+            label: "ops".into(),
+            username: "ops".into(),
+            key_id: None,
+            password: PasswordChange::Set(secrecy::SecretString::from(group_secret)),
+        })
+        .unwrap()
+        .record_id;
+    let group = save(
+        &u.core,
+        vault,
+        None,
+        RecordType::Group,
+        json!({"name": "prod", "ssh": {"identity_id": group_identity.to_string()}}),
+        &[],
+    )
+    .unwrap();
+    let host = save(
+        &u.core,
+        vault,
+        None,
+        RecordType::Host,
+        json!({
+            "address": "192.0.2.51",
+            "group_id": group.record_id().to_string(),
+            "ssh": {"identity_id": uuid::Uuid::now_v7().to_string()}
+        }),
+        &[],
+    )
+    .unwrap()
+    .record_id();
+    let config = u
+        .core
+        .session_config(&SessionTarget::Host {
+            vault_id: vault,
+            record_id: host,
+        })
+        .unwrap();
+    assert!(
+        config.password.is_none(),
+        "never the group identity's password"
+    );
+}

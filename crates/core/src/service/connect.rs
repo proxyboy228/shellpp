@@ -591,14 +591,18 @@ impl Core {
                     .or_else(|| own_identity.and_then(identity::username).map(str::to_owned))
                     .or_else(|| inherited.username.map(|name| name.value));
                 // password = host.ssh.password ?? identity.password, where
-                // identity = first(identity_id).
-                let linked = own_identity.or_else(|| {
+                // identity = first(identity_id): a host that names an identity
+                // uses that one, even when it is missing (no silent fallback
+                // to a group's credentials, data-model 8.3).
+                let linked = if uuid_member(ssh, "identity_id").is_some() {
+                    own_identity
+                } else {
                     inherited
                         .identity_id
                         .as_ref()
                         .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
                         .map(|record| record.data())
-                });
+                };
                 let password = host::secret_value(data, "ssh.password")
                     .or_else(|| linked.and_then(identity::password))
                     .map(|password| SecretString::from(password.to_owned()));
@@ -638,8 +642,12 @@ impl Core {
                     os,
                     known_key_types: known_hosts::known_key_types(&entries, &address, port),
                     can_save_password: true,
+                    // A bastion in the group whose chain names it is not its
+                    // own hop.
                     jump_hosts: jump_chain_len(ssh).unwrap_or_else(|| {
-                        inherited.jump_chain.map_or(0, |chain| chain.value.len())
+                        inherited.jump_chain.map_or(0, |chain| {
+                            chain.value.iter().filter(|hop| *hop != record_id).count()
+                        })
                     }),
                     address,
                 })

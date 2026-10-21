@@ -274,9 +274,11 @@ impl Core {
                 format_timestamp(now)
             );
             for (path, _, id, data) in &hosts {
+                // As a connection resolves them (data-model 8.3): the host's
+                // own value, else its own identity's, else the groups' (each
+                // with its identity, already in `inherited`).
                 let inherited = index.inherited_for_host(&tree, data);
                 let identity = ssh_uuid(data, "identity_id")
-                    .or_else(|| inherited.identity_id.as_ref().map(|value| value.value))
                     .and_then(|id| index.get_kind(&id, RecordKind::Identity))
                     .map(|record| record.data());
                 let username = ssh_str(data, "username")

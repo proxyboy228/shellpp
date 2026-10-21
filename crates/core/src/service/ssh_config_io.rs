@@ -10,8 +10,9 @@
 //!   and the first one is linked as `ssh.key_id`;
 //! - `ProxyJump` → `ssh.jump_chain` when every hop is a host of this
 //!   config or of an earlier import (Host Chaining works from stage 5);
-//!   otherwise no chain is set, the host's notes say so and the summary
-//!   counts it, so a host never silently connects directly;
+//!   otherwise the chain keeps the missing hop (the nil id), the host's
+//!   notes say so and the summary counts it, so the host is refused at
+//!   connect instead of connecting directly (D44);
 //! - `ForwardAgent` → `ssh.agent_forwarding`, `ServerAliveInterval` →
 //!   `ssh.keepalive_s` (at most 3600), `SetEnv` → `ssh.env`;
 //! - `ProxyCommand` → the host is not imported ("not supported");
@@ -597,32 +598,36 @@ impl Core {
                 ssh.insert("key_id".into(), json!(key_id.to_string()));
             }
             let mut notes = plan.notes.clone();
-            let chain: Option<Vec<String>> = plan
+            // A hop that is neither imported now nor before stays in the
+            // chain as a missing host (the nil id): the host is then refused
+            // at connect (D44) and, with Host Chaining, fails naming the
+            // missing hop, instead of connecting directly.
+            let chain: Vec<String> = plan
                 .jump
                 .iter()
-                .map(|hop| imported.get(&hop.to_lowercase()).map(Uuid::to_string))
+                .map(|hop| {
+                    imported
+                        .get(&hop.to_lowercase())
+                        .copied()
+                        .unwrap_or_else(Uuid::nil)
+                        .to_string()
+                })
                 .collect();
-            match chain {
-                Some(chain) if !chain.is_empty() => {
-                    ssh.insert("jump_chain".into(), json!(chain));
-                }
-                Some(_) => {}
-                None => {
-                    // A hop that is neither imported now nor before: no
-                    // chain, and the host says so instead of connecting
-                    // directly without a word.
-                    let missing: Vec<&str> = plan
-                        .jump
-                        .iter()
-                        .filter(|hop| !imported.contains_key(&hop.to_lowercase()))
-                        .map(String::as_str)
-                        .collect();
-                    notes.push(format!(
-                        "ProxyJump {} was not imported, so no jump hosts are set",
-                        missing.join(", ")
-                    ));
-                    summary.jump_chains_left_out += 1;
-                }
+            if !chain.is_empty() {
+                ssh.insert("jump_chain".into(), json!(chain));
+            }
+            let missing: Vec<&str> = plan
+                .jump
+                .iter()
+                .filter(|hop| !imported.contains_key(&hop.to_lowercase()))
+                .map(String::as_str)
+                .collect();
+            if !missing.is_empty() {
+                notes.push(format!(
+                    "ProxyJump {} was not imported: the jump host is missing, so the host is not connected",
+                    missing.join(", ")
+                ));
+                summary.jump_chains_left_out += 1;
             }
             let mut data = Map::new();
             data.insert("label".into(), json!(plan.alias));

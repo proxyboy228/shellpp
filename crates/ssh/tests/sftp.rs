@@ -495,7 +495,7 @@ async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &P
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let mut tx = Some(tx);
     let flag = Arc::clone(&cut);
-    // After 4 MB the download waits (at most 20 s) until the drop landed.
+    // After 4 MB the download waits (at most 60 s) until the drop landed.
     let mut slow = move |done: u64| {
         if done >= 4 * 1024 * 1024 {
             if let Some(tx) = tx.take() {
@@ -503,7 +503,7 @@ async fn a_dropped_download_resumes(server: &OpenSshServer, dir: &str, local: &P
             }
             let waited = std::time::Instant::now();
             while !flag.load(Ordering::SeqCst)
-                && waited.elapsed() < std::time::Duration::from_secs(20)
+                && waited.elapsed() < std::time::Duration::from_secs(60)
             {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }

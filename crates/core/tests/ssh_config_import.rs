@@ -413,14 +413,26 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
             .iter()
             .find(|host| host.data["label"] == label)
             .unwrap();
-        assert!(
-            host.data["ssh"]
-                .get("jump_chain")
-                .is_none_or(Value::is_null),
+        // The missing hop stays in the chain, so the host is refused at
+        // connect (D44) instead of connecting directly.
+        assert_eq!(
+            host.data["ssh"]["jump_chain"],
+            json!([uuid::Uuid::nil().to_string()]),
             "{label}"
         );
         let notes = host.data["notes"].as_str().unwrap_or_default();
-        assert!(notes.contains("no jump hosts are set"), "{label}: {notes}");
+        assert!(
+            notes.contains("the jump host is missing"),
+            "{label}: {notes}"
+        );
+        let config = u
+            .core
+            .session_config(&shellpp_core::service::dto::SessionTarget::Host {
+                vault_id: u.vault_id,
+                record_id: host.record_id,
+            })
+            .unwrap();
+        assert_eq!(config.jump_hosts, 1, "{label}");
     }
 }
 
@@ -476,5 +488,8 @@ fn no_jump_chain_points_at_a_host_that_was_refused() {
         .collect();
     let app = &hosts[0].data;
     assert_eq!(app["label"], "app");
-    assert!(app["ssh"].get("jump_chain").is_none_or(Value::is_null));
+    assert_eq!(
+        app["ssh"]["jump_chain"],
+        json!([uuid::Uuid::nil().to_string()])
+    );
 }

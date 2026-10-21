@@ -1320,7 +1320,8 @@ pub struct SshConfigImportSummary {
     /// Key files left out (missing, invalid, no passphrase given).
     pub keys_skipped: usize,
     /// Imported hosts whose `ProxyJump` names a host that was not imported:
-    /// no jump chain is set (their notes say so).
+    /// the chain keeps the missing hop and the host is not connected (their
+    /// notes say so).
     pub jump_chains_left_out: usize,
     /// Commands of the file that were neither run nor stored
     /// (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,

@@ -381,8 +381,8 @@ On the right:
   options that are not imported; then the key files with their status and, for an encrypted
   one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
   not be read. An imported host keeps what was left out in its notes; a host whose ProxyJump
-  names a host that is not imported gets no jump hosts and a note that says so, never a
-  silent direct connection. The summary adds, when there are any, the hosts left without
+  names a host that is not imported keeps that hop in its chain as a missing host, with a
+  note that says so, so it is not connected (D44), never silently connected directly. The summary adds, when there are any, the hosts left without
   their jump hosts and the commands of the file that were neither run nor imported
   (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec). [decision]
 

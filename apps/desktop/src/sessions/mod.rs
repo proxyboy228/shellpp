@@ -668,7 +668,6 @@ fn clamp_size(value: u16) -> u16 {
     value.clamp(*SIZE_RANGE.start(), *SIZE_RANGE.end())
 }
 
-/// The error of a core failure while opening or resolving a session.
 /// A host with jump hosts is refused until they are supported (stage 5):
 /// connecting directly would send its credentials to whatever answers at
 /// that address from here.
@@ -682,6 +681,7 @@ pub(crate) fn refuse_jump_hosts(
     }
 }
 
+/// The error of a core failure while opening or resolving a session.
 pub(crate) fn core_error(error: &CoreError) -> SessionError {
     match error {
         CoreError::NotFound => SessionError::HostMissing,
