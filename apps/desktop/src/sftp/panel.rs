@@ -637,7 +637,18 @@ impl FilePanel {
                 let work = remote.handle.spawn(async move {
                     sftp.list(&path)
                         .await
-                        .map(|entries| entries.iter().map(local::from_remote).collect::<Vec<_>>())
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                // A name a server should never send (a
+                                // separator, "." or ".."): it would lead
+                                // every operation outside this folder.
+                                .filter(|entry| {
+                                    valid_name(&entry.name) && entry.name == entry.name.trim()
+                                })
+                                .map(local::from_remote)
+                                .collect::<Vec<_>>()
+                        })
                         .map_err(|error| error.to_string())
                 });
                 self.listing = Some(cx.spawn(async move |this, cx| {

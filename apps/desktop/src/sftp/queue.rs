@@ -218,13 +218,25 @@ impl Transfers {
         let (parallel, _) = settings(&self.state, cx);
         self.queue.set_parallel(parallel);
         for entry in entries {
+            // Only one plain name goes into a path (never a separator, "."
+            // or ".."), whatever a listing held.
+            if !super::panel::valid_name(&entry.name) {
+                continue;
+            }
             let direction = direction(&from, &to);
             let total = (!entry.is_folder_like()).then_some(entry.size);
             let id = self.queue.add(&entry.name, direction, total);
+            // A name this system's files cannot have gets the suggestion of
+            // D46 (Windows: reserved names and characters).
+            let name = match (&to, cfg!(windows)) {
+                (Place::Local(_), true) => shellpp_ssh::local_names::windows_safe_name(&entry.name)
+                    .unwrap_or_else(|| entry.name.clone()),
+                _ => entry.name.clone(),
+            };
             self.jobs.insert(
                 id,
                 Job {
-                    name: entry.name.clone(),
+                    name,
                     entry,
                     from: from.clone(),
                     to: to.clone(),
