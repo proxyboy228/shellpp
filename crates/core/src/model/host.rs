@@ -64,6 +64,7 @@ const SSH_KNOWN: &[&str] = &[
     "env",
     "keepalive_s",
     "mosh",
+    "allow_legacy_algorithms",
 ];
 
 const PROXY_KNOWN: &[&str] = &["type", "address", "port", "username", "password"];
@@ -336,6 +337,7 @@ fn normalize_ssh(
         "agent_forward_system",
         "agent_confirm",
         "mosh",
+        "allow_legacy_algorithms",
     ] {
         let field = format!("ssh.{member}");
         if let Some(flag) = opt_bool(ssh, member, &field, errors) {

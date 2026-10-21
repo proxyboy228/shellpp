@@ -1,0 +1,45 @@
+# sshd configuration of the OpenSSH 7.4 compatibility image (CentOS 7). The
+# users and methods of tests/openssh/sshd_config, in the options 7.4 knows.
+
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_rsa_key
+LogLevel INFO
+PermitRootLogin no
+StrictModes yes
+LoginGraceTime 60
+MaxAuthTries 6
+MaxSessions 10
+MaxStartups 100
+UseDNS no
+UsePAM yes
+PubkeyAuthentication yes
+PasswordAuthentication yes
+ChallengeResponseAuthentication yes
+PermitEmptyPasswords no
+HostbasedAuthentication no
+IgnoreRhosts yes
+AuthorizedKeysFile .ssh/authorized_keys
+AllowAgentForwarding yes
+AllowTcpForwarding yes
+GatewayPorts no
+X11Forwarding no
+PermitTunnel no
+PermitUserEnvironment no
+AcceptEnv LANG LC_* SHELLPP_*
+Subsystem sftp internal-sftp
+PrintMotd no
+PrintLastLog no
+AllowUsers pwuser keyuser kiuser
+
+Match User pwuser
+    AuthenticationMethods password
+
+Match User keyuser
+    AuthenticationMethods publickey
+
+Match User kiuser
+    AuthenticationMethods keyboard-interactive

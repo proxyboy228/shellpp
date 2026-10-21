@@ -282,6 +282,37 @@ fn connection_screen_steps_cancel_and_failure(cx: &mut TestAppContext) {
         assert!(ui.visible("failed-retry", cx));
     }
 
+    // No common algorithm (D80): what the server offers, what we support,
+    // and the legacy setting when it would help.
+    let mismatch = shellpp_ssh::AlgorithmMismatch::from_offer(
+        shellpp_ssh::AlgorithmKind::KeyExchange,
+        &["diffie-hellman-group14-sha1".to_owned()],
+    );
+    set_phase(
+        &ui,
+        &pane,
+        Phase::Failed(Failure::NoCommonAlgorithm(mismatch)),
+        None,
+        cx,
+    );
+    assert!(ui.visible("failure-no_common_algorithm", cx));
+    assert!(ui.visible("failure-algorithms-offered", cx));
+    assert!(ui.visible("failure-algorithms-supported", cx));
+    assert!(ui.visible("failure-algorithms-legacy", cx));
+    let unknown = shellpp_ssh::AlgorithmMismatch::from_offer(
+        shellpp_ssh::AlgorithmKind::Cipher,
+        &["3des-cbc".to_owned()],
+    );
+    set_phase(
+        &ui,
+        &pane,
+        Phase::Failed(Failure::NoCommonAlgorithm(unknown)),
+        None,
+        cx,
+    );
+    assert!(ui.visible("failure-algorithms-offered", cx));
+    assert!(!ui.visible("failure-algorithms-legacy", cx));
+
     // Close ends the session and closes the tab (Vaults: no neighbor).
     ui.click("failed-close", cx);
     assert_eq!(ui.record.calls().last(), Some(&Call::Close));

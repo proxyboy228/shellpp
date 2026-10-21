@@ -330,6 +330,8 @@ pub struct HostDraft {
     pub record_output: OverrideMode,
     /// `ssh.mosh` (lead decision 2: shown, only the value is saved).
     pub mosh: bool,
+    /// `ssh.allow_legacy_algorithms` (off by default; D80).
+    pub allow_legacy_algorithms: bool,
     /// A built-in theme slug; `None`: the global default (Graphite).
     pub terminal_theme: Option<String>,
     /// The Telnet block; `None` until Add Telnet.
@@ -581,6 +583,10 @@ impl HostDraft {
             record_history: OverrideMode::parse(str_of(data, "record_history")),
             record_output: OverrideMode::parse(str_of(data, "record_output")),
             mosh: ssh.get("mosh").and_then(Value::as_bool).unwrap_or(false),
+            allow_legacy_algorithms: ssh
+                .get("allow_legacy_algorithms")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             terminal_theme: data
                 .get("terminal_theme")
                 .and_then(|theme| theme.get("builtin"))
@@ -763,6 +769,7 @@ impl HostDraft {
             ("agent_forward_system", self.agent_forward_system),
             ("agent_confirm", self.agent_confirm),
             ("mosh", self.mosh),
+            ("allow_legacy_algorithms", self.allow_legacy_algorithms),
         ] {
             if flag {
                 ssh.insert(member.into(), Value::Bool(true));

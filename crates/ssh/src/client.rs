@@ -174,6 +174,9 @@ pub struct ConnectSpec {
     /// Host key algorithms already saved for this host in known hosts, most
     /// preferred first, so that the server presents a key the store knows.
     pub preferred_host_key_types: Vec<String>,
+    /// The host setting "Allow legacy algorithms" (off by default, D80):
+    /// also offer the SHA-1 and CBC algorithms, after all modern ones.
+    pub allow_legacy_algorithms: bool,
     /// Jump hosts connected in this order before this host (stage 5).
     pub jump_hosts: Vec<JumpHost>,
     /// The proxy of the route's first connection: the first jump host, or
@@ -553,7 +556,10 @@ async fn open_transport(
 fn client_config(spec: &ConnectSpec) -> russh::client::Config {
     russh::client::Config {
         client_id: russh::SshId::Standard(std::borrow::Cow::Borrowed(CLIENT_ID)),
-        preferred: crate::algorithms::preferred(&spec.preferred_host_key_types),
+        preferred: crate::algorithms::preferred(
+            &spec.preferred_host_key_types,
+            spec.allow_legacy_algorithms,
+        ),
         // Own keepalive task after authentication (module documentation).
         keepalive_interval: None,
         inactivity_timeout: None,
@@ -1505,6 +1511,7 @@ mod tests {
             keepalive: None,
             connect_timeout: Duration::from_secs(1),
             preferred_host_key_types: vec![],
+            allow_legacy_algorithms: false,
             jump_hosts: Vec::new(),
             proxy: None,
             forward_agent: None,
@@ -1550,6 +1557,7 @@ mod tests {
             keepalive: None,
             connect_timeout: Duration::from_secs(15),
             preferred_host_key_types: vec![],
+            allow_legacy_algorithms: false,
             jump_hosts: Vec::new(),
             proxy: None,
             forward_agent: None,

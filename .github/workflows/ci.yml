@@ -73,7 +73,7 @@ jobs:
 
       # Scripts of the OpenSSH test server (tests/openssh).
       - name: shellcheck
-        run: shellcheck tests/openssh/*.sh
+        run: shellcheck tests/openssh/*.sh tests/openssh/variants/*.sh tests/openssh/compat/*.sh
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -265,6 +265,22 @@ jobs:
 
       - name: Desktop session tests (OpenSSH in Docker)
         run: cargo test --locked -p shellpp-desktop --test sessions -- --nocapture
+
+      # The server compatibility matrix (docs/compatibility.md, D80): each
+      # server and variant in its own container.
+      - name: Server compatibility matrix (Docker)
+        run: |
+          docker build --tag shellpp-compat-centos7:ci -f tests/openssh/compat/centos7.Dockerfile tests/openssh
+          docker build --tag shellpp-compat-dropbear:ci -f tests/openssh/compat/dropbear.Dockerfile tests/openssh
+          for entry in               "$SHELLPP_OPENSSH_IMAGE|"               "shellpp-compat-centos7:ci|"               "shellpp-compat-dropbear:ci|"               "$SHELLPP_OPENSSH_IMAGE|legacy-sha1"               "$SHELLPP_OPENSSH_IMAGE|kbd-2fa"               "$SHELLPP_OPENSSH_IMAGE|no-sftp"               "$SHELLPP_OPENSSH_IMAGE|motd-banner"; do
+            image="${entry%%|*}"
+            variant="${entry#*|}"
+            workdir="$(mktemp -d)"
+            json="$(SHELLPP_OPENSSH_IMAGE="$image" SHELLPP_OPENSSH_VARIANT="$variant" bash tests/openssh/start.sh "$workdir")"
+            SHELLPP_OPENSSH_SERVER_JSON="$json" cargo test --locked -p shellpp-ssh --test compat -- --nocapture
+            bash tests/openssh/stop.sh "$workdir"
+            rm -rf "$workdir"
+          done
 
       # A hashed known_hosts entry imported for the server's real key.
       - name: Desktop known_hosts import tests (OpenSSH in Docker)

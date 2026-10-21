@@ -27,6 +27,37 @@ pub const REASON_AUTH_FAILED: &str =
     "Authentication failed. The server did not accept the username, password or key.";
 pub const REASON_CANCELLED: &str = "The connection was cancelled.";
 pub const REASON_PROTOCOL: &str = "The server and Shell++ could not agree on the SSH protocol.";
+
+/// No common algorithm (D80).
+pub fn no_common_algorithm(kind: shellpp_ssh::AlgorithmKind) -> &'static str {
+    use shellpp_ssh::AlgorithmKind as K;
+    match kind {
+        K::KeyExchange => "The server and Shell++ have no key exchange algorithm in common.",
+        K::HostKey => "The server and Shell++ have no host key algorithm in common.",
+        K::Cipher => "The server and Shell++ have no cipher in common.",
+        K::Mac => "The server and Shell++ have no MAC algorithm in common.",
+        K::Compression => "The server and Shell++ have no compression method in common.",
+    }
+}
+
+/// "The server offers: a, b (and 2 others)." Only names Shell++ knows are
+/// shown, never the server's own text.
+pub fn server_offers(names: &[&str], others: usize) -> String {
+    match (names.is_empty(), others) {
+        (true, 0) => "The server offers nothing.".to_owned(),
+        (true, n) => format!("The server offers {n} algorithms Shell++ does not know."),
+        (false, 0) => format!("The server offers: {}.", names.join(", ")),
+        (false, 1) => format!("The server offers: {} and 1 other.", names.join(", ")),
+        (false, n) => format!("The server offers: {} and {n} others.", names.join(", ")),
+    }
+}
+
+/// "Shell++ supports: …"
+pub fn we_support(names: &[&str]) -> String {
+    format!("Shell++ supports: {}.", names.join(", "))
+}
+
+pub const LEGACY_HINT: &str = "The server offers only legacy (SHA-1 or CBC) algorithms. To connect anyway, turn on Allow legacy algorithms in the host's SSH settings.";
 pub const REASON_CHANNEL_FAILED: &str = "The server refused to open the session.";
 pub const REASON_DISCONNECTED: &str = "The server closed the connection.";
 pub const REASON_CONNECTION_LOST: &str = "The connection was lost. Check the network connection.";

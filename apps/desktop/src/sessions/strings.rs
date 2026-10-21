@@ -133,6 +133,9 @@ pub fn error_message(error: SessionError) -> &'static str {
             FailureKind::AuthFailed => "Authentication failed.",
             FailureKind::Cancelled => "The connection was cancelled.",
             FailureKind::Protocol => "The SSH handshake with the server failed.",
+            FailureKind::NoCommonAlgorithm(_) => {
+                "The server and Shell++ have no algorithm in common."
+            }
             FailureKind::ChannelFailed => "The server refused to open a session.",
             FailureKind::Disconnected => "The server closed the connection.",
             FailureKind::KeyUnusable => "The private key could not be used.",

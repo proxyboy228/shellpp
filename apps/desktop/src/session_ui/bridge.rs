@@ -357,6 +357,7 @@ pub fn failure_of(error: SessionError) -> Failure {
             FailureKind::AuthFailed => Failure::AuthFailed,
             FailureKind::Cancelled => Failure::Cancelled,
             FailureKind::Protocol => Failure::Protocol,
+            FailureKind::NoCommonAlgorithm(mismatch) => Failure::NoCommonAlgorithm(mismatch),
             FailureKind::ChannelFailed => Failure::ChannelFailed,
             FailureKind::Disconnected => Failure::Disconnected,
             FailureKind::KeyUnusable => Failure::KeyUnusable,

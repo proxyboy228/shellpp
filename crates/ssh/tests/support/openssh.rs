@@ -53,6 +53,9 @@ pub struct OpenSshServer {
     /// User name and the private key text (no passphrase).
     pub key_user: (String, String),
     pub ki_user: (String, String),
+    /// The server variant of `start.sh` (`SHELLPP_OPENSSH_VARIANT`; empty:
+    /// none).
+    pub variant: String,
 }
 
 #[allow(clippy::print_stderr)]
@@ -143,6 +146,11 @@ impl OpenSshServer {
                 string(&["users", "keyboard_interactive", "name"]),
                 string(&["users", "keyboard_interactive", "password"]),
             ),
+            variant: description
+                .get("variant")
+                .and_then(Json::str)
+                .unwrap_or_default()
+                .to_owned(),
             dir: path.parent().map(Path::to_path_buf).unwrap_or_default(),
             workdir,
         }

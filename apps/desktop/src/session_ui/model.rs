@@ -74,6 +74,9 @@ pub enum Failure {
     /// The user cancelled the attempt.
     Cancelled,
     Protocol,
+    /// No algorithm in common in one negotiation (D80): what the server
+    /// offered, by known names only.
+    NoCommonAlgorithm(shellpp_ssh::AlgorithmMismatch),
     ChannelFailed,
     /// The server closed the connection during the handshake.
     Disconnected,
@@ -117,6 +120,7 @@ impl Failure {
             Failure::AuthFailed => strings::REASON_AUTH_FAILED,
             Failure::Cancelled => strings::REASON_CANCELLED,
             Failure::Protocol => strings::REASON_PROTOCOL,
+            Failure::NoCommonAlgorithm(mismatch) => strings::no_common_algorithm(mismatch.kind()),
             Failure::ChannelFailed => strings::REASON_CHANNEL_FAILED,
             Failure::Disconnected => strings::REASON_DISCONNECTED,
             Failure::ConnectionLost => strings::REASON_CONNECTION_LOST,
@@ -160,6 +164,7 @@ impl Failure {
             Failure::AuthFailed => "auth_failed",
             Failure::Cancelled => "cancelled",
             Failure::Protocol => "protocol",
+            Failure::NoCommonAlgorithm(_) => "no_common_algorithm",
             Failure::ChannelFailed => "channel_failed",
             Failure::Disconnected => "disconnected",
             Failure::ConnectionLost => "connection_lost",
@@ -179,7 +184,7 @@ impl Failure {
     }
 
     /// Every reason (tests).
-    pub const ALL: [Failure; 24] = [
+    pub const ALL: [Failure; 25] = [
         Failure::NotFound,
         Failure::Refused,
         Failure::Timeout,
@@ -189,6 +194,9 @@ impl Failure {
         Failure::AuthFailed,
         Failure::Cancelled,
         Failure::Protocol,
+        Failure::NoCommonAlgorithm(shellpp_ssh::AlgorithmMismatch::new(
+            shellpp_ssh::AlgorithmKind::KeyExchange,
+        )),
         Failure::ChannelFailed,
         Failure::Disconnected,
         Failure::ConnectionLost,

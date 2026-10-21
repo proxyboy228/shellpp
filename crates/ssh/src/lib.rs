@@ -45,6 +45,7 @@ pub mod transfer_queue;
 mod transport;
 
 pub use agent::{AgentKeys, AgentLocation, ConfirmSignature, ForwardedAgent, SystemAgent};
+pub use algorithms::supported as supported_algorithms;
 pub use authorized_keys::{ExportOutcome, export_public_key};
 pub use client::{
     AuthMethod, AuthOutcome, AuthPlan, BoxFuture, ConnectSpec, ConnectStep, Connection, ExecOutput,
@@ -52,7 +53,7 @@ pub use client::{
     PromptAnswer, PromptedSecrets, SessionEnd, Shell, ShellEvent, ShellRequest, ShellWriter,
     connect,
 };
-pub use error::{FailureKind, FailurePlace, SshError};
+pub use error::{AlgorithmKind, AlgorithmMismatch, FailureKind, FailurePlace, SshError};
 pub use forward::{
     Bound, Forward, ForwardEnd, ForwardError, ForwardKind, ForwardSpec, HostForwarder, RuleStatus,
 };

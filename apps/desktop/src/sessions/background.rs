@@ -102,6 +102,7 @@ fn spec_of(config: &SessionConfig) -> ConnectSpec {
             .then(|| Duration::from_secs(u64::from(config.keepalive_s))),
         connect_timeout: CONNECT_TIMEOUT,
         preferred_host_key_types: config.known_key_types.clone(),
+        allow_legacy_algorithms: config.allow_legacy_algorithms,
         jump_hosts: Vec::new(),
         proxy: None,
         forward_agent: None,

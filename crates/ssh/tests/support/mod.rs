@@ -94,6 +94,7 @@ pub fn spec(addr: SocketAddr, username: Option<&str>, auth: AuthPlan) -> Connect
         keepalive: None,
         connect_timeout: Duration::from_secs(10),
         preferred_host_key_types: Vec::new(),
+        allow_legacy_algorithms: false,
         jump_hosts: Vec::new(),
         proxy: None,
         forward_agent: None,

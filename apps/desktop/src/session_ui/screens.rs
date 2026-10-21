@@ -259,6 +259,51 @@ pub fn failed(
             .text_center()
             .child(place)
     });
+    // No common algorithm (D80): what the server offers, what we support,
+    // and whether the host's legacy setting would help.
+    let algorithms = match reason {
+        Failure::NoCommonAlgorithm(mismatch) => {
+            let line = |id: &'static str, text: String| {
+                div()
+                    .id(id)
+                    .test_support()
+                    .max_w(px(560.))
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(theme.muted_foreground)
+                    .text_center()
+                    .child(text)
+            };
+            Some(
+                v_flex()
+                    .items_center()
+                    .gap(metrics::SPACE_1)
+                    .child(line(
+                        "failure-algorithms-offered",
+                        strings::server_offers(&mismatch.offered(), mismatch.others()),
+                    ))
+                    .child(line(
+                        "failure-algorithms-supported",
+                        strings::we_support(&shellpp_ssh::supported_algorithms(
+                            mismatch.kind(),
+                            false,
+                        )),
+                    ))
+                    .when(mismatch.legacy_would_help(), |this| {
+                        this.child(
+                            div()
+                                .id("failure-algorithms-legacy")
+                                .test_support()
+                                .max_w(px(560.))
+                                .text_size(metrics::FONT_SIZE_BODY)
+                                .text_color(theme.foreground)
+                                .text_center()
+                                .child(strings::LEGACY_HINT),
+                        )
+                    }),
+            )
+        }
+        _ => None,
+    };
     // A revoked key cannot continue (UI 10.2), a missing host or an invalid
     // target fails again: no Retry.
     let blocked = !reason.can_retry();
@@ -289,7 +334,8 @@ pub fn failed(
                     .gap(metrics::SPACE_2)
                     .child(status)
                     .children(place)
-                    .child(reason_text),
+                    .child(reason_text)
+                    .children(algorithms),
             )
             .children(revoked.map(|key| host_key::revoked_block(key, cx)))
             .child(buttons),

@@ -1973,6 +1973,21 @@ impl HostPanel {
                 this.draft.mosh = *checked;
                 this.changed(cx);
             }));
+        // Legacy algorithms (D80): off by default; on, the warning stays.
+        let legacy = Switch::new("host-legacy-algorithms")
+            .checked(self.draft.allow_legacy_algorithms)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.draft.allow_legacy_algorithms = *checked;
+                this.changed(cx);
+            }));
+        let legacy_warning = self.draft.allow_legacy_algorithms.then(|| {
+            div()
+                .id("host-legacy-warning")
+                .test_support()
+                .text_size(metrics::FONT_SIZE_CAPTION)
+                .text_color(cx.theme().warning)
+                .child(strings::LEGACY_ALGORITHMS_WARNING)
+        });
         let keepalive_error = self.error("ssh.keepalive_s");
         v_flex()
             .id("host-more")
@@ -2015,6 +2030,8 @@ impl HostPanel {
                 cx,
             ))
             .child(widgets::inline_row(strings::MOSH, mosh, cx))
+            .child(widgets::inline_row(strings::LEGACY_ALGORITHMS, legacy, cx))
+            .children(legacy_warning)
             .child(self.render_terminal_theme(window, cx))
     }
 

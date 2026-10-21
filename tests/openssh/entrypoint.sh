@@ -60,9 +60,23 @@ if [ -d "$input" ]; then
     add_user kiuser
     set_password kiuser "$input/kiuser.password"
 
+    # The key user's second factor (variant kbd-2fa): a password for PAM.
+    if [ -s "$input/keyuser.password" ]; then
+        set_password keyuser "$input/keyuser.password"
+    fi
+
     rm -rf "$input"
 elif ! id -u pwuser >/dev/null 2>&1; then
     fail "no credentials in $input: start the container with tests/openssh/start.sh"
+fi
+
+# A variant of the server (README.md, "Variants"): its script edits the
+# configuration before sshd starts.
+variant="${SHELLPP_OPENSSH_VARIANT:-}"
+if [ -n "$variant" ]; then
+    case "$variant" in *[!a-z0-9-]*) fail "bad variant name $variant" ;; esac
+    [ -x "/etc/shellpp-variants/$variant.sh" ] || fail "unknown variant $variant"
+    "/etc/shellpp-variants/$variant.sh"
 fi
 
 # Host keys of every default type (RSA, ECDSA, Ed25519), generated once per

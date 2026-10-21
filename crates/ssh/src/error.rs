@@ -20,8 +20,12 @@ pub enum FailureKind {
     AuthFailed,
     /// The user cancelled a prompt (or the attempt was cancelled).
     Cancelled,
-    /// The server violated the protocol or offered no common algorithm.
+    /// The server violated the protocol.
     Protocol,
+    /// The server and Shell++ have no algorithm in common for one of the
+    /// negotiations (run 4, plan 9.1, D80): what it offered, by name from
+    /// a fixed table only.
+    NoCommonAlgorithm(AlgorithmMismatch),
     /// The server refused a channel, PTY, shell or exec request.
     ChannelFailed,
     /// The connection was closed (transport error, keepalive timeout).
@@ -50,6 +54,7 @@ impl FailureKind {
             Self::AuthFailed => "auth_failed",
             Self::Cancelled => "cancelled",
             Self::Protocol => "protocol",
+            Self::NoCommonAlgorithm(_) => "no_common_algorithm",
             Self::ChannelFailed => "channel_failed",
             Self::Disconnected => "disconnected",
             Self::KeyUnusable => "key_unusable",
@@ -71,8 +76,100 @@ impl FailureKind {
             E::KeepaliveTimeout | E::InactivityTimeout => Self::Disconnected,
             E::Disconnect | E::HUP | E::SendError | E::RecvError => Self::Network,
             E::ChannelOpenFailure(_) | E::WrongChannel => Self::ChannelFailed,
+            E::NoCommonAlgo { kind, theirs, .. } => {
+                Self::NoCommonAlgorithm(AlgorithmMismatch::from_offer(kind.into(), theirs))
+            }
             _ => Self::Protocol,
         }
+    }
+}
+
+/// One of the negotiations of the SSH handshake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlgorithmKind {
+    KeyExchange,
+    HostKey,
+    Cipher,
+    Mac,
+    Compression,
+}
+
+impl From<&russh::AlgorithmKind> for AlgorithmKind {
+    fn from(kind: &russh::AlgorithmKind) -> Self {
+        match kind {
+            russh::AlgorithmKind::Kex => Self::KeyExchange,
+            russh::AlgorithmKind::Key => Self::HostKey,
+            russh::AlgorithmKind::Cipher => Self::Cipher,
+            russh::AlgorithmKind::Mac => Self::Mac,
+            russh::AlgorithmKind::Compression => Self::Compression,
+        }
+    }
+}
+
+/// What the server offered in a negotiation without a common algorithm.
+/// Only names of [`crate::algorithms::KNOWN`] are kept (as bits): never the
+/// server's text (section 9.1 of docs/security.md); the others are counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlgorithmMismatch {
+    kind: AlgorithmKind,
+    offered: u128,
+    others: u8,
+}
+
+impl AlgorithmMismatch {
+    /// A mismatch in `kind` where the server named nothing known.
+    pub const fn new(kind: AlgorithmKind) -> Self {
+        Self {
+            kind,
+            offered: 0,
+            others: 0,
+        }
+    }
+
+    pub fn from_offer(kind: AlgorithmKind, theirs: &[String]) -> Self {
+        let mut offered = 0u128;
+        let mut others = 0u8;
+        for name in theirs {
+            match crate::algorithms::KNOWN
+                .iter()
+                .position(|known| known == name)
+            {
+                Some(bit) => offered |= 1 << bit,
+                None => others = others.saturating_add(1),
+            }
+        }
+        Self {
+            kind,
+            offered,
+            others,
+        }
+    }
+
+    pub fn kind(&self) -> AlgorithmKind {
+        self.kind
+    }
+
+    /// The known names the server offered, in the table's order.
+    pub fn offered(&self) -> Vec<&'static str> {
+        crate::algorithms::KNOWN
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| self.offered & (1 << bit) != 0)
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    /// How many offered names are not in the table.
+    pub fn others(&self) -> usize {
+        usize::from(self.others)
+    }
+
+    /// Whether the host setting "Allow legacy algorithms" would let the
+    /// negotiation succeed: the server offers one of them.
+    pub fn legacy_would_help(&self) -> bool {
+        self.offered()
+            .iter()
+            .any(|name| crate::algorithms::is_legacy(self.kind, name))
     }
 }
 
@@ -158,6 +255,39 @@ mod tests {
         assert_eq!(
             FailureKind::from_russh(&russh::Error::Disconnect),
             FailureKind::Network
+        );
+    }
+
+    #[test]
+    fn a_mismatch_keeps_known_names_only() {
+        let theirs = [
+            "diffie-hellman-group14-sha1".to_owned(),
+            "diffie-hellman-group1-sha1".to_owned(),
+            "made-up-kex@example.com\u{1b}[31m".to_owned(),
+        ];
+        let kind = FailureKind::from_russh(&russh::Error::NoCommonAlgo {
+            kind: russh::AlgorithmKind::Kex,
+            ours: Vec::new(),
+            theirs: theirs.to_vec(),
+        });
+        let FailureKind::NoCommonAlgorithm(mismatch) = kind else {
+            panic!("{kind:?}");
+        };
+        assert_eq!(kind.reason(), "no_common_algorithm");
+        assert_eq!(mismatch.kind(), AlgorithmKind::KeyExchange);
+        assert_eq!(
+            mismatch.offered(),
+            ["diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1"]
+        );
+        assert_eq!(mismatch.others(), 1);
+        assert!(mismatch.legacy_would_help());
+        let modern = AlgorithmMismatch::from_offer(
+            AlgorithmKind::Cipher,
+            &["3des-cbc".to_owned(), "arcfour".to_owned()],
+        );
+        assert!(
+            !modern.legacy_would_help(),
+            "3DES and RC4 are not offered at all"
         );
     }
 

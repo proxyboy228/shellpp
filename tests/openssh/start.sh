@@ -25,6 +25,8 @@
 #   SHELLPP_OPENSSH_LIFETIME  seconds after which the container stops by
 #                             itself (default 3600)
 #   SHELLPP_OPENSSH_TIMEOUT   seconds to wait for the server (default 60)
+#   SHELLPP_OPENSSH_VARIANT   a variant of the server (variants/<name>.sh,
+#                             README.md "Variants"; default none)
 
 set -euo pipefail
 
@@ -48,6 +50,8 @@ if [ "$#" -ne 1 ] || [ -z "$1" ]; then
 fi
 
 lifetime="${SHELLPP_OPENSSH_LIFETIME:-3600}"
+variant="${SHELLPP_OPENSSH_VARIANT:-}"
+case "$variant" in *[!a-z0-9-]*) die 'SHELLPP_OPENSSH_VARIANT names no variant' ;; esac
 wait_seconds="${SHELLPP_OPENSSH_TIMEOUT:-60}"
 case "$lifetime" in '' | *[!0-9]*) die 'SHELLPP_OPENSSH_LIFETIME must be a number of seconds' ;; esac
 case "$wait_seconds" in '' | *[!0-9]*) die 'SHELLPP_OPENSSH_TIMEOUT must be a number of seconds' ;; esac
@@ -147,6 +151,11 @@ mkdir -p "$input/shellpp-input"
 printf '%s\n' "$password_user_secret" >"$input/shellpp-input/$PASSWORD_USER.password"
 printf '%s\n' "$ki_user_secret" >"$input/shellpp-input/$KI_USER.password"
 cp "$key.pub" "$input/shellpp-input/$KEY_USER.authorized_keys"
+# kbd-2fa: the key user answers its keyboard-interactive question with the
+# keyboard-interactive user's password.
+if [ "$variant" = 'kbd-2fa' ]; then
+    printf '%s\n' "$ki_user_secret" >"$input/shellpp-input/$KEY_USER.password"
+fi
 
 # --init: a minimal init as PID 1 reaps the processes of ended sessions
 # (sshd runs under `timeout`, which does not), so no zombies show up in `ps`
@@ -158,6 +167,7 @@ docker create \
     --hostname shellpp-openssh \
     --publish 127.0.0.1::22 \
     --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" \
+    --env "SHELLPP_OPENSSH_VARIANT=$variant" \
     "$image" >/dev/null || die 'docker create failed'
 printf '%s\n' "$name" >"$workdir/container"
 
@@ -216,6 +226,7 @@ done <<<"$host_key_lines"
     printf '    "keyboard_interactive": {"name": %s, "password": %s}\n' \
         "$(json_string "$KI_USER")" "$(json_string "$ki_user_secret")"
     printf '  },\n'
+    printf '  "variant": %s,\n' "$(json_string "$variant")"
     printf '  "container": %s\n' "$(json_string "$name")"
     printf '}\n'
 } >"$workdir/server.json.tmp"

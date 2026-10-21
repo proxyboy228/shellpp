@@ -1244,3 +1244,15 @@ Status: run 4 decision, 2026-10-22 (plan, section 7; the owner added section 9 d
 - 7.4 (keyboard navigation and visible focus on every screen) is done as far as an audit of the screens and its fixes take within the hour.
 
 **Spec impact:** none.
+
+### 80. Legacy algorithms per host and the errors of a mismatch (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 9.1 [decision of the owner]; closes the open item "per-host opt-in for legacy SSH algorithms" of docs/security.md, section 18).
+
+**Decision:**
+
+- A host setting `ssh.allow_legacy_algorithms` (bool, off by default), "Allow legacy algorithms" in Show more of the host panel, with a warning that stays shown while it is on. On, the connection also offers the SHA-1 key exchanges (`diffie-hellman-group14-sha1`, `diffie-hellman-group-exchange-sha1`, `diffie-hellman-group1-sha1`), the SHA-1 MACs (`hmac-sha1-etm@openssh.com`, `hmac-sha1`), `ssh-rsa` (SHA-1) host key signatures and the AES-CBC ciphers, each after all modern ones of its list, so a server that has a modern one still gets it. A jump host follows its own setting. Quick connect has no host, so it never offers them. 3DES, RC4, Blowfish, `ssh-dss` and the MD5 MACs are not offered at all.
+- When a negotiation finds nothing in common, the failure is `no_common_algorithm` with the negotiation (key exchange, host key, cipher, MAC, compression) and what the server offered. Only the names of a fixed table of known algorithms are kept (as bits of a `Copy` value), the others are counted: as for every failure, no server text is kept or shown (docs/security.md, section 9.1). The failure screen shows the reason, "The server offers: …", "Shell++ supports: …" and, when the server offers one of the legacy algorithms, the way to turn the host setting on.
+- The compatibility matrix (docs/compatibility.md) runs in Docker: the latest OpenSSH, OpenSSH 7.4 (CentOS 7), Dropbear (Alpine), and the OpenSSH variants legacy-sha1, kbd-2fa, no-sftp and motd-banner of tests/openssh, each in its own container (`crates/ssh/tests/compat.rs`, also in CI).
+
+**Spec impact:** none; docs/security.md (section 11.2 and the open item) and docs/data-model.md (the host's `ssh` fields) are updated.

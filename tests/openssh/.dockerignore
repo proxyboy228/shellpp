@@ -4,3 +4,5 @@
 !sshd_config
 !entrypoint.sh
 !container-control.sh
+!variants
+!compat

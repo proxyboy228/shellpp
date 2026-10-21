@@ -108,6 +108,7 @@ fn full_draft(group: Uuid, bastion: Uuid, other_jump: Uuid) -> HostDraft {
         record_history: OverrideMode::On,
         record_output: OverrideMode::Off,
         mosh: true,
+        allow_legacy_algorithms: true,
         terminal_theme: Some(
             shellpp_desktop::state::records_edit::TERMINAL_THEMES
                 .last()
@@ -243,6 +244,7 @@ fn everything_saved_survives_a_restart(cx: &mut TestAppContext) {
     assert_eq!(ssh["jump_chain"], json!([bastion, a]));
     assert_eq!(ssh["agent_forwarding"], true);
     assert_eq!(ssh["mosh"], true);
+    assert_eq!(ssh["allow_legacy_algorithms"], true);
     assert_eq!(ssh["keepalive_s"], 45);
     assert_eq!(ssh["proxy"]["type"], "socks5");
     assert_eq!(ssh["proxy"]["address"], "proxy.example.net");
@@ -262,7 +264,7 @@ fn everything_saved_survives_a_restart(cx: &mut TestAppContext) {
     assert_eq!(reread.env, draft.env);
     assert_eq!(reread.terminal_theme, draft.terminal_theme);
     assert_eq!(reread.backspace, BackspaceMode::CtrlH);
-    assert!(reread.mosh && reread.agent_forwarding);
+    assert!(reread.mosh && reread.agent_forwarding && reread.allow_legacy_algorithms);
     // Secrets: both stored, readable only through the core.
     for (path, expected) in [
         ("ssh.password", &password),

@@ -59,6 +59,9 @@ pub struct SessionConfig {
     /// Key types saved in known hosts for (address, port), for the preferred
     /// host key algorithms (stage 2 plan, section 4.2).
     pub known_key_types: Vec<String>,
+    /// `ssh.allow_legacy_algorithms` (off by default; D80): also offer the
+    /// SHA-1 and CBC algorithms, after the modern ones.
+    pub allow_legacy_algorithms: bool,
     /// A prompted password may be saved: a saved host in the personal vault.
     pub can_save_password: bool,
     /// The hops of the effective `jump_chain` (own, else inherited; `[]`

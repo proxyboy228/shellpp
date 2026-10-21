@@ -868,6 +868,28 @@ fn agent_forwarding_shows_its_warning_and_options(cx: &mut TestAppContext) {
     assert_eq!(data["ssh"]["agent_confirm"], json!(true));
 }
 
+/// D80: "Allow legacy algorithms" is off by default; on, its warning stays
+/// shown and the host stores it.
+#[gpui_kit::test]
+fn legacy_algorithms_show_their_warning(cx: &mut TestAppContext) {
+    let state = setup(cx);
+    let host = new_host(cx, &state, "192.0.2.80");
+    let (handle, _panel) = open_panel(cx, &state, Some(host));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-show-more", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("host-legacy-warning").is_none());
+        window.click("host-legacy-algorithms", cx);
+        window.render_frame(cx);
+        assert!(window.find("host-legacy-warning").visible());
+    })
+    .unwrap();
+    settle(cx);
+    let data = stored(cx, &state, host);
+    assert_eq!(data["ssh"]["allow_legacy_algorithms"], json!(true));
+}
+
 /// Plan of run 4, item 7.4: Esc closes the open dropdown, then the panel
 /// (a click on a dropdown leaves the keyboard focus in the field).
 #[gpui_kit::test]

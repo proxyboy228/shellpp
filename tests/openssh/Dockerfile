@@ -66,8 +66,12 @@ RUN set -eux; \
 COPY sshd_config /etc/ssh/sshd_config
 COPY entrypoint.sh /usr/local/bin/shellpp-openssh-entrypoint
 COPY container-control.sh /usr/local/bin/shellpp-openssh-control
+# Variants of the server (README.md, "Variants"): scripts that edit the
+# configuration at container start when SHELLPP_OPENSSH_VARIANT names one.
+COPY variants /etc/shellpp-variants
 RUN chmod 0644 /etc/ssh/sshd_config \
-    && chmod 0755 /usr/local/bin/shellpp-openssh-entrypoint /usr/local/bin/shellpp-openssh-control
+    && chmod 0755 /usr/local/bin/shellpp-openssh-entrypoint /usr/local/bin/shellpp-openssh-control \
+    && chmod 0755 /etc/shellpp-variants/*.sh
 
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/shellpp-openssh-entrypoint"]

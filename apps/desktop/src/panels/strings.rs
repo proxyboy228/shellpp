@@ -105,6 +105,10 @@ pub fn certificate_of(key: &str) -> String {
 pub const SHOW_MORE: &str = "Show more";
 pub const SHOW_LESS: &str = "Show less";
 pub const AGENT_FORWARDING: &str = "Agent Forwarding";
+pub const LEGACY_ALGORITHMS: &str = "Allow legacy algorithms";
+pub const LEGACY_ALGORITHMS_WARNING: &str = "Shell++ also offers SHA-1 key exchange, SHA-1 \
+     MACs, ssh-rsa signatures and CBC ciphers to this host, after the modern ones. They are \
+     weak: turn this on only for an old server or device that offers nothing else.";
 pub const AGENT_FORWARDING_WARNING: &str = "While a session is open, anyone with root on \
      this host can sign in elsewhere with your keys.";
 pub const AGENT_FORWARD_SYSTEM: &str = "Also offer the system agent's keys";

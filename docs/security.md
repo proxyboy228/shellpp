@@ -654,7 +654,7 @@ S11 algorithm (stage 0 decision; thresholds are tuned in stage 2 against the tes
 - `rsa` crate: RUSTSEC-2023-0071 is a timing side channel; signing happens locally, without a remote oracle, so the risk is low (D4).
 - Agent forwarding is off by default per host (UI 3.1). When it is on, the host can ask the forwarded agent for signatures while the session lasts but cannot extract keys (RR19).
 - The built-in agent works only inside the app: no socket or named pipe is exposed to other processes (D5). It refuses requests while locked (section 8).
-- Legacy SHA-1 algorithms (`ssh-rsa` signatures, SHA-1 key exchange) are disabled by default; a per-host opt-in is an open item (section 18). (stage 0 decision)
+- Legacy SHA-1 algorithms (`ssh-rsa` signatures, SHA-1 key exchange and MACs) and CBC ciphers are disabled by default; the host setting "Allow legacy algorithms" (`ssh.allow_legacy_algorithms`, with a warning while it is on) offers them after all modern ones (D80). 3DES, RC4, Blowfish, `ssh-dss` and MD5 MACs are never offered. (stage 0 decision; opt-in: D80)
 
 ### 11.3 Port forwarding
 
@@ -882,7 +882,6 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | "My old password may be compromised" option in the password change dialog (section 5.9) | UI 13.4 | stage 1 |
 | Lock when the OS session locks or the computer sleeps (proposal; not in UI 13.3) | UI 13.3 | stage 1 |
 | Exclude the app from Windows Error Reporting dumps; lock key memory pages | [architecture.md](architecture.md) | stage 1 |
-| Per-host opt-in for legacy SSH algorithms | UI 3.1 | stage 2 |
 | Tune the secret detector thresholds against the test corpus | this document | stage 2 |
 | Email change: password re-entry at the step that makes the change effective, and the sign-out of other devices (section 5.9) | UI 12.2 | stage 7 |
 | Sync status entry for records brought back by a full resync (RR1) | UI 12.2 | stage 7 |

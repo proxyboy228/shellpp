@@ -152,6 +152,38 @@ users have bash. Portable equivalents of its commands: `stty size` (rows and
 columns), `echo "$TERM"`, `printenv NAME`, `ssh-add -l` (forwarded agent),
 `exit <n>`, `seq 1 <n>` (for `lines <n>`).
 
+## Variants
+
+`SHELLPP_OPENSSH_VARIANT=<name>` for `start.sh` runs `variants/<name>.sh`
+in the container before sshd starts (the compatibility matrix,
+docs/compatibility.md; `crates/ssh/tests/compat.rs`):
+
+| Variant | What changes |
+|---|---|
+| `legacy-sha1` | only an RSA host key with `ssh-rsa` (SHA-1) signatures, `diffie-hellman-group14-sha1`, `hmac-sha1` |
+| `kbd-2fa` | `keyuser` needs its key and then a keyboard-interactive question (its password, the same as `kiuser`'s) |
+| `no-sftp` | no `Subsystem sftp` |
+| `motd-banner` | a banner before authentication and a 120-line message of the day |
+
+`server.json` names the variant (`"variant"`, empty without one).
+
+## Compatibility images
+
+`compat/` holds other servers of the matrix, built with the context
+`tests/openssh` and run through `start.sh` with `SHELLPP_OPENSSH_IMAGE`:
+
+```
+docker build -f tests/openssh/compat/centos7.Dockerfile -t shellpp-compat-centos7:local tests/openssh
+docker build -f tests/openssh/compat/dropbear.Dockerfile -t shellpp-compat-dropbear:local tests/openssh
+SHELLPP_OPENSSH_IMAGE=shellpp-compat-centos7:local bash tests/openssh/start.sh <workdir>
+```
+
+- `centos7`: OpenSSH 7.4 of CentOS 7 (packages from vault.centos.org), the
+  same users and entrypoint as the main image (variants work too).
+- `dropbear`: Dropbear of Alpine 3.20 with OpenSSH's `sftp-server`; the
+  users of the main image, but no keyboard-interactive authentication
+  (Dropbear has none).
+
 ## Server-side faults
 
 `control.sh <workdir> <command>` acts on the container of `start.sh

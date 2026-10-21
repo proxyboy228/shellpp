@@ -354,6 +354,10 @@ fn host_session_config(
         os_detection_script,
         os,
         known_key_types: known_hosts::known_key_types(entries, &address, port),
+        allow_legacy_algorithms: ssh
+            .and_then(|ssh| ssh.get("allow_legacy_algorithms"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         can_save_password: true,
         jump_hosts: Vec::new(),
         route_problem: None,
@@ -910,6 +914,7 @@ impl Core {
                     os_detection_script: None,
                     os: None,
                     known_key_types: known_hosts::known_key_types(&entries, &address, port),
+                    allow_legacy_algorithms: false,
                     can_save_password: false,
                     jump_hosts: Vec::new(),
                     route_problem: None,

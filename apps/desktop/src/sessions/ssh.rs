@@ -372,6 +372,7 @@ impl SshTask {
                 .then(|| Duration::from_secs(u64::from(config.keepalive_s))),
             connect_timeout: CONNECT_TIMEOUT,
             preferred_host_key_types: config.known_key_types.clone(),
+            allow_legacy_algorithms: config.allow_legacy_algorithms,
             jump_hosts: Vec::new(),
             forward_agent: None,
             proxy: config.proxy.as_ref().map(|proxy| ProxySpec {
@@ -1548,6 +1549,7 @@ fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
         keepalive: (hop.keepalive_s > 0).then(|| Duration::from_secs(u64::from(hop.keepalive_s))),
         connect_timeout: CONNECT_TIMEOUT,
         preferred_host_key_types: hop.known_key_types.clone(),
+        allow_legacy_algorithms: hop.allow_legacy_algorithms,
         jump_hosts: Vec::new(),
         proxy: None,
         forward_agent: None,
