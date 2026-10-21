@@ -1233,7 +1233,7 @@ fn mutated_escape_sequences_never_panic(cx: &mut TestAppContext) {
         "\u{9b}31m",
         "\u{202e}",
     ];
-    let mut state = 0x5eed_0005_u64;
+    let mut state = 20_261_021_u64;
     let mut next = move || {
         state ^= state >> 12;
         state ^= state << 25;
