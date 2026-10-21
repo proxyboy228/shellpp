@@ -260,6 +260,9 @@ impl RemoteRules {
 pub struct Forward {
     state: Arc<ForwardState>,
     bound: Bound,
+    /// The listener task (Local, Dynamic): [`Forward::stop`] waits for it,
+    /// so the port is free when it returns.
+    listener: Option<tokio::task::JoinHandle<()>>,
     /// Remote: cancels `tcpip-forward` and removes the rule on stop.
     remote: Option<(Arc<ConnCore>, u64, String)>,
 }
@@ -303,6 +306,9 @@ impl Forward {
     /// server) and the open connections.
     pub async fn stop(mut self) {
         self.stop_now();
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.await;
+        }
         if let Some((core, id, address)) = self.remote.take() {
             core.remote_rules().remove(id);
             if let Bound::Remote(port) = self.bound
@@ -406,7 +412,7 @@ async fn start_listener(
         .local_addr()
         .map_err(|_| ForwardError::AddressUnavailable)?;
     let state = ForwardState::new();
-    tokio::spawn(run_listener(
+    let task = tokio::spawn(run_listener(
         listener,
         Arc::clone(core),
         dest,
@@ -415,6 +421,7 @@ async fn start_listener(
     Ok(Forward {
         state,
         bound: Bound::Local(local),
+        listener: Some(task),
         remote: None,
     })
 }
@@ -728,6 +735,7 @@ async fn start_remote(
     Ok(Forward {
         state,
         bound: Bound::Remote(port),
+        listener: None,
         remote: Some((Arc::clone(core), id, address)),
     })
 }
@@ -800,11 +808,32 @@ struct HostState {
     rules: BTreeMap<u64, (ForwardSpec, Option<Forward>)>,
     statuses: BTreeMap<u64, RuleStatus>,
     supervising: bool,
+    /// The supervisor is reconnecting: new rules wait for it.
+    reconnecting: Option<u32>,
+}
+
+/// Failures a reconnect attempt retries: the server could not be reached
+/// or the connection was lost. Others (authentication, a host key, a
+/// refused jump host) end the attempts: retrying them could trip the
+/// server's intrusion detection, as for sessions (UI 4.6).
+fn transport_failure(kind: FailureKind) -> bool {
+    matches!(
+        kind,
+        FailureKind::NotFound
+            | FailureKind::Refused
+            | FailureKind::Timeout
+            | FailureKind::Network
+            | FailureKind::Disconnected
+    )
 }
 
 /// Keeps the rules of one host running on one shared connection (UI 8:
 /// several rules of a host use one SSH connection; after a reconnect the
 /// rules come up again). Rules start in the order they were added.
+///
+/// The connection is opened outside the state lock (it may wait for a
+/// host key decision or a password), and a rule started while the
+/// supervisor reconnects waits for that reconnect.
 pub struct HostForwarder {
     connect: ConnectFn,
     state: Arc<tokio::sync::Mutex<HostState>>,
@@ -818,6 +847,34 @@ impl std::fmt::Debug for HostForwarder {
     }
 }
 
+/// Starts every rule that has no live handle on `connection`.
+async fn bring_up_waiting(
+    state: &mut HostState,
+    connection: &Arc<Connection>,
+    statuses: &watch::Sender<BTreeMap<u64, RuleStatus>>,
+) {
+    let waiting: Vec<(u64, ForwardSpec)> = state
+        .rules
+        .iter()
+        .filter(|(_, (_, forward))| forward.is_none())
+        .map(|(id, (spec, _))| (*id, spec.clone()))
+        .collect();
+    for (id, spec) in waiting {
+        let status = match connection.forward(spec).await {
+            Ok(forward) => {
+                let status = RuleStatus::Running(forward.bound());
+                if let Some(entry) = state.rules.get_mut(&id) {
+                    entry.1 = Some(forward);
+                }
+                status
+            }
+            Err(error) => RuleStatus::Failed(error),
+        };
+        state.statuses.insert(id, status);
+    }
+    statuses.send_replace(state.statuses.clone());
+}
+
 impl HostForwarder {
     pub fn new(connect: ConnectFn) -> Self {
         Self {
@@ -827,6 +884,7 @@ impl HostForwarder {
                 rules: BTreeMap::new(),
                 statuses: BTreeMap::new(),
                 supervising: false,
+                reconnecting: None,
             })),
             statuses: watch::Sender::new(BTreeMap::new()),
             shutdown: watch::Sender::new(false),
@@ -851,22 +909,56 @@ impl HostForwarder {
     /// Starts rule `id` (replacing a rule with that id), connecting first
     /// when there is no connection. Returns the rule's status.
     pub async fn start(&self, id: u64, spec: ForwardSpec) -> RuleStatus {
+        let live = {
+            let mut state = self.state.lock().await;
+            if let Some((_, Some(old))) = state.rules.remove(&id) {
+                old.stop().await;
+            }
+            state.rules.insert(id, (spec, None));
+            if let Some(attempt) = state.reconnecting {
+                let status = RuleStatus::Reconnecting { attempt };
+                self.set_status(&mut state, id, status.clone());
+                return status;
+            }
+            self.set_status(&mut state, id, RuleStatus::Starting);
+            state
+                .connection
+                .clone()
+                .filter(|connection| !connection.is_closed())
+        };
+        let connection = match live {
+            Some(connection) => connection,
+            None => match (self.connect)().await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let mut state = self.state.lock().await;
+                    let status = RuleStatus::ConnectFailed(error.kind);
+                    if state.rules.contains_key(&id) {
+                        self.set_status(&mut state, id, status.clone());
+                    }
+                    return status;
+                }
+            },
+        };
         let mut state = self.state.lock().await;
-        if let Some((_, Some(old))) = state.rules.remove(&id) {
-            old.stop().await;
-        }
-        state.rules.insert(id, (spec.clone(), None));
-        self.set_status(&mut state, id, RuleStatus::Starting);
-        let connection = match self.ensure_connection(&mut state).await {
-            Ok(connection) => connection,
-            Err(kind) => {
-                self.set_status(&mut state, id, RuleStatus::ConnectFailed(kind));
-                return RuleStatus::ConnectFailed(kind);
+        // Another start may have connected meanwhile: keep one connection.
+        let connection = match &state.connection {
+            Some(current) if !current.is_closed() && !Arc::ptr_eq(current, &connection) => {
+                connection.disconnect().await;
+                Arc::clone(current)
+            }
+            _ => {
+                state.connection = Some(Arc::clone(&connection));
+                connection
             }
         };
-        let status = self.bring_up(&mut state, &connection, id, spec).await;
+        bring_up_waiting(&mut state, &connection, &self.statuses).await;
         self.supervise(&mut state);
-        status
+        state
+            .statuses
+            .get(&id)
+            .cloned()
+            .unwrap_or(RuleStatus::Starting)
     }
 
     /// Stops rule `id`; the connection closes with the last rule.
@@ -906,44 +998,11 @@ impl HostForwarder {
         self.statuses.send_replace(state.statuses.clone());
     }
 
-    async fn ensure_connection(
-        &self,
-        state: &mut HostState,
-    ) -> Result<Arc<Connection>, FailureKind> {
-        if let Some(connection) = &state.connection
-            && !connection.is_closed()
-        {
-            return Ok(Arc::clone(connection));
-        }
-        state.connection = None;
-        let connection = (self.connect)().await.map_err(|error| error.kind)?;
-        state.connection = Some(Arc::clone(&connection));
-        Ok(connection)
-    }
-
-    async fn bring_up(
-        &self,
-        state: &mut HostState,
-        connection: &Arc<Connection>,
-        id: u64,
-        spec: ForwardSpec,
-    ) -> RuleStatus {
-        let status = match connection.forward(spec).await {
-            Ok(forward) => {
-                let status = RuleStatus::Running(forward.bound());
-                if let Some(entry) = state.rules.get_mut(&id) {
-                    entry.1 = Some(forward);
-                }
-                status
-            }
-            Err(error) => RuleStatus::Failed(error),
-        };
-        self.set_status(state, id, status.clone());
-        status
-    }
-
-    /// Starts the supervisor once: it waits for the connection to drop and
-    /// brings every rule up again on a new one, with the reconnect backoff.
+    /// Starts the supervisor once: it waits for the connection it watches
+    /// to drop (a connection replaced or closed meanwhile is not a drop)
+    /// and brings every rule up again on a new one, with the reconnect
+    /// backoff; a failure other than the transport's ends the attempts
+    /// with `ConnectFailed`.
     fn supervise(&self, state: &mut HostState) {
         if state.supervising {
             return;
@@ -955,79 +1014,96 @@ impl HostForwarder {
         let mut shutdown = self.shutdown.subscribe();
         tokio::spawn(async move {
             loop {
-                // Wait for the current connection to drop.
-                let lost = {
-                    let state = shared.lock().await;
-                    match &state.connection {
-                        Some(connection) => connection.lost_signal(),
-                        None => break,
-                    }
-                };
-                tokio::select! {
-                    _ = lost => {}
-                    _ = set(&mut shutdown) => break,
-                }
-                let mut backoff = Backoff::new();
-                loop {
-                    {
-                        let mut state = shared.lock().await;
-                        if state.rules.is_empty() {
-                            state.connection = None;
+                let watched = {
+                    let mut state = shared.lock().await;
+                    match state.connection.clone() {
+                        Some(connection) => connection,
+                        None => {
                             state.supervising = false;
                             return;
                         }
-                        let attempt = backoff.attempt() + 1;
-                        let ids: Vec<u64> = state.rules.keys().copied().collect();
-                        for id in ids {
-                            if let Some(entry) = state.rules.get_mut(&id) {
-                                entry.1 = None;
-                            }
-                            state
-                                .statuses
-                                .insert(id, RuleStatus::Reconnecting { attempt });
-                        }
-                        state.connection = None;
-                        statuses.send_replace(state.statuses.clone());
                     }
+                };
+                tokio::select! {
+                    _ = watched.lost_signal() => {}
+                    _ = set(&mut shutdown) => return,
+                }
+                {
+                    let mut state = shared.lock().await;
+                    let current = state
+                        .connection
+                        .as_ref()
+                        .is_some_and(|connection| Arc::ptr_eq(connection, &watched));
+                    if !current {
+                        // Replaced or closed by `stop`: watch what is there now.
+                        continue;
+                    }
+                    state.connection = None;
+                    if state.rules.is_empty() {
+                        state.supervising = false;
+                        return;
+                    }
+                    state.reconnecting = Some(1);
+                    for (_, forward) in state.rules.values_mut() {
+                        *forward = None;
+                    }
+                    let ids: Vec<u64> = state.rules.keys().copied().collect();
+                    for id in ids {
+                        state
+                            .statuses
+                            .insert(id, RuleStatus::Reconnecting { attempt: 1 });
+                    }
+                    statuses.send_replace(state.statuses.clone());
+                }
+                let mut backoff = Backoff::new();
+                loop {
                     let delay = backoff.next_delay();
                     tokio::select! {
                         _ = tokio::time::sleep(delay) => {}
                         _ = set(&mut shutdown) => return,
                     }
-                    let Ok(connection) = (connect)().await else {
-                        continue;
-                    };
+                    let attempt = (connect)().await;
                     let mut state = shared.lock().await;
                     if state.rules.is_empty() {
-                        connection.disconnect().await;
+                        if let Ok(connection) = attempt {
+                            connection.disconnect().await;
+                        }
+                        state.reconnecting = None;
                         state.supervising = false;
                         return;
                     }
-                    state.connection = Some(Arc::clone(&connection));
-                    let rules: Vec<(u64, ForwardSpec)> = state
-                        .rules
-                        .iter()
-                        .map(|(id, (spec, _))| (*id, spec.clone()))
-                        .collect();
-                    for (id, spec) in rules {
-                        let status = match connection.forward(spec).await {
-                            Ok(forward) => {
-                                let status = RuleStatus::Running(forward.bound());
-                                if let Some(entry) = state.rules.get_mut(&id) {
-                                    entry.1 = Some(forward);
-                                }
-                                status
+                    match attempt {
+                        Ok(connection) => {
+                            state.reconnecting = None;
+                            state.connection = Some(Arc::clone(&connection));
+                            bring_up_waiting(&mut state, &connection, &statuses).await;
+                            break;
+                        }
+                        Err(error) if transport_failure(error.kind) => {
+                            let next = backoff.attempt() + 1;
+                            state.reconnecting = Some(next);
+                            let ids: Vec<u64> = state.rules.keys().copied().collect();
+                            for id in ids {
+                                state
+                                    .statuses
+                                    .insert(id, RuleStatus::Reconnecting { attempt: next });
                             }
-                            Err(error) => RuleStatus::Failed(error),
-                        };
-                        state.statuses.insert(id, status);
+                            statuses.send_replace(state.statuses.clone());
+                        }
+                        Err(error) => {
+                            state.reconnecting = None;
+                            let ids: Vec<u64> = state.rules.keys().copied().collect();
+                            for id in ids {
+                                state
+                                    .statuses
+                                    .insert(id, RuleStatus::ConnectFailed(error.kind));
+                            }
+                            statuses.send_replace(state.statuses.clone());
+                            state.supervising = false;
+                            return;
+                        }
                     }
-                    statuses.send_replace(state.statuses.clone());
-                    break;
                 }
-            }
-            if let Ok(mut state) = shared.try_lock() {
-                state.supervising = false;
             }
         });
     }

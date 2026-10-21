@@ -85,6 +85,7 @@ async fn the_stage_5_lab() {
     refused_environment_variables(&lab).await;
     a_command_on_six_hosts(&lab).await;
     the_built_in_agent_signs_for_the_next_hop(&lab).await;
+    real_proxies_carry_the_first_connection(&lab).await;
 }
 
 async fn two_jump_hosts_with_a_decision_on_each(lab: &Lab) {
@@ -431,9 +432,7 @@ async fn a_command_on_six_hosts(lab: &Lab) {
         .map(|name| {
             let (spec, _) = password_route(lab, &["jump1"], name);
             batch::target(move || async move {
-                connect(spec, TestInteraction::accepting().as_dyn())
-                    .await
-                    .map(Arc::new)
+                connect(spec, TestInteraction::accepting().as_dyn()).await
             })
         })
         .collect();
@@ -514,4 +513,83 @@ async fn the_built_in_agent_signs_for_the_next_hop(lab: &Lab) {
     shell.writer().write(login.as_bytes()).await.unwrap();
     read_until(&mut shell, "on-app1", Duration::from_secs(20)).await;
     connection.disconnect().await;
+}
+
+/// tinyproxy (HTTP CONNECT with Basic authentication) and microsocks
+/// (SOCKS5 with username/password) carry the first connection of a route;
+/// the proxy resolves the lab's names. Wrong proxy credentials are the
+/// proxy's failure.
+async fn real_proxies_carry_the_first_connection(lab: &Lab) {
+    let (user, password) = &lab.password_user;
+    let (proxy_user, proxy_password) = &lab.proxy_user;
+    let proxy = |kind, addr: SocketAddr, secret: &str| shellpp_ssh::ProxySpec {
+        kind,
+        address: addr.ip().to_string(),
+        port: addr.port(),
+        username: Some(proxy_user.clone()),
+        password: Some(SecretString::from(secret.to_owned())),
+    };
+    for (kind, addr) in [
+        (shellpp_ssh::ProxyKind::Http, lab.http_proxy),
+        (shellpp_ssh::ProxyKind::Socks5, lab.socks_proxy),
+    ] {
+        // Straight to the target (only the proxy and jump1 are published):
+        // the proxy reaches it by its lab name.
+        let connection = connect(
+            ConnectSpec {
+                proxy: Some(proxy(kind, addr, proxy_password)),
+                ..lab_spec("target", password_plan(password), user)
+            },
+            TestInteraction::accepting().as_dyn(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+        assert_eq!(
+            run(&connection, "hostname").await.trim(),
+            "target",
+            "{kind:?}"
+        );
+        connection.disconnect().await;
+
+        // The proxy, then a chain: proxy -> app1 -> jump2.
+        let hop = TestInteraction::accepting();
+        let connection = connect(
+            ConnectSpec {
+                proxy: Some(proxy(kind, addr, proxy_password)),
+                jump_hosts: vec![JumpHost {
+                    spec: lab_spec("app1", password_plan(password), user),
+                    interaction: hop.as_dyn(),
+                }],
+                ..lab_spec("jump2", password_plan(password), user)
+            },
+            TestInteraction::accepting().as_dyn(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{kind:?} with a hop: {error}"));
+        assert_eq!(
+            run(&connection, "hostname").await.trim(),
+            "jump2",
+            "{kind:?}"
+        );
+        assert!(
+            lab.fingerprints("app1")
+                .contains(&hop.host_keys()[0].fingerprint)
+        );
+        connection.disconnect().await;
+
+        let error = connect(
+            ConnectSpec {
+                proxy: Some(proxy(kind, addr, "wrong-password")),
+                ..lab_spec("target", password_plan(password), user)
+            },
+            TestInteraction::accepting().as_dyn(),
+        )
+        .await
+        .expect_err("wrong proxy password");
+        assert_eq!(
+            (error.kind, error.place),
+            (FailureKind::ProxyAuthFailed, FailurePlace::Proxy),
+            "{kind:?}"
+        );
+    }
 }

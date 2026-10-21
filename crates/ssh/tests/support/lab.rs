@@ -24,6 +24,11 @@ pub struct Lab {
     pub key_user: (String, String),
     /// What `target`'s HTTP service on port 8080 answers.
     pub http_body: String,
+    /// tinyproxy (HTTP CONNECT) and microsocks (SOCKS5) on loopback, with
+    /// their user and password.
+    pub http_proxy: SocketAddr,
+    pub socks_proxy: SocketAddr,
+    pub proxy_user: (String, String),
 }
 
 #[allow(clippy::print_stderr)]
@@ -113,7 +118,16 @@ impl Lab {
             })
             .unwrap_or_default();
         let key_path = string(&["users", "publickey", "private_key_path"]);
+        let proxy_port = |key: &str| {
+            description
+                .path(&["proxy", key])
+                .and_then(Json::number)
+                .unwrap_or_else(|| panic!("lab.json lacks proxy.{key}")) as u16
+        };
         Lab {
+            http_proxy: SocketAddr::new(host, proxy_port("http_port")),
+            socks_proxy: SocketAddr::new(host, proxy_port("socks_port")),
+            proxy_user: (string(&["proxy", "user"]), string(&["proxy", "password"])),
             jump1: SocketAddr::new(host, port),
             host_keys,
             password_user: (

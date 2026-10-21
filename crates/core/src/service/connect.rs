@@ -380,16 +380,24 @@ fn route_hops(
     record_id: &Uuid,
     data: &Map<String, Value>,
 ) -> Result<Vec<Uuid>, RouteProblem> {
-    let own: Option<Vec<Uuid>> = ssh_block(data)
+    // An entry that is not a host id (data that bypassed the model) is a
+    // missing hop: dropping it would shorten the route.
+    let own: Option<Vec<Option<Uuid>>> = ssh_block(data)
         .and_then(|ssh| ssh.get("jump_chain"))
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
-                .filter_map(Value::as_str)
-                .filter_map(|raw| Uuid::parse_str(raw).ok())
+                .map(|item| item.as_str().and_then(|raw| Uuid::parse_str(raw).ok()))
                 .collect()
         });
+    if let Some(index) = own
+        .as_ref()
+        .and_then(|chain| chain.iter().position(Option::is_none))
+    {
+        return Err(RouteProblem::MissingHop { index });
+    }
+    let own: Option<Vec<Uuid>> = own.map(|chain| chain.into_iter().flatten().collect());
     let chain: Vec<Uuid> = match own {
         Some(chain) => chain,
         None => {
@@ -796,6 +804,13 @@ impl Core {
                 let record = live(session, record_id, RecordKind::Host)?;
                 let data = record.data();
                 config.proxy = session_proxy(data);
+                // A proxy that is set but unreadable never means "direct".
+                let proxy_set = ssh_block(data)
+                    .is_some_and(|ssh| ssh.get("proxy").is_some_and(|proxy| !proxy.is_null()));
+                if proxy_set && config.proxy.is_none() {
+                    config.route_problem = Some(RouteProblem::InvalidProxy);
+                    return Ok(config);
+                }
                 match route_hops(session, record_id, data) {
                     Ok(hops) => {
                         for hop in hops {

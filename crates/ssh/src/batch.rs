@@ -21,9 +21,10 @@ use crate::error::{FailureKind, SshError};
 pub const MAX_PARALLEL: usize = 8;
 
 /// Opens the connection of one target (the desktop host resolves its spec,
-/// route and interaction).
+/// route and interaction). The run owns it and closes it when the command
+/// ended: never pass a connection shared with a session.
 pub type ConnectTarget =
-    Box<dyn FnOnce() -> BoxFuture<'static, Result<Arc<Connection>, SshError>> + Send>;
+    Box<dyn FnOnce() -> BoxFuture<'static, Result<Connection, SshError>> + Send>;
 
 /// How one target ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,7 +124,7 @@ async fn run_one(
 /// A boxed connect step from any future (for callers that build targets).
 pub fn target<F>(connect: impl FnOnce() -> F + Send + 'static) -> ConnectTarget
 where
-    F: Future<Output = Result<Arc<Connection>, SshError>> + Send + 'static,
+    F: Future<Output = Result<Connection, SshError>> + Send + 'static,
 {
     Box::new(move || Box::pin(connect()))
 }

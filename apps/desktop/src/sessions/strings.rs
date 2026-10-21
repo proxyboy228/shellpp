@@ -100,9 +100,24 @@ pub fn startup_input(script: &str) -> Vec<u8> {
 /// validated identifiers (`[A-Za-z_][A-Za-z0-9_]*`), so the line holds no
 /// control characters but its own dim styling.
 pub fn env_refused_notice(names: &[String]) -> String {
+    // Stored names are validated; names from data that bypassed the model
+    // are left out rather than written to the terminal as our own text.
+    let shown: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| {
+            !name.is_empty()
+                && name.len() <= 256
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+        .collect();
+    let shown = if shown.is_empty() {
+        "some environment variables".to_owned()
+    } else {
+        shown.join(", ")
+    };
     format!(
-        "\x1b[2m[Shell++] The server did not set {}: it accepts only the variables its AcceptEnv allows.\x1b[0m\r\n",
-        names.join(", ")
+        "\x1b[2m[Shell++] The server did not set {shown}: it accepts only the variables its AcceptEnv allows.\x1b[0m\r\n"
     )
 }
 

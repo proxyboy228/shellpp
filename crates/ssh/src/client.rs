@@ -412,8 +412,10 @@ pub async fn connect(
         chain.push(connection);
     }
     let via = via_after(&chain, spec.proxy.as_ref());
-    let mut connection = connect_one(&spec, &interaction, via).await?;
-    connection.chain = chain;
+    let connection = connect_one(&spec, &interaction, via).await?;
+    // The core owns the route: channels (a shell, SFTP, a forwarding rule)
+    // keep it open even after the `Connection` is dropped.
+    let _ = connection.core.chain.set(chain);
     Ok(connection)
 }
 
@@ -652,6 +654,7 @@ async fn attempt(
         switch,
         request_timeout: timeout,
         keepalive: std::sync::Mutex::new(None),
+        chain: std::sync::OnceLock::new(),
     });
     if let Some(interval) = spec.keepalive.filter(|interval| !interval.is_zero()) {
         let task = tokio::spawn(keepalive_loop(Arc::downgrade(&core), interval));
@@ -661,7 +664,6 @@ async fn attempt(
     }
     Ok(Connection {
         core,
-        chain: Vec::new(),
         server_ident,
         auth: authenticated.outcome,
         prompted: std::sync::Mutex::new(authenticated.prompted),
@@ -725,6 +727,9 @@ pub(crate) struct ConnCore {
     switch: Arc<KillSwitch>,
     request_timeout: Duration,
     keepalive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The jump hosts of the route, first one first (set once, after the
+    /// connection is made); dropped after this connection's own state.
+    chain: std::sync::OnceLock<Vec<Connection>>,
 }
 
 impl ConnCore {
@@ -796,8 +801,6 @@ impl Drop for ConnCore {
 /// An authenticated connection.
 pub struct Connection {
     core: Arc<ConnCore>,
-    /// The jump hosts of the route, first one first; dropped after `core`.
-    chain: Vec<Connection>,
     server_ident: String,
     auth: AuthOutcome,
     /// Taken once by [`Connection::take_prompted_secrets`].
@@ -835,7 +838,9 @@ impl std::fmt::Debug for ShellRequest {
 }
 
 /// Output of an exec channel (OS detection, snippets on many hosts).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// `Debug` shows sizes only: the output is the host's (docs/security.md,
+/// section 9.1).
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ExecOutput {
     /// Stdout (with [`Connection::exec_with_stderr`] stderr too, in arrival
     /// order), cut at the requested maximum.
@@ -884,6 +889,17 @@ async fn wait_reply(
                 pending.push_back(other);
             }
         }
+    }
+}
+
+impl std::fmt::Debug for ExecOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecOutput")
+            .field("bytes", &self.stdout.len())
+            .field("exit_status", &self.exit_status)
+            .field("truncated", &self.truncated)
+            .field("timed_out", &self.timed_out)
+            .finish()
     }
 }
 
@@ -978,11 +994,9 @@ impl Connection {
             match wait_reply(&mut channel, &mut pending, remaining).await {
                 Ok(true) => {}
                 Ok(false) => refused_env.push(name.clone()),
-                Err(kind @ (FailureKind::Disconnected | FailureKind::Protocol)) => {
-                    return Err(core.failure(kind));
-                }
-                // No answer in time: not known to be refused; stop waiting.
-                Err(_) => break,
+                // No answer in time fails the open too: the replies left
+                // unread would be taken for those of the next requests.
+                Err(kind) => return Err(core.failure(kind)),
             }
         }
 
@@ -1176,7 +1190,7 @@ impl Connection {
 
     /// The number of jump hosts this connection goes through.
     pub fn jump_hosts(&self) -> usize {
-        self.chain.len()
+        self.core.chain.get().map_or(0, Vec::len)
     }
 
     pub(crate) fn core(&self) -> &Arc<ConnCore> {
@@ -1203,7 +1217,7 @@ impl Connection {
     /// hosts' connections, last one first.
     pub async fn disconnect(&self) {
         disconnect_core(&self.core).await;
-        for hop in self.chain.iter().rev() {
+        for hop in self.core.chain.get().into_iter().flatten().rev() {
             disconnect_core(&hop.core).await;
         }
     }

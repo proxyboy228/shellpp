@@ -29,7 +29,6 @@ fn target_of(addr: std::net::SocketAddr, password: &str) -> batch::ConnectTarget
             TestInteraction::accepting().as_dyn(),
         )
         .await
-        .map(Arc::new)
     })
 }
 

@@ -141,7 +141,9 @@ where
     }
     match http_status(&reply) {
         Some(200..=299) => Ok(()),
-        Some(407) => Err(ProxyError::Proxy(FailureKind::ProxyAuthFailed)),
+        // 407 is the standard answer; tinyproxy answers wrong credentials
+        // with 401 (and missing ones with 407).
+        Some(401 | 407) => Err(ProxyError::Proxy(FailureKind::ProxyAuthFailed)),
         // Bad gateway, gateway timeout: the proxy could not reach the target.
         Some(502) => Err(ProxyError::Target(FailureKind::Refused)),
         Some(504) => Err(ProxyError::Target(FailureKind::Timeout)),
@@ -375,6 +377,10 @@ mod tests {
         for (reply, expected) in [
             (
                 &b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"[..],
+                ProxyError::Proxy(FailureKind::ProxyAuthFailed),
+            ),
+            (
+                &b"HTTP/1.0 401 Unauthorized\r\n\r\n"[..],
                 ProxyError::Proxy(FailureKind::ProxyAuthFailed),
             ),
             (

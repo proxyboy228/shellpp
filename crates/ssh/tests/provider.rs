@@ -413,6 +413,9 @@ async fn agent_forwarding(target: &Target) {
         password_plan(&target.password_user.1),
     );
     spec.agent = Some(SystemAgent::at(agent.location()));
+    spec.forward_agent = Some(shellpp_ssh::ForwardedAgent::system_only(SystemAgent::at(
+        agent.location(),
+    )));
     let connection = connect(spec, TestInteraction::accepting().as_dyn())
         .await
         .expect("connects");

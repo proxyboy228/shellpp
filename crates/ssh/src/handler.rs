@@ -133,12 +133,12 @@ impl Shared {
         self.verifying.subscribe()
     }
 
-    /// What a forwarded agent channel serves: the forwarded agent, else
-    /// the system agent alone; `None` when there is nothing to forward.
+    /// What a forwarded agent channel serves; `None` when nothing is to be
+    /// forwarded. Only [`crate::ConnectSpec::forward_agent`] decides: the
+    /// system agent used for authentication is never forwarded on its own
+    /// (D60: it needs the host's option).
     pub(crate) fn forwarded_agent(&self) -> Option<ForwardedAgent> {
-        self.forwarded
-            .clone()
-            .or_else(|| self.agent.clone().map(ForwardedAgent::system_only))
+        self.forwarded.clone()
     }
 
     pub(crate) fn set_forwarding_requested(&self, requested: bool) {

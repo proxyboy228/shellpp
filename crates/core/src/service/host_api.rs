@@ -105,6 +105,9 @@ pub enum RouteProblem {
     RepeatedHop { index: usize },
     /// More hops than a chain may hold (8).
     TooManyHops,
+    /// `ssh.proxy` is set but cannot be read (data that bypassed the model):
+    /// the host is not connected directly instead.
+    InvalidProxy,
 }
 
 /// The kind of a proxy (`host.ssh.proxy.type`).

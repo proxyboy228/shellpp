@@ -11,13 +11,16 @@
 #   127.0.0.1:<port> --> jump1 --+--> jump2
 #                                +--> target   (busybox httpd on port 8080)
 #                                +--> app1, app2, app3
+#   127.0.0.1:<port> --> proxy (tinyproxy on 3128, microsocks on 1080)
+#                                +--> every server of the lab
 #
 # Only jump1 is published (on 127.0.0.1, a random port); the lab network is
 # `--internal`: the other servers cannot be reached from this machine nor
 # reach anything outside the lab. Every server has the same three users as
 # start.sh (pwuser, keyuser, kiuser) with the credentials generated for this
 # lab, and its own host keys (generated at its start). `target` also serves
-# HTTP on port 8080 (the answer is lab.json's "http_body").
+# HTTP on port 8080 (the answer is lab.json's "http_body"). The proxies (image
+# proxy/Dockerfile) need the lab's generated proxy user and password.
 #
 # Exit status: 0 done; 1 failed; 2 usage; 3 Docker is not available.
 # Environment: SHELLPP_OPENSSH_IMAGE, SHELLPP_OPENSSH_LIFETIME,
@@ -109,6 +112,14 @@ if [ -z "$image" ]; then
 elif ! docker image inspect "$image" >/dev/null 2>&1; then
     die "image $image not found"
 fi
+proxy_image="${SHELLPP_OPENSSH_PROXY_IMAGE:-}"
+if [ -z "$proxy_image" ]; then
+    proxy_image='shellpp-test-proxy:local'
+    log "building $proxy_image"
+    docker build --quiet --tag "$proxy_image" "$here/proxy" >/dev/null || die 'docker build of the proxies failed'
+elif ! docker image inspect "$proxy_image" >/dev/null 2>&1; then
+    die "image $proxy_image not found"
+fi
 
 suffix="$(random_hex | cut -c 1-10)"
 network="shellpp-lab-$suffix"
@@ -129,6 +140,8 @@ mkdir -p "$input/shellpp-input"
 printf '%s\n' "$password_secret" >"$input/shellpp-input/pwuser.password"
 printf '%s\n' "$ki_secret" >"$input/shellpp-input/kiuser.password"
 cp "$key.pub" "$input/shellpp-input/keyuser.authorized_keys"
+proxy_user="proxy$(random_hex | cut -c 1-6)"
+proxy_secret="$(random_hex)"
 
 for server in $SERVERS; do
     name="shellpp-lab-$server-$suffix"
@@ -155,6 +168,26 @@ for server in $SERVERS; do
     docker start "$name" >/dev/null || die "docker start $server failed"
 done
 rm -rf "$input"
+
+# The proxies: published on loopback, reaching the lab network.
+proxy_name="shellpp-lab-proxy-$suffix"
+docker create --init --name "$proxy_name" --label "$LABEL" --hostname proxy \
+    --publish 127.0.0.1::3128 --publish 127.0.0.1::1080 \
+    --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" "$proxy_image" >/dev/null ||
+    die 'docker create proxy failed'
+printf '%s\n' "$proxy_name" >>"$workdir/containers"
+mkdir -p "$input/shellpp-input"
+printf '%s\n' "$proxy_user" >"$input/shellpp-input/proxy.user"
+printf '%s\n' "$proxy_secret" >"$input/shellpp-input/proxy.password"
+COPYFILE_DISABLE=1 tar -C "$input" -cf - shellpp-input | docker cp - "$proxy_name:/run" >/dev/null ||
+    die 'copying the proxy credentials failed'
+rm -rf "$input"
+docker network connect "$network" "$proxy_name" >/dev/null || die 'connecting the proxy failed'
+docker start "$proxy_name" >/dev/null || die 'docker start proxy failed'
+http_mapping="$(docker port "$proxy_name" 3128/tcp | head -n 1)" || die 'reading the proxy port failed'
+socks_mapping="$(docker port "$proxy_name" 1080/tcp | head -n 1)" || die 'reading the proxy port failed'
+http_port="${http_mapping##*:}"
+socks_port="${socks_mapping##*:}"
 
 name_of() {
     printf 'shellpp-lab-%s-%s' "$1" "$suffix"
@@ -204,6 +237,8 @@ done
     printf '    "keyboard_interactive": {"name": "kiuser", "password": %s}\n' "$(json_string "$ki_secret")"
     printf '  },\n'
     printf '  "http_body": %s,\n' "$(json_string "$http_body")"
+    printf '  "proxy": {"http_port": %s, "socks_port": %s, "user": %s, "password": %s},\n' \
+        "$http_port" "$socks_port" "$(json_string "$proxy_user")" "$(json_string "$proxy_secret")"
     printf '  "network": %s\n' "$(json_string "$network")"
     printf '}\n'
 } >"$workdir/lab.json.tmp"

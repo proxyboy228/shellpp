@@ -224,6 +224,9 @@ async fn the_agent_channel_is_accepted_only_after_forwarding_was_requested() {
     let (addr, outcomes, task) = start_hostile().await;
     let mut spec = spec(addr, Some("mallory"), password_plan("anything"));
     spec.agent = Some(SystemAgent::at(agent.location()));
+    spec.forward_agent = Some(shellpp_ssh::ForwardedAgent::system_only(SystemAgent::at(
+        agent.location(),
+    )));
     let connection = connect(spec, TestInteraction::accepting().as_dyn())
         .await
         .expect("connects");

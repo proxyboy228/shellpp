@@ -114,6 +114,9 @@ async fn forwarding_lets_the_server_list_the_agent_keys() {
     let server = start_server(vec![password_user("alice", &password)]).await;
     let mut spec = spec(server.addr(), Some("alice"), password_plan(&password));
     spec.agent = Some(SystemAgent::at(agent.location()));
+    spec.forward_agent = Some(shellpp_ssh::ForwardedAgent::system_only(SystemAgent::at(
+        agent.location(),
+    )));
     let connection = connect(spec, TestInteraction::accepting().as_dyn())
         .await
         .expect("connects");
@@ -151,6 +154,34 @@ async fn forwarding_is_off_unless_requested() {
     read_until(&mut shell, "agent: not forwarded", SHORT).await;
     assert!(!server.events().contains(&ServerEvent::AgentForward));
     assert_eq!(agent.requests(), 0);
+    connection.disconnect().await;
+    server.shutdown().await;
+}
+
+/// The system agent of the spec (authentication) is never forwarded on its
+/// own: forwarding needs `forward_agent` (D60).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_authentication_agent_is_not_forwarded_without_the_option() {
+    let (keys, _) = agent_keys(1);
+    let agent = TestAgent::start(keys).await;
+    let password = random_secret("pw");
+    let server = start_server(vec![password_user("alice", &password)]).await;
+    let mut spec = spec(server.addr(), Some("alice"), password_plan(&password));
+    spec.agent = Some(SystemAgent::at(agent.location()));
+    let connection = connect(spec, TestInteraction::accepting().as_dyn())
+        .await
+        .expect("connects");
+    let mut shell = connection
+        .open_shell(ShellRequest {
+            agent_forwarding: true,
+            ..shell_request()
+        })
+        .await
+        .expect("shell");
+    read_until(&mut shell, PROMPT, SHORT).await;
+    shell.writer().write(b"agent-keys\r").await.expect("write");
+    read_until(&mut shell, "agent: not forwarded", SHORT).await;
+    assert!(!server.events().contains(&ServerEvent::AgentForward));
     connection.disconnect().await;
     server.shutdown().await;
 }

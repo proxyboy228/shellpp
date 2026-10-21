@@ -374,3 +374,95 @@ async fn a_hosts_rules_share_one_connection_and_come_back_after_a_drop() {
     assert!(eventually(SHORT, || server.connection_count() == 0).await);
     forwarder.shutdown().await;
 }
+
+/// A reconnect that fails for another reason than the transport (here the
+/// password) ends the attempts with that failure instead of retrying
+/// forever; a rule started while the supervisor reconnects waits for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_login_ends_the_reconnects_and_new_rules_wait_for_one() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    let echo = Echo::start().await;
+    let addr = server.addr();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wrong_after = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let connect_fn: shellpp_ssh::forward::ConnectFn = {
+        let calls = Arc::clone(&calls);
+        let wrong_after = Arc::clone(&wrong_after);
+        Arc::new(move || {
+            let password = if wrong_after.load(std::sync::atomic::Ordering::SeqCst) {
+                "wrong".to_owned()
+            } else {
+                password.clone()
+            };
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                let mut spec = spec(addr, Some("alice"), password_plan(&password));
+                spec.auth.keyboard_interactive = false;
+                connect(spec, TestInteraction::accepting().as_dyn())
+                    .await
+                    .map(Arc::new)
+            })
+        })
+    };
+    let forwarder = HostForwarder::new(connect_fn);
+    let first = forwarder
+        .start(1, local("127.0.0.1", echo.addr.port(), 0))
+        .await;
+    assert!(matches!(first, RuleStatus::Running(_)), "{first:?}");
+    let mut statuses = forwarder.subscribe();
+    wrong_after.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(server.drop_connections(), 1);
+    let waiting = tokio::time::timeout(
+        SHORT,
+        statuses
+            .wait_for(|statuses| matches!(statuses.get(&1), Some(RuleStatus::Reconnecting { .. }))),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    assert!(waiting);
+    // Started during the reconnect: it waits, it does not connect itself.
+    let second = forwarder
+        .start(2, local("127.0.0.1", echo.addr.port(), 0))
+        .await;
+    assert!(
+        matches!(second, RuleStatus::Reconnecting { .. }),
+        "{second:?}"
+    );
+    let failed = tokio::time::timeout(
+        Duration::from_secs(15),
+        statuses.wait_for(|statuses| {
+            statuses.len() == 2
+                && statuses
+                    .values()
+                    .all(|status| matches!(status, RuleStatus::ConnectFailed(_)))
+        }),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    assert!(failed, "{:?}", forwarder.subscribe().borrow().clone());
+    // One login attempt after the drop, not one every minute.
+    let attempts = calls.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), attempts);
+    assert_eq!(attempts, 2, "the first connect and one reconnect");
+    forwarder.shutdown().await;
+}
+
+/// Restarting a rule on the same port works at once: `Forward::stop`
+/// returns once the listener is closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rule_restarts_on_its_own_port() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    let echo = Echo::start().await;
+    let connection = connection(&server, &password).await;
+    let port = free_port().await;
+    for _ in 0..5 {
+        let forward = connection
+            .forward(local("127.0.0.1", echo.addr.port(), port))
+            .await
+            .expect("the port is free again");
+        forward.stop().await;
+    }
+}

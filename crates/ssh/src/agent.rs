@@ -503,14 +503,33 @@ async fn sign(
         .find(|key| key_blob(key).as_deref() == Some(blob));
     let fingerprint = match own {
         Some(key) => key.public_key().fingerprint(HashAlg::Sha256).to_string(),
-        None => match russh::keys::ssh_key::PublicKey::from_bytes(blob) {
-            Ok(public) => public.fingerprint(HashAlg::Sha256).to_string(),
-            Err(_) => return failure_frame(),
-        },
+        None => {
+            // A key of the system agent: one it lists, and for RSA never a
+            // SHA-1 signature (the system agent would make one).
+            let Some(system) = &agent.system else {
+                return failure_frame();
+            };
+            let Ok(public) = russh::keys::ssh_key::PublicKey::from_bytes(blob) else {
+                return failure_frame();
+            };
+            if public.algorithm().is_rsa()
+                && flags & (SSH_AGENT_RSA_SHA2_256 | SSH_AGENT_RSA_SHA2_512) == 0
+            {
+                tracing::debug!("forwarded ssh-rsa (SHA-1) signature refused");
+                return failure_frame();
+            }
+            let listing = frame_of(vec![SSH_AGENTC_REQUEST_IDENTITIES]);
+            let listed = relay(system, upstream, &listing)
+                .await
+                .as_deref()
+                .and_then(identity_entries)
+                .is_some_and(|entries| entries.iter().any(|(listed, _)| listed == blob));
+            if !listed {
+                return failure_frame();
+            }
+            public.fingerprint(HashAlg::Sha256).to_string()
+        }
     };
-    if own.is_none() && agent.system.is_none() {
-        return failure_frame();
-    }
     if let Some(confirm) = &agent.confirm
         && !confirm.confirm(&fingerprint).await
     {

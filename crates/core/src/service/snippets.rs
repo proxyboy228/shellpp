@@ -426,6 +426,16 @@ impl Core {
             .ok_or(CoreError::Internal("forwarding rule unreadable"))
     }
 
+    /// The forwarding rules of the personal vault (the one open now): the
+    /// only rules whose autostart flags count (data-model 11).
+    pub fn forwarding_rules_personal(&self) -> Result<Vec<ForwardingRuleView>, CoreError> {
+        let vault_id = {
+            let inner = self.inner();
+            Self::require_session(&inner)?.ring.vault_id()
+        };
+        self.forwarding_rules_list(vault_id)
+    }
+
     /// Every forwarding rule of the vault, by label (the summary when
     /// there is none), then id. A rule whose data cannot be read is left out.
     pub fn forwarding_rules_list(
