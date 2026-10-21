@@ -808,22 +808,24 @@ impl SessionManager {
     }
 
     /// Starts a forwarding rule of the personal vault on its host's shared
-    /// connection (stage 5; the screen comes with the interface). The
-    /// connection uses only saved credentials and known host keys.
-    pub async fn forward_start(
+    /// connection (stage 5, the Port Forwarding screen). The connection uses
+    /// only saved credentials and known host keys. The work starts now, on
+    /// the session layer's runtime; the future only waits for its status.
+    pub fn forward_start(
         &self,
         rule: &shellpp_core::service::snippets::ForwardingRuleView,
-    ) -> shellpp_ssh::RuleStatus {
-        // On the session layer's runtime: the caller may be any executor.
+    ) -> impl std::future::Future<Output = shellpp_ssh::RuleStatus> + 'static {
         let shared = Arc::clone(&self.shared);
         let rule = rule.clone();
-        self.shared
+        let work = self
+            .shared
             .rt
-            .spawn(async move { shared.forwarding.start(&shared, &rule).await })
-            .await
-            .unwrap_or(shellpp_ssh::RuleStatus::ConnectFailed(
+            .spawn(async move { shared.forwarding.start(&shared, &rule).await });
+        async move {
+            work.await.unwrap_or(shellpp_ssh::RuleStatus::ConnectFailed(
                 shellpp_ssh::FailureKind::Cancelled,
             ))
+        }
     }
 
     /// Export to host (UI 7.3; stage 4, item 8): appends `public_key` to
@@ -870,14 +872,20 @@ impl SessionManager {
         async move { work.await.unwrap_or_default() }
     }
 
-    /// Stops a forwarding rule.
-    pub async fn forward_stop(&self, rule: uuid::Uuid) {
+    /// Stops a forwarding rule (the work starts now, as for
+    /// [`SessionManager::forward_start`]).
+    pub fn forward_stop(
+        &self,
+        rule: uuid::Uuid,
+    ) -> impl std::future::Future<Output = ()> + 'static {
         let shared = Arc::clone(&self.shared);
-        let _ = self
+        let work = self
             .shared
             .rt
-            .spawn(async move { shared.forwarding.stop(rule).await })
-            .await;
+            .spawn(async move { shared.forwarding.stop(rule).await });
+        async move {
+            let _ = work.await;
+        }
     }
 
     /// The status of a started forwarding rule.

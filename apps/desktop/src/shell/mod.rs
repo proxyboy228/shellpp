@@ -338,6 +338,7 @@ pub struct Shell {
     hosts: Entity<HostsScreen>,
     /// The Known Hosts section (UI 10.1), with its own details panel.
     known_hosts: Entity<crate::known_hosts::KnownHostsScreen>,
+    forwarding: Entity<crate::forwarding::ForwardingScreen>,
     sftp: Entity<crate::sftp::SftpScreen>,
     /// The Keychain section (UI 7), with its own details panel.
     keychain: Entity<crate::keychain::KeychainScreen>,
@@ -396,6 +397,8 @@ impl Shell {
         let hosts = cx.new(|cx| HostsScreen::new(state.clone(), window, cx));
         let known_hosts =
             cx.new(|cx| crate::known_hosts::KnownHostsScreen::new(state.clone(), window, cx));
+        let forwarding =
+            cx.new(|cx| crate::forwarding::ForwardingScreen::new(state.clone(), window, cx));
         let keychain = cx.new(|cx| crate::keychain::KeychainScreen::new(state.clone(), window, cx));
         let sftp = cx.new(|cx| crate::sftp::SftpScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
@@ -452,6 +455,7 @@ impl Shell {
             sidebar_visible: true,
             hosts,
             known_hosts,
+            forwarding,
             sftp,
             keychain,
             panel: None,
@@ -500,6 +504,10 @@ impl Shell {
 
     pub fn known_hosts_screen(&self) -> &Entity<crate::known_hosts::KnownHostsScreen> {
         &self.known_hosts
+    }
+
+    pub fn forwarding_screen(&self) -> &Entity<crate::forwarding::ForwardingScreen> {
+        &self.forwarding
     }
 
     pub fn keychain_screen(&self) -> &Entity<crate::keychain::KeychainScreen> {
@@ -1466,6 +1474,7 @@ impl Shell {
             Section::Hosts => self.hosts.clone().into_any_element(),
             Section::KnownHosts => self.known_hosts.clone().into_any_element(),
             Section::Keychain => self.keychain.clone().into_any_element(),
+            Section::PortForwarding => self.forwarding.clone().into_any_element(),
             _ => placeholder::placeholder("section-placeholder", self.section.label(), cx)
                 .into_any_element(),
         };
@@ -2330,6 +2339,9 @@ impl Render for Shell {
                                         self.known_hosts.read(cx).open_panel_width()
                                     }
                                     Section::Keychain => self.keychain.read(cx).open_panel_width(),
+                                    Section::PortForwarding => {
+                                        self.forwarding.read(cx).open_panel_width()
+                                    }
                                     _ => None,
                                 }
                             }),

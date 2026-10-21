@@ -238,6 +238,12 @@ pub enum ShotState {
     KeychainExport,
     /// A key with an expired certificate: its block and warning.
     KeychainCertificate,
+    /// Port Forwarding without rules (UI 8).
+    ForwardingEmpty,
+    /// Rule cards: running, stopped, an error and reconnecting.
+    ForwardingCards,
+    /// The full form of a Remote rule on all interfaces, with its status.
+    ForwardingForm,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -345,7 +351,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 57] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -370,6 +376,9 @@ impl ShotState {
         Self::ExportOpenSsh,
         Self::ImportData,
         Self::ImportSshConfig,
+        Self::ForwardingEmpty,
+        Self::ForwardingCards,
+        Self::ForwardingForm,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
@@ -477,6 +486,9 @@ impl ShotState {
             Self::SftpPermissions => "sftp-permissions",
             Self::KeychainExport => "keychain-export",
             Self::KeychainCertificate => "keychain-certificate",
+            Self::ForwardingEmpty => "forwarding-empty",
+            Self::ForwardingCards => "forwarding-cards",
+            Self::ForwardingForm => "forwarding-form",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1399,6 +1411,9 @@ pub async fn reach_state(
         | ShotState::KeychainImportUnknown => {
             keychain_shot::reach(cx, handle, root, shot_state).await
         }
+        ShotState::ForwardingEmpty | ShotState::ForwardingCards | ShotState::ForwardingForm => {
+            forwarding_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -1442,6 +1457,9 @@ pub fn check_state(
     }
     if sftp_shot::STATES.contains(&shot_state) {
         return sftp_shot::check(cx, handle, shot_state);
+    }
+    if forwarding_shot::STATES.contains(&shot_state) {
+        return forwarding_shot::check(cx, handle, shot_state);
     }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
@@ -1580,6 +1598,10 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SftpPermissions
             | ShotState::KeychainExport
             | ShotState::KeychainCertificate => Err("checked with the stage 4 screens"),
+            // Checked by `forwarding_shot::check`.
+            ShotState::ForwardingEmpty | ShotState::ForwardingCards | ShotState::ForwardingForm => {
+                Err("checked with the stage 5 screens")
+            }
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -1841,6 +1863,7 @@ fn capture(
     .map_err(|_| ScreenshotError::WindowClosed)?
 }
 
+mod forwarding_shot;
 mod keychain_shot;
 mod known_hosts_shot;
 mod sftp_shot;

@@ -216,6 +216,10 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Keychain);
     assert!(ui.visible("keychain-screen", cx));
     assert!(!ui.visible("section-placeholder", cx));
+    // Port Forwarding has its screen since stage 5.
+    ui.click("nav-port-forwarding", cx);
+    assert!(ui.visible("forwarding-screen", cx));
+    assert!(!ui.visible("section-placeholder", cx));
     ui.click("nav-hosts", cx);
     assert!(ui.visible("hosts-screen", cx));
     ui.finish(cx);

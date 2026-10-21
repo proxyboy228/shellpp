@@ -1041,3 +1041,19 @@ Status: run 3 decision, 2026-10-21 (plan, section 7: stage 4, the interface of S
 - Known limits: an opened copy is removed when the app exits (`tmp/` is emptied), not when its program closes it; a save in the last two seconds before the tab closes is not uploaded.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 7.1, 7.3 (and `docs/ru`); UI 5 is followed as written otherwise.
+
+### 66. The interface of stage 5 (run 3)
+
+Status: run 3 decision, 2026-10-21 (plan, section 8: stage 5, the interface; UI 3.1, 8).
+
+**Decision:**
+
+- A route failure names its place (D57): "On jump host 1 of 2: bastion", "At the proxy", or that a jump host of the chain is missing or listed twice; the jump chain editor and the proxy fields of Show more were built in run 2.
+- Agent Forwarding (D60): while the switch is on, the host panel shows the warning (anyone with root on the host can sign in elsewhere with your keys while a session is open) and two options: "Also offer the system agent's keys" (`agent_forward_system`) and "Ask before every signature" (`agent_confirm`). The signature dialog is not built yet; until it is, a host with `agent_confirm` gets no signature at all, and the option says so under it.
+- The Port Forwarding screen (UI 8): split New forwarding (the main part opens a Local rule, the arrow offers Local, Remote and Dynamic) and search; the cards with the type badge (L, R, D), the label (the summary when there is none), the summary and the status (Stopped, Starting, Running, Reconnecting with its attempt, or the error in words: a busy port names the port and asks for another, UI 8.4). A click opens the rule in the panel, a double click (and Enter) starts or stops it, the menu has Start/Stop, Edit, Duplicate and Remove; Delete removes, Esc closes the panel.
+- The panel is the full form of 8.4 for a new rule, a copy and a saved rule: type, host, label, where it listens and where it leads (each address with its port), and the two autostart switches; a saved rule's status with Start or Stop is above it, and Create, Create and start, or Save and Remove stay in the panel's footer below the long form. Ports are checked by the form (1 to 65535), everything else by the core, each reason under its field. Saving a rule that runs starts it again with the new values. Duplicate opens a new rule with the values and "<title> Copy"; nothing is saved until Create. Remove asks first, stops the rule, and offers Undo for 5 seconds.
+- The bind address defaults to 127.0.0.1; any address beyond loopback (0.0.0.0, ::, an address of a network) shows the warning under it, and for Remote it names `GatewayPorts`. The explicit choice of 8.4 is typing such an address.
+- The screen shows the rules of the personal vault (the only one whose autostart flags count, data-model 11). Statuses live in the session layer's forwarding service; the screen reads them once a second while a rule is started. `SessionManager::forward_start` and `forward_stop` start their work at once and return a future without a borrow, so the interface can wait for them on its own executor.
+- Not built in this run: the step-by-step wizard of 8.3 with its diagrams (the form is what its Skip wizard leads to), the tile/list toggle and sorting of 8.1, and Move to / Copy to another vault in the menu (there is one vault in local mode).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 3.1 (and `docs/ru`); UI 8 is followed as written otherwise, with the parts above left for later.

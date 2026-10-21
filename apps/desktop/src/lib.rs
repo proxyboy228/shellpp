@@ -45,6 +45,7 @@ pub mod data_transfer;
 #[cfg(feature = "dev-tools")]
 pub mod dev;
 pub mod dirs;
+pub mod forwarding;
 pub mod hardening;
 pub mod hosts;
 pub mod i18n;
