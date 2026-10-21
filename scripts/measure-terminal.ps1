@@ -114,7 +114,9 @@ param(
     [int] $HighlightRules = 0,
     # Use the existing binaries.
     [switch] $NoBuild
-)$ErrorActionPreference = 'Stop'
+)
+
+$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path -Parent $PSScriptRoot
@@ -240,7 +242,8 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
     if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
     if ($HighlightRules -gt 0) { $info.EnvironmentVariables['SHELLPP_BENCH_HIGHLIGHT_RULES'] = "$HighlightRules" }
-    $lines = New-Object System.Collections.Generic.List[string]$samples = New-Object System.Collections.Generic.List[object]
+    $lines = New-Object System.Collections.Generic.List[string]
+    $samples = New-Object System.Collections.Generic.List[object]
     $memory = $null
     $problem = $null
     $limit = if ($Timeout -gt 0) { $Timeout } else { $TimeoutSeconds }
