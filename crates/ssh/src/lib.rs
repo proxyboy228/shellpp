@@ -30,6 +30,7 @@ pub mod agent;
 mod algorithms;
 mod auth;
 pub mod authorized_keys;
+pub mod batch;
 pub mod client;
 pub mod error;
 pub mod forward;

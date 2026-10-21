@@ -1009,7 +1009,9 @@ pub(crate) async fn pump(
     mut decoder: charset::OutputDecoder,
     input_rx: InputReceiver,
 ) -> PumpEnd {
-    let TermParts { mut events, input } = parts;
+    let TermParts {
+        mut events, input, ..
+    } = parts;
     let writer = shared.rt.spawn(write_loop(input.clone(), input_rx));
     let terminal = session.terminal();
     let mut terminal_open = terminal.is_some();

@@ -29,6 +29,7 @@ Test use only; nothing here is shipped.
 | `start.sh <workdir>` | builds the image, generates the run's credentials, starts a container, writes `<workdir>/server.json` |
 | `control.sh <workdir> <command>` | server-side faults on that container: `rotate-host-key`, `drop-connections`, `freeze`, `thaw` (below) |
 | `stop.sh <workdir>` | removes that container; `stop.sh --all` removes every container started by `start.sh` |
+| `lab.sh up\|down <workdir>` | the stage 5 lab: jump1 on loopback, jump2, target (HTTP on 8080) and app1-app3 only in an `--internal` network of their own; writes `<workdir>/lab.json`. `crates/ssh/tests/lab.rs` starts and removes one itself with `SHELLPP_TEST_SSHD=openssh` (or reuses one: `SHELLPP_OPENSSH_LAB_JSON=<workdir>/lab.json`) |
 
 ## Requirements
 

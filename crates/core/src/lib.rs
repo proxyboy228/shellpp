@@ -34,6 +34,7 @@ pub mod os_detect;
 pub mod platform;
 pub mod service;
 pub mod settings;
+pub mod snippet;
 pub mod store;
 pub mod vault;
 

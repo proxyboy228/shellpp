@@ -109,6 +109,7 @@ fn parts(session: LocalSession, writer: PtyWriter) -> TermParts {
             exited: None,
         }),
         input: Arc::new(LocalInput(writer)),
+        refused_env: Vec::new(),
     }
 }
 

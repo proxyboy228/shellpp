@@ -54,6 +54,39 @@ pub trait TermInput: Send + Sync + 'static {
 pub struct TermParts {
     pub events: Box<dyn TermEvents>,
     pub input: Arc<dyn TermInput>,
+    /// SSH: the environment variables the server refused (`AcceptEnv`).
+    pub refused_env: Vec<String>,
+}
+
+/// Terminal events that start with a line of our own (a notice), then the
+/// terminal's. Cancel-safe: the notice is taken only when it is returned.
+struct WithNotice {
+    notice: Option<Vec<u8>>,
+    inner: Box<dyn TermEvents>,
+}
+
+impl TermEvents for WithNotice {
+    fn next(&mut self) -> BoxFuture<'_, TermEvent> {
+        Box::pin(async move {
+            if let Some(notice) = self.notice.take() {
+                return TermEvent::Data(notice);
+            }
+            self.inner.next().await
+        })
+    }
+}
+
+impl TermParts {
+    /// The same terminal, showing `notice` before its output.
+    pub fn with_notice(self, notice: Vec<u8>) -> Self {
+        Self {
+            events: Box::new(WithNotice {
+                notice: Some(notice),
+                inner: self.events,
+            }),
+            ..self
+        }
+    }
 }
 
 impl std::fmt::Debug for TermParts {
@@ -180,9 +213,11 @@ impl RemoteConnection for SshConnection {
         Box::pin(async move {
             let shell = self.0.open_shell(request).await?;
             let writer = shell.writer();
+            let refused_env = shell.refused_env().to_vec();
             Ok(TermParts {
                 events: Box::new(SshEvents(shell)),
                 input: Arc::new(SshInput(writer)),
+                refused_env,
             })
         })
     }

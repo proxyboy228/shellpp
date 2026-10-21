@@ -386,6 +386,41 @@ async fn a_host_behind_a_jump_host_connects_through_it() {
     jump.shutdown().await;
 }
 
+/// Environment variables the server refuses (OpenSSH `AcceptEnv`) are named
+/// once in the session, in the terminal; a reconnect does not repeat it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refused_environment_variables_are_named_once_per_session() {
+    let harness = Harness::new();
+    let password = random_secret("pw");
+    let mut config = ServerConfig::new(vec![password_user("alice", &password)]);
+    config.accept_env = Some(vec!["LANG".to_owned()]);
+    let server = start_with(config).await;
+    let target = harness.host(
+        server.port(),
+        json!({"ssh": {"username": "alice", "env": [
+            {"name": "LANG", "value": "C.UTF-8"},
+            {"name": "APP_MODE", "value": "dev"}
+        ]}}),
+        Some(&password),
+    );
+    let mut session = harness.connect(target, true).await;
+    session
+        .output(
+            "The server did not set APP_MODE: it accepts only the variables its AcceptEnv allows.",
+        )
+        .await;
+    let notice = "The server did not set";
+    session.type_line("drop");
+    session.state(SessionState::Dropped).await;
+    session.state(SessionState::Connected).await;
+    session.type_line("echo after-reconnect");
+    session.output("after-reconnect").await;
+    let text = String::from_utf8_lossy(&session.terminal.bytes()).into_owned();
+    assert_eq!(text.matches(notice).count(), 1, "{text:?}");
+    session.handle.close();
+    server.shutdown().await;
+}
+
 /// A host whose chain names a host that does not exist is refused, never
 /// connected directly instead (data-model 8.3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -101,6 +101,40 @@ async fn term_and_environment_reach_the_server() {
     server.shutdown().await;
 }
 
+/// A server that accepts only some names (OpenSSH `AcceptEnv`): the shell
+/// opens anyway and the refused names are reported (stage 5).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refused_environment_variables_are_reported() {
+    let password = random_secret("pw");
+    let mut config = ServerConfig::new(vec![password_user("alice", &password)]);
+    config.accept_env = Some(vec!["LANG".to_owned(), "LC_*".to_owned()]);
+    let server = start_with(config).await;
+    let connection = connect(
+        spec(server.addr(), Some("alice"), password_plan(&password)),
+        TestInteraction::accepting().as_dyn(),
+    )
+    .await
+    .expect("connects");
+    let value = |text: &str| SecretString::from(text.to_owned());
+    let request = ShellRequest {
+        env: vec![
+            ("LANG".to_owned(), value("C.UTF-8")),
+            ("APP_TOKEN".to_owned(), value("t-1")),
+            ("LC_ALL".to_owned(), value("C")),
+            ("DEPLOY_ENV".to_owned(), value("prod")),
+        ],
+        ..shell_request()
+    };
+    let mut shell = connection.open_shell(request).await.expect("shell");
+    assert_eq!(shell.refused_env(), ["APP_TOKEN", "DEPLOY_ENV"]);
+    read_until(&mut shell, PROMPT, SHORT).await;
+    // Nothing refused: the list is empty.
+    let shell = connection.open_shell(shell_request()).await.expect("shell");
+    assert!(shell.refused_env().is_empty());
+    connection.disconnect().await;
+    server.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exit_statuses_end_the_shell() {
     let (server, connection) = simple().await;

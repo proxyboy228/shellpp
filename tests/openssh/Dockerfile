@@ -20,6 +20,8 @@ LABEL org.opencontainers.image.title="shellpp-test-openssh" \
 # - htop and mc: full-screen programs for the terminal tests and screenshots
 #   (alternate screen, mouse reporting, 256 colors, line drawing); procps
 #   gives pkill for the control commands (container-control.sh).
+# - busybox: a small HTTP server (`busybox httpd`) for the port forwarding
+#   tests of the lab (lab.sh) and `nc`.
 # - The package's postinst generates host keys; they are removed so that every
 #   container generates its own.
 # - pam_loginuid cannot write the login uid inside an unprivileged container;
@@ -27,7 +29,7 @@ LABEL org.opencontainers.image.title="shellpp-test-openssh" \
 #   authentication, so it becomes optional.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends openssh-server passwd htop mc procps; \
+    apt-get install -y --no-install-recommends openssh-server passwd htop mc procps busybox; \
     rm -rf /var/lib/apt/lists/*; \
     rm -f /etc/ssh/ssh_host_*; \
     sed -i 's/^session[[:space:]]\+required[[:space:]]\+pam_loginuid\.so/session optional pam_loginuid.so/' /etc/pam.d/sshd; \

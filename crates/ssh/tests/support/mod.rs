@@ -10,6 +10,7 @@
 
 pub mod agent;
 pub mod json;
+pub mod lab;
 pub mod net;
 pub mod openssh;
 pub mod proxy;

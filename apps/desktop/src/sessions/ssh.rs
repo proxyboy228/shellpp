@@ -147,6 +147,8 @@ pub(crate) struct SshTask {
     /// A shell ran in this session before: the next one starts with a
     /// terminal mode reset.
     reconnected: bool,
+    /// The message about refused environment variables was shown.
+    env_noticed: bool,
 }
 
 impl SshTask {
@@ -172,6 +174,7 @@ impl SshTask {
             last_drop: SessionError::ClosedByServer,
             info: None,
             reconnected: false,
+            env_noticed: false,
         }
     }
 
@@ -600,6 +603,15 @@ impl SshTask {
             }
         }
 
+        // Refused environment variables: one message per session (stage 5),
+        // in the terminal before the server's output.
+        let parts = if !self.env_noticed && !parts.refused_env.is_empty() {
+            self.env_noticed = true;
+            let notice = super::strings::env_refused_notice(&parts.refused_env);
+            parts.with_notice(notice.into_bytes())
+        } else {
+            parts
+        };
         let decoder = OutputDecoder::new(info.encoding);
         // `None` only when the session was closed meanwhile (no update ran).
         let input = input.unwrap_or_else(super::InputReceiver::closed);

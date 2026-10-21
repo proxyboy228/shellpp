@@ -829,12 +829,17 @@ impl std::fmt::Debug for ShellRequest {
     }
 }
 
-/// Output of an exec channel (OS detection).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Output of an exec channel (OS detection, snippets on many hosts).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExecOutput {
-    /// Stdout, cut at the requested maximum.
+    /// Stdout (with [`Connection::exec_with_stderr`] stderr too, in arrival
+    /// order), cut at the requested maximum.
     pub stdout: Vec<u8>,
     pub exit_status: Option<u32>,
+    /// More output arrived than the maximum kept.
+    pub truncated: bool,
+    /// The timeout ended the command before its exit status and EOF.
+    pub timed_out: bool,
 }
 
 /// Most bytes of channel data (stdout and stderr) a server may send on a
@@ -875,6 +880,17 @@ async fn wait_reply(
             }
         }
     }
+}
+
+/// Appends exec output up to `max_output` bytes, noting what was cut.
+fn keep_output(output: &mut ExecOutput, data: &[u8], max_output: usize) {
+    let room = max_output.saturating_sub(output.stdout.len());
+    if data.len() > room {
+        output.truncated = true;
+    }
+    output
+        .stdout
+        .extend_from_slice(&data[..data.len().min(room)]);
 }
 
 /// The payload size of a data message (0 for other messages).
@@ -940,13 +956,29 @@ impl Connection {
             return Err(SshError::new(FailureKind::ChannelFailed));
         }
 
+        // Servers refuse names they do not accept (OpenSSH `AcceptEnv`):
+        // the requests go out together, then their replies are read in
+        // order; a refusal does not stop the shell, the refused names are
+        // reported (UI 3.1, stage 5: a message in the session).
         for (name, value) in &request.env {
-            // Servers refuse names they do not accept (OpenSSH `AcceptEnv`);
-            // refusals are ignored, so no reply is requested.
             channel
-                .set_env(false, name.as_str(), value.expose_secret())
+                .set_env(true, name.as_str(), value.expose_secret())
                 .await
                 .map_err(|_| core.failure(FailureKind::ChannelFailed))?;
+        }
+        let mut refused_env = Vec::new();
+        let env_deadline = Instant::now() + timeout;
+        for (name, _) in &request.env {
+            let remaining = env_deadline.saturating_duration_since(Instant::now());
+            match wait_reply(&mut channel, &mut pending, remaining).await {
+                Ok(true) => {}
+                Ok(false) => refused_env.push(name.clone()),
+                Err(kind @ (FailureKind::Disconnected | FailureKind::Protocol)) => {
+                    return Err(core.failure(kind));
+                }
+                // No answer in time: not known to be refused; stop waiting.
+                Err(_) => break,
+            }
         }
 
         if request.agent_forwarding && core.shared.agent().is_some() {
@@ -1003,6 +1035,7 @@ impl Connection {
             exit: None,
             exit_at: None,
             ended: None,
+            refused_env,
         })
     }
 
@@ -1013,6 +1046,27 @@ impl Connection {
         command: &str,
         timeout: Duration,
         max_output: usize,
+    ) -> Result<ExecOutput, SshError> {
+        self.exec_inner(command, timeout, max_output, false).await
+    }
+
+    /// [`Connection::exec`] that keeps stderr as well, interleaved with
+    /// stdout as it arrives (snippets on many hosts, UI 9.4).
+    pub async fn exec_with_stderr(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<ExecOutput, SshError> {
+        self.exec_inner(command, timeout, max_output, true).await
+    }
+
+    async fn exec_inner(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output: usize,
+        with_stderr: bool,
     ) -> Result<ExecOutput, SshError> {
         let core = &self.core;
         let deadline = Instant::now() + timeout;
@@ -1040,25 +1094,23 @@ impl Connection {
             Err(kind) => return Err(core.failure(kind)),
         }
 
-        let mut output = ExecOutput {
-            stdout: Vec::new(),
-            exit_status: None,
-        };
+        let mut output = ExecOutput::default();
         let mut eof = false;
         loop {
             let message = match pending.pop_front() {
                 Some(message) => Some(message),
                 None => match tokio::time::timeout_at(deadline, channel.wait()).await {
                     Ok(message) => message,
-                    Err(_) => break,
+                    Err(_) => {
+                        output.timed_out = true;
+                        break;
+                    }
                 },
             };
             match message {
-                Some(ChannelMsg::Data { data }) => {
-                    let room = max_output.saturating_sub(output.stdout.len());
-                    output
-                        .stdout
-                        .extend_from_slice(&data[..data.len().min(room)]);
+                Some(ChannelMsg::Data { data }) => keep_output(&mut output, &data, max_output),
+                Some(ChannelMsg::ExtendedData { data, .. }) if with_stderr => {
+                    keep_output(&mut output, &data, max_output)
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     output.exit_status = Some(exit_status);
@@ -1203,6 +1255,8 @@ pub struct Shell {
     exit: Option<SessionEnd>,
     exit_at: Option<Instant>,
     ended: Option<SessionEnd>,
+    /// Names of [`ShellRequest::env`] the server refused.
+    refused_env: Vec<String>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -1235,6 +1289,12 @@ fn signal_name(signal: &Sig) -> String {
 }
 
 impl Shell {
+    /// The environment variables the server refused to set (OpenSSH
+    /// accepts only the names of its `AcceptEnv`), in request order.
+    pub fn refused_env(&self) -> &[String] {
+        &self.refused_env
+    }
+
     /// A handle for input and resizes; cheap to clone.
     pub fn writer(&self) -> ShellWriter {
         self.writer.clone()

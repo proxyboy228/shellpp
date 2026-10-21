@@ -81,6 +81,17 @@ pub const OLD_FINGERPRINT: &str = "Saved fingerprint";
 pub const NEW_FINGERPRINT: &str = "Presented fingerprint";
 pub const HOST_KEY_REVOKED_TITLE: &str = "The host key is revoked";
 
+/// The line shown once in a session whose server refused environment
+/// variables (OpenSSH sets only the names of its `AcceptEnv`). Names are
+/// validated identifiers (`[A-Za-z_][A-Za-z0-9_]*`), so the line holds no
+/// control characters but its own dim styling.
+pub fn env_refused_notice(names: &[String]) -> String {
+    format!(
+        "\x1b[2m[Shell++] The server did not set {}: it accepts only the variables its AcceptEnv allows.\x1b[0m\r\n",
+        names.join(", ")
+    )
+}
+
 /// The text of a failure or drop reason.
 pub fn error_message(error: SessionError) -> &'static str {
     match error {
