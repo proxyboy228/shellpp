@@ -842,13 +842,10 @@ fn generate_key_offers_every_type_and_shows_progress(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
-/// FIDO2 opens the import of a security key's file; Certificate stays
-/// disabled (run 3 polish).
+/// FIDO2 opens the import of a security key's file (run 3 polish).
 #[gpui_kit::test]
 fn fido2_opens_the_import_of_a_security_key(cx: &mut TestAppContext) {
     let ui = Ui::open(cx, |_, _| {});
-    ui.click(cx, "kc-certificate");
-    assert!(!ui.visible(cx, "kc-import"));
     ui.click(cx, "kc-fido2");
     let form = ui
         .screen
@@ -1496,4 +1493,76 @@ fn pure_texts() {
         let text = strings::problem(&problem);
         assert!(text.ends_with('.'), "{text}");
     }
+}
+
+/// A user certificate of `subject` signed by `ca`, valid from `after` to
+/// `before` (Unix seconds).
+fn certificate_of(subject: &str, ca: &str, after: u64, before: u64) -> String {
+    use ssh_key::certificate::{Builder, CertType};
+    let subject = ssh_key::PrivateKey::from_openssh(subject.as_bytes()).expect("subject");
+    let ca = ssh_key::PrivateKey::from_openssh(ca.as_bytes()).expect("ca");
+    let mut builder = Builder::new(
+        vec![7u8; 32],
+        subject.public_key().key_data().clone(),
+        after,
+        before,
+    )
+    .expect("builder");
+    builder.cert_type(CertType::User).expect("type");
+    builder.key_id("ops-cert").expect("key id");
+    builder.valid_principal("ops").expect("principal");
+    builder
+        .sign(&ca)
+        .expect("signed")
+        .to_openssh()
+        .expect("line")
+}
+
+/// Certificate (stage 4, item 9): a pasted user certificate goes onto the
+/// key it certifies and its panel shows the principals; an expired one
+/// carries the warning; Remove certificate takes it off. A certificate of
+/// no key in the Keychain is refused with its reason.
+#[gpui_kit::test]
+fn a_certificate_goes_onto_the_key_it_certifies(cx: &mut TestAppContext) {
+    let subject = key_text(KeyKind::Ed25519, "signed@test", None);
+    let seeded = subject.clone();
+    let ui = Ui::open(cx, move |core, vault| {
+        import(core, vault, "Signed", &seeded);
+    });
+    let ca = key_text(KeyKind::Ed25519, "ca@test", None);
+    let stranger = key_text(KeyKind::Ed25519, "other@test", None);
+
+    // A certificate of a key that is not here.
+    ui.click(cx, "kc-certificate");
+    assert!(ui.visible(cx, "kc-certificate-form"));
+    ui.click(cx, "kc-certificate-cancel");
+    assert!(!ui.visible(cx, "kc-certificate-form"));
+    let expired = certificate_of(&subject, &ca, 1_000_000, 2_000_000);
+    let foreign = certificate_of(&stranger, &ca, 0, u64::MAX);
+    let screen = ui.screen.clone();
+    let state = ui.state.clone();
+    // Through the state, as the dialog's Add does.
+    let refused = state.update(cx, |state, cx| state.import_certificate(&foreign, cx));
+    assert_eq!(
+        super::certificate::error_text(&refused.unwrap_err()),
+        strings::CERTIFICATE_NO_KEY
+    );
+    let view = state
+        .update(cx, |state, cx| state.import_certificate(&expired, cx))
+        .expect("certificate added");
+    ui.frame(cx, |window, cx| {
+        screen.update(cx, |screen, cx| screen.open_key(view.record_id, window, cx))
+    });
+    assert!(ui.visible(cx, "kc-key-block-certificate"));
+    assert!(ui.visible(cx, "kc-key-certificate-warning"), "expired");
+    assert!(ui.visible(cx, "kc-key-certificate-principals"));
+    // Remove certificate (below the fold of the panel).
+    let panel = screen
+        .read_with(cx, |screen, _| screen.key_panel().cloned())
+        .expect("the key panel");
+    ui.frame(cx, |window, cx| {
+        panel.update(cx, |panel, cx| panel.remove_certificate(window, cx))
+    });
+    assert!(!ui.visible(cx, "kc-key-block-certificate"));
+    ui.finish(cx);
 }

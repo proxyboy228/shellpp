@@ -319,9 +319,8 @@ impl KeychainScreen {
     }
 
     /// The New key split button (▾: Generate key, New identity), then
-    /// Certificate (shown disabled until it is built, D30) and FIDO2 (the
-    /// import of a security key's file). Their tooltips say what does not
-    /// work yet. `compact`: only their icons, so that the search keeps its
+    /// Certificate (adds a certificate to its key) and FIDO2 (the import of
+    /// a security key's file); FIDO2's tooltip says what does not work yet. `compact`: only their icons, so that the search keeps its
     /// room ([`Self::compact_bar`]).
     fn render_bar_left(
         &self,
@@ -383,8 +382,10 @@ impl KeychainScreen {
             .child(labelled(
                 ControlButton::new("kc-certificate", ControlKind::Neutral)
                     .icon(IconName::FileText)
-                    .tooltip(strings::CERTIFICATE_LATER)
-                    .disabled(true),
+                    .tooltip(strings::CERTIFICATE_TOOLTIP)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_certificate(window, cx)
+                    })),
                 strings::CERTIFICATE,
             ))
             .child(labelled(
@@ -1515,6 +1516,92 @@ impl KeyPanel {
                 None => widgets::caption(strings::PUBLIC_KEY_MISSING, cx).into_any_element(),
             });
 
+        // 4b. The certificate (stage 4, item 9): principals, validity, CA.
+        let certificate = self.certificate.clone().map(|info| {
+            let theme = cx.theme();
+            let valid = format!(
+                "{} \u{2013} {}",
+                info.valid_after
+                    .as_deref()
+                    .map(crate::known_hosts::date_text)
+                    .unwrap_or_default(),
+                info.valid_before
+                    .as_deref()
+                    .map(crate::known_hosts::date_text)
+                    .unwrap_or_else(|| strings::CERTIFICATE_FOREVER.to_owned())
+            );
+            let principals = if info.principals.is_empty() {
+                strings::CERTIFICATE_ANY_PRINCIPAL.to_owned()
+            } else {
+                info.principals.join(", ")
+            };
+            let warning = match info.status {
+                shellpp_core::keys::certificate::CertificateStatus::Expired => {
+                    Some(strings::CERTIFICATE_EXPIRED)
+                }
+                shellpp_core::keys::certificate::CertificateStatus::NotYetValid => {
+                    Some(strings::CERTIFICATE_NOT_YET)
+                }
+                shellpp_core::keys::certificate::CertificateStatus::Valid => None,
+            };
+            let danger = theme.danger;
+            widgets::block(
+                "kc-key-block-certificate",
+                Some(strings::CERTIFICATE_TITLE),
+                cx,
+            )
+            .when_some(warning, |this, warning| {
+                this.child(
+                    div()
+                        .id("kc-key-certificate-warning")
+                        .test_support()
+                        .text_size(metrics::FONT_SIZE_BODY)
+                        .text_color(danger)
+                        .child(warning),
+                )
+            })
+            .child(value_row(
+                "kc-key-certificate-id",
+                strings::CERTIFICATE_KEY_ID,
+                div().child(info.key_id.clone()),
+                cx,
+            ))
+            .child(value_row(
+                "kc-key-certificate-principals",
+                strings::CERTIFICATE_PRINCIPALS,
+                div().child(principals),
+                cx,
+            ))
+            .child(value_row(
+                "kc-key-certificate-valid",
+                strings::CERTIFICATE_VALID,
+                div().child(valid),
+                cx,
+            ))
+            .child(value_row(
+                "kc-key-certificate-ca",
+                strings::CERTIFICATE_CA,
+                widgets::fingerprint_line(info.ca_fingerprint.clone())
+                    .font_family(crate::terminal::fonts::JETBRAINS_MONO)
+                    .text_size(metrics::FONT_SIZE_DENSE),
+                cx,
+            ))
+            .child(
+                h_flex().child(
+                    panel_button(
+                        "kc-key-certificate-remove",
+                        Lucide::Trash,
+                        strings::CERTIFICATE_REMOVE,
+                        true,
+                        cx,
+                    )
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| this.remove_certificate(window, cx),
+                    )),
+                ),
+            )
+        });
+
         // 5. Key export: Export to host (stage 4, item 8).
         let export =
             widgets::block("kc-key-block-export", Some(strings::EXPORT_TITLE), cx)
@@ -1545,6 +1632,7 @@ impl KeyPanel {
                     .child(label)
                     .child(private)
                     .child(public)
+                    .children(certificate)
                     .child(export),
             )
     }

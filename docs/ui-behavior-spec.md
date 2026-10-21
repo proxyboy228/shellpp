@@ -1047,9 +1047,15 @@ On the left:
 - **FIDO2**: add a hardware key (`sk-ssh-ed25519`, `sk-ecdsa`). [decision on types]
   It opens the New key form for the private key file that `ssh-keygen -t ed25519-sk`
   made (a handle; the key stays on the security key). [decision, D64]
+- **Certificate** opens "Add a certificate": the `*-cert.pub` text, pasted or chosen, goes
+  onto the key whose public key it certifies, and that key's panel opens; a certificate of
+  no key in the Keychain is refused with that reason. The key panel shows a key's
+  certificate (key ID, principals or "Any user", the validity window, the CA fingerprint),
+  a `--danger` line when it has expired or is not valid yet, and "Remove certificate".
+  [decision, D65]
 - While a part is not built, its button says so in a tooltip: what does not work yet and
-  when it arrives (Certificate: stage 4; creating a key on a security key and signing with
-  it: a later stage). [decision, D64]
+  when it arrives (FIDO2: creating a key on a security key and signing with it come in a
+  later stage). [decision, D64]
 
 On the right: search, a tile/list toggle, a sort menu (by name,
 by creation date, by modification date). The same sort icon is used

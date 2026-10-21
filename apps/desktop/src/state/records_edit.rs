@@ -1281,6 +1281,46 @@ impl AppState {
         Ok(view)
     }
 
+    /// What the key panel shows of a key's certificate (UI 7.3): `None`
+    /// without one.
+    pub fn key_certificate_info(
+        &self,
+        key_id: Uuid,
+    ) -> Result<Option<shellpp_core::keys::certificate::CertificateInfo>, CoreError> {
+        let key = self.key_ref(key_id)?;
+        self.require_core()?.key_certificate_info(key)
+    }
+
+    /// Removes a key's certificate.
+    pub fn remove_key_certificate(
+        &mut self,
+        key_id: Uuid,
+        cx: &mut Context<Self>,
+    ) -> Result<KeyView, CoreError> {
+        let key = self.key_ref(key_id)?;
+        let view = self.require_core()?.key_certificate_set(
+            shellpp_core::service::keychain::KeyCertificateInput {
+                key,
+                certificate: String::new(),
+            },
+        )?;
+        cx.notify();
+        Ok(view)
+    }
+
+    /// The Certificate action (UI 7.1): the certificate goes onto the key
+    /// of the personal vault it certifies.
+    pub fn import_certificate(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<KeyView, CoreError> {
+        let vault = self.require_vault()?;
+        let view = self.require_core()?.certificate_import(vault, text)?;
+        cx.notify();
+        Ok(view)
+    }
+
     /// The one-line public key of a key (not a secret, UI 7.3).
     pub fn key_public_key(&self, key_id: Uuid) -> Result<String, CoreError> {
         let key = self.key_ref(key_id)?;

@@ -46,6 +46,8 @@ pub struct KeyPanel {
     pub(super) public_key: Option<String>,
     /// The private key text while it is shown (Show), else `None`.
     revealed: Option<SecretString>,
+    /// The key's certificate (UI 7.3), read with the panel.
+    pub(super) certificate: Option<shellpp_core::keys::certificate::CertificateInfo>,
     /// The last Show could not read the key.
     pub(super) reveal_failed: bool,
     _subscriptions: Vec<Subscription>,
@@ -86,6 +88,11 @@ impl KeyPanel {
             .key_public_key(view.record_id)
             .map_err(|error| tracing::info!(code = error.code(), "public key not read"))
             .ok();
+        let certificate = state
+            .read(cx)
+            .key_certificate_info(view.record_id)
+            .ok()
+            .flatten();
         Self {
             state,
             view,
@@ -93,6 +100,7 @@ impl KeyPanel {
             label_error: None,
             autosave: Autosave::default(),
             public_key,
+            certificate,
             revealed: None,
             reveal_failed: false,
             _subscriptions: vec![subscription],
@@ -158,8 +166,33 @@ impl KeyPanel {
     pub fn set_view(&mut self, view: KeyView, cx: &mut Context<Self>) {
         if view.record_id == self.view.record_id {
             self.view = view;
+            self.certificate = self
+                .state
+                .read(cx)
+                .key_certificate_info(self.view.record_id)
+                .ok()
+                .flatten();
             cx.notify();
         }
+    }
+
+    /// Remove certificate (UI 7.3).
+    pub fn remove_certificate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key_id = self.view.record_id;
+        match self
+            .state
+            .update(cx, |state, cx| state.remove_key_certificate(key_id, cx))
+        {
+            Ok(view) => {
+                self.certificate = None;
+                self.view = view;
+            }
+            Err(error) => {
+                tracing::warn!(code = error.code(), "certificate not removed");
+                crate::shell::show_toast(strings::CERTIFICATE_REMOVE_FAILED, window, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Show (UI 7.3): reads the private key from the core.

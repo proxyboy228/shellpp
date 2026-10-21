@@ -143,9 +143,26 @@ pub const IMPORT_SECURITY_KEY_TITLE: &str = "FIDO2 key";
 pub const IMPORT_SECURITY_KEY_HINT: &str = "Paste or choose the private key file that \
      ssh-keygen -t ed25519-sk (or ecdsa-sk) made. It holds only a handle: the key stays on \
      the security key.";
-/// What Certificate and FIDO2 do not do yet, and when they will.
-pub const CERTIFICATE_LATER: &str =
-    "Certificates arrive in stage 4: a key's panel will show its principals, validity and CA.";
+/// What Certificate does (stage 4, item 9).
+pub const CERTIFICATE_TOOLTIP: &str = "Add an OpenSSH user certificate to the key it certifies";
+pub const CERTIFICATE_TITLE: &str = "Certificate";
+pub const CERTIFICATE_DIALOG_TITLE: &str = "Add a certificate";
+pub const CERTIFICATE_HINT: &str = "Paste the certificate (the key-cert.pub file) or choose the \
+     file. It goes onto the key in the Keychain whose public key it certifies.";
+pub const CERTIFICATE_ADD: &str = "Add";
+pub const CERTIFICATE_KEY_ID: &str = "Key ID";
+pub const CERTIFICATE_PRINCIPALS: &str = "Principals";
+pub const CERTIFICATE_ANY_PRINCIPAL: &str = "Any user";
+pub const CERTIFICATE_VALID: &str = "Valid";
+pub const CERTIFICATE_FOREVER: &str = "forever";
+pub const CERTIFICATE_CA: &str = "CA fingerprint";
+pub const CERTIFICATE_EXPIRED: &str = "This certificate has expired: servers refuse it.";
+pub const CERTIFICATE_NOT_YET: &str = "This certificate is not valid yet.";
+pub const CERTIFICATE_REMOVE: &str = "Remove certificate";
+pub const CERTIFICATE_REMOVE_FAILED: &str = "The certificate could not be removed";
+pub const CERTIFICATE_NO_KEY: &str =
+    "No key in the Keychain matches this certificate: import its private key first.";
+pub const CERTIFICATE_INVALID: &str = "This is not an OpenSSH user certificate.";
 pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Creating one here \
      and signing in with it arrive in a later stage.";
 pub const IMPORT_TEXT_PLACEHOLDER: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
