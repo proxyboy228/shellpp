@@ -10,7 +10,13 @@
 //!   written on close, so a file without it was not closed and reads as
 //!   incomplete; chunks out of order, cut or changed fail to open.
 //! - Output waits in memory until a chunk is full: a crash loses at most
-//!   the last 64 KiB. The buffer is zeroized.
+//!   the last 64 KiB. Each sealed chunk's plaintext and the waiting buffer
+//!   are zeroized when they go (copies made while a line is built are
+//!   not; the terminal holds the same text anyway).
+//! - A write that fails stops the recording: nothing more is written, so
+//!   the chunks already in the file still open (as an incomplete file).
+//!   Reading keeps the chunks that open and stops at the first one that
+//!   does not (incomplete); only a file whose first chunk fails is refused.
 
 use std::fs::File;
 use std::io::Write as _;
@@ -128,6 +134,8 @@ pub struct RecordingWriter {
     carry: Vec<u8>,
     started: Instant,
     finished: bool,
+    /// A write failed: the recording stopped there.
+    failed: bool,
 }
 
 impl std::fmt::Debug for RecordingWriter {
@@ -169,6 +177,7 @@ impl RecordingWriter {
             carry: Vec::new(),
             started: Instant::now(),
             finished: false,
+            failed: false,
         };
         let (width, height) = size;
         let first = serde_json::json!({
@@ -193,6 +202,9 @@ impl RecordingWriter {
 
     /// Output at `seconds` from the start.
     pub fn output_at(&mut self, seconds: f64, data: &[u8]) -> Result<(), RecordingError> {
+        if self.failed || self.finished {
+            return Err(RecordingError::Format);
+        }
         if data.is_empty() {
             return Ok(());
         }
@@ -221,23 +233,27 @@ impl RecordingWriter {
         self.buffer.extend_from_slice(line.as_bytes());
         self.buffer.push(b'\n');
         while self.buffer.len() >= CHUNK {
-            let rest = Zeroizing::new(self.buffer[CHUNK..].to_vec());
-            self.buffer.truncate(CHUNK);
-            self.seal(false)?;
-            *self.buffer = rest.to_vec();
+            let chunk = Zeroizing::new(self.buffer.drain(..CHUNK).collect::<Vec<u8>>());
+            self.seal(&chunk, false)?;
         }
         Ok(())
     }
 
-    fn seal(&mut self, last: bool) -> Result<(), RecordingError> {
-        let nonce = self.header.nonce(self.index, last);
-        let mut sealed = Vec::with_capacity(self.buffer.len() + TAG);
-        crypto::xchacha_seal_append(&self.key, &nonce, &self.aad, &self.buffer, &mut sealed)
-            .map_err(|_| RecordingError::Damaged)?;
-        self.file.write_all(&sealed)?;
-        self.buffer.clear();
-        self.index = self.index.checked_add(1).ok_or(RecordingError::Format)?;
-        Ok(())
+    /// Seals `plain` as the next chunk. A failure stops the recording.
+    fn seal(&mut self, plain: &[u8], last: bool) -> Result<(), RecordingError> {
+        let sealed = (|| {
+            let nonce = self.header.nonce(self.index, last);
+            let mut sealed = Vec::with_capacity(plain.len() + TAG);
+            crypto::xchacha_seal_append(&self.key, &nonce, &self.aad, plain, &mut sealed)
+                .map_err(|_| RecordingError::Damaged)?;
+            self.file.write_all(&sealed)?;
+            self.index = self.index.checked_add(1).ok_or(RecordingError::Format)?;
+            Ok(())
+        })();
+        if sealed.is_err() {
+            self.failed = true;
+        }
+        sealed
     }
 
     /// Writes the final chunk and closes the file.
@@ -246,20 +262,21 @@ impl RecordingWriter {
     }
 
     fn finish_inner(&mut self) -> Result<(), RecordingError> {
-        if self.finished {
+        if self.finished || self.failed {
             return Ok(());
         }
-        self.finished = true;
         if !self.carry.is_empty() {
             let rest = std::mem::take(&mut self.carry);
             let seconds = self.started.elapsed().as_secs_f64();
             let text = String::from_utf8_lossy(&rest).into_owned();
             let line =
                 serde_json::to_string(&(seconds, "o", text)).map_err(|_| RecordingError::Format)?;
-            self.buffer.extend_from_slice(line.as_bytes());
-            self.buffer.push(b'\n');
+            // Through the same split: the final chunk stays under 64 KiB.
+            self.push_line(&line)?;
         }
-        self.seal(true)?;
+        self.finished = true;
+        let last = Zeroizing::new(std::mem::take(&mut *self.buffer));
+        self.seal(&last, true)?;
         self.file.flush()?;
         Ok(())
     }
@@ -310,27 +327,42 @@ pub fn read(
     let rest = body.len() % FRAME;
     let complete = rest > 0 || body.is_empty();
     let mut plain = Zeroizing::new(Vec::with_capacity(body.len()));
+    // The chunks that open, in order; the first that does not ends the
+    // reading (the recording is then incomplete).
+    let mut opened_all = true;
+    let mut opened_any = false;
     for index in 0..whole {
         let frame = &body[index * FRAME..(index + 1) * FRAME];
         let index = u32::try_from(index).map_err(|_| RecordingError::Format)?;
-        let opened = crypto::xchacha_open(&key, &header.nonce(index, false), &aad, frame)
-            .map_err(|_| RecordingError::Damaged)?;
-        plain.extend_from_slice(&opened);
-    }
-    if rest > 0 {
-        if rest < TAG {
-            return Err(RecordingError::Damaged);
+        match crypto::xchacha_open(&key, &header.nonce(index, false), &aad, frame) {
+            Ok(opened) => {
+                plain.extend_from_slice(&opened);
+                opened_any = true;
+            }
+            Err(_) => {
+                opened_all = false;
+                break;
+            }
         }
-        let index = u32::try_from(whole).map_err(|_| RecordingError::Format)?;
-        let opened = crypto::xchacha_open(
-            &key,
-            &header.nonce(index, true),
-            &aad,
-            &body[whole * FRAME..],
-        )
-        .map_err(|_| RecordingError::Damaged)?;
-        plain.extend_from_slice(&opened);
     }
+    if rest > 0 && opened_all {
+        let index = u32::try_from(whole).map_err(|_| RecordingError::Format)?;
+        let last = &body[whole * FRAME..];
+        match (rest >= TAG)
+            .then(|| crypto::xchacha_open(&key, &header.nonce(index, true), &aad, last).ok())
+            .flatten()
+        {
+            Some(opened) => {
+                plain.extend_from_slice(&opened);
+                opened_any = true;
+            }
+            None => opened_all = false,
+        }
+    }
+    if !opened_any && !body.is_empty() {
+        return Err(RecordingError::Damaged);
+    }
+    let complete = complete && opened_all;
     let text = String::from_utf8_lossy(&plain);
     let mut lines = text.lines();
     let size = lines

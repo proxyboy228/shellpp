@@ -28,6 +28,8 @@ use crate::theme::metrics;
 
 /// The height of a line of the viewer.
 const LINE_HEIGHT: gpui::Pixels = px(18.);
+/// Lines the viewer shows at most (Export to .txt has every line).
+pub const MAX_LINES: usize = 200_000;
 
 pub struct RecordingViewer {
     log_id: Uuid,
@@ -35,6 +37,8 @@ pub struct RecordingViewer {
     lines: Arc<Vec<SharedString>>,
     shown: Rc<Vec<usize>>,
     complete: bool,
+    /// Longer than [`MAX_LINES`]: only the first lines are shown.
+    cut: bool,
     search: Entity<InputState>,
     state: Entity<AppState>,
     _subscription: Subscription,
@@ -65,7 +69,13 @@ impl RecordingViewer {
                 this.refilter(cx);
             }
         });
-        let lines: Vec<SharedString> = text.lines().map(|line| line.to_owned().into()).collect();
+        let all_lines = text.lines().count();
+        let lines: Vec<SharedString> = text
+            .lines()
+            .take(MAX_LINES)
+            .map(|line| line.to_owned().into())
+            .collect();
+        let cut = all_lines > MAX_LINES;
         let shown = Rc::new((0..lines.len()).collect());
         Self {
             log_id,
@@ -73,6 +83,7 @@ impl RecordingViewer {
             lines: Arc::new(lines),
             shown,
             complete,
+            cut,
             search,
             state,
             _subscription: subscription,
@@ -172,19 +183,25 @@ impl RecordingViewer {
         .detach();
     }
 
-    /// Writes the recording as plain text to `path` and says how it went.
+    /// Writes the recording as plain text to `path`, off the app's thread,
+    /// and says how it went.
     pub fn export_to(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
-        let message = match core.recording_export_txt(self.log_id, &path) {
-            Ok(()) => strings::EXPORTED,
-            Err(error) => {
-                tracing::warn!(code = error.code(), "recording not exported");
-                strings::EXPORT_FAILED
-            }
-        };
-        crate::shell::show_toast(message, window, cx);
+        let log_id = self.log_id;
+        let written = cx.background_spawn(async move { core.recording_export_txt(log_id, &path) });
+        cx.spawn_in(window, async move |_, cx| {
+            let message = match written.await {
+                Ok(()) => strings::EXPORTED,
+                Err(error) => {
+                    tracing::warn!(code = error.code(), "recording not exported");
+                    strings::EXPORT_FAILED
+                }
+            };
+            let _ = cx.update(|window, cx| crate::shell::show_toast(message, window, cx));
+        })
+        .detach();
     }
 }
 
@@ -233,6 +250,9 @@ impl Render for RecordingViewer {
             ))
             .when(searching, |this| {
                 this.child(widgets::caption(strings::matching_lines(count), cx))
+            })
+            .when(self.cut, |this| {
+                this.child(widgets::caption(strings::RECORDING_CUT, cx))
             })
             .when(!self.complete, |this| {
                 this.child(

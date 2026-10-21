@@ -149,17 +149,22 @@ impl Core {
     /// the session was not recorded. A file that is not on this device is
     /// [`CoreError::NotFound`] ("recording not available on this device").
     pub fn recording_read(&self, log_id: Uuid) -> Result<Option<Recording>, CoreError> {
-        let mut guard = self.inner();
-        let parts = parts(&mut guard)?;
-        let record = parts
-            .session
-            .index
-            .get_kind(&log_id, RecordKind::ConnectionLogEntry)
-            .ok_or(CoreError::NotFound)?;
-        let Some(file_id) = file_id_of(record.data()) else {
-            return Ok(None);
+        // The core is locked only to look up the file and its key: reading
+        // and decrypting a long recording would hold up every other call.
+        let (file_id, path) = {
+            let mut guard = self.inner();
+            let parts = parts(&mut guard)?;
+            let record = parts
+                .session
+                .index
+                .get_kind(&log_id, RecordKind::ConnectionLogEntry)
+                .ok_or(CoreError::NotFound)?;
+            let Some(file_id) = file_id_of(record.data()) else {
+                return Ok(None);
+            };
+            let path = file_path(parts.store, file_id).ok_or(CoreError::NotFound)?;
+            (file_id, path)
         };
-        let path = file_path(parts.store, file_id).ok_or(CoreError::NotFound)?;
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -167,14 +172,17 @@ impl Core {
             }
             Err(error) => return Err(io(error)),
         };
-        let ring = &parts.session.ring;
-        let recording = recording::read(&bytes, |header| {
+        let header = Header::parse(&bytes).map_err(recording_error)?;
+        let key = {
+            let mut guard = self.inner();
+            let parts = parts(&mut guard)?;
+            let ring = &parts.session.ring;
             (header.file_id == file_id && header.vault_id == ring.vault_id())
                 .then(|| ring.key(header.key_epoch))
                 .flatten()
                 .map(|vault_key| crypto::derive_recording_key(vault_key, &file_id))
-        })
-        .map_err(recording_error)?;
+        };
+        let recording = recording::read(&bytes, |_| key).map_err(recording_error)?;
         Ok(Some(recording))
     }
 

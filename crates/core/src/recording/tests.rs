@@ -109,11 +109,17 @@ fn chunks_are_sealed_in_order_and_a_cut_file_is_incomplete() {
         read(&other, |_| Some(key())),
         Err(RecordingError::Damaged)
     ));
-    // A final chunk cut short, or a non-final chunk dropped.
-    assert!(read(&bytes[..bytes.len() - 5], |_| Some(key())).is_err());
-    let mut dropped = bytes[..HEADER_LEN].to_vec();
-    dropped.extend_from_slice(&bytes[HEADER_LEN + FRAME..]);
-    assert!(read(&dropped, |_| Some(key())).is_err());
+    // A final chunk cut short, or a non-final chunk dropped: the chunks
+    // before it still open, as an incomplete recording, and nothing after
+    // the gap is shown.
+    let cut = read(&bytes[..bytes.len() - 5], |_| Some(key())).unwrap();
+    assert!(!cut.complete && cut.events.len() < 200);
+    let mut dropped = bytes[..HEADER_LEN + FRAME].to_vec();
+    dropped.extend_from_slice(&bytes[HEADER_LEN + 2 * FRAME..]);
+    let gap = read(&dropped, |_| Some(key())).unwrap();
+    assert!(!gap.complete);
+    let first_chunk = read(&bytes[..HEADER_LEN + FRAME], |_| Some(key())).unwrap();
+    assert_eq!(gap.events, first_chunk.events);
     assert!(matches!(
         read(b"not a recording", |_| Some(key())),
         Err(RecordingError::Format)
@@ -127,5 +133,53 @@ fn plain_text_drops_escape_sequences_and_controls() {
             "\x1b]0;title\x07a\x1b[1;31mb\x1b[0m\x1b(Bc\r\nd\x08e\x1b]8;;http://x\x1b\\f\tg"
         ),
         "abc\ndef\tg"
+    );
+}
+
+/// The review of D75: a UTF-8 sequence cut at the end next to a full chunk
+/// keeps the final chunk under 64 KiB; a write that fails stops the
+/// recording and leaves the chunks before it readable.
+#[test]
+fn the_end_of_a_recording_reads_back() {
+    let dir = tempfile::tempdir().unwrap();
+    for pad in 0..8 {
+        let header = header();
+        let path = dir.path().join(format!("{}.{EXTENSION}", header.file_id));
+        let mut writer = RecordingWriter::create(&path, header, key(), (80, 24), 1).unwrap();
+        // Lines that leave the buffer just under a full chunk, then the
+        // first bytes of a character the session never finishes.
+        let big = vec![b'y'; CHUNK - 120 + pad * 7];
+        writer.output_at(0.0, &big).unwrap();
+        writer.output_at(1.0, &"ж".as_bytes()[..1]).unwrap();
+        writer.finish().unwrap();
+        let recording = read(&std::fs::read(&path).unwrap(), |_| Some(key())).unwrap();
+        assert!(recording.complete, "pad {pad}");
+    }
+    // A writer whose write failed writes nothing more, also on drop.
+    let header = header();
+    let path = dir.path().join(format!("{}.{EXTENSION}", header.file_id));
+    let mut writer = RecordingWriter::create(&path, header, key(), (80, 24), 1).unwrap();
+    writer
+        .output_at(
+            0.0, b"before
+",
+        )
+        .unwrap();
+    writer.output_at(0.5, &vec![b'z'; CHUNK + 10]).unwrap();
+    writer.failed = true;
+    assert!(writer.output_at(1.0, b"more").is_err());
+    drop(writer);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes.len(), HEADER_LEN + FRAME);
+    let recording = read(&bytes, |_| Some(key())).unwrap();
+    assert!(!recording.complete);
+    assert_eq!(
+        recording.events[0],
+        (
+            0.0,
+            "before
+"
+            .to_owned()
+        )
     );
 }

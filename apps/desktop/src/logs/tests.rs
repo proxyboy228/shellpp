@@ -273,9 +273,7 @@ fn a_recorded_entry_opens_its_recording(cx: &mut TestAppContext) {
     ui.click(cx, "log-open-recording");
     let mut viewer = None;
     for _ in 0..100 {
-        viewer = ui
-            .screen
-            .read_with(cx, |screen, _| screen.viewer().cloned());
+        viewer = ui.screen.read_with(cx, |screen, _| screen.viewer());
         if viewer.is_some() {
             break;
         }
@@ -311,6 +309,14 @@ fn a_recorded_entry_opens_its_recording(cx: &mut TestAppContext) {
     ui.frame(cx, |window, cx| {
         viewer.update(cx, |viewer, cx| viewer.export_to(target, window, cx))
     });
+    // Written off the app's thread.
+    for _ in 0..200 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.frame(cx, |_, _| {});
+    }
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         "$ uptime\n up 3 days\nload average: 0.10\n"

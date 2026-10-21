@@ -114,8 +114,10 @@ pub struct LogsScreen {
     /// The records changed while a load ran: one more after it.
     stale: bool,
     failed: bool,
-    /// The recording viewer opened last.
-    viewer: Option<Entity<recording::RecordingViewer>>,
+    /// The recording viewer opened last, while its dialog holds it: the
+    /// decrypted output goes with the dialog (and with a lock, which
+    /// closes the dialogs).
+    viewer: Option<gpui::WeakEntity<recording::RecordingViewer>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -287,7 +289,7 @@ impl LogsScreen {
                             log_id, title, &text, complete, state, window, cx,
                         )
                     });
-                    screen.viewer = Some(viewer.clone());
+                    screen.viewer = Some(viewer.downgrade());
                     recording::open(viewer, window, cx);
                 }
                 Ok(None) => crate::shell::show_toast(strings::NOT_RECORDED, window, cx),
@@ -303,9 +305,9 @@ impl LogsScreen {
         .detach();
     }
 
-    /// The viewer opened last (tests).
-    pub fn viewer(&self) -> Option<&Entity<recording::RecordingViewer>> {
-        self.viewer.as_ref()
+    /// The viewer opened last, while it is open (tests).
+    pub fn viewer(&self) -> Option<Entity<recording::RecordingViewer>> {
+        self.viewer.as_ref().and_then(gpui::WeakEntity::upgrade)
     }
 
     pub fn toggle_saved(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {

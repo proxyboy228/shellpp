@@ -38,6 +38,8 @@ pub const OPEN_RECORDING: &str = "Open recording";
 pub const RECORDING_TITLE: &str = "Session recording";
 pub const RECORDING_SEARCH: &str = "Search the output";
 pub const RECORDING_INCOMPLETE: &str = "Incomplete recording: the app stopped before the session ended. Its last output may be missing.";
+pub const RECORDING_CUT: &str =
+    "Only the first 200 000 lines are shown. Export to .txt has all of them.";
 pub const RECORDING_ELSEWHERE: &str = "The recording is not available on this device.";
 pub const RECORDING_FAILED: &str = "The recording could not be opened.";
 pub const EXPORT_TXT: &str = "Export to .txt";
