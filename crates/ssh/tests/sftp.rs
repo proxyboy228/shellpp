@@ -445,15 +445,36 @@ async fn open_with_round_trip(sftp: &Sftp, dir: &str, local: &Path) {
         .await
         .unwrap();
     assert_eq!(std::fs::read_to_string(&check).unwrap(), "third");
+    // The same size within the same second still counts as a change on the
+    // server (the content of a small file is compared too).
+    std::fs::write(&source, "THIRD").unwrap();
+    sftp.upload(&source, &remote, false, &mut |_| {})
+        .await
+        .unwrap();
+    std::fs::write(copy.local_path(), "fourth").unwrap();
+    assert_eq!(
+        copy.upload_back(sftp, false).await,
+        Ok(UploadOutcome::RemoteChanged)
+    );
+    // A changed copy is not thrown away unless forced.
+    let copy = *copy.discard(false).expect_err("kept: not uploaded");
     let folder = copy.local_path().parent().unwrap().to_path_buf();
-    copy.discard().unwrap();
+    copy.discard(true).unwrap();
     assert!(!folder.exists());
-    // A copy left behind goes at exit.
+    // Copies left behind: the unchanged one goes, the edited one is kept.
     let left = OpenedCopy::open(sftp, &remote, &root).await.unwrap();
-    let path = left.local_path().to_path_buf();
+    let unchanged = left.local_path().to_path_buf();
     drop(left);
-    discard_all(&root).unwrap();
-    assert!(!path.exists() && !root.exists());
+    let edited = OpenedCopy::open(sftp, &remote, &root).await.unwrap();
+    std::fs::write(edited.local_path(), "an edit that was not uploaded").unwrap();
+    let edited_path = edited.local_path().to_path_buf();
+    drop(edited);
+    let kept = discard_all(&root).unwrap();
+    assert!(!unchanged.exists());
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].local, edited_path);
+    assert_eq!(kept[0].remote.as_deref(), Some(remote.as_str()));
+    std::fs::remove_dir_all(&root).unwrap();
     // A folder is not opened.
     assert_eq!(
         OpenedCopy::open(sftp, dir, &root).await.err(),

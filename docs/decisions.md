@@ -767,13 +767,15 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 2; 
 
 ### 49. Open and Open with a remote file (night)
 
-Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 6; UI 5.4).
+Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 6; UI 5.4); amended after its review.
 
 **Decision:**
 
 - The engine part is `shellpp_ssh::open_with::OpenedCopy`; the app launches the program, warns that the copy is not encrypted, watches the copy and notifies after each upload.
-- Each copy gets a folder of its own under a root inside the app's data folder (mode 0700 on Unix), under the file's own name (made safe for Windows, D46), so the program sees the right extension. A symbolic link is opened as the file it points to, and an upload goes there; the link stays a link.
-- A copy changed locally (its size or modification time is not the one written) is uploaded back. When the file on the server changed since the copy was made (its size or modification time), nothing is written and the app asks; overwriting is an explicit `force`. After an upload the copy is based on the new server state.
-- A copy is removed with its folder when the user is done (the tab closes); at exit, and at the next start after a crash, the whole root is removed.
+- Each copy gets a folder of its own under a root inside the app's data folder (created with mode 0700 on Unix), under the file's own name (made safe for Windows, D46; long paths prefixed), so the program sees the right extension. A symbolic link is opened as the file it points to, and an upload goes there; when the server's realpath does not resolve the link, Open refuses.
+- The server's state is read before and after the download; a file that changed meanwhile is downloaded again (up to 3 times).
+- A copy changed locally (its size or modification time is not the one written) is uploaded back. When the file on the server changed since the copy was made (its size or modification time; for a file of up to 1 MiB also its content), nothing is written and the app asks; overwriting is an explicit `force`, which also recreates a file deleted on the server. A folder in its place is refused. What is recorded as uploaded is the copy as it was when the upload started, so a save during the upload goes up next time.
+- A copy is removed with its folder when the file is closed (UI 5.4), but never with changes that are not uploaded unless forced. Each folder holds a note of what was written: at exit and at the next start after a crash the root's copies that hold nothing new are removed, and the others are returned for the user to upload or drop. Only folders this code made are touched.
+- Limits: the check and the upload are not one step on the server, so a change made there during the upload of a large file is overwritten; a file over 1 MiB changed on the server with the same size within the same second is not noticed.
 
 **Spec impact:** none (UI 5.4 states the behavior).
