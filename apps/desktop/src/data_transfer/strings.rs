@@ -21,6 +21,8 @@ pub const EXPORT_PASSWORD: &str = "Password";
 pub const EXPORT_REPEAT: &str = "Repeat password";
 pub const EXPORT_PLAIN_WARNING: &str = "The file will hold your passwords and private keys in clear text. Anyone who gets the file can use them.";
 pub const EXPORT_UNDERSTAND: &str = "I understand";
+pub const EXPORT_HISTORY: &str = "Include command history";
+pub const EXPORT_CONNECTION_LOG: &str = "Include the connection log";
 pub const EXPORT_RUN: &str = "Export…";
 pub const EXPORT_RUNNING: &str = "Exporting…";
 pub const EXPORT_FAILED: &str = "The data could not be exported.";
@@ -35,6 +37,9 @@ pub const IMPORT_FILE: &str = "File";
 pub const IMPORT_BROWSE: &str = "Choose file…";
 pub const IMPORT_HINT: &str = "A Shell++ export (.json or .encrypted.json). Records that are here already are kept; a record changed on both sides is imported as a copy.";
 pub const IMPORT_SETTINGS: &str = "Apply the settings in the file";
+pub const IMPORT_FULL_RESTORE: &str = "Full restore from my backup";
+pub const IMPORT_FULL_RESTORE_WARNING: &str = "Applies every setting of the file, also the commands and programs Shell++ runs. The file may hold a script that will then run on your servers. Use this only for a backup of your own.";
+pub const IMPORT_CONTENTS_HINT: &str = "The file also holds:";
 pub const IMPORT_NEXT: &str = "Import";
 pub const IMPORT_RUNNING: &str = "Importing…";
 pub const IMPORT_PASSWORD: &str = "Export password";
@@ -52,7 +57,9 @@ pub const SUMMARY_TITLE: &str = "Import Finished";
 pub const SUMMARY_ADDED: &str = "Added";
 pub const SUMMARY_EXISTING: &str = "Already here";
 pub const SUMMARY_CONFLICTS: &str = "Imported as copies";
-pub const SUMMARY_SKIPPED: &str = "Skipped (history, logs, device data)";
+pub const SUMMARY_SKIPPED: &str = "Skipped (history and logs turned off, device data)";
+pub const SUMMARY_UNKNOWN_KEYS: &str = "Keys kept as unknown (this version cannot read them)";
+pub const SUMMARY_HISTORY_LEFT_OUT: &str = "Commands left out (they look like secrets)";
 pub const SUMMARY_ERRORS: &str = "Errors";
 pub const SUMMARY_SETTINGS: &str = "Settings applied";
 pub const SUMMARY_SETTINGS_LEFT_OUT: &str =
@@ -79,5 +86,21 @@ pub fn exported(records: usize) -> String {
     match records {
         1 => "Exported 1 record.".to_owned(),
         n => format!("Exported {n} records."),
+    }
+}
+
+/// The history checkbox of the Contents step.
+pub fn import_history(entries: usize) -> String {
+    match entries {
+        1 => "Import command history (1 command)".to_owned(),
+        n => format!("Import command history ({n} commands)"),
+    }
+}
+
+/// The connection log checkbox of the Contents step.
+pub fn import_connection_log(entries: usize) -> String {
+    match entries {
+        1 => "Import the connection log (1 connection)".to_owned(),
+        n => format!("Import the connection log ({n} connections)"),
     }
 }

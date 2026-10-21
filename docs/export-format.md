@@ -77,8 +77,10 @@ least 8 characters (Unicode characters after NFC), like the master password
   (storage-format.md, section 13.2); `settings` is such a member, added in
   stage 3.
 - Exported: every live record of the personal vault (hosts, groups, keys,
-  identities, known hosts, command history, the connection log, the
-  vault's metadata, device records), except the recovery key.
+  identities, known hosts, the vault's metadata, device records), except the
+  recovery key. The command history (with the hosts' history hint states)
+  and the connection log only when the user includes them; both options are
+  off by default (D50).
 
 ## 3. Encrypted export: JSON Schema
 
@@ -123,9 +125,21 @@ merges them into the personal vault (D34):
 
 - Taken: groups, hosts, keys, identities and known hosts, each checked by
   the same rules as a save (a record that breaks them is listed with its
-  errors and left out; the others are imported). Skipped and counted:
-  command history, the connection log, device and vault records, and types
-  this version does not know.
+  errors and left out; the others are imported). The command history, the
+  hosts' history hint states and the connection log are taken too when the
+  file holds them, unless the user turns them off (both on, D51): each
+  history entry goes through the capture rules and the secret detector of
+  live recording that a stored command can still be checked by
+  (security.md, sections 10.1 and 10.2), and one they would not have
+  recorded is left out and counted; a connection log entry still open in
+  the file is ended as `unknown`, without its session recording and team
+  copy. A host link that names the exported personal vault names the
+  personal vault here. Skipped and counted: device and vault records, the
+  turned-off history and log, and types this version does not know.
+- A key with a valid label that this version cannot read (another source,
+  a format of a later version, a damaged key) is kept as it is, as
+  "unknown" (data-model 9.1), so nothing of the file is lost (D50); the
+  summary counts those keys.
 - A record whose id is new here is added under that id, so references
   between the imported records stay as they were.
 - A record whose id exists here with the same content (its place in a
@@ -155,7 +169,9 @@ merges them into the personal vault (D34):
   SFTP open program, the update settings, auto-lock, the paste, delete and
   name-conflict questions, history recording and the logs stay as they
   are here (D41; security.md, TB7); the summary counts those whose value in
-  the file differs.
+  the file differs. "Full restore from my backup" (off by default, D50)
+  applies every setting of the file, those too, after a warning that the
+  file may hold a script that then runs on the servers.
 - A file over 64 MiB or with more than 500,000 records is refused.
 
 The summary reads "added N, existing M, conflicts C, skipped S, errors K"

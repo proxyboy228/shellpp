@@ -176,11 +176,10 @@ fn import(
     text: &SecretString,
     password: Option<&str>,
 ) -> shellpp_core::service::dto::DataImportSummary {
-    core.data_import(DataImportInput {
-        text: text.clone(),
-        password: password.map(|value| SecretString::from(value.to_owned())),
-        apply_settings: true,
-    })
+    core.data_import(DataImportInput::new(
+        text.clone(),
+        password.map(|value| SecretString::from(value.to_owned())),
+    ))
     .expect("import")
 }
 
@@ -208,6 +207,7 @@ fn plain_and_encrypted_exports_round_trip_into_an_empty_store() {
         .core
         .data_export(DataExportInput {
             password: Some(SecretString::from(export_password.clone())),
+            ..DataExportInput::default()
         })
         .expect("encrypted export");
     assert!(encrypted.encrypted);
@@ -415,15 +415,15 @@ fn wrong_passwords_and_hostile_files_are_refused() {
         .core
         .data_export(DataExportInput {
             password: Some(SecretString::from(password.clone())),
+            ..DataExportInput::default()
         })
         .unwrap();
     let target = first_run();
     let attempt = |text: &str, password: Option<&str>| {
-        target.core.data_import(DataImportInput {
-            text: SecretString::from(text.to_owned()),
-            password: password.map(|value| SecretString::from(value.to_owned())),
-            apply_settings: true,
-        })
+        target.core.data_import(DataImportInput::new(
+            SecretString::from(text.to_owned()),
+            password.map(|value| SecretString::from(value.to_owned())),
+        ))
     };
     assert_eq!(
         reasons(attempt(encrypted.text.expose_secret(), None).unwrap_err()),
@@ -455,6 +455,7 @@ fn wrong_passwords_and_hostile_files_are_refused() {
                 .core
                 .data_export(DataExportInput {
                     password: Some(SecretString::from("short".to_owned())),
+                    ..DataExportInput::default()
                 })
                 .unwrap_err()
         ),
@@ -478,9 +479,8 @@ fn wrong_passwords_and_hostile_files_are_refused() {
     let summary = target
         .core
         .data_import(DataImportInput {
-            text: SecretString::from(document.to_string()),
-            password: None,
             apply_settings: false,
+            ..DataImportInput::new(SecretString::from(document.to_string()), None)
         })
         .unwrap();
     assert_eq!(summary.refused.len(), 1);

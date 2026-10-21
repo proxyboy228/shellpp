@@ -5,7 +5,8 @@
 //!
 //! Export: every live record of the personal vault except the recovery key
 //! (section 13.2), sorted by record id, plus the app settings (`settings`,
-//! an optional member that v1 readers ignore). The plain export holds the
+//! an optional member that v1 readers ignore). The command history and the
+//! connection log only when asked for (D50). The plain export holds the
 //! secrets in clear text, the encrypted one only ciphertext.
 //!
 //! Import (D34): records are merged by record id into the personal vault.
@@ -18,13 +19,17 @@
 //!   are kept; the imported one gets a new id and an " (imported)" suffix
 //!   on its label or name, and references inside the import point to it.
 //! - Groups, hosts, keys, identities and known hosts are imported, each
-//!   checked by the same rules as a save; history, the connection log and
-//!   device records are skipped and counted.
+//!   checked by the same rules as a save; the command history and the
+//!   connection log too unless the user turns them off (D51), each history
+//!   entry through the secret detector of live recording; device records
+//!   are skipped and counted.
+//! - A key this client cannot read is kept as it is, as "unknown" (D50), so
+//!   nothing of the file is lost.
 //! - Existing records are never overwritten (D21); a copy carries the
 //!   `import_key` `json:<exported id>`, so the next import finds it.
 //! - Only the settings of how the app looks and behaves are applied
 //!   ([`imported_setting`], D41); commands, programs, URLs and security
-//!   settings stay as they are here.
+//!   settings stay as they are here, except in a full restore (D50).
 //!
 //! Nothing here logs record content; the plain text and its copies are
 //! wiped.
@@ -40,23 +45,25 @@ use zeroize::Zeroizing;
 
 use super::Core;
 use super::dto::{
-    DataExport, DataExportInput, DataImportInput, DataImportRefusal, DataImportSummary,
-    SettingsSetInput,
+    DataExport, DataExportInput, DataImportContents, DataImportContentsInput, DataImportInput,
+    DataImportRefusal, DataImportSummary, SettingsSetInput,
 };
 use super::records::{Plan, parts, vault_view};
 use crate::crypto::{
     self, EXPORT_NONCE_LEN, EXPORT_SALT_LEN, KdfParams, PlatformClass, SealedExport,
 };
 use crate::error::{CoreError, FieldError, ValidationReason};
+use crate::history;
 use crate::ids::{EXPORT_FORMAT_ENCRYPTED_V1, EXPORT_FORMAT_V1};
 use crate::keys;
 use crate::model::group::{self, GroupRules};
 use crate::model::host::{self, HostRules};
 use crate::model::identity::{self, PasswordChange};
 use crate::model::known_host;
-use crate::model::time::format_timestamp;
+use crate::model::time::{format_timestamp, is_timestamp};
 use crate::model::types::RecordKind;
 use crate::model::wipe::WipeOnDrop;
+use crate::model::{connection_log, history_entry};
 use crate::model::{key, text};
 
 /// The largest import file accepted (a plain export, or the encrypted file).
@@ -71,14 +78,21 @@ pub const CONFLICT_SUFFIX: &str = " (imported)";
 /// Groups deeper than this, or in a cycle, go to the top level.
 const MAX_GROUP_DEPTH: usize = 32;
 
-/// The record types an import takes, in the order they are written.
-const IMPORTED: [RecordKind; 5] = [
+/// The record types an import takes, in the order they are written: the
+/// history and the connection log after the hosts they name (D51).
+const IMPORTED: [RecordKind; 8] = [
     RecordKind::Group,
     RecordKind::Key,
     RecordKind::Identity,
     RecordKind::Host,
     RecordKind::KnownHost,
+    RecordKind::HistoryEntry,
+    RecordKind::HistoryHintState,
+    RecordKind::ConnectionLogEntry,
 ];
+/// The largest key record kept as "unknown" (D50): a private key file is at
+/// most 64 KiB (D35), with room for the other members.
+const MAX_UNKNOWN_KEY_BYTES: usize = 256 * 1024;
 
 /// The settings an import applies (D41): how the app and the terminal look
 /// and behave. A setting that runs or opens something (the OS detection
@@ -113,9 +127,25 @@ pub fn imported_setting(key: &str) -> bool {
         || TERMINAL_AND_SFTP.contains(&key)
 }
 
-/// Records never exported (docs/storage-format.md, section 13.2).
-fn exported(kind: RecordKind) -> bool {
-    !matches!(kind, RecordKind::RecoveryKey)
+/// Whether an export writes records of `kind`: never the recovery key
+/// (docs/storage-format.md, section 13.2); the history and the connection
+/// log only when asked for (D50).
+fn exported(kind: RecordKind, input: &DataExportInput) -> bool {
+    match kind {
+        RecordKind::RecoveryKey => false,
+        RecordKind::HistoryEntry | RecordKind::HistoryHintState => input.include_history,
+        RecordKind::ConnectionLogEntry => input.include_connection_log,
+        _ => true,
+    }
+}
+
+/// Whether an import takes records of `kind` (D51).
+fn imported(kind: RecordKind, input: &DataImportInput) -> bool {
+    match kind {
+        RecordKind::HistoryEntry | RecordKind::HistoryHintState => input.import_history,
+        RecordKind::ConnectionLogEntry => input.import_connection_log,
+        _ => IMPORTED.contains(&kind),
+    }
 }
 
 /// The label member of a record type (for the conflict suffix).
@@ -265,13 +295,23 @@ fn take_secret(data: &mut Map<String, Value>, path: &[&str]) -> Option<SecretStr
     }
 }
 
+/// What an incoming record becomes.
+enum Checked {
+    /// The record as a save would write it.
+    Record(Map<String, Value>),
+    /// A key this client cannot read, kept as it is (D50).
+    UnknownKey(Map<String, Value>),
+    /// A history entry live recording would not have written (D51).
+    LeftOut,
+}
+
 /// Checks and normalizes the data of an incoming record by the rules of a
 /// save; `Err` holds the field errors.
 fn check(
     kind: RecordKind,
     record_id: Uuid,
     data: &Map<String, Value>,
-) -> Result<Map<String, Value>, Vec<FieldError>> {
+) -> Result<Checked, Vec<FieldError>> {
     let order_key = data.get("order_key").cloned();
     let mut input = WipeOnDrop::new(data.clone());
     let mut built = match kind {
@@ -314,7 +354,13 @@ fn check(
             };
             identity::build(&input, None, &password)?
         }
-        RecordKind::Key => check_key(&input)?,
+        RecordKind::Key => match check_key(&input)? {
+            Some(built) => built,
+            None => return Ok(Checked::UnknownKey(data.clone())),
+        },
+        RecordKind::HistoryEntry => return check_history(&input),
+        RecordKind::HistoryHintState => check_hint_state(&input)?,
+        RecordKind::ConnectionLogEntry => check_connection_log(&input)?,
         RecordKind::KnownHost => {
             let entry = known_host::read(&input)
                 .ok_or_else(|| vec![FieldError::new("host", ValidationReason::Invalid)])?;
@@ -337,6 +383,173 @@ fn check(
         built.insert("order_key".into(), Value::String(order_key));
     }
     restore_managed(kind, data, &mut built);
+    Ok(Checked::Record(built))
+}
+
+fn invalid(field: &str) -> Vec<FieldError> {
+    vec![FieldError::new(field, ValidationReason::Invalid)]
+}
+
+/// A history entry by the rules of live recording (D51): left out when the
+/// secret detector or a capture rule would not have recorded its command.
+fn check_history(data: &Map<String, Value>) -> Result<Checked, Vec<FieldError>> {
+    let Some(Value::String(command)) = data.get("command") else {
+        return Err(vec![FieldError::new("command", ValidationReason::Required)]);
+    };
+    let executed_at = data
+        .get("executed_at")
+        .and_then(Value::as_str)
+        .filter(|text| is_timestamp(text))
+        .ok_or_else(|| invalid("executed_at"))?;
+    let host = match data.get("host") {
+        None | Some(Value::Null) => None,
+        link => Some(history_entry::read_host_link(link).ok_or_else(|| invalid("host"))?),
+    };
+    let origin = match data.get("origin").and_then(Value::as_str) {
+        None => "typed",
+        Some(origin @ ("typed" | "imported")) => origin,
+        Some(_) => return Err(invalid("origin")),
+    };
+    let Ok(command) = history::imported_command(command).map(Zeroizing::new) else {
+        return Ok(Checked::LeftOut);
+    };
+    let mut built = history_entry::new_typed(host, &command, executed_at);
+    built.insert("origin".into(), Value::String(origin.to_owned()));
+    Ok(Checked::Record(built))
+}
+
+/// A host's history hint state (docs/data-model.md, section 13.2).
+fn check_hint_state(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldError>> {
+    let host = history_entry::read_host_link(data.get("host")).ok_or_else(|| invalid("host"))?;
+    let dismissed = data
+        .get("dismissed")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| invalid("dismissed"))?;
+    let mut built = Map::new();
+    built.insert("host".into(), history_entry::host_link(host));
+    built.insert("dismissed".into(), Value::Bool(dismissed));
+    Ok(built)
+}
+
+/// A log entry as an import stores it, before it is compared with the one
+/// here: without the members it never takes, and ended when still open
+/// (see [`check_connection_log`]), so a second import finds it again.
+fn as_imported_log_entry(data: &mut Map<String, Value>) {
+    for member in ["recording_file_id", "published_copy"] {
+        if let Some(mut value) = data.remove(member) {
+            crate::model::wipe::wipe_value(&mut value);
+        }
+    }
+    if connection_log::is_open(data) {
+        connection_log::set_unknown_end(data);
+    }
+}
+
+/// A connection log entry (docs/data-model.md, section 13.3): the members of
+/// the section, each checked; a session recording (a file of the device
+/// that wrote it) and a team copy are not taken. An entry still open in the
+/// file ends as "unknown", as one left open by a crash.
+fn check_connection_log(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldError>> {
+    let mut built = Map::new();
+    let text = |name: &str, max: usize| -> Result<Option<String>, Vec<FieldError>> {
+        match data.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(raw)) => text::string(raw, max).map_err(|_| invalid(name)),
+            Some(_) => Err(invalid(name)),
+        }
+    };
+    let time = |name: &str| -> Result<Option<String>, Vec<FieldError>> {
+        match data.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(raw)) if is_timestamp(raw) => Ok(Some(raw.clone())),
+            Some(_) => Err(invalid(name)),
+        }
+    };
+    let id = |name: &str| -> Result<Option<Uuid>, Vec<FieldError>> {
+        match data.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(raw)) => Uuid::parse_str(raw).map(Some).map_err(|_| invalid(name)),
+            Some(_) => Err(invalid(name)),
+        }
+    };
+    let started_at = time("started_at")?.ok_or_else(|| invalid("started_at"))?;
+    built.insert("started_at".into(), Value::String(started_at));
+    if let Some(ended_at) = time("ended_at")? {
+        built.insert("ended_at".into(), Value::String(ended_at));
+    }
+    match data.get("end_reason") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(reason))
+            if matches!(
+                reason.as_str(),
+                "closed" | "exit_status" | "dropped" | crate::connlog::UNKNOWN_END
+            ) =>
+        {
+            built.insert("end_reason".into(), Value::String(reason.clone()));
+        }
+        Some(_) => return Err(invalid("end_reason")),
+    }
+    match data.get("exit_status") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(status)) if status.is_i64() => {
+            built.insert("exit_status".into(), Value::Number(status.clone()));
+        }
+        Some(_) => return Err(invalid("exit_status")),
+    }
+    match data.get("protocol").and_then(Value::as_str) {
+        Some(protocol @ ("ssh" | "sftp" | "telnet" | "mosh")) => {
+            built.insert("protocol".into(), Value::String(protocol.to_owned()));
+        }
+        _ => return Err(invalid("protocol")),
+    }
+    match data.get("host") {
+        None | Some(Value::Null) => {}
+        link => {
+            let host = history_entry::read_host_link(link).ok_or_else(|| invalid("host"))?;
+            built.insert("host".into(), history_entry::host_link(host));
+        }
+    }
+    for (name, max) in [("host_label", 256), ("username", 256), ("user_email", 320)] {
+        if let Some(value) = text(name, max)? {
+            built.insert(name.into(), Value::String(value));
+        }
+    }
+    let address = text("address", 255)?.ok_or_else(|| invalid("address"))?;
+    built.insert("address".into(), Value::String(address));
+    let port = data
+        .get("port")
+        .and_then(Value::as_u64)
+        .filter(|port| (1..=65535).contains(port))
+        .ok_or_else(|| invalid("port"))?;
+    built.insert("port".into(), Value::from(port));
+    if let Some(Value::Object(os)) = data.get("os") {
+        let fits = os.len() <= 8
+            && os.values().all(|value| {
+                value.is_null()
+                    || value
+                        .as_str()
+                        .is_some_and(|text| text.chars().count() <= 64)
+            });
+        if !fits {
+            return Err(invalid("os"));
+        }
+        built.insert("os".into(), Value::Object(os.clone()));
+    }
+    if let Some(user_id) = id("user_id")? {
+        built.insert("user_id".into(), Value::String(user_id.to_string()));
+    }
+    let device_id = id("device_id")?.ok_or_else(|| invalid("device_id"))?;
+    built.insert("device_id".into(), Value::String(device_id.to_string()));
+    match data.get("saved") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(saved)) => {
+            built.insert("saved".into(), Value::Bool(*saved));
+        }
+        Some(_) => return Err(invalid("saved")),
+    }
+    if connection_log::is_open(&built) {
+        connection_log::set_unknown_end(&mut built);
+    }
     Ok(built)
 }
 
@@ -375,8 +588,10 @@ fn restore_managed(
 const MAX_IMPORT_KEY_CHARS: usize = 512;
 
 /// A stored key: its private key parses (OpenSSH, the stored form), the
-/// label is valid, a certificate fits the key.
-fn check_key(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldError>> {
+/// label is valid, a certificate fits the key. `None`: a key with a valid
+/// label that this client cannot read (another source, a format of a later
+/// version, a damaged key), kept as it is (D50).
+fn check_key(data: &Map<String, Value>) -> Result<Option<Map<String, Value>>, Vec<FieldError>> {
     let label = match data.get("label").and_then(Value::as_str) {
         Some(raw) => match text::string(raw, key::MAX_LABEL_CHARS) {
             Ok(Some(label)) => label,
@@ -385,16 +600,23 @@ fn check_key(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldE
         },
         None => return Err(vec![FieldError::new("label", ValidationReason::Required)]),
     };
+    let unknown = || {
+        let bytes = serde_json::to_vec(data).map(|bytes| Zeroizing::new(bytes).len());
+        match bytes {
+            Ok(len) if len <= MAX_UNKNOWN_KEY_BYTES => Ok(None),
+            _ => Err(vec![FieldError::new("record", ValidationReason::TooLong)]),
+        }
+    };
+    // Agent keys (FIDO2 fallback, D5) arrive with a later stage.
     if key::source(data) != "stored" {
-        // Agent keys (FIDO2 fallback, D5) arrive with a later stage.
-        return Err(vec![FieldError::new(
-            "source",
-            ValidationReason::NotAllowed,
-        )]);
+        return unknown();
     }
-    let private = key::private_key(data)
-        .ok_or_else(|| vec![FieldError::new("private_key", ValidationReason::Required)])?;
-    let parsed = keys::parse(private).map_err(|error| vec![error])?;
+    let Some(private) = key::private_key(data) else {
+        return unknown();
+    };
+    let Ok(parsed) = keys::parse(private) else {
+        return unknown();
+    };
     let mut built = key::new_stored(
         &label,
         &parsed.text,
@@ -415,13 +637,14 @@ fn check_key(data: &Map<String, Value>) -> Result<Map<String, Value>, Vec<FieldE
             Err(error) => return Err(vec![error]),
         }
     }
-    Ok(built)
+    Ok(Some(built))
 }
 
 impl Core {
     pub(super) fn data_export_impl(&self, input: DataExportInput) -> Result<DataExport, CoreError> {
         let password = input
             .password
+            .clone()
             .filter(|password| !password.expose_secret().is_empty());
         if let Some(password) = &password
             && !crypto::password_length_ok(password)
@@ -434,15 +657,20 @@ impl Core {
             let mut guard = self.inner();
             let settings = guard.settings.values();
             let mut parts = parts(&mut guard)?;
-            for class in [classes::HISTORY, classes::CONNECTION_LOG] {
-                self.load_lazy(&mut parts, class, now)?;
+            for (class, wanted) in [
+                (classes::HISTORY, input.include_history),
+                (classes::CONNECTION_LOG, input.include_connection_log),
+            ] {
+                if wanted {
+                    self.load_lazy(&mut parts, class, now)?;
+                }
             }
             let vault = vault_view(parts.session);
             let mut records: Vec<_> = parts
                 .session
                 .index
                 .iter()
-                .filter(|record| exported(record.kind))
+                .filter(|record| exported(record.kind, &input))
                 .collect();
             records.sort_by_key(|record| record.record_id);
             let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -598,6 +826,9 @@ impl Core {
         let mut summary = DataImportSummary::default();
         let mut incoming: Vec<Incoming> = Vec::new();
         let mut seen: HashSet<Uuid> = HashSet::new();
+        // The exported personal vault: the history and the connection log
+        // name its hosts by vault and record id (`host_link`).
+        let mut exported_vaults: Vec<Uuid> = Vec::new();
         let vaults = document
             .get("vaults")
             .and_then(Value::as_array)
@@ -606,6 +837,13 @@ impl Core {
             let Some(records) = vault.get("records").and_then(Value::as_array) else {
                 continue;
             };
+            if let Some(vault_id) = vault
+                .get("vault_id")
+                .and_then(Value::as_str)
+                .and_then(|raw| Uuid::parse_str(raw).ok())
+            {
+                exported_vaults.push(vault_id);
+            }
             for record in records {
                 if incoming.len() + summary.skipped >= MAX_IMPORT_RECORDS {
                     return Err(refuse("text", ValidationReason::TooMany));
@@ -620,13 +858,17 @@ impl Core {
                     .and_then(|raw| Uuid::parse_str(raw).ok());
                 let data = record.get("data").and_then(Value::as_object);
                 match (kind, record_id, data) {
-                    (Some(kind), Some(record_id), Some(data)) if IMPORTED.contains(&kind) => {
+                    (Some(kind), Some(record_id), Some(data)) if imported(kind, &input) => {
                         // Duplicates inside one file: the first one counts.
                         if seen.insert(record_id) {
+                            let mut data = WipeOnDrop::new(data.clone());
+                            if kind == RecordKind::ConnectionLogEntry {
+                                as_imported_log_entry(&mut data);
+                            }
                             incoming.push(Incoming {
                                 kind,
                                 record_id,
-                                data: WipeOnDrop::new(data.clone()),
+                                data,
                             });
                         }
                     }
@@ -645,8 +887,7 @@ impl Core {
                 }
             }
         }
-        let settings: Option<SettingsSetInput> = input
-            .apply_settings
+        let settings: Option<SettingsSetInput> = (input.apply_settings || input.full_restore)
             .then(|| document.get("settings").and_then(Value::as_object).cloned())
             .flatten()
             .map(|values| SettingsSetInput {
@@ -665,9 +906,25 @@ impl Core {
         {
             let mut guard = self.inner();
             let mut parts = parts(&mut guard)?;
+            // The entries here, to compare the incoming ones with.
+            for (class, wanted) in [
+                (classes::HISTORY, input.import_history),
+                (classes::CONNECTION_LOG, input.import_connection_log),
+            ] {
+                if wanted {
+                    self.load_lazy(&mut parts, class, now)?;
+                }
+            }
             // References are rewritten to the record that stays (existing)
-            // or to the imported copy (conflict).
+            // or to the imported copy (conflict), and a host link's vault to
+            // the personal vault here.
             let mut map: HashMap<Uuid, Uuid> = HashMap::new();
+            let personal = vault_view(parts.session).vault_id;
+            for vault_id in exported_vaults {
+                if vault_id != personal {
+                    map.insert(vault_id, personal);
+                }
+            }
             let mut writes: Vec<(RecordKind, Uuid, Map<String, Value>)> = Vec::new();
             let fingerprints: HashMap<String, Uuid> = parts
                 .session
@@ -803,7 +1060,15 @@ impl Core {
                 }
                 let target = copy.unwrap_or(record.record_id);
                 let mut data = match check(record.kind, target, &record.data) {
-                    Ok(data) => data,
+                    Ok(Checked::Record(data)) => data,
+                    Ok(Checked::UnknownKey(data)) => {
+                        summary.unknown_keys += 1;
+                        data
+                    }
+                    Ok(Checked::LeftOut) => {
+                        summary.history_left_out += 1;
+                        continue;
+                    }
                     Err(errors) => {
                         summary.refused.push(DataImportRefusal {
                             record_id: record.record_id,
@@ -852,7 +1117,7 @@ impl Core {
             // and so is every setting D41 keeps local (counted when the
             // file's value differs from the one here).
             for (key, value) in settings.values {
-                if !imported_setting(&key) {
+                if !input.full_restore && !imported_setting(&key) {
                     if local.get(&key).is_some_and(|here| *here != value) {
                         summary.settings_left_out += 1;
                     }
@@ -873,9 +1138,50 @@ impl Core {
             conflicts = summary.conflicts,
             skipped = summary.skipped,
             refused = summary.refused.len(),
+            unknown_keys = summary.unknown_keys,
+            history_left_out = summary.history_left_out,
+            full_restore = input.full_restore,
             "data imported"
         );
         Ok(summary)
+    }
+
+    /// What a file holds that Import Data asks about (D51): its history and
+    /// connection log entries. Slow for an encrypted file (Argon2id).
+    pub(super) fn data_import_contents_impl(
+        &self,
+        input: DataImportContentsInput,
+    ) -> Result<DataImportContents, CoreError> {
+        {
+            let inner = self.inner();
+            Self::require_session(&inner)?;
+        }
+        let plain = Self::open_import(input.text.expose_secret(), input.password.as_ref())?;
+        let document: WipeOnDrop = match serde_json::from_str::<Value>(&plain) {
+            Ok(Value::Object(map)) => WipeOnDrop::new(map),
+            _ => return Err(refuse("text", ValidationReason::Invalid)),
+        };
+        drop(plain);
+        let mut contents = DataImportContents::default();
+        let records = document
+            .get("vaults")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|vault| vault.get("records").and_then(Value::as_array))
+            .flatten();
+        for record in records {
+            match record
+                .get("type")
+                .and_then(Value::as_str)
+                .and_then(RecordKind::from_name)
+            {
+                Some(RecordKind::HistoryEntry) => contents.history += 1,
+                Some(RecordKind::ConnectionLogEntry) => contents.connection_log += 1,
+                _ => {}
+            }
+        }
+        Ok(contents)
     }
 }
 

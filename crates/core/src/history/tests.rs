@@ -559,3 +559,27 @@ fn evaluate_checks_in_plan_order() {
     // The length counts characters, not bytes.
     assert!(evaluate(&candidate(&"ж".repeat(MAX_COMMAND_CHARS)), false, true).is_ok());
 }
+
+#[test]
+fn imported_commands_follow_the_rules_a_stored_command_can_be_checked_by() {
+    use HistoryDropReason::*;
+    assert_eq!(imported_command("ls -la").as_deref(), Ok("ls -la"));
+    // Control and escape sequences are removed as for a typed command.
+    assert_eq!(
+        imported_command("echo \u{1b}[1mhi\u{1b}[0m").as_deref(),
+        Ok("echo hi")
+    );
+    let secret = format!("mysql -p{}", cycle("Kq7", 12));
+    assert_eq!(imported_command(&secret), Err(Secret));
+    assert_eq!(imported_command(" ls"), Err(LeadingSpace));
+    assert_eq!(imported_command(""), Err(Empty));
+    assert_eq!(imported_command("****"), Err(EchoOff));
+    assert_eq!(
+        imported_command("[sudo] password for deploy:"),
+        Err(PasswordPrompt)
+    );
+    assert_eq!(
+        imported_command(&"a".repeat(MAX_COMMAND_CHARS + 1)),
+        Err(TooLong)
+    );
+}

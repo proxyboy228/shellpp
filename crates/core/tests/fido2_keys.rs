@@ -103,9 +103,8 @@ fn security_keys_are_imported_with_their_fido2_member() {
     let summary = target
         .core
         .data_import(shellpp_core::service::dto::DataImportInput {
-            text: export.text.clone(),
-            password: None,
             apply_settings: false,
+            ..shellpp_core::service::dto::DataImportInput::new(export.text.clone(), None)
         })
         .expect("import");
     assert_eq!(summary.added, 2);

@@ -869,3 +869,18 @@ Status: run 2 decision, 2026-10-21 (plan, item 3.2).
 - `scripts/measure-terminal.ps1` shows such a run as "invalid (… s)", prints a warning and leaves it out of "our terminal's cost".
 
 **Spec impact:** none.
+
+### 54. Import Data with history, the connection log and unknown keys (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, item 3.3; how D50, items 3-5, and D51 are built).
+
+**Decision:**
+
+- Import Data opens the file first (`data_import_contents`: the number of history and connection log entries) and asks about them only when there are any; an encrypted file is then decrypted a second time by the import (about a second of Argon2id more, instead of keeping the plain text between the steps).
+- An imported history entry is checked by the rules a stored command can still be checked by (`history::imported_command`): control sequences removed, then empty, a leading space, too long, masked echo, a password prompt in the line and the secret detector. What the terminal showed (the prompt, the alternate screen) is not in an entry, so those rules cannot be applied.
+- A connection log entry keeps the members of data-model 13.3, each checked; its session recording (a file of the device that wrote it) and its team copy are not taken, and an entry still open in the file ends as `unknown`. The incoming entry is compared in that form, so a second import finds it again.
+- A host link that names the exported personal vault is rewritten to the personal vault here.
+- A key kept as "unknown" must have a valid label and fit in 256 KiB; it is stored exactly as in the file, members of later versions included.
+- "Full restore from my backup" also turns "Apply the settings in the file" on (shown on and disabled).
+
+**Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 18.4, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).

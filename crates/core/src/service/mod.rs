@@ -57,14 +57,15 @@ use crate::platform::{Availability, Platform};
 use crate::settings::Settings;
 use crate::store::{OpenOutcome, Store, StoreError, WrapKind};
 use dto::{
-    CoreEvent, CoreEventKind, CoreSnapshot, DataExport, DataExportInput, DataImportInput,
-    DataImportSummary, HistoryClearInput, HistoryClearResult, HistoryEntryView, HistoryListInput,
-    KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView, KnownHostAddInput, KnownHostView,
-    KnownHostsImportSummary, LockState, LockStatus, NewNotification, Notification,
-    NotificationList, OsSource, RecentConnection, RecordDeleteResult, RecordMoveInput, RecordRef,
-    RecordSaveInput, RecordView, RecordsQuery, RecordsRef, RecoveryKeyResult, SecretCopyTarget,
-    SecretFieldRef, SessionTarget, SettingsSetInput, SettingsValues, SshConfigImportInput,
-    SshConfigImportSummary, SshConfigPreview, SshConfigSource, VaultView,
+    CoreEvent, CoreEventKind, CoreSnapshot, DataExport, DataExportInput, DataImportContents,
+    DataImportContentsInput, DataImportInput, DataImportSummary, HistoryClearInput,
+    HistoryClearResult, HistoryEntryView, HistoryListInput, KeyGenerateInput, KeyImportInput,
+    KeyImportResult, KeyView, KnownHostAddInput, KnownHostView, KnownHostsImportSummary, LockState,
+    LockStatus, NewNotification, Notification, NotificationList, OsSource, RecentConnection,
+    RecordDeleteResult, RecordMoveInput, RecordRef, RecordSaveInput, RecordView, RecordsQuery,
+    RecordsRef, RecoveryKeyResult, SecretCopyTarget, SecretFieldRef, SessionTarget,
+    SettingsSetInput, SettingsValues, SshConfigImportInput, SshConfigImportSummary,
+    SshConfigPreview, SshConfigSource, VaultView,
 };
 use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
@@ -680,6 +681,17 @@ impl Core {
     /// `invalid`). Slow when encrypted: call it off the UI thread.
     pub fn data_import(&self, input: DataImportInput) -> Result<DataImportSummary, CoreError> {
         self.data_import_impl(input)
+    }
+
+    /// What an export file holds that Import Data asks about before it
+    /// imports (D51): the number of command history and connection log
+    /// entries. Errors as `data_import`. Slow when encrypted: call it off
+    /// the UI thread.
+    pub fn data_import_contents(
+        &self,
+        input: DataImportContentsInput,
+    ) -> Result<DataImportContents, CoreError> {
+        self.data_import_contents_impl(input)
     }
 
     /// The preview of an `~/.ssh/config` import (UI 2.5 step 3; D35): each

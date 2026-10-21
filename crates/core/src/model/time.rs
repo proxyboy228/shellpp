@@ -42,6 +42,12 @@ pub fn format_timestamp(time: SystemTime) -> String {
     format_unix_ms(unix_ms(time))
 }
 
+/// Whether `text` is a timestamp in the format above (an imported record's,
+/// D51).
+pub fn is_timestamp(text: &str) -> bool {
+    time::PrimitiveDateTime::parse(text, FORMAT).is_ok()
+}
+
 /// A UUIDv7 whose timestamp is `now` (random sub-millisecond bits).
 pub fn new_record_id(now: SystemTime) -> Uuid {
     let (secs, nanos) = split(now);
@@ -115,6 +121,22 @@ mod tests {
             format_timestamp(UNIX_EPOCH - Duration::from_secs(5)),
             EPOCH_TEXT
         );
+    }
+
+    #[test]
+    fn reads_only_its_own_timestamps() {
+        assert!(is_timestamp("2026-10-18T22:31:05.123Z"));
+        assert!(is_timestamp(&format_unix_ms(0)));
+        for text in [
+            "",
+            "2026-10-18",
+            "2026-10-18T22:31:05Z",
+            "2026-10-18T22:31:05.123+03:00",
+            "2026-13-18T22:31:05.123Z",
+            "2026-10-18T22:31:05.123Z ",
+        ] {
+            assert!(!is_timestamp(text), "{text:?}");
+        }
     }
 
     #[test]

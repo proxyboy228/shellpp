@@ -1176,6 +1176,13 @@ pub struct DataExportInput {
     /// secrets are in clear text (the UI warns first).
     #[serde(default)]
     pub password: Option<SecretString>,
+    /// Write the command history (and the hosts' dismissed history hints)
+    /// too; off by default (D50).
+    #[serde(default)]
+    pub include_history: bool,
+    /// Write the connection log too; off by default (D50).
+    #[serde(default)]
+    pub include_connection_log: bool,
 }
 
 redacted_debug!(DataExportInput);
@@ -1212,9 +1219,57 @@ pub struct DataImportInput {
     /// Apply the app settings the export holds (the default).
     #[serde(default = "default_true")]
     pub apply_settings: bool,
+    /// Import the command history the file holds (the default, D51): each
+    /// entry goes through the secret detector of live recording.
+    #[serde(default = "default_true")]
+    pub import_history: bool,
+    /// Import the connection log the file holds (the default, D51).
+    #[serde(default = "default_true")]
+    pub import_connection_log: bool,
+    /// "Full restore from my backup" (D50): every setting of the file is
+    /// applied, also those D41 keeps local. Off by default; implies
+    /// `apply_settings`.
+    #[serde(default)]
+    pub full_restore: bool,
 }
 
 redacted_debug!(DataImportInput);
+
+impl DataImportInput {
+    /// An import of `text` with the default options: the file's settings
+    /// applied by D41, its history and connection log imported, no full
+    /// restore.
+    pub fn new(text: SecretString, password: Option<SecretString>) -> Self {
+        Self {
+            text,
+            password,
+            apply_settings: true,
+            import_history: true,
+            import_connection_log: true,
+            full_restore: false,
+        }
+    }
+}
+
+/// Input of `data_import_contents`: the file and, for an encrypted one, its
+/// password.
+#[derive(Clone, Deserialize)]
+pub struct DataImportContentsInput {
+    pub text: SecretString,
+    #[serde(default)]
+    pub password: Option<SecretString>,
+}
+
+redacted_debug!(DataImportContentsInput);
+
+/// What an export file holds that Import Data asks about (D51).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct DataImportContents {
+    /// Command history entries.
+    pub history: usize,
+    /// Connection log entries.
+    pub connection_log: usize,
+}
 
 fn default_true() -> bool {
     true
@@ -1361,6 +1416,13 @@ pub struct DataImportSummary {
     /// URLs and security settings, D41) whose value differs from the one
     /// here.
     pub settings_left_out: usize,
+    /// Keys this client cannot read, kept as "unknown" records so that
+    /// nothing of the file is lost (D50; counted in `added` or `conflicts`
+    /// too).
+    pub unknown_keys: usize,
+    /// History entries left out because the secret detector or the capture
+    /// rules of live recording would not have recorded them (D51).
+    pub history_left_out: usize,
 }
 
 /// Result of `key_import`.

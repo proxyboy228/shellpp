@@ -138,10 +138,17 @@
    OpenSSH files (D43): a `shellpp-ssh-config` and, optionally, the key files into a
    folder the user chooses, with a passphrase offered for the keys that have none (off
    asks for "I understand"); files that are already there are replaced only after
-   "Replace". The import applies only the
+   "Replace". The JSON export has "Include command history" and "Include the connection
+   log", both off (D50). The import applies only the
    settings of how the app and the terminal look and behave; a setting that runs or opens
    something, points somewhere or guards the user stays as it is here, and the summary
-   counts those whose value in the file differs (D41). [decision]
+   counts those whose value in the file differs (D41). "Full restore from my backup"
+   (off) applies every setting of the file; turned on, it says in `--danger` that the
+   file may hold a script that will then run on the servers (D50). A file that holds
+   command history or a connection log asks next whether to import them ("Import command
+   history", "Import the connection log", only those the file holds, both on); imported
+   history goes through the secret detector of 4.2 (D51). The summary also counts the
+   keys kept as unknown and the commands left out, when there are any. [decision]
 7. Edit ▸: undo, redo, cut, copy, paste, select all. [decision]
 8. View ▸: interface zoom, full-screen mode, show or hide
    the sidebar. [decision]

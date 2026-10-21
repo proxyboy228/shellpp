@@ -133,7 +133,7 @@ async fn import_summary(
         .update(|cx| state.read(cx).core().cloned())
         .ok_or_else(|| not_reached("no core"))?;
     let export = core
-        .data_export(DataExportInput { password: None })
+        .data_export(DataExportInput::default())
         .map_err(|error| not_reached(&format!("export: {error}")))?;
     let folder = TempProfile::create("shellpp-shots-import-data")
         .map_err(|error| not_reached(&format!("temporary folder: {error}")))?;

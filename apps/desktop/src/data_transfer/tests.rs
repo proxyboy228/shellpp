@@ -15,7 +15,6 @@ use serde_json::{Map, Value, json};
 use super::*;
 use crate::state::AppState;
 use crate::testing::TestProfile;
-use crate::theme::{self, Appearance};
 
 struct Blank;
 
@@ -33,9 +32,7 @@ struct Ui {
 impl Ui {
     fn open(cx: &mut TestAppContext, hosts: &[Value]) -> Self {
         cx.update(|cx| {
-            gpui_kit::init(cx);
-            theme::install(Appearance::Dark, cx);
-            cx.set_reduce_motion(true);
+            crate::testing::init_ui(cx);
         });
         let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
         state.update(cx, |state, cx| {
@@ -470,4 +467,115 @@ fn openssh_files_are_written_into_the_chosen_folder(cx: &mut TestAppContext) {
     let config = std::fs::read_to_string(dir.path().join("shellpp-ssh-config")).unwrap();
     assert!(config.contains("HostName web.example.com"));
     assert!(!ui.visible(cx, "data-export-dialog"));
+}
+
+/// Records one command of a local terminal (no host) in `ui`'s profile.
+fn record_command(ui: &Ui, cx: &mut TestAppContext, command: &str) {
+    use shellpp_core::service::dto::HistoryCandidate;
+    use shellpp_core::service::host_api::{HistoryDecision, HistoryRecordInput};
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let decision = core
+        .history_record(HistoryRecordInput {
+            host: None,
+            session_id: uuid::Uuid::now_v7(),
+            candidate: HistoryCandidate {
+                command: command.to_owned(),
+                prompt_text: "me@here:~$".to_owned(),
+                typed_printable: true,
+                alt_screen: false,
+            },
+            injected: false,
+            record_history: true,
+        })
+        .unwrap();
+    assert_eq!(decision, HistoryDecision::Recorded);
+}
+
+/// D50 and D51: history only in an export that asks for it; Import Data
+/// then asks whether to take it (on), and the full restore warns first.
+#[gpui_kit::test]
+fn history_travels_only_when_asked_for(cx: &mut TestAppContext) {
+    let source = Ui::open(cx, &[json!({"address": "web.example.com"})]);
+    record_command(&source, cx, "uptime");
+    let dir = tempfile::tempdir().unwrap();
+    let export_to = |ui: &Ui, cx: &mut TestAppContext, file: &Path, history: bool| {
+        let export = ui.export(cx);
+        assert!(ui.visible(cx, "data-export-history"));
+        assert!(ui.visible(cx, "data-export-connection-log"));
+        if history {
+            ui.click(cx, "data-export-history");
+        }
+        export.update(cx, |dialog, cx| dialog.set_encrypt(false, cx));
+        export.update(cx, |dialog, cx| dialog.set_understood(true, cx));
+        ui.click(cx, "data-export-run");
+        let chosen = file.to_path_buf();
+        cx.simulate_new_path_selection(move |_| Some(chosen));
+        cx.run_until_parked();
+        ui.frame(cx, |_, _| {});
+    };
+    let without = dir.path().join("without.json");
+    export_to(&source, cx, &without, false);
+    assert!(
+        !std::fs::read_to_string(&without)
+            .unwrap()
+            .contains("uptime")
+    );
+    let with = dir.path().join("with.json");
+    export_to(&source, cx, &with, true);
+    assert!(std::fs::read_to_string(&with).unwrap().contains("uptime"));
+
+    // A file without history goes straight to the summary.
+    let target = Ui::open(cx, &[]);
+    let import = target.import(cx);
+    target.frame(cx, |window, cx| {
+        import.update(cx, |dialog, cx| dialog.set_path(&without, window, cx))
+    });
+    target.click(cx, "data-import-run");
+    assert!(matches!(
+        import.read_with(cx, |dialog, _| dialog.step().clone()),
+        ImportStep::Summary(_)
+    ));
+    target.click(cx, "data-import-close");
+
+    // The full restore warns before anything runs.
+    let import = target.import(cx);
+    assert!(!target.visible(cx, "data-import-full-restore-warning"));
+    target.click(cx, "data-import-full-restore");
+    assert!(target.visible(cx, "data-import-full-restore-warning"));
+    target.click(cx, "data-import-full-restore");
+    assert!(!target.visible(cx, "data-import-full-restore-warning"));
+
+    // A file with history asks, with the history checked.
+    target.frame(cx, |window, cx| {
+        import.update(cx, |dialog, cx| dialog.set_path(&with, window, cx))
+    });
+    target.click(cx, "data-import-run");
+    assert_eq!(
+        import.read_with(cx, |dialog, _| dialog.step().clone()),
+        ImportStep::Contents(DataImportContents {
+            history: 1,
+            connection_log: 0
+        })
+    );
+    assert!(target.visible(cx, "data-import-history"));
+    assert!(!target.visible(cx, "data-import-connection-log"));
+    assert!(import.read_with(cx, |dialog, _| dialog.import_history));
+    target.click(cx, "data-import-run");
+    assert!(matches!(
+        import.read_with(cx, |dialog, _| dialog.step().clone()),
+        ImportStep::Summary(_)
+    ));
+    let core = target
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let listed = core.history_list(Default::default()).unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|entry| entry.command.as_str())
+            .collect::<Vec<_>>(),
+        ["uptime"]
+    );
 }

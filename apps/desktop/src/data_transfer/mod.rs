@@ -16,11 +16,18 @@
 //!   one), then the save dialog suggests the core's file name; the file is
 //!   written for the user only (mode 0600 on Unix, a protected DACL on
 //!   Windows, D42) and a toast says how many records it holds.
+//!   "Include command history" and "Include the connection log" are off by
+//!   default (D50).
 //! - Import: a file (typed or chosen), "Apply the settings in the file"
-//!   (on); an encrypted file asks for its password; the import runs off the
-//!   UI thread and ends with the summary (added, already here, imported as
-//!   copies, skipped, errors, settings; the settings an import never
-//!   applies, D41, when the file has other values for them).
+//!   (on) and "Full restore from my backup" (off; D50: every setting, with
+//!   the warning that the file may hold a script that then runs on the
+//!   servers); an encrypted file asks for its password; a file that holds
+//!   command history or a connection log asks whether to import them (both
+//!   on, D51); the import runs off the UI thread and ends with the summary
+//!   (added, already here, imported as copies, skipped, errors, settings;
+//!   the settings an import never applies, D41, when the file has other
+//!   values for them; keys kept as unknown and history left out by the
+//!   secret detector, when there are any).
 //!
 //! Nothing here logs paths, passwords or the file's content; the text of a
 //! file is held as a secret until the import has run.
@@ -47,7 +54,10 @@ use gpui_kit::component::radio::Radio;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::{ExposeSecret, SecretString};
-use shellpp_core::service::dto::{DataExportInput, DataImportInput, DataImportSummary};
+use shellpp_core::service::dto::{
+    DataExportInput, DataImportContents, DataImportContentsInput, DataImportInput,
+    DataImportSummary,
+};
 use shellpp_core::service::ssh_export::SshFilesExportInput;
 use shellpp_core::{CoreError, ValidationReason};
 
@@ -97,6 +107,9 @@ pub struct ExportDialog {
     include_keys: bool,
     /// OpenSSH files: the folder waiting for "Replace".
     folder: Option<PathBuf>,
+    /// Shell++ data: the command history and the connection log too (D50).
+    include_history: bool,
+    include_connection_log: bool,
     /// The JSON's encryption, or the key files' passphrase.
     encrypt: bool,
     understood: bool,
@@ -146,6 +159,8 @@ impl ExportDialog {
             format: ExportFormat::Data,
             include_keys: true,
             folder: None,
+            include_history: false,
+            include_connection_log: false,
             encrypt: true,
             understood: false,
             password,
@@ -182,6 +197,16 @@ impl ExportDialog {
     pub fn set_include_keys(&mut self, include: bool, cx: &mut Context<Self>) {
         self.include_keys = include;
         self.understood = false;
+        cx.notify();
+    }
+
+    pub fn set_include_history(&mut self, include: bool, cx: &mut Context<Self>) {
+        self.include_history = include;
+        cx.notify();
+    }
+
+    pub fn set_include_connection_log(&mut self, include: bool, cx: &mut Context<Self>) {
+        self.include_connection_log = include;
         cx.notify();
     }
 
@@ -268,8 +293,12 @@ impl ExportDialog {
         self.step = ExportStep::Running;
         self.error = None;
         cx.notify();
-        let built =
-            cx.background_spawn(async move { core.data_export(DataExportInput { password }) });
+        let input = DataExportInput {
+            password,
+            include_history: self.include_history,
+            include_connection_log: self.include_connection_log,
+        };
+        let built = cx.background_spawn(async move { core.data_export(input) });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let export = match built.await {
                 Ok(export) => export,
@@ -457,6 +486,29 @@ impl Render for ExportDialog {
                             this.set_include_keys(*checked, cx)
                         })),
                 );
+        } else {
+            body = body.child(
+                v_flex()
+                    .gap(metrics::SPACE_1)
+                    .child(
+                        Checkbox::new("data-export-history")
+                            .label(strings::EXPORT_HISTORY)
+                            .checked(self.include_history)
+                            .disabled(running)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.set_include_history(*checked, cx)
+                            })),
+                    )
+                    .child(
+                        Checkbox::new("data-export-connection-log")
+                            .label(strings::EXPORT_CONNECTION_LOG)
+                            .checked(self.include_connection_log)
+                            .disabled(running)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.set_include_connection_log(*checked, cx)
+                            })),
+                    ),
+            );
         }
         if self.secret_asked() {
             let (label, hint) = if openssh {
@@ -627,8 +679,14 @@ fn title(text: &'static str) -> impl IntoElement {
 /// Where the import dialog is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportStep {
-    File { error: Option<&'static str> },
-    Password { error: Option<&'static str> },
+    File {
+        error: Option<&'static str>,
+    },
+    Password {
+        error: Option<&'static str>,
+    },
+    /// The file holds command history or a connection log: import them?
+    Contents(DataImportContents),
     Running,
     Summary(DataImportSummary),
 }
@@ -638,8 +696,16 @@ pub struct ImportDialog {
     path: Entity<InputState>,
     password: Entity<InputState>,
     apply_settings: bool,
-    /// The content of an encrypted file while its password is asked.
+    /// Every setting of the file, D41 aside (D50).
+    full_restore: bool,
+    /// The file's history and connection log, when it holds them (D51).
+    import_history: bool,
+    import_connection_log: bool,
+    /// The content of the file while its password or its options are
+    /// asked.
     text: Option<SecretString>,
+    /// The password the file opened with.
+    opened_with: Option<SecretString>,
     step: ImportStep,
     task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -735,7 +801,11 @@ impl ImportDialog {
             path,
             password,
             apply_settings: true,
+            full_restore: false,
+            import_history: true,
+            import_connection_log: true,
             text: None,
+            opened_with: None,
             step: ImportStep::File { error: None },
             task: None,
             _subscriptions: subscriptions,
@@ -766,6 +836,21 @@ impl ImportDialog {
         cx.notify();
     }
 
+    pub fn set_full_restore(&mut self, full: bool, cx: &mut Context<Self>) {
+        self.full_restore = full;
+        cx.notify();
+    }
+
+    pub fn set_import_history(&mut self, import: bool, cx: &mut Context<Self>) {
+        self.import_history = import;
+        cx.notify();
+    }
+
+    pub fn set_import_connection_log(&mut self, import: bool, cx: &mut Context<Self>) {
+        self.import_connection_log = import;
+        cx.notify();
+    }
+
     /// "Choose file…": the system open dialog.
     pub fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
@@ -786,8 +871,8 @@ impl ImportDialog {
         .detach();
     }
 
-    /// The primary button: reads the file (File step) or imports with the
-    /// typed password (Password step).
+    /// The primary button: reads the file (File step), opens it with the
+    /// typed password (Password step) or imports it (Contents step).
     pub fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.step {
             ImportStep::File { .. } => self.read(window, cx),
@@ -797,7 +882,13 @@ impl ImportDialog {
                     return;
                 }
                 if let Some(text) = self.text.clone() {
-                    self.import(text, Some(SecretString::from(password)), window, cx);
+                    self.open(text, Some(SecretString::from(password)), window, cx);
+                }
+            }
+            ImportStep::Contents(_) => {
+                if let Some(text) = self.text.clone() {
+                    let password = self.opened_with.clone();
+                    self.import(text, password, window, cx);
                 }
             }
             ImportStep::Running | ImportStep::Summary(_) => {}
@@ -833,7 +924,7 @@ impl ImportDialog {
                         .update(cx, |input, cx| input.focus(window, cx));
                     cx.notify();
                 }
-                Ok((text, false)) => dialog.import(text, None, window, cx),
+                Ok((text, false)) => dialog.open(text, None, window, cx),
                 Err(error) => {
                     dialog.step = ImportStep::File { error: Some(error) };
                     dialog.task = None;
@@ -841,6 +932,79 @@ impl ImportDialog {
                 }
             });
         }));
+    }
+
+    /// Opens the file (with its password when encrypted) to see whether it
+    /// holds command history or a connection log: then the Contents step
+    /// asks about them, else the import runs at once.
+    fn open(
+        &mut self,
+        text: SecretString,
+        password: Option<SecretString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let encrypted_file = password.is_some();
+        self.step = ImportStep::Running;
+        cx.notify();
+        let input = DataImportContentsInput {
+            text: text.clone(),
+            password: password.clone(),
+        };
+        let work = cx.background_spawn(async move { core.data_import_contents(input) });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |dialog, window, cx| match result {
+                Ok(contents) if contents.history > 0 || contents.connection_log > 0 => {
+                    dialog.task = None;
+                    dialog.text = Some(text);
+                    dialog.opened_with = password;
+                    dialog.step = ImportStep::Contents(contents);
+                    cx.notify();
+                }
+                Ok(_) => dialog.import(text, password, window, cx),
+                Err(error) => {
+                    dialog.task = None;
+                    dialog.step = dialog.failed(&error, encrypted_file);
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    /// The step after an error of the core: a wrong password asks again;
+    /// otherwise back to the file.
+    fn failed(&mut self, error: &CoreError, encrypted_file: bool) -> ImportStep {
+        match error {
+            CoreError::Validation(errors)
+                if encrypted_file
+                    && errors.iter().any(|error| {
+                        error.field == "password" && error.reason == ValidationReason::Invalid
+                    }) =>
+            {
+                ImportStep::Password {
+                    error: Some(strings::PASSWORD_WRONG),
+                }
+            }
+            CoreError::Validation(_) => {
+                self.text = None;
+                self.opened_with = None;
+                ImportStep::File {
+                    error: Some(strings::FILE_NOT_EXPORT),
+                }
+            }
+            error => {
+                tracing::warn!(code = error.code(), "data not imported");
+                self.text = None;
+                self.opened_with = None;
+                ImportStep::File {
+                    error: Some(strings::IMPORT_FAILED),
+                }
+            }
+        }
     }
 
     fn import(
@@ -854,16 +1018,16 @@ impl ImportDialog {
             return;
         };
         let encrypted_file = password.is_some();
-        let apply_settings = self.apply_settings;
+        let input = DataImportInput {
+            apply_settings: self.apply_settings || self.full_restore,
+            import_history: self.import_history,
+            import_connection_log: self.import_connection_log,
+            full_restore: self.full_restore,
+            ..DataImportInput::new(text, password)
+        };
         self.step = ImportStep::Running;
         cx.notify();
-        let work = cx.background_spawn(async move {
-            core.data_import(DataImportInput {
-                text,
-                password,
-                apply_settings,
-            })
-        });
+        let work = cx.background_spawn(async move { core.data_import(input) });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |dialog, cx| {
@@ -871,32 +1035,10 @@ impl ImportDialog {
                 dialog.step = match result {
                     Ok(summary) => {
                         dialog.text = None;
+                        dialog.opened_with = None;
                         ImportStep::Summary(summary)
                     }
-                    Err(CoreError::Validation(errors))
-                        if encrypted_file
-                            && errors.iter().any(|error| {
-                                error.field == "password"
-                                    && error.reason == ValidationReason::Invalid
-                            }) =>
-                    {
-                        ImportStep::Password {
-                            error: Some(strings::PASSWORD_WRONG),
-                        }
-                    }
-                    Err(CoreError::Validation(_)) => {
-                        dialog.text = None;
-                        ImportStep::File {
-                            error: Some(strings::FILE_NOT_EXPORT),
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(code = error.code(), "data not imported");
-                        dialog.text = None;
-                        ImportStep::File {
-                            error: Some(strings::IMPORT_FAILED),
-                        }
-                    }
+                    Err(error) => dialog.failed(&error, encrypted_file),
                 };
                 cx.notify();
             });
@@ -971,6 +1113,53 @@ impl ImportDialog {
                     summary.settings_left_out,
                 ))
             })
+            .when(summary.unknown_keys > 0, |this| {
+                this.child(row(
+                    "data-import-unknown-keys",
+                    strings::SUMMARY_UNKNOWN_KEYS,
+                    summary.unknown_keys,
+                ))
+            })
+            .when(summary.history_left_out > 0, |this| {
+                this.child(row(
+                    "data-import-history-left-out",
+                    strings::SUMMARY_HISTORY_LEFT_OUT,
+                    summary.history_left_out,
+                ))
+            })
+    }
+
+    fn render_contents(
+        &self,
+        contents: DataImportContents,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .id("data-import-contents")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_2)
+            .child(widgets::caption(strings::IMPORT_CONTENTS_HINT, cx))
+            .when(contents.history > 0, |this| {
+                this.child(
+                    Checkbox::new("data-import-history")
+                        .label(strings::import_history(contents.history))
+                        .checked(self.import_history)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_import_history(*checked, cx)
+                        })),
+                )
+            })
+            .when(contents.connection_log > 0, |this| {
+                this.child(
+                    Checkbox::new("data-import-connection-log")
+                        .label(strings::import_connection_log(contents.connection_log))
+                        .checked(self.import_connection_log)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_import_connection_log(*checked, cx)
+                        })),
+                )
+            })
     }
 }
 
@@ -979,6 +1168,10 @@ impl Render for ImportDialog {
         let theme = cx.theme();
         let body = match &self.step {
             ImportStep::Summary(summary) => self.render_summary(summary, cx).into_any_element(),
+            ImportStep::Contents(contents) => {
+                let contents = *contents;
+                self.render_contents(contents, cx).into_any_element()
+            }
             ImportStep::File { error } => v_flex()
                 .w_full()
                 .gap(metrics::SPACE_3)
@@ -1006,11 +1199,34 @@ impl Render for ImportDialog {
                 ))
                 .child(
                     Switch::new("data-import-settings")
-                        .checked(self.apply_settings)
+                        .checked(self.apply_settings || self.full_restore)
+                        .disabled(self.full_restore)
                         .label(strings::IMPORT_SETTINGS)
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.set_apply_settings(*checked, cx)
                         })),
+                )
+                .child(
+                    v_flex()
+                        .gap(metrics::SPACE_1)
+                        .child(
+                            Switch::new("data-import-full-restore")
+                                .checked(self.full_restore)
+                                .label(strings::IMPORT_FULL_RESTORE)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.set_full_restore(*checked, cx)
+                                })),
+                        )
+                        .when(self.full_restore, |this| {
+                            this.child(
+                                div()
+                                    .id("data-import-full-restore-warning")
+                                    .test_support()
+                                    .text_size(metrics::FONT_SIZE_BODY)
+                                    .text_color(theme.danger)
+                                    .child(strings::IMPORT_FULL_RESTORE_WARNING),
+                            )
+                        }),
                 )
                 .child(
                     div()

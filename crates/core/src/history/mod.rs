@@ -348,5 +348,33 @@ pub fn evaluate(
     Ok(command)
 }
 
+/// The rules of [`evaluate`] that a stored command can still be checked by,
+/// for a command of an imported history (D51): what the terminal showed
+/// (the prompt, the alternate screen, masked echo) is not in an entry, so a
+/// command that looks masked or like a password prompt is left out as well.
+/// Returns the command to store.
+pub fn imported_command(command: &str) -> Result<String, HistoryDropReason> {
+    let command = clean_command(command);
+    if command.trim().chars().all(|c| MASK_CHARS.contains(&c)) && !command.trim().is_empty() {
+        return Err(HistoryDropReason::EchoOff);
+    }
+    if line_holds_password_prompt(&command) {
+        return Err(HistoryDropReason::PasswordPrompt);
+    }
+    if command.is_empty() {
+        return Err(HistoryDropReason::Empty);
+    }
+    if command.starts_with(' ') {
+        return Err(HistoryDropReason::LeadingSpace);
+    }
+    if command.chars().count() > MAX_COMMAND_CHARS {
+        return Err(HistoryDropReason::TooLong);
+    }
+    if looks_like_secret(&command) {
+        return Err(HistoryDropReason::Secret);
+    }
+    Ok(command)
+}
+
 #[cfg(test)]
 mod tests;
