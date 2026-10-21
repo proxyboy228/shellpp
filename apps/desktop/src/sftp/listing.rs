@@ -38,7 +38,11 @@ pub struct Entry {
     pub modified: Option<u64>,
     /// Permission bits (remote panel).
     pub permissions: Option<u32>,
-    /// Hidden: a dot-file, or on Windows the hidden or system attribute.
+    /// The local entry's own path (its name may not be UTF-8: `name` is
+    /// for display, this is what an operation opens). `None` remotely.
+    pub local_path: Option<std::path::PathBuf>,
+    /// Hidden: a dot-file (remote panels, Unix), or on Windows the hidden
+    /// or system attribute.
     pub hidden: bool,
 }
 
@@ -48,9 +52,10 @@ impl Entry {
         matches!(self.kind, Kind::Folder | Kind::Link { to_folder: true })
     }
 
-    /// The Size column: a dash for folders.
+    /// The Size column: a dash for folders and links (a link's own size is
+    /// not the size of what it points to).
     pub fn size_text(&self) -> String {
-        if self.is_folder_like() {
+        if self.is_folder_like() || matches!(self.kind, Kind::Link { .. }) {
             "—".to_owned()
         } else {
             human_size(self.size)
@@ -82,18 +87,29 @@ pub fn human_size(bytes: u64) -> String {
     }
     let mut value = bytes as f64 / 1024.0;
     let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if value < 10.0 {
-        format!("{value:.1} {}", UNITS[unit])
-    } else {
-        format!("{value:.0} {}", UNITS[unit])
+    loop {
+        // The value as it will be shown decides the unit: 1023.6 KB is
+        // 1.0 MB, 9.97 KB is 10 KB.
+        let shown = if value < 9.95 {
+            (value * 10.0).round() / 10.0
+        } else {
+            value.round()
+        };
+        if shown >= 1024.0 && unit + 1 < UNITS.len() {
+            value /= 1024.0;
+            unit += 1;
+            continue;
+        }
+        return if shown < 10.0 {
+            format!("{shown:.1} {}", UNITS[unit])
+        } else {
+            format!("{shown:.0} {}", UNITS[unit])
+        };
     }
 }
 
-/// `-rw-r--r--` for a mode (`d` for a folder, `l` for a link).
+/// `-rw-r--r--` for a mode (`d` for a folder, `l` for a link), with the
+/// letters of `ls` for setuid, setgid and sticky (`s`/`S`, `t`/`T`).
 pub fn mode_text(mode: u32, kind: Kind) -> String {
     let mut out = String::with_capacity(10);
     out.push(match kind {
@@ -101,11 +117,16 @@ pub fn mode_text(mode: u32, kind: Kind) -> String {
         Kind::Link { .. } => 'l',
         _ => '-',
     });
-    for shift in [6u32, 3, 0] {
+    for (shift, special, letter) in [(6u32, 0o4000, 's'), (3, 0o2000, 's'), (0, 0o1000, 't')] {
         let bits = (mode >> shift) & 0o7;
         out.push(if bits & 0o4 != 0 { 'r' } else { '-' });
         out.push(if bits & 0o2 != 0 { 'w' } else { '-' });
-        out.push(if bits & 0o1 != 0 { 'x' } else { '-' });
+        out.push(match (bits & 0o1 != 0, mode & special != 0) {
+            (true, true) => letter,
+            (false, true) => letter.to_ascii_uppercase(),
+            (true, false) => 'x',
+            (false, false) => '-',
+        });
     }
     out
 }
@@ -205,6 +226,8 @@ pub fn sorted(entries: &[Entry], sort: Sort) -> Vec<Entry> {
         let by_column = match sort.column {
             Column::Name => natural_cmp(&a.name, &b.name),
             Column::Modified => a.modified.cmp(&b.modified),
+            // Folders show no size: among them the name decides.
+            Column::Size if a.is_folder_like() => Ordering::Equal,
             Column::Size => a.size.cmp(&b.size),
             Column::Kind => a.kind_text().cmp(&b.kind_text()),
         };
@@ -301,43 +324,138 @@ fn separator(style: PathStyle) -> char {
     }
 }
 
-/// The root of `path` (`/`, or `C:\`), and the rest.
-fn split_root(path: &str, style: PathStyle) -> (String, &str) {
+fn separators(style: PathStyle) -> &'static [char] {
     match style {
-        PathStyle::Posix => match path.strip_prefix('/') {
-            Some(rest) => ("/".to_owned(), rest),
-            None => (String::new(), path),
-        },
-        PathStyle::Windows => {
-            let bytes = path.as_bytes();
-            if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-                let drive = path[..2].to_uppercase();
-                (
-                    format!("{drive}\\"),
-                    path[2..].trim_start_matches(['\\', '/']),
-                )
-            } else {
-                (String::new(), path)
-            }
-        }
+        PathStyle::Posix => &['/'],
+        PathStyle::Windows => &['\\', '/'],
     }
 }
 
-/// The folder above `path` (the ".." row); `None` at the root.
+/// The root of a path: what it opens, its crumb, whether that crumb is a
+/// drive (its click opens the drive selection).
+struct Root {
+    path: String,
+    label: String,
+    drive: bool,
+}
+
+/// A `C:` drive at the start of `text` (`C:\…`; `C:foo`, relative to the
+/// drive's current folder, is not a root).
+fn drive_root(text: &str) -> Option<(String, &str)> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let rest = &text[2..];
+        if rest.is_empty() || rest.starts_with(['\\', '/']) {
+            return Some((
+                text[..2].to_uppercase(),
+                rest.trim_start_matches(['\\', '/']),
+            ));
+        }
+    }
+    None
+}
+
+/// The root of `path` and the rest: `/`; `C:\`; `\\?\C:\` (as
+/// `canonicalize` writes it); `\\server\share\` and `\\?\UNC\server\share\`;
+/// `\` (the current drive). A relative path has no root.
+fn split_root(path: &str, style: PathStyle) -> (Option<Root>, &str) {
+    let seps = separators(style);
+    if style == PathStyle::Posix {
+        return match path.strip_prefix('/') {
+            Some(rest) => (
+                Some(Root {
+                    path: "/".to_owned(),
+                    label: "/".to_owned(),
+                    drive: false,
+                }),
+                rest.trim_start_matches('/'),
+            ),
+            None => (None, path),
+        };
+    }
+    if let Some((drive, rest)) = drive_root(path) {
+        return (
+            Some(Root {
+                path: format!("{drive}\\"),
+                label: drive,
+                drive: true,
+            }),
+            rest,
+        );
+    }
+    if let Some(verbatim) = path.strip_prefix(r"\\?\") {
+        if let Some((drive, rest)) = drive_root(verbatim) {
+            return (
+                Some(Root {
+                    path: format!(r"\\?\{drive}\"),
+                    label: drive,
+                    drive: true,
+                }),
+                rest,
+            );
+        }
+        let unc = verbatim
+            .strip_prefix("UNC\\")
+            .or_else(|| verbatim.strip_prefix("unc\\"));
+        if let Some(unc) = unc {
+            return share_root(unc, r"\\?\UNC\");
+        }
+    }
+    if let Some(unc) = path.strip_prefix(r"\\").or_else(|| path.strip_prefix("//")) {
+        return share_root(unc, r"\\");
+    }
+    if let Some(rest) = path.strip_prefix(seps) {
+        return (
+            Some(Root {
+                path: "\\".to_owned(),
+                label: "\\".to_owned(),
+                drive: false,
+            }),
+            rest.trim_start_matches(seps),
+        );
+    }
+    (None, path)
+}
+
+/// `server\share\rest` after a `\\` (or `\\?\UNC\`) prefix: the share is
+/// the root, a bare server is no root to list.
+fn share_root<'a>(unc: &'a str, prefix: &str) -> (Option<Root>, &'a str) {
+    let mut parts = unc.splitn(3, ['\\', '/']);
+    let server = parts.next().unwrap_or_default();
+    let share = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or_default();
+    if server.is_empty() || share.is_empty() {
+        return (None, unc);
+    }
+    (
+        Some(Root {
+            path: format!(r"{prefix}{server}\{share}\"),
+            label: format!(r"\\{server}\{share}"),
+            drive: false,
+        }),
+        rest.trim_start_matches(['\\', '/']),
+    )
+}
+
+/// The parts of `path` below its root, repeated separators collapsed.
+fn parts(rest: &str, style: PathStyle) -> Vec<&str> {
+    rest.split(separators(style))
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect()
+}
+
+/// The folder above `path` (the ".." row); `None` at a root and for a
+/// relative path without a folder above.
 pub fn parent(path: &str, style: PathStyle) -> Option<String> {
     let (root, rest) = split_root(path, style);
-    let separators: &[char] = match style {
-        PathStyle::Posix => &['/'],
-        PathStyle::Windows => &['\\', '/'],
-    };
-    let rest = rest.trim_end_matches(separators);
-    if rest.is_empty() {
-        return None;
-    }
-    Some(match rest.rfind(separators) {
-        Some(at) => format!("{root}{}", &rest[..at]),
-        None if root.is_empty() => ".".to_owned(),
-        None => root,
+    let mut parts = parts(rest, style);
+    parts.pop()?;
+    let sep = separator(style).to_string();
+    let below = parts.join(&sep);
+    Some(match root {
+        Some(root) => format!("{}{below}", root.path),
+        None if below.is_empty() => return None,
+        None => below,
     })
 }
 
@@ -355,22 +473,16 @@ pub fn breadcrumbs(path: &str, style: PathStyle) -> Vec<Crumb> {
     let (root, rest) = split_root(path, style);
     let sep = separator(style);
     let mut out = Vec::new();
-    let mut current = root.clone();
-    if !root.is_empty() {
+    let mut current = String::new();
+    if let Some(root) = root {
+        current = root.path.clone();
         out.push(Crumb {
-            label: match style {
-                PathStyle::Posix => "/".to_owned(),
-                PathStyle::Windows => root.trim_end_matches('\\').to_owned(),
-            },
-            path: root.clone(),
-            drive: style == PathStyle::Windows,
+            label: root.label,
+            path: root.path,
+            drive: root.drive,
         });
     }
-    let separators: &[char] = match style {
-        PathStyle::Posix => &['/'],
-        PathStyle::Windows => &['\\', '/'],
-    };
-    for part in rest.split(separators).filter(|part| !part.is_empty()) {
+    for part in parts(rest, style) {
         if !current.is_empty() && !current.ends_with(sep) {
             current.push(sep);
         }
@@ -395,6 +507,7 @@ mod tests {
             size,
             modified: Some(modified),
             permissions: None,
+            local_path: None,
             hidden: name.starts_with('.'),
         }
     }
@@ -509,6 +622,20 @@ mod tests {
             Some(r"C:\")
         );
         assert_eq!(parent(r"C:\", PathStyle::Windows), None);
+        assert_eq!(parent("/a//b", PathStyle::Posix).as_deref(), Some("/a"));
+        assert_eq!(parent(".", PathStyle::Posix), None);
+        assert_eq!(parent("a/b", PathStyle::Posix).as_deref(), Some("a"));
+        assert_eq!(
+            parent(r"\\srv\share\d", PathStyle::Windows).as_deref(),
+            Some(r"\\srv\share\")
+        );
+        assert_eq!(parent(r"\\srv\share", PathStyle::Windows), None);
+        assert_eq!(
+            parent(r"\\?\C:\Users\a", PathStyle::Windows).as_deref(),
+            Some(r"\\?\C:\Users")
+        );
+        assert_eq!(parent(r"\Users", PathStyle::Windows).as_deref(), Some(r"\"));
+        assert_eq!(parent("C:foo", PathStyle::Windows), None);
 
         let crumbs = breadcrumbs("/home/u/a", PathStyle::Posix);
         let pairs: Vec<(&str, &str)> = crumbs
@@ -540,6 +667,26 @@ mod tests {
     }
 
     #[test]
+    fn crumbs_of_shares_and_verbatim_paths() {
+        let crumbs = breadcrumbs(r"\\srv\share\d", PathStyle::Windows);
+        let pairs: Vec<(&str, &str)> = crumbs
+            .iter()
+            .map(|crumb| (crumb.label.as_str(), crumb.path.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [(r"\\srv\share", r"\\srv\share\"), ("d", r"\\srv\share\d")]
+        );
+        let crumbs = breadcrumbs(r"\\?\C:\Users", PathStyle::Windows);
+        assert_eq!(crumbs[0].label, "C:");
+        assert!(crumbs[0].drive);
+        assert_eq!(crumbs[1].path, r"\\?\C:\Users");
+        let crumbs = breadcrumbs("//double//slashes", PathStyle::Posix);
+        let paths: Vec<&str> = crumbs.iter().map(|crumb| crumb.path.as_str()).collect();
+        assert_eq!(paths, ["/", "/double", "/double/slashes"]);
+    }
+
+    #[test]
     fn row_texts() {
         assert_eq!(human_size(0), "0 bytes");
         assert_eq!(human_size(1), "1 byte");
@@ -547,6 +694,11 @@ mod tests {
         assert_eq!(human_size(1536), "1.5 KB");
         assert_eq!(human_size(12 * 1024 * 1024), "12 MB");
         assert_eq!(human_size(1288490188), "1.2 GB");
+        assert_eq!(human_size(1023), "1023 bytes");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(10239), "10 KB");
+        assert_eq!(human_size(1048575), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024 * 1024), "1.0 TB");
         let folder = entry("src", Kind::Folder, 4096, 1);
         assert_eq!(folder.size_text(), "—");
         assert_eq!(folder.kind_text(), "folder");
@@ -558,6 +710,13 @@ mod tests {
         assert_eq!(
             mode_text(0o777, Kind::Link { to_folder: true }),
             "lrwxrwxrwx"
+        );
+        assert_eq!(mode_text(0o4755, Kind::File), "-rwsr-xr-x");
+        assert_eq!(mode_text(0o2644, Kind::File), "-rw-r-Sr--");
+        assert_eq!(mode_text(0o1777, Kind::Folder), "drwxrwxrwt");
+        assert_eq!(
+            entry("link", Kind::Link { to_folder: false }, 9, 1).size_text(),
+            "—"
         );
     }
 }

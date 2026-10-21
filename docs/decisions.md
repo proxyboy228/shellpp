@@ -757,7 +757,11 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 2; 
 - Back and forward as in a browser: opening a folder clears Forward; opening the folder that is open changes nothing.
 - The ".." row opens the parent; there is none at a root (`/`, `C:\`). The breadcrumbs start with `/` or the drive (`C:`), whose click opens the drive selection (the letters that have a root folder now).
 - Sizes are 1024-based (`512 bytes`, `1.5 KB`, `12 MB`, `1.2 GB`: one decimal below 10); folders show a dash and the kind "folder"; a file's kind is its extension in lowercase, or "file". Permissions read `-rw-r--r--` (`d` for a folder, `l` for a link), remote panel only.
-- A symbolic link (or a junction) is listed as a link, never as what it points to.
+- A symbolic link (or a junction) is listed as a link, never as what it points to, and shows no size (a link's own size is the length of its target path). Sorting by size orders folders by name.
+- Hidden on Windows is the hidden or system attribute (as Explorer shows it), elsewhere a name with a leading dot; a remote entry is hidden when its name starts with a dot.
+- Paths: POSIX roots and repeated slashes; Windows drives (`C:\`), `\\?\C:\` as `canonicalize` writes it, shares (`\\server\share\`, also `\\?\UNC\…`) as their own root, `\` for the current drive; `C:foo` is relative. A local row keeps its own path, so a name that is not UTF-8 still opens.
+- Sizes are rounded before the unit is chosen (`10 KB`, not `10.0 KB`; `1.0 MB`, not `1024 KB`); permissions show setuid, setgid and sticky as `ls` does (`s`/`S`, `t`/`T`).
+- The drive list touches each drive and runs off the UI thread; reading the letters without I/O (`GetLogicalDrives`) needs FFI, which this crate does not use (owner's question).
 
 **Spec impact:** none (these are the rules of UI 5.3 written out).
 

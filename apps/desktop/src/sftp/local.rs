@@ -33,45 +33,59 @@ fn hidden(name: &str, meta: &std::fs::Metadata) -> bool {
     }
 }
 
-/// The entries of the local folder `dir`, in the order of the system.
+/// The entries of the local folder `dir`, in the order of the system. The
+/// type comes from the folder scan (a link is a link); an entry whose
+/// details cannot be read is still listed, without size and date, and one
+/// the scan itself cannot read is left out.
 pub fn list(dir: &Path) -> std::io::Result<Vec<Entry>> {
     let mut out = Vec::new();
     for item in std::fs::read_dir(dir)? {
-        let item = item?;
-        let name = item.file_name().to_string_lossy().into_owned();
-        // The entry itself, never what a link points to.
-        let Ok(meta) = std::fs::symlink_metadata(item.path()) else {
+        let Ok(item) = item else {
             continue;
         };
-        let kind = if meta.file_type().is_symlink() {
+        let name = item.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = item.file_type() else {
+            continue;
+        };
+        let kind = if file_type.is_symlink() {
             Kind::Link {
                 to_folder: std::fs::metadata(item.path()).is_ok_and(|target| target.is_dir()),
             }
-        } else if meta.is_dir() {
+        } else if file_type.is_dir() {
             Kind::Folder
-        } else if meta.is_file() {
+        } else if file_type.is_file() {
             Kind::File
         } else {
             Kind::Other
         };
+        // The entry's own details (no link followed; on Windows from the
+        // scan itself).
+        let meta = item.metadata().ok();
         out.push(Entry {
-            hidden: hidden(&name, &meta),
-            name,
+            hidden: meta
+                .as_ref()
+                .map_or(name.starts_with('.'), |meta| hidden(&name, meta)),
             kind,
-            size: if meta.is_file() { meta.len() } else { 0 },
+            size: match (&meta, kind) {
+                (Some(meta), Kind::File) => meta.len(),
+                _ => 0,
+            },
             modified: meta
-                .modified()
-                .ok()
+                .as_ref()
+                .and_then(|meta| meta.modified().ok())
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|since| since.as_secs()),
             permissions: None,
+            local_path: Some(item.path()),
+            name,
         });
     }
     Ok(out)
 }
 
 /// The drives of the drive selection (Windows: each letter that has a root
-/// folder now; elsewhere `/`).
+/// folder now; elsewhere `/`). It touches each drive: call it off the UI
+/// thread (a disconnected network drive can take seconds, D48).
 pub fn drives() -> Vec<PathBuf> {
     if cfg!(windows) {
         ('A'..='Z')
@@ -93,9 +107,16 @@ pub fn from_remote(entry: &RemoteEntry) -> Entry {
             EntryKind::Symlink { to_dir, .. } => Kind::Link { to_folder: *to_dir },
             EntryKind::Other => Kind::Other,
         },
-        size: entry.size,
+        // A link's own size (the length of its target path) means nothing
+        // here; the local panel has none either.
+        size: if matches!(entry.kind, EntryKind::Symlink { .. }) {
+            0
+        } else {
+            entry.size
+        },
         modified: entry.modified,
         permissions: entry.permissions,
+        local_path: None,
         hidden: entry.name.starts_with('.'),
     }
 }
@@ -133,6 +154,10 @@ mod tests {
         assert!(find("notes.txt").modified.is_some());
         assert_eq!(find("src").kind, Kind::Folder);
         assert!(find(secret).hidden);
+        assert_eq!(
+            find("notes.txt").local_path.as_deref(),
+            Some(dir.path().join("notes.txt").as_path())
+        );
     }
 
     #[cfg(unix)]
@@ -165,5 +190,6 @@ mod tests {
         assert_eq!(row.kind, Kind::Link { to_folder: false });
         assert!(row.hidden);
         assert_eq!(row.permissions, Some(0o777));
+        assert_eq!(row.size, 0, "a link's own size is not shown");
     }
 }
