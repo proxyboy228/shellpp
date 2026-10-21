@@ -64,26 +64,40 @@ impl Category {
     }
 }
 
-/// One regex with a named group per category, case-insensitive, on word
-/// boundaries.
+/// One regex with a named group per category, case-insensitive, on ASCII
+/// word boundaries and ASCII digits (the fast matcher stays on rows with
+/// other scripts).
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)",
-        r"(?P<error>\b(?:error|errors|err|fail|failed|failure|fatal|denied|refused|panic|critical|exception)\b)",
-        r"|(?P<warning>\b(?:warn|warning|warnings|deprecated)\b)",
-        r"|(?P<ok>\b(?:ok|success|successful|succeeded|passed)\b)",
-        r"|(?P<info>\b(?:info|notice)\b)",
-        r"|(?P<debug>\b(?:debug|trace)\b)",
-        r"|(?P<address>\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b",
-        r"|\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b)",
+        r"(?P<error>(?-u:\b)(?:error|errors|err|fail|failed|failure|fatal|denied|refused|panic|critical|exception)(?-u:\b))",
+        r"|(?P<warning>(?-u:\b)(?:warn|warning|warnings|deprecated)(?-u:\b))",
+        r"|(?P<ok>(?-u:\b)(?:ok|success|successful|succeeded|passed)(?-u:\b))",
+        r"|(?P<info>(?-u:\b)(?:info|notice)(?-u:\b))",
+        r"|(?P<debug>(?-u:\b)(?:debug|trace)(?-u:\b))",
+        r"|(?P<address>(?-u:\b)(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(?-u:\b)",
+        r"|(?-u:\b)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?-u:\b))",
     ))
     .expect("the highlighting pattern")
 });
+
+/// An address inside a longer run of the same kind (a hex dump, a
+/// fingerprint, an OID, a four-part version): not an address.
+fn inside_longer_run(text: &str, start: usize, end: usize) -> bool {
+    let joins = |c: char| matches!(c, '.' | ':' | '-');
+    let before = text[..start].chars().next_back();
+    let mut after = text[end..].chars();
+    let (after, beyond) = (after.next(), after.next());
+    before.is_some_and(joins)
+        || (after.is_some_and(joins) && beyond.is_some_and(|c| c.is_ascii_hexdigit()))
+}
 
 /// The highlighted spans of `text`, as character ranges with their
 /// category.
 pub fn spans(text: &str) -> Vec<(Range<usize>, Category)> {
     let mut out = Vec::new();
+    // Character positions counted as the matches go (one pass).
+    let (mut byte, mut chars) = (0, 0);
     for captures in PATTERN.captures_iter(text) {
         let Some(category) = Category::ALL
             .iter()
@@ -95,9 +109,13 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, Category)> {
         let Some(found) = captures.get(0) else {
             continue;
         };
-        let start = text[..found.start()].chars().count();
+        if category == Category::Address && inside_longer_run(text, found.start(), found.end()) {
+            continue;
+        }
+        chars += text[byte..found.start()].chars().count();
+        byte = found.start();
         let len = found.as_str().chars().count();
-        out.push((start..start + len, category));
+        out.push((chars..chars + len, category));
     }
     out
 }
@@ -131,6 +149,11 @@ mod tests {
         // Not inside other words: "errors" is one, "terror" and "booking"
         // are not.
         assert_eq!(found("terror booking"), []);
+        // Not inside hex dumps, fingerprints, OIDs or versions.
+        assert_eq!(
+            found("00:b4:31:98:0a:c4:bc:11:22:33 1.3.6.1.4.1 4.0.0.0.1"),
+            []
+        );
         assert_eq!(
             found("from 192.168.1.20 via aa:bb:cc:00:11:22, not 999.1.1.1"),
             [
@@ -138,8 +161,10 @@ mod tests {
                 ("aa:bb:cc:00:11:22", Category::Address),
             ]
         );
-        // Character positions, not bytes.
+        // Character positions, not bytes, across several matches.
         assert_eq!(spans("ü error")[0].0, 2..7);
+        let both = spans("ü error ü ok");
+        assert_eq!((both[0].0.clone(), both[1].0.clone()), (2..7, 10..12));
         assert_ne!(Category::Error.color(true), Category::Error.color(false));
     }
 }

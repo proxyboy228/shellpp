@@ -606,8 +606,13 @@ fn row_cells(
         } else {
             column
         };
+        // Plain text only: the default colors, not reversed, dimmed or hidden
+        // (a category color on a program's background could be unreadable).
         let mut is_plain = matches!(cell.fg, Color::Named(NamedColor::Foreground))
-            && !cell.flags.contains(Flags::HIDDEN);
+            && matches!(cell.bg, Color::Named(NamedColor::Background))
+            && !cell
+                .flags
+                .intersects(Flags::HIDDEN | Flags::INVERSE | Flags::DIM);
         if let Some((color, (first, last))) = selected
             && last_cell >= first
             && column <= last
