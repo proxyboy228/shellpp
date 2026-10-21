@@ -15,16 +15,15 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use shellpp_core::service::dto::TagColor;
 use shellpp_core::service::snippets::{ForwardType, ForwardingRuleView};
 use uuid::Uuid;
 
 use super::{
-    FormMode, ForwardingScreen, StatusTone, card_id, card_title, is_started, status_id,
-    status_text, strings, type_letter,
+    FormMode, ForwardingScreen, StatusTone, card_id, card_title, status_id, status_text, strings,
+    type_letter,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
@@ -64,7 +63,11 @@ fn badge(kind: ForwardType, size: Pixels) -> impl IntoElement {
         .child(type_letter(kind))
 }
 
-fn tone_color(tone: StatusTone, cx: &App) -> Hsla {
+/// A theme color (the literal scan of `theme::literals` reads `Hsla {` as
+/// a struct literal).
+type Color = Hsla;
+
+fn tone_color(tone: StatusTone, cx: &App) -> Color {
     let theme = cx.theme();
     match tone {
         StatusTone::Stopped => theme.muted_foreground,
@@ -358,12 +361,10 @@ impl ForwardingScreen {
             selected && self.focus.is_focused(window) && window.last_input_was_keyboard();
         let hover = theme.secondary_hover;
         let pressed = theme.secondary_active;
-        let status = self.statuses.get(&id);
-        let started = is_started(status);
-        let (tone, text) = if self.pending.contains(&id) && !started {
+        let (tone, text) = if self.is_starting(id) {
             (StatusTone::Busy, strings::STARTING.to_owned())
         } else {
-            status_text(status)
+            status_text(self.status(id))
         };
         let screen = cx.entity().downgrade();
         div()
@@ -429,7 +430,7 @@ impl ForwardingScreen {
                         if screen.selected != Some(id) {
                             screen.select(Some(id), window, cx);
                         }
-                        is_started(screen.statuses.get(&id))
+                        screen.is_running(id)
                     })
                     .unwrap_or(false);
                 card_menu(menu, screen.clone(), id, started)
@@ -562,16 +563,18 @@ impl ForwardingScreen {
             }
         });
         if let Some(id) = edited {
-            let started = is_started(self.statuses.get(&id));
+            let started = self.is_running(id);
             let screen = screen.clone();
             header = header.menu(move |menu, _, _| card_menu(menu, screen.clone(), id, started));
         }
         // The rule's status with Start or Stop.
         let status = edited.map(|id| {
-            let status = self.statuses.get(&id);
-            let started = is_started(status);
-            let pending = self.pending.contains(&id);
-            let (tone, text) = status_text(status);
+            let started = self.is_running(id);
+            let (tone, text) = if self.is_starting(id) {
+                (StatusTone::Busy, strings::STARTING.to_owned())
+            } else {
+                status_text(self.status(id))
+            };
             let button = if started {
                 ControlButton::new("fwd-panel-stop", ControlKind::Neutral)
                     .icon(Lucide::Square)
@@ -593,7 +596,7 @@ impl ForwardingScreen {
                         true,
                         cx,
                     )))
-                    .child(button.disabled(pending).on_click(cx.listener(
+                    .child(button.on_click(cx.listener(
                         move |this, _: &ClickEvent, window, cx| this.toggle(id, window, cx),
                     ))),
             )
@@ -765,7 +768,9 @@ impl ForwardingScreen {
 
 impl Render for ForwardingScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Shown: started rules get their statuses read again.
+        // Shown: the statuses are read again (rules that autostarted
+        // elsewhere show up), and polled while any rule runs.
+        self.read_statuses(cx);
         self.poll_if_needed(cx);
         let total = self
             .measured_width

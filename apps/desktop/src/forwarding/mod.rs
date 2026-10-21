@@ -149,8 +149,15 @@ pub struct ForwardingScreen {
     shown: Vec<usize>,
     /// Statuses of the started rules, read from the session layer.
     statuses: HashMap<Uuid, RuleStatus>,
-    /// Rules with a start or stop in flight.
-    pending: HashSet<Uuid>,
+    /// Why the last start of a rule failed (the rule was stopped then, so
+    /// the session layer has no status for it).
+    failures: HashMap<Uuid, RuleStatus>,
+    /// Rules with a start in flight.
+    starting: HashSet<Uuid>,
+    /// Stopped or saved while their start was in flight: stopped, or
+    /// started again with the saved values, once it ends.
+    stop_after: HashSet<Uuid>,
+    restart_after: HashSet<Uuid>,
     selected: Option<Uuid>,
     /// The rule panel: the form of the selected rule or of a new one.
     form: Option<Entity<RuleForm>>,
@@ -218,7 +225,10 @@ impl ForwardingScreen {
             items: Vec::new(),
             shown: Vec::new(),
             statuses: HashMap::new(),
-            pending: HashSet::new(),
+            failures: HashMap::new(),
+            starting: HashSet::new(),
+            stop_after: HashSet::new(),
+            restart_after: HashSet::new(),
             selected: None,
             form: None,
             panel_width: metrics::WIDTH_DETAILS,
@@ -261,12 +271,20 @@ impl ForwardingScreen {
         self.form.as_ref()
     }
 
+    /// The status on screen: the session layer's, else why the last start
+    /// failed.
     pub fn status(&self, id: Uuid) -> Option<&RuleStatus> {
-        self.statuses.get(&id)
+        self.statuses.get(&id).or_else(|| self.failures.get(&id))
     }
 
-    pub fn is_pending(&self, id: Uuid) -> bool {
-        self.pending.contains(&id)
+    /// Whether a start of the rule is in flight.
+    pub fn is_starting(&self, id: Uuid) -> bool {
+        self.starting.contains(&id)
+    }
+
+    /// Whether the rule runs or is on its way (Stop applies).
+    pub fn is_running(&self, id: Uuid) -> bool {
+        self.starting.contains(&id) || is_started(self.statuses.get(&id))
     }
 
     pub fn can_undo(&self) -> bool {
@@ -348,13 +366,14 @@ impl ForwardingScreen {
     }
 
     /// Reads the statuses once a second while any rule is started or a
-    /// start or stop is in flight.
+    /// start is in flight. Each render reads them too, so rules that
+    /// autostart elsewhere show up when the screen is shown.
     fn poll_if_needed(&mut self, cx: &mut Context<Self>) {
         if self.frozen {
             return;
         }
         let needed =
-            !self.pending.is_empty() || self.statuses.values().any(|s| is_started(Some(s)));
+            !self.starting.is_empty() || self.statuses.values().any(|s| is_started(Some(s)));
         if !needed || self.poll.is_some() {
             return;
         }
@@ -365,7 +384,7 @@ impl ForwardingScreen {
                     if screen.read_statuses(cx) {
                         cx.notify();
                     }
-                    !screen.pending.is_empty()
+                    !screen.starting.is_empty()
                         || screen.statuses.values().any(|s| is_started(Some(s)))
                 });
                 if !matches!(more, Ok(true)) {
@@ -425,7 +444,7 @@ impl ForwardingScreen {
 
     /// Double click and the menu: starts a stopped rule, stops a started one.
     pub fn toggle(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if is_started(self.statuses.get(&id)) {
+        if self.is_running(id) {
             self.stop(id, cx);
         } else {
             self.start(id, window, cx);
@@ -433,7 +452,9 @@ impl ForwardingScreen {
     }
 
     /// Starts a rule on its host's connection; a failure is shown on the
-    /// card (and in a toast: the card may be out of view).
+    /// card (and in a toast: the card may be out of view). A rule that
+    /// fails is stopped, so it does not come up later on its own (a retry
+    /// of its host's connection would bring it up).
     pub fn start(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let Some(rule) = self.rule(id).cloned() else {
             return;
@@ -441,9 +462,11 @@ impl ForwardingScreen {
         let Some(manager) = crate::sessions::ui::manager(cx) else {
             return;
         };
-        if !self.pending.insert(id) {
+        if !self.starting.insert(id) {
             return;
         }
+        self.failures.remove(&id);
+        self.stop_after.remove(&id);
         let started = manager.forward_start(&rule);
         self.statuses.insert(id, RuleStatus::Starting);
         self.poll_if_needed(cx);
@@ -451,37 +474,66 @@ impl ForwardingScreen {
         cx.spawn_in(window, async move |this, cx| {
             let status = started.await;
             let _ = this.update_in(cx, |screen, window, cx| {
-                screen.pending.remove(&id);
-                tracing::info!(
-                    running = matches!(status, RuleStatus::Running(_)),
-                    "forwarding rule started"
-                );
-                if let (StatusTone::Error, text) = status_text(Some(&status)) {
-                    crate::shell::show_toast(text, window, cx);
-                }
-                screen.statuses.insert(id, status);
-                screen.read_statuses(cx);
-                screen.poll_if_needed(cx);
-                cx.notify();
+                screen.started(id, status, window, cx)
             });
         })
         .detach();
     }
 
-    /// Stops a rule (its host's connection closes with its last rule).
+    fn started(
+        &mut self,
+        id: Uuid,
+        status: RuleStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.starting.remove(&id);
+        tracing::info!(
+            running = matches!(status, RuleStatus::Running(_)),
+            "forwarding rule started"
+        );
+        // Stopped or removed meanwhile: down it goes.
+        let stop = self.stop_after.remove(&id) || self.rule(id).is_none();
+        let failed = matches!(status, RuleStatus::Failed(_) | RuleStatus::ConnectFailed(_));
+        if (stop || failed)
+            && let Some(manager) = crate::sessions::ui::manager(cx)
+        {
+            // The work runs on the session layer's runtime.
+            drop(manager.forward_stop(id));
+        }
+        if failed && !stop {
+            let cancelled =
+                status == RuleStatus::ConnectFailed(shellpp_ssh::FailureKind::Cancelled);
+            if !cancelled && let (StatusTone::Error, text) = status_text(Some(&status)) {
+                crate::shell::show_toast(text, window, cx);
+            }
+            self.failures.insert(id, status);
+        }
+        self.statuses.remove(&id);
+        self.read_statuses(cx);
+        if self.restart_after.remove(&id) && !stop {
+            self.restart(id, window, cx);
+        }
+        self.poll_if_needed(cx);
+        cx.notify();
+    }
+
+    /// Stops a rule (its host's connection closes with its last rule). A
+    /// start in flight is stopped too, and again once it ends.
     pub fn stop(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(manager) = crate::sessions::ui::manager(cx) else {
             return;
         };
-        if !self.pending.insert(id) {
-            return;
+        if self.starting.contains(&id) {
+            self.stop_after.insert(id);
         }
+        self.restart_after.remove(&id);
+        self.failures.remove(&id);
         let stopped = manager.forward_stop(id);
         cx.notify();
         cx.spawn(async move |this, cx| {
             stopped.await;
             let _ = this.update(cx, |screen, cx| {
-                screen.pending.remove(&id);
                 screen.statuses.remove(&id);
                 screen.read_statuses(cx);
                 cx.notify();
@@ -496,7 +548,7 @@ impl ForwardingScreen {
         let Some(rule) = self.rule(id) else {
             return;
         };
-        let body = strings::remove_body(&card_title(rule), is_started(self.statuses.get(&id)));
+        let body = strings::remove_body(&card_title(rule), self.is_running(id));
         let screen = cx.entity().downgrade();
         view::open_remove_confirmation(body, window, cx, move |window, cx| {
             let _ = screen.update(cx, |screen, cx| screen.remove(id, window, cx));
@@ -505,9 +557,9 @@ impl ForwardingScreen {
 
     /// Removes a rule now (after the confirmation) and shows the Undo toast.
     pub fn remove(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.statuses.contains_key(&id) {
-            self.stop(id, cx);
-        }
+        // Whoever started it (this screen or an autostart), it stops.
+        self.stop(id, cx);
+        self.failures.remove(&id);
         let removed = self
             .state
             .update(cx, |state, cx| state.delete_records(vec![id], cx));
@@ -597,10 +649,18 @@ impl ForwardingScreen {
             Ok(view) => {
                 let id = view.record.record_id;
                 tracing::info!(created = record_id.is_none(), "forwarding rule saved");
-                let was_started = is_started(self.statuses.get(&id));
+                // The session layer's status: the rule may have autostarted.
+                let was_started = is_started(
+                    crate::sessions::ui::manager(cx)
+                        .and_then(|manager| manager.forward_status(id))
+                        .as_ref(),
+                );
+                let in_flight = self.starting.contains(&id);
                 self.reload(cx);
                 self.select(Some(id), window, cx);
-                if was_started {
+                if in_flight {
+                    self.restart_after.insert(id);
+                } else if was_started {
                     self.restart(id, window, cx);
                 } else if start {
                     self.start(id, window, cx);
@@ -622,11 +682,9 @@ impl ForwardingScreen {
             return;
         };
         let stopped = manager.forward_stop(id);
-        self.pending.insert(id);
         cx.spawn_in(window, async move |this, cx| {
             stopped.await;
             let _ = this.update_in(cx, |screen, window, cx| {
-                screen.pending.remove(&id);
                 screen.statuses.remove(&id);
                 screen.start(id, window, cx);
             });

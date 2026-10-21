@@ -898,14 +898,15 @@ impl SessionManager {
     /// (UI 9.4, more than 4 targets; the table and the confirmation are the
     /// interface's). Progress goes to `events`; the results are in host
     /// order. The connections use only saved credentials and known host
-    /// keys, and close when their command ended.
-    pub async fn run_on_hosts(
+    /// keys, and close when their command ended. The work starts now; the
+    /// future only waits for it.
+    pub fn run_on_hosts(
         &self,
         script: String,
         hosts: Vec<RecordRef>,
         timeout: Duration,
         events: Option<mpsc::UnboundedSender<shellpp_ssh::batch::BatchEvent>>,
-    ) -> Vec<shellpp_ssh::batch::TargetOutcome> {
+    ) -> impl std::future::Future<Output = Vec<shellpp_ssh::batch::TargetOutcome>> + 'static {
         // On the session layer's runtime: the caller may be any executor.
         let shared = Arc::clone(&self.shared);
         let run = async move {
@@ -920,7 +921,8 @@ impl SessionManager {
                 .collect();
             shellpp_ssh::batch::run(targets, script, timeout, SNIPPET_OUTPUT_LIMIT, events).await
         };
-        self.shared.rt.spawn(run).await.unwrap_or_default()
+        let work = self.shared.rt.spawn(run);
+        async move { work.await.unwrap_or_default() }
     }
 
     /// The lock state changed (call it from the app's lock events).
