@@ -95,7 +95,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (144 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (146 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -202,7 +202,7 @@ $stage5States = @('forwarding-empty', 'forwarding-cards', 'forwarding-form', 'sn
     'snippet-variables', 'snippet-confirm', 'snippet-results', 'shell-history')
 # Stage 6 (run 3): the Logs screen and the Logs settings (ShotState::Logs,
 # SettingsLogs).
-$stage6States = @('logs', 'settings-logs')
+$stage6States = @('logs', 'settings-logs', 'settings-shortcuts')
 $allStates += $stage6States
 $allStates += $stage5States
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus

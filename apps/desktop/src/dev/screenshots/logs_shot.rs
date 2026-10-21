@@ -16,7 +16,11 @@ use crate::shell::{Section, TopTab};
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 2] = [ShotState::Logs, ShotState::SettingsLogs];
+pub const STATES: [ShotState; 3] = [
+    ShotState::Logs,
+    ShotState::SettingsLogs,
+    ShotState::SettingsShortcuts,
+];
 
 fn not_reached(state: ShotState, reason: &str) -> ScreenshotError {
     ScreenshotError::state(state, reason)
@@ -99,7 +103,12 @@ pub async fn reach(
             cx.update(|cx| screen.update(cx, |screen, cx| screen.select(Some(first), cx)));
             settle(cx, handle).await
         }
-        ShotState::SettingsLogs => {
+        ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
+            let nav = if shot == ShotState::SettingsLogs {
+                "settings-nav-logs"
+            } else {
+                "settings-nav-shortcuts"
+            };
             let state = state.clone();
             cx.update_window(handle, |_, window, cx| {
                 screen.update(cx, |screen, cx| screen.select(None, cx));
@@ -109,7 +118,7 @@ pub async fn reach(
             settle(cx, handle).await?;
             cx.update_window(handle, |_, window, cx| {
                 window.render_frame(cx);
-                window.click("settings-nav-logs", cx);
+                window.click(nav, cx);
             })
             .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
@@ -127,6 +136,7 @@ pub fn check(
     let wanted: &[&str] = match shot {
         ShotState::Logs => &["log-rows", "log-panel"],
         ShotState::SettingsLogs => &["settings-logs"],
+        ShotState::SettingsShortcuts => &["settings-shortcuts"],
         _ => return Err(not_reached(shot, "not a stage 6 state")),
     };
     for id in wanted {

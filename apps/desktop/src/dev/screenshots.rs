@@ -260,6 +260,8 @@ pub enum ShotState {
     Logs,
     /// The Logs section of the Settings window (UI 12.6).
     SettingsLogs,
+    /// The Shortcuts section of the Settings window (UI 12.5).
+    SettingsShortcuts,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -370,7 +372,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 66] = [
+    pub const ALL: [Self; 67] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -406,6 +408,7 @@ impl ShotState {
         Self::ShellHistory,
         Self::Logs,
         Self::SettingsLogs,
+        Self::SettingsShortcuts,
         Self::TagFilter,
         Self::TagChips,
         Self::ShowMore,
@@ -525,6 +528,7 @@ impl ShotState {
             Self::ShellHistory => "shell-history",
             Self::Logs => "logs",
             Self::SettingsLogs => "settings-logs",
+            Self::SettingsShortcuts => "settings-shortcuts",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1495,7 +1499,7 @@ pub async fn reach_state(
         | ShotState::ShellHistory => {
             snippets_shot::reach(cx, handle, root, state, shot_state).await
         }
-        ShotState::Logs | ShotState::SettingsLogs => {
+        ShotState::Logs | ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
             logs_shot::reach(cx, handle, root, state, shot_state).await
         }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
@@ -1702,7 +1706,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SnippetConfirm
             | ShotState::SnippetResults
             | ShotState::ShellHistory => Err("checked with the stage 5 screens"),
-            ShotState::Logs | ShotState::SettingsLogs => Err("checked with the stage 6 screens"),
+            ShotState::Logs | ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
+                Err("checked with the stage 6 screens")
+            }
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
