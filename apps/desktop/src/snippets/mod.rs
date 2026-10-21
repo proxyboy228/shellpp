@@ -24,6 +24,7 @@
 mod form;
 pub mod history;
 mod run;
+pub mod shell_highlight;
 pub mod strings;
 mod view;
 

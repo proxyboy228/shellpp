@@ -224,7 +224,13 @@ fn a_snippet_is_created_with_its_package_tags_and_targets(cx: &mut TestAppContex
         Some(strings::ERROR_SCRIPT)
     );
     ui.type_into(cx, "snippet-label", "Restart nginx");
+    // Tags are chips (D74): a comma adds "web", Enter adds "deploy".
     ui.type_into(cx, "snippet-tags", "web, deploy");
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert_eq!(
+        form.read_with(cx, |form, _| form.tags().to_vec()),
+        ["web", "deploy"]
+    );
     ui.type_into(cx, "snippet-script", "sudo systemctl restart {{service}}");
     assert!(ui.visible(cx, "snippet-variables"));
     ui.click(cx, "snippet-package");
@@ -719,5 +725,61 @@ fn a_snippet_from_history_counts_as_not_saved(cx: &mut TestAppContext) {
     ui.click(cx, "snippet-leave-save");
     assert!(!ui.visible(cx, "snippet-panel"));
     assert_eq!(ui.snippets(cx)[0].script, "uptime");
+    ui.finish(cx);
+}
+
+/// D74: tags are chips with the vault's other tags as suggestions; × and
+/// Backspace in the empty field remove one; the highlighted script is
+/// stored as typed.
+#[gpui_kit::test]
+fn tags_are_chips_and_the_script_keeps_its_text(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[json!({"address": "web.example.com"})]);
+    ui.save(
+        cx,
+        json!({"script": "uptime", "tags": ["production", "web"]}),
+    );
+    ui.click(cx, "snippet-new");
+    let form = ui.form(cx);
+    let tags = |cx: &mut TestAppContext| form.read_with(cx, |form, _| form.tags().to_vec());
+    // Typed into the tag field as it is (`type_into` clears it with
+    // Backspace, which in an empty tag field takes the last chip).
+    let type_tag = |cx: &mut TestAppContext, text: &'static str| {
+        ui.frame(cx, |window, cx| {
+            window.click("snippet-tags", cx);
+            window.input(text, cx);
+        })
+    };
+    // A suggestion from the other snippet.
+    type_tag(cx, "prod");
+    assert!(ui.visible(cx, "snippet-tag-suggest-0"));
+    ui.click(cx, "snippet-tag-suggest-0");
+    assert_eq!(tags(cx), ["production"]);
+    // A new one with Enter; the same one again is not added twice.
+    type_tag(cx, "db");
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    type_tag(cx, "DB");
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert_eq!(tags(cx), ["production", "db"]);
+    // Backspace in the empty field takes the last chip; × takes any.
+    ui.frame(cx, |window, cx| {
+        window.click("snippet-tags", cx);
+        window.press("backspace", cx);
+    });
+    assert_eq!(tags(cx), ["production"]);
+    ui.click(cx, "snippet-tag-remove-0");
+    assert!(tags(cx).is_empty());
+    // The script: shell highlighting colors it, the text stays as typed.
+    let script = "if [ -f \"$HOME/{{file}}\" ]; then cat 'x' # read\nfi";
+    ui.type_into(cx, "snippet-script", script);
+    assert_eq!(form.read_with(cx, |form, cx| form.script_text(cx)), script);
+    type_tag(cx, "ops");
+    ui.click(cx, "snippet-create");
+    let saved = ui
+        .snippets(cx)
+        .into_iter()
+        .find(|snippet| snippet.tags == ["ops"])
+        .expect("the new snippet");
+    assert_eq!(saved.script, script);
+    assert_eq!(saved.variables, ["file"]);
     ui.finish(cx);
 }

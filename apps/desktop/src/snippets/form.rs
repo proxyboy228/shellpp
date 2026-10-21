@@ -1,27 +1,41 @@
 //! The snippet panel's form (UI 9.3): description, package, tags, script
 //! and targets. Run and Save sit in the panel's footer (the screen's).
 //!
-//! Tags are typed as one comma-separated field (the chips of the host
-//! panel are not shared yet, D66). The script field is monospaced; the
+//! Tags are chips (D74): Enter or a comma adds the typed tag, the
+//! suggestions are the tags of the vault's other snippets, × and
+//! Backspace in the empty field remove one. The script is a monospaced
+//! editor with the shell highlighting of [`super::shell_highlight`]; the
 //! `{{name}}` variables it holds are listed under it.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Context, Entity, IntoElement, Render, Subscription, Window, div, px};
+use gpui::{
+    AnyElement, App, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription,
+    Window, div, px,
+};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::input::{InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{
+    Backspace, Editor, EditorState, InputEvent, InputHighlighter, InputState,
+};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use serde_json::{Map, Value, json};
 use shellpp_core::error::{FieldError, ValidationReason};
 use shellpp_core::service::snippets::SnippetView;
 use uuid::Uuid;
 
+use super::shell_highlight::{self, ShellHighlighter};
 use super::strings;
+use crate::panels::picker::{self, PickValue, PickerRow};
 use crate::panels::widgets;
 use crate::state::AppState;
+use crate::state::records_edit::{has_tag, normalize_tag};
 use crate::theme::{self, metrics};
+
+/// The height of the script editor: six lines, as the field it replaced.
+const SCRIPT_HEIGHT: gpui::Pixels = px(128.);
 
 /// Whether the form makes a new snippet or edits a saved one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +85,10 @@ fn reason_text(reason: ValidationReason) -> &'static str {
 pub struct SnippetForm {
     mode: FormMode,
     label: Entity<InputState>,
-    tags: Entity<InputState>,
-    script: Entity<TextareaState>,
+    /// The tags as chips, and the field a new one is typed in.
+    tags: Vec<String>,
+    tag_input: Entity<InputState>,
+    script: Entity<EditorState>,
     package: Option<Uuid>,
     package_open: bool,
     targets: Vec<Uuid>,
@@ -103,7 +119,7 @@ impl SnippetForm {
     ) -> Self {
         let form = Self::build(
             FormMode::New,
-            (String::new(), String::new(), String::new()),
+            (String::new(), Vec::new(), String::new()),
             package,
             Vec::new(),
             state,
@@ -125,7 +141,7 @@ impl SnippetForm {
     ) -> Self {
         let mut form = Self::build(
             FormMode::New,
-            (String::new(), String::new(), command.to_owned()),
+            (String::new(), Vec::new(), command.to_owned()),
             None,
             host.into_iter().collect(),
             state,
@@ -163,7 +179,7 @@ impl SnippetForm {
             FormMode::Edit(snippet.record.record_id),
             (
                 snippet.label.clone().unwrap_or_default(),
-                snippet.tags.join(", "),
+                snippet.tags.clone(),
                 snippet.script.clone(),
             ),
             package,
@@ -188,7 +204,7 @@ impl SnippetForm {
 
     fn build(
         mode: FormMode,
-        (label, tags, script): (String, String, String),
+        (label, tags, script): (String, Vec<String>, String),
         package: Option<Uuid>,
         targets: Vec<Uuid>,
         state: Entity<AppState>,
@@ -200,28 +216,56 @@ impl SnippetForm {
                 .default_value(label)
                 .placeholder(strings::LABEL_PLACEHOLDER)
         });
-        let tags = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(tags)
-                .placeholder(strings::TAGS_PLACEHOLDER)
-        });
+        let tag_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(strings::TAGS_PLACEHOLDER));
         let script = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(6, 16)
+            EditorState::new(window, cx)
+                .language(shell_highlight::LANGUAGE)
+                .line_number(false)
+                .folding(false)
                 .default_value(script)
         });
+        script.update(cx, |editor, cx| {
+            editor.set_highlighter_factory(
+                Rc::new(|language: &str| {
+                    (language == shell_highlight::LANGUAGE)
+                        .then(|| Box::new(ShellHighlighter::default()) as Box<dyn InputHighlighter>)
+                }),
+                cx,
+            )
+        });
         let mut subscriptions = Vec::new();
-        for (input, member) in [(&label, "label"), (&tags, "tags")] {
-            subscriptions.push(cx.subscribe(
-                input,
-                move |form: &mut Self, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) {
-                        form.errors.remove(member);
-                        cx.notify();
+        subscriptions.push(
+            cx.subscribe(&label, |form: &mut Self, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    form.errors.remove("label");
+                    cx.notify();
+                }
+            }),
+        );
+        // Enter adds the typed tag; a comma adds what is before it.
+        subscriptions.push(cx.subscribe_in(
+            &tag_input,
+            window,
+            |form: &mut Self, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    let typed = form.tag_input.read(cx).value().to_string();
+                    form.add_tags(&typed, window, cx);
+                }
+                InputEvent::Change => {
+                    let typed = form.tag_input.read(cx).value().to_string();
+                    if let Some(comma) = typed.rfind(',') {
+                        form.add_tags(&typed[..comma], window, cx);
+                        let rest = typed[comma + 1..].trim_start().to_owned();
+                        form.tag_input
+                            .update(cx, |input, cx| input.set_value(rest, window, cx));
                     }
-                },
-            ));
-        }
+                    form.errors.remove("tags");
+                    cx.notify();
+                }
+                _ => {}
+            },
+        ));
         subscriptions.push(
             cx.subscribe(&script, |form: &mut Self, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -234,6 +278,7 @@ impl SnippetForm {
             mode,
             label,
             tags,
+            tag_input,
             script,
             package,
             package_open: false,
@@ -251,7 +296,7 @@ impl SnippetForm {
     fn values(&self, cx: &App) -> Values {
         Values {
             label: self.label.read(cx).value().trim().to_owned(),
-            tags: parse_tags(&self.tags.read(cx).value()),
+            tags: self.all_typed_tags(cx),
             script: self.script_text(cx),
             package: self.package,
             targets: self.targets.clone(),
@@ -279,6 +324,41 @@ impl SnippetForm {
 
     pub fn errors(&self) -> &BTreeMap<&'static str, &'static str> {
         &self.errors
+    }
+
+    /// The tags as chips (a tag still in the field is not one yet).
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+
+    /// The chips and what the tag field still holds: Save takes both.
+    fn all_typed_tags(&self, cx: &App) -> Vec<String> {
+        let mut tags = self.tags.clone();
+        for tag in parse_tags(&self.tag_input.read(cx).value()) {
+            if !has_tag(&tags, &tag) {
+                tags.push(tag);
+            }
+        }
+        tags
+    }
+
+    /// Every tag of the vault's snippets, once each, sorted (the
+    /// suggestions of the tag field).
+    fn vault_tags(&self, cx: &App) -> Vec<String> {
+        let state = self.state.read(cx);
+        let snippets = state
+            .core()
+            .zip(state.vault_id())
+            .and_then(|(core, vault)| core.snippets_list(vault).ok())
+            .unwrap_or_default();
+        let mut tags: Vec<String> = Vec::new();
+        for tag in snippets.into_iter().flat_map(|snippet| snippet.tags) {
+            if !has_tag(&tags, &tag) {
+                tags.push(tag);
+            }
+        }
+        tags.sort_by_key(|tag| tag.to_lowercase());
+        tags
     }
 
     pub fn script_text(&self, cx: &App) -> String {
@@ -314,7 +394,7 @@ impl SnippetForm {
         }) {
             data.insert("package_id".into(), json!(package));
         }
-        let tags = parse_tags(&self.tags.read(cx).value());
+        let tags = self.all_typed_tags(cx);
         if !tags.is_empty() {
             data.insert("tags".into(), json!(tags));
         }
@@ -360,6 +440,37 @@ impl SnippetForm {
             })
             .collect();
         cx.notify();
+    }
+
+    /// Adds the tags of `typed` (comma-separated) as chips; one the core
+    /// would refuse leaves its reason under the field.
+    pub fn add_tags(&mut self, typed: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let mut added = false;
+        for raw in typed.split(',').filter(|raw| !raw.trim().is_empty()) {
+            match normalize_tag(raw) {
+                Ok(tag) => {
+                    if !has_tag(&self.tags, &tag) {
+                        self.tags.push(tag);
+                    }
+                    added = true;
+                }
+                Err(reason) => {
+                    self.errors.insert("tags", reason_text(reason));
+                }
+            }
+        }
+        if added && !typed.contains(',') {
+            picker::clear_search(&self.tag_input, window, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn remove_tag(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.tags.len() {
+            self.tags.remove(index);
+            self.errors.remove("tags");
+            cx.notify();
+        }
     }
 
     pub fn set_package(&mut self, package: Option<Uuid>, cx: &mut Context<Self>) {
@@ -446,8 +557,8 @@ impl SnippetForm {
             .children(package_list);
         let variables = shellpp_core::snippet::variables(&self.script_text(cx));
         let danger = theme.danger;
-        let script = Textarea::new(&self.script)
-            .px(metrics::SPACE_3 - gpui_kit::component::Size::Medium.input_px())
+        let script = Editor::new(&self.script)
+            .h(SCRIPT_HEIGHT)
             .text_size(metrics::FONT_SIZE_DENSE)
             .font_family(crate::terminal::fonts::JETBRAINS_MONO)
             .bg(tokens.bg_input.hsla())
@@ -455,6 +566,7 @@ impl SnippetForm {
             .when(self.errors.contains_key("script"), |this| {
                 this.border_color(danger)
             });
+        let tags = self.render_tags(window, cx);
         widgets::block("snippet-form-main", None, cx)
             .child(widgets::field(
                 strings::LABEL,
@@ -475,19 +587,8 @@ impl SnippetForm {
                 cx,
             ))
             .child(
-                widgets::field(
-                    strings::TAGS,
-                    widgets::text_input(
-                        &self.tags,
-                        "snippet-tags",
-                        self.errors.contains_key("tags"),
-                        window,
-                        cx,
-                    ),
-                    self.errors.get("tags").copied(),
-                    cx,
-                )
-                .child(widgets::caption(strings::TAGS_NOTE, cx)),
+                widgets::field(strings::TAGS, tags, self.errors.get("tags").copied(), cx)
+                    .child(widgets::caption(strings::TAGS_NOTE, cx)),
             )
             .child(
                 widgets::field(
@@ -509,6 +610,96 @@ impl SnippetForm {
                     .test_support(),
                 ),
             )
+    }
+
+    /// The chips, the field and, while something is typed, the matching
+    /// tags of the vault's snippets (or "Create tag").
+    fn render_tags(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let chips: Vec<AnyElement> = self
+            .tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| {
+                let remove = widgets::remove_button(
+                    SharedString::from(format!("snippet-tag-remove-{index}")),
+                    cx,
+                )
+                .on_click(
+                    cx.listener(move |form, _: &ClickEvent, _, cx| form.remove_tag(index, cx)),
+                );
+                widgets::chip(
+                    SharedString::from(format!("snippet-tag-{index}")),
+                    tag.clone(),
+                    remove,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+        let query = self.tag_input.read(cx).value().trim().to_owned();
+        let suggestions = (!query.is_empty()).then(|| {
+            let all = self.vault_tags(cx);
+            let mut rows: Vec<PickerRow> = all
+                .iter()
+                .filter(|tag| picker::matches(&query, tag) && !has_tag(&self.tags, tag))
+                .take(8)
+                .enumerate()
+                .map(|(index, tag)| {
+                    PickerRow::new(
+                        format!("suggest-{index}"),
+                        PickValue::Tag(tag.clone()),
+                        tag.clone(),
+                    )
+                })
+                .collect();
+            if !has_tag(&all, &query) && !has_tag(&self.tags, &query) {
+                rows.push(PickerRow::new(
+                    "create",
+                    PickValue::Create(query.clone()),
+                    crate::panels::strings::create_tag(&query),
+                ));
+            }
+            picker::render_list(
+                "snippet-tag",
+                None,
+                rows,
+                window,
+                cx,
+                Rc::new(|form: &mut Self, value, window, cx| {
+                    if let PickValue::Tag(tag) | PickValue::Create(tag) = value {
+                        form.add_tags(&tag, window, cx);
+                        picker::clear_search(&form.tag_input, window, cx);
+                    }
+                }),
+            )
+        });
+        v_flex()
+            .id("snippet-tags-field")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_2)
+            // Backspace in the empty field removes the last chip (the field
+            // passes it on when there is nothing before the cursor).
+            .on_action(cx.listener(|form, _: &Backspace, _, cx| {
+                if form.tag_input.read(cx).value().is_empty() && !form.tags.is_empty() {
+                    let last = form.tags.len() - 1;
+                    form.remove_tag(last, cx);
+                } else {
+                    cx.propagate();
+                }
+            }))
+            .when(!chips.is_empty(), |this| {
+                this.child(h_flex().flex_wrap().gap(metrics::SPACE_1).children(chips))
+            })
+            .child(widgets::text_input(
+                &self.tag_input,
+                "snippet-tags",
+                self.errors.contains_key("tags"),
+                window,
+                cx,
+            ))
+            .children(suggestions)
+            .into_any_element()
     }
 
     fn render_targets(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1172,3 +1172,14 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.1; UI 8.1, 8.3; completes D66).
 - The diagram is drawn by the app (`forwarding/diagram.rs`): Lucide icons for this computer, the firewall, the SSH host and the service or the internet, arrows the way the forwarded connections go, and the participant that holds the port marked ("port", "SOCKS").
 
 **Spec impact:** none; UI 8.1 and 8.3 are followed as written.
+
+### 74. Tag chips and the highlighted script of a snippet (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 5.2; UI 9.3; completes D66).
+
+**Decision:**
+
+- Tags are chips, as in the host panel: Enter or a comma adds the typed tag (with the host tags' rule: trimmed, at most 64 characters, no commas; one that differs only in case is not added twice); while something is typed, the matching tags of the vault's other snippets are offered, and "Create tag" when none is that tag. × removes a chip; Backspace in the empty field removes the last one. A tag still in the field when the snippet is saved is saved too.
+- The script field is GPUI Kit's code editor (`Editor`) with the app's own shell highlighting (`snippets/shell_highlight.rs`) through its parser-independent `InputHighlighter`: comments, quoted strings, `$variables` and `${...}`, the snippet's `{{name}}` variables (also inside double quotes, in the theme's "embedded" color), shell keywords (`if`, `then`, `for`, `do`, `case`...), numbers and operators. No grammar crate: GPUI Kit's `tree-sitter` features are not exposed through `gpui-kit` (depending on `gpui-component` directly would break its one-dependency rule, D3) and would build C grammars. Highlighting only colors the text; the script is stored and run as typed. The editor shows no line numbers and no folding, six lines high.
+
+**Spec impact:** none; UI 9.3 is followed as written.

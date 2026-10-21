@@ -117,8 +117,9 @@ fn prepare(state: &Entity<AppState>, cx: &mut gpui::App) -> Option<Vec<SnippetVi
         .record
         .record_id;
     let snippets = [
-        json!({"label": "Restart nginx", "script": "sudo systemctl restart nginx\nsystemctl status nginx --no-pager",
-               "tags": ["web"], "target_host_ids": some}),
+        json!({"label": "Restart nginx",
+               "script": "sudo systemctl restart nginx && systemctl status nginx --no-pager # check\nif [ $? -ne 0 ]; then\n  journalctl -u nginx -n 50 \"--since=today\"\nfi",
+               "tags": ["web", "nginx"], "target_host_ids": some}),
         json!({"label": "Disk usage", "script": "df -h {{path}}", "target_host_ids": many}),
         json!({"script": "uptime"}),
         json!({"label": "Release", "script": "cd /srv/app && git pull && ./deploy.sh {{version}}",
