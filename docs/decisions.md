@@ -958,3 +958,17 @@ Status: run 2 decision, 2026-10-21 (plan, item 5.3, without its interface; D5 "t
 - Before this decision a host with Agent Forwarding forwarded the system agent; now it needs `agent_forward_system` for that.
 
 **Spec impact:** `docs/data-model.md` 7.3 gains `agent_forward_system` and `agent_confirm` (with the interface).
+
+### 61. Connections without a tab: forwarding rules and scripts on many hosts (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, items 5.7 and 5.8, without their screens).
+
+**Decision:**
+
+- The session layer opens a saved host's route without a tab for forwarding rules and for a script on many hosts: its jump hosts, its proxy, its saved credentials, the agent and the key files (passphrases remembered for this app session). With nobody to ask, a host key is accepted only when Known Hosts holds it (an unknown, changed or revoked key fails), prompts are cancelled, nothing is saved and the agent is never forwarded. The TOFU dialog of such a connection comes with the stage 4 service "SSH connection without a tab".
+- Forwarding rules of the personal vault run on one connection per host. Rules with `autostart_on_connect` start when a session to their host connects (its TOFU has saved the key by then); rules with `autostart_on_launch` start after unlock (D9). Team-vault rules never autostart (data-model 11). Locking does not stop running rules (sessions keep running too, UI 13.3); quitting does.
+- A script on more than 4 hosts runs in exec channels, at most 8 at a time, with its timeout per host (UI 9.4); 256 KiB of output kept per host. The table, the confirmation for 2+ hosts and the split tab for up to 4 hosts are the interface's.
+- The History tab's "Save" makes a snippet per (edited) command, targeting the host; a command the secret detector flags is left out; the hint is not shown again. Shell History lists every host's entries with a host filter (`history_search`).
+- Imported `LocalForward`, `RemoteForward` and `DynamicForward` become rules with `autostart_on_connect` (OpenSSH starts them with every connection).
+
+**Spec impact:** none (UI 8, 9 and data-model 11 are followed; the TOFU dialog without a tab is stage 4).

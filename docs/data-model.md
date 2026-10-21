@@ -493,7 +493,9 @@ UI 3.1 "SSH" block and "Show more". "Inherit" fields follow section 8.
 | `fido2_key_id` | ref(key)? | none | "+ → FIDO2 key": a key with an `sk-` algorithm; host only |
 | `jump_chain` | list<ref(host)>[8]? | inherit | Host Chaining; `[]` means direct |
 | `proxy` | object? | none | section 7.5 |
-| `agent_forwarding` | bool | `false` | UI 3.1 |
+| `agent_forwarding` | bool | `false` | UI 3.1; forwards the built-in agent (the Keychain's keys, D60) |
+| `agent_forward_system` | bool | `false` | also the system agent's keys (D60) [decision] |
+| `agent_confirm` | bool | `false` | every forwarded signature waits for the user's yes (D60) [decision] |
 | `startup_snippet_id` | ref(snippet)? | none | runs in the interactive session right after login; variables are asked as for any run |
 | `env` | list<env_var>[64] | `[]` | names unique (case-sensitive); sent as SSH `env` requests, which the server accepts only for names it allows |
 | `keepalive_s` | int[0..3600]? | the global value | D20; `0` = off |
