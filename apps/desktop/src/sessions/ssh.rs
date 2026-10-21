@@ -341,6 +341,7 @@ impl SshTask {
             connect_timeout: CONNECT_TIMEOUT,
             preferred_host_key_types: config.known_key_types.clone(),
             jump_hosts: Vec::new(),
+            forward_agent: None,
             proxy: config.proxy.as_ref().map(|proxy| ProxySpec {
                 kind: match proxy.kind {
                     shellpp_core::service::host_api::ProxyType::Http => ProxyKind::Http,
@@ -1186,6 +1187,7 @@ fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
         preferred_host_key_types: hop.known_key_types.clone(),
         jump_hosts: Vec::new(),
         proxy: None,
+        forward_agent: None,
     }
 }
 

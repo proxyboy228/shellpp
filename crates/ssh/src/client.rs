@@ -179,6 +179,10 @@ pub struct ConnectSpec {
     /// The proxy of the route's first connection: the first jump host, or
     /// this host when there is none (docs/data-model.md, section 7.3).
     pub proxy: Option<ProxySpec>,
+    /// What agent forwarding offers (stage 5: the built-in agent's keys,
+    /// optionally the system agent's, optionally confirmed). `None`: the
+    /// system agent of [`ConnectSpec::agent`], if any.
+    pub forward_agent: Option<crate::agent::ForwardedAgent>,
 }
 
 impl std::fmt::Debug for ConnectSpec {
@@ -572,6 +576,7 @@ async fn attempt(
         Arc::clone(interaction),
         auto_accept,
         spec.agent.clone(),
+        spec.forward_agent.clone(),
     ));
 
     let transport = open_transport(spec, interaction, via, deadline).await?;
@@ -981,7 +986,7 @@ impl Connection {
             }
         }
 
-        if request.agent_forwarding && core.shared.agent().is_some() {
+        if request.agent_forwarding && core.shared.forwarded_agent().is_some() {
             // Allowed before the request goes out: the server may open the
             // agent channel as soon as it accepted.
             core.shared.set_forwarding_requested(true);
@@ -1489,6 +1494,7 @@ mod tests {
             preferred_host_key_types: vec![],
             jump_hosts: Vec::new(),
             proxy: None,
+            forward_agent: None,
         };
         let future = connect(spec, Arc::new(Nothing));
         assert_send(&future);
@@ -1533,6 +1539,7 @@ mod tests {
             preferred_host_key_types: vec![],
             jump_hosts: Vec::new(),
             proxy: None,
+            forward_agent: None,
         };
         let text = format!("{spec:?}");
         assert!(!text.contains("example.com"));

@@ -84,6 +84,7 @@ async fn the_stage_5_lab() {
     rules_come_back_after_the_connection_drops(&lab).await;
     refused_environment_variables(&lab).await;
     a_command_on_six_hosts(&lab).await;
+    the_built_in_agent_signs_for_the_next_hop(&lab).await;
 }
 
 async fn two_jump_hosts_with_a_decision_on_each(lab: &Lab) {
@@ -463,4 +464,54 @@ async fn a_command_on_six_hosts(lab: &Lab) {
             "{name}: {text:?}"
         );
     }
+}
+
+struct LabKeys(Vec<Arc<russh::keys::PrivateKey>>);
+
+impl shellpp_ssh::AgentKeys for LabKeys {
+    fn keys(&self) -> Vec<Arc<russh::keys::PrivateKey>> {
+        self.0.clone()
+    }
+}
+
+/// Agent forwarding with the built-in agent: jump1 sees the key
+/// (`ssh-add -l`) and its own `ssh` logs in to app1 with it, so the
+/// signature made here is accepted by a real OpenSSH server.
+async fn the_built_in_agent_signs_for_the_next_hop(lab: &Lab) {
+    let key = russh::keys::PrivateKey::from_openssh(lab.key_user.1.as_bytes()).expect("lab key");
+    let fingerprint = key
+        .public_key()
+        .fingerprint(russh::keys::HashAlg::Sha256)
+        .to_string();
+    let (user, password) = &lab.password_user;
+    let connection = connect(
+        ConnectSpec {
+            forward_agent: Some(shellpp_ssh::ForwardedAgent {
+                keys: Arc::new(LabKeys(vec![Arc::new(key)])),
+                system: None,
+                confirm: None,
+            }),
+            ..spec(lab.jump1, Some(user), password_plan(password))
+        },
+        TestInteraction::accepting().as_dyn(),
+    )
+    .await
+    .expect("jump1");
+    let mut shell = connection
+        .open_shell(ShellRequest {
+            agent_forwarding: true,
+            ..shell_request()
+        })
+        .await
+        .expect("shell");
+    shell.writer().write(b"ssh-add -l\r").await.unwrap();
+    read_until(&mut shell, &fingerprint, SHORT).await;
+    let login = format!(
+        "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes \
+         -o LogLevel=ERROR {}@app1 'echo on-$(hostname)'\r",
+        lab.key_user.0
+    );
+    shell.writer().write(login.as_bytes()).await.unwrap();
+    read_until(&mut shell, "on-app1", Duration::from_secs(20)).await;
+    connection.disconnect().await;
 }

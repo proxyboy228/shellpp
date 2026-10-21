@@ -44,7 +44,7 @@ pub mod transfer;
 pub mod transfer_queue;
 mod transport;
 
-pub use agent::{AgentLocation, SystemAgent};
+pub use agent::{AgentKeys, AgentLocation, ConfirmSignature, ForwardedAgent, SystemAgent};
 pub use authorized_keys::{ExportOutcome, export_public_key};
 pub use client::{
     AuthMethod, AuthOutcome, AuthPlan, BoxFuture, ConnectSpec, ConnectStep, Connection, ExecOutput,

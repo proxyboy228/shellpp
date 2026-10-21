@@ -96,6 +96,7 @@ pub fn spec(addr: SocketAddr, username: Option<&str>, auth: AuthPlan) -> Connect
         preferred_host_key_types: Vec::new(),
         jump_hosts: Vec::new(),
         proxy: None,
+        forward_agent: None,
     }
 }
 

@@ -14,7 +14,7 @@ use russh::keys::PublicKeyOrCertificate;
 use russh::keys::ssh_key::{HashAlg, PublicKey};
 use tokio::sync::watch;
 
-use crate::agent::SystemAgent;
+use crate::agent::{ForwardedAgent, SystemAgent};
 use crate::client::{ConnectStep, HostKeyDecision, HostKeyInfo, Interaction};
 
 /// State shared between the handler (running in the russh session task)
@@ -30,8 +30,11 @@ pub(crate) struct Shared {
     /// `true` once the host key decision started; the handshake timeout does
     /// not run while the user decides.
     verifying: watch::Sender<bool>,
-    /// The system agent for forwarded channels.
+    /// The system agent (authentication; forwarded channels when no
+    /// `forwarded` agent is set).
     agent: Option<SystemAgent>,
+    /// What forwarded agent channels offer (stage 5: the built-in agent).
+    forwarded: Option<ForwardedAgent>,
     /// Agent forwarding was requested on a session channel of this connection.
     forwarding_requested: AtomicBool,
     /// The russh session ended (transport error or disconnect).
@@ -74,6 +77,7 @@ impl Shared {
         interaction: Arc<dyn Interaction>,
         auto_accept: Option<HostKeyInfo>,
         agent: Option<SystemAgent>,
+        forwarded: Option<ForwardedAgent>,
     ) -> Self {
         Self {
             interaction,
@@ -82,6 +86,7 @@ impl Shared {
             auto_accept,
             verifying: watch::Sender::new(false),
             agent,
+            forwarded,
             forwarding_requested: AtomicBool::new(false),
             transport_closed: AtomicBool::new(false),
             lost: watch::Sender::new(false),
@@ -128,8 +133,12 @@ impl Shared {
         self.verifying.subscribe()
     }
 
-    pub(crate) fn agent(&self) -> Option<&SystemAgent> {
-        self.agent.as_ref()
+    /// What a forwarded agent channel serves: the forwarded agent, else
+    /// the system agent alone; `None` when there is nothing to forward.
+    pub(crate) fn forwarded_agent(&self) -> Option<ForwardedAgent> {
+        self.forwarded
+            .clone()
+            .or_else(|| self.agent.clone().map(ForwardedAgent::system_only))
     }
 
     pub(crate) fn set_forwarding_requested(&self, requested: bool) {
@@ -289,7 +298,7 @@ impl russh::client::Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         let allowed = self.shared.forwarding_requested.load(Ordering::SeqCst);
-        match (allowed, self.shared.agent.clone()) {
+        match (allowed, self.shared.forwarded_agent()) {
             (true, Some(agent)) => {
                 reply.accept().await;
                 tracing::debug!("forwarded agent channel accepted");
