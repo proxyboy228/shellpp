@@ -65,6 +65,8 @@ pub const PRIVATE_KEY_NOT_COPIED: &str = "The private key could not be copied";
 pub const PRIVATE_KEY_NOT_SHOWN: &str = "The private key could not be read";
 pub const COPY_PUBLIC_KEY: &str = "Copy public key";
 pub const PUBLIC_KEY_COPIED: &str = "Public key copied";
+pub const COPY_FINGERPRINT: &str = "Copy fingerprint";
+pub const FINGERPRINT_COPIED: &str = "Fingerprint copied";
 pub const PUBLIC_KEY_MISSING: &str = "The public key could not be read from this key.";
 pub const NOT_PROTECTED: &str = "Not protected by a passphrase";
 pub const PASSPHRASE_SAVED: &str = "Protected by a passphrase, saved in the vault";
@@ -106,6 +108,8 @@ pub const BITS_4096: &str = "4096 bits";
 pub const LABEL_PLACEHOLDER: &str = "For example, work laptop";
 pub const FIELD_PASSPHRASE: &str = "Passphrase";
 pub const PASSPHRASE_OPTIONAL: &str = "Optional";
+pub const FIELD_PASSPHRASE_REPEAT: &str = "Repeat passphrase";
+pub const PASSPHRASE_REPEAT_PLACEHOLDER: &str = "The same passphrase again";
 pub const PASSPHRASE_STORE: &str = "Save in the vault";
 pub const PASSPHRASE_ASK: &str = "Ask on every connection";
 pub const GENERATE: &str = "Generate";
@@ -122,6 +126,15 @@ pub fn remove_body(label: &str) -> String {
 // Import (New key, 7.1, 7.3).
 pub const IMPORT_TITLE: &str = "New key";
 pub const IMPORT_HINT: &str = "Paste a private key, choose a file or drop one here.";
+pub const IMPORT_SECURITY_KEY_TITLE: &str = "FIDO2 key";
+pub const IMPORT_SECURITY_KEY_HINT: &str = "Paste or choose the private key file that \
+     ssh-keygen -t ed25519-sk (or ecdsa-sk) made. It holds only a handle: the key stays on \
+     the security key.";
+/// What Certificate and FIDO2 do not do yet, and when they will.
+pub const CERTIFICATE_LATER: &str =
+    "Certificates arrive in stage 4: a key's panel will show its principals, validity and CA.";
+pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Creating one here \
+     and signing in with it arrive in a later stage.";
 pub const IMPORT_TEXT_PLACEHOLDER: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
 pub const CHOOSE_FILE: &str = "Choose file…";
 pub const IMPORT_LABEL_PLACEHOLDER: &str = "From the key comment";
@@ -154,6 +167,11 @@ pub fn problem(problem: &KeyProblem) -> String {
         KeyProblem::NotAKey => "This is not a private key in a supported format \
              (OpenSSH, PEM or PuTTY .ppk)."
             .to_owned(),
+        KeyProblem::PublicKey => {
+            "This is a public key. Import the private key: the file of the same name \
+             without .pub."
+                .to_owned()
+        }
         KeyProblem::Damaged => "The key is damaged or incomplete.".to_owned(),
         KeyProblem::Algorithm(algorithm) if algorithm.is_empty() => {
             "This key type is not supported.".to_owned()
@@ -188,6 +206,7 @@ pub fn reason(field: &str, reason: ValidationReason) -> &'static str {
         ("passphrase", ValidationReason::TooLong) => "Use at most 1024 bytes.",
         ("passphrase", ValidationReason::NotAllowed) => "This key has no passphrase.",
         ("passphrase", _) => "The passphrase does not open this key.",
+        ("passphrase_repeat", _) => "The passphrases do not match.",
         _ => crate::panels::strings::reason(field, reason),
     }
 }

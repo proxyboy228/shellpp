@@ -464,8 +464,9 @@ impl KnownHostsScreen {
                 .flex_none()
                 .w(KEY_TYPE_COLUMN)
                 .into_any_element(),
-            secondary(view.fingerprint.clone())
+            crate::panels::widgets::fingerprint_line(view.fingerprint.clone())
                 .flex_1()
+                .text_color(theme.muted_foreground)
                 .into_any_element(),
             secondary(date_text(&view.created_at))
                 .flex_none()
@@ -725,17 +726,15 @@ impl KnownHostsScreen {
         let fingerprint = h_flex()
             .w_full()
             .gap(metrics::SPACE_2)
-            .items_start()
+            .items_center()
             .child(
-                div()
+                crate::panels::widgets::fingerprint_line(view.fingerprint.clone())
+                    .id("kh-fingerprint")
+                    .test_support()
                     .flex_1()
-                    .min_w_0()
                     .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                     .text_size(metrics::FONT_SIZE_DENSE)
-                    .text_color(theme.foreground)
-                    // A fingerprint is one word: let it wrap anywhere.
-                    .whitespace_normal()
-                    .child(view.fingerprint.clone()),
+                    .text_color(theme.foreground),
             )
             .child(
                 ControlButton::new("kh-copy-fingerprint", ControlKind::Ghost)

@@ -842,6 +842,23 @@ fn generate_key_offers_every_type_and_shows_progress(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// FIDO2 opens the import of a security key's file; Certificate stays
+/// disabled (run 3 polish).
+#[gpui_kit::test]
+fn fido2_opens_the_import_of_a_security_key(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, |_, _| {});
+    ui.click(cx, "kc-certificate");
+    assert!(!ui.visible(cx, "kc-import"));
+    ui.click(cx, "kc-fido2");
+    let form = ui
+        .screen
+        .read_with(cx, |screen, _| screen.import_form().cloned())
+        .expect("the import form");
+    assert!(form.read_with(cx, |form, _| form.is_security_key()));
+    assert!(ui.visible(cx, "kc-import"));
+    ui.finish(cx);
+}
+
 /// Every type generates a key of its algorithm; a passphrase with "Ask on
 /// every connection" encrypts the key without saving it.
 #[gpui_kit::test]
@@ -878,10 +895,27 @@ fn generated_keys_have_their_type_and_passphrase(cx: &mut TestAppContext) {
     ui.click(cx, "kc-new-key-menu");
     ui.click(cx, "kc-menu-generate");
     assert!(!ui.visible(cx, "kc-gen-passphrase-ask"));
-    ui.type_into(cx, "kc-gen-passphrase", &new_passphrase());
+    assert!(!ui.visible(cx, "kc-gen-passphrase-repeat"));
+    let passphrase = new_passphrase();
+    ui.type_into(cx, "kc-gen-passphrase", &passphrase);
     assert!(ui.visible(cx, "kc-gen-passphrase-store"));
     ui.click(cx, "kc-gen-passphrase-ask");
     ui.type_into(cx, "kc-gen-label", "Protected");
+    // The passphrase is typed twice: a typo is caught before the key exists.
+    ui.type_into(cx, "kc-gen-passphrase-repeat", "a typo");
+    ui.click(cx, "kc-gen-submit");
+    assert!(ui.keys(cx).iter().all(|key| key.label != "Protected"));
+    assert_eq!(
+        ui.screen
+            .read_with(cx, |screen, cx| screen.generate_form().map(|form| form
+                .read(cx)
+                .errors()
+                .get("passphrase_repeat")
+                .copied())),
+        Some(Some(shellpp_core::ValidationReason::Invalid))
+    );
+    ui.clear(cx, "kc-gen-passphrase-repeat");
+    ui.type_into(cx, "kc-gen-passphrase-repeat", &passphrase);
     ui.click(cx, "kc-gen-submit");
     let protected = ui.key_by_label(cx, "Protected");
     assert!(protected.encrypted);
@@ -1001,7 +1035,7 @@ fn import_explains_an_unknown_key(cx: &mut TestAppContext) {
     ui.paste_key(cx, &line);
     assert_eq!(
         form.read_with(cx, |form, _| form.inspection().clone()),
-        Inspection::Problem(KeyProblem::NotAKey)
+        Inspection::Problem(KeyProblem::PublicKey)
     );
     assert!(ui.visible(cx, "kc-import-unknown"));
     assert!(ui.visible(cx, "kc-import-reason"));
@@ -1348,15 +1382,24 @@ fn the_section_shows_the_screen_and_leaving_it_hides_the_key(cx: &mut TestAppCon
     assert!(app.visible(cx, "keychain-screen"));
     assert!(!app.visible(cx, "section-placeholder"));
     let deploy = app.deploy(cx);
+    // Without the panel Certificate and FIDO2 carry their labels.
+    let wide = app.bounds(cx, "kc-fido2").unwrap();
     app.click(cx, key_card_id(deploy.record_id));
-    // With the panel open the search wraps below the buttons instead of
-    // sliding under FIDO2.
+    // With the panel open Certificate and FIDO2 drop their labels, so the
+    // search stays on their row, at least 200 px wide (run 3 polish).
     let fido2 = app.bounds(cx, "kc-fido2").unwrap();
     let search = app.bounds(cx, "kc-search-field").unwrap();
+    assert!(fido2.size.width < wide.size.width, "{fido2:?} {wide:?}");
+    assert!(fido2.right() <= search.left(), "{fido2:?} {search:?}");
     assert!(
-        fido2.right() <= search.left() || fido2.bottom() <= search.top(),
+        (fido2.top() - search.top()).abs() < px(2.),
         "{fido2:?} {search:?}"
     );
+    assert!(search.size.width >= px(200.) - px(0.5), "{search:?}");
+    // The fingerprint is one line with its copy button.
+    assert!(app.visible(cx, "kc-key-copy-fingerprint"));
+    let line = app.bounds(cx, "kc-key-fingerprint").unwrap();
+    assert!(line.size.height < px(24.), "{line:?}");
     app.click(cx, "kc-key-show");
     assert!(app.visible(cx, "kc-key-private"));
     let screen = app.screen(cx);
@@ -1441,6 +1484,7 @@ fn pure_texts() {
     // Every refusal reason has its own sentence.
     for problem in [
         KeyProblem::NotAKey,
+        KeyProblem::PublicKey,
         KeyProblem::Damaged,
         KeyProblem::Algorithm("ssh-dss".into()),
         KeyProblem::RsaTooSmall,

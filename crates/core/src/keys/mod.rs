@@ -210,7 +210,7 @@ pub fn prepare(
 pub fn problem_field(problem: convert::KeyProblem) -> FieldError {
     use convert::KeyProblem;
     match problem {
-        KeyProblem::NotAKey | KeyProblem::Damaged => {
+        KeyProblem::NotAKey | KeyProblem::PublicKey | KeyProblem::Damaged => {
             FieldError::new("private_key", ValidationReason::Invalid)
         }
         KeyProblem::Algorithm(_)
@@ -229,7 +229,13 @@ pub fn problem_field(problem: convert::KeyProblem) -> FieldError {
 /// why it is not a usable key (the type "unknown" with the reason).
 pub fn inspect(raw: &str) -> Result<(convert::Format, bool), convert::KeyProblem> {
     let text = normalize_text(raw);
-    let (format, encrypted) = convert::detect(&text).ok_or(convert::KeyProblem::NotAKey)?;
+    let (format, encrypted) = convert::detect(&text).ok_or_else(|| {
+        if convert::is_public_key(&text) {
+            convert::KeyProblem::PublicKey
+        } else {
+            convert::KeyProblem::NotAKey
+        }
+    })?;
     if !encrypted {
         // Reads the whole key: damaged keys and refused algorithms show now.
         convert::to_openssh(&text, None).and_then(|openssh| {

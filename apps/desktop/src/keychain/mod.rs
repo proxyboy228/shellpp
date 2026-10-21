@@ -821,6 +821,15 @@ impl KeychainScreen {
         self.open_import_with(Some(folder), window, cx);
     }
 
+    /// FIDO2: the import form for a key that `ssh-keygen -t ed25519-sk`
+    /// made on a security key (its file holds a handle; D37).
+    pub fn open_import_security_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_import_with(None, window, cx);
+        if let Some(PanelContent::Import(form)) = &self.panel {
+            form.update(cx, |form, cx| form.set_security_key(cx));
+        }
+    }
+
     fn open_import_with(
         &mut self,
         folder: Option<Option<PathBuf>>,

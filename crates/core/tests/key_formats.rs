@@ -413,10 +413,28 @@ fn encrypted_pem_keys_are_stored_encrypted_with_the_same_passphrase() {
 fn unusable_texts_say_why() {
     let u = first_run();
     let inspect = shellpp_core::keys::inspect;
-    // Not a private key: a public key line, a certificate block, text.
+    // A public key instead of the private one: a `.pub` line (also with
+    // authorized_keys options), an RFC 4716 block, a PEM public key.
     let key = stage2::generate(stage2::KeyKind::Ed25519, "");
     let public = key.public_key().to_openssh().unwrap();
-    assert_eq!(inspect(&public), Err(KeyProblem::NotAKey));
+    assert_eq!(inspect(&public), Err(KeyProblem::PublicKey));
+    assert_eq!(
+        inspect(&format!("no-pty,restrict {public}")),
+        Err(KeyProblem::PublicKey)
+    );
+    assert_eq!(
+        inspect(
+            "---- BEGIN SSH2 PUBLIC KEY ----\nAAAAC3NzaC1lZDI1NTE5\n---- END SSH2 PUBLIC KEY ----\n"
+        ),
+        Err(KeyProblem::PublicKey)
+    );
+    assert_eq!(
+        inspect(&pem("PUBLIC KEY", &[0x30, 0x03, 0x02, 0x01, 0x00], &[])),
+        Err(KeyProblem::PublicKey)
+    );
+    // Not a key at all: a certificate block, text, a word that looks like
+    // an algorithm.
+    assert_eq!(inspect("ssh-ed25519 not-base64"), Err(KeyProblem::NotAKey));
     assert_eq!(
         inspect(&pem("CERTIFICATE", &[1, 2, 3], &[])),
         Err(KeyProblem::NotAKey)

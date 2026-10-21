@@ -57,10 +57,13 @@ impl Format {
 /// the type "unknown" (UI 7.2).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KeyProblem {
-    /// Not a private key in a known format (a public key, a certificate,
-    /// another file).
+    /// Not a private key in a known format (a certificate, another file).
     #[error("not a private key in a supported format")]
     NotAKey,
+    /// A public key (an OpenSSH `.pub` line, an RFC 4716 or a PEM public
+    /// key): the private key is the file next to it, without `.pub`.
+    #[error("a public key, not a private key")]
+    PublicKey,
     /// A known format whose content could not be decoded.
     #[error("the key is damaged or incomplete")]
     Damaged,
@@ -106,6 +109,38 @@ const PEM_PKCS8_ENCRYPTED: &str = "ENCRYPTED PRIVATE KEY";
 const PEM_SEC1: &str = "EC PRIVATE KEY";
 const PEM_OPENSSH: &str = "OPENSSH PRIVATE KEY";
 const PPK_PREFIX: &str = "PuTTY-User-Key-File-";
+
+/// Whether `text` (already normalized) is a public key: an OpenSSH line
+/// (`ssh-ed25519 AAAA… comment`, a `.pub` file, certificates included), an
+/// RFC 4716 block or a PEM `PUBLIC KEY`. Pasted instead of the private key,
+/// it gets its own message (UI 7.2).
+pub fn is_public_key(text: &str) -> bool {
+    let first = text.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(first) = first else {
+        return false;
+    };
+    if first.starts_with("---- BEGIN SSH2 PUBLIC KEY ----") {
+        return true;
+    }
+    if let Some(pem) = Pem::parse(text)
+        && matches!(pem.label, "PUBLIC KEY" | "RSA PUBLIC KEY")
+    {
+        return true;
+    }
+    // `algorithm base64 [comment]`, with an optional options prefix as in
+    // authorized_keys; the blob starts with the algorithm name's length.
+    let words: Vec<&str> = first.split_whitespace().take(3).collect();
+    words.windows(2).any(|pair| {
+        let (algorithm, blob) = (pair[0], pair[1]);
+        (algorithm.starts_with("ssh-")
+            || algorithm.starts_with("ecdsa-sha2-")
+            || algorithm.starts_with("sk-"))
+            && blob.starts_with("AAAA")
+            && blob
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+    })
+}
 
 /// The format of `text` (already normalized) and whether it needs a
 /// passphrase to be read; `None` when it is not a private key this module

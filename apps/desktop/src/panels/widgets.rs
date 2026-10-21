@@ -79,6 +79,19 @@ pub(crate) fn block(id: &'static str, title: Option<&'static str>, cx: &App) -> 
         })
 }
 
+/// A key fingerprint (`SHA256:…`) as one line: a narrow column
+/// cuts it in the middle, so both ends stay readable, and it never breaks
+/// at a `/` (run 3 polish, D64). The caller sets its font, size and color
+/// (monospaced in a panel, the list's font in a list row).
+pub(crate) fn fingerprint_line(text: impl Into<SharedString>) -> Div {
+    div()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis_middle()
+        .child(text.into())
+}
+
 /// A field caption (12 px, `--text-secondary`); file paths in it are in
 /// the monospaced font ([`text_with_paths`]).
 pub(crate) fn caption(text: impl Into<SharedString>, cx: &App) -> Div {

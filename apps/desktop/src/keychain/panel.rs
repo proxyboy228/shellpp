@@ -207,6 +207,16 @@ impl KeyPanel {
         }
     }
 
+    pub fn copy_fingerprint(
+        &mut self,
+        fingerprint: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.write_to_clipboard(ClipboardItem::new_string(fingerprint.to_owned()));
+        crate::shell::show_toast(strings::FINGERPRINT_COPIED, window, cx);
+    }
+
     /// Checks the typed label and schedules its save (UI 1.3).
     fn label_changed(&mut self, cx: &mut Context<Self>) {
         let text = self.label.read(cx).value().to_string();

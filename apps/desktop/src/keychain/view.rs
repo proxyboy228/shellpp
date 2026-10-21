@@ -44,8 +44,8 @@ const HEADING_HEIGHT: Pixels = px(40.);
 /// The tile of a list row (the 36 px card tile does not fit a 44 px row).
 const LIST_TILE_SIZE: Pixels = px(28.);
 /// The search field of the action bar takes the room left, between these
-/// widths (as on the Known Hosts screen).
-const SEARCH_MIN_WIDTH: Pixels = px(160.);
+/// widths (200 px: the owner's polish of run 3).
+const SEARCH_MIN_WIDTH: Pixels = px(200.);
 const SEARCH_MAX_WIDTH: Pixels = px(320.);
 /// Fixed list columns: a key's type, an identity's username and method.
 const TYPE_COLUMN: Pixels = px(140.);
@@ -319,8 +319,16 @@ impl KeychainScreen {
     }
 
     /// The New key split button (▾: Generate key, New identity), then
-    /// Certificate and FIDO2, shown disabled until they are built (D30).
-    fn render_bar_left(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Certificate (shown disabled until it is built, D30) and FIDO2 (the
+    /// import of a security key's file). Their tooltips say what does not
+    /// work yet. `compact`: only their icons, so that the search keeps its
+    /// room ([`Self::compact_bar`]).
+    fn render_bar_left(
+        &self,
+        compact: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
         let new_key = ControlButton::new("kc-new-key", ControlKind::Neutral)
@@ -359,38 +367,63 @@ impl KeychainScreen {
             .child(new_key_menu);
         // Certificate and FIDO2 are one group: both as wide as the wider.
         let width = controls::group_width(window, &[strings::CERTIFICATE, strings::FIDO2]);
+        let labelled = |button: ControlButton, label: &'static str| {
+            if compact {
+                button
+            } else {
+                button.label(label).min_w(width)
+            }
+        };
         h_flex()
             .id("kc-action-bar-left")
             .test_support()
             .flex_none()
             .gap(metrics::SPACE_2)
             .child(split)
-            .child(
+            .child(labelled(
                 ControlButton::new("kc-certificate", ControlKind::Neutral)
                     .icon(IconName::FileText)
-                    .label(strings::CERTIFICATE)
-                    .min_w(width)
+                    .tooltip(strings::CERTIFICATE_LATER)
                     .disabled(true),
-            )
-            .child(
+                strings::CERTIFICATE,
+            ))
+            .child(labelled(
                 ControlButton::new("kc-fido2", ControlKind::Neutral)
                     .icon(Lucide::Usb)
-                    .label(strings::FIDO2)
-                    .min_w(width)
-                    .disabled(true),
-            )
+                    .tooltip(strings::FIDO2_TOOLTIP)
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_import_security_key(window, cx)
+                    })),
+                strings::FIDO2,
+            ))
+    }
+
+    /// The narrowest the right group gets: the search at its minimum, the
+    /// view toggle (two buttons 4 px apart) and sort, with their gaps.
+    fn bar_right_min() -> Pixels {
+        SEARCH_MIN_WIDTH + metrics::SPACE_2 * 2. + metrics::HEIGHT_CONTROL * 3. + metrics::SPACE_1
+    }
+
+    /// Whether the bar cannot hold the labels of Certificate and FIDO2 next
+    /// to the search at its minimum: they show only their icons then, before
+    /// the search wraps below (an open panel narrows the bar).
+    pub(super) fn compact_bar(&self, window: &Window) -> bool {
+        let label = |labels: &[&str]| controls::group_width(window, labels).as_f32();
+        let gap = metrics::SPACE_2.as_f32();
+        let split = label(&[strings::NEW_KEY]) + 1. + metrics::HEIGHT_CONTROL.as_f32();
+        let pair = label(&[strings::CERTIFICATE, strings::FIDO2]);
+        let left = split + 2. * (gap + pair);
+        self.grid_width(window) < left + gap + Self::bar_right_min().as_f32()
     }
 
     /// New key, Certificate and FIDO2 on the left; search, view toggle and
-    /// sort on the right (7.1). In a narrow area the right group wraps below:
-    /// it never gets narrower than the search field's minimum and its
-    /// buttons, so it cannot slide under the left group.
+    /// sort on the right (7.1). In a narrow area the search narrows to its
+    /// minimum, then Certificate and FIDO2 drop their labels; only when that
+    /// is not enough the right group wraps below: it never gets narrower than
+    /// the search field's minimum and its buttons, so it cannot slide under
+    /// the left group.
     fn render_action_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Search, gap, view toggle (two buttons 4 px apart), gap, sort.
-        let right_min = SEARCH_MIN_WIDTH
-            + metrics::SPACE_2 * 2.
-            + metrics::HEIGHT_CONTROL * 3.
-            + metrics::SPACE_1;
+        let compact = self.compact_bar(window);
         h_flex()
             .id("kc-action-bar")
             .test_support()
@@ -398,13 +431,13 @@ impl KeychainScreen {
             .flex_wrap()
             .items_center()
             .gap(metrics::SPACE_2)
-            .child(self.render_bar_left(window, cx))
+            .child(self.render_bar_left(compact, window, cx))
             .child(
                 h_flex()
                     .id("kc-action-bar-right")
                     .test_support()
                     .flex_1()
-                    .min_w(right_min)
+                    .min_w(Self::bar_right_min())
                     .justify_end()
                     .items_center()
                     .gap(metrics::SPACE_2)
@@ -674,52 +707,44 @@ impl KeychainScreen {
                 .child(tile(Lucide::Key, metrics::HOST_TILE_SIZE))
                 .child(self.render_key_texts(view, cx))
                 .into_any_element(),
-            KeychainLayout::List => {
-                let secondary = |text: String| {
-                    div()
+            KeychainLayout::List => frame
+                .child(
+                    h_flex()
+                        .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .gap(metrics::SPACE_3)
+                        .items_center()
+                        .child(tile(Lucide::Key, LIST_TILE_SIZE))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child(key_title(view)),
+                        ),
+                )
+                .child(
+                    type_line(view, key_unknown_id(id), cx)
+                        .flex_none()
+                        .w(TYPE_COLUMN)
+                        .child(
+                            div()
+                                .id(key_subtitle_id(id))
+                                .test_support()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.muted_foreground)
+                                .child(key_type_text(view)),
+                        ),
+                )
+                .child(
+                    widgets::fingerprint_line(view.fingerprint.clone().unwrap_or_default())
+                        .flex_1()
                         .text_color(theme.muted_foreground)
-                        .child(text)
-                };
-                frame
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(metrics::SPACE_3)
-                            .items_center()
-                            .child(tile(Lucide::Key, LIST_TILE_SIZE))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground)
-                                    .child(key_title(view)),
-                            ),
-                    )
-                    .child(
-                        type_line(view, key_unknown_id(id), cx)
-                            .flex_none()
-                            .w(TYPE_COLUMN)
-                            .child(
-                                div()
-                                    .id(key_subtitle_id(id))
-                                    .test_support()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(theme.muted_foreground)
-                                    .child(key_type_text(view)),
-                            ),
-                    )
-                    .child(
-                        secondary(view.fingerprint.clone().unwrap_or_default())
-                            .flex_1()
-                            .into_any_element(),
-                    )
-                    .into_any_element()
-            }
+                        .into_any_element(),
+                )
+                .into_any_element(),
         }
     }
 
@@ -1394,10 +1419,32 @@ impl KeyPanel {
                 )
             })
             .when_some(view.fingerprint.clone(), |this, fingerprint| {
+                let copied = fingerprint.clone();
                 this.child(value_row(
                     "kc-key-fingerprint-row",
                     strings::FIELD_FINGERPRINT,
-                    mono("kc-key-fingerprint", fingerprint, cx),
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap(metrics::SPACE_2)
+                        .items_center()
+                        .child(
+                            widgets::fingerprint_line(fingerprint)
+                                .id("kc-key-fingerprint")
+                                .test_support()
+                                .flex_1()
+                                .font_family(crate::terminal::fonts::JETBRAINS_MONO)
+                                .text_size(metrics::FONT_SIZE_DENSE)
+                                .text_color(cx.theme().foreground),
+                        )
+                        .child(
+                            ControlButton::new("kc-key-copy-fingerprint", ControlKind::Ghost)
+                                .icon(Lucide::Copy)
+                                .tooltip(strings::COPY_FINGERPRINT)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.copy_fingerprint(&copied, window, cx)
+                                })),
+                        ),
                     cx,
                 ))
             })
@@ -1570,11 +1617,13 @@ impl Render for GenerateForm {
             cx,
         ));
         let passphrase_error = field_error(self.errors(), "passphrase");
+        let repeat_error = field_error(self.errors(), "passphrase_repeat");
         let has_passphrase = self.has_passphrase(cx);
         let passphrase_block = widgets::block("kc-gen-block-passphrase", None, cx)
             .child(widgets::field(
                 strings::FIELD_PASSPHRASE,
-                widgets::text_input(
+                widgets::text_input_with(
+                    Input::new(&self.passphrase).mask_toggle(),
                     &self.passphrase,
                     "kc-gen-passphrase",
                     passphrase_error.is_some(),
@@ -1584,6 +1633,23 @@ impl Render for GenerateForm {
                 passphrase_error,
                 cx,
             ))
+            // A typo in a new passphrase would lock the key for good: it is
+            // typed twice.
+            .when(has_passphrase, |this| {
+                this.child(widgets::field(
+                    strings::FIELD_PASSPHRASE_REPEAT,
+                    widgets::text_input_with(
+                        Input::new(&self.repeat).mask_toggle(),
+                        &self.repeat,
+                        "kc-gen-passphrase-repeat",
+                        repeat_error.is_some(),
+                        window,
+                        cx,
+                    ),
+                    repeat_error,
+                    cx,
+                ))
+            })
             .when(has_passphrase, |this| {
                 this.child(passphrase_choice(
                     "kc-gen",
@@ -1645,7 +1711,15 @@ impl Render for ImportForm {
         );
         let tokens = theme::tokens(cx);
         let form = cx.entity().downgrade();
-        let header = DetailsHeader::new(strings::IMPORT_TITLE).on_collapse(move |_, _, cx| {
+        let (title, hint) = if self.is_security_key() {
+            (
+                strings::IMPORT_SECURITY_KEY_TITLE,
+                strings::IMPORT_SECURITY_KEY_HINT,
+            )
+        } else {
+            (strings::IMPORT_TITLE, strings::IMPORT_HINT)
+        };
+        let header = DetailsHeader::new(title).on_collapse(move |_, _, cx| {
             let _ = form.update(cx, |form, cx| form.cancel(cx));
         });
         let importing = self.is_importing();
@@ -1749,7 +1823,7 @@ impl Render for ImportForm {
         };
         let key_block =
             widgets::block("kc-import-block-key", Some(strings::FIELD_PRIVATE_KEY), cx)
-                .child(widgets::caption(strings::IMPORT_HINT, cx))
+                .child(widgets::caption(hint, cx))
                 .child(
                     div()
                         .id("kc-import-text")
@@ -1805,7 +1879,8 @@ impl Render for ImportForm {
                 .child(widgets::caption(strings::NEEDS_PASSPHRASE, cx))
                 .child(widgets::field(
                     strings::FIELD_PASSPHRASE,
-                    widgets::text_input(
+                    widgets::text_input_with(
+                        Input::new(&self.passphrase).mask_toggle(),
                         &self.passphrase,
                         "kc-import-passphrase",
                         error.is_some(),

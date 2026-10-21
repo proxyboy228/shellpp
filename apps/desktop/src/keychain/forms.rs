@@ -45,7 +45,7 @@ fn errors_of(fields: Vec<shellpp_core::FieldError>) -> FieldErrors {
         .collect()
 }
 
-/// A passphrase input: masked, with no "show" toggle of its own.
+/// A passphrase input, masked; the view adds its show / hide button.
 fn masked_input<T>(
     placeholder: &'static str,
     window: &mut Window,
@@ -83,6 +83,8 @@ pub struct GenerateForm {
     rsa: KeyKind,
     pub(super) label: Entity<InputState>,
     pub(super) passphrase: Entity<InputState>,
+    /// The passphrase again: Generate checks that both agree.
+    pub(super) repeat: Entity<InputState>,
     save_passphrase: bool,
     errors: FieldErrors,
     generating: Option<Task<()>>,
@@ -103,6 +105,7 @@ impl GenerateForm {
         let label =
             cx.new(|cx| InputState::new(window, cx).placeholder(strings::LABEL_PLACEHOLDER));
         let passphrase = masked_input(strings::PASSPHRASE_OPTIONAL, window, cx);
+        let repeat = masked_input(strings::PASSPHRASE_REPEAT_PLACEHOLDER, window, cx);
         let subscriptions = vec![
             cx.subscribe(&label, |this: &mut Self, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -112,6 +115,11 @@ impl GenerateForm {
             }),
             cx.subscribe(&passphrase, |this: &mut Self, _, _: &InputEvent, cx| {
                 this.errors.remove("passphrase");
+                this.errors.remove("passphrase_repeat");
+                cx.notify();
+            }),
+            cx.subscribe(&repeat, |this: &mut Self, _, _: &InputEvent, cx| {
+                this.errors.remove("passphrase_repeat");
                 cx.notify();
             }),
         ];
@@ -123,6 +131,7 @@ impl GenerateForm {
             rsa: KeyKind::Rsa3072,
             label,
             passphrase,
+            repeat,
             save_passphrase: true,
             errors: FieldErrors::new(),
             generating: None,
@@ -204,6 +213,13 @@ impl GenerateForm {
             return;
         }
         let typed = Zeroizing::new(self.passphrase.read(cx).value().to_string());
+        let again = Zeroizing::new(self.repeat.read(cx).value().to_string());
+        if !typed.is_empty() && typed != again {
+            self.errors
+                .insert("passphrase_repeat".into(), ValidationReason::Invalid);
+            cx.notify();
+            return;
+        }
         let passphrase = (!typed.is_empty()).then(|| SecretString::from(typed.as_str()));
         let save = passphrase.is_some() && self.save_passphrase;
         self.errors.clear();
@@ -227,8 +243,9 @@ impl GenerateForm {
         self.generating = None;
         match result {
             Ok(result) => {
-                self.passphrase
-                    .update(cx, |input, cx| input.set_value("", window, cx));
+                for input in [&self.passphrase, &self.repeat] {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
                 cx.emit(KeychainEvent::Saved {
                     key_id: result.key.record_id,
                     created: result.created,
@@ -285,6 +302,8 @@ pub struct ImportForm {
     importing: Option<Task<()>>,
     /// "Import from ~/.ssh": what the folder holds.
     ssh: Option<SshScan>,
+    /// Opened by FIDO2: the form explains a security key's file.
+    security_key: bool,
     _scan: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -364,9 +383,20 @@ impl ImportForm {
             file_problem: None,
             importing: None,
             ssh,
+            security_key: false,
             _scan: scan,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Opened by FIDO2 (a security key's file).
+    pub fn is_security_key(&self) -> bool {
+        self.security_key
+    }
+
+    pub fn set_security_key(&mut self, cx: &mut Context<Self>) {
+        self.security_key = true;
+        cx.notify();
     }
 
     pub fn inspection(&self) -> &Inspection {
