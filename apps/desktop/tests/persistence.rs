@@ -85,6 +85,8 @@ fn full_draft(group: Uuid, bastion: Uuid, other_jump: Uuid) -> HostDraft {
         certificate_key_id: Some(Uuid::now_v7()),
         fido2_key_id: Some(Uuid::now_v7()),
         agent_forwarding: true,
+        agent_forward_system: true,
+        agent_confirm: true,
         startup_snippet_id: Some(Uuid::now_v7()),
         jump_chain: Some(vec![bastion, other_jump]),
         proxy_kind: ProxyKind::Socks5,
