@@ -53,6 +53,10 @@ $env:SHELLPP_DATA_DIR = "D:\shellpp-data"; cargo run -p shellpp-desktop
 
 The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELLPP_DATA_DIR` returns to the permanent profile.
 
+## Known limitations
+
+- SFTP: a file or folder name on the server that is not valid UTF-8 is shown with the replacement character `�` (U+FFFD) and cannot be opened, renamed or downloaded; a folder transfer leaves it out and lists it at the end. The SFTP library decodes names that way (`docs/decisions.md`, D45, D50).
+
 ## Specifications
 
 - [SPEC.md](SPEC.md): product specification, covering scope, principles, data model, security and sync.

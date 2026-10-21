@@ -895,3 +895,15 @@ Status: run 2 decision, 2026-10-21 (plan, item 3.3; D50, items 9 and 15; amends 
 - The call is the only `unsafe` code of the new platform module `apps/desktop/src/platform/drives.rs`, with its `SAFETY` comment and a Windows test that calls it; `windows-sys` (already in the lockfile through `crates/private-file`) becomes a Windows dependency of the desktop crate with the feature `Win32_Storage_FileSystem`.
 
 **Spec impact:** none (UI 5.3 does not say how the drives are found).
+
+### 56. Links and unreadable names in folder transfers (run 2)
+
+Status: run 2 decision, 2026-10-21 (plan, items 3.3 and 3.4; how D50, items 12 and 13, are built; amends D47).
+
+**Decision:**
+
+- A symbolic link inside a copied folder is decided by what it points to: a file is copied under the link's name as the target's content (`TreeSummary::links` counts them); a folder is left out; a missing or unreadable target is left out as a broken link. A lost connection or a timeout while the link is read ends the transfer as before.
+- `TreeSummary::skipped` lists what was left out by its path inside the folder (`a/link`) with the reason: a link to a folder, a broken link, a special file (device, socket, pipe), or a name that is not UTF-8 on the server. The transfer UI of stage 4 shows that list at the end of the transfer.
+- A name that is not UTF-8 on the server arrives in the listing with U+FFFD (russh-sftp decodes lossily, D45): such an entry that cannot be found under that name is left out of a download instead of ending it with "not found". The limitation is in the README ("Known limitations").
+
+**Spec impact:** none yet (UI 5.6, the transfer queue, comes with stage 4).

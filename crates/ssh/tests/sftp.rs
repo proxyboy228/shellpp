@@ -329,7 +329,7 @@ async fn trees_and_remote_to_remote(
     dir: &str,
     local: &Path,
 ) {
-    use shellpp_ssh::transfer::{copy_between, download_tree, upload_tree};
+    use shellpp_ssh::transfer::{SkipReason, copy_between, download_tree, upload_tree};
     // A local tree of small files in three folders.
     let tree = local.join("tree-up");
     for (n, folder) in ["", "a", "a/b"].iter().cycle().take(TREE_FILES).enumerate() {
@@ -345,10 +345,12 @@ async fn trees_and_remote_to_remote(
     assert_eq!(up.files, TREE_FILES);
     assert_eq!(up.folders, 3);
     assert_eq!(last, up.bytes);
-    // A link in the remote tree to a folder outside it is left out.
+    // Links in the remote tree (D50): to a folder outside it (left out), to
+    // a file outside it (copied as the file's content) and to nothing
+    // (left out); the left-out ones are listed by their path in the tree.
     let outside = shellpp_ssh::sftp::join(dir, "outside-tree");
     let script = format!(
-        "mkdir -p '{outside}' && echo secret > '{outside}/s.txt' && ln -s '{outside}' '{remote}/a/link'"
+        "mkdir -p '{outside}' && echo secret > '{outside}/s.txt' && ln -s '{outside}' '{remote}/a/link' && ln -s '{outside}/s.txt' '{remote}/a/file-link' && ln -s '{outside}/gone' '{remote}/broken' && touch \"{remote}/$(printf 'bad\\377')\""
     );
     let output = connection
         .exec(&script, std::time::Duration::from_secs(10), 4096)
@@ -359,13 +361,75 @@ async fn trees_and_remote_to_remote(
     let down = download_tree(sftp, &remote, &back, &mut |_| {})
         .await
         .expect("download tree");
-    assert_eq!(down.files, TREE_FILES);
+    assert_eq!(down.files, TREE_FILES + 1);
     assert_eq!(down.links, 1);
-    assert_eq!(down.bytes, up.bytes);
+    assert_eq!(down.bytes, up.bytes + "secret\n".len() as u64);
+    let mut skipped: Vec<(String, SkipReason)> = down
+        .skipped
+        .iter()
+        .map(|entry| (entry.path.clone(), entry.reason))
+        .collect();
+    skipped.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        skipped,
+        [
+            ("a/link".to_owned(), SkipReason::LinkToFolder),
+            ("bad\u{fffd}".to_owned(), SkipReason::NameNotUtf8),
+            ("broken".to_owned(), SkipReason::BrokenLink),
+        ]
+    );
     assert!(
         !back.join("a").join("link").exists(),
-        "the link is not followed"
+        "the link to a folder is not followed"
     );
+    assert_eq!(
+        std::fs::read_to_string(back.join("a").join("file-link")).unwrap(),
+        "secret\n",
+        "the link to a file arrives as its content"
+    );
+    // SFTP cannot reach that name to delete it either (the known limitation).
+    let output = connection
+        .exec(
+            &format!("rm -f \"{remote}/$(printf 'bad\\377')\""),
+            std::time::Duration::from_secs(10),
+            4096,
+        )
+        .await
+        .expect("exec");
+    assert_eq!(output.exit_status, Some(0));
+    // The same rule for an upload of a local tree with links.
+    #[cfg(unix)]
+    {
+        let linked = local.join("tree-links");
+        std::fs::create_dir_all(linked.join("sub")).unwrap();
+        std::fs::write(local.join("target.txt"), "pointed at").unwrap();
+        std::os::unix::fs::symlink(local.join("target.txt"), linked.join("to-file")).unwrap();
+        std::os::unix::fs::symlink(&tree, linked.join("sub").join("to-folder")).unwrap();
+        std::os::unix::fs::symlink(local.join("gone"), linked.join("broken")).unwrap();
+        let remote_links = shellpp_ssh::sftp::join(dir, "tree-links");
+        let up = upload_tree(sftp, &linked, &remote_links, &mut |_| {})
+            .await
+            .expect("upload tree with links");
+        assert_eq!((up.files, up.links), (1, 1));
+        let mut skipped: Vec<(String, SkipReason)> = up
+            .skipped
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.reason))
+            .collect();
+        skipped.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            skipped,
+            [
+                ("broken".to_owned(), SkipReason::BrokenLink),
+                ("sub/to-folder".to_owned(), SkipReason::LinkToFolder),
+            ]
+        );
+        let arrived = sftp
+            .stat(&shellpp_ssh::sftp::join(&remote_links, "to-file"))
+            .await
+            .expect("uploaded");
+        assert_eq!(arrived.kind, shellpp_ssh::EntryKind::File);
+    }
     assert_eq!(
         std::fs::read_to_string(back.join("a").join("b").join("f0002.txt")).unwrap(),
         "file 2"
