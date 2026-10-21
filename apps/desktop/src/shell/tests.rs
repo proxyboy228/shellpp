@@ -259,6 +259,31 @@ fn leaving_snippets_with_changes_not_saved_asks_first(cx: &mut TestAppContext) {
     ui.click("nav-hosts", cx);
     assert!(!ui.visible("snippet-leave-dialog", cx));
     assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Hosts);
+
+    // The Hosts shortcut asks too; Save saves, then goes.
+    ui.click("nav-snippets", cx);
+    ui.click("snippet-new", cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.click("snippet-script", cx);
+        window.input("df -h", cx);
+    })
+    .unwrap();
+    ui.frame(cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.dispatch_action(Box::new(super::actions::ShowHosts), cx)
+    })
+    .unwrap();
+    ui.frame(cx);
+    assert!(ui.visible("snippet-leave-dialog", cx));
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Snippets);
+    ui.click("snippet-leave-save", cx);
+    assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Hosts);
+    let saved = ui.state.read_with(cx, |state, _| {
+        let core = state.core().cloned().unwrap();
+        core.snippets_list(state.vault_id().unwrap()).unwrap()
+    });
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].script, "df -h");
     ui.finish(cx);
 }
 

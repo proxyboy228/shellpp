@@ -783,3 +783,41 @@ fn tags_are_chips_and_the_script_keeps_its_text(cx: &mut TestAppContext) {
     assert_eq!(saved.variables, ["file"]);
     ui.finish(cx);
 }
+
+/// D68, D69: the other ways of leaving the panel ask too: New snippet, Esc
+/// and the arrow keys on the cards.
+#[gpui_kit::test]
+fn every_way_of_leaving_the_panel_asks(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[json!({"address": "web.example.com"})]);
+    let a = ui
+        .save(cx, json!({"label": "A", "script": "uptime"}))
+        .record
+        .record_id;
+    let b = ui
+        .save(cx, json!({"label": "B", "script": "df -h"}))
+        .record
+        .record_id;
+    let selected = |cx: &mut TestAppContext| ui.screen.read_with(cx, |screen, _| screen.selected());
+    ui.click(cx, card_id(a));
+    ui.type_into(cx, "snippet-label", "A changed");
+    // New snippet.
+    ui.click(cx, "snippet-new");
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    ui.click(cx, "snippet-leave-stay");
+    assert_eq!(selected(cx), Some(a));
+    // Esc on the cards (a click on the open card keeps its form and takes
+    // the keyboard to the cards).
+    ui.click(cx, card_id(a));
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    ui.click(cx, "snippet-leave-stay");
+    assert!(ui.visible(cx, "snippet-panel"));
+    // The arrow keys move to the next card: asked first, then Discard.
+    ui.click(cx, card_id(a));
+    ui.frame(cx, |window, cx| window.press("right", cx));
+    assert!(ui.visible(cx, "snippet-leave-dialog"));
+    assert_eq!(selected(cx), Some(a));
+    ui.click(cx, "snippet-leave-discard");
+    assert_eq!(selected(cx), Some(b));
+    ui.finish(cx);
+}

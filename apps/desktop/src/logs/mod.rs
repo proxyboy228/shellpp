@@ -498,8 +498,21 @@ impl LogsScreen {
                 strings::FIELD_PROTOCOL,
                 entry.protocol.to_uppercase(),
             ))
-            .child(row("log-panel-started", strings::FIELD_STARTED, started))
-            .child(row("log-panel-ended", strings::FIELD_ENDED, ended))
+            .child(
+                row("log-panel-started", strings::FIELD_STARTED, started).when_some(
+                    crate::dates::timestamp_tooltip(&entry.started_at),
+                    |this, utc| this.tooltip(crate::dates::utc_tooltip(utc)),
+                ),
+            )
+            .child(
+                row("log-panel-ended", strings::FIELD_ENDED, ended).when_some(
+                    entry
+                        .ended_at
+                        .as_deref()
+                        .and_then(crate::dates::timestamp_tooltip),
+                    |this, utc| this.tooltip(crate::dates::utc_tooltip(utc)),
+                ),
+            )
             .child(row("log-panel-end", strings::FIELD_END, end_text(&entry)))
             .child(row(
                 "log-panel-device",

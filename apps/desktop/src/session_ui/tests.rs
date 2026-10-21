@@ -1773,6 +1773,11 @@ fn a_waiting_signature_marks_its_tab_and_notifies_an_unfocused_window(cx: &mut T
     assert!(!delivered[0].title.contains("SHA256"));
     // The key shows on the tab while another screen is open.
     assert!(ui.visible(&key, cx));
+    // The session's view changes while the question waits (the OS was
+    // detected, say): no second notification.
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert_eq!(cx.shown_system_notifications().len(), 1);
     // A click on the notification: the tab comes back.
     cx.simulate_system_notification_response(SystemNotificationResponse {
         tag: tag.clone(),
@@ -1783,6 +1788,29 @@ fn a_waiting_signature_marks_its_tab_and_notifies_an_unfocused_window(cx: &mut T
     // The answer withdraws the notification.
     ui.click("signature-deny", cx);
     assert!(cx.dismissed_system_notifications().contains(&tag));
+    assert!(cx.delivered_system_notifications().is_empty());
+
+    // The next question times out (the session layer withdraws it): the
+    // key and the notification go.
+    VisualTestContext::from_window(ui.handle, cx).deactivate_window();
+    ask(&mut view, 5);
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert_eq!(cx.delivered_system_notifications().len(), 1);
+    view.prompt = None;
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert!(!ui.visible(&key, cx));
+    assert!(cx.delivered_system_notifications().is_empty());
+
+    // A question waits and the tab closes: the notification goes with it.
+    ask(&mut view, 6);
+    pane.update(cx, |pane, cx| bridge::apply(pane, &view, &shown, cx));
+    ui.frame(cx);
+    assert_eq!(cx.delivered_system_notifications().len(), 1);
+    let shell = ui.shell(cx);
+    shell.update(cx, |shell, cx| shell.close_session(id, cx));
+    ui.frame(cx);
     assert!(cx.delivered_system_notifications().is_empty());
     ui.finish(cx);
 }

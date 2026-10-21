@@ -249,8 +249,8 @@ pub struct SessionPane {
     active: bool,
     /// The window the pane was last drawn in.
     window: Option<gpui::AnyWindowHandle>,
-    /// A system notification of the signature question is shown (D68).
-    signature_notice: bool,
+    /// The signature question a system notification was shown for (D68).
+    signature_notice: Option<u64>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -301,7 +301,7 @@ impl SessionPane {
             startup_asked: 0,
             startup_live: None,
             window: None,
-            signature_notice: false,
+            signature_notice: None,
             reconnect: None,
             ask: None,
             paste: None,
@@ -649,15 +649,19 @@ impl SessionPane {
         }
         self.ask = Some(Ask::Signature { id, fingerprint });
         self.focus_request = true;
-        self.notify_signature(cx);
+        self.notify_signature(id, cx);
         cx.notify();
     }
 
     /// While the pane's window is not focused, the signature question is
     /// also a system notification naming the host (D68): nothing of the
     /// key is in it. With no window known yet, any focused window of the
-    /// app counts.
-    fn notify_signature(&mut self, cx: &mut Context<Self>) {
+    /// app counts. Once per question: the same question shown again (the
+    /// session's view changed meanwhile) notifies nothing new.
+    fn notify_signature(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.signature_notice == Some(id) {
+            return;
+        }
         let active = cx.active_window();
         let focused = match self.window {
             Some(window) => active.is_some_and(|active| active.window_id() == window.window_id()),
@@ -672,12 +676,13 @@ impl SessionPane {
             body: strings::SIGN_NOTICE_BODY.into(),
             actions: Vec::new(),
         });
-        self.signature_notice = true;
+        self.signature_notice = Some(id);
     }
 
-    /// The question was answered or withdrawn: its notification goes too.
+    /// The question was answered or withdrawn, or the tab closes: its
+    /// notification goes too.
     fn withdraw_signature_notice(&mut self, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.signature_notice) {
+        if self.signature_notice.take().is_some() {
             cx.dismiss_system_notification(&signature_tag(cx.entity_id()));
         }
     }
@@ -754,6 +759,7 @@ impl SessionPane {
         self.closed = true;
         self.ticker = None;
         self.ask = None;
+        self.withdraw_signature_notice(cx);
         self.paste = None;
         if let Some(control) = self.control.clone() {
             control.close(cx);

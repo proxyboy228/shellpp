@@ -269,7 +269,7 @@ pub fn date_text(modified: Option<u64>) -> String {
 }
 
 /// The tooltip of a modification time: its full time in UTC.
-fn date_tooltip(modified: Option<u64>) -> Option<String> {
+pub fn date_tooltip(modified: Option<u64>) -> Option<String> {
     modified.map(|seconds| crate::dates::utc_text(UNIX_EPOCH + Duration::from_secs(seconds)))
 }
 

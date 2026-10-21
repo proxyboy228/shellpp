@@ -538,6 +538,11 @@ impl Transfers {
                 panel::date_text(modified)
             )
         });
+        // The dates' tooltips: their full UTC times (D71).
+        let copied_utc = panel::date_tooltip(job.entry.modified);
+        let here_utc = job
+            .existing
+            .and_then(|(_, modified)| panel::date_tooltip(modified));
         let runner = cx.entity().downgrade();
         let all = Arc::new(std::sync::atomic::AtomicBool::new(false));
         window.open_dialog(cx, move |dialog, _, cx| {
@@ -583,16 +588,24 @@ impl Transfers {
                         .when_some(here.clone(), |this, here| {
                             this.child(
                                 div()
+                                    .id("sftp-conflict-here")
                                     .text_size(metrics::FONT_SIZE_DENSE)
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!("{}: {here}", strings::CONFLICT_HERE)),
+                                    .child(format!("{}: {here}", strings::CONFLICT_HERE))
+                                    .when_some(here_utc.clone(), |this, utc| {
+                                        this.tooltip(crate::dates::utc_tooltip(utc))
+                                    }),
                             )
                         })
                         .child(
                             div()
+                                .id("sftp-conflict-copied")
                                 .text_size(metrics::FONT_SIZE_DENSE)
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!("{}: {copied}", strings::CONFLICT_COPIED)),
+                                .child(format!("{}: {copied}", strings::CONFLICT_COPIED))
+                                .when_some(copied_utc.clone(), |this, utc| {
+                                    this.tooltip(crate::dates::utc_tooltip(utc))
+                                }),
                         )
                         .child(
                             Checkbox::new("sftp-conflict-all")

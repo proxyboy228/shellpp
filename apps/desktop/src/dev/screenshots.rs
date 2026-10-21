@@ -1171,13 +1171,34 @@ impl Run {
             } else {
                 for (appearance, theme_name) in THEMES {
                     let file = file_name(size, theme_name, state);
-                    let ready = async {
-                        set_theme(cx, handle, appearance)?;
-                        reach_fresh_state(cx, handle, state).await?;
-                        settle(cx, handle).await?;
-                        check_state(cx, handle, &root, state)
-                    }
-                    .await;
+                    // The same limit and retry as a demo state (D72).
+                    let mut attempt = 0;
+                    let ready = loop {
+                        attempt += 1;
+                        mark_progress(Some(state));
+                        let timeout = cx.background_executor().timer(STATE_TIMEOUT);
+                        let try_reach = async {
+                            set_theme(cx, handle, appearance)?;
+                            reach_fresh_state(cx, handle, state).await?;
+                            settle(cx, handle).await?;
+                            check_state(cx, handle, &root, state)
+                        };
+                        let outcome =
+                            match futures::future::select(std::pin::pin!(try_reach), timeout).await
+                            {
+                                futures::future::Either::Left((outcome, _)) => outcome,
+                                futures::future::Either::Right(_) => Err(ScreenshotError::state(
+                                    state,
+                                    &format!("not reached in {} s", STATE_TIMEOUT.as_secs()),
+                                )),
+                            };
+                        match outcome {
+                            Err(error) if attempt == 1 => {
+                                complain(&format!("{file}: {error}; trying once more"));
+                            }
+                            outcome => break outcome,
+                        }
+                    };
                     if let Err(error) = ready {
                         errors.push(error);
                         continue;
