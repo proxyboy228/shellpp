@@ -293,6 +293,9 @@ async fn a_recursive_delete_leaves_link_targets_alone(
         .await
         .expect("exec");
     assert_eq!(output.exit_status, Some(0));
+    // The confirmation counts what the delete removes: x.txt and the link,
+    // sub and doomed itself; nothing behind the link.
+    assert_eq!(sftp.count_tree(&doomed).await.unwrap(), (2, 2));
     let removed = sftp.remove_tree(&doomed).await.expect("remove tree");
     assert_eq!(removed, 4, "sub/x.txt, sub, link, doomed");
     assert_eq!(sftp.stat(&doomed).await.err(), Some(SftpError::NotFound));

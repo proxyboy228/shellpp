@@ -479,6 +479,39 @@ impl Sftp {
         Ok(removed)
     }
 
+    /// What a delete of `path` would remove, for the confirmation of UI
+    /// 5.4 ("N files"): (files and links, folders), `path` included. Links
+    /// are counted, never entered.
+    pub async fn count_tree(&self, path: &str) -> Result<(usize, usize), SftpError> {
+        let path = trimmed(path);
+        if !self.is_real_dir(path).await? {
+            return Ok((1, 0));
+        }
+        let (mut files, mut folders) = (0, 0);
+        let mut stack = vec![path.to_owned()];
+        while let Some(dir) = stack.pop() {
+            folders += 1;
+            let items = self
+                .session
+                .read_dir(dir.as_str())
+                .await
+                .map_err(|error| self.fail(error))?;
+            for item in items {
+                let name = item.file_name();
+                if name == "." || name == ".." {
+                    continue;
+                }
+                let child = join(&dir, &name);
+                if item.file_type().is_dir() && self.is_real_dir(&child).await? {
+                    stack.push(child);
+                } else {
+                    files += 1;
+                }
+            }
+        }
+        Ok((files, folders))
+    }
+
     /// Whether the last block before `offset` of the remote `path` holds
     /// `local` (the same block of the local side). A remote file that is
     /// shorter does not; an error (a timeout, no permission) is returned, so
