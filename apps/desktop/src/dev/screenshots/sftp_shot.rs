@@ -255,7 +255,7 @@ async fn keychain(
             None,
         )
         .map_err(|_| not_reached(shot, "no CA key"))?;
-        let line = certificate_of(secrecy::ExposeSecret::expose_secret(&text), &ca.to_string())
+        let line = certificate_of(secrecy::ExposeSecret::expose_secret(&text), ca.as_ref())
             .ok_or_else(|| not_reached(shot, "no certificate"))?;
         let added =
             cx.update(|cx| state.update(cx, |state, cx| state.import_certificate(&line, cx)));

@@ -275,6 +275,13 @@ impl TransferQueue {
         }
     }
 
+    /// A new operation starts: an "apply to all" answer of an earlier one
+    /// no longer applies (UI 5.7: "the remaining conflicts of the same
+    /// operation").
+    pub fn forget_for_all(&mut self) {
+        self.for_all = None;
+    }
+
     /// The user's answer to a conflict; with `for_all`, it also answers the
     /// later conflicts of this queue. A skipped transfer ends; the others
     /// queue again (the runner starts them with the answer).
@@ -519,5 +526,19 @@ mod tests {
         assert_eq!(renamed(".bashrc", taken(&[])), ".bashrc (2)");
         assert_eq!(renamed("Makefile", taken(&[])), "Makefile (2)");
         assert_eq!(renamed("отчёт.txt", taken(&[])), "отчёт (2).txt");
+    }
+
+    #[test]
+    fn apply_to_all_ends_with_its_operation() {
+        let mut queue = TransferQueue::new(3, ConflictPolicy::Ask);
+        let first = queue.add("a.txt", Direction::Upload, Some(1));
+        queue.start_next();
+        assert_eq!(queue.conflict(first), ConflictOutcome::Ask);
+        queue.answer_conflict(first, ConflictChoice::Replace, true);
+        // The next operation asks again.
+        queue.forget_for_all();
+        let second = queue.add("a.txt", Direction::Upload, Some(1));
+        queue.start_next();
+        assert_eq!(queue.conflict(second), ConflictOutcome::Ask);
     }
 }

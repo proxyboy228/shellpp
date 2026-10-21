@@ -105,6 +105,13 @@ pub const CHANGED_ON_SERVER_TITLE: &str = "The file changed on the server";
 pub const KEEP_SERVER_FILE: &str = "Keep the server's file";
 pub const OVERWRITE: &str = "Overwrite";
 
+/// After "Keep the server's file".
+pub fn kept_server_file(name: &str) -> String {
+    format!(
+        "Saves of your copy of {name} are no longer uploaded. Open the file again to edit the server's version."
+    )
+}
+
 /// "Uploaded report.txt".
 pub fn uploaded_back(name: &str) -> String {
     format!("Uploaded {name}")
@@ -126,6 +133,30 @@ pub const UPLOAD: &str = "Upload";
 pub const DOWNLOAD: &str = "Download";
 pub const BETWEEN_HOSTS: &str = "Between hosts";
 pub const BETWEEN_HOSTS_FOLDERS: &str = "Folders cannot be copied between two hosts yet";
+pub const NOT_CONNECTED: &str = "The host is not connected";
+pub const SAME_FILE: &str = "The source and the target are the same file";
+pub const INTO_ITSELF: &str = "A folder cannot be copied into itself";
+pub const NAME_TAKEN: &str = "An item with this name exists";
+
+/// Why a folder transfer left an entry out (D56).
+pub fn skip_reason(reason: shellpp_ssh::transfer::SkipReason) -> &'static str {
+    use shellpp_ssh::transfer::SkipReason;
+    match reason {
+        SkipReason::LinkToFolder => "a link to a folder",
+        SkipReason::BrokenLink => "a broken link",
+        SkipReason::Special => "a special file",
+        SkipReason::NameNotUtf8 => "a name that is not UTF-8",
+    }
+}
+
+// Open of a file the system would run (security.md 11.4).
+pub const RUN_TITLE: &str = "Open a program file?";
+pub const RUN_OPEN: &str = "Open";
+
+/// "report.exe is a program file (.exe): opening it runs it."
+pub fn run_text(name: &str, extension: &str) -> String {
+    format!("{name} is a program file (.{extension}): opening it runs it on this computer.")
+}
 pub const COPY_LOCAL: &str = "Local copy";
 pub const QUEUED: &str = "Queued";
 pub const DONE: &str = "Done";

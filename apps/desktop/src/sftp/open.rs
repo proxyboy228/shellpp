@@ -32,8 +32,9 @@ pub struct Opened {
     copy: Arc<tokio::sync::Mutex<OpenedCopy>>,
     /// The local copy's path.
     path: PathBuf,
+    /// Its session: the channel is taken for each upload, so a reconnect's
+    /// new channel is used.
     handle: SessionHandle,
-    sftp: Arc<Sftp>,
     name: String,
     /// The file on the server changed: uploads wait for the user's answer
     /// (shared by the copies of this handle).
@@ -46,6 +47,82 @@ impl std::fmt::Debug for Opened {
             .field("blocked", &self.is_blocked())
             .finish_non_exhaustive()
     }
+}
+
+/// Marks a downloaded copy the way the system marks downloads (security.md
+/// 11.4): the Windows Mark of the Web, so the system's checks apply when a
+/// program opens it. Elsewhere nothing yet.
+pub fn mark_downloaded(path: &Path) {
+    #[cfg(windows)]
+    {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        if let Err(error) = std::fs::write(&stream, b"[ZoneTransfer]\r\nZoneId=3\r\n") {
+            tracing::warn!(kind = %error.kind(), "the downloaded copy was not marked");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+    }
+}
+
+/// "Open a program file?": Cancel or Open (security.md 11.4).
+pub fn confirm_run(
+    name: &str,
+    extension: &str,
+    window: &mut Window,
+    cx: &mut App,
+    on_open: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    use gpui::prelude::*;
+    use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex};
+
+    use crate::hosts::controls::{ControlButton, ControlKind};
+    use crate::theme::metrics;
+
+    let text = strings::run_text(&super::display_name(name), extension);
+    let on_open = std::rc::Rc::new(on_open);
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let on_open = on_open.clone();
+        dialog
+            .w(gpui::px(420.))
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(
+                gpui::div()
+                    .text_size(metrics::FONT_SIZE_TITLE)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(strings::RUN_TITLE),
+            )
+            .child(
+                gpui::div()
+                    .id("sftp-run-confirm")
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(text.clone()),
+            )
+            .footer(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        ControlButton::new("sftp-run-cancel", ControlKind::Neutral)
+                            .label(strings::CANCEL)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        ControlButton::new("sftp-run-open", ControlKind::Danger)
+                            .label(strings::RUN_OPEN)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                on_open(window, cx);
+                            }),
+                    ),
+            )
+    });
 }
 
 /// The program of "Program for Open", when one is set.
@@ -143,7 +220,18 @@ fn ask_overwrite(open: Opened, window: &mut Window, cx: &mut App) {
                     .child(
                         ControlButton::new("sftp-open-keep", ControlKind::Neutral)
                             .label(strings::KEEP_SERVER_FILE)
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                            .on_click({
+                                let name = name.clone();
+                                move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    // Its saves are not uploaded from now on.
+                                    crate::shell::show_toast(
+                                        strings::kept_server_file(&name),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
                     )
                     .child(
                         ControlButton::new("sftp-open-overwrite", ControlKind::Danger)
@@ -190,18 +278,16 @@ impl Opened {
             copy: self.copy.clone(),
             path: self.path.clone(),
             handle: self.handle.clone(),
-            sftp: self.sftp.clone(),
             name: self.name.clone(),
             blocked: self.blocked.clone(),
         }
     }
 
-    pub fn new(copy: OpenedCopy, handle: SessionHandle, sftp: Arc<Sftp>, name: String) -> Self {
+    pub fn new(copy: OpenedCopy, handle: SessionHandle, name: String) -> Self {
         Self {
             path: copy.local_path().to_path_buf(),
             copy: Arc::new(tokio::sync::Mutex::new(copy)),
             handle,
-            sftp,
             name,
             blocked: Arc::default(),
         }
@@ -219,7 +305,10 @@ impl Opened {
     /// on the server).
     async fn upload(&self, force: bool) -> Result<UploadOutcome, String> {
         let copy = self.copy.clone();
-        let sftp = self.sftp.clone();
+        let Some(sftp) = self.handle.sftp() else {
+            // Not connected now: the next check after a reconnect uploads.
+            return Ok(UploadOutcome::Unchanged);
+        };
         let work = self.handle.spawn(async move {
             let mut copy = copy.lock().await;
             copy.upload_back(&sftp, force)

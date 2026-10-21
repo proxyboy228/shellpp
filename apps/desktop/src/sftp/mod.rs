@@ -24,6 +24,42 @@ pub use screen::SftpScreen;
 
 use crate::theme::{self, metrics};
 
+/// A file name as the tab shows it (security.md 11.4): control and
+/// bidirectional override characters made visible as `<U+202E>`, so
+/// `photo\u{202e}gpj.exe` cannot pass for a picture.
+pub fn display_name(name: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    };
+    if !name.chars().any(hidden) {
+        return name.to_owned();
+    }
+    name.chars()
+        .map(|c| {
+            if hidden(c) {
+                format!("<U+{:04X}>", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+/// The extensions of files the system would run or install (security.md
+/// 11.4): Open asks first.
+pub const RUNNABLE: &[&str] = &[
+    "exe", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi",
+    "msp", "scr", "pif", "lnk", "url", "reg", "hta", "cpl", "jar", "app", "command", "sh",
+    "desktop", "appimage", "run", "pkg", "dmg",
+];
+
+/// The extension of `name` when the system would run such a file.
+pub fn runnable_extension(name: &str) -> Option<String> {
+    let extension = name.rsplit_once('.')?.1.trim().to_lowercase();
+    RUNNABLE.contains(&extension.as_str()).then_some(extension)
+}
+
 /// What a drag from a file panel carries: the entries and their panel.
 #[derive(Clone, Debug)]
 pub struct DraggedFiles {

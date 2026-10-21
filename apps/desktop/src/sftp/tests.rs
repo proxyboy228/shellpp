@@ -414,3 +414,73 @@ fn names_modes_and_dates() {
     assert_eq!(date_text(None), "—");
     assert_eq!(date_text(Some(0)), "1970-01-01 00:00 UTC");
 }
+
+/// The review of stage 4: a local copy onto itself is refused and leaves
+/// the file whole; a rename never replaces an existing item; names with
+/// control or bidirectional characters are shown visibly; Open asks first
+/// for a file the system would run.
+#[gpui_kit::test]
+fn copies_onto_themselves_and_renames_over_items_are_refused(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[]);
+    let dir = folder();
+    ui.open_local(cx, Side::Left, dir.path());
+    ui.open_local(cx, Side::Right, dir.path());
+    let file = ui.panel(cx, Side::Left).read_with(cx, |panel, _| {
+        panel
+            .rows()
+            .iter()
+            .find(|row| row.name == "b.txt")
+            .cloned()
+            .unwrap()
+    });
+    cx.update_window(ui.handle, |_, window, cx| {
+        ui.screen.update(cx, |screen, cx| {
+            screen.copy(Side::Left, vec![file.clone()], window, cx)
+        })
+    })
+    .unwrap();
+    // The conflict is asked first; Replace would copy the file onto itself.
+    ui.until(cx, "the conflict dialog", |cx| {
+        ui.visible(cx, "sftp-conflict")
+    });
+    ui.click(cx, "sftp-conflict-replace");
+    let transfers = ui.transfers(cx);
+    ui.until(cx, "the refusal", |cx| {
+        transfers.read_with(cx, |transfers, _| transfers.active() == 0)
+    });
+    let failed = transfers.read_with(cx, |transfers, _| {
+        transfers.transfers().iter().any(|transfer| {
+            transfer.state
+                == shellpp_ssh::transfer_queue::State::Failed(super::strings::SAME_FILE.to_owned())
+        })
+    });
+    assert!(failed);
+    assert_eq!(
+        std::fs::read(dir.path().join("b.txt")).unwrap(),
+        b"0123456789"
+    );
+
+    ui.update_panel(cx, Side::Left, |panel, window, cx| {
+        panel.rename("a2.log", "b.txt", window, cx)
+    });
+    assert!(
+        dir.path().join("a2.log").is_file(),
+        "not renamed over b.txt"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("b.txt")).unwrap(),
+        b"0123456789"
+    );
+}
+
+#[test]
+fn names_are_shown_safely_and_programs_are_named() {
+    use super::{display_name, runnable_extension};
+    assert_eq!(display_name("report.txt"), "report.txt");
+    assert_eq!(display_name("photo\u{202e}gpj.exe"), "photo<U+202E>gpj.exe");
+    assert_eq!(display_name("a\u{7}b"), "a<U+0007>b");
+    assert_eq!(runnable_extension("setup.EXE").as_deref(), Some("exe"));
+    assert_eq!(runnable_extension("deploy.sh").as_deref(), Some("sh"));
+    assert_eq!(runnable_extension("notes.txt"), None);
+    assert_eq!(runnable_extension("Makefile"), None);
+}

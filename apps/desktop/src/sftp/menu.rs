@@ -113,7 +113,12 @@ pub fn panel_menu(
             true,
             !some,
             on(Rc::new(move |panel, window, cx| {
-                open_delete(panel.clone(), deleted.clone(), window, cx);
+                if panel.read(cx).confirm_delete(cx) {
+                    open_delete(panel.clone(), deleted.clone(), window, cx);
+                } else {
+                    let entries = deleted.clone();
+                    panel.update(cx, |panel, cx| panel.delete(entries, window, cx));
+                }
             })),
         ))
         .separator()
@@ -326,7 +331,8 @@ pub(crate) fn open_delete(
         .iter()
         .filter(|entry| matches!(entry.kind, Kind::Folder))
         .count();
-    let heading: SharedString = strings::delete_title(&names).into();
+    let shown: Vec<String> = names.iter().map(|name| super::display_name(name)).collect();
+    let heading: SharedString = strings::delete_title(&shown).into();
     let text: SharedString = strings::delete_text(folders).into();
     let entries = Rc::new(entries);
     window.open_dialog(cx, move |dialog, _, cx| {
@@ -523,6 +529,8 @@ pub(crate) fn open_permissions(
         return;
     };
     let start = first.permissions.unwrap_or(0o644);
+    // The form edits rwx; setuid, setgid and sticky of the first entry stay.
+    let high = start & 0o7000;
     let form = cx.new(|cx| PermissionsForm::new(start, window, cx));
     let entries = Rc::new(entries);
     window.open_dialog(cx, move |dialog, _, cx| {
@@ -554,7 +562,7 @@ pub(crate) fn open_permissions(
                             .on_click(move |_, window, cx| {
                                 let (mode, recursive) = {
                                     let form = read.read(cx);
-                                    (form.mode(), form.recursive())
+                                    (form.mode() | high, form.recursive())
                                 };
                                 window.close_dialog(cx);
                                 let entries = (*entries).clone();

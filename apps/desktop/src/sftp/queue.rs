@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
@@ -62,9 +62,10 @@ const VISIBLE_ROWS: f32 = 5.;
 #[derive(Clone)]
 pub enum Place {
     Local(PathBuf),
+    /// A folder of a host; its channel is taken when a transfer starts, so a
+    /// Retry after Reconnect uses the new one.
     Remote {
         handle: SessionHandle,
-        sftp: Arc<Sftp>,
         dir: String,
     },
 }
@@ -92,17 +93,16 @@ impl Place {
         matches!(self, Place::Remote { .. })
     }
 
-    /// `name` inside this folder.
-    fn child(&self, name: &str) -> Spot {
-        match self {
+    /// `name` inside this folder; `None` when its host is not connected.
+    fn child(&self, name: &str) -> Option<Spot> {
+        Some(match self {
             Place::Local(dir) => Spot::Local(dir.join(name)),
-            Place::Remote { sftp, dir, .. } => Spot::Remote(
-                sftp.clone(),
+            Place::Remote { handle, dir } => Spot::Remote(
+                handle.sftp()?,
                 panel::join(dir, name, listing::PathStyle::Posix),
             ),
-        }
+        })
     }
-
     /// The runtime that runs this side's requests.
     fn handle(&self) -> Option<&SessionHandle> {
         match self {
@@ -132,8 +132,8 @@ struct Job {
     choice: Option<ConflictChoice>,
     /// Continue from the `.part` (Resume, Retry).
     resume: bool,
-    /// What a folder transfer left out (D56).
-    skipped: usize,
+    /// What a folder transfer left out (D56): each path with its reason.
+    skipped: Vec<String>,
     /// The size and date of the file the target folder already holds (the
     /// conflict dialog).
     existing: Option<(u64, Option<u64>)>,
@@ -143,6 +143,8 @@ struct Job {
 struct Running {
     done: Arc<AtomicU64>,
     abort: Option<tokio::task::AbortHandle>,
+    /// Pause or Cancel of a local copy (it checks between chunks).
+    stop: Arc<AtomicBool>,
     _task: Task<()>,
 }
 
@@ -200,11 +202,15 @@ impl Transfers {
         self.queue.transfers().is_empty()
     }
 
+    /// Transfers that run or wait to run (a failed one waits for Retry and
+    /// is not counted).
     pub fn active(&self) -> usize {
         self.queue
             .transfers()
             .iter()
-            .filter(|transfer| transfer.state.is_open())
+            .filter(|transfer| {
+                transfer.state.is_open() && !matches!(transfer.state, State::Failed(_))
+            })
             .count()
     }
 
@@ -220,6 +226,8 @@ impl Transfers {
     ) {
         let (parallel, _) = settings(&self.state, cx);
         self.queue.set_parallel(parallel);
+        // A new operation: an "apply to all" of the last one ends here.
+        self.queue.forget_for_all();
         for entry in entries {
             // Only one plain name goes into a path (never a separator, "."
             // or ".."), whatever a listing held.
@@ -246,7 +254,7 @@ impl Transfers {
                     to_side,
                     choice: None,
                     resume: false,
-                    skipped: 0,
+                    skipped: Vec::new(),
                     existing: None,
                 },
             );
@@ -290,13 +298,20 @@ impl Transfers {
         let Some(job) = self.jobs.get(&id) else {
             return;
         };
-        let target = job.to.child(&job.name);
-        let source = source_spot(job);
+        let (Some(target), Some(source)) =
+            (job.to.child(&job.name), job.from.child(&job.entry.name))
+        else {
+            self.queue.fail(id, strings::NOT_CONNECTED);
+            cx.notify();
+            return;
+        };
         let folder = job.entry.is_folder_like();
         let choice = job.choice;
         let resume = job.resume;
         let done = Arc::new(AtomicU64::new(0));
         let counter = done.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
         let taken_place = job.to.clone();
         // Where the work runs: the target's session, else the source's, else
         // a background thread.
@@ -321,6 +336,7 @@ impl Transfers {
                 &target,
                 folder,
                 resume && choice != Some(ConflictChoice::Replace),
+                &stopped,
                 &mut progress,
             )
             .await
@@ -358,6 +374,7 @@ impl Transfers {
             Running {
                 done,
                 abort,
+                stop,
                 _task: running,
             },
         );
@@ -440,13 +457,21 @@ impl Transfers {
         cx.notify();
     }
 
-    pub fn pause(&mut self, id: TransferId, cx: &mut Context<Self>) {
-        self.queue.pause(id);
-        if let Some(running) = self.running.remove(&id)
-            && let Some(abort) = running.abort
-        {
-            abort.abort();
+    /// Stops the work of a running transfer (its `.part` stays).
+    fn stop(&mut self, id: TransferId) {
+        if let Some(running) = self.running.remove(&id) {
+            running.stop.store(true, Ordering::Relaxed);
+            if let Some(abort) = running.abort {
+                abort.abort();
+            }
         }
+    }
+
+    pub fn pause(&mut self, id: TransferId, window: &mut Window, cx: &mut Context<Self>) {
+        self.queue.pause(id);
+        self.stop(id);
+        // The slot it held goes to the next queued transfer.
+        self.pump(window, cx);
         cx.notify();
     }
 
@@ -460,13 +485,10 @@ impl Transfers {
         cx.notify();
     }
 
-    pub fn cancel(&mut self, id: TransferId, cx: &mut Context<Self>) {
+    pub fn cancel(&mut self, id: TransferId, window: &mut Window, cx: &mut Context<Self>) {
         self.queue.cancel(id);
-        if let Some(running) = self.running.remove(&id)
-            && let Some(abort) = running.abort
-        {
-            abort.abort();
-        }
+        self.stop(id);
+        self.pump(window, cx);
         cx.notify();
     }
 
@@ -475,7 +497,8 @@ impl Transfers {
     pub fn clear_all(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<TransferId> = self.queue.transfers().iter().map(|t| t.id).collect();
         for id in ids {
-            self.cancel(id, cx);
+            self.queue.cancel(id);
+            self.stop(id);
         }
         self.asking = None;
         self.clear_finished(cx);
@@ -502,7 +525,7 @@ impl Transfers {
             return;
         };
         self.asking = Some(id);
-        let name: SharedString = job.name.clone().into();
+        let name: SharedString = super::display_name(&job.name).into();
         let copied = format!(
             "{}, {}",
             job.entry.size_text(),
@@ -531,7 +554,11 @@ impl Transfers {
             };
             let toggle = all.clone();
             let checked = all.load(Ordering::Relaxed);
+            // An answer is needed: Escape and a click outside do not close it
+            // (Skip is the way out).
             dialog
+                .keyboard(false)
+                .overlay_closable(false)
                 .w(px(440.))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
@@ -625,8 +652,9 @@ fn settings(state: &Entity<AppState>, cx: &App) -> (usize, ConflictPolicy) {
 
 /// How a transfer ended.
 enum Outcome {
+    /// `skipped`: what a folder transfer left out, each path with its reason.
     Done {
-        skipped: usize,
+        skipped: Vec<String>,
     },
     Failed(String),
     /// The target name exists (its size and date) and nothing was answered
@@ -634,10 +662,6 @@ enum Outcome {
     Conflict((u64, Option<u64>)),
     /// Paused or cancelled (the task was aborted).
     Stopped,
-}
-
-fn source_spot(job: &Job) -> Spot {
-    job.from.child(&job.entry.name)
 }
 
 fn reason(error: SftpError) -> String {
@@ -675,7 +699,7 @@ async fn free_name(place: &Place, target: &Spot) -> Option<Spot> {
             }
             (names, path.file_name()?.to_string_lossy().into_owned())
         }
-        (Place::Remote { sftp, dir, .. }, Spot::Remote(_, path)) => {
+        (Place::Remote { dir, .. }, Spot::Remote(sftp, path)) => {
             let names = sftp
                 .list(dir)
                 .await
@@ -690,7 +714,7 @@ async fn free_name(place: &Place, target: &Spot) -> Option<Spot> {
     let free = renamed(&name, |candidate| {
         taken.iter().any(|name| name == candidate)
     });
-    Some(place.child(&free))
+    place.child(&free)
 }
 
 /// Copies `source` to `target` (a folder with everything inside).
@@ -699,20 +723,34 @@ async fn copy(
     target: &Spot,
     folder: bool,
     resume: bool,
+    stop: &AtomicBool,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Outcome {
     use shellpp_ssh::transfer;
-    let result: Result<usize, String> = match (source, target) {
+    let skipped = |summary: transfer::TreeSummary| -> Vec<String> {
+        summary
+            .skipped
+            .into_iter()
+            .map(|skipped| {
+                format!(
+                    "{} ({})",
+                    super::display_name(&skipped.path),
+                    strings::skip_reason(skipped.reason)
+                )
+            })
+            .collect()
+    };
+    let result: Result<Vec<String>, String> = match (source, target) {
         (Spot::Local(from), Spot::Remote(sftp, to)) => {
             if folder {
                 transfer::upload_tree(sftp, from, to, progress)
                     .await
-                    .map(|summary| summary.skipped.len())
+                    .map(skipped)
                     .map_err(reason)
             } else {
                 sftp.upload(from, to, resume, progress)
                     .await
-                    .map(|_| 0)
+                    .map(|_| Vec::new())
                     .map_err(reason)
             }
         }
@@ -720,12 +758,12 @@ async fn copy(
             if folder {
                 transfer::download_tree(sftp, from, to, progress)
                     .await
-                    .map(|summary| summary.skipped.len())
+                    .map(skipped)
                     .map_err(reason)
             } else {
                 sftp.download(from, to, resume, progress)
                     .await
-                    .map(|_| 0)
+                    .map(|_| Vec::new())
                     .map_err(reason)
             }
         }
@@ -735,48 +773,96 @@ async fn copy(
             } else {
                 transfer::copy_between(from_sftp, from, to_sftp, to, progress)
                     .await
-                    .map(|_| 0)
+                    .map(|_| Vec::new())
                     .map_err(reason)
             }
         }
-        (Spot::Local(from), Spot::Local(to)) => local_copy(from, to, progress).map(|_| 0),
+        (Spot::Local(from), Spot::Local(to)) => match same_or_inside(from, to) {
+            Some(reason) => Err(reason.to_owned()),
+            None => {
+                let mut done = 0;
+                local_copy(from, to, stop, &mut done, progress).map(|_| Vec::new())
+            }
+        },
     };
     match result {
         Ok(skipped) => Outcome::Done { skipped },
+        Err(_) if stop.load(Ordering::Relaxed) => Outcome::Stopped,
         Err(reason) => Outcome::Failed(reason),
     }
 }
 
-/// A local copy (both panels local): files, folders with everything
-/// inside; links are copied as what they point to only for files.
-fn local_copy(
-    from: &Path,
-    to: &Path,
-    progress: &mut (dyn FnMut(u64) + Send),
-) -> Result<u64, String> {
-    let meta = std::fs::metadata(from).map_err(|error| error.to_string())?;
-    if meta.is_dir() {
-        std::fs::create_dir_all(to).map_err(|error| error.to_string())?;
-        let mut done = 0;
-        for entry in std::fs::read_dir(from).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            let kind = entry.file_type().map_err(|error| error.to_string())?;
-            // A link to a folder is left out, as in a folder transfer (D56).
-            if kind.is_symlink() && entry.path().is_dir() {
-                continue;
-            }
-            done += local_copy(&entry.path(), &to.join(entry.file_name()), progress)?;
-            progress(done);
-        }
-        Ok(done)
+/// A local copy onto itself would empty the file, and a folder into itself
+/// would grow without end: both are refused.
+fn same_or_inside(from: &Path, to: &Path) -> Option<&'static str> {
+    let from = std::fs::canonicalize(from).ok()?;
+    let to_parent = to
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())?;
+    let to = to_parent.join(to.file_name()?);
+    if to == from {
+        Some(strings::SAME_FILE)
+    } else if to.starts_with(&from) {
+        Some(strings::INTO_ITSELF)
     } else {
-        let bytes = std::fs::copy(from, to).map_err(|error| error.to_string())?;
-        progress(bytes);
-        Ok(bytes)
+        None
     }
 }
 
-// -- Rendering ----------------------------------------------------------------------
+/// A local copy (both panels local): files, folders with everything
+/// inside; a link to a folder is left out (D56). A file goes through
+/// `<name>.part`, renamed when complete; `stop` (Pause, Cancel) is checked
+/// between chunks. `done` counts the bytes of the whole copy.
+fn local_copy(
+    from: &Path,
+    to: &Path,
+    stop: &AtomicBool,
+    done: &mut u64,
+    progress: &mut (dyn FnMut(u64) + Send),
+) -> Result<(), String> {
+    use std::io::{Read as _, Write as _};
+    let io = |error: std::io::Error| error.to_string();
+    let meta = std::fs::metadata(from).map_err(io)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(to).map_err(io)?;
+        for entry in std::fs::read_dir(from).map_err(io)? {
+            let entry = entry.map_err(io)?;
+            let kind = entry.file_type().map_err(io)?;
+            if kind.is_symlink() && entry.path().is_dir() {
+                continue;
+            }
+            local_copy(
+                &entry.path(),
+                &to.join(entry.file_name()),
+                stop,
+                done,
+                progress,
+            )?;
+        }
+        return Ok(());
+    }
+    let mut part_name = to.file_name().unwrap_or_default().to_os_string();
+    part_name.push(".part");
+    let part = to.with_file_name(part_name);
+    let mut source = std::fs::File::open(from).map_err(io)?;
+    let mut target = std::fs::File::create(&part).map_err(io)?;
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(strings::CANCELLED.to_owned());
+        }
+        let read = source.read(&mut buffer).map_err(io)?;
+        if read == 0 {
+            break;
+        }
+        target.write_all(&buffer[..read]).map_err(io)?;
+        *done += read as u64;
+        progress(*done);
+    }
+    target.flush().map_err(io)?;
+    drop(target);
+    std::fs::rename(&part, to).map_err(io)
+} // -- Rendering ----------------------------------------------------------------------
 
 fn direction_text(direction: Direction) -> &'static str {
     match direction {
@@ -862,7 +948,11 @@ impl Render for Transfers {
         let rows = self.queue.transfers().iter().map(|transfer| {
             let id = transfer.id;
             let state = transfer.state.clone();
-            let skipped = self.jobs.get(&id).map_or(0, |job| job.skipped);
+            let skipped = self
+                .jobs
+                .get(&id)
+                .map(|job| job.skipped.clone())
+                .unwrap_or_default();
             let fraction = if state == State::Done {
                 1.
             } else {
@@ -904,7 +994,7 @@ impl Render for Transfers {
                         .truncate()
                         .text_size(metrics::FONT_SIZE_BODY)
                         .text_color(theme.foreground)
-                        .child(transfer.name.clone()),
+                        .child(super::display_name(&transfer.name)),
                 )
                 .child(
                     div()
@@ -938,6 +1028,11 @@ impl Render for Transfers {
                 )
                 .child(
                     div()
+                        .id(SharedString::from(format!(
+                            "sftp-transfer-{}-state",
+                            transfer.name
+                        )))
+                        .test_support()
                         .w(px(200.))
                         .flex_none()
                         .truncate()
@@ -948,10 +1043,18 @@ impl Render for Transfers {
                         })
                         .child(if state == State::Running {
                             SharedString::from(speed_text(transfer))
-                        } else if state == State::Done && skipped > 0 {
-                            strings::skipped(skipped).into()
+                        } else if state == State::Done && !skipped.is_empty() {
+                            strings::skipped(skipped.len()).into()
                         } else {
                             state_text(&state)
+                        })
+                        // What a folder transfer left out, by path (D56).
+                        .when(!skipped.is_empty(), |this| {
+                            let list = skipped.join("\n");
+                            this.tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(list.clone())
+                                    .build(window, cx)
+                            })
                         }),
                 )
                 .child(
@@ -962,7 +1065,9 @@ impl Render for Transfers {
                         .gap(px(2.))
                         .when(matches!(state, State::Running | State::Queued), |this| {
                             this.child(button("pause", Lucide::Pause, strings::PAUSE).on_click(
-                                cx.listener(move |this, _: &ClickEvent, _, cx| this.pause(id, cx)),
+                                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.pause(id, window, cx)
+                                }),
                             ))
                         })
                         .when(state == State::Paused, |this| {
@@ -981,7 +1086,9 @@ impl Render for Transfers {
                         })
                         .when(state.is_open(), |this| {
                             this.child(button("cancel", Lucide::X, strings::CANCEL).on_click(
-                                cx.listener(move |this, _: &ClickEvent, _, cx| this.cancel(id, cx)),
+                                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.cancel(id, window, cx)
+                                }),
                             ))
                         }),
                 )

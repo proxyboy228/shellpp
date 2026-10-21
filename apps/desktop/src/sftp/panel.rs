@@ -403,6 +403,16 @@ impl FilePanel {
         join(self.path(), name, self.style)
     }
 
+    /// `sftp.confirm_delete` (UI 12.6, on by default): Delete asks first.
+    pub fn confirm_delete(&self, cx: &App) -> bool {
+        self.state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| values.get("sftp.confirm_delete").and_then(|v| v.as_bool()))
+            .unwrap_or(true)
+    }
+
     /// The title of the source (the header).
     pub fn title(&self) -> SharedString {
         match &self.source {
@@ -645,7 +655,9 @@ impl FilePanel {
                                 // separator, "." or ".."): it would lead
                                 // every operation outside this folder.
                                 .filter(|entry| {
-                                    valid_name(&entry.name) && entry.name == entry.name.trim()
+                                    valid_name(&entry.name)
+                                        && entry.name == entry.name.trim()
+                                        && !entry.name.chars().any(char::is_control)
                                 })
                                 .map(local::from_remote)
                                 .collect::<Vec<_>>()
@@ -947,10 +959,24 @@ impl FilePanel {
         let old = self.child_path(from);
         let new = self.child_path(to.trim());
         let (remote_old, remote_new) = (old.clone(), new.clone());
+        if self.entries.iter().any(|entry| entry.name == to.trim()) {
+            crate::shell::show_toast(
+                strings::failed(strings::RENAME_FAILED, strings::NAME_TAKEN),
+                window,
+                cx,
+            );
+            return;
+        }
         self.selected.remove(from);
         self.operate(
             strings::RENAME_FAILED,
-            move || std::fs::rename(&old, &new).map_err(|error| error.to_string()),
+            move || {
+                // Not over an item that appeared meanwhile.
+                if std::fs::symlink_metadata(&new).is_ok() {
+                    return Err(strings::NAME_TAKEN.to_owned());
+                }
+                std::fs::rename(&old, &new).map_err(|error| error.to_string())
+            },
             move |sftp| {
                 Box::pin(async move {
                     sftp.rename(&remote_old, &remote_new)
@@ -1740,7 +1766,7 @@ impl FilePanel {
                                     .truncate()
                                     .text_size(metrics::FONT_SIZE_BODY)
                                     .text_color(theme.foreground)
-                                    .child(entry.name.clone()),
+                                    .child(super::display_name(&entry.name)),
                             )
                             .when_some(permissions, |this, permissions| {
                                 this.child(

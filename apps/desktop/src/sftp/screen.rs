@@ -146,11 +146,14 @@ impl SftpScreen {
         }
         match panel.source() {
             Source::Local => Some(Place::Local(PathBuf::from(panel.path()))),
-            Source::Remote(_) => Some(Place::Remote {
-                handle: panel.handle()?.clone(),
-                sftp: panel.sftp()?,
-                dir: panel.path().to_owned(),
-            }),
+            Source::Remote(_) => {
+                // Not connected: nothing to copy to or from.
+                panel.sftp()?;
+                Some(Place::Remote {
+                    handle: panel.handle()?.clone(),
+                    dir: panel.path().to_owned(),
+                })
+            }
             Source::Empty => None,
         }
     }
@@ -187,6 +190,32 @@ impl SftpScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A file the system would run: only after a confirmation naming its
+        // type (security.md 11.4); Open with names its own program.
+        if program.is_none()
+            && let Some(extension) = super::runnable_extension(&entry.name)
+        {
+            let screen = cx.entity().downgrade();
+            let name = entry.name.clone();
+            super::open::confirm_run(&name, &extension, window, cx, move |window, cx| {
+                let _ = screen.update(cx, |screen, cx| {
+                    screen.open_confirmed(side, entry.clone(), None, window, cx)
+                });
+            });
+            return;
+        }
+        self.open_confirmed(side, entry, program, window, cx);
+    }
+
+    /// Open once it is clear to run.
+    fn open_confirmed(
+        &mut self,
+        side: Side,
+        entry: Entry,
+        program: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let program = program.or_else(|| super::open::open_program(self.state.read(cx)));
         let panel = self.panel(side).read(cx);
         if panel.is_local() {
@@ -209,7 +238,8 @@ impl SftpScreen {
             let copy = super::open::download(handle.clone(), sftp.clone(), remote, root).await;
             let _ = this.update_in(cx, |this, window, cx| match copy {
                 Ok(copy) => {
-                    let opened = Opened::new(copy, handle, sftp, name);
+                    super::open::mark_downloaded(copy.local_path());
+                    let opened = Opened::new(copy, handle, name);
                     super::open::launch(opened.local_path(), program.as_deref(), window, cx);
                     crate::shell::show_toast(super::strings::OPEN_NOT_ENCRYPTED, window, cx);
                     this.opened.push(opened);
