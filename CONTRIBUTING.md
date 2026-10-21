@@ -13,6 +13,7 @@ The project is in early development. Build and test instructions are in
 - [Clean-room rules](#clean-room-rules)
 - [Development workflow](#development-workflow)
 - [Toolchain and build](#toolchain-and-build)
+- [Unsafe code](#unsafe-code)
 - [Tests](#tests)
 - [Commit messages](#commit-messages)
 - [Pull requests](#pull-requests)
@@ -162,6 +163,27 @@ Write code, comments, commit messages and documentation in English.
   GPUI Kit. Run it with `cargo run -p shellpp-desktop`. The README section
   [Running](README.md#running) shows how to start it with demo data in a
   temporary folder and where the permanent profile lives.
+
+## Unsafe code
+
+The workspace denies `unsafe_code`, and most crates also
+`#![forbid(unsafe_code)]`. `unsafe` is allowed only in platform modules: a
+module that exists to call one operating system's API, such as `windows.rs`,
+`unix.rs` or `macos.rs`, or a module of the same kind under `platform/`. Such
+a module opts in with `#![allow(unsafe_code)]` (or a `cfg_attr` for its
+platform) and keeps the `unsafe` calls behind safe functions.
+
+Every `unsafe` block has:
+
+- a `// SAFETY:` comment right above it that says why the call is sound:
+  which pointers it reads or writes, how long they stay valid, who frees what;
+- a test that runs the code path of that block on its platform.
+
+The platform modules today: the advapi32 security calls of
+`crates/private-file` (`src/windows.rs`) and the `libc` calls of process
+hardening (`apps/desktop/src/hardening.rs`) and of the device name
+(`apps/desktop/src/platform/device_name.rs`). `GetLogicalDrives`, for the
+drive list of the local file panel, is allowed in such a module too.
 
 ## Tests
 

@@ -525,7 +525,7 @@ Superseded parts of earlier decisions:
 
 ## Night of 2026-10-21
 
-The decisions below were taken during the owner's night run (night plan, section 1.1): the lead chose where the specification leaves the details open, marked each one "night", and lists the disputable ones for the owner in the night report.
+The decisions below were taken during the owner's night run (night plan, section 1.1): the lead chose where the specification leaves the details open, marked each one "night", and lists the disputable ones for the owner in the night report. The owner's answers to them are D50.
 
 ### 32. Keychain keys: generation and import formats (night)
 
@@ -801,3 +801,28 @@ Status: night decision, 2026-10-21 (the owner's night plan for stage 4, item 6; 
 - Limits: the check and the upload are not one step on the server, so a change made there during the upload of a large file is overwritten; a file over 1 MiB changed on the server with the same size within the same second is not noticed.
 
 **Spec impact:** none (UI 5.4 states the behavior).
+
+## The owner's answers of 2026-10-21
+
+### 50. The owner's answers to the questions of the night
+
+Status: accepted, 2026-10-21 (owner's choice; the 15 questions in section 3 of the night report). Amends D32, D34, D38, D41, D47 and D48; keeps D33, D35, D36, D42, D44 and D45 as written; settles the authenticator path left open in D37. What has to be built is item 3 of the plan of the next run; FIDO2 signing comes later.
+
+**Decision:**
+
+1. The Keychain branch is merged into main (2026-10-21, with D33).
+2. Keys (D33): the key panel's "…" menu gets Remove, with a confirmation. When hosts or identities use the key, the confirmation lists them and warns that they lose it. The rule of D33 for creating a key (an explicit Import or Generate) is accepted.
+3. Unrecognized keys (D32): a key imported by hand (the New key form) that is not recognized is never saved; the form shows the reason and keeps the text. Import Data of our JSON saves such a key as a key record of type "unknown", so nothing from the file is lost (data-model 9.1).
+4. History in the export (D34, D38): Export Data gets two checkboxes, "Include command history" and "Include the connection log", both off by default.
+5. Settings on import (D41): D41 stays. Import Data gets the mode "Full restore from my backup", off by default: it applies every setting of the file, including those D41 leaves out. Turning it on shows a warning that the file may hold a script that will then run on the servers.
+6. `~/.ssh/config` (D35): stays as it is: only the first alias of a `Host a b` line becomes a host, and SendEnv goes only into the host's notes.
+7. Public keys per authentication (D36): the limit stays 4 and is not a setting.
+8. FIDO2 signing (D37): on Windows only through the WebAuthn API; on macOS and Linux through `ctap-hid-fido2`. Built later, not in the next run.
+9. and 15. `unsafe` code (D42, D48): allowed only in platform modules (`windows.rs`, `unix.rs` and the like); every `unsafe` block has a `SAFETY` comment and a test. `GetLogicalDrives` is allowed, so the drive list of a local file panel (D48) reads the drive letters without touching each drive. The rule is in `CONTRIBUTING.md`, section "Unsafe code".
+10. Jump hosts (D44): the refusal stays until stage 5.
+11. Export to host: built with the SFTP panels, over a shared service of SSH connections without a terminal tab, which the panels use too.
+12. SFTP engine (D45): `russh-sftp` stays. Names that are not UTF-8 on the server (shown with U+FFFD, not openable) are a known limitation and are described as such in the documentation.
+13. Links in folder transfers (D47): inside a copied folder, a link to a file is copied as the content of its target, and a link to a folder is skipped; at the end of the transfer the user sees the list of what was skipped.
+14. `CODE_OF_CONDUCT.md`: the enforcement contact is replaced with the address the owner gives.
+
+**Spec impact:** with the implementation: `docs/ui-behavior-spec.md` 1.4 (Export Data, Import Data) and 7.3 (Remove), `docs/export-format.md` section 4 and `docs/data-model.md` 9.1 and 18.4 (unknown keys, the full restore); now: `CONTRIBUTING.md` ("Unsafe code").
