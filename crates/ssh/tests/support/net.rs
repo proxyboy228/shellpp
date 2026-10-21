@@ -101,6 +101,49 @@ async fn pump<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     let _ = to.shutdown().await;
 }
 
+/// An address whose TCP connect never completes, the way a non-routable
+/// address behaves on most networks: a local listener that never accepts,
+/// with its accept queue full, so the kernel drops further SYNs (Linux,
+/// macOS). The address of TEST-NET-1 depends on the network (a dev server
+/// answered for it), this does not.
+#[cfg(unix)]
+pub struct BlackHole {
+    pub addr: SocketAddr,
+    _listener: TcpListener,
+    _queued: Vec<tokio::net::TcpStream>,
+}
+
+#[cfg(unix)]
+impl BlackHole {
+    pub async fn start() -> BlackHole {
+        let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+        socket.bind("127.0.0.1:0".parse().unwrap()).expect("bind");
+        let listener = socket.listen(0).expect("listen");
+        let addr = listener.local_addr().expect("address");
+        let mut queued = Vec::new();
+        for _ in 0..16 {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                tokio::net::TcpStream::connect(addr),
+            )
+            .await
+            {
+                Ok(Ok(stream)) => queued.push(stream),
+                Ok(Err(error)) => panic!("filling the accept queue failed: {error}"),
+                // A connect that hangs: the queue is full.
+                Err(_) => {
+                    return BlackHole {
+                        addr,
+                        _listener: listener,
+                        _queued: queued,
+                    };
+                }
+            }
+        }
+        panic!("the accept queue never filled");
+    }
+}
+
 /// A listener that accepts connections and never sends anything.
 pub struct SilentServer {
     addr: SocketAddr,

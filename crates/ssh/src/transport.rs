@@ -48,6 +48,23 @@ pub(crate) async fn connect_any(
     addrs: &[std::net::SocketAddr],
     deadline: Instant,
 ) -> Result<TcpStream, FailureKind> {
+    let stream = connect_each(addrs, deadline, TcpStream::connect).await?;
+    // Interactive traffic: no Nagle delay on keystrokes.
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
+}
+
+/// [`connect_any`] with the connect step given (tests pass one whose first
+/// address never answers, whatever the network does with silent addresses).
+async fn connect_each<S, F, Fut>(
+    addrs: &[std::net::SocketAddr],
+    deadline: Instant,
+    mut connect: F,
+) -> Result<S, FailureKind>
+where
+    F: FnMut(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = io::Result<S>>,
+{
     let mut last = FailureKind::Network;
     for (index, addr) in addrs.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -58,12 +75,8 @@ pub(crate) async fn connect_any(
             .unwrap_or(u32::MAX)
             .max(1);
         let share = (remaining / left).max(MIN_ADDRESS_TIMEOUT).min(remaining);
-        match tokio::time::timeout(share, TcpStream::connect(addr)).await {
-            Ok(Ok(stream)) => {
-                // Interactive traffic: no Nagle delay on keystrokes.
-                let _ = stream.set_nodelay(true);
-                return Ok(stream);
-            }
+        match tokio::time::timeout(share, connect(*addr)).await {
+            Ok(Ok(stream)) => return Ok(stream),
             Ok(Err(error)) => {
                 last = io_failure(&error);
                 tracing::debug!(kind = last.reason(), "tcp connect attempt failed");
@@ -228,23 +241,27 @@ mod tests {
             .await
             .expect("listener");
         let reachable = listener.local_addr().expect("address");
-        // 192.0.2.0/24 is never routed (RFC 5737): the connect either hangs
-        // (black hole) or fails at once, depending on the network.
+        // 192.0.2.0/24 is never routed (RFC 5737), but some networks answer
+        // for it anyway (a transparent proxy accepted it on a dev server):
+        // its connect hangs here like a black hole, whatever the network.
         let silent = std::net::SocketAddr::from(([192, 0, 2, 1], 22));
+        let connect = move |addr: std::net::SocketAddr| async move {
+            if addr == silent {
+                std::future::pending::<()>().await;
+            }
+            TcpStream::connect(addr).await
+        };
         let started = Instant::now();
         let deadline = started + Duration::from_secs(6);
-        let stream = connect_any(&[silent, reachable], deadline)
+        let stream = connect_each(&[silent, reachable], deadline, connect)
             .await
             .expect("the reachable address connects");
         assert_eq!(stream.peer_addr().expect("peer"), reachable);
         assert!(started.elapsed() < Duration::from_secs(5));
         // Every address timing out ends with Timeout at the deadline.
         let deadline = Instant::now() + Duration::from_millis(300);
-        let result = connect_any(&[silent, silent], deadline).await;
-        assert!(matches!(
-            result,
-            Err(FailureKind::Timeout | FailureKind::Network)
-        ));
+        let result = connect_each(&[silent, silent], deadline, connect).await;
+        assert!(matches!(result, Err(FailureKind::Timeout)));
     }
 
     #[tokio::test]

@@ -178,14 +178,19 @@ async fn a_server_that_never_answers_times_out() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_non_routable_address_fails_within_the_timeout() {
-    // 192.0.2.0/24 is TEST-NET-1: never routed. Depending on the machine's
-    // routes the connect hangs (timeout) or fails at once (network error).
+    // An address whose TCP connect hangs. On Unix a local black hole
+    // (`BlackHole`): 192.0.2.0/24 (TEST-NET-1) is never routed, but a
+    // network may answer for it anyway (a dev server's did, with an SSH
+    // server). On Windows TEST-NET-1: depending on the machine's routes the
+    // connect hangs (timeout) or fails at once (network error).
+    #[cfg(unix)]
+    let hole = support::net::BlackHole::start().await;
+    #[cfg(unix)]
+    let address = hole.addr;
+    #[cfg(not(unix))]
+    let address = "192.0.2.1:22".parse().expect("address");
     let interaction = TestInteraction::accepting();
-    let mut spec = spec(
-        "192.0.2.1:22".parse().expect("address"),
-        Some("alice"),
-        AuthPlan::default(),
-    );
+    let mut spec = spec(address, Some("alice"), AuthPlan::default());
     spec.connect_timeout = Duration::from_millis(500);
     let started = Instant::now();
     let error = connect(spec, interaction.as_dyn())
