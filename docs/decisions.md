@@ -1086,3 +1086,21 @@ Status: run 3 decision, 2026-10-21 (plan, section 9: stage 6, item 1; UI 11).
 - Keyword highlighting (12.4): on by default (`terminal.highlighting_enabled`, a switch in Settings → Terminal). Words of Error (error, fail, failed, fatal, denied, refused, panic, critical, exception...), Warning (warn, warning, deprecated), OK (ok, success, succeeded, passed), Info (info, notice) and Debug (debug, trace), and IPv4 and MAC addresses, are drawn in their category's color, one for a dark and one for a light terminal background (the theme's background decides). Only text in the terminal's default color is recolored, so a program's own colors stay; never in the alternate screen; only when a row is laid out anew (the row cache keeps it, so the cost is per new row). The colors of the categories cannot be changed yet, and custom regex rules (the `highlight_rule` records) have no editor yet. After the review: only plain text is recolored (the default text and background colors, not reversed, dimmed or hidden), so a search match of `less` or a red background stays readable; an address inside a longer run (a hex dump, a fingerprint, an OID, a four-part version) is not one; the pattern uses ASCII word boundaries and digits.
 
 **Spec impact:** none; UI 11, 12.2, 12.4 (highlighting) and 12.6 are followed as written, with the recordings of 11.2 and 12.6, the category colors and the custom rules of 12.4 left for later.
+
+## The owner's answers to run 3
+
+### 68. The owner's answers to the questions of run 3
+
+Status: accepted, 2026-10-21 (owner's choice; the seven questions in section 3 of the run 3 report). Amends D65, D66 and D67 where they differ; items 1 to 7 of the plan of run 4.
+
+**Decision:**
+
+1. The snippet panel keeps its explicit Create and Save (D66). Leaving it with changes not saved (opening another card, going to another screen, closing the panel) asks "Save", "Discard changes" or "Stay"; while it has such changes, the panel's header marks the snippet "Not saved". Run from the panel with changes not saved asks "Save and run". UI 1.3 records the snippet panel as the exception to saving on every change. This replaces D66's "Changes not saved are dropped when another card opens".
+2. A run on one to four hosts keeps the results table as the default, as on more hosts. The split tab comes with Broadcast (stage 9); UI 9.4 says so.
+3. The signature question of a forwarded agent (D60, D66): the tab that waits for the answer shows a key icon in the warning color, and when the app's window is not focused a system notification names the host. The question still waits at most two minutes.
+4. Retention of the connection log (D67, UI 12.6) applies when the app starts and every 24 hours after, not only when the Logs screen reads the log.
+5. A snippet of several lines in a shell without bracketed paste still goes only by Run (D66); the insert button is disabled, and its tooltip gives the reason.
+6. Dates are shown in local time from now on, everywhere (Logs, Known Hosts, SFTP, Import Data), in the format of the system's locale; a tooltip gives the full time in UTC. This replaces the UTC dates of D65 and D67.
+7. The hang of `scripts\ui-screens.ps1` on `new-tab-search` in a full run is looked into for an hour at most. A cause in the app (a leak, a lock after many sessions) is fixed, with a test; a cause in the harness gets a timeout and one retry per state, and the cause goes to `CLAUDE.md`.
+
+**Spec impact:** with the implementation (run 4): `docs/ui-behavior-spec.md` 1.3 (the snippet panel's exception), 3.1 (the signature question), 4.2 (the insert button), 9.4 (the split tab with Broadcast), 12.6 (when retention applies) and the dates of 2.5, 5, 10 and 11 (and `docs/ru`).
