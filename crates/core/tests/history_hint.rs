@@ -108,3 +108,56 @@ fn close_is_remembered_per_host_across_restarts() {
     assert!(u.core.history_hint(web).unwrap().dismissed);
     assert!(!u.core.history_hint(db).unwrap().dismissed);
 }
+
+/// "Save" makes snippets of the (edited) commands that target the host,
+/// leaves out what looks like a secret, and the hint is not shown again
+/// (stage 5). The Shell History search lists every host's entries, or
+/// those of the hosts asked for, each with its host.
+#[test]
+fn save_makes_snippets_and_the_search_filters_by_host() {
+    let u = first_run();
+    let web = u.host(json!({"address": "web.example.com"}));
+    let db = u.host(json!({"address": "db.example.com"}));
+    let web = RecordRef {
+        vault_id: u.vault_id,
+        record_id: web.record_id,
+    };
+    let db = RecordRef {
+        vault_id: u.vault_id,
+        record_id: db.record_id,
+    };
+    record(&u.core, web, "df -h");
+    record(&u.core, db, "psql");
+    let saved = u
+        .core
+        .history_hint_save(
+            web,
+            &[
+                "df -h /var".to_owned(),
+                "export TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyzAB".to_owned(),
+                "  ".to_owned(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(saved.len(), 1, "the secret and the blank line are left out");
+    assert_eq!(saved[0].script, "df -h /var");
+    assert_eq!(saved[0].target_host_ids, [web.record_id]);
+    assert!(u.core.history_hint(web).unwrap().dismissed);
+
+    use shellpp_core::service::dto::HistorySearchInput;
+    let all = u
+        .core
+        .history_search(HistorySearchInput::default())
+        .unwrap();
+    assert_eq!(all.len(), 2);
+    let only_db = u
+        .core
+        .history_search(HistorySearchInput {
+            hosts: vec![db],
+            ..HistorySearchInput::default()
+        })
+        .unwrap();
+    assert_eq!(only_db.len(), 1);
+    assert_eq!(only_db[0].command, "psql");
+    assert_eq!(only_db[0].host, Some(db));
+}

@@ -1467,6 +1467,32 @@ pub struct HistoryEntryView {
     pub record_id: Uuid,
     pub command: String,
     pub executed_at: String,
+    /// The saved host it ran on; `None` for local terminals and quick
+    /// connects.
+    pub host: Option<RecordRef>,
+}
+
+/// Input of `history_search` (UI 9.1, the Shell History screen: every
+/// host, filtered by host and text).
+#[derive(Clone, Default, Deserialize)]
+pub struct HistorySearchInput {
+    /// Only these hosts; empty = every entry (with or without a host).
+    #[serde(default)]
+    pub hosts: Vec<RecordRef>,
+    /// Case-insensitive substring filter.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Default 500, at most 5000.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+impl fmt::Debug for HistorySearchInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HistorySearchInput")
+            .field("hosts", &self.hosts.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for HistoryEntryView {

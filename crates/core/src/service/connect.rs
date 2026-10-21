@@ -1512,25 +1512,46 @@ impl Core {
         &self,
         input: HistoryListInput,
     ) -> Result<Vec<HistoryEntryView>, CoreError> {
+        let host = input.host;
+        self.history_entries(input.text.as_deref(), input.limit, |data| {
+            same_link(data, host)
+        })
+    }
+
+    /// The Shell History screen (UI 9.1): every entry, or those of `hosts`.
+    pub fn history_search(
+        &self,
+        input: super::dto::HistorySearchInput,
+    ) -> Result<Vec<HistoryEntryView>, CoreError> {
+        let hosts = input.hosts;
+        self.history_entries(input.text.as_deref(), input.limit, |data| {
+            hosts.is_empty() || history_entry::host(data).is_some_and(|host| hosts.contains(&host))
+        })
+    }
+
+    /// History entries `keep` selects, newest first, filtered by `text`.
+    fn history_entries(
+        &self,
+        text: Option<&str>,
+        limit: Option<u32>,
+        keep: impl Fn(&Map<String, Value>) -> bool,
+    ) -> Result<Vec<HistoryEntryView>, CoreError> {
         let now = self.now();
         let mut guard = self.inner();
         let mut parts = parts(&mut guard)?;
         self.ensure_history(&mut parts, now)?;
-        let text = input
-            .text
-            .as_deref()
+        let text = text
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .map(fold);
-        let limit = input
-            .limit
+        let limit = limit
             .unwrap_or(HISTORY_LIST_DEFAULT)
             .min(HISTORY_LIST_MAX) as usize;
         let mut entries: Vec<&IndexedRecord> = parts
             .session
             .index
             .of_kind(RecordKind::HistoryEntry)
-            .filter(|record| same_link(record.data(), input.host))
+            .filter(|record| keep(record.data()))
             .filter(|record| {
                 text.as_deref()
                     .is_none_or(|text| fold(history_entry::command(record.data())).contains(text))
@@ -1550,6 +1571,7 @@ impl Core {
                 record_id: record.record_id,
                 command: history_entry::command(record.data()).to_owned(),
                 executed_at: history_entry::executed_at(record.data()).to_owned(),
+                host: history_entry::host(record.data()),
             })
             .collect())
     }

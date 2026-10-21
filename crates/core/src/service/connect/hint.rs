@@ -103,6 +103,37 @@ impl Core {
         })
     }
 
+    /// "Save" on the hint (UI 4.2, stage 5): each of the (edited) `commands`
+    /// becomes a snippet that targets `host`; a command that is blank or
+    /// looks like a secret (docs/security.md, section 10.2) is left out.
+    /// The hint is then not shown again for the host.
+    pub fn history_hint_save(
+        &self,
+        host: RecordRef,
+        commands: &[String],
+    ) -> Result<Vec<crate::service::snippets::SnippetView>, CoreError> {
+        let mut saved = Vec::new();
+        for command in commands.iter().take(HINT_COMMANDS) {
+            let command = command.trim();
+            if command.is_empty() || history::looks_like_secret(command) {
+                continue;
+            }
+            let mut data = Map::new();
+            data.insert("script".into(), Value::String(command.to_owned()));
+            data.insert(
+                "target_host_ids".into(),
+                Value::Array(vec![Value::String(host.record_id.to_string())]),
+            );
+            saved.push(self.snippet_save(crate::service::snippets::RecordInput {
+                vault_id: host.vault_id,
+                record_id: None,
+                data,
+            })?);
+        }
+        self.history_hint_dismiss(host)?;
+        Ok(saved)
+    }
+
     /// "Close" on the hint: the hint is not shown again for `host`
     /// (`history_hint_state.dismissed = true`, one record per host link).
     pub fn history_hint_dismiss(&self, host: RecordRef) -> Result<(), CoreError> {
