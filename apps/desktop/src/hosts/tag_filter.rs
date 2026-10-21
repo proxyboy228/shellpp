@@ -31,6 +31,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use super::controls::{ControlButton, ControlKind, ICON_SIZE};
 use super::strings;
 use crate::state::hosts_view::TagCount;
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
 /// Width of the dropdown.
@@ -389,6 +390,7 @@ pub fn selected_chip(
     div()
         .id(id)
         .test_support()
+        .keyboard_stop(theme.colors.list, cx)
         .flex()
         .flex_none()
         .items_center()

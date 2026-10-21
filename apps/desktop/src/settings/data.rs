@@ -26,6 +26,7 @@ use shellpp_core::service::dto::SettingsSetInput;
 use super::{SettingsView, strings};
 use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::metrics;
 
 /// The answers to name conflicts (5.7), as stored.
@@ -446,6 +447,8 @@ impl SettingsView {
         let clear = div()
             .id("settings-clear-log")
             .test_support()
+            .tab_index(0)
+            .focus_ring_visible(theme.secondary, cx)
             .flex()
             .flex_none()
             .items_center()

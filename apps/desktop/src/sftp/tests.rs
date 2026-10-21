@@ -297,6 +297,53 @@ fn the_selection_follows_ctrl_and_shift(cx: &mut TestAppContext) {
     assert_eq!(selected(&ui, cx).len(), 4);
 }
 
+/// Plan of run 4, item 7.4: the file list works from the keyboard; the
+/// arrows move the selection (Shift extends it), Enter opens a folder,
+/// Backspace goes up, Ctrl+A selects all.
+#[gpui_kit::test]
+fn the_file_list_works_from_the_keyboard(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[]);
+    let dir = folder();
+    ui.open_local(cx, Side::Left, dir.path());
+    let selected = |ui: &Ui, cx: &mut TestAppContext| -> Vec<String> {
+        ui.panel(cx, Side::Left).read_with(cx, |panel, _| {
+            panel
+                .selection()
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect()
+        })
+    };
+    let press = |ui: &Ui, key: &str, cx: &mut TestAppContext| {
+        cx.update_window(ui.handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.press(key, cx);
+        })
+        .unwrap();
+        ui.settle(cx);
+    };
+    // A click focuses the list.
+    ui.click(cx, "sftp-left-row-a2.log");
+    press(&ui, "down", cx);
+    assert_eq!(selected(&ui, cx), ["a10.log"]);
+    press(&ui, "shift-down", cx);
+    assert_eq!(selected(&ui, cx), ["a10.log", "b.txt"]);
+    press(&ui, "down", cx);
+    assert_eq!(selected(&ui, cx), ["b.txt"], "the last row stays");
+    press(&ui, "ctrl-a", cx);
+    assert_eq!(selected(&ui, cx).len(), 4);
+    for _ in 0..3 {
+        press(&ui, "up", cx);
+    }
+    assert_eq!(selected(&ui, cx), ["docs"]);
+    press(&ui, "enter", cx);
+    ui.until(cx, "docs listed", |cx| {
+        ui.names(cx, Side::Left) == ["inside.md"]
+    });
+    press(&ui, "backspace", cx);
+    ui.until(cx, "up", |cx| ui.names(cx, Side::Left).len() == 4);
+}
+
 #[gpui_kit::test]
 fn new_folder_rename_and_delete_in_a_local_panel(cx: &mut TestAppContext) {
     let ui = Ui::open(cx, &[]);

@@ -37,6 +37,7 @@ use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
 use crate::shell::details::DetailsHeader;
 use crate::state::{AppState, AppStateEvent};
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::metrics;
 
 const CONTENT_PADDING: Pixels = metrics::SPACE_5;
@@ -420,9 +421,12 @@ impl LogsScreen {
                 .as_ref()
                 .map(|os| crate::session_ui::bridge::os_family(os.family)),
         );
+        // A keyboard focus stop: Enter opens the details like a click.
         h_flex()
             .id(row_id(id))
             .test_support()
+            .tab_index(0)
+            .focus_ring_visible(theme.colors.list, cx)
             .w_full()
             .min_h(px(52.))
             .px(metrics::SPACE_2)

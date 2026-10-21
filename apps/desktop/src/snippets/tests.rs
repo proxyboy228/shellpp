@@ -821,3 +821,36 @@ fn every_way_of_leaving_the_panel_asks(cx: &mut TestAppContext) {
     assert_eq!(selected(cx), Some(b));
     ui.finish(cx);
 }
+
+/// Plan of run 4, item 7.4: the arrows reach the folder cards too (up from
+/// the first snippet row); Enter opens the folder, Esc leaves it.
+#[gpui_kit::test]
+fn folders_are_reached_with_the_arrows(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[]);
+    let deploy = ui.package(cx, "Deploy");
+    let top = ui.save(cx, json!({"label": "Uptime", "script": "uptime"}));
+    let top = top.record.record_id;
+    // A click on the card selects it and focuses the cards.
+    ui.click(cx, card_id(top));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.selected()),
+        Some(top)
+    );
+    ui.frame(cx, |window, cx| window.press("up", cx));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.selected()),
+        None,
+        "the cursor is on the folder"
+    );
+    ui.frame(cx, |window, cx| window.press("enter", cx));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.open_package()),
+        Some(deploy)
+    );
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert_eq!(
+        ui.screen.read_with(cx, |screen, _| screen.open_package()),
+        None
+    );
+    ui.finish(cx);
+}

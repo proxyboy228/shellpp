@@ -11,8 +11,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Div, ElementId, Entity, Focusable as _, IntoElement, SharedString, Stateful,
-    StyledText, Window, div, px,
+    AnyElement, App, Div, ElementId, Entity, Focusable as _, Hsla, IntoElement, SharedString,
+    Stateful, StyledText, Window, div, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::FocusableExt as _;
@@ -20,6 +20,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use shellpp_core::service::dto::TagColor;
 
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// A color swatch in the Color field.
@@ -36,12 +37,19 @@ pub(crate) fn hit(id: impl Into<ElementId>) -> Hit {
     div().id(id).test_support()
 }
 
+/// A [`hit`] that is also a keyboard tab stop with the focus ring of
+/// design-system 6 ([`FocusRingExt::keyboard_stop`](crate::theme::focus::FocusRingExt::keyboard_stop)).
+/// `surface` is the color around it; a disabled control is no tab stop.
+pub(crate) fn pressable(id: impl Into<ElementId>, enabled: bool, surface: Hsla, cx: &App) -> Hit {
+    hit(id).when(enabled, |this| this.keyboard_stop(surface, cx))
+}
+
 /// An icon-only button (32 px square, hover `--bg-raised-hover`).
 pub(crate) fn icon_button(id: impl Into<ElementId>, icon: IconName, cx: &App) -> Hit {
     let theme = cx.theme();
     let hover = theme.secondary_hover;
     let pressed = theme.secondary_active;
-    hit(id)
+    pressable(id, true, theme.secondary, cx)
         .flex_none()
         .size(px(32.))
         .flex()
@@ -235,7 +243,7 @@ pub(crate) fn select_trigger(
     let theme = cx.theme();
     let tokens = theme::tokens(cx);
     let border = if open { theme.ring } else { theme.input };
-    hit(id)
+    pressable(id, true, theme.secondary, cx)
         .w_full()
         .h(metrics::HEIGHT_CONTROL)
         .px(metrics::SPACE_3)
@@ -273,7 +281,7 @@ pub(crate) fn segment(
     let theme = cx.theme();
     let tokens = theme::tokens(cx);
     let hover = theme.secondary_hover;
-    hit(id)
+    pressable(id, true, theme.secondary, cx)
         .flex_1()
         .min_w_0()
         .h(metrics::HEIGHT_CONTROL)
@@ -329,7 +337,7 @@ pub(crate) fn color_name(color: TagColor) -> &'static str {
 pub(crate) fn swatch(prefix: &str, color: TagColor, selected: bool, cx: &App) -> Hit {
     let fill = palette::tag_color(color).hsla();
     let ring = cx.theme().ring;
-    hit(swatch_id(prefix, color))
+    pressable(swatch_id(prefix, color), true, cx.theme().secondary, cx)
         .flex_none()
         .size(SWATCH_SIZE)
         .flex()
@@ -378,7 +386,7 @@ pub(crate) fn chip(
 pub(crate) fn remove_button(id: impl Into<ElementId>, cx: &App) -> Hit {
     let theme = cx.theme();
     let hover = theme.secondary_hover;
-    hit(id)
+    pressable(id, true, theme.secondary, cx)
         .flex_none()
         .size(px(18.))
         .flex()
@@ -401,7 +409,7 @@ pub(crate) fn text_button(
 ) -> Hit {
     let theme = cx.theme();
     let hover = theme.link_hover;
-    hit(id)
+    pressable(id, enabled, theme.secondary, cx)
         .flex_none()
         .h(px(28.))
         .flex()
@@ -432,7 +440,7 @@ pub(crate) fn outline_button(
     let theme = cx.theme();
     let hover = theme.secondary_hover;
     let pressed = theme.secondary_active;
-    hit(id)
+    pressable(id, true, theme.secondary, cx)
         .h(metrics::HEIGHT_CONTROL)
         .px(metrics::SPACE_3)
         .flex()
@@ -477,7 +485,7 @@ pub(crate) fn dropdown_item(
 ) -> Hit {
     let theme = cx.theme();
     let hover = theme.accent;
-    hit(id)
+    pressable(id, true, theme.popover, cx)
         .w_full()
         .min_h(px(32.))
         .px(metrics::SPACE_2)
@@ -630,7 +638,7 @@ pub(crate) fn form_button(
     let theme = cx.theme();
     let hover = theme.secondary_hover;
     let pressed = theme.secondary_active;
-    hit(id)
+    pressable(id, enabled, theme.secondary, cx)
         .flex_none()
         .h(px(32.))
         .px(metrics::SPACE_3)

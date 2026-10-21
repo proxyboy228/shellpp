@@ -403,6 +403,21 @@ impl HostsScreen {
             .collect()
     }
 
+    /// The first card on screen, where the arrows start when nothing is
+    /// selected.
+    pub(crate) fn first_visible_id(&self) -> Option<Uuid> {
+        self.listing
+            .groups
+            .first()
+            .map(|&ix| self.groups[ix].record_id)
+            .or_else(|| {
+                self.listing
+                    .hosts
+                    .first()
+                    .map(|&ix| self.hosts[ix].record_id)
+            })
+    }
+
     /// Every card on screen: groups first, then hosts (selection order).
     fn visible_ids(&self) -> Vec<Uuid> {
         let mut ids = self.visible_group_ids();
@@ -755,7 +770,8 @@ impl HostsScreen {
             .update(cx, |state, cx| state.set_location(Some(id), cx));
     }
 
-    /// Enter, E and the arrows on the focused cards (UI 2.4).
+    /// Enter, E and the arrows on the focused cards (UI 2.4); Esc leaves
+    /// the open group for its parent.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         if keystroke.modifiers.modified() {
@@ -784,6 +800,16 @@ impl HostsScreen {
                     cx.stop_propagation();
                     cx.emit(HostsRequest::EditHost(id));
                 }
+            }
+            "escape" => {
+                let state = self.state.read(cx);
+                let Some(location) = state.location() else {
+                    return;
+                };
+                let parent = state.group(location).and_then(|group| group.parent_id);
+                cx.stop_propagation();
+                self.state
+                    .update(cx, |state, cx| state.set_location(parent, cx));
             }
             key => {
                 if let Some(arrow) = layout::Arrow::from_key(key) {
@@ -1327,8 +1353,9 @@ pub(crate) fn exact_match(hosts: &[HostItem], text: &str) -> Option<Uuid> {
 
 /// Arrow navigation over two sections (groups, then hosts), each laid out
 /// in rows of `columns`. Up from the first host row goes to the last group
-/// row; down from the last group row goes to the first host row.
-fn sections_target(
+/// row; down from the last group row goes to the first host row. Snippets
+/// use it for their folders, then snippets.
+pub(crate) fn sections_target(
     groups: usize,
     hosts: usize,
     current: Option<usize>,

@@ -17,6 +17,7 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Selectable, Sizable as _};
 
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
 /// Icon size inside controls.
@@ -381,6 +382,7 @@ pub fn tag_chip(
     div()
         .id(id)
         .test_support()
+        .keyboard_stop(theme.colors.list, cx)
         .flex()
         .flex_none()
         .items_center()

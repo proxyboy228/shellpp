@@ -867,3 +867,52 @@ fn agent_forwarding_shows_its_warning_and_options(cx: &mut TestAppContext) {
     assert_eq!(data["ssh"]["agent_forward_system"], json!(true));
     assert_eq!(data["ssh"]["agent_confirm"], json!(true));
 }
+
+/// Plan of run 4, item 7.4: Esc closes the open dropdown, then the panel
+/// (a click on a dropdown leaves the keyboard focus in the field).
+#[gpui_kit::test]
+fn escape_closes_the_dropdown_then_the_panel(cx: &mut TestAppContext) {
+    let state = setup(cx);
+    let host = new_host(cx, &state, "192.0.2.74");
+    let (handle, panel) = open_panel(cx, &state, Some(host));
+    let closed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let _subscription = cx.update(|cx| {
+        let closed = closed.clone();
+        cx.subscribe(&panel, move |_, event: &crate::panels::PanelEvent, _| {
+            if matches!(event, crate::panels::PanelEvent::Close) {
+                closed.set(true);
+            }
+        })
+    });
+    let shown = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("host-charset-utf-8").is_some()
+        })
+        .unwrap()
+    };
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("host-label", cx);
+        window.click("host-show-more", cx);
+        window.render_frame(cx);
+        window.click("host-charset", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(shown(cx), "the dropdown is open");
+    let escape = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    escape(cx);
+    assert!(!shown(cx), "Esc closes the dropdown");
+    assert!(!closed.get(), "the panel stays");
+    escape(cx);
+    assert!(closed.get(), "the second Esc closes the panel");
+    state.update(cx, |state, _| state.shutdown());
+}

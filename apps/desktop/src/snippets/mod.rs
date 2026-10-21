@@ -100,6 +100,8 @@ pub struct SnippetsScreen {
     shown: Vec<usize>,
     shown_packages: Vec<usize>,
     selected: Option<Uuid>,
+    /// The folder card the arrow keys stand on (Enter opens it).
+    package_cursor: Option<Uuid>,
     form: Option<Entity<SnippetForm>>,
     panel_width: Pixels,
     measured_width: Option<f32>,
@@ -167,6 +169,7 @@ impl SnippetsScreen {
             shown: Vec::new(),
             shown_packages: Vec::new(),
             selected: None,
+            package_cursor: None,
             form: None,
             panel_width: metrics::WIDTH_DETAILS,
             measured_width: None,
@@ -384,6 +387,7 @@ impl SnippetsScreen {
 
     /// Opens a package (`None`: back to the top level).
     pub fn enter_package(&mut self, id: Option<Uuid>, cx: &mut Context<Self>) {
+        self.package_cursor = None;
         self.package = id.filter(|id| self.package_view(*id).is_some());
         self.refilter(cx);
     }

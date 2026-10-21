@@ -28,6 +28,7 @@ use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
 use crate::panels::widgets;
 use crate::shell::details::{self, DetailsHeader, ResizeDetails, ResizePreview};
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
 const CONTENT_PADDING: Pixels = metrics::SPACE_5;
@@ -621,12 +622,24 @@ impl SnippetsScreen {
         &self,
         package: &SnippetPackageView,
         width: f32,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = package.record.record_id;
         let screen = cx.entity().downgrade();
+        // With nothing selected the ring marks the first folder, where the
+        // arrows start.
+        let first = self.selected.is_none()
+            && self.package_cursor.is_none()
+            && self.shown_package_ids().first() == Some(&id);
+        let keyboard_cursor = (self.package_cursor == Some(id) || first)
+            && self.focus.is_focused(window)
+            && window.last_input_was_keyboard();
         self.card_frame(package_id(id), false, width, cx)
             .test_support()
+            .when(keyboard_cursor, |this| {
+                this.child(controls::focus_ring(metrics::RADIUS_CARD, px(1.), cx))
+            })
             .child(widgets::tile(
                 Lucide::Folder,
                 TagColor::Amber,
@@ -654,8 +667,15 @@ impl SnippetsScreen {
     ) -> AnyElement {
         let id = snippet.record.record_id;
         let selected = self.selected == Some(id);
-        let keyboard_cursor =
-            selected && self.focus.is_focused(window) && window.last_input_was_keyboard();
+        // With nothing selected the ring marks the first card, where the
+        // arrows start.
+        let first = self.selected.is_none()
+            && self.package_cursor.is_none()
+            && self.shown_package_ids().is_empty()
+            && self.shown_ids().first() == Some(&id);
+        let keyboard_cursor = (selected || first)
+            && self.focus.is_focused(window)
+            && window.last_input_was_keyboard();
         let package = snippet
             .package_id
             .filter(|_| self.package.is_none())
@@ -808,7 +828,7 @@ impl SnippetsScreen {
                     wrap().children(
                         packages
                             .iter()
-                            .map(|package| self.render_package(package, card_width, cx)),
+                            .map(|package| self.render_package(package, card_width, window, cx)),
                     ),
                 )
         });
@@ -883,6 +903,8 @@ impl SnippetsScreen {
             div()
                 .id("snippet-panel-remove")
                 .test_support()
+                .tab_index(0)
+                .focus_ring_visible(theme.colors.list, cx)
                 .flex()
                 .flex_none()
                 .items_center()
@@ -991,23 +1013,26 @@ impl SnippetsScreen {
         )
     }
 
-    /// Arrows move the selection; Enter runs the selected snippet; Delete
-    /// removes it; Esc closes the panel, then leaves the package.
+    /// Arrows move over the folders, then the snippets; Enter opens the
+    /// folder or runs the selected snippet; Delete removes it; Esc closes
+    /// the panel, then leaves the package.
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         if keystroke.modifiers.modified() {
             return;
         }
-        let ids = self.shown_ids();
+        let packages = self.shown_package_ids();
+        let ids: Vec<Uuid> = packages.iter().copied().chain(self.shown_ids()).collect();
         let current = self
-            .selected
+            .package_cursor
+            .or(self.selected)
             .and_then(|id| ids.iter().position(|shown| *shown == id));
-        let columns = self.columns.max(1) as isize;
-        let step = match keystroke.key.as_str() {
-            "left" => -1,
-            "right" => 1,
-            "up" => -columns,
-            "down" => columns,
+        let arrow = match keystroke.key.as_str() {
+            "enter" if self.package_cursor.is_some() => {
+                cx.stop_propagation();
+                self.enter_package(self.package_cursor, cx);
+                return;
+            }
             "enter" => {
                 if let Some(id) = self.selected {
                     cx.stop_propagation();
@@ -1032,17 +1057,30 @@ impl SnippetsScreen {
                 self.enter_package(None, cx);
                 return;
             }
-            _ => return,
+            key => match crate::hosts::layout::Arrow::from_key(key) {
+                Some(arrow) => arrow,
+                None => return,
+            },
         };
-        if ids.is_empty() {
+        let Some(next) = crate::hosts::sections_target(
+            packages.len(),
+            ids.len() - packages.len(),
+            current,
+            self.columns,
+            arrow,
+        ) else {
             return;
-        }
-        cx.stop_propagation();
-        let next = match current {
-            None => 0,
-            Some(index) => (index as isize + step).clamp(0, ids.len() as isize - 1) as usize,
         };
-        self.select(Some(ids[next]), window, cx);
+        cx.stop_propagation();
+        if next < packages.len() {
+            // A folder: the cursor stands on it, the snippet panel closes.
+            self.package_cursor = Some(ids[next]);
+            self.select(None, window, cx);
+            cx.notify();
+        } else {
+            self.package_cursor = None;
+            self.select(Some(ids[next]), window, cx);
+        }
     }
 }
 

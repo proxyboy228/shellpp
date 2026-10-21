@@ -44,6 +44,7 @@ use super::{
     host_card_id, layout, list_cell_id, strings, tag_chip_id, tag_filter,
 };
 use crate::state::hosts_view::{HostsLayout, HostsSort};
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Height of a section heading row ("Groups", "Hosts").
@@ -521,6 +522,7 @@ impl HostsScreen {
         let secondary = theme.muted_foreground;
         let primary = theme.foreground;
         let drop_bg = theme.drop_target;
+        let surface = theme.colors.list;
         let last = path.len() - 1;
         let crumb = |id: SharedString,
                      target: Option<Uuid>,
@@ -529,6 +531,7 @@ impl HostsScreen {
             div()
                 .id(id)
                 .test_support()
+                .keyboard_stop(surface, cx)
                 .min_w_0()
                 .truncate()
                 .px(metrics::SPACE_1)
@@ -674,7 +677,15 @@ impl HostsScreen {
         let tokens = theme::tokens(cx);
         let selection = self.state.read(cx).selection();
         let selected = selection.contains(&record);
-        let keyboard_cursor = selection.anchor() == Some(record)
+        // With nothing selected the ring marks the first card, where the
+        // arrows start (Tab into the grid shows where the focus is).
+        let cursor = selection.anchor().or_else(|| {
+            selection
+                .is_empty()
+                .then(|| self.first_visible_id())
+                .flatten()
+        });
+        let keyboard_cursor = cursor == Some(record)
             && self.focus.is_focused(window)
             && window.last_input_was_keyboard();
         let hover = theme.secondary_hover;

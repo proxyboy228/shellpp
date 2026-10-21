@@ -597,7 +597,8 @@ fn trash_button(
         .child(Icon::new(IconName::Trash).small())
         .map(|this| {
             if enabled {
-                this.cursor_pointer()
+                this.keyboard_stop(cx.theme().colors.list, cx)
+                    .cursor_pointer()
                     .hover(move |style| style.bg(hover).text_color(danger_hover))
                     .active(move |style| style.bg(pressed).text_color(danger_hover))
             } else {

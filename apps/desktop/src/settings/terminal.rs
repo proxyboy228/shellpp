@@ -46,6 +46,7 @@ use super::strings;
 use crate::panels::widgets;
 use crate::state::AppState;
 pub use crate::terminal::contrast::MinContrast;
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
 // Setting keys (docs/data-model.md, section 16.1).
@@ -1110,6 +1111,8 @@ impl TerminalSection {
                     THEME_CARD_WIDTH,
                     cx,
                 )
+                .tab_index(0)
+                .focus_ring_visible(cx.theme().secondary, cx)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.set_default_theme(choice, cx)
                 }))

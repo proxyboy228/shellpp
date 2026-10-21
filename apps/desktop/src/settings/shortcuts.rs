@@ -168,7 +168,7 @@ impl SettingsView {
                 theme.input
             };
             let hover = theme.secondary_hover;
-            let face = widgets::hit(keys_id(id))
+            let face = widgets::pressable(keys_id(id), true, theme.secondary, cx)
                 .flex_none()
                 .min_w(px(180.))
                 .h(px(32.))

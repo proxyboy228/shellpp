@@ -31,6 +31,7 @@ use super::{
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
 use crate::shell::details::{self, DetailsHeader, ResizeDetails, ResizePreview};
+use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
@@ -840,6 +841,8 @@ impl KnownHostsScreen {
         let remove = div()
             .id("kh-panel-remove")
             .test_support()
+            .tab_index(0)
+            .focus_ring_visible(theme.colors.list, cx)
             .flex()
             .flex_none()
             .items_center()

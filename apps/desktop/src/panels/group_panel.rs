@@ -311,6 +311,21 @@ impl GroupPanel {
         cx.notify();
     }
 
+    /// Esc closes the open dropdown, then the panel (the shell saves a
+    /// pending edit first).
+    fn on_escape(&mut self, event: &gpui::KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        if keystroke.key != "escape" || keystroke.modifiers.modified() {
+            return;
+        }
+        cx.stop_propagation();
+        if self.dropdown.take().is_some() {
+            cx.notify();
+        } else {
+            cx.emit(PanelEvent::Close);
+        }
+    }
+
     /// A click outside an open dropdown closes it.
     fn close_dropdown(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.dropdown.take().is_some() {
@@ -916,6 +931,7 @@ impl Render for GroupPanel {
         v_flex()
             .id("group-panel")
             .test_support()
+            .on_key_down(cx.listener(Self::on_escape))
             .size_full()
             .bg(cx.theme().colors.list)
             .text_color(cx.theme().foreground)

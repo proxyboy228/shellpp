@@ -21,7 +21,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    IntoElement, Pixels, SharedString, Size, Subscription, Task, Window, div, px, size,
+    IntoElement, KeyDownEvent, Pixels, SharedString, Size, Subscription, Task, Window, div, px,
+    size,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -194,6 +195,8 @@ pub struct FilePanel {
     show_hidden: bool,
     selected: BTreeSet<String>,
     anchor: Option<String>,
+    /// The row the arrow keys move from: the last one clicked or reached.
+    cursor: Option<String>,
     load: Load,
     /// Counts the listings: a late result of an older one is dropped.
     generation: u64,
@@ -322,12 +325,14 @@ impl FilePanel {
             show_hidden,
             selected: BTreeSet::new(),
             anchor: None,
+            cursor: None,
             load: Load::Idle,
             generation: 0,
             listing: None,
             scroll: VirtualListScrollHandle::new(),
             row_sizes: Rc::new(Vec::new()),
-            focus: cx.focus_handle(),
+            // The file list is one tab stop; the arrows move inside it.
+            focus: cx.focus_handle().tab_stop(true),
             picker: None,
             drives_open: false,
             _subscriptions: subscriptions,
@@ -749,6 +754,7 @@ impl FilePanel {
         self.history.go(path);
         self.selected.clear();
         self.anchor = None;
+        self.cursor = None;
         self.filter_reset(cx);
         self.list(cx);
     }
@@ -839,6 +845,7 @@ impl FilePanel {
                 }
             }
         }
+        self.cursor = Some(name.to_owned());
         cx.notify();
         cx.emit(PanelEvent::Changed);
     }
@@ -847,6 +854,67 @@ impl FilePanel {
         self.selected = self.rows.iter().map(|row| row.name.clone()).collect();
         cx.notify();
         cx.emit(PanelEvent::Changed);
+    }
+
+    /// The arrow keys (design-system 6): the row below or above the cursor
+    /// becomes the selection; with Shift the selection reaches it from the
+    /// anchor.
+    pub fn move_cursor(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let position = |wanted: Option<&str>| {
+            wanted.and_then(|wanted| self.rows.iter().position(|row| row.name == wanted))
+        };
+        let last = self.rows.len() - 1;
+        let next = match position(self.cursor.as_deref()).or(position(self.anchor.as_deref())) {
+            Some(at) if down => (at + 1).min(last),
+            Some(at) => at.saturating_sub(1),
+            None if down => 0,
+            None => last,
+        };
+        let name = self.rows[next].name.clone();
+        let mode = if extend {
+            SelectMode::Range
+        } else {
+            SelectMode::Replace
+        };
+        self.click(&name, mode, cx);
+        let parent = usize::from(listing::parent(self.path(), self.style).is_some());
+        self.scroll
+            .scroll_to_item(next + parent, gpui::ScrollStrategy::Nearest);
+    }
+
+    /// Keys on the focused file list: the arrows, Enter opens the selected
+    /// folder or file, Backspace goes up a folder, Ctrl+A selects all.
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Not while typing in the path or the filter field.
+        if !self.focus.is_focused(window) {
+            return;
+        }
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        match keystroke.key.as_str() {
+            "up" | "down" if !modifiers.control && !modifiers.alt && !modifiers.platform => {
+                cx.stop_propagation();
+                self.move_cursor(keystroke.key == "down", modifiers.shift, cx);
+            }
+            "enter" if !modifiers.modified() => {
+                if let [entry] = self.selection().as_slice() {
+                    cx.stop_propagation();
+                    self.open_entry(entry, cx);
+                }
+            }
+            "backspace" if !modifiers.modified() => {
+                cx.stop_propagation();
+                self.up(cx);
+            }
+            "a" if modifiers.secondary() && !modifiers.shift && !modifiers.alt => {
+                cx.stop_propagation();
+                self.select_all(cx);
+            }
+            _ => {}
+        }
     }
 
     pub fn is_selected(&self, name: &str) -> bool {
@@ -1714,7 +1782,7 @@ impl FilePanel {
             .into_any_element()
     }
 
-    fn render_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(&mut self, index: usize, keyboard: bool, cx: &mut Context<Self>) -> AnyElement {
         let has_parent = listing::parent(self.path(), self.style).is_some();
         if has_parent && index == 0 {
             return self.render_parent_row(cx);
@@ -1752,12 +1820,28 @@ impl FilePanel {
             many => format!("{} items", many.len()).into(),
         };
         let muted = theme.muted_foreground;
+        let ring = theme.ring;
+        let cursor = keyboard && self.cursor.as_deref() == Some(entry.name.as_str());
         h_flex()
             .id(row_id)
             .test_support()
+            .relative()
             .w_full()
             .h(ROW_HEIGHT)
             .rounded(metrics::RADIUS_CONTROL)
+            .when(cursor, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .rounded(metrics::RADIUS_CONTROL)
+                        .border(metrics::FOCUS_RING_WIDTH)
+                        .border_color(ring),
+                )
+            })
             .when(selected, |this| this.bg(cx.theme().list_active))
             .when(!selected, |this| {
                 this.hover(|style| style.bg(cx.theme().list_hover))
@@ -1890,9 +1974,11 @@ impl FilePanel {
             cx.entity(),
             self.id("rows-list"),
             self.row_sizes.clone(),
-            |this: &mut Self, range, _, cx| {
+            |this: &mut Self, range, window, cx| {
+                // The keyboard cursor shows only while the keyboard is used.
+                let keyboard = this.focus.is_focused(window) && window.last_input_was_keyboard();
                 range
-                    .map(|row| this.render_row(row, cx))
+                    .map(|row| this.render_row(row, keyboard, cx))
                     .collect::<Vec<_>>()
             },
         )
@@ -1962,6 +2048,7 @@ impl Render for FilePanel {
             .test_support()
             .key_context("SftpPanel")
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key_down))
             .size_full()
             .min_w_0()
             .p(metrics::SPACE_3)

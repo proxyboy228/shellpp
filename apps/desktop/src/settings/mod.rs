@@ -303,7 +303,7 @@ impl SettingsView {
                 .filter(|section| section.is_shown())
                 .map(|&section| {
                     let active = section == self.section;
-                    widgets::hit(section.nav_id())
+                    widgets::pressable(section.nav_id(), true, theme.background, cx)
                         .h(metrics::HEIGHT_CONTROL)
                         .px(metrics::SPACE_3)
                         .flex()
