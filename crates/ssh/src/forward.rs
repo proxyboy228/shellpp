@@ -534,11 +534,12 @@ enum Download {
 ///
 /// The channel is read message by message, not through russh's reader:
 /// that reader closes the channel's queue at the EOF, so the server's CLOSE
-/// could not be seen. It is read until the CLOSE, also after the server's
-/// EOF: russh hands the CLOSE over only when the queue has room, and holds
-/// the whole SSH connection until then. Our EOF goes out when the socket
-/// ends or fails. A failed socket does not wait for the server's half to
-/// end, and the server's CLOSE does not wait for ours.
+/// could not be seen. It is read until the CLOSE whatever else waits (the
+/// upload after the server's EOF, our EOF): russh hands a message to the
+/// channel only when its queue has room, and holds the whole SSH connection
+/// meanwhile. Our EOF goes out when the socket ends or fails. A failed
+/// socket does not wait for the server's half to end, and the server's
+/// CLOSE does not wait for ours.
 async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Msg>) {
     let (mut read, write) = channel.split();
     let mut guard = CloseOnDrop(Some(write));
@@ -547,15 +548,14 @@ async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Ms
     };
     let mut to_channel = half.make_writer();
     let (mut from_socket, mut to_socket) = socket.split();
-    // `false` when the socket failed.
-    let upload = async {
+    // `false` when the socket failed. The upload owns the channel's writer:
+    // dropping it lets go of what the writer holds in russh (a place in the
+    // queue, the window's lock).
+    let mut upload = Some(Box::pin(async move {
         let copied = tokio::io::copy(&mut from_socket, &mut to_channel).await;
         let _ = to_channel.shutdown().await;
         copied.is_ok()
-    };
-    tokio::pin!(upload);
-    // `Some` once our EOF went out.
-    let mut uploaded = None;
+    }));
     let ended = {
         let download = async {
             loop {
@@ -580,8 +580,8 @@ async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Ms
         tokio::pin!(download);
         loop {
             tokio::select! {
-                copied = &mut upload, if uploaded.is_none() => {
-                    uploaded = Some(copied);
+                copied = while_there(&mut upload) => {
+                    upload = None;
                     if !copied {
                         break Download::Failed;
                     }
@@ -590,37 +590,16 @@ async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Ms
             }
         }
     };
-    let closed_by_server = match ended {
+    let closed = match ended {
         Download::Closed => true,
-        Download::Eof | Download::Failed => {
-            if uploaded.is_none() && matches!(ended, Download::Failed) {
-                // The upload stops here.
-                let _ = half.eof().await;
-                uploaded = Some(false);
-            }
-            // After the server's EOF the upload goes on; the wait for the
-            // server's CLOSE starts when it ends.
-            let mut deadline = uploaded.map(|_| tokio::time::Instant::now() + CLOSE_WAIT);
-            loop {
-                let wait = tokio::time::sleep_until(
-                    deadline.unwrap_or_else(|| tokio::time::Instant::now() + CLOSE_WAIT),
-                );
-                tokio::select! {
-                    copied = &mut upload, if uploaded.is_none() => {
-                        uploaded = Some(copied);
-                        deadline = Some(tokio::time::Instant::now() + CLOSE_WAIT);
-                    }
-                    message = read.wait() => {
-                        if matches!(message, Some(russh::ChannelMsg::Close) | None) {
-                            break true;
-                        }
-                    }
-                    () = wait, if deadline.is_some() => break false,
-                }
-            }
+        Download::Eof => closed_by_server(&mut read, half, upload, false).await,
+        Download::Failed => {
+            // A running upload stops here: our EOF instead of its end.
+            let send_eof = upload.take().is_some();
+            closed_by_server(&mut read, half, upload, send_eof).await
         }
     };
-    if closed_by_server {
+    if closed {
         // Nothing left to close.
         guard.0 = None;
     }
@@ -631,20 +610,49 @@ async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Ms
 async fn end_channel(channel: russh::Channel<russh::client::Msg>) {
     let (mut read, write) = channel.split();
     let mut guard = CloseOnDrop(Some(write));
-    if let Some(half) = guard.0.as_ref() {
-        let _ = half.eof().await;
-    }
-    let closed = tokio::time::timeout(CLOSE_WAIT, async {
-        while let Some(message) = read.wait().await {
-            if matches!(message, russh::ChannelMsg::Close) {
-                return;
-            }
-        }
-    })
-    .await
-    .is_ok();
-    if closed {
+    let Some(half) = guard.0.as_ref() else {
+        return;
+    };
+    let no_upload: Option<std::future::Ready<()>> = None;
+    if closed_by_server(&mut read, half, no_upload, true).await {
         guard.0 = None;
+    }
+}
+
+/// Reads the channel while `upload` and our EOF (when `send_eof`) go out,
+/// and then for [`CLOSE_WAIT`]; `true` when the server closed it (or the
+/// connection ended).
+async fn closed_by_server<U: Future + Unpin>(
+    read: &mut russh::ChannelReadHalf,
+    half: &russh::ChannelWriteHalf<russh::client::Msg>,
+    mut upload: Option<U>,
+    send_eof: bool,
+) -> bool {
+    let mut eof = send_eof.then(|| Box::pin(half.eof()));
+    let mut deadline = None;
+    loop {
+        if deadline.is_none() && upload.is_none() && eof.is_none() {
+            deadline = Some(tokio::time::Instant::now() + CLOSE_WAIT);
+        }
+        let wait = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now));
+        tokio::select! {
+            _ = while_there(&mut upload) => upload = None,
+            _ = while_there(&mut eof) => eof = None,
+            message = read.wait() => {
+                if matches!(message, Some(russh::ChannelMsg::Close) | None) {
+                    return true;
+                }
+            }
+            () = wait, if deadline.is_some() => return false,
+        }
+    }
+}
+
+/// Runs `future` while there is one; never ends otherwise.
+async fn while_there<F: Future + Unpin>(future: &mut Option<F>) -> F::Output {
+    match future {
+        Some(future) => future.await,
+        None => std::future::pending().await,
     }
 }
 
@@ -910,7 +918,11 @@ pub(crate) async fn serve_remote_channel(
         Ok(Ok(socket)) => socket,
         _ => {
             tracing::debug!("remote forward destination unreachable");
-            let _ = channel.close().await;
+            tokio::select! {
+                biased;
+                () = end_channel(channel) => {}
+                _ = set(&mut stop) => {}
+            }
             return;
         }
     };

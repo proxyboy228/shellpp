@@ -265,6 +265,71 @@ async fn a_reset_local_connection_ends_while_the_destination_stays_open() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reset_local_connection_that_stopped_reading_ends() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&sent);
+    // Sends until the connection goes; never closes by itself.
+    let (addr, _task) = destination(|mut socket| async move {
+        let chunk = vec![b'x'; 64 << 10];
+        while socket.write_all(&chunk).await.is_ok() {
+            counted.fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
+        }
+        std::future::pending::<()>().await;
+    })
+    .await;
+    let connection = connection(&server, &password).await;
+    let forward = connection
+        .forward(local("127.0.0.1", addr.port(), 0))
+        .await
+        .expect("starts");
+    let stream = TcpStream::connect(local_addr(forward.bound()))
+        .await
+        .expect("connect");
+    // Nothing is read here: the data piles up on the way.
+    assert!(
+        eventually(SHORT, || sent.load(std::sync::atomic::Ordering::SeqCst)
+            >= 2 << 20)
+        .await
+    );
+    stream.set_zero_linger().expect("linger");
+    drop(stream);
+
+    // The writes to the socket fail; our EOF, then our CLOSE.
+    assert!(eventually(SHORT * 3, || forward.active_connections() == 0).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_connection_to_a_closed_port_here_ends() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    let closed = free_port().await;
+    let connection = connection(&server, &password).await;
+    let forward = connection
+        .forward(ForwardSpec {
+            kind: ForwardKind::Remote {
+                host: "127.0.0.1".to_owned(),
+                port: closed,
+            },
+            bind_address: String::new(),
+            bind_port: 0,
+        })
+        .await
+        .expect("starts");
+    let Bound::Remote(port) = forward.bound() else {
+        panic!("a remote listener");
+    };
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("the server listens");
+    // Our EOF: nothing here took the connection.
+    assert!(read_to_end(&mut stream).await.is_empty());
+    drop(stream);
+    assert!(eventually(SHORT, || forward.active_connections() == 0).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_busy_local_port_is_named_in_the_error() {
     let password = random_secret("pw");
     let server = forwarding_server(&password, true).await;
