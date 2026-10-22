@@ -1297,7 +1297,7 @@ Status: accepted, 2026-10-22 (owner's choice; the questions in section 3 of the 
 
 1. Interface scale (D78): option (a), the design system in rem with `set_rem_size`, in a separate run later. Not now; the menu items stay placeholders.
 2. Installer (D82): the portable zip only for now. Once code signing exists, an NSIS installer. No MSI.
-3. App icon (D82): one of the three drafts in `docs/assets/` becomes an `.ico` with every size from 16 to 256 px, embedded in the executable and set on the window; 16 and 32 px must stay legible. The other drafts are then removed. The answer did not name the variant (its placeholder "A, B or C" was left), so no draft is removed until the owner names it.
+3. App icon (D82): variant B, `docs/assets/icon-b-window.svg` (an accent tile with a terminal window, its prompt and a plus), becomes an `.ico` with every size from 16 to 256 px, embedded in the executable and set on the window; 16 and 32 px must stay legible. The other drafts are then removed. (The owner named the variant after the first answer, which had left it open.)
 4. Windows app identity (D70): the process sets `Shellpp.Desktop` with `SetCurrentProcessExplicitAppUserModelID` at every start; its registration under HKCU happens at the first start, not at the first notification. A test run (`SHELLPP_TEST=1`) and a temporary profile (`--demo`) still set and register nothing, as in D70.
 5. No allocator that wipes freed memory. The copies of secrets the code cannot wipe are listed in `docs/security.md` (section 9.5, RR11) as a known limitation.
 6. Broadcast input to panes of other tabs (D81): option (b), the tabs ticked in a list.
