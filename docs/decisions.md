@@ -1425,11 +1425,27 @@ Status: run 5 decision, 2026-10-22 (plan, section 12: a review of what grows or 
 
 **Spec impact:** `docs/storage-format.md` 8.3.
 
+## The owner's answers to run 5
+
+### 92. The owner's answers to the questions of run 5
+
+Status: accepted, 2026-10-22 (owner's choice; the five questions in section 3 of the run 5 report). Amends D84, D88 and D90 where they differ; items 1 and 5 go into the plan of run 6.
+
+**Decision:**
+
+1. A workspace's link to a host that does not exist stays (D63, D84): an import keeps it and opening the workspace leaves that pane out (D81). In addition, the Workspaces block of the new tab page marks such a workspace "N hosts not found", and its tooltip names the missing hosts as the workspace saved them (run 6).
+2. No mode 2027 (grapheme clusters negotiated with the shell). The blank cells after an emoji sequence drawn as one glyph (D90) stay a known limitation, recorded in `docs/compatibility.md`, section 2.
+3. DECCOLM stays as D90 has it: 80 or 132 columns only after DECSET 40, until the pane's size changes, RIS or DECRST 40.
+4. Removing a workspace stays as D90 has it: at once, with Undo in a toast for 5 seconds, without a question.
+5. Serial (D88): no saved port profiles. The settings of the last Connect are kept between app runs (a per-device setting: port names belong to one device). The port field also takes a name typed by hand when the port is not in the system's list (run 6).
+
+**Spec impact:** `docs/compatibility.md` section 2 (item 2) now; with the implementation (run 6): `docs/ui-behavior-spec.md` 2.2 "Serial" and the new tab page's Workspaces block (6), and `docs/ru`.
+
 ## The owner's answers to the sync design draft
 
 ### 93. The owner's answers to the sync design draft
 
-Status: accepted, 2026-10-22 (owner's choice; the 18 questions of `docs/sync-design-draft.md`, section 11, and a new requirement: the server will run in the owner's homelab). The owner gave the number 93. There is no decision 92: run 5 ended at D91 and nothing took 92 since; the owner's number is kept. Amends D11 (a server whose personal epoch is below the device's), D12 (records missing from a snapshot) and D14 (server restores) where they differ, and the stage 0 decisions that left custom CA certificates for sync servers out of the MVP (architecture.md 1.3) and that a received tombstone removes the local copy (storage-format.md 4.6). Closes the draft. SPEC stage 7 is still not started: this changes documents only.
+Status: accepted, 2026-10-22 (owner's choice; the 18 questions of `docs/sync-design-draft.md`, section 11, and a new requirement: the server will run in the owner's homelab). The owner gave the number 93; 92 holds the owner's answers to the questions of run 5, recorded after it. Amends D11 (a server whose personal epoch is below the device's), D12 (records missing from a snapshot) and D14 (server restores) where they differ, and the stage 0 decisions that left custom CA certificates for sync servers out of the MVP (architecture.md 1.3) and that a received tombstone removes the local copy (storage-format.md 4.6). Closes the draft. SPEC stage 7 is still not started: this changes documents only.
 
 **Decision** (the owner's answers; each option as the draft worded it):
 

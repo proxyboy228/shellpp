@@ -104,6 +104,12 @@ state checks what the program shows before the capture.
   no flag glyphs: the font draws the two letters in boxes. An emoji with the
   variation selector VS16 (`❤️`) is still drawn two cells wide in a one-cell
   slot and covers the next cell. Not fixed.
+- **Known limitation: the blank cells after an emoji sequence** (D92). They
+  stay: closing them up needs the terminal and the shell to agree on grapheme
+  clusters (mode 2027, as in WezTerm and foot), which the shells in common
+  use do not do yet; counting the sequence as two cells on the terminal's
+  side alone would move readline's cursor out of step with the screen.
+  Shell++ does not implement mode 2027.
 - **vttest and 80/132 columns** (run 5, D90). vttest allows column
   switching (DECSET 40) and then sets 80 columns with DECCOLM: the grid
   takes 80 (or 132) columns at once and the remote side is told, so test 1's
