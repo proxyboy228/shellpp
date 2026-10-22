@@ -529,8 +529,15 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
             .iter()
             .any(|divider| divider.direction == Direction::Row)
     );
-    // Broadcast input (UI 4.4): on, the receiving panes are marked; the
-    // item then stops it.
+    // Broadcast input (UI 4.4): on, the receiving panes of the running
+    // sessions are marked; the item then stops it.
+    let sessions: Vec<Entity<SessionPane>> =
+        cx.update(|cx| group.read(cx).sessions().into_iter().cloned().collect());
+    for session in &sessions {
+        session.update(cx, |session, cx| {
+            session.set_phase(Phase::Running, None, cx)
+        });
+    }
     ui.right_click(tab.element_id(), cx);
     ui.click("tab-menu-broadcast", cx);
     assert_eq!(cx.update(|cx| group.read(cx).pane_count()), 3);

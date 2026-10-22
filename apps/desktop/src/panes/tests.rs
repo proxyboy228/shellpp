@@ -798,16 +798,38 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
             sink
         })
         .collect();
-    terminals[1].send_typed(b"date\r".to_vec());
+    let view = |pane: PaneId, cx: &mut TestAppContext| {
+        tab.read(cx, |group, cx| {
+            group
+                .session(pane)
+                .and_then(|session| session.read(cx).terminal().cloned())
+                .unwrap()
+        })
+    };
+    let typed = |pane: PaneId, text: &'static str, cx: &mut TestAppContext| {
+        let view = view(pane, cx);
+        view.update(cx, |view, cx| view.type_for_test(text, cx));
+    };
+    typed(panes[1], "date\r", cx);
     for sink in &sinks {
         assert_eq!(sink.0.lock().unwrap().as_slice(), b"date\r");
     }
 
-    // Closing a pane leaves one: Broadcast input ends.
-    tab.update(cx, |group, cx| {
-        group.close_pane(panes[1], cx);
-    });
+    // At a password prompt (sudo), what is typed stays in its pane.
+    terminals[1]
+        .feed_blocking(b"[sudo] password for dev: ")
+        .unwrap();
+    terminals[1].flush_blocking();
+    typed(panes[1], "secret", cx);
+    assert_eq!(sinks[0].0.lock().unwrap().as_slice(), b"date\r");
+    assert!(sinks[1].0.lock().unwrap().ends_with(b"secret"));
+
+    // A member that stops running leaves (a reconnect is a fresh shell);
+    // fewer than two members end Broadcast input.
+    tab.set_phase(panes[0], Phase::Dropped(Failure::ConnectionLost), cx);
+    tab.frame(cx);
     assert!(!tab.read(cx, |group, _| group.broadcasting()));
-    terminals[0].send_typed(b"x".to_vec());
-    assert_eq!(sinks[1].0.lock().unwrap().as_slice(), b"date\r");
+    tab.set_phase(panes[0], Phase::Running, cx);
+    typed(panes[0], "x", cx);
+    assert!(sinks[1].0.lock().unwrap().ends_with(b"secret"));
 }

@@ -420,6 +420,21 @@ fn read_line(term: &Term<Listener>, boundary: Boundary) -> Option<Snapshot> {
     })
 }
 
+impl TerminalHandle {
+    /// Broadcast input (UI 4.4): whether the line the cursor is on looks
+    /// like a password prompt (`sudo`, `su`, `mysql -p`); typed input then
+    /// stays in its own pane. A line too long to follow counts as one.
+    pub fn cursor_at_password_prompt(&self) -> bool {
+        let term = self.term().lock();
+        let cursor = term.grid().cursor.point.line;
+        let Some(start) = logical_start(&term, cursor) else {
+            return true;
+        };
+        let text = Zeroizing::new(rows_text(&term, start, logical_end(&term, cursor), 0));
+        prompt_looks_like_password(&text)
+    }
+}
+
 /// Whether the logical line the cursor is on looks like a password prompt
 /// (the check of a held line); also `true` in the alternate screen and for
 /// a line too long to follow (fail closed).
@@ -795,8 +810,6 @@ impl TerminalHandle {
     /// history capture, then sent.
     pub fn send_typed(&self, bytes: Vec<u8>) {
         self.watch_input(&bytes, InputOrigin::Typed);
-        // Broadcast input (UI 4.4): the other panes of the tab too.
-        self.mirror_input(&bytes);
         self.send_input(bytes);
     }
 

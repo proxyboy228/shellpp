@@ -221,6 +221,10 @@ pub struct PaneGroup {
     /// Broadcast input (UI 4.4): what is typed in a pane goes to every
     /// pane of the tab.
     broadcast: bool,
+    /// The panes that take part: the running sessions when it was turned
+    /// on. A pane whose session stops running (a drop, a reconnect into a
+    /// fresh shell) leaves for good; a new pane does not join.
+    broadcast_members: Vec<PaneId>,
     focus: FocusHandle,
 }
 
@@ -316,6 +320,7 @@ impl PaneGroup {
             summary: None,
             empty: false,
             broadcast: false,
+            broadcast_members: Vec::new(),
             focus: cx.focus_handle(),
         }
     }
@@ -332,30 +337,78 @@ impl PaneGroup {
 
     /// Turns Broadcast input on or off; it needs more than one pane.
     pub fn set_broadcast(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.broadcast = on && self.has_splits();
+        self.broadcast_members = if on {
+            self.panes
+                .iter()
+                .filter(|pane| self.running_terminal(pane.id, cx).is_some())
+                .map(|pane| pane.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.broadcast = on && self.broadcast_members.len() > 1;
+        if !self.broadcast {
+            self.broadcast_members.clear();
+        }
         self.sync_broadcast(cx);
         cx.notify();
     }
 
-    /// Points every terminal of the tab at the others (while broadcasting)
-    /// or at none. Runs at each render while broadcasting, so new panes,
-    /// started sessions and closed panes are followed.
-    fn sync_broadcast(&self, cx: &App) {
-        let handles: Vec<crate::terminal::TerminalHandle> = self
+    /// The terminal of pane `id` while its session runs.
+    fn running_terminal(
+        &self,
+        id: PaneId,
+        cx: &App,
+    ) -> Option<Entity<crate::terminal::TerminalView>> {
+        match &self.pane(id)?.content {
+            Content::Session(session) => {
+                let session = session.read(cx);
+                (*session.phase() == Phase::Running)
+                    .then(|| session.terminal().cloned())
+                    .flatten()
+            }
+            Content::Picker { .. } => None,
+        }
+    }
+
+    /// Points each member's terminal at the other members (while
+    /// broadcasting) and every other terminal at none. Runs at each render
+    /// while broadcasting: a member that stopped running or closed leaves,
+    /// and fewer than two members end it.
+    fn sync_broadcast(&mut self, cx: &mut App) {
+        let members: Vec<(PaneId, Entity<crate::terminal::TerminalView>)> = if self.broadcast {
+            self.broadcast_members
+                .iter()
+                .filter_map(|id| Some((*id, self.running_terminal(*id, cx)?)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.broadcast_members = members.iter().map(|(id, _)| *id).collect();
+        if members.len() < 2 {
+            self.broadcast = false;
+            self.broadcast_members.clear();
+        }
+        let all: Vec<Entity<crate::terminal::TerminalView>> = self
             .panes
             .iter()
             .filter_map(|pane| match &pane.content {
-                Content::Session(session) => session
-                    .read(cx)
-                    .terminal()
-                    .map(|terminal| terminal.read(cx).handle()),
+                Content::Session(session) => session.read(cx).terminal().cloned(),
                 Content::Picker { .. } => None,
             })
             .collect();
-        let targets: &[crate::terminal::TerminalHandle] =
-            if self.broadcast { &handles } else { &[] };
-        for handle in &handles {
-            handle.set_mirror(targets);
+        for terminal in all {
+            let targets: Vec<gpui::WeakEntity<crate::terminal::TerminalView>> =
+                if self.broadcast && members.iter().any(|(_, member)| *member == terminal) {
+                    members
+                        .iter()
+                        .filter(|(_, member)| *member != terminal)
+                        .map(|(_, member)| member.downgrade())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+            terminal.update(cx, |terminal, _| terminal.set_broadcast(targets));
         }
     }
 
@@ -844,7 +897,7 @@ impl PaneGroup {
         let marked = self.panes.len() > 1 && id == self.active;
         // Broadcast input: the panes that receive what is typed in the
         // active one are marked (UI 4.7).
-        let broadcast = self.broadcast && id != self.active;
+        let broadcast = self.broadcast && id != self.active && self.broadcast_members.contains(&id);
         let warning = cx.theme().warning;
         div()
             .id(Self::element_id(id))
@@ -1006,11 +1059,8 @@ impl Render for PaneGroup {
         }
         // New sessions start now, at the size their pane had last.
         self.start_pending(window, cx);
-        // Broadcast input follows the panes; one pane left ends it.
+        // Broadcast input follows its members; fewer than two end it.
         if self.broadcast {
-            if !self.has_splits() {
-                self.broadcast = false;
-            }
             self.sync_broadcast(cx);
         }
         // Not from under a dialog, nor from the Rename field of the tab
