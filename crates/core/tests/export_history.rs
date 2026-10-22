@@ -332,6 +332,7 @@ fn a_full_restore_applies_the_settings_of_the_file_but_not_the_devices() {
     assert!(document["settings"].get("serial.baud").is_none());
     document["settings"]["serial.port"] = json!("COM42");
     document["settings"]["serial.flow"] = json!("hardware");
+    document["settings"]["updates.last_check"] = json!(4_000_000_000_u64);
     let text = SecretString::from(document.to_string());
 
     let target = first_run();
@@ -343,7 +344,10 @@ fn a_full_restore_applies_the_settings_of_the_file_but_not_the_devices() {
             ..DataImportInput::new(text, None)
         })
         .expect("import");
-    assert_eq!(summary.settings_left_out, 2, "serial.port and serial.flow");
+    assert_eq!(
+        summary.settings_left_out, 3,
+        "serial.port, serial.flow and updates.last_check"
+    );
     let settings = target.core.settings_get().expect("settings");
     let value = |key: &str| settings[key].clone();
     assert_eq!(value("terminal.os_detection_enabled"), false);
@@ -351,4 +355,5 @@ fn a_full_restore_applies_the_settings_of_the_file_but_not_the_devices() {
     assert_eq!(value("terminal.font_size"), 18);
     assert_eq!(value("serial.port"), serde_json::Value::Null);
     assert_eq!(value("serial.flow"), "none");
+    assert_eq!(value("updates.last_check"), 0);
 }

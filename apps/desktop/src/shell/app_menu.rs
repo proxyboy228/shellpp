@@ -282,8 +282,6 @@ mod tests {
             .unwrap_or_else(|| panic!("{id} missing"))
     }
 
-    /// UI 1.4, items 1-13 in order, with Import Data and Export Data after
-    /// the new connections (D38).
     /// D97: an update found adds an item with its version to Help, after
     /// Check for updates; without one, Help is as it was.
     #[test]
@@ -319,6 +317,8 @@ mod tests {
         assert_eq!(found.len(), plain.len() + 1);
     }
 
+    /// UI 1.4, items 1-13 in order, with Import Data and Export Data after
+    /// the new connections (D38).
     #[test]
     fn app_menu_has_the_spec_items_in_order() {
         let entries = entries();

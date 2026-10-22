@@ -12,7 +12,7 @@ D34 in [decisions.md](decisions.md)).
 
 | File | `format` | Content |
 |---|---|---|
-| `shellpp-export-<UTC yyyymmddThhmmssZ>.json` | `shellpp.export.v1` | every record of the personal vault except the recovery key, in clear text (passwords, private keys and passphrases included), and the app settings except those of the device (`serial.*`, D95) |
+| `shellpp-export-<UTC yyyymmddThhmmssZ>.json` | `shellpp.export.v1` | every record of the personal vault except the recovery key, in clear text (passwords, private keys and passphrases included), and the app settings except those of the device (`serial.*`, D95; `updates.last_check`, D97) |
 | `shellpp-export-<UTC yyyymmddThhmmssZ>.encrypted.json` | `shellpp.export.encrypted.v1` | the plain export, encrypted with an export password |
 
 Both are UTF-8 without a byte order mark, with LF line endings, indented
@@ -183,8 +183,8 @@ merges them into the personal vault (D34):
   the file differs. "Full restore from my backup" (off by default, D50)
   applies every setting of the file, those too, after a warning that the
   file may hold a script that then runs on the servers. The settings of the
-  device (`serial.*`: the last serial port, D95) are never applied, not
-  even by a full restore.
+  device (`serial.*`: the last serial port, D95; `updates.last_check`, D97)
+  are never applied, not even by a full restore.
 - A file over 64 MiB or with more than 500,000 records is refused.
 
 The summary reads "added N, existing M, conflicts C, skipped S, errors K"

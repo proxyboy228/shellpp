@@ -186,8 +186,8 @@
     updates, about. [decision] "Check for updates" is always available, even when the
     automatic check is off (see 12.7). [decision] It says what it found in a toast: an
     update with "Open Release Page", or that this is the latest version, or why the check
-    failed. While an update is known, Help also has "Shell++ X.Y.Z Is Available…", which
-    opens its release page in the system browser. (D97)
+    failed ("Checking for updates…" shows at once). While an update is known, Help also has
+    "Open the Shell++ X.Y.Z Release Page", which opens it in the system browser. (D97)
 11. Lock (Ctrl+Shift+L): lock the app now (see 13.3).
 12. — separator —
 13. Exit. While sessions, port forwards or file transfers are active, Exit asks for

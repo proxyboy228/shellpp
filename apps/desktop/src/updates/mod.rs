@@ -78,17 +78,22 @@ pub fn found(cx: &App) -> Option<(String, String)> {
     cx.try_global::<Found>().and_then(|found| found.0.clone())
 }
 
-/// Keeps what a check found for the Help menu, and when the source last
-/// answered (`updates.last_check`, the check at launch is daily).
-pub fn remember(outcome: &Outcome, core: Option<&shellpp_core::Core>, cx: &mut App) {
-    let found = match outcome {
-        Outcome::Newer { version, page } => Some((version.clone(), page.clone())),
-        Outcome::UpToDate => None,
-    };
-    cx.set_global(Found(found));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
+/// Keeps what a check found for the Help menu (an answer replaces it; a
+/// failure leaves it), and when the source was last asked
+/// (`updates.last_check`: the check at launch is daily, failed or not).
+pub fn remember(
+    result: &Result<Outcome, CheckError>,
+    core: Option<&shellpp_core::Core>,
+    cx: &mut App,
+) {
+    if let Ok(outcome) = result {
+        let found = match outcome {
+            Outcome::Newer { version, page } => Some((version.clone(), page.clone())),
+            Outcome::UpToDate => None,
+        };
+        cx.set_global(Found(found));
+    }
+    let now = now();
     if let Some(core) = core
         && let Err(error) = core.settings_set(shellpp_core::service::dto::SettingsSetInput {
             values: [(LAST_CHECK.to_owned(), serde_json::json!(now))]
@@ -129,7 +134,9 @@ pub fn due_at_launch(values: &serde_json::Map<String, Value>, now: u64) -> bool 
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let last = values.get(LAST_CHECK).and_then(Value::as_u64).unwrap_or(0);
-    on && now.saturating_sub(last) >= CHECK_INTERVAL.as_secs()
+    // A last check in the future (the clock was ahead, or went back) does
+    // not stop the check.
+    on && (last > now || now - last >= CHECK_INTERVAL.as_secs())
 }
 
 /// The check at launch (blocking): asks the source of `values` only when
@@ -141,24 +148,35 @@ pub fn at_launch(
     due_at_launch(values, now).then(|| check(&manifest_url(values), current_version()))
 }
 
-/// Whether `url` may be asked: `https://`, or plain HTTP to this machine.
+/// Whether `url` may be asked: `Ok(true)` for `https://`, `Ok(false)` for
+/// plain HTTP to this machine's loopback (the tests). The host is parsed;
+/// a user part (`user@`) is refused, so no `Authorization` is sent and
+/// `http://127.0.0.1:@elsewhere/` is not "this machine".
 fn allowed(url: &str) -> Result<bool, CheckError> {
-    let lower = url.trim().to_ascii_lowercase();
-    if lower.starts_with("https://") {
-        return Ok(true);
+    let uri: ureq::http::Uri = url.trim().parse().map_err(|_| CheckError::NotHttps)?;
+    let authority = uri.authority().ok_or(CheckError::NotHttps)?;
+    if authority.as_str().contains('@') {
+        return Err(CheckError::NotHttps);
     }
-    let local = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"];
-    if local.iter().any(|prefix| lower.starts_with(prefix)) {
-        return Ok(false);
+    match uri.scheme_str().map(str::to_ascii_lowercase).as_deref() {
+        Some("https") => Ok(true),
+        Some("http") if matches!(authority.host(), "127.0.0.1" | "localhost" | "[::1]") => {
+            Ok(false)
+        }
+        _ => Err(CheckError::NotHttps),
     }
-    Err(CheckError::NotHttps)
 }
 
 /// Asks `url` for the manifest and compares its version with `current`
 /// (blocking: run it off the UI thread).
 pub fn check(url: &str, current: &str) -> Result<Outcome, CheckError> {
     let https = allowed(url)?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let mut config = ureq::Agent::config_builder();
+    if !https {
+        // This machine: never through a proxy of the environment.
+        config = config.proxy(None);
+    }
+    let agent: ureq::Agent = config
         .timeout_global(Some(TIMEOUT))
         .https_only(https)
         .max_redirects(5)
@@ -196,7 +214,8 @@ pub fn compare(body: &[u8], current: &str) -> Result<Outcome, CheckError> {
     let text = text.strip_prefix('v').unwrap_or(text);
     let latest = semver::Version::parse(text).map_err(|_| CheckError::BadManifest)?;
     let ours = semver::Version::parse(current).map_err(|_| CheckError::BadManifest)?;
-    if latest <= ours {
+    // Semver precedence: build metadata (`+ci.5`) does not count.
+    if latest.cmp_precedence(&ours) != std::cmp::Ordering::Greater {
         return Ok(Outcome::UpToDate);
     }
     let page = manifest

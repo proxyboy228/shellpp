@@ -10,9 +10,10 @@ pub fn available(version: &str) -> String {
     format!("Shell++ {version} is available")
 }
 
-/// The Help menu's item while an update is known.
+/// The Help menu's item while an update is known (it opens the release
+/// page at once).
 pub fn menu_available(version: &str) -> String {
-    format!("Shell++ {version} Is Available\u{2026}")
+    format!("Open the Shell++ {version} Release Page")
 }
 
 /// After a check that found nothing newer.

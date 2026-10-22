@@ -465,7 +465,7 @@ Enforcement (stage 0 decision):
 - `shellpp://invite/<invitation_token>?server=<origin>` carries the invitation token. This is an accepted exception (D14): the token is single-use, valid 7 days, stored by the server only as a hash, revocable, and grants nothing by itself. Acceptance needs a signed-in account, and access needs the owner's fingerprint confirmation. The client sends the token only in request bodies and never logs it.
 - The `otpauth://` URI from TOTP setup is shown only as a QR code, with the secret as text next to it, inside the app (UI 13.5); it is never passed to the OS, opened as a link or logged.
 - External links opened by the app (Documentation, Report a Bug, Changelog, terminal links) never carry app data.
-- The update check is a plain GET without identifiers; its User-Agent is `shellpp` without a version (D7).
+- The update check is a plain GET without identifiers; its User-Agent is `shellpp/<version>` (D7, D97), and nothing else of ours is sent (no cookies; a source with a user part is refused).
 
 ### 9.3 Plaintext on disk
 

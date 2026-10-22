@@ -80,6 +80,11 @@ fn the_same_or_an_older_release_is_up_to_date() {
     let server = serve("200 OK", r#"{"version": "0.1.0"}"#);
     assert_eq!(check(&server.url, "0.1.0"), Ok(Outcome::UpToDate));
     assert_eq!(check(&server.url, "0.2.0"), Ok(Outcome::UpToDate));
+    // Build metadata does not make a version newer.
+    assert_eq!(
+        compare(br#"{"version": "0.2.0+ci.5"}"#, "0.2.0"),
+        Ok(Outcome::UpToDate)
+    );
     // A pre-release of the same version is older than the release.
     assert_eq!(
         compare(br#"{"version": "0.2.0-rc.1"}"#, "0.2.0"),
@@ -140,7 +145,16 @@ fn only_https_or_this_machine_is_asked() {
         check("ftp://example.com/x", "0.1.0"),
         Err(CheckError::NotHttps)
     );
+    // A user part: not this machine, and no Authorization either.
+    let disguised = server.url.replace("127.0.0.1:", "127.0.0.1:@example.com:");
+    assert_eq!(check(&disguised, "0.1.0"), Err(CheckError::NotHttps));
+    assert_eq!(
+        check("https://user:pw@example.com/latest.json", "0.1.0"),
+        Err(CheckError::NotHttps)
+    );
     assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    // The scheme's case does not matter.
+    assert_eq!(allowed("HTTPS://example.com/x"), Ok(true));
 }
 
 #[test]
@@ -160,6 +174,11 @@ fn the_check_at_launch_is_off_by_default_and_daily() {
     ));
     assert!(due_at_launch(
         &values(json!({AUTO_CHECK: true, LAST_CHECK: now - day})),
+        now
+    ));
+    // A last check in the future (the clock went back) does not block it.
+    assert!(due_at_launch(
+        &values(json!({AUTO_CHECK: true, LAST_CHECK: now + day})),
         now
     ));
     assert_eq!(manifest_url(&values(json!({}))), DEFAULT_MANIFEST_URL);

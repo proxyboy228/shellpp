@@ -401,12 +401,13 @@ fn check_updates_at_launch(core: std::sync::Arc<shellpp_core::Core>, cx: &mut Ap
         .background_executor()
         .spawn(async move { crate::updates::at_launch(&values, crate::updates::now()) });
     cx.spawn(async move |cx| {
-        let Some(Ok(outcome)) = task.await else {
+        let Some(result) = task.await else {
             return;
         };
         cx.update(|cx| {
-            crate::updates::remember(&outcome, Some(&core), cx);
-            if let crate::updates::Outcome::Newer { version, page } = outcome {
+            // Failed or not, the next check at launch is a day later.
+            crate::updates::remember(&result, Some(&core), cx);
+            if let Ok(crate::updates::Outcome::Newer { version, page }) = result {
                 for shell in all_shells(cx) {
                     let page = page.clone();
                     shell.update(cx, |shell, cx| {
@@ -522,6 +523,8 @@ pub struct Shell {
     /// The tabs of Broadcast input (UI 4.4, D86): what is typed in a
     /// member pane of one goes to the member panes of all.
     broadcast_tabs: Vec<SessionId>,
+    /// Help > Check for updates while it runs (one at a time, D97).
+    update_check: Option<gpui::Task<()>>,
     /// The Ctrl+K search over this window (UI 6), while open.
     search: Option<(Entity<SearchOverlay>, Subscription)>,
     /// Give the keyboard focus back to the shell at the next render (the
@@ -639,6 +642,7 @@ impl Shell {
             renaming: None,
             broadcast_tabs: Vec::new(),
             search: None,
+            update_check: None,
             focus_shell: false,
             focus_page: false,
             _subscriptions: subscriptions,
@@ -908,6 +912,11 @@ impl Shell {
     /// Help > Check for updates (UI 1.4, D97): asks the update source now
     /// and says what it found (an update with its release page).
     pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        // One check at a time; it says it started (it may take seconds).
+        if self.update_check.is_some() {
+            return;
+        }
+        self.toast(crate::updates::strings::CHECKING, cx);
         let core = self.state.read(cx).core().cloned();
         let values: serde_json::Map<String, serde_json::Value> = core
             .as_ref()
@@ -918,25 +927,32 @@ impl Shell {
         let task = cx.background_spawn(async move {
             crate::updates::check(&url, crate::updates::current_version())
         });
-        cx.spawn(async move |this, cx| {
+        self.update_check = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |shell, cx| match result {
-                Ok(outcome) => {
-                    crate::updates::remember(&outcome, core.as_deref(), cx);
-                    match outcome {
-                        crate::updates::Outcome::Newer { version, page } => {
-                            shell.push_toast(update_toast(&version, page), cx);
-                        }
-                        crate::updates::Outcome::UpToDate => shell.toast(
-                            crate::updates::strings::up_to_date(crate::updates::current_version()),
-                            cx,
-                        ),
-                    }
-                }
-                Err(error) => shell.toast(crate::updates::strings::failed(error), cx),
+            let _ = this.update(cx, |shell, cx| {
+                shell.update_check = None;
+                crate::updates::remember(&result, core.as_deref(), cx);
+                shell.update_checked(result, cx);
             });
-        })
-        .detach();
+        }));
+    }
+
+    /// The toast of Help > Check for updates.
+    fn update_checked(
+        &mut self,
+        result: Result<crate::updates::Outcome, crate::updates::CheckError>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(crate::updates::Outcome::Newer { version, page }) => {
+                self.push_toast(update_toast(&version, page), cx);
+            }
+            Ok(crate::updates::Outcome::UpToDate) => self.toast(
+                crate::updates::strings::up_to_date(crate::updates::current_version()),
+                cx,
+            ),
+            Err(error) => self.toast(crate::updates::strings::failed(error), cx),
+        }
     }
 
     /// Shows a toast at the bottom of the main area.

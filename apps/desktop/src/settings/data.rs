@@ -517,7 +517,10 @@ impl SettingsView {
     /// default) or an https:// address; otherwise marked, not written.
     pub(super) fn manifest_url_changed(&mut self, cx: &mut Context<Self>) {
         let text = self.manifest_url.read(cx).value().trim().to_owned();
-        self.manifest_url_invalid = !text.is_empty() && !text.starts_with("https://");
+        self.manifest_url_invalid = !text.is_empty()
+            && (!text.to_ascii_lowercase().starts_with("https://")
+                || text.contains(char::is_whitespace)
+                || text.len() > 2048);
         if self.manifest_url_invalid {
             cx.notify();
             return;
@@ -552,9 +555,7 @@ impl SettingsView {
         self.update_work = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if let Ok(outcome) = &result {
-                    crate::updates::remember(outcome, core.as_deref(), cx);
-                }
+                crate::updates::remember(&result, core.as_deref(), cx);
                 this.update_status = Some(UpdateStatus::Done(result));
                 cx.notify();
             });
