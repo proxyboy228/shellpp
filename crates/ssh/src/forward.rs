@@ -514,6 +514,16 @@ impl Drop for CloseOnDrop {
     }
 }
 
+/// How the server's half of a forwarded connection ended.
+enum Download {
+    /// The server sent its EOF; the socket's write side is shut.
+    Eof,
+    /// The server closed the channel, or the SSH connection ended.
+    Closed,
+    /// The socket failed: the local side is gone.
+    Failed,
+}
+
 /// Copies between `socket` and `channel` until both directions end, then
 /// lets the SSH server close the channel first. russh 0.64 keeps the
 /// client's entry of a channel the client closed first (the server's CLOSE
@@ -524,8 +534,11 @@ impl Drop for CloseOnDrop {
 ///
 /// The channel is read message by message, not through russh's reader:
 /// that reader closes the channel's queue at the EOF, so the server's CLOSE
-/// could not be seen. Our EOF goes out when the socket ends, also when it
-/// fails.
+/// could not be seen. It is read until the CLOSE, also after the server's
+/// EOF: russh hands the CLOSE over only when the queue has room, and holds
+/// the whole SSH connection until then. Our EOF goes out when the socket
+/// ends or fails. A failed socket does not wait for the server's half to
+/// end, and the server's CLOSE does not wait for ours.
 async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Msg>) {
     let (mut read, write) = channel.split();
     let mut guard = CloseOnDrop(Some(write));
@@ -534,47 +547,103 @@ async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Ms
     };
     let mut to_channel = half.make_writer();
     let (mut from_socket, mut to_socket) = socket.split();
+    // `false` when the socket failed.
     let upload = async {
-        let _ = tokio::io::copy(&mut from_socket, &mut to_channel).await;
+        let copied = tokio::io::copy(&mut from_socket, &mut to_channel).await;
         let _ = to_channel.shutdown().await;
+        copied.is_ok()
     };
-    // `true` once the channel is gone (the server closed it, or the
-    // connection ended); `false` at its EOF.
-    let download = async {
-        let mut writing = true;
-        loop {
-            match read.wait().await {
-                Some(russh::ChannelMsg::Data { data }) => {
-                    if writing && to_socket.write_all(&data).await.is_err() {
-                        writing = false;
-                    }
-                }
-                Some(russh::ChannelMsg::Eof) => {
-                    let _ = to_socket.shutdown().await;
-                    return false;
-                }
-                Some(russh::ChannelMsg::Close) | None => {
-                    let _ = to_socket.shutdown().await;
-                    return true;
-                }
-                Some(_) => {}
-            }
-        }
-    };
-    let ((), closed) = tokio::join!(upload, download);
-    let closed_by_server = closed
-        || tokio::time::timeout(CLOSE_WAIT, async {
+    tokio::pin!(upload);
+    // `Some` once our EOF went out.
+    let mut uploaded = None;
+    let ended = {
+        let download = async {
             loop {
                 match read.wait().await {
-                    Some(russh::ChannelMsg::Close) | None => return,
+                    Some(russh::ChannelMsg::Data { data }) => {
+                        if to_socket.write_all(&data).await.is_err() {
+                            return Download::Failed;
+                        }
+                    }
+                    Some(russh::ChannelMsg::Eof) => {
+                        let _ = to_socket.shutdown().await;
+                        return Download::Eof;
+                    }
+                    Some(russh::ChannelMsg::Close) | None => {
+                        let _ = to_socket.shutdown().await;
+                        return Download::Closed;
+                    }
                     Some(_) => {}
                 }
             }
-        })
-        .await
-        .is_ok();
+        };
+        tokio::pin!(download);
+        loop {
+            tokio::select! {
+                copied = &mut upload, if uploaded.is_none() => {
+                    uploaded = Some(copied);
+                    if !copied {
+                        break Download::Failed;
+                    }
+                }
+                ended = &mut download => break ended,
+            }
+        }
+    };
+    let closed_by_server = match ended {
+        Download::Closed => true,
+        Download::Eof | Download::Failed => {
+            if uploaded.is_none() && matches!(ended, Download::Failed) {
+                // The upload stops here.
+                let _ = half.eof().await;
+                uploaded = Some(false);
+            }
+            // After the server's EOF the upload goes on; the wait for the
+            // server's CLOSE starts when it ends.
+            let mut deadline = uploaded.map(|_| tokio::time::Instant::now() + CLOSE_WAIT);
+            loop {
+                let wait = tokio::time::sleep_until(
+                    deadline.unwrap_or_else(|| tokio::time::Instant::now() + CLOSE_WAIT),
+                );
+                tokio::select! {
+                    copied = &mut upload, if uploaded.is_none() => {
+                        uploaded = Some(copied);
+                        deadline = Some(tokio::time::Instant::now() + CLOSE_WAIT);
+                    }
+                    message = read.wait() => {
+                        if matches!(message, Some(russh::ChannelMsg::Close) | None) {
+                            break true;
+                        }
+                    }
+                    () = wait, if deadline.is_some() => break false,
+                }
+            }
+        }
+    };
     if closed_by_server {
         // Nothing left to close.
+        guard.0 = None;
+    }
+}
+
+/// Ends a channel nothing went through: our EOF, then the server's CLOSE as
+/// in [`relay`].
+async fn end_channel(channel: russh::Channel<russh::client::Msg>) {
+    let (mut read, write) = channel.split();
+    let mut guard = CloseOnDrop(Some(write));
+    if let Some(half) = guard.0.as_ref() {
+        let _ = half.eof().await;
+    }
+    let closed = tokio::time::timeout(CLOSE_WAIT, async {
+        while let Some(message) = read.wait().await {
+            if matches!(message, russh::ChannelMsg::Close) {
+                return;
+            }
+        }
+    })
+    .await
+    .is_ok();
+    if closed {
         guard.0 = None;
     }
 }
@@ -737,7 +806,7 @@ async fn forward_socks(mut socket: TcpStream, peer: SocketAddr, core: &ConnCore)
     match open_direct(core, &request.host, request.port, peer).await {
         Ok(channel) => {
             if socket.write_all(&socks_reply(REP_SUCCEEDED)).await.is_err() {
-                let _ = channel.close().await;
+                end_channel(channel).await;
                 return;
             }
             relay(&mut socket, channel).await;

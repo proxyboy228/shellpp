@@ -1,7 +1,8 @@
 //! Port forwarding (stage 5) against the russh test server: Local, Remote
-//! and Dynamic rules to a TCP echo service on loopback, a busy local port,
-//! a refused remote listener, stopping, and a host's rules on one shared
-//! connection that come up again after the connection drops.
+//! and Dynamic rules to a TCP echo service on loopback, how a forwarded
+//! connection ends (half-closed, closed by the server, reset), a busy
+//! local port, a refused remote listener, stopping, and a host's rules on
+//! one shared connection that come up again after the connection drops.
 
 mod support;
 
@@ -141,6 +142,126 @@ async fn a_local_rule_reaches_the_destination_through_the_ssh_host() {
         eventually(SHORT, || std::net::TcpStream::connect(addr).is_err()).await,
         "the port is free again"
     );
+}
+
+/// A destination that takes one connection and hands it to `serve`.
+async fn destination<F, Fut>(serve: F) -> (SocketAddr, tokio::task::JoinHandle<()>)
+where
+    F: FnOnce(TcpStream) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("address");
+    let task = tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            serve(socket).await;
+        }
+    });
+    (addr, task)
+}
+
+/// Reads `stream` to its end.
+async fn read_to_end(stream: &mut TcpStream) -> Vec<u8> {
+    let mut all = Vec::new();
+    tokio::time::timeout(SHORT, stream.read_to_end(&mut all))
+        .await
+        .expect("the end in time")
+        .expect("read");
+    all
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_upload_goes_on_after_the_destination_s_end() {
+    const UPLOAD: usize = 4 << 20;
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    let (received, count) = tokio::sync::oneshot::channel();
+    let (addr, _task) = destination(|mut socket| async move {
+        socket.write_all(b"ready").await.expect("write");
+        socket.shutdown().await.expect("shutdown");
+        let mut all = Vec::new();
+        let _ = socket.read_to_end(&mut all).await;
+        let _ = received.send(all.len());
+    })
+    .await;
+    let connection = connection(&server, &password).await;
+    let forward = connection
+        .forward(local("127.0.0.1", addr.port(), 0))
+        .await
+        .expect("starts");
+    let mut stream = TcpStream::connect(local_addr(forward.bound()))
+        .await
+        .expect("connect");
+    assert_eq!(read_to_end(&mut stream).await, b"ready");
+
+    // The destination's end is the end of one direction only.
+    stream.write_all(&vec![7u8; UPLOAD]).await.expect("upload");
+    stream.shutdown().await.expect("shutdown");
+    let count = tokio::time::timeout(SHORT, count)
+        .await
+        .expect("the destination read it all in time")
+        .expect("a count");
+    assert_eq!(count, UPLOAD);
+    assert!(eventually(SHORT, || forward.active_connections() == 0).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_s_close_ends_a_connection_the_local_side_keeps_open() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    // A reset destination: the test server closes the channel at once.
+    let (addr, _task) = destination(|mut socket| async move {
+        let mut buf = [0u8; 16];
+        let _ = socket.read(&mut buf).await;
+        socket.set_zero_linger().expect("linger");
+    })
+    .await;
+    let connection = connection(&server, &password).await;
+    let forward = connection
+        .forward(local("127.0.0.1", addr.port(), 0))
+        .await
+        .expect("starts");
+    let mut stream = TcpStream::connect(local_addr(forward.bound()))
+        .await
+        .expect("connect");
+    stream.write_all(b"hi").await.expect("write");
+    assert!(read_to_end(&mut stream).await.is_empty());
+
+    // The local side neither sends nor closes.
+    assert!(eventually(SHORT, || forward.active_connections() == 0).await);
+    drop(stream);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reset_local_connection_ends_while_the_destination_stays_open() {
+    let password = random_secret("pw");
+    let server = forwarding_server(&password, true).await;
+    // Reads to the end and keeps its side open: the server never closes.
+    let (addr, _task) = destination(|mut socket| async move {
+        let mut buf = [0u8; 1024];
+        while let Ok(n) = socket.read(&mut buf).await {
+            if n == 0 {
+                break;
+            }
+        }
+        std::future::pending::<()>().await;
+    })
+    .await;
+    let connection = connection(&server, &password).await;
+    let forward = connection
+        .forward(local("127.0.0.1", addr.port(), 0))
+        .await
+        .expect("starts");
+    let mut stream = TcpStream::connect(local_addr(forward.bound()))
+        .await
+        .expect("connect");
+    stream.write_all(b"hi").await.expect("write");
+    assert!(eventually(SHORT, || forward.active_connections() == 1).await);
+    stream.set_zero_linger().expect("linger");
+    drop(stream);
+
+    // Our EOF, then our CLOSE: the server has not closed within 5 s.
+    assert!(eventually(SHORT * 3, || forward.active_connections() == 0).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
