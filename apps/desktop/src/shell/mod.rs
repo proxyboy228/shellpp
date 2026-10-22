@@ -39,6 +39,7 @@
 
 pub mod actions;
 pub mod app_menu;
+pub mod broadcast_dialog;
 pub mod details;
 pub mod notifications;
 pub mod placeholder;
@@ -459,6 +460,9 @@ pub struct Shell {
     terminal_sidebar: Entity<TerminalSidebar>,
     /// The tab being renamed in place, if any.
     renaming: Option<Rename>,
+    /// The tabs of Broadcast input (UI 4.4, D86): what is typed in a
+    /// member pane of one goes to the member panes of all.
+    broadcast_tabs: Vec<SessionId>,
     /// The Ctrl+K search over this window (UI 6), while open.
     search: Option<(Entity<SearchOverlay>, Subscription)>,
     /// Give the keyboard focus back to the shell at the next render (the
@@ -572,6 +576,7 @@ impl Shell {
             contents: Vec::new(),
             terminal_sidebar,
             renaming: None,
+            broadcast_tabs: Vec::new(),
             search: None,
             focus_shell: false,
             focus_page: false,
@@ -1023,6 +1028,12 @@ impl Shell {
         match event {
             // The last pane closed (UI 4.6, 4.7): the neighbor rule applies.
             PaneGroupEvent::Empty => self.close_session(id, cx),
+            PaneGroupEvent::BroadcastChanged => {
+                if self.broadcast_tabs.contains(&id) {
+                    self.link_broadcast(cx);
+                    cx.notify();
+                }
+            }
             PaneGroupEvent::Changed => self.on_group_changed(id, group, cx),
             // A quick connect (UI 2.1) offers to save the host.
             PaneGroupEvent::Connected(PaneTarget::Quick(target)) => {
@@ -1102,6 +1113,10 @@ impl Shell {
         }
         let next = self.sessions.close(id);
         self.session_focus.retain(|(session, _)| *session != id);
+        if self.broadcast_tabs.contains(&id) {
+            self.broadcast_tabs.retain(|tab| *tab != id);
+            self.link_broadcast(cx);
+        }
         if was_active {
             self.top_tab = next.map_or(TopTab::Vaults, TopTab::Session);
             self.reveal_active_tab();
@@ -1126,12 +1141,108 @@ impl Shell {
         }
     }
 
-    /// Ctrl+Shift+B (UI 4.4): Broadcast input on or off in the active tab,
-    /// as its menu item.
-    fn toggle_broadcast(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let TopTab::Session(id) = self.top_tab {
-            self.run_tab_command(id, tab_menu::TabCommand::BroadcastInput, window, cx);
+    /// Ctrl+Shift+B (UI 4.4): Broadcast input off, or on in the active tab.
+    fn toggle_broadcast(&mut self, cx: &mut Context<Self>) {
+        if !self.broadcast_tabs.is_empty() {
+            self.stop_broadcast(cx);
+        } else if let TopTab::Session(id) = self.top_tab {
+            self.start_broadcast(vec![id], cx);
         }
+        cx.notify();
+    }
+
+    /// Starts Broadcast input over `tabs` (D86): their panes whose sessions
+    /// run take part; with fewer than two, a toast says so.
+    fn start_broadcast(&mut self, tabs: Vec<SessionId>, cx: &mut Context<Self>) -> bool {
+        self.stop_broadcast(cx);
+        let mut joined = Vec::new();
+        let mut members = 0;
+        for id in tabs {
+            if let Some(group) = self.group(id).cloned() {
+                let count = group.update(cx, |group, cx| group.join_broadcast(cx));
+                if count > 0 {
+                    joined.push(id);
+                    members += count;
+                }
+            }
+        }
+        if members < 2 {
+            for id in joined {
+                if let Some(group) = self.group(id).cloned() {
+                    group.update(cx, |group, cx| group.set_broadcast(false, cx));
+                }
+            }
+            self.toast(strings::BROADCAST_TOO_FEW, cx);
+            return false;
+        }
+        self.broadcast_tabs = joined;
+        self.link_broadcast(cx);
+        cx.notify();
+        true
+    }
+
+    /// Points each tab's members at the members of the other tabs; fewer
+    /// than two members left end Broadcast input.
+    fn link_broadcast(&mut self, cx: &mut Context<Self>) {
+        let groups: Vec<(SessionId, Entity<PaneGroup>)> = self
+            .broadcast_tabs
+            .iter()
+            .filter_map(|id| Some((*id, self.group(*id)?.clone())))
+            .filter(|(_, group)| group.read(cx).broadcasting())
+            .collect();
+        self.broadcast_tabs = groups.iter().map(|(id, _)| *id).collect();
+        let terminals: Vec<Vec<gpui::WeakEntity<crate::terminal::TerminalView>>> = groups
+            .iter()
+            .map(|(_, group)| group.read(cx).broadcast_terminals(cx))
+            .collect();
+        if terminals.iter().map(Vec::len).sum::<usize>() < 2 {
+            self.stop_broadcast(cx);
+            return;
+        }
+        for (index, (_, group)) in groups.iter().enumerate() {
+            let peers = terminals
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .flat_map(|(_, members)| members.iter().cloned())
+                .collect();
+            group.update(cx, |group, cx| group.set_broadcast_peers(peers, cx));
+        }
+    }
+
+    /// Ends Broadcast input in every tab.
+    fn stop_broadcast(&mut self, cx: &mut Context<Self>) {
+        for id in std::mem::take(&mut self.broadcast_tabs) {
+            if let Some(group) = self.group(id).cloned() {
+                group.update(cx, |group, cx| group.set_broadcast(false, cx));
+            }
+        }
+    }
+
+    /// The tab list of Broadcast input (D86): every session tab, `id` and
+    /// the tabs that broadcast now ticked.
+    fn open_broadcast_dialog(
+        &mut self,
+        id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs: Vec<(SessionId, SharedString, bool)> = self
+            .sessions
+            .tabs()
+            .iter()
+            .filter(|tab| self.group(tab.id()).is_some())
+            .map(|tab| {
+                let ticked = tab.id() == id || self.broadcast_tabs.contains(&tab.id());
+                (tab.id(), tab.title().clone(), ticked)
+            })
+            .collect();
+        let shell = cx.entity().downgrade();
+        broadcast_dialog::open(tabs, window, cx, move |chosen, _, cx| {
+            shell
+                .update(cx, |shell, cx| shell.start_broadcast(chosen, cx))
+                .unwrap_or(true)
+        });
     }
 
     /// The top-bar tabs in order: Vaults, SFTP, then the session tabs.
@@ -1532,6 +1643,7 @@ impl Shell {
                     title_bar::TabMarks {
                         state: self.tab_status(id, cx),
                         asks_signature: self.tab_asks_signature(id, cx),
+                        broadcasting: self.broadcast_tabs.contains(&id),
                     },
                     rename,
                     &focus,
@@ -2314,7 +2426,8 @@ impl Shell {
             can_split_down: has_target && group.can_split(active, Direction::Column),
             can_split_right: has_target && group.can_split(active, Direction::Row),
             has_splits: group.has_splits(),
-            broadcasting: group.broadcasting(),
+            other_tabs: self.sessions.len() > 1,
+            broadcasting: self.broadcast_tabs.contains(&id),
         }
     }
 
@@ -2361,16 +2474,15 @@ impl Shell {
                 }
             }
             TabCommand::BroadcastInput => {
-                if let Some(group) = group {
-                    let refused = group.update(cx, |group, cx| {
-                        let on = !group.broadcasting();
-                        group.set_broadcast(on, cx);
-                        on && !group.broadcasting()
-                    });
-                    if refused {
-                        self.toast(strings::BROADCAST_TOO_FEW, cx);
-                    }
+                // Several tabs open: the list of tabs to broadcast to (D86).
+                if self.broadcast_tabs.contains(&id) {
+                    self.stop_broadcast(cx);
+                } else if group.is_some() && self.sessions.len() > 1 {
+                    self.open_broadcast_dialog(id, window, cx);
+                } else if group.is_some() {
+                    self.start_broadcast(vec![id], cx);
                 }
+                cx.notify();
             }
             TabCommand::Close => {
                 self.close_session(id, cx);
@@ -2826,9 +2938,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             // The focus goes to the next active pane or tab.
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_active(cx)))
-            .on_action(cx.listener(|this, _: &ToggleBroadcast, window, cx| {
-                this.toggle_broadcast(window, cx)
-            }))
+            .on_action(cx.listener(|this, _: &ToggleBroadcast, _, cx| this.toggle_broadcast(cx)))
             .on_action(cx.listener(|_, _: &OpenDocumentation, _, cx| {
                 cx.open_url(&format!("{}#readme", env!("CARGO_PKG_REPOSITORY")));
             }))

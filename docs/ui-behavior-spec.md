@@ -754,7 +754,7 @@ The same form is used for creating and editing; it opens in the details panel.
 5. Split horizontally: a new pane below the current one (Ctrl+Shift+E, see 4.7). [decision]
 6. Split vertically: a new pane to the right of the current one (Ctrl+Shift+D,
    see 4.7). [decision]
-7. Broadcast input: shown only on a tab with splits (see 4.7). [decision]
+7. Broadcast input: shown on a tab with splits, and on any session tab while other tabs are open (see 4.7, D86). [decision]
    Until stage 9 it is shown disabled (section 0). [decision]
 8. Close: closes the tab with all its panes. The next active tab follows 4.6. [decision]
 
@@ -860,6 +860,13 @@ The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases eithe
   The item reads "Stop Broadcast Input" while it is on; a tab left with one pane ends it.
   A paste of several lines asks first while it is on, also with the confirmation setting
   off, and the dialog says the other panes get it too (D81).
+- **Broadcast to other tabs** [decision]: while other session tabs are open, the menu item
+  opens a list of the open tabs with a check box each, the tab of the menu ticked; Start
+  sends what is typed in a connected pane of a ticked tab to the connected panes of all of
+  them. Each such tab shows a tower in `--warning` by its name, and the receiving panes
+  have the border. A tab that closes or keeps no connected pane leaves; fewer than two
+  connected panes in all end it. Ctrl+Shift+B turns it off, or on for the current tab only
+  (D86).
 
 ### 4.8 Connecting and authentication [decision]
 

@@ -194,12 +194,14 @@ pub fn vaults_pill(
 /// inline Rename field (UI 4.4). `close` is the tab's close button
 /// ([`session_tab_close`] with the caller's click handler); the caller
 /// attaches the tab's own click handler.
-/// The marks of a session tab next to its name: the state dot and the key
-/// of a waiting signature question (D68).
+/// The marks of a session tab next to its name: the state dot, the key of
+/// a waiting signature question (D68) and the tower of Broadcast input
+/// (D86).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TabMarks {
     pub state: Option<PaneStatus>,
     pub asks_signature: bool,
+    pub broadcasting: bool,
 }
 
 pub fn session_tab<C: IntoElement>(
@@ -214,6 +216,7 @@ pub fn session_tab<C: IntoElement>(
     let TabMarks {
         state,
         asks_signature,
+        broadcasting,
     } = marks;
     let theme = cx.theme();
     let group: SharedString = format!("{}-group", tab.element_id()).into();
@@ -269,6 +272,22 @@ pub fn session_tab<C: IntoElement>(
                     .child(Icon::new(Lucide::KeyRound).size(px(14.)))
                     .tooltip(|window, cx| {
                         Tooltip::new(crate::session_ui::strings::SIGN_WAITING).build(window, cx)
+                    }),
+            )
+        })
+        .when(broadcasting, |this| {
+            this.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "{}-broadcast",
+                        tab.element_id()
+                    )))
+                    .test_support()
+                    .flex_none()
+                    .text_color(theme.warning)
+                    .child(Icon::new(Lucide::RadioTower).size(px(14.)))
+                    .tooltip(|window, cx| {
+                        Tooltip::new(super::strings::BROADCAST_TITLE).build(window, cx)
                     }),
             )
         })

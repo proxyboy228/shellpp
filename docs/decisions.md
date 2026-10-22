@@ -1337,3 +1337,17 @@ Status: run 5 decision, 2026-10-22 (plan, section 6; night 1 report, section 2.4
 - Not kept in the journal: OSC 8 links and underline colors. Journal rows keep the width they had when they moved: a later resize does not reflow them (a wider row is cut, a narrower one padded).
 
 **Spec impact:** none (UI 4.2's search and 4.3's selection already cover the whole scrollback).
+
+### 86. Broadcast input to ticked tabs (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 7; D83 item 6: "the tabs ticked in a list").
+
+**Decision:**
+
+- The tab menu's "Broadcast Input" item shows on a tab with splits and on any session tab while other tabs are open. With other tabs open it opens a list of the open session tabs (by their names), each with a check box, the tab of the menu ticked (and the tabs that broadcast now); Start begins Broadcast input over the ticked tabs. With one tab it starts at once, as before. On a tab that broadcasts, the item stops it everywhere.
+- The members are the panes whose sessions run when it starts, in all ticked tabs; what is typed in one goes to all the others, with every rule of D81 (the password pause, Tab, the confirmed paste and its count). A pane that stops running leaves, a tab that closes leaves with its panes, and fewer than two members in all end it, in every tab.
+- Each tab that takes part shows a tower in `--warning` by its name in the tab strip; in a tab, the receiving panes have the border, also when the active pane of that tab is not a member (the other tabs send to it).
+- Ctrl+Shift+B turns Broadcast input off, or on for the current tab only (the quick case); the list is the menu's.
+- The window keeps the set of tabs; each tab's pane group keeps its members and the other tabs' members as peers, and tells the window when its members change.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 4.4 item 7 and 4.7 (and `docs/ru`).

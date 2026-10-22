@@ -113,6 +113,9 @@ pub enum PaneGroupEvent {
     /// The last pane closed: the tab closes (UI 4.6). Every session of the
     /// group has ended.
     Empty,
+    /// The panes that take part in Broadcast input changed, or it ended
+    /// here (D86): the window points the other tabs' panes at the new set.
+    BroadcastChanged,
     /// The active pane, its title or icon, or the worst state changed: the
     /// tab redraws, and the terminal sidebar follows the active pane.
     Changed,
@@ -225,6 +228,9 @@ pub struct PaneGroup {
     /// on. A pane whose session stops running (a drop, a reconnect into a
     /// fresh shell) leaves for good; a new pane does not join.
     broadcast_members: Vec<PaneId>,
+    /// The members of other tabs (Broadcast input over ticked tabs, D86):
+    /// what is typed in a member here goes to them too.
+    broadcast_peers: Vec<gpui::WeakEntity<crate::terminal::TerminalView>>,
     focus: FocusHandle,
 }
 
@@ -321,6 +327,7 @@ impl PaneGroup {
             empty: false,
             broadcast: false,
             broadcast_members: Vec::new(),
+            broadcast_peers: Vec::new(),
             focus: cx.focus_handle(),
         }
     }
@@ -346,12 +353,56 @@ impl PaneGroup {
         } else {
             Vec::new()
         };
+        self.broadcast_peers.clear();
         self.broadcast = on && self.broadcast_members.len() > 1;
         if !self.broadcast {
             self.broadcast_members.clear();
         }
         self.sync_broadcast(cx);
         cx.notify();
+    }
+
+    /// Takes part in Broadcast input over several tabs (D86): the panes
+    /// whose sessions run now become members, however many; the window
+    /// then sets the other tabs' members ([`Self::set_broadcast_peers`]).
+    /// Returns the members.
+    pub fn join_broadcast(&mut self, cx: &mut Context<Self>) -> usize {
+        self.broadcast_members = self
+            .panes
+            .iter()
+            .filter(|pane| self.running_terminal(pane.id, cx).is_some())
+            .map(|pane| pane.id)
+            .collect();
+        self.broadcast = !self.broadcast_members.is_empty();
+        self.broadcast_peers.clear();
+        cx.notify();
+        self.broadcast_members.len()
+    }
+
+    /// The members of the other tabs of Broadcast input.
+    pub fn set_broadcast_peers(
+        &mut self,
+        peers: Vec<gpui::WeakEntity<crate::terminal::TerminalView>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.broadcast_peers = peers;
+        self.sync_broadcast(cx);
+        cx.notify();
+    }
+
+    /// The terminals of this tab's members.
+    pub fn broadcast_terminals(
+        &self,
+        cx: &App,
+    ) -> Vec<gpui::WeakEntity<crate::terminal::TerminalView>> {
+        if !self.broadcast {
+            return Vec::new();
+        }
+        self.broadcast_members
+            .iter()
+            .filter_map(|id| self.running_terminal(*id, cx))
+            .map(|terminal| terminal.downgrade())
+            .collect()
     }
 
     /// The terminal of pane `id` while its session runs.
@@ -371,12 +422,15 @@ impl PaneGroup {
         }
     }
 
-    /// Points each member's terminal at the other members (while
-    /// broadcasting) and every other terminal at none. Runs at each render
-    /// and session change while broadcasting (a tab in the background
-    /// too): a member that stopped running or closed leaves, and fewer than
-    /// two members end it.
-    fn sync_broadcast(&mut self, cx: &mut App) {
+    /// Points each member's terminal at the other members and the other
+    /// tabs' (while broadcasting) and every other terminal at none. Runs at
+    /// each render and session change while broadcasting (a tab in the
+    /// background too): a member that stopped running or closed leaves,
+    /// and fewer than two members in all end it. A change is told to the
+    /// window ([`PaneGroupEvent::BroadcastChanged`]).
+    fn sync_broadcast(&mut self, cx: &mut Context<Self>) {
+        let before = (self.broadcast, self.broadcast_members.clone());
+        self.broadcast_peers.retain(|peer| peer.upgrade().is_some());
         let members: Vec<(PaneId, Entity<crate::terminal::TerminalView>)> = if self.broadcast {
             self.broadcast_members
                 .iter()
@@ -386,9 +440,10 @@ impl PaneGroup {
             Vec::new()
         };
         self.broadcast_members = members.iter().map(|(id, _)| *id).collect();
-        if members.len() < 2 {
+        if members.len() + self.broadcast_peers.len() < 2 {
             self.broadcast = false;
             self.broadcast_members.clear();
+            self.broadcast_peers.clear();
         }
         let all: Vec<Entity<crate::terminal::TerminalView>> = self
             .panes
@@ -405,11 +460,15 @@ impl PaneGroup {
                         .iter()
                         .filter(|(_, member)| *member != terminal)
                         .map(|(_, member)| member.downgrade())
+                        .chain(self.broadcast_peers.iter().cloned())
                         .collect()
                 } else {
                     Vec::new()
                 };
             terminal.update(cx, |terminal, _| terminal.set_broadcast(targets));
+        }
+        if (self.broadcast, &self.broadcast_members) != (before.0, &before.1) {
+            cx.emit(PaneGroupEvent::BroadcastChanged);
         }
     }
 
@@ -906,10 +965,12 @@ impl PaneGroup {
         let marked = self.panes.len() > 1 && id == self.active;
         // Broadcast input: the panes that receive what is typed in the
         // active one are marked (UI 4.7).
+        // A receiving pane is marked: a member other than the active one,
+        // while typing in the active pane is mirrored or other tabs send.
         let broadcast = self.broadcast
             && id != self.active
             && self.broadcast_members.contains(&id)
-            && self.broadcast_members.contains(&self.active);
+            && (self.broadcast_members.contains(&self.active) || !self.broadcast_peers.is_empty());
         let warning = cx.theme().warning;
         div()
             .id(Self::element_id(id))

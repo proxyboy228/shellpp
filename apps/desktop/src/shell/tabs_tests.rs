@@ -489,7 +489,10 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
     ] {
         assert!(ui.visible(id, cx), "{id}");
     }
-    assert!(!ui.visible("tab-menu-broadcast", cx), "only with splits");
+    assert!(
+        ui.visible("tab-menu-broadcast", cx),
+        "another tab is open (D86)"
+    );
     ui.click("tab-menu-duplicate", cx);
     let tabs = ui.tabs(cx);
     assert_eq!(tabs.len(), 3);
@@ -539,8 +542,11 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
             session.set_phase(Phase::Running, None, cx)
         });
     }
+    // Other tabs are open: the item lists them, this tab ticked (D86).
     ui.right_click(tab.element_id(), cx);
     ui.click("tab-menu-broadcast", cx);
+    assert!(ui.visible("broadcast-dialog", cx));
+    ui.click("broadcast-start", cx);
     assert_eq!(cx.update(|cx| group.read(cx).pane_count()), 3);
     assert!(cx.update(|cx| group.read(cx).broadcasting()));
     let picker = cx.update(|cx| group.read(cx).active_pane());
@@ -597,6 +603,80 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
     let tabs = ui.tabs(cx);
     assert_eq!(tabs.len(), 2);
     assert!(tabs.iter().all(|tab| tab.id() != first));
+    ui.finish(cx);
+}
+
+/// D86: Broadcast input over ticked tabs. The tab menu lists the open tabs;
+/// what is typed in one goes to the connected panes of the ticked tabs, each
+/// marked in the tab strip, and not to the others; a tab that closes leaves,
+/// and fewer than two connected panes in all end it.
+#[gpui_kit::test]
+fn broadcast_input_reaches_the_ticked_tabs(cx: &mut TestAppContext) {
+    #[derive(Default)]
+    struct Sink(std::sync::Mutex<Vec<u8>>);
+    impl crate::terminal::TerminalSink for Sink {
+        fn send(&self, bytes: Vec<u8>) {
+            self.0.lock().unwrap().extend_from_slice(&bytes);
+        }
+        fn resize(&self, _: crate::terminal::TerminalSize) {}
+    }
+
+    let ui = Ui::open(cx);
+    let host = ui.save_host(web(), cx);
+    let a = ui.open_tab(SessionRequest::new(SessionKind::Ssh).host(host), cx);
+    let b = ui.open_tab(SessionRequest::new(SessionKind::Ssh).host(host), cx);
+    let c = ui.open_tab(SessionRequest::new(SessionKind::Local), cx);
+    let mut terminals = Vec::new();
+    for id in [a, b, c] {
+        let group = ui.group(id, cx);
+        let session = cx.update(|cx| group.read(cx).sessions()[0].clone());
+        session.update(cx, |session, cx| {
+            session.set_phase(Phase::Running, None, cx)
+        });
+        let terminal = cx.update(|cx| session.read(cx).terminal().cloned().unwrap());
+        let sink = std::sync::Arc::new(Sink::default());
+        cx.update(|cx| terminal.read(cx).handle().set_sink(Some(sink.clone())));
+        terminals.push((terminal, sink));
+    }
+    ui.frame(cx);
+    let tab_of = |id: SessionId, cx: &mut TestAppContext| {
+        ui.tabs(cx)
+            .into_iter()
+            .find(|tab| tab.id() == id)
+            .unwrap()
+            .element_id()
+    };
+
+    // Tab A's menu: the list with A ticked; B ticked too, C not.
+    let a_tab = tab_of(a, cx);
+    ui.right_click(a_tab.clone(), cx);
+    ui.click("tab-menu-broadcast", cx);
+    assert!(ui.visible("broadcast-dialog", cx));
+    ui.click(format!("broadcast-tab-{b}"), cx);
+    ui.click("broadcast-start", cx);
+    let broadcasting = |id: SessionId, cx: &mut TestAppContext| {
+        let group = ui.group(id, cx);
+        cx.update(|cx| group.read(cx).broadcasting())
+    };
+    assert!(broadcasting(a, cx) && broadcasting(b, cx));
+    assert!(!broadcasting(c, cx));
+    assert!(ui.visible(format!("{a_tab}-broadcast"), cx));
+    assert!(ui.visible(format!("{}-broadcast", tab_of(b, cx)), cx));
+    assert!(!ui.visible(format!("{}-broadcast", tab_of(c, cx)), cx));
+
+    // Typed in A: B gets it, C does not.
+    terminals[0]
+        .0
+        .update(cx, |terminal, cx| terminal.type_for_test("uptime\r", cx));
+    assert_eq!(terminals[1].1.0.lock().unwrap().as_slice(), b"uptime\r");
+    assert!(terminals[2].1.0.lock().unwrap().is_empty());
+
+    // B closes: A alone with one pane ends it.
+    let shell = ui.shell(cx);
+    shell.update(cx, |shell, cx| shell.close_session(b, cx));
+    ui.frame(cx);
+    assert!(!broadcasting(a, cx));
+    assert!(!ui.visible(format!("{a_tab}-broadcast"), cx));
     ui.finish(cx);
 }
 

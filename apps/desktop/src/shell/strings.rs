@@ -12,6 +12,12 @@ pub const MENU_BROADCAST_INPUT: &str = "Broadcast Input";
 pub const MENU_BROADCAST_STOP: &str = "Stop Broadcast Input";
 /// Broadcast input asked with fewer than two connected panes (D81).
 pub const BROADCAST_TOO_FEW: &str = "Broadcast input needs two connected panes";
+/// The tab list of Broadcast input (D86).
+pub const BROADCAST_TITLE: &str = "Broadcast input";
+pub const BROADCAST_HINT: &str =
+    "What you type in a connected pane of a ticked tab goes to the connected panes of all of them.";
+pub const BROADCAST_START: &str = "Start";
+pub const BROADCAST_CANCEL: &str = "Cancel";
 pub const MENU_CLOSE: &str = "Close";
 
 /// Accessible name of the inline Rename field.

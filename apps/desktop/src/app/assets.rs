@@ -51,6 +51,7 @@ gpui_kit::assets::icon_assets!(pub AppIcons, [
     Pencil,
     Play,
     Plus,
+    RadioTower,
     RotateCcw,
     RotateCcwClock,
     ScrollText,

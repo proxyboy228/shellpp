@@ -81,6 +81,8 @@ pub struct TabFacts {
     pub can_split_right: bool,
     /// The tab has more than one pane.
     pub has_splits: bool,
+    /// Other session tabs are open (Broadcast input over tabs, D86).
+    pub other_tabs: bool,
     /// Broadcast input is on: the item stops it.
     pub broadcasting: bool,
 }
@@ -123,7 +125,9 @@ pub fn entries(facts: TabFacts) -> Vec<TabMenuEntry> {
             facts.can_split_right,
         ),
     ];
-    if facts.has_splits {
+    // Broadcast input: to the panes of a split tab, or of tabs ticked in a
+    // list when several are open (D86).
+    if facts.has_splits || facts.other_tabs || facts.broadcasting {
         entries.push(TabMenuEntry::item(
             BroadcastInput,
             "tab-menu-broadcast",
@@ -264,6 +268,7 @@ mod tests {
             can_split_down: true,
             can_split_right: true,
             has_splits: false,
+            other_tabs: false,
             broadcasting: false,
         };
         assert_eq!(
@@ -277,6 +282,12 @@ mod tests {
                 (Close, true),
             ]
         );
+        // Another tab open: Broadcast input over ticked tabs (D86).
+        let with_others = TabFacts {
+            other_tabs: true,
+            ..one_pane
+        };
+        assert!(commands(&entries(with_others)).contains(&(BroadcastInput, true)));
         let split = TabFacts {
             has_splits: true,
             ..one_pane
