@@ -530,7 +530,8 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
             .any(|divider| divider.direction == Direction::Row)
     );
     // Broadcast input (UI 4.4): on, the receiving panes of the running
-    // sessions are marked; the item then stops it.
+    // sessions are marked while one of them is active (the new pane still
+    // chooses a host: typing there is not mirrored); the item then stops it.
     let sessions: Vec<Entity<SessionPane>> =
         cx.update(|cx| group.read(cx).sessions().into_iter().cloned().collect());
     for session in &sessions {
@@ -542,11 +543,26 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
     ui.click("tab-menu-broadcast", cx);
     assert_eq!(cx.update(|cx| group.read(cx).pane_count()), 3);
     assert!(cx.update(|cx| group.read(cx).broadcasting()));
-    let active = cx.update(|cx| group.read(cx).active_pane());
+    let picker = cx.update(|cx| group.read(cx).active_pane());
+    assert!(cx.update(|cx| group.read(cx).session(picker).is_none()));
+    for pane in cx.update(|cx| group.read(cx).pane_ids()) {
+        assert!(!ui.visible(format!("pane-{pane}-broadcast"), cx));
+    }
+    let members: Vec<PaneId> = cx.update(|cx| {
+        let group = group.read(cx);
+        group
+            .pane_ids()
+            .into_iter()
+            .filter(|pane| group.session(*pane).is_some())
+            .collect()
+    });
+    assert_eq!(members.len(), 2);
+    group.update(cx, |group, cx| group.activate(members[0], cx));
+    ui.frame(cx);
     for pane in cx.update(|cx| group.read(cx).pane_ids()) {
         assert_eq!(
             ui.visible(format!("pane-{pane}-broadcast"), cx),
-            pane != active
+            pane == members[1]
         );
     }
     ui.right_click(tab.element_id(), cx);
