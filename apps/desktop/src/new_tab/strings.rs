@@ -22,6 +22,7 @@ pub const CREATE_WORKSPACE_NOTHING: &str = "Open sessions to saved hosts or loca
 pub const WORKSPACES: &str = "Workspaces";
 pub const WORKSPACE_NAME: &str = "Name";
 pub const WORKSPACE_NAME_PLACEHOLDER: &str = "Production";
+pub const WORKSPACE_NAME_NEEDED: &str = "Enter a name";
 pub const WORKSPACE_HINT: &str = "The tabs and splits of this window to saved hosts and local terminals; quick connections are left out.";
 pub const CANCEL: &str = "Cancel";
 pub const CREATE: &str = "Create";

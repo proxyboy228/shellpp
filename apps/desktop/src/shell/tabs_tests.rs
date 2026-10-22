@@ -1347,6 +1347,10 @@ fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
     ui.click("tab-new", cx);
     ui.click("new-tab-workspace", cx);
     assert!(ui.visible("workspace-dialog", cx));
+    // No name: the dialog stays and says so.
+    ui.click("workspace-create", cx);
+    assert!(ui.visible("workspace-dialog", cx));
+    assert!(ui.visible("workspace-name-error", cx));
     ui.click("workspace-name", cx);
     ui.input("Prod", cx);
     ui.click("workspace-create", cx);

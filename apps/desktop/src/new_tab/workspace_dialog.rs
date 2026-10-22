@@ -1,5 +1,7 @@
 //! The name of a new workspace (UI 4.5, 6): one field, Cancel and Create.
+//! An empty name is not sent: the field says a name is needed.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -29,12 +31,20 @@ pub fn open(
     });
     input.update(cx, |input, cx| input.focus(window, cx));
     let save = Rc::new(save);
+    let missing = Rc::new(Cell::new(false));
     window.open_dialog(cx, move |dialog, window, cx| {
         let submit = {
             let input = input.clone();
             let save = save.clone();
+            let missing = missing.clone();
             move |window: &mut Window, cx: &mut App| {
                 let name = input.read(cx).value().to_string();
+                if name.trim().is_empty() {
+                    missing.set(true);
+                    window.refresh();
+                    return;
+                }
+                missing.set(false);
                 if save(name, window, cx) {
                     window.close_dialog(cx);
                 }
@@ -63,10 +73,18 @@ pub fn open(
                     .child(widgets::caption(strings::WORKSPACE_HINT, cx))
                     .child(widgets::field(
                         strings::WORKSPACE_NAME,
-                        widgets::text_input(&input, "workspace-name", false, window, cx),
+                        widgets::text_input(&input, "workspace-name", missing.get(), window, cx),
                         None,
                         cx,
-                    )),
+                    ))
+                    .when(missing.get(), |this| {
+                        this.child(
+                            div()
+                                .id("workspace-name-error")
+                                .test_support()
+                                .child(widgets::error_text(strings::WORKSPACE_NAME_NEEDED, cx)),
+                        )
+                    }),
             )
             .on_ok(move |_, window, cx| {
                 on_ok(window, cx);
