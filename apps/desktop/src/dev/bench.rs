@@ -108,6 +108,10 @@ pub enum BenchMode {
     Latency {
         keys: usize,
     },
+    /// `--soak <minutes>`: the app under load (`super::soak`).
+    Soak {
+        minutes: u64,
+    },
 }
 
 /// The command line of a benchmark run.
@@ -119,13 +123,17 @@ pub struct BenchArgs {
 }
 
 /// The flags that select a benchmark.
-const MODE_FLAGS: [&str; 5] = [
+const MODE_FLAGS: [&str; 6] = [
     "--bench-sessions",
     "--bench-splits",
     "--bench-flood",
     "--bench-output",
     "--bench-latency",
+    "--soak",
 ];
+
+/// The longest soak run, in minutes.
+const MAX_SOAK_MINUTES: u64 = 600;
 
 /// The usage of the benchmark modes (`shellpp --help` lists them too).
 pub const USAGE: &str = "Benchmarks (dev-tools builds; scripts/measure-terminal.ps1):
@@ -137,7 +145,8 @@ pub const USAGE: &str = "Benchmarks (dev-tools builds; scripts/measure-terminal.
 Without --test-server the russh test server runs as a child process
 (shellpp-test-sshd next to this binary, or SHELLPP_TEST_SSHD_EXE).
 --seq-lines (default 3000000), --keys (default 200) and --flood-seconds
-(default 600, samples every --sample-seconds, default 30) shorten smoke runs.";
+(default 600, samples every --sample-seconds, default 30) shorten smoke runs.
+  shellpp --soak <minutes> --test-server <server.json> [--theme <mode>]";
 
 /// The entry of `main`: `None` for a launch without a benchmark flag,
 /// otherwise runs the benchmark (or refuses the arguments with exit code 2).
@@ -197,6 +206,10 @@ fn parse_bench(args: &[String]) -> Result<BenchArgs, String> {
                 set(&mut mode, BenchMode::Sessions(count))?;
             }
             "--bench-splits" => set(&mut mode, BenchMode::Splits)?,
+            "--soak" => {
+                let minutes = number(arg, iter.next(), 1..=MAX_SOAK_MINUTES)?;
+                set(&mut mode, BenchMode::Soak { minutes })?;
+            }
             "--bench-flood" => set(
                 &mut mode,
                 BenchMode::Flood {
@@ -267,7 +280,7 @@ fn parse_bench(args: &[String]) -> Result<BenchArgs, String> {
                 *every = value;
             }
         }
-        BenchMode::Sessions(_) | BenchMode::Splits => {}
+        BenchMode::Sessions(_) | BenchMode::Splits | BenchMode::Soak { .. } => {}
     }
     if seq_lines.is_some() {
         return Err("--seq-lines goes with --bench-output".into());

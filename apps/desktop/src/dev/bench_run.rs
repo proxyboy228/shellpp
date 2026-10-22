@@ -91,7 +91,7 @@ const WINDOW_HEIGHT: f32 = 800.;
 const DIRECT_SHELL_ID: &str = "bench-seq-direct";
 
 #[allow(clippy::print_stdout)]
-fn say(line: &str) {
+pub(super) fn say(line: &str) {
     println!("bench: {line}");
 }
 
@@ -214,6 +214,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
     let mode = args.mode.clone();
     let appearance = args.appearance;
     let seq = local_seq();
+    let real_shell = server.has_real_shell();
     let flood_shell = if server.has_real_shell() {
         FloodShell::Bash
     } else {
@@ -229,6 +230,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
         BenchMode::Sessions(_)
         | BenchMode::Splits
         | BenchMode::Flood { .. }
+        | BenchMode::Soak { .. }
         | BenchMode::Latency { .. } => None,
     };
     gpui_kit::application()
@@ -276,6 +278,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
                 windows.borrow_mut().main = Some(root.clone());
                 let quit = quit_command();
                 cx.activate(true);
+                let soak_target = target.clone();
                 let SessionTarget::Host { record_id, .. } = target else {
                     unreachable!("the benchmark target is a saved host");
                 };
@@ -286,6 +289,18 @@ pub fn run(args: BenchArgs) -> ExitCode {
                         }
                         BenchMode::Splits => {
                             split_tabs(cx, window, &root, record_id, &fingerprints).await
+                        }
+                        BenchMode::Soak { minutes } => {
+                            super::soak::run(
+                                cx,
+                                window,
+                                &root,
+                                soak_target,
+                                &fingerprints,
+                                minutes,
+                                real_shell,
+                            )
+                            .await
                         }
                         BenchMode::Flood {
                             seconds,
@@ -353,7 +368,10 @@ pub fn run(args: BenchArgs) -> ExitCode {
 fn in_main_window(mode: &BenchMode) -> bool {
     matches!(
         mode,
-        BenchMode::Sessions(_) | BenchMode::Splits | BenchMode::Flood { .. }
+        BenchMode::Sessions(_)
+            | BenchMode::Splits
+            | BenchMode::Flood { .. }
+            | BenchMode::Soak { .. }
     )
 }
 
@@ -566,7 +584,7 @@ impl BenchTerminal {
     }
 }
 
-async fn sleep(cx: &mut AsyncApp, duration: Duration) {
+pub(super) async fn sleep(cx: &mut AsyncApp, duration: Duration) {
     cx.background_executor().timer(duration).await;
 }
 
@@ -744,9 +762,10 @@ async fn drive(
     cx.update_window(bench.window, |_, window, _| window.activate_window())
         .map_err(|_| "the benchmark window closed".to_owned())?;
     match mode {
-        BenchMode::Sessions(_) | BenchMode::Splits | BenchMode::Flood { .. } => {
-            Err("this benchmark runs in the main window".to_owned())
-        }
+        BenchMode::Sessions(_)
+        | BenchMode::Splits
+        | BenchMode::Flood { .. }
+        | BenchMode::Soak { .. } => Err("this benchmark runs in the main window".to_owned()),
         BenchMode::Output { lines } => {
             output_runs(cx, bench, target, fingerprints, seq, *lines).await
         }
@@ -820,7 +839,7 @@ async fn session_tabs(
 
 /// The shell of the main window, once the app state knows the benchmark
 /// host (it learns about it through the core's events).
-async fn main_shell(
+pub(super) async fn main_shell(
     cx: &mut AsyncApp,
     root: &Entity<RootView>,
     host: uuid::Uuid,
@@ -840,7 +859,7 @@ async fn main_shell(
 
 /// Opens a session tab to the saved host as a Connect does and waits until
 /// its session runs.
-async fn open_host_tab(
+pub(super) async fn open_host_tab(
     cx: &mut AsyncApp,
     window: AnyWindowHandle,
     shell: &Entity<Shell>,
@@ -1072,7 +1091,7 @@ async fn flood(
 }
 
 /// Types `line` and Enter into the terminal (the sink of typed input).
-fn type_line(handle: &TerminalHandle, line: &str) {
+pub(super) fn type_line(handle: &TerminalHandle, line: &str) {
     let mut bytes = line.as_bytes().to_vec();
     bytes.push(b'\r');
     handle.send_input(bytes);
@@ -1156,7 +1175,10 @@ fn check_host_key(fingerprint: &str, fingerprints: &[String]) -> Result<(), Stri
 
 /// Waits until the tab's terminal shows something and stays unchanged for
 /// [`SETTLE`] (the shell's prompt after its start-up output).
-async fn wait_settled(cx: &mut AsyncApp, pane: &Entity<SessionPane>) -> Result<(), String> {
+pub(super) async fn wait_settled(
+    cx: &mut AsyncApp,
+    pane: &Entity<SessionPane>,
+) -> Result<(), String> {
     let deadline = Instant::now() + CONNECT_TIMEOUT;
     let mut last: Vec<String> = Vec::new();
     let mut since = Instant::now();

@@ -834,7 +834,7 @@ impl SessionManager {
     pub fn forward_start(
         &self,
         rule: &shellpp_core::service::snippets::ForwardingRuleView,
-    ) -> impl std::future::Future<Output = shellpp_ssh::RuleStatus> + 'static {
+    ) -> impl std::future::Future<Output = shellpp_ssh::RuleStatus> + 'static + use<> {
         let shared = Arc::clone(&self.shared);
         let rule = rule.clone();
         let work = self

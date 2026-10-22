@@ -28,5 +28,6 @@ mod bench_run;
 pub mod demo;
 #[cfg(feature = "screenshots")]
 pub mod screenshots;
+mod soak;
 pub mod startup;
 pub mod test_server;

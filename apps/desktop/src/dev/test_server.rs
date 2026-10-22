@@ -145,6 +145,9 @@ impl DevServer {
             // Debian server answers it.
             "exec": {"stdout": "Linux\nID=debian\nVERSION_ID=13\n", "exit_status": 0},
             "banner_comment": "Debian-5",
+            // Port forwarding to loopback destinations (the soak run's
+            // forwarding rules reach a server of the run, `super::soak`).
+            "forwarding": true,
         });
         let dir = crate::profile::TempProfile::create("shellpp-test-sshd")
             .map_err(|error| format!("temporary directory: {error}"))?;
