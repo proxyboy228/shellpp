@@ -494,6 +494,55 @@ async fn open_direct(
     }
 }
 
+/// How long a finished forwarded connection waits for the server to close
+/// its channel before closing it itself.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
+
+/// Closes a channel when it is dropped unasked (a stopped rule aborts its
+/// connections mid-copy): what `ChannelStream` did on drop.
+struct CloseOnDrop(Option<russh::ChannelWriteHalf<russh::client::Msg>>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        if let Some(write) = self.0.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                let _ = write.close().await;
+            });
+        }
+    }
+}
+
+/// Copies between `socket` and `channel` until both directions end, then
+/// lets the SSH server close the channel first. russh 0.64 keeps the
+/// client's entry of a channel the client closed first (the server's CLOSE
+/// then finds the channel gone and returns before removing it), so with
+/// every forwarded connection closed by us a long run grew by a few KB per
+/// connection (run 6, the soak test). Only a server that does not close
+/// within [`CLOSE_WAIT`] gets our CLOSE.
+async fn relay(socket: &mut TcpStream, channel: russh::Channel<russh::client::Msg>) {
+    let (mut read, write) = channel.split();
+    let mut write = CloseOnDrop(Some(write));
+    if let Some(half) = &write.0 {
+        let mut both = tokio::io::join(read.make_reader(), half.make_writer());
+        let _ = tokio::io::copy_bidirectional(socket, &mut both).await;
+    }
+    let closed_by_server = tokio::time::timeout(CLOSE_WAIT, async {
+        while let Some(message) = read.wait().await {
+            if matches!(message, russh::ChannelMsg::Close) {
+                break;
+            }
+        }
+    })
+    .await
+    .is_ok();
+    if closed_by_server {
+        // Nothing left to close.
+        write.0 = None;
+    }
+}
+
 async fn forward_local(
     mut socket: TcpStream,
     peer: SocketAddr,
@@ -502,10 +551,7 @@ async fn forward_local(
     port: u16,
 ) {
     match open_direct(core, host, port, peer).await {
-        Ok(channel) => {
-            let mut stream = channel.into_stream();
-            let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
-        }
+        Ok(channel) => relay(&mut socket, channel).await,
         Err(_) => tracing::debug!("forwarded connection refused by the ssh host"),
     }
 }
@@ -655,10 +701,10 @@ async fn forward_socks(mut socket: TcpStream, peer: SocketAddr, core: &ConnCore)
     match open_direct(core, &request.host, request.port, peer).await {
         Ok(channel) => {
             if socket.write_all(&socks_reply(REP_SUCCEEDED)).await.is_err() {
+                let _ = channel.close().await;
                 return;
             }
-            let mut stream = channel.into_stream();
-            let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+            relay(&mut socket, channel).await;
         }
         Err(error) => {
             tracing::debug!("socks request refused by the ssh host");
@@ -764,9 +810,8 @@ pub(crate) async fn serve_remote_channel(
         }
     };
     let _ = socket.set_nodelay(true);
-    let mut stream = channel.into_stream();
     tokio::select! {
-        _ = tokio::io::copy_bidirectional(&mut socket, &mut stream) => {}
+        () = relay(&mut socket, channel) => {}
         _ = set(&mut stop) => {}
     }
 }
