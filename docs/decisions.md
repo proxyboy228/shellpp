@@ -1553,3 +1553,16 @@ Status: run 6 decision, 2026-10-22 (plan, section 10; SPEC stage 9). Amends D7 a
 - Tests run against a server of the test on this machine (no network): newer, not newer, a broken answer, no answer, only https or this machine, and no request at all while the check is off or a day has not passed.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.1, 1.4 item 10 and 12.7 (and `docs/ru`), `docs/data-model.md` 16.1, `docs/architecture.md` 10.1 and the identifiers table, `docs/security.md` (the update check), `docs/export-format.md` 1 and 4.
+
+### 98. A forwarded connection lets the server close its channel (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 8: the soak test found it).
+
+**Decision:**
+
+- The soak run (`scripts/soak.ps1`) grew about 4 MB a minute with forwarding traffic alone: about 560 forwarded connections a minute through a local and a dynamic rule, a few KB each. Cause: russh 0.64.1 (the latest) keeps the client's entry of a channel the client closes first. Our `ChannelStream` closed each channel on drop, right after the copy; the server's CLOSE then found the channel gone from the session's list and returned before removing the client's entry (its sender and queue).
+- A forwarded connection (local, dynamic, remote) now copies through the channel's halves and, when both directions are done, waits up to 5 s for the server's CLOSE; the client sends its own CLOSE only when the server stays silent, or when the connection is dropped mid-copy (a stopped rule), as before. OpenSSH and the russh test server close a channel once both sides sent EOF.
+- Checked by the soak's load of forwards alone: before, private bytes 133 to 194 MB in 15 minutes; after, flat at 133 MB with the same traffic. The forwarding tests of `shellpp-ssh` and of the session layer pass unchanged.
+- Not changed: session, SFTP and exec channels open once per tab or task, not per connection.
+
+**Spec impact:** none.
