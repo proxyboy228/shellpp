@@ -17,7 +17,7 @@ integration").
 | OpenSSH 10.0p2 (Debian 13) | `tests/openssh/Dockerfile` | yes | yes | yes | yes | yes | yes | the main test server of every suite |
 | OpenSSH 7.4 (CentOS 7) | `compat/centos7.Dockerfile` | yes | yes | yes | yes | yes | yes | Ed25519 host key, curve25519, AES-GCM and ChaCha20 already there |
 | Dropbear 2024.85 (Alpine 3.20) | `compat/dropbear.Dockerfile` | yes | yes | — | yes | yes (OpenSSH's sftp-server) | yes | Dropbear has no keyboard-interactive authentication |
-| Only `ssh-rsa` (SHA-1) and `diffie-hellman-group14-sha1` | variant `legacy-sha1` | with the host setting | with the host setting | with the host setting | yes | yes | yes | without the setting the connection fails with the mismatch error below |
+| Only `ssh-rsa` (SHA-1) host keys, `diffie-hellman-group14-sha1`, `aes128-cbc` and `hmac-sha1` | variant `legacy-sha1` | with the host setting | with the host setting | with the host setting | yes | yes | yes | without the setting the connection fails with the mismatch error below |
 | Key plus a keyboard-interactive second factor | variant `kbd-2fa` | — | yes, then the question | yes | yes | yes | yes | `AuthenticationMethods publickey,keyboard-interactive` |
 | No SFTP subsystem | variant `no-sftp` | yes | yes | yes | yes | no: "The server refused to open a session." | yes | the terminal and forwarding work as usual |
 | A banner before login and a 120-line message of the day | variant `motd-banner` | yes | yes | yes | yes | yes | yes | the banner reaches the connection's interaction, the message of the day the terminal |
@@ -35,20 +35,28 @@ while it is on (D80). Then Shell++ also offers, after all modern ones of
 each list:
 
 - key exchange: `diffie-hellman-group14-sha1`,
-  `diffie-hellman-group-exchange-sha1`, `diffie-hellman-group1-sha1`;
+  `diffie-hellman-group-exchange-sha1`;
 - host key signatures: `ssh-rsa` (SHA-1);
+- RSA user key signatures with SHA-1, only for a server that accepts no
+  `rsa-sha2-*` (or names none, as OpenSSH before 7.2);
 - MACs: `hmac-sha1-etm@openssh.com`, `hmac-sha1`;
 - ciphers: `aes256-cbc`, `aes192-cbc`, `aes128-cbc`.
 
-Never offered: 3DES, RC4 (`arcfour*`), Blowfish, CAST, `ssh-dss`, MD5 and
-96-bit MACs, `umac-*`.
+Never offered: 3DES, RC4 (`arcfour*`), Blowfish, CAST, `ssh-dss`, the
+1024-bit `diffie-hellman-group1-sha1`, MD5 and 96-bit MACs, `umac-*`.
+
+Not covered by the matrix: an RSA user key signing with SHA-1 (the test
+users have Ed25519 keys); its path is the same as the SHA-2 one with the
+hash left out.
 
 ### When nothing matches
 
 The failure screen names the negotiation ("no key exchange algorithm in
 common", or host key, cipher, MAC, compression), then "The server offers:
 …" and "Shell++ supports: …". When the server offers a legacy algorithm, it
-adds how to turn the host setting on. The server's list shows only names
+adds how to turn the host setting on (for the jump host when the failure
+names one; Quick connect never offers them, so the host is saved first).
+The server's list shows only names
 Shell++ knows (others are counted, "and 2 others"): no text the server sent
 is shown or logged.
 
@@ -62,4 +70,45 @@ is shown or logged.
 
 ## 2. Terminal programs
 
-See section 2 below once it is filled in (plan 9.2).
+Checked in an SSH session to the OpenSSH test image (bash,
+`TERM=xterm-256color`, `LANG=C.UTF-8`) at 1280x800, in both themes: the
+screenshot states `terminal-tmux`, `terminal-tmux-resize`, `terminal-mc`,
+`terminal-vim`, `terminal-nano`, `terminal-less`, `terminal-emacs`,
+`terminal-vttest` and `terminal-unicode` (`scripts/ui-screens.ps1 -Sizes
+1280x800 -States …`, OpenSSH only; files in `target\ui-screens\`). Each
+state checks what the program shows before the capture.
+
+| Program | Result |
+|---|---|
+| tmux 3.5a | two panes, status line, colors, the pane border; after the app's pane is split beside it, tmux draws again for the new size with its status line on the last row |
+| mc 4.8 | panels, frames (line drawing), menu bar, function key bar, colors |
+| vim 9.1 | syntax colors (light and dark), `~` lines, the ruler |
+| nano 8.4 | title bar, syntax colors, the two help rows, the status message in reverse video |
+| less 668 | the `less -M` prompt on the last row, the alternate screen |
+| emacs 30.1 (`-nw`) | menu bar, syntax colors, mode line, echo area |
+| vttest 2.7 | test 1 (cursor movements): the outer frame of `*` and `+`, the frame of `E`s and the text inside it are right; the inner bottom row of `+` lands too far right when the window is wider than 80 columns (see below) |
+| Cyrillic | right, including `ё` and `ъ` |
+| Combining marks | right: `é ä ñ ộ` from a letter plus marks, in one cell |
+| CJK, Hangul, fullwidth Latin | two cells each, in the right columns |
+| Box drawing | right |
+| Emoji | a single emoji right (two cells); sequences below |
+
+### Known limits
+
+- **Emoji sequences.** A skin tone modifier (`👍🏽`) is drawn as a second
+  emoji beside the first, a ZWJ sequence (`👨‍👩‍👧`) as its parts side by
+  side, a flag (`🇺🇦`) as two letters: the grid holds one character per cell
+  (as the shell's `wcwidth` counts them, so the columns stay right), and
+  Windows has no flag glyphs at all. An emoji with the variation selector
+  VS16 (`❤️`) is drawn two cells wide in a one-cell slot and covers the next
+  cell. Most terminals behave the same way; a fix needs grapheme clusters in
+  the emulator's grid (alacritty_terminal). Not fixed.
+- **vttest and 80/132 columns.** vttest assumes an 80-column screen and
+  switches columns with DECCOLM, which the emulator does not implement; in
+  a wider window the inner bottom border of test 1 lands to the right of
+  the frame. That switch is the likely cause (not confirmed); the rest of
+  the test screen is right. Not fixed.
+
+Typing, mouse reporting (mc, htop), bracketed paste and resizing are also
+covered by the terminal tests and the stage 2 screenshots; this section
+adds the programs above.

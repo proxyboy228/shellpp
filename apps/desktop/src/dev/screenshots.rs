@@ -342,6 +342,26 @@ pub enum ShotState {
     /// `htop` in an SSH session: the alternate screen (OpenSSH; the russh
     /// test server's `alt-screen` instead).
     TerminalHtop,
+    /// Run 4, plan 9.2 (docs/compatibility.md, section 2): tmux with two
+    /// panes (`ls --color` in one); OpenSSH only, like the other programs.
+    TerminalTmux,
+    /// tmux after the app's pane is split beside it: drawn again for half
+    /// the columns, its status line on the last row.
+    TerminalTmuxResize,
+    /// Midnight Commander.
+    TerminalMc,
+    /// vim with a shell script (syntax colors).
+    TerminalVim,
+    /// nano with the same script.
+    TerminalNano,
+    /// less with a long text (`seq 1 1000 | less -M`).
+    TerminalLess,
+    /// emacs in the terminal (`emacs -nw`).
+    TerminalEmacs,
+    /// vttest: the first screen of its cursor movement test.
+    TerminalVttest,
+    /// Cyrillic, emoji, wide and combining characters, box drawing.
+    TerminalUnicode,
     /// A dropped connection: the output stays, the reason with Reconnect
     /// and Close over it (UI 4.6; Autoreconnect off for the picture, so no
     /// attempt replaces the overlay).
@@ -417,7 +437,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 75] = [
+    pub const ALL: [Self; 84] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -492,12 +512,21 @@ impl ShotState {
         Self::SidebarAppearance,
         Self::SidebarFont,
         Self::QuickConnectToast,
+        Self::TerminalTmux,
+        Self::TerminalTmuxResize,
+        Self::TerminalMc,
+        Self::TerminalVim,
+        Self::TerminalNano,
+        Self::TerminalLess,
+        Self::TerminalEmacs,
+        Self::TerminalVttest,
+        Self::TerminalUnicode,
         Self::TerminalHostKeyChanged,
     ];
     /// The states with sessions to the SSH test server: the terminal states
     /// (owner's stage 2a and 2b, step 5.1) and the offer to save a
     /// quick-connect host, which needs a session that connected.
-    pub const TERMINAL: [Self; 19] = [
+    pub const TERMINAL: [Self; 28] = [
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -516,6 +545,15 @@ impl ShotState {
         Self::SidebarAppearance,
         Self::SidebarFont,
         Self::QuickConnectToast,
+        Self::TerminalTmux,
+        Self::TerminalTmuxResize,
+        Self::TerminalMc,
+        Self::TerminalVim,
+        Self::TerminalNano,
+        Self::TerminalLess,
+        Self::TerminalEmacs,
+        Self::TerminalVttest,
+        Self::TerminalUnicode,
         Self::TerminalHostKeyChanged,
     ];
     /// The states of stage 2b (owner's step 5.1) that are new in this run;
@@ -603,6 +641,15 @@ impl ShotState {
             Self::TerminalTofu => "terminal-tofu",
             Self::TerminalLsColor => "terminal-ls-color",
             Self::TerminalHtop => "terminal-htop",
+            Self::TerminalTmux => "terminal-tmux",
+            Self::TerminalTmuxResize => "terminal-tmux-resize",
+            Self::TerminalMc => "terminal-mc",
+            Self::TerminalVim => "terminal-vim",
+            Self::TerminalNano => "terminal-nano",
+            Self::TerminalLess => "terminal-less",
+            Self::TerminalEmacs => "terminal-emacs",
+            Self::TerminalVttest => "terminal-vttest",
+            Self::TerminalUnicode => "terminal-unicode",
             Self::TerminalDrop => "terminal-drop",
             Self::TerminalLocal => "terminal-local",
             Self::TerminalTabs => "terminal-tabs",
@@ -636,6 +683,12 @@ impl ShotState {
             .find(|state| state.name() == name || state.file_label(false) == name)
     }
 
+    /// The programs of plan 9.2: only on the OpenSSH test image, left out
+    /// of a run on the russh test server.
+    pub fn openssh_only(self) -> bool {
+        terminal::PROGRAM_STATES.contains(&self)
+    }
+
     /// The name in file names: [`Self::name`], except the two states whose
     /// content differs on the russh test server (`real_shell` false: no
     /// bash, no `ls`, no `htop`).
@@ -655,6 +708,15 @@ impl ShotState {
             Self::TerminalTofu
             | Self::TerminalLsColor
             | Self::TerminalHtop
+            | Self::TerminalTmux
+            | Self::TerminalTmuxResize
+            | Self::TerminalMc
+            | Self::TerminalVim
+            | Self::TerminalNano
+            | Self::TerminalLess
+            | Self::TerminalEmacs
+            | Self::TerminalVttest
+            | Self::TerminalUnicode
             | Self::TerminalDrop
             | Self::TerminalLocal
             | Self::TerminalTabs
@@ -747,6 +809,9 @@ pub fn expected_files_on(sizes: &ShotSize, real_shell: bool) -> Vec<String> {
     let mut files = Vec::new();
     for size in sizes.sizes() {
         for state in states_for(*size) {
+            if !real_shell && state.openssh_only() {
+                continue;
+            }
             for (_, theme) in THEMES {
                 files.push(file_name_on(*size, theme, *state, real_shell));
             }
@@ -1024,7 +1089,12 @@ impl Run {
         let mut errors = Vec::new();
         let mut previous: Option<AnyWindowHandle> = None;
         for size in sizes.sizes().iter().copied() {
-            let states = selected_states(size, self.only.as_deref());
+            let mut states = selected_states(size, self.only.as_deref());
+            // The programs of plan 9.2 need the OpenSSH test image.
+            if !self.real_shell && states.iter().any(|state| state.openssh_only()) {
+                say("Terminal programs (tmux, mc, vim, ...): left out on the russh test server");
+                states.retain(|state| !state.openssh_only());
+            }
             if states.is_empty() {
                 continue;
             }
@@ -1630,6 +1700,15 @@ pub async fn reach_state(
         ShotState::TerminalTofu
         | ShotState::TerminalLsColor
         | ShotState::TerminalHtop
+        | ShotState::TerminalTmux
+        | ShotState::TerminalTmuxResize
+        | ShotState::TerminalMc
+        | ShotState::TerminalVim
+        | ShotState::TerminalNano
+        | ShotState::TerminalLess
+        | ShotState::TerminalEmacs
+        | ShotState::TerminalVttest
+        | ShotState::TerminalUnicode
         | ShotState::TerminalDrop
         | ShotState::TerminalLocal
         | ShotState::TerminalTabs
@@ -1843,6 +1922,15 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
             | ShotState::TerminalHtop
+            | ShotState::TerminalTmux
+            | ShotState::TerminalTmuxResize
+            | ShotState::TerminalMc
+            | ShotState::TerminalVim
+            | ShotState::TerminalNano
+            | ShotState::TerminalLess
+            | ShotState::TerminalEmacs
+            | ShotState::TerminalVttest
+            | ShotState::TerminalUnicode
             | ShotState::TerminalDrop
             | ShotState::TerminalLocal
             | ShotState::TerminalTabs

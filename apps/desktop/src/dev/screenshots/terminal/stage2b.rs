@@ -55,7 +55,7 @@ pub const STATES: [ShotState; 11] = [
 ];
 
 /// Ctrl+Shift+D: a new pane to the right (UI 12.5).
-const SPLIT_RIGHT: &str = "ctrl-shift-d";
+pub(super) const SPLIT_RIGHT: &str = "ctrl-shift-d";
 /// Ctrl+Shift+E: a new pane below.
 const SPLIT_DOWN: &str = "ctrl-shift-e";
 /// Ctrl+Shift+F: the sidebar's Tools with the search focused.
@@ -98,7 +98,7 @@ fn failed(shot: ShotState, reason: &str) -> ScreenshotError {
 }
 
 /// The panes of session tab `id`.
-fn group_of(
+pub(super) fn group_of(
     cx: &mut AsyncApp,
     shell: &Entity<Shell>,
     id: SessionId,
@@ -109,7 +109,7 @@ fn group_of(
 }
 
 /// Makes pane `pane` of `group` active (its terminal takes the focus).
-fn activate(
+pub(super) fn activate(
     cx: &mut AsyncApp,
     handle: gpui::AnyWindowHandle,
     group: &Entity<PaneGroup>,
@@ -151,7 +151,7 @@ async fn split_key(
 /// [`split_key`], then Enter in the new pane's host list (its first row is
 /// the split pane's host): a session to the same host, connected and at
 /// its prompt.
-async fn split_and_open(
+pub(super) async fn split_and_open(
     cx: &mut AsyncApp,
     handle: gpui::AnyWindowHandle,
     group: &Entity<PaneGroup>,

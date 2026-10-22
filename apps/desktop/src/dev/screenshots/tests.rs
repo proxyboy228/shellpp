@@ -155,7 +155,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 75);
+    assert_eq!(ShotState::ALL.len(), 84);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");
@@ -172,7 +172,29 @@ fn the_full_set_covers_every_state_in_both_themes() {
     // On the russh test server two terminal states are named after what
     // its shell shows instead of ls and htop.
     let russh = expected_files_on(&FULL_SET, false);
-    assert_eq!(russh.len(), files.len());
+    // Run 4, plan 9.2: the programs need the OpenSSH image; a run on the
+    // russh test server leaves them out.
+    assert_eq!(
+        russh.len(),
+        files.len() - 2 * terminal::PROGRAM_STATES.len()
+    );
+    assert!(!russh.iter().any(|name| name.contains("terminal-tmux")));
+    for state in [
+        "terminal-tmux",
+        "terminal-tmux-resize",
+        "terminal-mc",
+        "terminal-vim",
+        "terminal-nano",
+        "terminal-less",
+        "terminal-emacs",
+        "terminal-vttest",
+        "terminal-unicode",
+    ] {
+        for theme in ["dark", "light"] {
+            let name = format!("1280x800-{theme}-{state}.png");
+            assert!(files.contains(&name), "{name}");
+        }
+    }
     for name in [
         "1280x800-dark-terminal-colors.png",
         "1280x800-light-terminal-alt-screen.png",

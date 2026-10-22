@@ -689,6 +689,8 @@ fn active_pane(shell: &Entity<Shell>, cx: &App) -> Option<Entity<SessionPane>> {
     }
 }
 
+mod programs;
+pub use programs::STATES as PROGRAM_STATES;
 mod stage2b;
 
 /// Brings the demo window (after the reset) into the terminal state `shot`.
@@ -718,6 +720,15 @@ pub async fn reach(
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance
         | ShotState::SidebarFont => stage2b::reach(cx, handle, root, state, rig, shot).await,
+        ShotState::TerminalTmux
+        | ShotState::TerminalTmuxResize
+        | ShotState::TerminalMc
+        | ShotState::TerminalVim
+        | ShotState::TerminalNano
+        | ShotState::TerminalLess
+        | ShotState::TerminalEmacs
+        | ShotState::TerminalVttest
+        | ShotState::TerminalUnicode => programs::reach(cx, handle, root, state, rig, shot).await,
         ShotState::TerminalTofu => {
             rig.forget_host_keys(&core)?;
             let (_, pane) = open_ssh(cx, handle, root, state, rig, 0, shot).await?;
@@ -896,6 +907,9 @@ pub fn check(
             window.render_frame(cx);
             if stage2b::STATES.contains(&shot) {
                 return stage2b::check(window, cx, &shell, real_shell, shot);
+            }
+            if programs::STATES.contains(&shot) {
+                return programs::check(window, cx, &shell, shot);
             }
             let Some(pane) = active_pane(&shell, cx) else {
                 return Err("no session tab is active");

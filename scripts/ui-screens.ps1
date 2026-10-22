@@ -95,7 +95,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (146 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (180 files for the
   default sizes). Exits with 1 when the build, the run or a file check fails.
 
 .EXAMPLE
@@ -211,6 +211,12 @@ $run4States = @('snippet-leave', 'forwarding-wizard-type', 'forwarding-wizard-re
     'forwarding-wizard-dynamic', 'forwarding-wizard-host', 'forwarding-wizard-listen', 'forwarding-wizard-dest',
     'forwarding-wizard-summary')
 $allStates += $run4States
+# Run 4, plan 9.2: full-screen programs and Unicode (ShotState::Terminal{Tmux,
+# TmuxResize,Mc,Vim,Nano,Less,Emacs,Vttest,Unicode}); OpenSSH only, left out
+# on the russh test server.
+$programStates = @('terminal-tmux', 'terminal-tmux-resize', 'terminal-mc', 'terminal-vim', 'terminal-nano',
+    'terminal-less', 'terminal-emacs', 'terminal-vttest', 'terminal-unicode')
+$allStates += $programStates
 $allStates += $stage6States
 $allStates += $stage5States
 # Stage 2b, step 5.1 (src/dev/screenshots.rs, ShotState::STAGE_2B, plus
@@ -296,7 +302,7 @@ try {
     $terminalOnly = @('terminal-tofu', 'terminal-ls-color', 'terminal-htop', 'terminal-drop', 'terminal-local',
         'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed', 'terminal-connecting',
         'terminal-splits', 'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools',
-        'sidebar-snippets', 'sidebar-history', 'sidebar-appearance', 'sidebar-font')
+        'sidebar-snippets', 'sidebar-history', 'sidebar-appearance', 'sidebar-font') + $programStates
     $needsServer = ($States.Count -eq 0) -or (@($States | Where-Object { $_ -in $terminalOnly }).Count -gt 0)
     if (-not $needsServer) {
         Write-Host 'ui-screens: server: none (no terminal state)'
@@ -404,17 +410,19 @@ foreach ($entry in $saved) {
 # host-panel in both themes, the default size every terminal state. A run
 # limited by -States has exactly its states at the sizes that have them.
 $terminalStates = @('terminal-tofu', 'terminal-host-key-changed', 'terminal-drop', 'terminal-local', 'terminal-tabs',
-    'terminal-ls-color', 'terminal-htop') + $stage2bStates + $stage3States
+    'terminal-ls-color', 'terminal-htop') + $stage2bStates + $stage3States + $programStates
 # (PowerShell names ignore case: a `$states` here would overwrite -States.)
 $expectedCount = 0
 foreach ($size in $Sizes) {
     if ($States.Count -gt 0) {
         $sizeStates = @(Get-SizeStates $size | Where-Object { $_ -in $States })
+        if (-not $serverJson) { $sizeStates = @($sizeStates | Where-Object { $_ -notin $programStates }) }
         $expectedCount += 2 * $sizeStates.Count
     }
     else {
         $sizeStates = @('root', 'host-panel')
         if ($size -eq '1280x800') { $sizeStates += $terminalStates }
+        if (-not $serverJson) { $sizeStates = @($sizeStates | Where-Object { $_ -notin $programStates }) }
     }
     foreach ($theme in @('dark', 'light')) {
         foreach ($state in $sizeStates) {
