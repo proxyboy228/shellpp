@@ -13,7 +13,7 @@
 //! be scrolled and selected.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, ClickEvent, Context, IntoElement, SharedString, Window, div, px};
+use gpui::{AnyElement, ClickEvent, Context, IntoElement, SharedString, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 
@@ -25,7 +25,7 @@ use crate::theme::palette::{self, Status};
 use crate::theme::{self, metrics};
 
 /// Width of the message card.
-const CARD_WIDTH: gpui::Pixels = px(420.);
+const CARD_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// The overlay of the current phase, if it has one.
 pub fn render(view: &SessionPane, cx: &mut Context<SessionPane>) -> Option<AnyElement> {

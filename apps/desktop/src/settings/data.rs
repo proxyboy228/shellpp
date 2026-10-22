@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div, px,
+    AnyElement, App, ClickEvent, Context, FontWeight, IntoElement, SharedString, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::switch::Switch;
@@ -139,7 +139,7 @@ impl SettingsView {
             let confirm = record.clone();
             let on_ok = record.clone();
             dialog
-                .w(px(420.))
+                .w(metrics::scaled(420., cx))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
                 .close_button(false)
@@ -193,7 +193,7 @@ impl SettingsView {
             let confirm = clear.clone();
             let on_ok = clear.clone();
             dialog
-                .w(px(420.))
+                .w(metrics::scaled(420., cx))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
                 .close_button(false)

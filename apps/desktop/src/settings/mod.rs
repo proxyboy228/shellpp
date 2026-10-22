@@ -22,7 +22,7 @@ mod tests;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, IntoElement, ParentElement as _,
-    Pixels, Render, SharedString, Styled as _, Task, Window, div, prelude::*, px,
+    Render, SharedString, Styled as _, Task, Window, div, prelude::*,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::switch::Switch;
@@ -37,11 +37,11 @@ use crate::theme::{self, metrics};
 
 /// Width of the Settings window; the kit dialog narrows it in a small
 /// window (the minimum window is 960 x 600).
-pub const WINDOW_WIDTH: Pixels = px(720.);
+pub const WINDOW_WIDTH: gpui::Rems = metrics::rpx(720.);
 /// Height of the navigation and section area.
-pub const BODY_HEIGHT: Pixels = px(420.);
+pub const BODY_HEIGHT: gpui::Rems = metrics::rpx(420.);
 /// Width of the navigation column.
-pub const NAV_WIDTH: Pixels = px(200.);
+pub const NAV_WIDTH: gpui::Rems = metrics::rpx(200.);
 
 /// Sections of UI 12.1, top to bottom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,7 +130,7 @@ pub fn open(state: Entity<AppState>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, cx| {
         let theme = cx.theme();
         dialog
-            .w(WINDOW_WIDTH)
+            .w(metrics::to_px(WINDOW_WIDTH, cx))
             .title(
                 div()
                     .id("settings-title")
@@ -395,8 +395,8 @@ impl SettingsView {
             .gap(metrics::SPACE_2)
             .child(label(strings::AUTO_LOCK, cx))
             .child(widgets::caption(strings::AUTO_LOCK_HINT, cx))
-            .child(div().w(px(240.)).child(trigger))
-            .children(list.map(|list| div().w(px(240.)).child(list)));
+            .child(div().w(metrics::rpx(240.)).child(trigger))
+            .children(list.map(|list| div().w(metrics::rpx(240.)).child(list)));
         let remember = available.then(|| {
             let explanation = if self.remember_turned_on && remembered {
                 notice(

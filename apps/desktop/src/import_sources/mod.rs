@@ -29,7 +29,7 @@ use gpui::{
     App, AppContext as _, ClickEvent, Context, ElementId, Entity, FontWeight, Global,
     InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
     ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Task, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -467,17 +467,17 @@ impl ImportSourcesDialog {
                             cx.listener(move |this, _: &bool, _, cx| this.select(source, cx)),
                         ),
                 )
-                .children(
-                    source
-                        .path()
-                        .map(|path| div().pl(px(24.)).child(widgets::caption(path, cx))),
-                );
+                .children(source.path().map(|path| {
+                    div()
+                        .pl(metrics::rpx(24.))
+                        .child(widgets::caption(path, cx))
+                }));
             list = list.child(if source.available() {
                 row
             } else {
                 row.child(
                     div()
-                        .pl(px(24.))
+                        .pl(metrics::rpx(24.))
                         .child(widgets::caption(strings::SOURCE_LATER, cx)),
                 )
             });
@@ -557,7 +557,7 @@ impl ImportSourcesDialog {
                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                     this.set_chosen(&alias, *checked, cx)
                 }));
-            let mut row = v_flex().gap(px(2.)).child(
+            let mut row = v_flex().gap(metrics::rpx(2.)).child(
                 h_flex()
                     .w_full()
                     .justify_between()
@@ -575,7 +575,11 @@ impl ImportSourcesDialog {
                     ),
             );
             for note in host.reason.iter().chain(host.notes.iter()) {
-                row = row.child(div().pl(px(24.)).child(widgets::caption(note.clone(), cx)));
+                row = row.child(
+                    div()
+                        .pl(metrics::rpx(24.))
+                        .child(widgets::caption(note.clone(), cx)),
+                );
             }
             hosts = hosts.child(row);
         }
@@ -601,7 +605,7 @@ impl ImportSourcesDialog {
                     KeyFileStatus::Missing => strings::KEY_MISSING.to_owned(),
                     KeyFileStatus::Invalid(reason) => reason.clone(),
                 };
-                let mut row = v_flex().gap(px(2.)).child(
+                let mut row = v_flex().gap(metrics::rpx(2.)).child(
                     h_flex()
                         .w_full()
                         .justify_between()
@@ -652,7 +656,7 @@ impl ImportSourcesDialog {
             }
         }
         if !preview.problems.is_empty() {
-            let mut problems = v_flex().gap(px(2.));
+            let mut problems = v_flex().gap(metrics::rpx(2.));
             for problem in &preview.problems {
                 problems = problems.child(widgets::caption(problem.clone(), cx));
             }
@@ -668,7 +672,7 @@ impl ImportSourcesDialog {
                     .id("import-preview")
                     .test_support()
                     .w_full()
-                    .max_h(px(PREVIEW_HEIGHT))
+                    .max_h(metrics::rpx(PREVIEW_HEIGHT))
                     .overflow_y_scroll()
                     .track_scroll(&self.preview_scroll)
                     .pr(metrics::SPACE_3)
@@ -685,7 +689,7 @@ impl ImportSourcesDialog {
                 .id(id)
                 .test_support()
                 .w_full()
-                .h(px(28.))
+                .h(metrics::rpx(28.))
                 .justify_between()
                 .items_center()
                 .child(
@@ -702,7 +706,7 @@ impl ImportSourcesDialog {
                         .child(value.to_string()),
                 )
         };
-        let mut errors = v_flex().gap(px(2.));
+        let mut errors = v_flex().gap(metrics::rpx(2.));
         for (alias, reason) in &summary.errors {
             errors = errors.child(widgets::caption(format!("{alias}: {reason}"), cx));
         }
@@ -861,7 +865,7 @@ pub fn open(
             _ => strings::TITLE,
         };
         modal
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

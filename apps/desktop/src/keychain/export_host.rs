@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, FontWeight, IntoElement, SharedString, Subscription, Window,
-    div, px,
+    div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -67,7 +67,7 @@ pub fn result_text(result: &Result<ExportOutcome, FailureKind>) -> &'static str 
 }
 
 /// The height of a host row (and of the "Select all" row).
-const ROW_HEIGHT: gpui::Pixels = px(32.);
+const ROW_HEIGHT: gpui::Rems = metrics::rpx(32.);
 
 impl ExportToHost {
     pub fn new(
@@ -289,7 +289,7 @@ impl Render for ExportToHost {
                         v_flex()
                             .id("kc-export-hosts")
                             .test_support()
-                            .h(px(224.))
+                            .h(metrics::rpx(224.))
                             .overflow_y_scroll()
                             .when(hosts.is_empty(), |this| {
                                 this.child(
@@ -376,7 +376,7 @@ pub fn open(state: Entity<AppState>, public_key: String, window: &mut Window, cx
     let dialog = cx.new(|cx| ExportToHost::new(state, public_key, window, cx));
     window.open_dialog(cx, move |modal, _, cx| {
         modal
-            .w(px(460.))
+            .w(metrics::scaled(460., cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -386,7 +386,7 @@ pub fn open(state: Entity<AppState>, public_key: String, window: &mut Window, cx
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Bounds, TestAppContext, WindowBounds, WindowOptions, size};
+    use gpui::{Bounds, TestAppContext, WindowBounds, WindowOptions, px, size};
     use gpui_kit::test::TestWindowExt as _;
     use serde_json::{Map, Value, json};
 
@@ -450,7 +450,7 @@ mod tests {
                     .map(|found| found.bounds().size.height)
             })
             .unwrap();
-        assert_eq!(row, Some(ROW_HEIGHT));
+        assert_eq!(row, Some(metrics::at_100(ROW_HEIGHT)));
         // The search shows the two web hosts; Select all takes them.
         cx.update_window(handle, |_, window, cx| {
             window.click("kc-export-search", cx);

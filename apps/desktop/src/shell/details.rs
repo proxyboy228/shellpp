@@ -25,7 +25,8 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{controls, metrics};
 
 /// The width of the panel for a drag that ends at `pointer_x`, given the
-/// right edge of the panel: clamped to 320-560 px.
+/// right edge of the panel: clamped to 320-560 px. In design units (px at
+/// 100 %, D96), as every width of this module.
 pub fn width_for_drag(panel_right: Pixels, pointer_x: Pixels) -> Pixels {
     clamp_width(panel_right - pointer_x)
 }
@@ -33,8 +34,8 @@ pub fn width_for_drag(panel_right: Pixels, pointer_x: Pixels) -> Pixels {
 /// Clamps a panel width to `--width-details-min` .. `--width-details-max`.
 pub fn clamp_width(width: Pixels) -> Pixels {
     width
-        .max(metrics::WIDTH_DETAILS_MIN)
-        .min(metrics::WIDTH_DETAILS_MAX)
+        .max(metrics::at_100(metrics::WIDTH_DETAILS_MIN))
+        .min(metrics::at_100(metrics::WIDTH_DETAILS_MAX))
 }
 
 /// The narrowest main area next to the panel: its width at the minimum
@@ -48,7 +49,7 @@ pub const MAIN_AREA_MIN: Pixels = gpui::px(360.);
 /// comes back when the window grows.
 pub fn fitted_width(width: Pixels, window: Pixels, sidebar: Pixels) -> Pixels {
     let room = window - sidebar - MAIN_AREA_MIN;
-    clamp_width(width).min(room.max(metrics::WIDTH_DETAILS_MIN))
+    clamp_width(width).min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)))
 }
 
 /// The value dragged by the resize handle.
@@ -130,7 +131,7 @@ impl RenderOnce for DetailsHeader {
                 .custom(controls::ghost(cx))
                 .icon(IconName::Ellipsis)
                 .size(metrics::HEIGHT_CONTROL)
-                .rounded(metrics::RADIUS_CONTROL)
+                .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
                 .tooltip(i18n::details::MORE_ACTIONS)
                 .focus_ring(false)
                 .focus_ring_visible(surface, cx)
@@ -142,7 +143,7 @@ impl RenderOnce for DetailsHeader {
             .custom(controls::ghost(cx))
             .icon(IconName::PanelRightClose)
             .size(metrics::HEIGHT_CONTROL)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .tooltip(i18n::details::COLLAPSE)
             .focus_ring(false)
             .focus_ring_visible(surface, cx)
@@ -202,7 +203,13 @@ mod tests {
     fn drag_width_is_clamped_to_the_design_system_limits() {
         let right = px(1280.);
         assert_eq!(width_for_drag(right, px(900.)), px(380.));
-        assert_eq!(width_for_drag(right, px(1100.)), metrics::WIDTH_DETAILS_MIN);
-        assert_eq!(width_for_drag(right, px(100.)), metrics::WIDTH_DETAILS_MAX);
+        assert_eq!(
+            width_for_drag(right, px(1100.)),
+            metrics::at_100(metrics::WIDTH_DETAILS_MIN)
+        );
+        assert_eq!(
+            width_for_drag(right, px(100.)),
+            metrics::at_100(metrics::WIDTH_DETAILS_MAX)
+        );
     }
 }

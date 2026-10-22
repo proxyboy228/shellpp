@@ -29,8 +29,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName as KitIcon, Sizable as _, VirtualListScrollHandle, h_flex,
-    v_flex, v_virtual_list,
+    ActiveTheme as _, Icon, IconName as KitIcon, VirtualListScrollHandle, h_flex, v_flex,
+    v_virtual_list,
 };
 use shellpp_core::service::dto::{RecentConnection, VaultKind};
 
@@ -41,13 +41,13 @@ use crate::state::{AppState, AppStateEvent};
 use crate::theme::{self, metrics, palette};
 
 /// Height of a section heading row of a list [decision].
-pub const HEADING_HEIGHT: Pixels = px(28.);
+pub const HEADING_HEIGHT: gpui::Rems = metrics::rpx(28.);
 /// The tile of a row (the tile of the Hosts list layout).
-const TILE_SIZE: Pixels = px(28.);
+const TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// Width of the column of the page and the pane picker, and of the overlay
 /// [decision]: the widest details panel (`--width-details-max`); narrower
 /// areas use their own width.
-pub const COLUMN_WIDTH: Pixels = metrics::WIDTH_DETAILS_MAX;
+pub const COLUMN_WIDTH: gpui::Rems = metrics::WIDTH_DETAILS_MAX;
 /// The vault name until the core has answered.
 const DEFAULT_VAULT_NAME: &str = crate::i18n::top_bar::PERSONAL_VAULT;
 
@@ -387,7 +387,7 @@ impl Picker {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(KitIcon::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -409,19 +409,19 @@ impl Picker {
             )
             .children(hint)
             .when(focused, |this| {
-                this.child(focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(focus_ring(metrics::RADIUS_CONTROL, metrics::rpx(1.), cx))
             })
     }
 
-    /// Total height of the list's entries.
+    /// Total height of the list's entries, in design units.
     pub fn content_height(&self) -> Pixels {
         self.sizes
             .iter()
             .fold(Pixels::ZERO, |total, size| total + size.height)
     }
 
-    /// The list, or its empty state. `height`: a fixed height (the
-    /// overlay); `None` fills the remaining space.
+    /// The list, or its empty state. `height`: a fixed height in design
+    /// units (the overlay); `None` fills the remaining space.
     pub fn render_list<V: PickerHost>(
         &self,
         height: Option<Pixels>,
@@ -448,7 +448,7 @@ impl Picker {
         let list = v_virtual_list(
             cx.entity(),
             SharedString::from(format!("{}-list", self.prefix)),
-            self.sizes.clone(),
+            metrics::scaled_sizes(&self.sizes, cx),
             |this: &mut V, range, _, cx| {
                 range
                     .map(|ix| render_item(this, ix, cx))
@@ -461,7 +461,7 @@ impl Picker {
             .relative()
             .w_full()
             .map(|this| match height {
-                Some(height) => this.h(height).flex_none(),
+                Some(height) => this.h(metrics::rems_of(height)).flex_none(),
                 None => this.flex_1().min_h_0(),
             })
             .child(list)
@@ -470,11 +470,11 @@ impl Picker {
     }
 }
 
-/// The height of a list entry.
+/// The height of a list entry, in design units (px at 100 %, D96).
 fn item_height(item: &Item) -> Pixels {
     match item {
-        Item::Heading(_) => HEADING_HEIGHT,
-        Item::Row(_) => metrics::HEIGHT_ROW,
+        Item::Heading(_) => metrics::at_100(HEADING_HEIGHT),
+        Item::Row(_) => metrics::at_100(metrics::HEIGHT_ROW),
     }
 }
 
@@ -484,7 +484,7 @@ fn shortcut_chip(text: String, cx: &App) -> Div {
     let theme = cx.theme();
     div()
         .flex_none()
-        .h(px(24.))
+        .h(metrics::rpx(24.))
         .px(metrics::SPACE_2)
         .flex()
         .items_center()
@@ -540,7 +540,7 @@ fn render_row<V: PickerHost>(
         .justify_center()
         .child(
             Icon::new(row.icon)
-                .with_size(ICON_SIZE)
+                .size(ICON_SIZE)
                 .text_color(palette::TEXT_ON_TAG.hsla()),
         );
     h_flex()

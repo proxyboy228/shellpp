@@ -171,7 +171,7 @@ impl SnippetsScreen {
             selected: None,
             package_cursor: None,
             form: None,
-            panel_width: metrics::WIDTH_DETAILS,
+            panel_width: metrics::at_100(metrics::WIDTH_DETAILS),
             measured_width: None,
             grid_width: None,
             columns: 1,

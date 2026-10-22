@@ -30,8 +30,8 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, VirtualListScrollHandle,
-    h_flex, v_flex, v_virtual_list,
+    ActiveTheme as _, Disableable as _, Icon, IconName, VirtualListScrollHandle, h_flex, v_flex,
+    v_virtual_list,
 };
 use shellpp_core::service::dto::{RecordRef, SessionTarget};
 use shellpp_ssh::Sftp;
@@ -53,16 +53,16 @@ use crate::state::selection::SelectMode;
 use crate::theme::metrics;
 
 /// Height of a row (a remote file's permissions sit under its name).
-pub const ROW_HEIGHT: Pixels = px(40.);
+pub const ROW_HEIGHT: gpui::Rems = metrics::rpx(40.);
 /// Widths of the fixed columns.
-const MODIFIED_COLUMN: Pixels = px(150.);
-const SIZE_COLUMN: Pixels = px(80.);
-const KIND_COLUMN: Pixels = px(80.);
+const MODIFIED_COLUMN: gpui::Rems = metrics::rpx(150.);
+const SIZE_COLUMN: gpui::Rems = metrics::rpx(80.);
+const KIND_COLUMN: gpui::Rems = metrics::rpx(80.);
 /// The filter field of the header.
-const FILTER_WIDTH: Pixels = px(160.);
+const FILTER_WIDTH: gpui::Rems = metrics::rpx(160.);
 /// The host selection list.
-const PICKER_WIDTH: Pixels = px(360.);
-const PICKER_HEIGHT: Pixels = px(320.);
+const PICKER_WIDTH: gpui::Rems = metrics::rpx(360.);
+const PICKER_HEIGHT: gpui::Rems = metrics::rpx(320.);
 
 /// Which panel: the ids of its elements start with its side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -740,7 +740,10 @@ impl FilePanel {
             .collect();
         self.rows = listing::sorted(&shown, self.sort);
         let parent = usize::from(listing::parent(self.path(), self.style).is_some());
-        self.row_sizes = Rc::new(vec![size(px(1.), ROW_HEIGHT); self.rows.len() + parent]);
+        self.row_sizes = Rc::new(vec![
+            size(px(1.), metrics::at_100(ROW_HEIGHT));
+            self.rows.len() + parent
+        ]);
         cx.notify();
     }
 
@@ -1225,7 +1228,7 @@ impl FilePanel {
             .px(metrics::SPACE_5)
             .child(
                 Icon::new(Lucide::FolderOpen)
-                    .with_size(px(32.))
+                    .size(metrics::rpx(32.))
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -1268,7 +1271,7 @@ impl FilePanel {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .children(hosts.into_iter().map(|(host, title)| {
                 let picked = title.clone();
                 h_flex()
@@ -1285,7 +1288,7 @@ impl FilePanel {
                     .hover(|style| style.bg(cx.theme().list_hover))
                     .child(
                         Icon::new(Lucide::Server)
-                            .with_size(ICON_SIZE)
+                            .size(ICON_SIZE)
                             .text_color(theme.muted_foreground),
                     )
                     .child(
@@ -1520,10 +1523,10 @@ impl FilePanel {
             .icon(icon)
             .label(self.title())
             .trailing_icon(IconName::ChevronDown)
-            .dropdown_menu(move |menu: PopupMenu, _, _| {
+            .dropdown_menu(move |menu: PopupMenu, _, cx| {
                 let local = panel.clone();
                 let host = panel.clone();
-                menu.min_w(px(200.))
+                menu.min_w(metrics::scaled(200., cx))
                     .item(menus::menu_item(
                         strings::SOURCE_LOCAL,
                         false,
@@ -1613,18 +1616,18 @@ impl FilePanel {
                     .flex_1()
                     .min_w_0()
                     .overflow_x_hidden()
-                    .gap(px(2.))
+                    .gap(metrics::rpx(2.))
                     .children(crumbs.into_iter().enumerate().map(|(index, crumb)| {
                         let path = crumb.path.clone();
                         let drive = crumb.drive;
                         let panel = cx.entity().downgrade();
                         h_flex()
                             .flex_none()
-                            .gap(px(2.))
+                            .gap(metrics::rpx(2.))
                             .when(index > 0, |this| {
                                 this.child(
                                     Icon::new(IconName::ChevronRight)
-                                        .with_size(px(12.))
+                                        .size(metrics::rpx(12.))
                                         .text_color(theme.muted_foreground),
                                 )
                             })
@@ -1701,7 +1704,7 @@ impl FilePanel {
                         )))
                         .test_support()
                         .px(metrics::SPACE_2)
-                        .py(px(2.))
+                        .py(metrics::rpx(2.))
                         .rounded(metrics::RADIUS_CONTROL)
                         .border_1()
                         .border_color(theme.border)
@@ -1721,14 +1724,14 @@ impl FilePanel {
     fn render_columns(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let sort = self.sort;
-        let header = |column: Column, label: &'static str, width: Option<Pixels>| {
+        let header = |column: Column, label: &'static str, width: Option<gpui::Rems>| {
             let arrow = (sort.column == column).then(|| {
                 Icon::new(if sort.descending {
                     IconName::ChevronDown
                 } else {
                     IconName::ChevronUp
                 })
-                .with_size(px(12.))
+                .size(metrics::rpx(12.))
                 .text_color(theme.muted_foreground)
             });
             let cell = h_flex()
@@ -1760,7 +1763,7 @@ impl FilePanel {
             .test_support()
             .w_full()
             .flex_none()
-            .h(px(28.))
+            .h(metrics::rpx(28.))
             .border_b_1()
             .border_color(theme.border)
             .child(header(Column::Name, strings::COLUMN_NAME, None))
@@ -1852,13 +1855,15 @@ impl FilePanel {
                     .min_w_0()
                     .gap(metrics::SPACE_2)
                     .px(metrics::SPACE_2)
-                    .child(Icon::new(icon).with_size(ICON_SIZE).text_color(
-                        if entry.is_folder_like() {
-                            theme.primary
-                        } else {
-                            muted
-                        },
-                    ))
+                    .child(
+                        Icon::new(icon)
+                            .size(ICON_SIZE)
+                            .text_color(if entry.is_folder_like() {
+                                theme.primary
+                            } else {
+                                muted
+                            }),
+                    )
                     .child(
                         v_flex()
                             .flex_1()
@@ -1942,7 +1947,7 @@ impl FilePanel {
             .hover(|style| style.bg(cx.theme().list_hover))
             .child(
                 Icon::new(Lucide::CornerLeftUp)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -1973,7 +1978,7 @@ impl FilePanel {
         let list = v_virtual_list(
             cx.entity(),
             self.id("rows-list"),
-            self.row_sizes.clone(),
+            metrics::scaled_sizes(&self.row_sizes, cx),
             |this: &mut Self, range, window, cx| {
                 // The keyboard cursor shows only while the keyboard is used.
                 let keyboard = this.focus.is_focused(window) && window.last_input_was_keyboard();
@@ -2015,7 +2020,7 @@ impl FilePanel {
 }
 
 /// A fixed-width cell of a row.
-fn cell(text: String, width: Pixels, color: gpui::Hsla) -> gpui::Div {
+fn cell(text: String, width: gpui::Rems, color: gpui::Hsla) -> gpui::Div {
     div()
         .flex_none()
         .w(width)

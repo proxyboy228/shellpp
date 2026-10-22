@@ -141,7 +141,7 @@ impl Render for SearchOverlay {
         let scrim = theme::tokens(cx).scrim.hsla();
         let surface = theme.popover;
         let border = theme.border;
-        let max_list: Pixels = metrics::HEIGHT_ROW * LIST_ROWS;
+        let max_list: Pixels = metrics::at_100(metrics::HEIGHT_ROW) * LIST_ROWS;
         let content = self.picker.content_height();
         let height = if content < max_list {
             content

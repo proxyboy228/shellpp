@@ -5,7 +5,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Context, Entity, FontWeight, IntoElement, PathPromptOptions, Window, div, px,
+    App, ClickEvent, Context, Entity, FontWeight, IntoElement, PathPromptOptions, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
@@ -162,7 +162,7 @@ impl Render for CertificateForm {
             )
             .child(widgets::caption(strings::CERTIFICATE_HINT, cx))
             .child(
-                div().h(px(140.)).child(
+                div().h(metrics::rpx(140.)).child(
                     Textarea::new(&self.text)
                         .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                         .h_full(),
@@ -216,7 +216,7 @@ impl KeychainScreen {
         let form = cx.new(|cx| CertificateForm::new(state, screen, window, cx));
         window.open_dialog(cx, move |modal, _, cx: &mut App| {
             modal
-                .w(px(520.))
+                .w(metrics::scaled(520., cx))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
                 .close_button(false)

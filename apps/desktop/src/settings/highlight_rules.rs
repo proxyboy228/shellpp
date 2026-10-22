@@ -8,7 +8,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription,
-    Window, div, px,
+    Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -309,7 +309,7 @@ impl HighlightRulesBlock {
                 div()
                     .id(SharedString::from(format!("{prefix}-color-{index}")))
                     .test_support()
-                    .size(px(18.))
+                    .size(metrics::rpx(18.))
                     .rounded_full()
                     .bg(fill)
                     .border_2()
@@ -352,7 +352,7 @@ impl HighlightRulesBlock {
                     .items_center()
                     .child(
                         div()
-                            .w(px(140.))
+                            .w(metrics::rpx(140.))
                             .text_size(metrics::FONT_SIZE_BODY)
                             .child(category_label(category)),
                     )

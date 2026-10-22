@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, Render, SharedString,
-    Subscription, Task, Window, div, px,
+    Subscription, Task, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -481,9 +481,9 @@ impl HistoryTab {
             // The size of "Close" next to it (`widgets::form_button`): 32 px
             // high, the label at body size (`large`).
             .large()
-            .h(px(32.))
+            .h(metrics::rpx(32.))
             .px(metrics::SPACE_3)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.save_hint(window, cx)));
         Some(
             widgets::block("history-hint", Some(text::HINT_TITLE), cx)
@@ -587,7 +587,7 @@ fn trash_button(
     let danger_hover = theme::tokens(cx).danger_hover.hsla();
     widgets::hit(id)
         .flex_none()
-        .size(px(32.))
+        .size(metrics::rpx(32.))
         .flex()
         .items_center()
         .justify_center()

@@ -1008,7 +1008,7 @@ impl TerminalSection {
             .gap(metrics::SPACE_2)
             .items_center()
             .child(minus)
-            .child(div().w(px(64.)).child(widgets::text_input(
+            .child(div().w(metrics::rpx(64.)).child(widgets::text_input(
                 &self.font_size,
                 "settings-font-size",
                 self.font_size_invalid,
@@ -1046,7 +1046,7 @@ impl TerminalSection {
             .gap(metrics::SPACE_2)
             .items_center()
             .child(line_minus)
-            .child(div().w(px(64.)).child(widgets::text_input(
+            .child(div().w(metrics::rpx(64.)).child(widgets::text_input(
                 &self.line_height,
                 "settings-line-height",
                 self.line_height_invalid,
@@ -1143,7 +1143,7 @@ impl TerminalSection {
                     h_flex()
                         .gap(metrics::SPACE_2)
                         .items_center()
-                        .child(div().w(px(96.)).child(widgets::text_input(
+                        .child(div().w(metrics::rpx(96.)).child(widgets::text_input(
                             &self.keepalive,
                             "settings-keepalive",
                             self.keepalive_invalid,
@@ -1190,9 +1190,9 @@ fn min_contrast_hint(mode: MinContrast) -> Option<&'static str> {
 }
 
 /// Width of the select-like fields.
-const FIELD_WIDTH: gpui::Pixels = px(280.);
+const FIELD_WIDTH: gpui::Rems = metrics::rpx(280.);
 /// Size of a theme preview card.
-const THEME_CARD_WIDTH: gpui::Pixels = px(148.);
+const THEME_CARD_WIDTH: gpui::Rems = metrics::rpx(148.);
 
 /// A settings block: the heading (14 px, 600) and its rows, 12 px apart.
 fn block(id: &'static str, title: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
@@ -1245,7 +1245,7 @@ pub(crate) fn step_button(
                 this.opacity(metrics::OPACITY_DISABLED)
             }
         })
-        .child(gpui_kit::component::Icon::new(icon).size(px(16.)))
+        .child(gpui_kit::component::Icon::new(icon).size(metrics::rpx(16.)))
 }
 
 /// A theme choice: a preview in the theme's own colors (background, text
@@ -1259,7 +1259,7 @@ pub(crate) fn theme_card(
     name: impl Into<SharedString>,
     selected: bool,
     new: bool,
-    width: gpui::Pixels,
+    width: gpui::Rems,
     cx: &App,
 ) -> widgets::Hit {
     let theme = cx.theme();
@@ -1270,14 +1270,14 @@ pub(crate) fn theme_card(
             .into_iter()
             .map(|index| {
                 div()
-                    .size(px(10.))
-                    .rounded(px(2.))
+                    .size(metrics::rpx(10.))
+                    .rounded(metrics::rpx(2.))
                     .bg(terminal.ansi.0[index].hsla())
                     .into_any_element()
             })
             .collect();
         v_flex()
-            .h(px(56.))
+            .h(metrics::rpx(56.))
             .p(metrics::SPACE_2)
             .gap(metrics::SPACE_1)
             .rounded(metrics::RADIUS_CONTROL)
@@ -1288,7 +1288,7 @@ pub(crate) fn theme_card(
                     .text_color(terminal.foreground.hsla())
                     .child(strings::THEME_PREVIEW_SAMPLE),
             )
-            .child(h_flex().gap(px(3.)).children(swatches))
+            .child(h_flex().gap(metrics::rpx(3.)).children(swatches))
     });
     let mark = new.then(|| {
         div()
@@ -1335,7 +1335,7 @@ pub(crate) fn theme_card(
                 .when(selected, |this| {
                     this.child(
                         gpui_kit::component::Icon::new(IconName::Check)
-                            .size(px(14.))
+                            .size(metrics::rpx(14.))
                             .text_color(theme.primary),
                     )
                 }),

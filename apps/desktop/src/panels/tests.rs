@@ -46,7 +46,7 @@ fn options() -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             Default::default(),
-            size(metrics::WIDTH_DETAILS, px(3000.)),
+            size(metrics::at_100(metrics::WIDTH_DETAILS), px(3000.)),
         ))),
         ..Default::default()
     }
@@ -199,7 +199,7 @@ fn host_panel_blocks_follow_ui_3_1(cx: &mut TestAppContext) {
         for id in ["host-address", "host-label", "host-port", "host-username"] {
             assert_eq!(
                 window.find(id).bounds().size.height,
-                metrics::HEIGHT_CONTROL,
+                metrics::at_100(metrics::HEIGHT_CONTROL),
                 "{id}"
             );
         }

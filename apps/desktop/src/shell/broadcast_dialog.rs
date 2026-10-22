@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, FontWeight, SharedString, Window, div, px};
+use gpui::{App, FontWeight, SharedString, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
@@ -18,7 +18,7 @@ use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
 use crate::theme::metrics;
 
-const DIALOG_WIDTH: gpui::Pixels = px(440.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(440.);
 
 /// Asks which tabs take part: `tabs` are (tab, title, ticked); `start` gets
 /// the ticked tabs and returns whether the dialog may close.
@@ -70,7 +70,7 @@ pub fn open(
                 .collect::<Vec<_>>(),
         );
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

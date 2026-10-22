@@ -43,7 +43,7 @@ use crate::theme::terminal::TerminalTheme;
 pub const KEY_CONTEXT: &str = "Terminal";
 
 /// Space between the view's edges and the grid.
-const PADDING: Pixels = metrics::SPACE_2;
+const PADDING: Pixels = gpui::px(8.);
 
 /// How often a selection drag above or below the grid scrolls.
 const AUTOSCROLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -75,7 +75,8 @@ impl gpui::Global for KeysBound {}
 
 /// The terminal's key bindings (UI 12.5), once per app. Ctrl+letter and Ctrl+Alt+letter
 /// without Shift are disabled for the app while the terminal has the focus,
-/// so they reach the shell (Ctrl+L, Ctrl+P, Ctrl+K, Ctrl+Alt+S, ...); the
+/// so they reach the shell (Ctrl+L, Ctrl+P, Ctrl+K, Ctrl+Alt+S, ...), and so
+/// are Ctrl+=, Ctrl+- and Ctrl+0 (the interface zoom outside it); the
 /// app keeps Ctrl+1..9, `Ctrl+,`, Ctrl+Shift+..., Ctrl+Alt+arrows and
 /// Alt+Left/Right.
 pub fn bind_keys(cx: &mut App) {
@@ -95,6 +96,10 @@ pub fn bind_keys(cx: &mut App) {
         bindings.push(KeyBinding::new("cmd-c", Copy, context));
         bindings.push(KeyBinding::new("cmd-v", Paste, context));
         bindings.push(KeyBinding::new("cmd-a", SelectAll, context));
+    }
+    // The interface zoom keys go to the program too (D96).
+    for keys in ["ctrl-=", "ctrl--", "ctrl-0"] {
+        bindings.push(KeyBinding::new(keys, NoAction, context));
     }
     for letter in 'a'..='z' {
         bindings.push(KeyBinding::new(

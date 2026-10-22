@@ -6,9 +6,7 @@
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, IntoElement, SharedString, Window, div, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, Entity, IntoElement, SharedString, Window, div};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _};
 use shellpp_core::model::text;
@@ -203,7 +201,7 @@ pub fn render_list<V: 'static>(
                 .w_full()
                 .max_h(widgets::PICKER_MAX_HEIGHT)
                 .overflow_y_scroll()
-                .gap(px(2.))
+                .gap(metrics::rpx(2.))
                 .children(items)
                 .when(empty, |this| {
                     this.child(

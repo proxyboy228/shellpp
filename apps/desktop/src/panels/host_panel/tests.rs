@@ -142,7 +142,13 @@ fn open_panel(
     state: &Entity<AppState>,
     record_id: Option<Uuid>,
 ) -> (AnyWindowHandle, Entity<HostPanel>) {
-    open_panel_sized(cx, state, record_id, metrics::WIDTH_DETAILS, px(4000.))
+    open_panel_sized(
+        cx,
+        state,
+        record_id,
+        metrics::at_100(metrics::WIDTH_DETAILS),
+        px(4000.),
+    )
 }
 
 fn settle(cx: &mut TestAppContext) {
@@ -720,9 +726,12 @@ const FITTING_IDS: &[&str] = &[
 fn the_panel_fits_the_minimum_window(cx: &mut TestAppContext) {
     let state = setup(cx);
     let mut host = None;
-    for (index, width) in [metrics::WIDTH_DETAILS, metrics::WIDTH_DETAILS_MIN]
-        .into_iter()
-        .enumerate()
+    for (index, width) in [
+        metrics::at_100(metrics::WIDTH_DETAILS),
+        metrics::at_100(metrics::WIDTH_DETAILS_MIN),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let id = new_host(cx, &state, &format!("192.0.2.{}", 27 + index));
         host.get_or_insert(id);
@@ -753,8 +762,14 @@ fn the_panel_fits_the_minimum_window(cx: &mut TestAppContext) {
         settle(cx);
     }
     // 600 px window minus the 44 px top bar.
-    let height = px(600.) - metrics::HEIGHT_TOP_BAR;
-    let (handle, _) = open_panel_sized(cx, &state, host, metrics::WIDTH_DETAILS, height);
+    let height = px(600.) - metrics::at_100(metrics::HEIGHT_TOP_BAR);
+    let (handle, _) = open_panel_sized(
+        cx,
+        &state,
+        host,
+        metrics::at_100(metrics::WIDTH_DETAILS),
+        height,
+    );
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let connect = window.find("host-connect");

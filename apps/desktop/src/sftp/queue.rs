@@ -28,14 +28,13 @@ use std::time::{Duration, Instant};
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement, SharedString, Task,
-    Window, div, px,
+    Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, WindowExt as _, h_flex, v_flex,
 };
 use shellpp_ssh::transfer_queue::{
     ConflictChoice, ConflictOutcome, ConflictPolicy, DEFAULT_PARALLEL, Direction, PARALLEL_RANGE,
@@ -54,7 +53,7 @@ use crate::theme::metrics;
 /// How often running transfers report their progress to the panel.
 const TICK: Duration = Duration::from_millis(250);
 /// Height of a row of the queue.
-const ROW_HEIGHT: gpui::Pixels = px(36.);
+const ROW_HEIGHT: gpui::Rems = metrics::rpx(36.);
 /// Rows shown before the queue scrolls.
 const VISIBLE_ROWS: f32 = 5.;
 
@@ -564,7 +563,7 @@ impl Transfers {
             dialog
                 .keyboard(false)
                 .overlay_closable(false)
-                .w(px(440.))
+                .w(metrics::scaled(440., cx))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
                 .close_button(false)
@@ -919,7 +918,7 @@ impl Render for Transfers {
             .id("sftp-queue-header")
             .test_support()
             .w_full()
-            .h(px(32.))
+            .h(metrics::rpx(32.))
             .px(metrics::SPACE_3)
             .gap(metrics::SPACE_2)
             .child(
@@ -929,7 +928,7 @@ impl Render for Transfers {
                     } else {
                         IconName::ChevronDown
                     })
-                    .height(px(28.))
+                    .height(metrics::rpx(28.))
                     .tooltip(strings::QUEUE_TITLE)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.set_collapsed(!collapsed, cx)
@@ -954,7 +953,7 @@ impl Render for Transfers {
             .child(
                 ControlButton::new("sftp-queue-clear", ControlKind::Ghost)
                     .label(strings::QUEUE_CLEAR)
-                    .height(px(28.))
+                    .height(metrics::rpx(28.))
                     .disabled(self.queue.transfers().iter().all(|t| t.state.is_open()))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_finished(cx))),
             );
@@ -981,7 +980,7 @@ impl Render for Transfers {
                     ControlKind::Ghost,
                 )
                 .icon(icon)
-                .height(px(28.))
+                .height(metrics::rpx(28.))
                 .tooltip(tooltip)
             };
             h_flex()
@@ -997,12 +996,12 @@ impl Render for Transfers {
                         Direction::Download => Lucide::Download,
                         Direction::RemoteToRemote => Lucide::ArrowLeftRight,
                     })
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
                 )
                 .child(
                     div()
-                        .w(px(220.))
+                        .w(metrics::rpx(220.))
                         .flex_none()
                         .truncate()
                         .text_size(metrics::FONT_SIZE_BODY)
@@ -1011,7 +1010,7 @@ impl Render for Transfers {
                 )
                 .child(
                     div()
-                        .w(px(90.))
+                        .w(metrics::rpx(90.))
                         .flex_none()
                         .text_size(metrics::FONT_SIZE_CAPTION)
                         .text_color(theme.muted_foreground)
@@ -1024,14 +1023,14 @@ impl Render for Transfers {
                 .child(
                     div()
                         .flex_1()
-                        .min_w(px(80.))
-                        .h(px(6.))
-                        .rounded(px(3.))
+                        .min_w(metrics::rpx(80.))
+                        .h(metrics::rpx(6.))
+                        .rounded(metrics::rpx(3.))
                         .bg(theme.muted)
                         .child(
                             div()
                                 .h_full()
-                                .rounded(px(3.))
+                                .rounded(metrics::rpx(3.))
                                 .w(gpui::relative(fraction))
                                 .bg(match state {
                                     State::Failed(_) => theme.danger,
@@ -1046,7 +1045,7 @@ impl Render for Transfers {
                             transfer.name
                         )))
                         .test_support()
-                        .w(px(200.))
+                        .w(metrics::rpx(200.))
                         .flex_none()
                         .truncate()
                         .text_size(metrics::FONT_SIZE_CAPTION)
@@ -1073,9 +1072,9 @@ impl Render for Transfers {
                 .child(
                     h_flex()
                         .flex_none()
-                        .w(px(64.))
+                        .w(metrics::rpx(64.))
                         .justify_end()
-                        .gap(px(2.))
+                        .gap(metrics::rpx(2.))
                         .when(matches!(state, State::Running | State::Queued), |this| {
                             this.child(button("pause", Lucide::Pause, strings::PAUSE).on_click(
                                 cx.listener(move |this, _: &ClickEvent, window, cx| {

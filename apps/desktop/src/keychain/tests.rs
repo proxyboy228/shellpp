@@ -1452,7 +1452,7 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     app.click(cx, "nav-keychain");
     assert_eq!(
         app.bounds(cx, "sidebar").unwrap().size.width,
-        metrics::WIDTH_SIDEBAR
+        metrics::at_100(metrics::WIDTH_SIDEBAR)
     );
     let deploy = app.deploy(cx);
     app.click(cx, key_card_id(deploy.record_id));
@@ -1463,7 +1463,7 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     );
     assert_eq!(
         app.bounds(cx, "kc-panel").unwrap().size.width,
-        metrics::WIDTH_DETAILS
+        metrics::at_100(metrics::WIDTH_DETAILS)
     );
     let main = app.bounds(cx, "kc-main").unwrap();
     assert!(
@@ -1485,7 +1485,7 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     app.click(cx, "panel-close");
     assert_eq!(
         app.bounds(cx, "sidebar").unwrap().size.width,
-        metrics::WIDTH_SIDEBAR
+        metrics::at_100(metrics::WIDTH_SIDEBAR)
     );
     app.finish(cx);
 }

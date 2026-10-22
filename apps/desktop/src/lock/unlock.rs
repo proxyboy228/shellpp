@@ -214,7 +214,7 @@ impl Render for UnlockScreen {
             .large()
             .w_full()
             .h(metrics::HEIGHT_CONTROL)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .label(if self.busy {
                 strings::WORKING
             } else {

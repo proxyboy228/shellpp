@@ -232,7 +232,7 @@ impl ForwardingScreen {
             restart_after: HashSet::new(),
             selected: None,
             form: None,
-            panel_width: metrics::WIDTH_DETAILS,
+            panel_width: metrics::at_100(metrics::WIDTH_DETAILS),
             measured_width: None,
             grid_width: None,
             columns: 1,

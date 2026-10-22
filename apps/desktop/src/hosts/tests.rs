@@ -656,11 +656,11 @@ fn grid_columns_follow_the_width(cx: &mut TestAppContext) {
     assert_eq!(columns, 5, "1920 px window: 5 columns");
     assert!((240. ..=360.).contains(&width), "{width}");
     let card = ui.frame(cx, |window, _| window.find(host_card_id(ids[0])).bounds());
-    assert_eq!(card.size.height, metrics::HEIGHT_HOST_CARD);
+    assert_eq!(card.size.height, metrics::at_100(metrics::HEIGHT_HOST_CARD));
     assert!((card.size.width.as_f32() - width).abs() < 0.5);
     let next = ui.frame(cx, |window, _| window.find(host_card_id(ids[1])).bounds());
     let gap = next.origin.x - (card.origin.x + card.size.width);
-    assert!((gap.as_f32() - metrics::HOST_CARD_GAP.as_f32()).abs() < 0.5);
+    assert!((gap.as_f32() - metrics::at_100(metrics::HOST_CARD_GAP).as_f32()).abs() < 0.5);
     ui.finish(cx);
 }
 
@@ -681,7 +681,7 @@ fn view_sort_and_tag_filter(cx: &mut TestAppContext) {
         HostsLayout::List
     );
     let row = ui.frame(cx, |window, _| window.find(host_card_id(web)).bounds());
-    assert_eq!(row.size.height, metrics::HEIGHT_ROW);
+    assert_eq!(row.size.height, metrics::at_100(metrics::HEIGHT_ROW));
     ui.frame(cx, |window, cx| window.click("view-tiles", cx));
 
     // Sort by name: "192.0.2.10", "Mail", "Web front".
@@ -981,6 +981,12 @@ fn open_app_with(
 /// At the minimum window size: the top bar, the search bar, the action bar
 /// (with chips) and the first card are whole and apart.
 fn check_min_window(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&str]) {
+    check_bars_fit(cx, handle, tags, true);
+}
+
+/// [`check_min_window`]; `a_chip` also asks for a tag chip next to "+N"
+/// (the main area at least 360 px at 100 %: a zoomed window is narrower).
+fn check_bars_fit(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&str], a_chip: bool) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let viewport = Bounds::new(Default::default(), window.viewport_size());
@@ -1007,7 +1013,8 @@ fn check_min_window(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&s
         assert!(bar.len() >= 8, "{bar:?}");
         // Never "+N" alone while a chip fits (owner's step 0.1).
         assert!(
-            tags.is_empty()
+            !a_chip
+                || tags.is_empty()
                 || bar
                     .iter()
                     .any(|(id, _)| id.starts_with("tag-chip-") && id != "tag-chip-more"),
@@ -1020,7 +1027,7 @@ fn check_min_window(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&s
         // The content keeps room for cards.
         let content = window.find("hosts-content").bounds();
         assert!(
-            content.size.height >= metrics::HEIGHT_HOST_CARD * 2.,
+            content.size.height >= metrics::to_px(metrics::HEIGHT_HOST_CARD, cx) * 2.,
             "{content:?}"
         );
         let cards: Vec<SharedString> = ["heading-groups", "heading-hosts"]
@@ -1105,7 +1112,7 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
         })
         .unwrap()
         .expect("the details panel");
-    assert_eq!(panel.size.width, metrics::WIDTH_DETAILS);
+    assert_eq!(panel.size.width, metrics::at_100(metrics::WIDTH_DETAILS));
     let (sidebar, main) = cx
         .update_window(handle, |_, window, _| {
             (
@@ -1134,7 +1141,7 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
     // A panel dragged to its widest keeps the main area at 360 px.
     let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
     shell.update(cx, |shell, cx| {
-        shell.set_details_width(metrics::WIDTH_DETAILS_MAX, cx)
+        shell.set_details_width(metrics::at_100(metrics::WIDTH_DETAILS_MAX), cx)
     });
     for _ in 0..2 {
         cx.update_window(handle, |_, window, cx| window.render_frame(cx))
@@ -1155,6 +1162,89 @@ fn min_window_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
     let plan = screen.read_with(cx, |screen, _| screen.bar_plan()).unwrap();
     assert!(plan.wrapped && plan.chips >= 1, "{plan:?}");
 
+    let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    cx.run_until_parked();
+    state.update(cx, |state, _| state.shutdown());
+}
+
+/// D96: at 150 % the minimum window (960x600, 640x400 at 100 %) has nothing
+/// clipped or overlapping either: the top bar, the search and action bars
+/// (with tag chips) and the content, with and without the details panel;
+/// the sidebar collapses and the bars wrap as in a narrower window.
+#[gpui_kit::test]
+fn min_window_at_150_percent_has_nothing_clipped_or_overlapping(cx: &mut TestAppContext) {
+    let (state, handle, root, ids) = open_app(cx, 960., 600.);
+    cx.update(|cx| crate::theme::zoom::set(1.5, cx));
+    let settle = |cx: &mut TestAppContext| {
+        for _ in 0..3 {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+    };
+    settle(cx);
+    let screen = cx.update(|cx| {
+        root.read(cx)
+            .shell()
+            .expect("unlocked")
+            .read(cx)
+            .hosts_screen()
+            .clone()
+    });
+    let top_bar = cx
+        .update_window(handle, |_, window, _| {
+            window.find("main-area").bounds().top()
+        })
+        .unwrap();
+    assert!((top_bar - px(44. * 1.5)).abs() < px(0.5), "{top_bar:?}");
+    check_min_window(cx, handle, &[]);
+    screen.update(cx, |screen, cx| {
+        for tag in ["prod", "staging", "critical"] {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    settle(cx);
+    check_min_window(cx, handle, &["prod", "staging", "critical"]);
+    screen.update(cx, |screen, cx| screen.clear_tags(cx));
+
+    // The details panel: the sidebar is the strip of icons.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(host_card_id(ids[0]), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(300));
+    settle(cx);
+    let (sidebar, panel) = cx
+        .update_window(handle, |_, window, _| {
+            (
+                window.find("sidebar").bounds(),
+                window.try_find("right-panel").map(|panel| panel.bounds()),
+            )
+        })
+        .unwrap();
+    assert!(panel.is_some(), "the details panel");
+    assert!(
+        (sidebar.size.width - crate::shell::sidebar::WIDTH_COLLAPSED * 1.5).abs() < px(0.5),
+        "{sidebar:?}"
+    );
+    check_min_window(cx, handle, &[]);
+    screen.update(cx, |screen, cx| {
+        for tag in ["prod", "staging", "critical", "legacy"] {
+            screen.toggle_tag(tag, cx);
+        }
+    });
+    settle(cx);
+    // 264 px at 100 % for the main area: the chips go into "+N".
+    check_bars_fit(
+        cx,
+        handle,
+        &["prod", "staging", "critical", "legacy"],
+        false,
+    );
+
+    cx.update(|cx| crate::theme::zoom::set(1., cx));
     let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     cx.run_until_parked();
     state.update(cx, |state, _| state.shutdown());
@@ -1250,7 +1340,10 @@ fn buttons_of_a_group_are_equally_wide(cx: &mut TestAppContext) {
     };
     let terminal = width(&ui, cx, "terminal");
     assert_eq!(terminal, width(&ui, cx, "serial"));
-    assert!(terminal > metrics::HEIGHT_CONTROL, "with its label");
+    assert!(
+        terminal > metrics::at_100(metrics::HEIGHT_CONTROL),
+        "with its label"
+    );
     assert_eq!(
         width(&ui, cx, "create-host"),
         width(&ui, cx, "import-ssh-config")
@@ -1781,7 +1874,7 @@ fn more_chip_lists_the_hidden_tags(cx: &mut TestAppContext) {
         window.find("tag-chip-more-tooltip").bounds().size.height
     });
     assert!(
-        height > metrics::FONT_SIZE_BODY * (hidden.len() as f32 - 1.),
+        height > metrics::at_100(metrics::FONT_SIZE_BODY) * (hidden.len() as f32 - 1.),
         "one line per hidden tag: {height:?}"
     );
     ui.finish(cx);
@@ -1913,7 +2006,7 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
         cx.run_until_parked();
     };
     // 960 - 196 = 764 px of main area: the full sidebar.
-    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar_width(cx), metrics::at_100(metrics::WIDTH_SIDEBAR));
 
     // The details panel leaves 360 px: the strip of icons.
     click(cx, host_card_id(ids[0]));
@@ -1943,7 +2036,7 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(items.len(), 6);
     // The strip inside its padding and its 1 px border: icons only.
-    let item_width = WIDTH_COLLAPSED - metrics::SPACE_2 * 2. - px(1.);
+    let item_width = WIDTH_COLLAPSED - metrics::at_100(metrics::SPACE_2) * 2. - px(1.);
     assert!(
         items.iter().all(|item| item.size.width == item_width),
         "{items:?}"
@@ -1981,7 +2074,7 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
     assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
     cx.simulate_window_resize(handle, size(px(1176.), px(700.)));
     frame(cx);
-    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar_width(cx), metrics::at_100(metrics::WIDTH_SIDEBAR));
     let main = cx
         .update_window(handle, |_, window, _| window.find("main-area").bounds())
         .unwrap();
@@ -1992,7 +2085,7 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
     assert_eq!(sidebar_width(cx), WIDTH_COLLAPSED);
     shell.update(cx, |shell, cx| shell.close_panel(cx));
     frame(cx);
-    assert_eq!(sidebar_width(cx), metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar_width(cx), metrics::at_100(metrics::WIDTH_SIDEBAR));
 
     let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     cx.run_until_parked();

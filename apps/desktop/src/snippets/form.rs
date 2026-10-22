@@ -13,7 +13,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription,
-    Window, div, px,
+    Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -35,7 +35,7 @@ use crate::state::records_edit::{has_tag, normalize_tag};
 use crate::theme::{self, metrics};
 
 /// The height of the script editor: six lines, as the field it replaced.
-const SCRIPT_HEIGHT: gpui::Pixels = px(128.);
+const SCRIPT_HEIGHT: gpui::Rems = metrics::rpx(128.);
 
 /// Whether the form makes a new snippet or edits a saved one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -807,6 +807,6 @@ impl Render for SnippetForm {
             .gap(metrics::SPACE_3)
             .child(self.render_main(window, cx))
             .child(self.render_targets(cx))
-            .child(div().h(px(1.)))
+            .child(div().h(metrics::rpx(1.)))
     }
 }

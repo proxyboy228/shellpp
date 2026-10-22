@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, FontWeight, Global, ScrollHandle, Subscription, Task, Window,
-    div, px,
+    div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -32,7 +32,7 @@ use crate::panels::widgets;
 use crate::sessions::SerialBackend;
 use crate::theme::metrics;
 
-const DIALOG_WIDTH: gpui::Pixels = px(440.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(440.);
 
 /// The baud rates offered, slowest first.
 pub const BAUD_RATES: [u32; 12] = [
@@ -509,7 +509,7 @@ pub fn open(
         let on_ok = submit.clone();
         let ready = shown.read(cx).config().is_some();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

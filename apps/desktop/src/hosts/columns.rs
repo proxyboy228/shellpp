@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn the_gap_is_the_rows_gap() {
-        assert_eq!(GAP, metrics::SPACE_3.as_f32());
+        assert_eq!(GAP, metrics::design_px(metrics::SPACE_3));
     }
 
     #[test]

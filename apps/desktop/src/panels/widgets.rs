@@ -12,7 +12,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, Focusable as _, Hsla, IntoElement, SharedString,
-    Stateful, StyledText, Window, div, px,
+    Stateful, StyledText, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::base::FocusableExt as _;
@@ -24,9 +24,9 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// A color swatch in the Color field.
-pub(crate) const SWATCH_SIZE: gpui::Pixels = px(28.);
+pub(crate) const SWATCH_SIZE: gpui::Rems = metrics::rpx(28.);
 /// Height of the inline dropdown lists (pickers).
-pub(crate) const PICKER_MAX_HEIGHT: gpui::Pixels = px(240.);
+pub(crate) const PICKER_MAX_HEIGHT: gpui::Rems = metrics::rpx(240.);
 
 /// An element with a stable id, registered for tests (the wrapper type
 /// differs with the `test-support` feature, so helpers name it this way).
@@ -51,7 +51,7 @@ pub(crate) fn icon_button(id: impl Into<ElementId>, icon: IconName, cx: &App) ->
     let pressed = theme.secondary_active;
     pressable(id, true, theme.secondary, cx)
         .flex_none()
-        .size(px(32.))
+        .size(metrics::rpx(32.))
         .flex()
         .items_center()
         .justify_center()
@@ -368,7 +368,7 @@ pub(crate) fn chip(
         .id(id)
         .test_support()
         .flex_none()
-        .h(px(24.))
+        .h(metrics::rpx(24.))
         .pl(metrics::SPACE_2)
         .pr(metrics::SPACE_1)
         .gap(metrics::SPACE_1)
@@ -388,7 +388,7 @@ pub(crate) fn remove_button(id: impl Into<ElementId>, cx: &App) -> Hit {
     let hover = theme.secondary_hover;
     pressable(id, true, theme.secondary, cx)
         .flex_none()
-        .size(px(18.))
+        .size(metrics::rpx(18.))
         .flex()
         .items_center()
         .justify_center()
@@ -411,7 +411,7 @@ pub(crate) fn text_button(
     let hover = theme.link_hover;
     pressable(id, enabled, theme.secondary, cx)
         .flex_none()
-        .h(px(28.))
+        .h(metrics::rpx(28.))
         .flex()
         .items_center()
         .gap(metrics::SPACE_1)
@@ -467,7 +467,7 @@ pub(crate) fn dropdown_list(id: impl Into<ElementId>, cx: &App) -> Stateful<Div>
         .id(id)
         .w_full()
         .p(metrics::SPACE_1)
-        .gap(px(2.))
+        .gap(metrics::rpx(2.))
         .rounded(metrics::RADIUS_OVERLAY)
         .border_1()
         .border_color(theme.input)
@@ -487,7 +487,7 @@ pub(crate) fn dropdown_item(
     let hover = theme.accent;
     pressable(id, true, theme.popover, cx)
         .w_full()
-        .min_h(px(32.))
+        .min_h(metrics::rpx(32.))
         .px(metrics::SPACE_2)
         .flex()
         .items_center()
@@ -520,7 +520,7 @@ pub(crate) fn dropdown_item(
 
 /// A small tile with a white icon on a tile color (the Address block's OS
 /// icon, group icons in pickers).
-pub(crate) fn tile(icon: impl Into<Icon>, color: TagColor, size: gpui::Pixels) -> Div {
+pub(crate) fn tile(icon: impl Into<Icon>, color: TagColor, size: gpui::Rems) -> Div {
     div()
         .flex_none()
         .size(size)
@@ -561,7 +561,7 @@ pub(crate) fn inline_row(
 
 /// A thin divider between rows (`--border-subtle`).
 pub(crate) fn divider(cx: &App) -> Div {
-    div().w_full().h(px(1.)).bg(cx.theme().border)
+    div().w_full().h(metrics::rpx(1.)).bg(cx.theme().border)
 }
 
 /// A framed area inside a block for an inline form (the "+" forms of the
@@ -640,7 +640,7 @@ pub(crate) fn form_button(
     let pressed = theme.secondary_active;
     pressable(id, enabled, theme.secondary, cx)
         .flex_none()
-        .h(px(32.))
+        .h(metrics::rpx(32.))
         .px(metrics::SPACE_3)
         .flex()
         .items_center()

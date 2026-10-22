@@ -6,9 +6,7 @@
 //! `shortcuts.preset` and bound at once ([`crate::shell::shortcuts::apply`]).
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, ClickEvent, Context, IntoElement, KeyDownEvent, SharedString, Window, div, px,
-};
+use gpui::{AnyElement, ClickEvent, Context, IntoElement, KeyDownEvent, SharedString, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use serde_json::{Map, Value, json};
@@ -170,8 +168,8 @@ impl SettingsView {
             let hover = theme.secondary_hover;
             let face = widgets::pressable(keys_id(id), true, theme.secondary, cx)
                 .flex_none()
-                .min_w(px(180.))
-                .h(px(32.))
+                .min_w(metrics::rpx(180.))
+                .h(metrics::rpx(32.))
                 .px(metrics::SPACE_3)
                 .flex()
                 .items_center()
@@ -196,7 +194,7 @@ impl SettingsView {
             let changed = overrides.contains_key(id);
             h_flex()
                 .w_full()
-                .min_h(px(40.))
+                .min_h(metrics::rpx(40.))
                 .gap(metrics::SPACE_2)
                 .items_center()
                 .border_b_1()
@@ -225,16 +223,16 @@ impl SettingsView {
                     ControlButton::new(unassign_id(id), ControlKind::Ghost)
                         .icon(gpui_kit::component::IconName::Close)
                         .tooltip(strings::UNASSIGN)
-                        .height(px(32.))
+                        .height(metrics::rpx(32.))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.set_shortcut(id, None, cx)
                         })),
                 )
-                .child(div().w(px(32.)).children(changed.then(|| {
+                .child(div().w(metrics::rpx(32.)).children(changed.then(|| {
                     ControlButton::new(reset_id(id), ControlKind::Ghost)
                         .icon(gpui_kit::assets::IconName::RotateCcw)
                         .tooltip(strings::RESET_SHORTCUT)
-                        .height(px(32.))
+                        .height(metrics::rpx(32.))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.reset_shortcut(id, cx)
                         }))

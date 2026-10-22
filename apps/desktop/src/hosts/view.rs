@@ -17,8 +17,8 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, DispatchPhase, DragMoveEvent,
     Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseUpEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Window, canvas, div, prelude::FluentBuilder as _, px, size,
+    MouseUpEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    canvas, div, prelude::FluentBuilder as _, px, size,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -27,8 +27,8 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, h_flex,
-    v_flex, v_virtual_list,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, h_flex, v_flex,
+    v_virtual_list,
 };
 use shellpp_core::service::dto::TagColor;
 use uuid::Uuid;
@@ -50,17 +50,17 @@ use crate::theme::{self, metrics, palette};
 /// Height of a section heading row ("Groups", "Hosts").
 const HEADING_HEIGHT: f32 = 40.;
 /// Horizontal padding of the content (`--space-5`).
-const CONTENT_PADDING: gpui::Pixels = metrics::SPACE_5;
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// Tile of a list row (the 36 px card tile does not fit a 44 px row).
-const LIST_TILE_SIZE: gpui::Pixels = px(28.);
+const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// Height of the Connect button inside the 36 px search field.
-const INNER_BUTTON_HEIGHT: gpui::Pixels = px(28.);
+const INNER_BUTTON_HEIGHT: gpui::Rems = metrics::rpx(28.);
 /// The kit input's right padding (medium size): the search hint ends before it.
 const SEARCH_INPUT_PAD_RIGHT: f32 = 10.;
 
 /// The width of Terminal and Serial with their labels: one group, as wide
 /// as the wider of the two (design-system 6 [decision]).
-fn local_group_width(window: &Window) -> Pixels {
+fn local_group_width(window: &Window) -> gpui::Rems {
     controls::group_width(window, &[strings::TERMINAL, strings::SERIAL])
 }
 
@@ -87,7 +87,7 @@ impl Render for DragPreview {
 
 /// The icon tile: the user's color or `--tag-graphite`, a white monochrome
 /// icon, never a letter (owner's audit item 3).
-fn tile(color: TagColor, icon: Lucide, tile_size: gpui::Pixels) -> impl IntoElement {
+fn tile(color: TagColor, icon: Lucide, tile_size: gpui::Rems) -> impl IntoElement {
     div()
         .flex_none()
         .size(tile_size)
@@ -98,7 +98,7 @@ fn tile(color: TagColor, icon: Lucide, tile_size: gpui::Pixels) -> impl IntoElem
         .justify_center()
         .child(
             Icon::new(icon)
-                .with_size(ICON_SIZE)
+                .size(ICON_SIZE)
                 .text_color(palette::TEXT_ON_TAG.hsla()),
         )
 }
@@ -138,8 +138,9 @@ impl HostsScreen {
         );
         let screen = cx.entity().downgrade();
         let measure_text = canvas(
-            move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+            move |bounds, window, cx| {
+                // In design units (D96), as the hint is planned.
+                let width = bounds.size.width.as_f32() / metrics::zoom_of(window);
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .search_text_width
@@ -170,7 +171,7 @@ impl HostsScreen {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -198,7 +199,11 @@ impl HostsScreen {
             )
             .child(connect)
             .when(focused, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CONTROL,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
     }
 
@@ -219,20 +224,20 @@ impl HostsScreen {
             text_width(window, text, metrics::FONT_SIZE_BODY, FontWeight::MEDIUM)
                 + LABEL_BUTTON_EXTRA
         };
-        let icon = metrics::HEIGHT_CONTROL.as_f32();
-        let gap = metrics::SPACE_2.as_f32();
+        let icon = metrics::design_px(metrics::HEIGHT_CONTROL);
+        let gap = metrics::design_px(metrics::SPACE_2);
         // The split button: New host, the 1 px divider, the arrow.
         let split = |new_host: f32| new_host + 1. + icon;
         let new_host = label(strings::NEW_HOST);
         // Terminal and Serial are one group: both as wide as the wider.
-        let local = local_group_width(window).as_f32();
+        let local = metrics::design_px(local_group_width(window));
         let left = [
             split(new_host) + gap + local + gap + local,
             split(new_host) + gap + icon + gap + icon,
             split(icon) + gap + icon + gap + icon,
         ];
         // View toggle (two buttons 4 px apart), tag button, sort.
-        let right = (icon * 2. + metrics::SPACE_1.as_f32()) + gap + icon + gap + icon;
+        let right = (icon * 2. + metrics::design_px(metrics::SPACE_1)) + gap + icon + gap + icon;
         let chips = self
             .filter
             .tags()
@@ -252,7 +257,7 @@ impl HostsScreen {
             right,
             chips,
             gap,
-            chip_gap: metrics::SPACE_1.as_f32(),
+            chip_gap: metrics::design_px(metrics::SPACE_1),
         }
     }
 
@@ -308,7 +313,7 @@ impl HostsScreen {
     fn render_bar_left(
         &self,
         plan: BarPlan,
-        local_width: Pixels,
+        local_width: gpui::Rems,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -325,10 +330,10 @@ impl HostsScreen {
             .icon(IconName::ChevronDown)
             .tooltip(strings::NEW_HOST_MENU)
             .rounded_sides(false, true)
-            .dropdown_menu(move |menu, _, _| {
+            .dropdown_menu(move |menu, _, cx| {
                 let new_group = screen.clone();
                 let import = screen.clone();
-                menu.min_w(px(200.))
+                menu.min_w(metrics::scaled(200., cx))
                     .item(
                         PopupMenuItem::element(|_, cx| {
                             menu_text("new-group", strings::NEW_GROUP, cx)
@@ -349,7 +354,12 @@ impl HostsScreen {
         let split = h_flex()
             .flex_none()
             .child(new_host)
-            .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
+            .child(
+                div()
+                    .w(metrics::rpx(1.))
+                    .h(metrics::HEIGHT_CONTROL)
+                    .bg(theme.border),
+            )
             .child(new_host_menu);
         let local_labels = plan.labels == BarLabels::Full;
         let terminal = ControlButton::new("terminal", ControlKind::Neutral)
@@ -481,8 +491,8 @@ impl HostsScreen {
         ControlButton::new("sort", ControlKind::Ghost)
             .icon(Lucide::ArrowUpDown)
             .tooltip(strings::SORT)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.min_w(px(200.));
+            .dropdown_menu(move |mut menu, _, cx| {
+                menu = menu.min_w(metrics::scaled(200., cx));
                 for sort in HostsSort::ALL {
                     let (id, label) = match sort {
                         HostsSort::Manual => ("sort-manual", strings::SORT_MANUAL),
@@ -631,9 +641,10 @@ impl HostsScreen {
         }
         let item_row = match self.layout {
             HostsLayout::Tiles => {
-                metrics::HEIGHT_HOST_CARD.as_f32() + metrics::HOST_CARD_GAP.as_f32()
+                metrics::design_px(metrics::HEIGHT_HOST_CARD)
+                    + metrics::design_px(metrics::HOST_CARD_GAP)
             }
-            HostsLayout::List => metrics::HEIGHT_ROW.as_f32(),
+            HostsLayout::List => metrics::design_px(metrics::HEIGHT_ROW),
         };
         self.row_sizes = Rc::new(
             rows.iter()
@@ -653,7 +664,7 @@ impl HostsScreen {
         div()
             .id(id)
             .test_support()
-            .h(px(HEADING_HEIGHT))
+            .h(metrics::rpx(HEADING_HEIGHT))
             .flex()
             .items_end()
             .pb(metrics::SPACE_2)
@@ -700,7 +711,7 @@ impl HostsScreen {
         let frame = match self.layout {
             HostsLayout::Tiles => frame
                 .flex_none()
-                .w(px(self.card_width))
+                .w(metrics::rpx(self.card_width))
                 .h(metrics::HEIGHT_HOST_CARD)
                 .gap(metrics::SPACE_3)
                 .px(metrics::SPACE_3)
@@ -733,10 +744,10 @@ impl HostsScreen {
         };
         let radius = match self.layout {
             HostsLayout::Tiles => metrics::RADIUS_CARD,
-            HostsLayout::List => gpui::Pixels::ZERO,
+            HostsLayout::List => gpui::Rems::ZERO,
         };
         frame.when(keyboard_cursor, |this| {
-            this.child(controls::focus_ring(radius, px(1.), cx))
+            this.child(controls::focus_ring(radius, metrics::rpx(1.), cx))
         })
     }
 
@@ -746,7 +757,7 @@ impl HostsScreen {
         v_flex()
             .flex_1()
             .min_w_0()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .child(
                 div()
                     .text_size(metrics::FONT_SIZE_BODY)
@@ -786,7 +797,7 @@ impl HostsScreen {
                 .id(list_cell_id(record, column))
                 .test_support()
                 .flex_none()
-                .w(px(width))
+                .w(metrics::rpx(width))
                 .min_w_0()
                 .truncate()
                 .text_color(theme.muted_foreground)
@@ -798,7 +809,7 @@ impl HostsScreen {
                 .id(list_cell_id(record, "name"))
                 .test_support()
                 .flex_none()
-                .w(px(name_width))
+                .w(metrics::rpx(name_width))
                 .min_w_0()
                 .gap(metrics::SPACE_3)
                 .items_center()
@@ -842,7 +853,7 @@ impl HostsScreen {
                 .gap(metrics::SPACE_1)
                 .child(
                     Icon::new(Lucide::Folder)
-                        .with_size(ICON_SIZE)
+                        .size(ICON_SIZE)
                         .text_color(cx.theme().muted_foreground),
                 )
                 .child(div().min_w_0().truncate().child(name))
@@ -859,7 +870,7 @@ impl HostsScreen {
         let fitted = self.fitted_columns;
         let line = theme.border;
         let handle_hover = theme.drag_border;
-        let pad = metrics::SPACE_3.as_f32();
+        let pad = metrics::design_px(metrics::SPACE_3);
         let cell = |id: &'static str, label: &'static str, width: Option<f32>| {
             div()
                 .id(id)
@@ -867,7 +878,7 @@ impl HostsScreen {
                 .min_w_0()
                 .truncate()
                 .map(|this| match width {
-                    Some(width) => this.flex_none().w(px(width)),
+                    Some(width) => this.flex_none().w(metrics::rpx(width)),
                     None => this.flex_1(),
                 })
                 .child(label)
@@ -880,8 +891,8 @@ impl HostsScreen {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .left(px(x - columns::DIVIDER_HIT / 2.))
-                .w(px(columns::DIVIDER_HIT))
+                .left(metrics::rpx(x - columns::DIVIDER_HIT / 2.))
+                .w(metrics::rpx(columns::DIVIDER_HIT))
                 .flex()
                 .justify_center()
                 .items_center()
@@ -890,7 +901,7 @@ impl HostsScreen {
                 .on_drag(ResizeColumn(column), |_, _, _, cx| {
                     cx.new(|_| crate::shell::details::ResizePreview)
                 })
-                .child(div().w(px(1.)).h(metrics::SPACE_4).bg(line))
+                .child(div().w(metrics::rpx(1.)).h(metrics::SPACE_4).bg(line))
         });
         let screen = cx.entity().downgrade();
         // While a divider is dragged: the button going up anywhere ends it.
@@ -927,7 +938,8 @@ impl HostsScreen {
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeColumn>, _, cx| {
                     let ResizeColumn(column) = *event.drag(cx);
-                    let x = event.event.position.x - event.bounds.left() - metrics::SPACE_3;
+                    let x = metrics::unscaled(event.event.position.x - event.bounds.left(), cx)
+                        - metrics::at_100(metrics::SPACE_3);
                     this.drag_column(column, x.as_f32(), cx);
                 }),
             )
@@ -953,10 +965,10 @@ impl HostsScreen {
 
     /// The width of a list row's content (inside its 12 px padding).
     pub(super) fn list_row_inner_width(&self) -> f32 {
-        (self.card_width - 2. * metrics::SPACE_3.as_f32()).max(0.)
+        (self.card_width - 2. * metrics::design_px(metrics::SPACE_3)).max(0.)
     }
 
-    fn tile_size(&self) -> gpui::Pixels {
+    fn tile_size(&self) -> gpui::Rems {
         match self.layout {
             HostsLayout::Tiles => metrics::HOST_TILE_SIZE,
             HostsLayout::List => LIST_TILE_SIZE,
@@ -1269,7 +1281,7 @@ impl HostsScreen {
             .when_some(body, |this, body| {
                 this.child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(metrics::rpx(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
                         .child(body),
@@ -1283,10 +1295,11 @@ impl HostsScreen {
     /// cards): measured after the previous layout; the first frame
     /// estimates it from the window.
     fn inner_width(&self, window: &Window) -> f32 {
-        let outer = self
-            .measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
-        (outer - CONTENT_PADDING.as_f32() * 2.).max(0.)
+        let outer = self.measured_width.unwrap_or_else(|| {
+            window.viewport_size().width.as_f32() / metrics::zoom_of(window)
+                - metrics::design_px(metrics::WIDTH_SIDEBAR)
+        });
+        (outer - metrics::design_px(CONTENT_PADDING) * 2.).max(0.)
     }
 
     /// The content width for the columns. Below 240 px (a narrow window with
@@ -1349,8 +1362,9 @@ impl Render for HostsScreen {
         // Measures the content area (the details panel narrows it); a new
         // width relays the grid out on the next frame.
         let measure = canvas(
-            move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+            move |bounds, window, cx| {
+                // In design units (D96), as the grid is planned.
+                let width = bounds.size.width.as_f32() / metrics::zoom_of(window);
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .measured_width
@@ -1376,7 +1390,7 @@ impl Render for HostsScreen {
                     v_virtual_list(
                         cx.entity(),
                         "host-grid",
-                        self.row_sizes.clone(),
+                        metrics::scaled_sizes(&self.row_sizes, cx),
                         |this: &mut Self, range, window, cx| {
                             range
                                 .map(|ix| {

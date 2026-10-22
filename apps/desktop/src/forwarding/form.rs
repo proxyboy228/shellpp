@@ -19,7 +19,6 @@ use std::collections::BTreeMap;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, IntoElement, Render, Subscription, Window, div,
-    px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -36,7 +35,7 @@ use crate::state::AppState;
 use crate::theme::metrics;
 
 /// The width of a port field.
-const PORT_WIDTH: gpui::Pixels = px(96.);
+const PORT_WIDTH: gpui::Rems = metrics::rpx(96.);
 
 /// Whether the form makes a new rule or edits a saved one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

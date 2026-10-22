@@ -9,26 +9,27 @@ use std::rc::Rc;
 
 use gpui::{
     App, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement, Interactivity,
-    IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, SharedString, Stateful,
+    IntoElement, MouseButton, ParentElement, Rems, RenderOnce, SharedString, Stateful,
     StatefulInteractiveElement, StyleRefinement, Styled, TextRun, Window, div,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::DropdownMenu;
-use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Selectable, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Selectable};
 
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
 /// Icon size inside controls.
-pub const ICON_SIZE: Pixels = px(16.);
+pub const ICON_SIZE: Rems = metrics::rpx(16.);
 /// What a 36 px control button adds around its label: the 12 px padding on
 /// both sides, the 16 px icon and the 8 px gap.
 pub const LABEL_BUTTON_EXTRA: f32 = 48.;
 
 /// The width of `text` in the window's current font with 2 % and a pixel to
-/// spare (it plans layouts, so it errs on the wide side).
-pub fn text_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> f32 {
+/// spare (it plans layouts, so it errs on the wide side), in px at 100 %
+/// (design units, D96): the layouts plan at every zoom alike.
+pub fn text_width(window: &Window, text: &str, size: Rems, weight: FontWeight) -> f32 {
     if text.is_empty() {
         return 0.;
     }
@@ -39,22 +40,24 @@ pub fn text_width(window: &Window, text: &str, size: Pixels, weight: FontWeight)
         font,
         ..Default::default()
     };
-    let line =
-        window
-            .text_system()
-            .shape_line(SharedString::from(text.to_owned()), size, &[run], None);
-    (line.width().as_f32() * 1.02).ceil() + 1.
+    let line = window.text_system().shape_line(
+        SharedString::from(text.to_owned()),
+        size.to_pixels(window.rem_size()),
+        &[run],
+        None,
+    );
+    (line.width().as_f32() / metrics::zoom_of(window) * 1.02).ceil() + 1.
 }
 
 /// The common width of buttons of one group that stand side by side, each
 /// with an icon and one of `labels` (design-system 6 [decision]): as wide
 /// as the widest of them. Give it to each button as its minimum width.
-pub fn group_width(window: &Window, labels: &[&str]) -> Pixels {
+pub fn group_width(window: &Window, labels: &[&str]) -> Rems {
     let widest = labels
         .iter()
         .map(|label| text_width(window, label, metrics::FONT_SIZE_BODY, FontWeight::MEDIUM))
         .fold(0., f32::max);
-    px(widest + LABEL_BUTTON_EXTRA)
+    metrics::rpx(widest + LABEL_BUTTON_EXTRA)
 }
 
 /// How a control is painted.
@@ -131,7 +134,7 @@ fn paint(kind: ControlKind, active: bool, cx: &App) -> Paint {
 /// The keyboard focus ring of design-system 6: one 2 px `--focus-ring`
 /// line, 2 px outside the element's border box. `radius` is the element's
 /// own corner radius; `border` its border width.
-pub fn focus_ring(radius: Pixels, border: Pixels, cx: &App) -> impl IntoElement {
+pub fn focus_ring(radius: Rems, border: Rems, cx: &App) -> impl IntoElement {
     let outset = metrics::FOCUS_RING_OFFSET + metrics::FOCUS_RING_WIDTH + border;
     div()
         .absolute()
@@ -158,7 +161,7 @@ pub struct ControlButton {
     tooltip_is_path: bool,
     disabled: bool,
     selected: bool,
-    height: Pixels,
+    height: Rems,
     rounded: (bool, bool),
     on_click: Option<ClickHandler>,
 }
@@ -229,7 +232,7 @@ impl ControlButton {
 
     /// A control height other than 36 px (the Connect button inside the
     /// search field).
-    pub fn height(mut self, height: Pixels) -> Self {
+    pub fn height(mut self, height: Rems) -> Self {
         self.height = height;
         self
     }
@@ -355,14 +358,14 @@ impl RenderOnce for ControlButton {
                 })
             })
             .when_some(self.icon, |this, icon| {
-                this.child(icon.with_size(ICON_SIZE).text_color(fg))
+                this.child(icon.size(ICON_SIZE).text_color(fg))
             })
             .when_some(self.label, |this, label| this.child(label))
             .when_some(self.trailing_icon, |this, icon| {
-                this.child(icon.with_size(ICON_SIZE).text_color(fg))
+                this.child(icon.size(ICON_SIZE).text_color(fg))
             })
             .when(focused, |this| {
-                this.child(focus_ring(radius, Pixels::ZERO, cx))
+                this.child(focus_ring(radius, Rems::ZERO, cx))
             })
     }
 }
@@ -386,7 +389,7 @@ pub fn tag_chip(
         .flex()
         .flex_none()
         .items_center()
-        .h(px(28.))
+        .h(metrics::rpx(28.))
         .px(metrics::SPACE_3)
         .rounded(metrics::RADIUS_CONTROL)
         .border_1()

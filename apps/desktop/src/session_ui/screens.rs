@@ -5,7 +5,7 @@
 //! reason with Retry and Close. Centered on `--bg-surface`.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, ClickEvent, Context, FocusHandle, IntoElement, Window, div, px};
+use gpui::{AnyElement, App, ClickEvent, Context, FocusHandle, IntoElement, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 use shellpp_core::service::dto::TagColor;
@@ -20,7 +20,7 @@ use crate::theme::palette::{self, Status};
 use crate::theme::{self, metrics};
 
 /// Width of the screen's column.
-const COLUMN_WIDTH: gpui::Pixels = px(400.);
+const COLUMN_WIDTH: gpui::Rems = metrics::rpx(400.);
 
 /// The status dot (8 px).
 fn dot(status: Status, cx: &App) -> impl IntoElement {
@@ -38,7 +38,11 @@ fn header(target: &TabInfo, cx: &App) -> impl IntoElement {
     v_flex()
         .items_center()
         .gap(metrics::SPACE_2)
-        .child(widgets::tile(target.icon(), TagColor::Graphite, px(44.)))
+        .child(widgets::tile(
+            target.icon(),
+            TagColor::Graphite,
+            metrics::rpx(44.),
+        ))
         .child(
             div()
                 .id("connecting-title")
@@ -89,7 +93,7 @@ fn steps(target: &TabInfo, current: ConnectStep, cx: &App) -> impl IntoElement {
             let (marker, color): (AnyElement, _) = if index < position {
                 (
                     Icon::new(IconName::Check)
-                        .size(px(14.))
+                        .size(metrics::rpx(14.))
                         .text_color(theme.success)
                         .into_any_element(),
                     theme.muted_foreground,
@@ -118,8 +122,14 @@ fn steps(target: &TabInfo, current: ConnectStep, cx: &App) -> impl IntoElement {
                 .test_support()
                 .gap(metrics::SPACE_2)
                 .items_center()
-                .h(px(24.))
-                .child(div().w(px(16.)).flex().justify_center().child(marker))
+                .h(metrics::rpx(24.))
+                .child(
+                    div()
+                        .w(metrics::rpx(16.))
+                        .flex()
+                        .justify_center()
+                        .child(marker),
+                )
                 .child(
                     div()
                         .text_size(metrics::FONT_SIZE_BODY)
@@ -267,7 +277,7 @@ pub fn failed(
                 div()
                     .id(id)
                     .test_support()
-                    .max_w(px(560.))
+                    .max_w(metrics::rpx(560.))
                     .text_size(metrics::FONT_SIZE_CAPTION)
                     .text_color(theme.muted_foreground)
                     .text_center()
@@ -290,7 +300,7 @@ pub fn failed(
                             div()
                                 .id("failure-algorithms-legacy")
                                 .test_support()
-                                .max_w(px(560.))
+                                .max_w(metrics::rpx(560.))
                                 .text_size(metrics::FONT_SIZE_BODY)
                                 .text_color(theme.foreground)
                                 .text_center()

@@ -34,9 +34,7 @@ pub use strength::Strength;
 pub use unlock::UnlockScreen;
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, Entity, FontWeight, IntoElement, Pixels, SharedString, Window, div, px,
-};
+use gpui::{AnyElement, App, Entity, FontWeight, IntoElement, SharedString, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -48,7 +46,7 @@ use crate::shell::title_bar::bare_title_bar;
 use crate::theme::{self, metrics};
 
 /// Width of the lock card (UI 13.1).
-pub const CARD_WIDTH: Pixels = px(420.);
+pub const CARD_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// The text of a password field as a secret, copied straight from the
 /// field's rope into the secret's own buffer (exact capacity, so turning it

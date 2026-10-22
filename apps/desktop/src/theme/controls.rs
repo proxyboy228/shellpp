@@ -201,32 +201,32 @@ mod tests {
                 .size_full()
                 .flex()
                 .flex_wrap()
-                .p(px(40.))
-                .gap(px(8.))
+                .p(metrics::rpx(40.))
+                .gap(metrics::rpx(8.))
                 .child(
                     Button::new("accent")
                         .label("Accent")
                         .accent_colors()
-                        .w(px(120.)),
+                        .w(metrics::rpx(120.)),
                 )
                 .child(
                     Button::new("neutral")
                         .label("Neutral")
                         .neutral_colors()
-                        .w(px(120.)),
+                        .w(metrics::rpx(120.)),
                 )
                 .child(
                     Button::new("accent-disabled")
                         .label("Accent")
                         .accent_colors()
-                        .w(px(120.))
+                        .w(metrics::rpx(120.))
                         .disabled_as_designed(true, Filled::Accent, cx),
                 )
                 .child(
                     Button::new("neutral-disabled")
                         .label("Neutral")
                         .neutral_colors()
-                        .w(px(120.))
+                        .w(metrics::rpx(120.))
                         .disabled_as_designed(true, Filled::Neutral, cx),
                 )
         }

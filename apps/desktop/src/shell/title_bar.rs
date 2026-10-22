@@ -24,7 +24,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ElementId, FocusHandle, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, div, px,
+    StatefulInteractiveElement, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -41,14 +41,14 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, controls, metrics};
 
 /// Height of a tab and of the icon buttons in the bar.
-const TAB_HEIGHT: gpui::Pixels = metrics::HEIGHT_TAB;
+const TAB_HEIGHT: gpui::Rems = metrics::HEIGHT_TAB;
 /// Width of the vault switcher arrow inside the Vaults pill.
-const SWITCHER_WIDTH: gpui::Pixels = px(20.);
+const SWITCHER_WIDTH: gpui::Rems = metrics::rpx(20.);
 /// Width limits of a session tab (below the minimum the strip scrolls).
-pub(super) const SESSION_TAB_MIN_WIDTH: gpui::Pixels = px(96.);
-const SESSION_TAB_MAX_WIDTH: gpui::Pixels = px(220.);
+pub(super) const SESSION_TAB_MIN_WIDTH: gpui::Rems = metrics::rpx(96.);
+const SESSION_TAB_MAX_WIDTH: gpui::Rems = metrics::rpx(220.);
 /// The icon size in tabs and bar buttons.
-const ICON_SIZE: gpui::Pixels = px(16.);
+const ICON_SIZE: gpui::Rems = metrics::rpx(16.);
 
 /// A title bar without tabs, for the lock screens (UI 13.2: only the window
 /// buttons stay available) and the startup error; the shell's top bar adds
@@ -269,7 +269,7 @@ pub fn session_tab<C: IntoElement>(
                     .test_support()
                     .flex_none()
                     .text_color(theme.warning)
-                    .child(Icon::new(Lucide::KeyRound).size(px(14.)))
+                    .child(Icon::new(Lucide::KeyRound).size(metrics::rpx(14.)))
                     .tooltip(|window, cx| {
                         Tooltip::new(crate::session_ui::strings::SIGN_WAITING).build(window, cx)
                     }),
@@ -285,7 +285,7 @@ pub fn session_tab<C: IntoElement>(
                     .test_support()
                     .flex_none()
                     .text_color(theme.warning)
-                    .child(Icon::new(Lucide::RadioTower).size(px(14.)))
+                    .child(Icon::new(Lucide::RadioTower).size(metrics::rpx(14.)))
                     .tooltip(|window, cx| {
                         Tooltip::new(super::strings::BROADCAST_TITLE).build(window, cx)
                     }),
@@ -297,7 +297,7 @@ pub fn session_tab<C: IntoElement>(
             div()
                 .flex_none()
                 .text_color(theme.muted_foreground)
-                .child(Icon::new(icon).size(px(14.)))
+                .child(Icon::new(icon).size(metrics::rpx(14.)))
         }))
 }
 
@@ -351,7 +351,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: impl Into<Icon>, cx: &App) ->
         .custom(controls::ghost(cx))
         .icon(icon.into().size(ICON_SIZE))
         .size(TAB_HEIGHT)
-        .rounded(metrics::RADIUS_CONTROL)
+        .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
         .focus_ring(false)
         .focus_ring_visible(theme.title_bar, cx)
 }
@@ -374,10 +374,10 @@ pub fn vault_switcher_button(cx: &App) -> Button {
     let theme = cx.theme();
     Button::new("vault-switcher")
         .custom(controls::ghost(cx))
-        .icon(Icon::new(IconName::ChevronDown).size(px(14.)))
+        .icon(Icon::new(IconName::ChevronDown).size(metrics::rpx(14.)))
         .w(SWITCHER_WIDTH)
         .h(TAB_HEIGHT)
-        .rounded(metrics::RADIUS_CONTROL)
+        .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
         .tooltip(i18n::top_bar::SWITCH_VAULT)
         .focus_ring(false)
         .focus_ring_visible(theme.title_bar, cx)
@@ -392,15 +392,15 @@ pub fn notifications_button(unread: usize, cx: &App) -> Button {
             .id("notification-count")
             .test_support()
             .absolute()
-            .top(px(4.))
-            .right(px(4.))
-            .min_w(px(16.))
-            .h(px(16.))
-            .px(px(4.))
+            .top(metrics::rpx(4.))
+            .right(metrics::rpx(4.))
+            .min_w(metrics::rpx(16.))
+            .h(metrics::rpx(16.))
+            .px(metrics::rpx(4.))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(8.))
+            .rounded(metrics::rpx(8.))
             // Inverse colors: a neutral, always legible counter (the accent
             // is reserved for the primary action, the danger color for
             // dangerous actions).

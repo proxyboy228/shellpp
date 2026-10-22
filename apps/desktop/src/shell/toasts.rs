@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Task, Window, div, prelude::*, px,
+    ParentElement as _, Render, SharedString, Styled as _, Task, Window, div, prelude::*,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -228,7 +228,7 @@ impl Toasts {
                 .id(shown.close_element_id())
                 .test_support()
                 .flex_none()
-                .size(px(24.))
+                .size(metrics::rpx(24.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -244,8 +244,8 @@ impl Toasts {
         let toast = h_flex()
             .id(shown.element_id())
             .test_support()
-            .min_w(px(240.))
-            .max_w(px(480.))
+            .min_w(metrics::rpx(240.))
+            .max_w(metrics::rpx(480.))
             .pl(metrics::SPACE_4)
             .pr(metrics::SPACE_2)
             .py(metrics::SPACE_2)
@@ -272,7 +272,7 @@ impl Toasts {
                 .with_animation(
                     ("toast-enter", id),
                     Animation::new(duration).with_easing(motion::ease_out),
-                    |toast, delta| toast.opacity(delta).mt(px(8. * (1. - delta))),
+                    |toast, delta| toast.opacity(delta).mt(metrics::rpx(8. * (1. - delta))),
                 )
                 .into_any_element()
         }

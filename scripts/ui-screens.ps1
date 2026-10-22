@@ -139,7 +139,11 @@ param(
     # The Keychain states of stage 3 (added to -States).
     [switch] $Stage3,
     # Use the existing debug binaries.
-    [switch] $NoBuild
+    [switch] $NoBuild,
+    # The interface zoom in percent (View > Zoom In steps, D96); other than
+    # 100 it is in the file names: <W>x<H>-<theme>-<zoom>-<state>.png.
+    [ValidateSet(80, 90, 100, 110, 125, 150, 175, 200)]
+    [int] $Zoom = 100
 )
 
 $ErrorActionPreference = 'Stop'
@@ -280,6 +284,7 @@ if (-not (Test-Path -LiteralPath $sshdExe)) { Fail "binary not found: $sshdExe" 
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
+$zoomPart = if ($Zoom -eq 100) { '' } else { "-$Zoom" }
 if ($States.Count -gt 0) {
     # A smoke run replaces only the PNGs of its states at its sizes.
     foreach ($state in $States) {
@@ -287,13 +292,21 @@ if ($States.Count -gt 0) {
         if ($russhLabels.ContainsKey($state)) { $labels += $russhLabels[$state] }
         foreach ($label in $labels) {
             foreach ($size in $Sizes) {
-                Get-ChildItem -LiteralPath $OutDir -Filter "$size-*-$label.png" -File | Remove-Item -Force
+                Get-ChildItem -LiteralPath $OutDir -Filter "$size-*-$label.png" -File |
+                    Where-Object { $_.Name -match "^$size-(dark|light)$zoomPart-$([regex]::Escape($label))\.png$" } |
+                    Remove-Item -Force
             }
         }
     }
 }
 else {
-    Get-ChildItem -LiteralPath $OutDir -Filter '*.png' -File | Remove-Item -Force
+    # A full run replaces the PNGs of its zoom only.
+    Get-ChildItem -LiteralPath $OutDir -Filter '*.png' -File |
+        Where-Object {
+            if ($Zoom -eq 100) { $_.Name -notmatch '^\d+x\d+-(dark|light)-\d+-' }
+            else { $_.Name -match "^\d+x\d+-(dark|light)-$Zoom-" }
+        } |
+        Remove-Item -Force
 }
 
 $failures = @()
@@ -359,6 +372,7 @@ try {
     if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
     if ($serverJson) { $info.EnvironmentVariables['SHELLPP_TEST_SERVER_JSON'] = $serverJson }
     if ($States.Count -gt 0) { $info.EnvironmentVariables['SHELLPP_SCREENSHOT_STATES'] = ($States -join ',') }
+    $info.EnvironmentVariables['SHELLPP_SCREENSHOT_ZOOM'] = "$Zoom"
     # The local terminal state types commands into Windows PowerShell, which
     # keeps its history (PSReadLine) under APPDATA: they go to the temporary
     # folder, never into the user's history.
@@ -448,7 +462,7 @@ foreach ($size in $Sizes) {
         foreach ($state in $sizeStates) {
             $label = $state
             if (-not $serverJson -and $russhLabels.ContainsKey($state)) { $label = $russhLabels[$state] }
-            $file = Join-Path $OutDir "$size-$theme-$label.png"
+            $file = Join-Path $OutDir "$size-$theme$zoomPart-$label.png"
             if (-not (Test-Path -LiteralPath $file)) { $failures += "missing $file" }
         }
     }

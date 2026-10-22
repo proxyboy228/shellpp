@@ -8,7 +8,7 @@
 //! - Dynamic: this computer (SOCKS) → firewall → SSH host → internet.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, IntoElement, SharedString, div, px};
+use gpui::{AnyElement, App, IntoElement, SharedString, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{ActiveTheme as _, Icon, h_flex, v_flex};
@@ -29,12 +29,12 @@ fn node(node: Node, cx: &App) -> AnyElement {
     let tokens = crate::theme::tokens(cx);
     v_flex()
         .flex_none()
-        .w(px(64.))
+        .w(metrics::rpx(64.))
         .items_center()
         .gap(metrics::SPACE_1)
         .child(
             div()
-                .size(px(36.))
+                .size(metrics::rpx(36.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -46,7 +46,7 @@ fn node(node: Node, cx: &App) -> AnyElement {
                     theme.border
                 })
                 .bg(theme.secondary)
-                .child(Icon::new(node.icon).size(px(18.))),
+                .child(Icon::new(node.icon).size(metrics::rpx(18.))),
         )
         .child(
             div()
@@ -57,7 +57,7 @@ fn node(node: Node, cx: &App) -> AnyElement {
         )
         .child(
             div()
-                .h(px(14.))
+                .h(metrics::rpx(14.))
                 .text_size(metrics::FONT_SIZE_CAPTION)
                 .text_color(tokens.accent_text.hsla())
                 .children(node.mark),
@@ -69,8 +69,8 @@ fn node(node: Node, cx: &App) -> AnyElement {
 fn arrow(leftward: bool, cx: &App) -> AnyElement {
     div()
         .flex_1()
-        .min_w(px(12.))
-        .pt(px(9.))
+        .min_w(metrics::rpx(12.))
+        .pt(metrics::rpx(9.))
         .flex()
         .justify_center()
         .text_color(cx.theme().muted_foreground)
@@ -80,7 +80,7 @@ fn arrow(leftward: bool, cx: &App) -> AnyElement {
             } else {
                 Lucide::ArrowRight
             })
-            .size(px(16.)),
+            .size(metrics::rpx(16.)),
         )
         .into_any_element()
 }

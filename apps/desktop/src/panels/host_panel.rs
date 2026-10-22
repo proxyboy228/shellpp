@@ -44,7 +44,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, IntoElement, MouseDownEvent,
-    Render, ScrollHandle, SharedString, Subscription, Window, div, px,
+    Render, ScrollHandle, SharedString, Subscription, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -1086,7 +1086,9 @@ impl HostPanel {
             .unwrap_or_default();
         let trigger = widgets::select_trigger(
             "host-parent-group",
-            Some(widgets::tile(Lucide::Folder, current_color, px(20.)).into_any_element()),
+            Some(
+                widgets::tile(Lucide::Folder, current_color, metrics::rpx(20.)).into_any_element(),
+            ),
             current,
             open,
             cx,
@@ -1122,7 +1124,7 @@ impl HostPanel {
                     .leading(widgets::tile(
                         Lucide::Folder,
                         group.color,
-                        px(20.),
+                        metrics::rpx(20.),
                     )),
                 );
             }
@@ -1297,7 +1299,7 @@ impl HostPanel {
         // input padding (medium: 10 px); the frame adds the rest, so the text
         // starts 12 px in like every other field of the panel.
         let notes = Textarea::new(&self.notes)
-            .px(metrics::SPACE_3 - gpui_kit::component::Size::Medium.input_px())
+            .px(metrics::to_px(metrics::SPACE_3, cx) - gpui_kit::component::Size::Medium.input_px())
             .text_size(metrics::FONT_SIZE_BODY)
             .bg(theme::tokens(cx).bg_input.hsla())
             .rounded(metrics::RADIUS_CONTROL)
@@ -1387,13 +1389,18 @@ impl HostPanel {
                     .child(strings::SSH),
             )
             .child(widgets::caption(strings::PORT, cx))
-            .child(div().flex_1().min_w(px(96.)).child(widgets::text_input(
-                &self.port,
-                "host-port",
-                port_error.is_some(),
-                window,
-                cx,
-            )));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(metrics::rpx(96.))
+                    .child(widgets::text_input(
+                        &self.port,
+                        "host-port",
+                        port_error.is_some(),
+                        window,
+                        cx,
+                    )),
+            );
         let more_label = if self.show_more {
             strings::SHOW_LESS
         } else {
@@ -1522,7 +1529,7 @@ impl HostPanel {
                     .leading(widgets::tile(
                         crate::hosts::layout::os_icon(host.os_family.as_deref()),
                         host.color,
-                        px(20.),
+                        metrics::rpx(20.),
                     ))
                 })
                 .collect()
@@ -1599,7 +1606,7 @@ impl HostPanel {
                             window,
                             cx,
                         )))
-                        .child(div().w(px(96.)).child(widgets::text_input(
+                        .child(div().w(metrics::rpx(96.)).child(widgets::text_input(
                             &self.proxy_port,
                             "host-proxy-port",
                             port_error.is_some(),
@@ -1661,7 +1668,7 @@ impl HostPanel {
                     .w_full()
                     .gap(metrics::SPACE_2)
                     .items_center()
-                    .child(div().w(px(120.)).child(widgets::text_input(
+                    .child(div().w(metrics::rpx(120.)).child(widgets::text_input(
                         &row.name,
                         SharedString::from(format!("host-env-name-{index}")),
                         name_error,
@@ -1736,27 +1743,27 @@ impl HostPanel {
     fn theme_preview(theme: &TerminalTheme, cx: &App) -> gpui::Div {
         let bar = |token: theme::palette::Token, width: f32| {
             div()
-                .w(px(width))
-                .h(px(3.))
-                .rounded(px(1.))
+                .w(metrics::rpx(width))
+                .h(metrics::rpx(3.))
+                .rounded(metrics::rpx(1.))
                 .bg(token.hsla())
         };
         div()
             .flex_none()
-            .w(px(40.))
-            .h(px(24.))
+            .w(metrics::rpx(40.))
+            .h(metrics::rpx(24.))
             .rounded(metrics::RADIUS_CONTROL)
             .border_1()
             .border_color(cx.theme().input)
             .bg(theme.background.hsla())
-            .p(px(4.))
+            .p(metrics::rpx(4.))
             .flex()
             .flex_col()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .child(bar(theme.foreground, 22.))
             .child(
                 h_flex()
-                    .gap(px(2.))
+                    .gap(metrics::rpx(2.))
                     .child(bar(theme.ansi.0[2], 8.))
                     .child(bar(theme.ansi.0[4], 12.)),
             )
@@ -2083,13 +2090,18 @@ impl HostPanel {
                     .child(strings::TELNET),
             )
             .child(widgets::caption(strings::PORT, cx))
-            .child(div().flex_1().min_w(px(72.)).child(widgets::text_input(
-                &self.telnet_port,
-                "host-telnet-port",
-                port_error.is_some(),
-                window,
-                cx,
-            )))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(metrics::rpx(72.))
+                    .child(widgets::text_input(
+                        &self.telnet_port,
+                        "host-telnet-port",
+                        port_error.is_some(),
+                        window,
+                        cx,
+                    )),
+            )
             .child(remove);
         block
             .child(protocol_line)
@@ -2137,7 +2149,7 @@ impl HostPanel {
             .large()
             .w_full()
             .h(metrics::HEIGHT_CONTROL)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .label(strings::CONNECT)
             .focus_ring(false)
             .focus_ring_visible(surface, cx)

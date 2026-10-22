@@ -67,7 +67,7 @@ pub const PANE_MIN: Pixels = px(128.);
 
 /// The width of a divider's drag area [decision]: `--space-2`, centered on
 /// the 1 px `--border-subtle` line between the panes.
-const DIVIDER_HIT: Pixels = metrics::SPACE_2;
+const DIVIDER_HIT: Pixels = gpui::px(8.);
 
 /// At most this many panes in a tab, and splits nested at most this deep
 /// on disk (docs/data-model.md, section 12: the limits of a saved tab).

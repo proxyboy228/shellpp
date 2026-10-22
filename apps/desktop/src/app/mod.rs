@@ -96,6 +96,11 @@ pub fn run(launch: Launch) {
                 }
                 Err(message) => AppState::failed(message),
             });
+            // The interface zoom of the last launch (D96), before the first
+            // window: the lock screen opens at it too.
+            if let Some(core) = state.read(cx).core().cloned() {
+                theme::zoom::apply_stored(&core, cx);
+            }
             // The session layer (its own Tokio runtime) over the core: the
             // session tabs connect through it. Nothing to start without a core.
             if state.read(cx).core().is_some() {

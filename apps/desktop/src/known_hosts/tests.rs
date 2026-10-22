@@ -764,14 +764,14 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     let app = App2::open(cx, 960.);
     app.click(cx, "nav-known-hosts");
     let sidebar = app.bounds(cx, "sidebar").unwrap();
-    assert_eq!(sidebar.size.width, metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar.size.width, metrics::at_100(metrics::WIDTH_SIDEBAR));
     let web = app.web(cx);
     app.click(cx, card_id(web.record_id));
     app.frame(cx, |_, _| {});
     let sidebar = app.bounds(cx, "sidebar").unwrap();
     assert_eq!(sidebar.size.width, crate::shell::sidebar::WIDTH_COLLAPSED);
     let panel = app.bounds(cx, "kh-panel").unwrap();
-    assert_eq!(panel.size.width, metrics::WIDTH_DETAILS);
+    assert_eq!(panel.size.width, metrics::at_100(metrics::WIDTH_DETAILS));
     let main = app.bounds(cx, "kh-main").unwrap();
     assert!(
         main.size.width >= crate::shell::details::MAIN_AREA_MIN,
@@ -781,7 +781,7 @@ fn the_panel_collapses_the_sidebar_in_a_narrow_window(cx: &mut TestAppContext) {
     // Closing the panel brings the full sidebar back.
     app.click(cx, "panel-close");
     let sidebar = app.bounds(cx, "sidebar").unwrap();
-    assert_eq!(sidebar.size.width, metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar.size.width, metrics::at_100(metrics::WIDTH_SIDEBAR));
     app.finish(cx);
 }
 

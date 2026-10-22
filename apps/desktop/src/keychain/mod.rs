@@ -533,7 +533,7 @@ impl KeychainScreen {
             shown_identities: Vec::new(),
             selected: None,
             panel: None,
-            panel_width: metrics::WIDTH_DETAILS,
+            panel_width: metrics::at_100(metrics::WIDTH_DETAILS),
             measured_width: None,
             columns: 1,
             card_width: 0.,

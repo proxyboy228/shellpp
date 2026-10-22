@@ -377,44 +377,46 @@ fn dimension_tokens(text: &str) -> Vec<(String, f32)> {
 #[test]
 fn metrics_match_the_design_system() {
     let ms = |duration: std::time::Duration| duration.as_millis() as f32;
+    // The tables give the sizes in px at 100 % (D96).
+    let px100 = |size: gpui::Rems| f32::from(metrics::at_100(size));
     for (path, text) in docs() {
         let found = dimension_tokens(&text);
         let mut checked = 0;
         for (name, value) in &found {
             let ours: f32 = match name.as_str() {
-                "space-1" => metrics::SPACE_1.into(),
-                "space-2" => metrics::SPACE_2.into(),
-                "space-3" => metrics::SPACE_3.into(),
-                "space-4" => metrics::SPACE_4.into(),
-                "space-5" => metrics::SPACE_5.into(),
-                "space-6" => metrics::SPACE_6.into(),
-                "radius-control" => metrics::RADIUS_CONTROL.into(),
-                "radius-tile" => metrics::RADIUS_TILE.into(),
-                "radius-card" => metrics::RADIUS_CARD.into(),
-                "radius-overlay" => metrics::RADIUS_OVERLAY.into(),
-                "height-top-bar" => metrics::HEIGHT_TOP_BAR.into(),
-                "height-tab" => metrics::HEIGHT_TAB.into(),
-                "padding-tab" => metrics::PADDING_TAB.into(),
-                "height-nav-item" => metrics::HEIGHT_NAV_ITEM.into(),
-                "gap-nav-item" => metrics::GAP_NAV_ITEM.into(),
-                "gap-nav-icon" => metrics::GAP_NAV_ICON.into(),
-                "height-control" => metrics::HEIGHT_CONTROL.into(),
-                "height-row" => metrics::HEIGHT_ROW.into(),
-                "height-host-card" => metrics::HEIGHT_HOST_CARD.into(),
-                "width-sidebar" => metrics::WIDTH_SIDEBAR.into(),
-                "width-details" => metrics::WIDTH_DETAILS.into(),
-                "width-details-min" => metrics::WIDTH_DETAILS_MIN.into(),
-                "width-details-max" => metrics::WIDTH_DETAILS_MAX.into(),
-                "font-size-caption" => metrics::FONT_SIZE_CAPTION.into(),
-                "font-size-dense" => metrics::FONT_SIZE_DENSE.into(),
-                "font-size-body" => metrics::FONT_SIZE_BODY.into(),
-                "font-size-heading" => metrics::FONT_SIZE_HEADING.into(),
-                "font-size-title" => metrics::FONT_SIZE_TITLE.into(),
-                "font-size-mono" => metrics::FONT_SIZE_MONO.into(),
-                "focus-ring-width" => metrics::FOCUS_RING_WIDTH.into(),
-                "focus-ring-offset" => metrics::FOCUS_RING_OFFSET.into(),
-                "size-status-dot" => metrics::SIZE_STATUS_DOT.into(),
-                "size-tab-indicator" => metrics::SIZE_TAB_INDICATOR.into(),
+                "space-1" => px100(metrics::SPACE_1),
+                "space-2" => px100(metrics::SPACE_2),
+                "space-3" => px100(metrics::SPACE_3),
+                "space-4" => px100(metrics::SPACE_4),
+                "space-5" => px100(metrics::SPACE_5),
+                "space-6" => px100(metrics::SPACE_6),
+                "radius-control" => px100(metrics::RADIUS_CONTROL),
+                "radius-tile" => px100(metrics::RADIUS_TILE),
+                "radius-card" => px100(metrics::RADIUS_CARD),
+                "radius-overlay" => px100(metrics::RADIUS_OVERLAY),
+                "height-top-bar" => px100(metrics::HEIGHT_TOP_BAR),
+                "height-tab" => px100(metrics::HEIGHT_TAB),
+                "padding-tab" => px100(metrics::PADDING_TAB),
+                "height-nav-item" => px100(metrics::HEIGHT_NAV_ITEM),
+                "gap-nav-item" => px100(metrics::GAP_NAV_ITEM),
+                "gap-nav-icon" => px100(metrics::GAP_NAV_ICON),
+                "height-control" => px100(metrics::HEIGHT_CONTROL),
+                "height-row" => px100(metrics::HEIGHT_ROW),
+                "height-host-card" => px100(metrics::HEIGHT_HOST_CARD),
+                "width-sidebar" => px100(metrics::WIDTH_SIDEBAR),
+                "width-details" => px100(metrics::WIDTH_DETAILS),
+                "width-details-min" => px100(metrics::WIDTH_DETAILS_MIN),
+                "width-details-max" => px100(metrics::WIDTH_DETAILS_MAX),
+                "font-size-caption" => px100(metrics::FONT_SIZE_CAPTION),
+                "font-size-dense" => px100(metrics::FONT_SIZE_DENSE),
+                "font-size-body" => px100(metrics::FONT_SIZE_BODY),
+                "font-size-heading" => px100(metrics::FONT_SIZE_HEADING),
+                "font-size-title" => px100(metrics::FONT_SIZE_TITLE),
+                "font-size-mono" => px100(metrics::FONT_SIZE_MONO),
+                "focus-ring-width" => px100(metrics::FOCUS_RING_WIDTH),
+                "focus-ring-offset" => px100(metrics::FOCUS_RING_OFFSET),
+                "size-status-dot" => px100(metrics::SIZE_STATUS_DOT),
+                "size-tab-indicator" => px100(metrics::SIZE_TAB_INDICATOR),
                 "duration-fast" => ms(metrics::DURATION_FAST),
                 "duration-normal" => ms(metrics::DURATION_NORMAL),
                 "opacity-disabled" => metrics::OPACITY_DISABLED,
@@ -444,10 +446,22 @@ fn theme_file_base_values_are_the_metrics() {
     let file: serde_json::Value = serde_json::from_str(super::THEME_FILE).unwrap();
     for theme in file["themes"].as_array().unwrap() {
         let number = |key: &str| theme[key].as_f64().unwrap() as f32;
-        assert_eq!(number("font.size"), f32::from(metrics::FONT_SIZE_BODY));
-        assert_eq!(number("mono_font.size"), f32::from(metrics::FONT_SIZE_MONO));
-        assert_eq!(number("radius"), f32::from(metrics::RADIUS_CONTROL));
-        assert_eq!(number("radius.lg"), f32::from(metrics::RADIUS_OVERLAY));
+        assert_eq!(
+            number("font.size"),
+            f32::from(metrics::at_100(metrics::FONT_SIZE_BODY))
+        );
+        assert_eq!(
+            number("mono_font.size"),
+            f32::from(metrics::at_100(metrics::FONT_SIZE_MONO))
+        );
+        assert_eq!(
+            number("radius"),
+            f32::from(metrics::at_100(metrics::RADIUS_CONTROL))
+        );
+        assert_eq!(
+            number("radius.lg"),
+            f32::from(metrics::at_100(metrics::RADIUS_OVERLAY))
+        );
         // The kit's own control shadows stay off: the design system has
         // shadows only for overlays and modal windows (2.6, palette.rs).
         assert_eq!(theme["shadow"], false);

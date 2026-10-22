@@ -10,9 +10,7 @@
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{
-    App, ClickEvent, Context, Entity, FontWeight, IntoElement, SharedString, Window, div, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, FontWeight, IntoElement, SharedString, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -67,7 +65,7 @@ pub fn panel_menu(
     let deleted = selection.clone();
     let changed = selection.clone();
     let mut menu = menu
-        .min_w(px(220.))
+        .min_w(metrics::scaled(220., cx))
         .item(menus::menu_item(
             strings::MENU_OPEN,
             false,
@@ -236,7 +234,7 @@ fn open_name_dialog(
         let invalid = !name.trim().is_empty() && !valid_name(&name);
         let ok = submit.clone();
         dialog
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -339,7 +337,7 @@ pub(crate) fn open_delete(
         let panel = panel.clone();
         let entries = entries.clone();
         dialog
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -484,7 +482,7 @@ impl Render for PermissionsForm {
                     .gap(metrics::SPACE_4)
                     .child(
                         div()
-                            .w(px(72.))
+                            .w(metrics::rpx(72.))
                             .text_size(metrics::FONT_SIZE_BODY)
                             .text_color(theme.foreground)
                             .child(label),
@@ -539,7 +537,7 @@ pub(crate) fn open_permissions(
         let read = form.clone();
         let valid = form.read(cx).is_valid();
         dialog
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

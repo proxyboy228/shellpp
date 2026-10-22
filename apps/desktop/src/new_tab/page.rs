@@ -13,7 +13,7 @@ use crate::state::WorkspaceItem;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-    SharedString, Window, px,
+    SharedString, Window,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -143,7 +143,7 @@ impl NewTabPage {
                     })
             });
             h_flex()
-                .gap(px(2.))
+                .gap(metrics::rpx(2.))
                 .items_center()
                 .child(
                     ControlButton::new(

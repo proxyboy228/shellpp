@@ -20,7 +20,7 @@
 
 use gpui::{
     AppContext as _, ClickEvent, Context, Entity, FocusHandle, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Task, Window, div, prelude::*, px,
+    Render, SharedString, Styled as _, Subscription, Task, Window, div, prelude::*,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
@@ -43,7 +43,7 @@ use crate::theme::{self, metrics};
 /// same rule after NFC normalization).
 const MIN_CHARS: usize = shellpp_core::crypto::MIN_PASSWORD_CHARS;
 /// Width of the strength label, so the bar does not move with the text.
-const STRENGTH_LABEL_WIDTH: gpui::Pixels = px(96.);
+const STRENGTH_LABEL_WIDTH: gpui::Rems = metrics::rpx(96.);
 
 /// What the fields hold, without their text.
 #[derive(Clone, Copy, Debug)]
@@ -357,7 +357,7 @@ impl Render for FirstRunScreen {
             .large()
             .w_full()
             .h(metrics::HEIGHT_CONTROL)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .label(if self.busy {
                 strings::WORKING
             } else {

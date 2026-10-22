@@ -10,7 +10,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription, Task,
-    WeakEntity, Window, div, px,
+    WeakEntity, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -208,7 +208,7 @@ impl ShellHistory {
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_host(None, cx)));
             widgets::dropdown_list("shell-history-hosts", cx)
                 .absolute()
-                .top(metrics::HEIGHT_CONTROL + px(4.))
+                .top(metrics::HEIGHT_CONTROL + metrics::rpx(4.))
                 .left_0()
                 .right_0()
                 .max_h(widgets::PICKER_MAX_HEIGHT)
@@ -232,7 +232,7 @@ impl ShellHistory {
         div()
             .relative()
             .flex_none()
-            .w(px(240.))
+            .w(metrics::rpx(240.))
             .child(
                 widgets::select_trigger("shell-history-host", None, chosen, self.filter_open, cx)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -274,7 +274,7 @@ impl ShellHistory {
             .child(
                 div()
                     .flex_none()
-                    .w(px(180.))
+                    .w(metrics::rpx(180.))
                     .truncate()
                     .text_size(metrics::FONT_SIZE_CAPTION)
                     .text_color(theme.muted_foreground)
@@ -284,7 +284,7 @@ impl ShellHistory {
                 div()
                     .id(SharedString::from(format!("shell-history-when-{id}")))
                     .flex_none()
-                    .w(px(140.))
+                    .w(metrics::rpx(140.))
                     .text_size(metrics::FONT_SIZE_CAPTION)
                     .text_color(theme.muted_foreground)
                     .child(when(&entry.executed_at))
@@ -310,18 +310,19 @@ impl Render for ShellHistory {
         let icon = Icon::new(gpui_kit::component::IconName::Search)
             .small()
             .text_color(cx.theme().muted_foreground);
-        let field = div()
-            .flex_1()
-            .min_w_0()
-            .max_w(px(360.))
-            .child(widgets::text_input_with(
-                Input::new(&self.search).prefix(icon),
-                &self.search,
-                "shell-history-search",
-                false,
-                window,
-                cx,
-            ));
+        let field =
+            div()
+                .flex_1()
+                .min_w_0()
+                .max_w(metrics::rpx(360.))
+                .child(widgets::text_input_with(
+                    Input::new(&self.search).prefix(icon),
+                    &self.search,
+                    "shell-history-search",
+                    false,
+                    window,
+                    cx,
+                ));
         let entries = std::mem::take(&mut self.entries);
         let rows: Vec<AnyElement> = entries
             .iter()

@@ -18,7 +18,7 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Context, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
@@ -390,7 +390,7 @@ pub fn build_popup(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let mut menu = menu.min_w(px(240.));
+    let mut menu = menu.min_w(metrics::scaled(240., cx));
     for entry in entries {
         menu = match entry {
             MenuEntry::Separator => menu.separator(),
@@ -440,7 +440,7 @@ pub fn build_popup(
 }
 
 /// Height of the content row of a gpui-kit menu item (medium size).
-const KIT_ITEM_HEIGHT: gpui::Pixels = px(26.);
+const KIT_ITEM_HEIGHT: gpui::Rems = metrics::rpx(26.);
 
 struct ItemStyle {
     hint: Option<&'static str>,

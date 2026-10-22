@@ -12,9 +12,9 @@ use crate::theme::metrics;
 /// the fewest columns that keep cards at most 360 px wide, but never so many
 /// that a card gets narrower than 240 px; at least one.
 pub fn columns_for(width: f32) -> usize {
-    let gap = metrics::HOST_CARD_GAP.as_f32();
-    let min = metrics::HOST_CARD_MIN_WIDTH.as_f32();
-    let max = metrics::HOST_CARD_MAX_WIDTH.as_f32();
+    let gap = metrics::design_px(metrics::HOST_CARD_GAP);
+    let min = metrics::design_px(metrics::HOST_CARD_MIN_WIDTH);
+    let max = metrics::design_px(metrics::HOST_CARD_MAX_WIDTH);
     let width = width.max(0.);
     let fewest = ((width + gap) / (max + gap)).ceil().max(1.) as usize;
     let most = ((width + gap) / (min + gap)).floor().max(1.) as usize;
@@ -25,9 +25,10 @@ pub fn columns_for(width: f32) -> usize {
 /// columns and their 12 px gaps, never wider than 360 px.
 pub fn card_width(width: f32, columns: usize) -> f32 {
     let columns = columns.max(1) as f32;
-    let gap = metrics::HOST_CARD_GAP.as_f32();
+    let gap = metrics::design_px(metrics::HOST_CARD_GAP);
     let card = (width - (columns - 1.) * gap) / columns;
-    card.min(metrics::HOST_CARD_MAX_WIDTH.as_f32()).max(0.)
+    card.min(metrics::design_px(metrics::HOST_CARD_MAX_WIDTH))
+        .max(0.)
 }
 
 /// How the buttons on the left of the action bar show their labels.

@@ -18,8 +18,9 @@
 //! which already covers the window. Esc and Cancel close it; Enter is Cancel.
 
 use gpui::{
-    ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    ParentElement as _, Render, SharedString, Styled as _, Task, Window, div, prelude::*,
+    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Task, Window, div,
+    prelude::*,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -130,11 +131,11 @@ impl ForgotDialog {
         cx.notify();
     }
 
-    fn button(id: &'static str, label: &'static str) -> Button {
+    fn button(id: &'static str, label: &'static str, cx: &App) -> Button {
         Button::new(id)
             .large()
             .h(metrics::HEIGHT_CONTROL)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .label(label)
     }
 
@@ -185,7 +186,7 @@ impl ForgotDialog {
             )
             .child(
                 h_flex().justify_end().child(
-                    Self::button("forgot-cancel", strings::CANCEL)
+                    Self::button("forgot-cancel", strings::CANCEL, cx)
                         .neutral_colors()
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close(cx))),
                 ),
@@ -208,7 +209,7 @@ impl ForgotDialog {
                     .justify_end()
                     .gap(metrics::SPACE_2)
                     .child(
-                        Self::button("forgot-cancel", strings::CANCEL)
+                        Self::button("forgot-cancel", strings::CANCEL, cx)
                             .neutral_colors()
                             .disabled_as_designed(self.busy, Filled::Neutral, cx)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close(cx))),
@@ -221,6 +222,7 @@ impl ForgotDialog {
                             } else {
                                 strings::CONFIRM_START
                             },
+                            cx,
                         )
                         .danger()
                         .disabled_as_designed(!enabled, Filled::Danger, cx)

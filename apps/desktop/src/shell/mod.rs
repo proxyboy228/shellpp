@@ -563,7 +563,7 @@ impl Shell {
             sftp,
             keychain,
             panel: None,
-            details_width: metrics::WIDTH_DETAILS,
+            details_width: metrics::at_100(metrics::WIDTH_DETAILS),
             search_has_address: false,
             toasts,
             notifications,
@@ -836,6 +836,13 @@ impl Shell {
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
         cx.notify();
+    }
+
+    /// Zoom In (`Some(true)`), Zoom Out, Actual Size (`None`) of the
+    /// interface (UI 1.4, D96).
+    pub fn zoom(&mut self, up: Option<bool>, cx: &mut Context<Self>) {
+        let core = self.state.read(cx).core().cloned();
+        crate::theme::zoom::change(core.as_deref(), up, cx);
     }
 
     /// Shows a toast at the bottom of the main area.
@@ -1794,7 +1801,7 @@ impl Shell {
                     mark_read.update(cx, |list, cx| list.mark_all_read(cx));
                 }
             })
-            .w(px(320.))
+            .w(metrics::rpx(320.))
             .p(metrics::SPACE_2)
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_overlay(cx))
@@ -1925,19 +1932,22 @@ impl Shell {
         // The main area keeps its minimum width (lead decision 4), next to
         // the sidebar as it is drawn (full or the strip of icons).
         let sidebar = if self.sidebar_visible {
-            let viewport = window.viewport_size().width;
+            let viewport = metrics::unscaled(window.viewport_size().width, cx);
             sidebar::width(sidebar::is_collapsed(viewport, Some(self.details_width)))
         } else {
             px(0.)
         };
-        let width =
-            details::fitted_width(self.details_width, window.viewport_size().width, sidebar);
+        let width = details::fitted_width(
+            self.details_width,
+            metrics::unscaled(window.viewport_size().width, cx),
+            sidebar,
+        );
         Some(
             div()
                 .id("right-panel")
                 .test_support()
                 .relative()
-                .w(width)
+                .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -1945,8 +1955,10 @@ impl Shell {
                 .bg(theme.colors.list)
                 .on_drag_move(cx.listener(
                     |this, event: &DragMoveEvent<details::ResizeDetails>, _, cx| {
-                        let width =
-                            details::width_for_drag(event.bounds.right(), event.event.position.x);
+                        let width = details::width_for_drag(
+                            metrics::unscaled(event.bounds.right(), cx),
+                            metrics::unscaled(event.event.position.x, cx),
+                        );
                         this.set_details_width(width, cx);
                     },
                 ))
@@ -1958,8 +1970,8 @@ impl Shell {
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(px(-3.))
-                        .w(px(6.))
+                        .left(metrics::rpx(-3.))
+                        .w(metrics::rpx(6.))
                         .cursor_col_resize()
                         .hover(move |style| style.bg(handle_hover.opacity(0.5)))
                         .on_drag(details::ResizeDetails, |_, _, _, cx| {
@@ -2917,7 +2929,7 @@ impl Render for Shell {
                         &self.nav_focus,
                         // The strip of icons below a 600 px main area.
                         sidebar::is_collapsed(
-                            window.viewport_size().width,
+                            metrics::unscaled(window.viewport_size().width, cx),
                             self.panel.as_ref().map(|_| self.details_width).or_else(|| {
                                 // Known Hosts and the Keychain draw their own
                                 // details panel.
@@ -2999,15 +3011,11 @@ impl Render for Shell {
             }))
             // Ctrl+K outside a terminal, Ctrl+Shift+K (UI 6).
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.open_search(window, cx)))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-                this.placeholder_toast(i18n::menu::INTERFACE_ZOOM, cx)
-            }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
-                this.placeholder_toast(i18n::menu::INTERFACE_ZOOM, cx)
-            }))
-            .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
-                this.placeholder_toast(i18n::menu::INTERFACE_ZOOM, cx)
-            }))
+            // The interface zoom (UI 1.4, D96): every window, kept for the
+            // next launch.
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom(Some(true), cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom(Some(false), cx)))
+            .on_action(cx.listener(|this, _: &ActualSize, _, cx| this.zoom(None, cx)))
             .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &NewWindow, window, cx| {

@@ -697,7 +697,7 @@ impl HostPanel {
             Button::new("host-add-credential")
                 .custom(controls::ghost(cx))
                 .small()
-                .rounded(metrics::RADIUS_CONTROL)
+                .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
                 .focus_ring(false)
                 .focus_ring_visible(surface, cx)
                 .icon(IconName::Plus)
@@ -785,7 +785,7 @@ impl HostPanel {
         let danger = cx.theme().danger;
         let mono = cx.theme().mono_font_family.clone();
         let textarea = Textarea::new(state)
-            .px(metrics::SPACE_3 - gpui_kit::component::Size::Medium.input_px())
+            .px(metrics::to_px(metrics::SPACE_3, cx) - gpui_kit::component::Size::Medium.input_px())
             .text_size(metrics::FONT_SIZE_DENSE)
             .font_family(mono)
             .bg(theme::tokens(cx).bg_input.hsla())

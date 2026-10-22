@@ -15,7 +15,7 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, FontWeight, IntoElement, Render, SharedString, Task, Window,
-    div, px,
+    div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::InputState;
@@ -33,8 +33,8 @@ use crate::theme::metrics;
 /// How long each host has to connect and run the script.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
-const DIALOG_WIDTH: gpui::Pixels = px(440.);
-const RESULTS_WIDTH: gpui::Pixels = px(720.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(440.);
+const RESULTS_WIDTH: gpui::Rems = metrics::rpx(720.);
 
 /// Output as text: control characters other than new lines and tabs (and
 /// so escape sequences and bidirectional overrides) are shown as `·`.
@@ -111,7 +111,7 @@ pub fn ask_script_values(
         let submit = Rc::new(submit);
         let on_ok = submit.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -186,7 +186,7 @@ pub fn confirm(
         let run = start.clone();
         let on_ok = start.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(theme.popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -210,7 +210,7 @@ pub fn confirm(
                     .child(
                         v_flex()
                             .id("snippet-confirm-hosts")
-                            .max_h(px(240.))
+                            .max_h(metrics::rpx(240.))
                             .overflow_y_scroll()
                             .gap(metrics::SPACE_1)
                             .children(hosts.iter().map(|(_, title)| {
@@ -501,7 +501,7 @@ impl Render for RunResults {
                                 row.host
                             )))
                             .w_full()
-                            .max_h(px(200.))
+                            .max_h(metrics::rpx(200.))
                             .overflow_y_scroll()
                             .p(metrics::SPACE_2)
                             .rounded(metrics::RADIUS_CONTROL)
@@ -539,7 +539,7 @@ impl Render for RunResults {
                         .child(
                             div()
                                 .flex_none()
-                                .w(px(240.))
+                                .w(metrics::rpx(240.))
                                 .truncate()
                                 .text_size(metrics::FONT_SIZE_BODY)
                                 .child(row.title.clone()),
@@ -547,7 +547,7 @@ impl Render for RunResults {
                         .child(
                             div()
                                 .flex_none()
-                                .w(px(96.))
+                                .w(metrics::rpx(96.))
                                 .text_size(metrics::FONT_SIZE_CAPTION)
                                 .text_color(color)
                                 .child(status),
@@ -603,7 +603,7 @@ impl Render for RunResults {
                 v_flex()
                     .id("snippet-results-rows")
                     .w_full()
-                    .max_h(px(420.))
+                    .max_h(metrics::rpx(420.))
                     .overflow_y_scroll()
                     .border_t_1()
                     .border_color(theme.border)
@@ -616,7 +616,7 @@ impl Render for RunResults {
 pub fn open_results(results: Entity<RunResults>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, cx| {
         dialog
-            .w(RESULTS_WIDTH)
+            .w(metrics::to_px(RESULTS_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

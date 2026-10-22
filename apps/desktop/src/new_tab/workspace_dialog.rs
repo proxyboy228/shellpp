@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{App, Entity, FontWeight, Window, div, px};
+use gpui::{App, Entity, FontWeight, Window, div};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex};
@@ -16,7 +16,7 @@ use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
 use crate::theme::metrics;
 
-const DIALOG_WIDTH: gpui::Pixels = px(440.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(440.);
 
 /// Asks the name (`rename`: of an existing workspace); `save` returns
 /// whether the dialog may close.
@@ -61,7 +61,7 @@ pub fn open(
         let submit = Rc::new(submit);
         let on_ok = submit.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

@@ -10,8 +10,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Div, ElementId, FocusHandle, IntoElement, KeyBinding, Pixels, SharedString,
-    Stateful, div, px,
+    AnyElement, App, Div, ElementId, FocusHandle, IntoElement, KeyBinding, SharedString, Stateful,
+    div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::Button;
@@ -25,7 +25,7 @@ use crate::theme::{self, metrics};
 pub const KEY_CONTEXT: &str = "SessionDialog";
 
 /// Width of a dialog card (narrowed by a small tab area).
-pub const CARD_WIDTH: Pixels = px(460.);
+pub const CARD_WIDTH: gpui::Rems = metrics::rpx(460.);
 
 gpui_kit::actions!(
     session_dialog,
@@ -120,7 +120,7 @@ pub fn key_row(
     v_flex()
         .id(id)
         .test_support()
-        .gap(px(2.))
+        .gap(metrics::rpx(2.))
         .child(
             div()
                 .text_size(metrics::FONT_SIZE_CAPTION)
@@ -176,7 +176,7 @@ pub fn button(
         .label(label.into())
         .h(metrics::HEIGHT_CONTROL)
         .px(metrics::SPACE_4)
-        .rounded(metrics::RADIUS_CONTROL)
+        .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
         .focus_ring(false)
         .focus_ring_visible(surface, cx);
     let (button, filled) = match kind {

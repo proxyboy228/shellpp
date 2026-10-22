@@ -45,7 +45,7 @@ use zeroize::Zeroizing;
 use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, FontWeight, InteractiveElement as _,
     IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Subscription, Task,
-    Window, div, prelude::FluentBuilder as _, px,
+    Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -659,7 +659,7 @@ pub fn open_export(
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
         modal
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -1057,7 +1057,7 @@ impl ImportDialog {
                 .id(id)
                 .test_support()
                 .w_full()
-                .h(px(28.))
+                .h(metrics::rpx(28.))
                 .justify_between()
                 .items_center()
                 .child(
@@ -1328,7 +1328,7 @@ pub fn open_import(
             _ => strings::IMPORT_TITLE,
         };
         modal
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

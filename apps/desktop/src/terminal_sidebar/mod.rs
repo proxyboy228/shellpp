@@ -38,8 +38,8 @@ mod tests;
 
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Context, Entity, EntityId, FocusHandle, IntoElement, KeyBinding, Pixels,
-    Render, SharedString, WeakEntity, Window, div,
+    App, ClickEvent, Context, Entity, EntityId, FocusHandle, IntoElement, KeyBinding, Render,
+    SharedString, WeakEntity, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -65,7 +65,7 @@ gpui_kit::actions!(
 );
 
 /// Width of the sidebar [decision]: `--width-details-min`.
-pub const WIDTH: Pixels = metrics::WIDTH_DETAILS_MIN;
+pub const WIDTH: gpui::Rems = metrics::WIDTH_DETAILS_MIN;
 /// The key of [`FindInTerminal`] (UI 12.5; `secondary` is Cmd on macOS).
 pub const FIND_KEYS: &str = "secondary-shift-f";
 /// Key context of the sidebar.

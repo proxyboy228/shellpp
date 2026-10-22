@@ -17,7 +17,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, EventEmitter, IntoElement, MouseDownEvent, Render,
-    SharedString, Subscription, Window, div, px,
+    SharedString, Subscription, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -632,14 +632,20 @@ impl GroupPanel {
                 rows.push(
                     PickerRow::new(id.to_string(), PickValue::Group(id), path)
                         .checked(self.draft.parent_id == Some(id))
-                        .leading(widgets::tile(Lucide::Folder, group.color, px(20.))),
+                        .leading(widgets::tile(
+                            Lucide::Folder,
+                            group.color,
+                            metrics::rpx(20.),
+                        )),
                 );
             }
             rows
         });
         let trigger = widgets::select_trigger(
             "group-parent",
-            Some(widgets::tile(Lucide::Folder, current_color, px(20.)).into_any_element()),
+            Some(
+                widgets::tile(Lucide::Folder, current_color, metrics::rpx(20.)).into_any_element(),
+            ),
             current,
             open,
             cx,
@@ -786,7 +792,7 @@ impl GroupPanel {
                     .leading(widgets::tile(
                         crate::hosts::layout::os_icon(host.os_family.as_deref()),
                         host.color,
-                        px(20.),
+                        metrics::rpx(20.),
                     ))
                 })
                 .collect()
@@ -824,7 +830,7 @@ impl GroupPanel {
         let add_credential = Button::new("group-add-credential")
             .custom(controls::ghost(cx))
             .small()
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .focus_ring(false)
             .focus_ring_visible(surface, cx)
             .icon(IconName::Plus)
@@ -862,13 +868,18 @@ impl GroupPanel {
                     .child(strings::SSH),
             )
             .child(widgets::caption(strings::PORT, cx))
-            .child(div().flex_1().min_w(px(96.)).child(widgets::text_input(
-                &self.port,
-                "group-port",
-                port_error.is_some(),
-                window,
-                cx,
-            )));
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(metrics::rpx(96.))
+                    .child(widgets::text_input(
+                        &self.port,
+                        "group-port",
+                        port_error.is_some(),
+                        window,
+                        cx,
+                    )),
+            );
         widgets::block("group-block-ssh", None, cx)
             .child(protocol_line)
             .when_some(port_error, |this, error| {

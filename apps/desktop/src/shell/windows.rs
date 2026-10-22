@@ -16,11 +16,10 @@ use gpui::{AnyWindowHandle, App, Bounds, Context, Entity, Window, WindowBounds, 
 
 use super::{SessionId, Shell, TopTab, all_shells, all_windows, restore};
 use crate::state::AppState;
-use crate::theme::metrics;
 
 /// How far a new window is placed from the one it was opened from, right
 /// and down [decision]: `--space-6`.
-pub const WINDOW_OFFSET: gpui::Pixels = metrics::SPACE_6;
+pub const WINDOW_OFFSET: gpui::Pixels = gpui::px(32.);
 
 /// Opens a new app window over `state`, at the size of `from` and offset by
 /// [`WINDOW_OFFSET`], and runs `then` on its shell (to open a session tab

@@ -25,7 +25,7 @@ mod tests;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, FontWeight, IntoElement, Pixels, Render, SharedString,
-    Subscription, Task, Window, div, px,
+    Subscription, Task, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -40,10 +40,10 @@ use crate::state::{AppState, AppStateEvent};
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::metrics;
 
-const CONTENT_PADDING: Pixels = metrics::SPACE_5;
-const DATE_COLUMN: Pixels = px(200.);
-const USER_COLUMN: Pixels = px(160.);
-const SAVED_COLUMN: Pixels = px(72.);
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+const DATE_COLUMN: gpui::Rems = metrics::rpx(200.);
+const USER_COLUMN: gpui::Rems = metrics::rpx(160.);
+const SAVED_COLUMN: gpui::Rems = metrics::rpx(72.);
 
 /// Stable element id of a row and of its bookmark.
 pub fn row_id(id: Uuid) -> SharedString {
@@ -197,7 +197,8 @@ impl LogsScreen {
     /// The panel's width while an entry is open (the shell collapses its
     /// sidebar by it, UI 1.2).
     pub fn open_panel_width(&self) -> Option<Pixels> {
-        self.selected_entry().map(|_| metrics::WIDTH_DETAILS)
+        self.selected_entry()
+            .map(|_| metrics::at_100(metrics::WIDTH_DETAILS))
     }
 
     fn selected_entry(&self) -> Option<&ConnectionLogView> {
@@ -354,7 +355,7 @@ impl LogsScreen {
             } else {
                 strings::SORT_OLDEST
             })
-            .height(px(28.))
+            .height(metrics::rpx(28.))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_sort(cx)));
         let saved = ControlButton::new("log-saved-filter", ControlKind::Ghost)
             .icon(if self.saved_only {
@@ -367,7 +368,7 @@ impl LogsScreen {
             } else {
                 strings::SAVED_ONLY
             })
-            .height(px(28.))
+            .height(metrics::rpx(28.))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_saved_only(cx)));
         h_flex()
             .id("log-header")
@@ -428,7 +429,7 @@ impl LogsScreen {
             .tab_index(0)
             .focus_ring_visible(theme.colors.list, cx)
             .w_full()
-            .min_h(px(52.))
+            .min_h(metrics::rpx(52.))
             .px(metrics::SPACE_2)
             .gap(metrics::SPACE_3)
             .items_center()

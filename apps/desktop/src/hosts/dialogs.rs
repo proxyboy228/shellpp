@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Styled as _, Window, div, px,
+    Styled as _, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::{ActiveTheme as _, WindowExt as _, h_flex, v_flex};
@@ -52,7 +52,7 @@ pub(super) fn open_remove_confirmation(
         let confirm = on_confirm.clone();
         let on_ok = on_confirm.clone();
         dialog
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -93,7 +93,7 @@ pub(super) fn open_placeholder(
 ) {
     window.open_dialog(cx, move |dialog, _, cx| {
         dialog
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

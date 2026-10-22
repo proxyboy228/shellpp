@@ -36,6 +36,7 @@ pub mod metrics;
 pub mod motion;
 pub mod palette;
 pub mod terminal;
+pub mod zoom;
 
 use std::rc::Rc;
 

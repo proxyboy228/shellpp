@@ -30,7 +30,7 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{controls, metrics};
 
 /// Size of the previous / next buttons.
-const STEP_BUTTON: gpui::Pixels = gpui::px(32.);
+const STEP_BUTTON: gpui::Rems = metrics::rpx(32.);
 
 /// The Tools tab.
 pub struct ToolsTab {
@@ -199,7 +199,7 @@ impl ToolsTab {
             .custom(controls::ghost(cx))
             .icon(Icon::new(icon).size(gpui::px(16.)))
             .size(STEP_BUTTON)
-            .rounded(metrics::RADIUS_CONTROL)
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .tooltip(tooltip)
             .focus_ring(false)
             .focus_ring_visible(surface, cx);

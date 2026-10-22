@@ -7,16 +7,14 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, DragMoveEvent, Focusable as _,
     FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Window, canvas, div, prelude::FluentBuilder as _, px,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    canvas, div, prelude::FluentBuilder as _, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, WindowExt as _, h_flex, v_flex};
 use shellpp_core::service::dto::TagColor;
 use shellpp_core::service::snippets::{ForwardType, ForwardingRuleView};
 use uuid::Uuid;
@@ -32,12 +30,12 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: Pixels = metrics::SPACE_5;
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// A card holds three lines: title, summary, status.
-const CARD_HEIGHT: Pixels = px(80.);
-const SEARCH_MIN_WIDTH: Pixels = px(160.);
-const SEARCH_MAX_WIDTH: Pixels = px(320.);
-const DIALOG_WIDTH: Pixels = px(420.);
+const CARD_HEIGHT: gpui::Rems = metrics::rpx(80.);
+const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(160.);
+const SEARCH_MAX_WIDTH: gpui::Rems = metrics::rpx(320.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// The tile color of a rule type.
 fn type_color(kind: ForwardType) -> TagColor {
@@ -49,7 +47,7 @@ fn type_color(kind: ForwardType) -> TagColor {
 }
 
 /// The square badge with the type letter (UI 8.2).
-fn badge(kind: ForwardType, size: Pixels) -> impl IntoElement {
+fn badge(kind: ForwardType, size: gpui::Rems) -> impl IntoElement {
     div()
         .flex_none()
         .size(size)
@@ -98,8 +96,8 @@ fn status_line(
         .child(
             div()
                 .flex_none()
-                .when(wrap, |this| this.mt(px(5.)))
-                .size(px(8.))
+                .when(wrap, |this| this.mt(metrics::rpx(5.)))
+                .size(metrics::rpx(8.))
                 .rounded_full()
                 .bg(color),
         )
@@ -191,7 +189,7 @@ pub(super) fn open_remove_confirmation(
         let confirm = on_confirm.clone();
         let on_ok = on_confirm.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -262,7 +260,7 @@ impl ForwardingScreen {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -281,7 +279,11 @@ impl ForwardingScreen {
                     ),
             )
             .when(focused, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CONTROL,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
     }
 
@@ -300,8 +302,8 @@ impl ForwardingScreen {
             .icon(IconName::ChevronDown)
             .tooltip(strings::NEW_RULE_MENU)
             .rounded_sides(false, true)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.min_w(px(220.));
+            .dropdown_menu(move |mut menu, _, cx| {
+                menu = menu.min_w(metrics::scaled(220., cx));
                 for (id, label, kind) in [
                     ("fwd-new-local", strings::NEW_LOCAL, ForwardType::Local),
                     ("fwd-new-remote", strings::NEW_REMOTE, ForwardType::Remote),
@@ -333,7 +335,12 @@ impl ForwardingScreen {
                 h_flex()
                     .flex_none()
                     .child(new_rule)
-                    .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
+                    .child(
+                        div()
+                            .w(metrics::rpx(1.))
+                            .h(metrics::HEIGHT_CONTROL)
+                            .bg(theme.border),
+                    )
                     .child(new_menu),
             )
             .child(
@@ -372,7 +379,7 @@ impl ForwardingScreen {
             .test_support()
             .relative()
             .flex_none()
-            .w(px(width))
+            .w(metrics::rpx(width))
             .h(CARD_HEIGHT)
             .flex()
             .items_center()
@@ -394,7 +401,7 @@ impl ForwardingScreen {
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(2.))
+                    .gap(metrics::rpx(2.))
                     .child(
                         div()
                             .text_size(metrics::FONT_SIZE_BODY)
@@ -413,7 +420,11 @@ impl ForwardingScreen {
                     .child(status_line(status_id(id), tone, text, false, cx)),
             )
             .when(keyboard_cursor, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CARD, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CARD,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.focus.focus(window, cx);
@@ -466,7 +477,7 @@ impl ForwardingScreen {
             .when_some(body, |this, body| {
                 this.child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(metrics::rpx(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
                         .child(body),
@@ -494,7 +505,7 @@ impl ForwardingScreen {
         let screen = cx.entity().downgrade();
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .grid_width
@@ -688,15 +699,15 @@ impl ForwardingScreen {
                 }))
         });
         let room = px(total) - details::MAIN_AREA_MIN;
-        let width =
-            details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN));
+        let width = details::clamp_width(self.panel_width)
+            .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)));
         let handle_hover = theme.drag_border;
         Some(
             div()
                 .id("fwd-panel")
                 .test_support()
                 .relative()
-                .w(width)
+                .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -743,8 +754,8 @@ impl ForwardingScreen {
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(px(-3.))
-                        .w(px(6.))
+                        .left(metrics::rpx(-3.))
+                        .w(metrics::rpx(6.))
                         .cursor_col_resize()
                         .hover(move |style| style.bg(handle_hover.opacity(0.5)))
                         .on_drag(ResizeDetails, |_, _, _, cx| cx.new(|_| ResizePreview)),
@@ -809,13 +820,15 @@ impl Render for ForwardingScreen {
         // elsewhere show up), and polled while any rule runs.
         self.read_statuses(cx);
         self.poll_if_needed(cx);
-        let total = self
-            .measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
+        let total = self.measured_width.unwrap_or_else(|| {
+            (metrics::unscaled(window.viewport_size().width, cx)
+                - metrics::at_100(metrics::WIDTH_SIDEBAR))
+            .as_f32()
+        });
         let screen = cx.entity().downgrade();
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .measured_width
@@ -880,8 +893,10 @@ impl Render for ForwardingScreen {
             .text_color(cx.theme().foreground)
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDetails>, _, cx| {
-                    let width =
-                        details::width_for_drag(event.bounds.right(), event.event.position.x);
+                    let width = details::width_for_drag(
+                        metrics::unscaled(event.bounds.right(), cx),
+                        metrics::unscaled(event.event.position.x, cx),
+                    );
                     this.set_panel_width(width, cx);
                 }),
             )

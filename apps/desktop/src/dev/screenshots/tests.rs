@@ -409,3 +409,23 @@ async fn fresh_profile_states_show_their_screens(cx: &mut TestAppContext) {
     let left = std::fs::read_dir(parent.path()).unwrap().count();
     assert_eq!(left, 0, "the fresh profiles were removed");
 }
+
+/// D96: the zoom of a run is one of the steps; the file names carry it
+/// unless it is 100.
+#[test]
+fn the_zoom_of_a_run_is_a_step_and_named() {
+    assert_eq!(parse_zoom(""), Ok(100));
+    assert_eq!(parse_zoom("125"), Ok(125));
+    assert_eq!(parse_zoom(" 80 "), Ok(80));
+    assert!(parse_zoom("130").is_err());
+    assert!(parse_zoom("1.25").is_err());
+    let size = WindowSize::parse("1280x800").unwrap();
+    assert_eq!(
+        file_name_at(size, "dark", ShotState::Root, true, 125),
+        "1280x800-dark-125-root.png"
+    );
+    assert_eq!(
+        file_name_at(size, "light", ShotState::Root, true, 100),
+        "1280x800-light-root.png"
+    );
+}

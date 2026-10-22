@@ -143,7 +143,11 @@ impl Ui {
 fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let main = ui.bounds("main-area", cx).expect("main area");
-    assert_eq!(main.origin.y, metrics::HEIGHT_TOP_BAR, "top bar height");
+    assert_eq!(
+        main.origin.y,
+        metrics::at_100(metrics::HEIGHT_TOP_BAR),
+        "top bar height"
+    );
     for id in [
         "app-menu",
         "tab-vaults",
@@ -159,11 +163,18 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     // Tabs are 32 px inside the 44 px bar (design-system 6 [decision]).
     for id in ["tab-vaults", "tab-sftp", "tab-new", "vaults-pill"] {
         let tab = ui.bounds(id, cx).expect(id);
-        assert_eq!(tab.size.height, metrics::HEIGHT_TAB, "{id}");
+        assert_eq!(
+            tab.size.height,
+            metrics::at_100(metrics::HEIGHT_TAB),
+            "{id}"
+        );
         // Centered above the bar's 1 px bottom line.
         assert_eq!(
             tab.origin.y,
-            (metrics::HEIGHT_TOP_BAR - px(1.) - metrics::HEIGHT_TAB) / 2.,
+            (metrics::at_100(metrics::HEIGHT_TOP_BAR)
+                - px(1.)
+                - metrics::at_100(metrics::HEIGHT_TAB))
+                / 2.,
             "{id} centered"
         );
     }
@@ -177,7 +188,10 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
     assert_eq!(switcher.right(), pill.right());
     // 4 px between the pill and the SFTP tab.
     let sftp = ui.bounds("tab-sftp", cx).unwrap();
-    assert_eq!(sftp.origin.x - pill.right(), metrics::SPACE_1);
+    assert_eq!(
+        sftp.origin.x - pill.right(),
+        metrics::at_100(metrics::SPACE_1)
+    );
     // Vaults is active: the arrow opens the vault menu, Vaults stays.
     ui.click("vault-switcher", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Vaults);
@@ -206,24 +220,41 @@ fn top_bar_tabs_and_placeholders(cx: &mut TestAppContext) {
 fn sidebar_sections(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let sidebar = ui.bounds("sidebar", cx).expect("sidebar");
-    assert_eq!(sidebar.size.width, metrics::WIDTH_SIDEBAR);
+    assert_eq!(sidebar.size.width, metrics::at_100(metrics::WIDTH_SIDEBAR));
     let mut last_bottom = None;
     for section in Section::ALL {
         let item = ui
             .bounds(section.element_id().as_ref(), cx)
             .expect("sidebar item");
-        assert_eq!(item.size.height, metrics::HEIGHT_NAV_ITEM, "{section:?}");
+        assert_eq!(
+            item.size.height,
+            metrics::at_100(metrics::HEIGHT_NAV_ITEM),
+            "{section:?}"
+        );
         // 8 px from the sidebar's edges.
-        assert_eq!(item.origin.x - sidebar.origin.x, metrics::SPACE_2);
-        assert_eq!(sidebar.right() - item.right(), metrics::SPACE_2 + px(1.));
+        assert_eq!(
+            item.origin.x - sidebar.origin.x,
+            metrics::at_100(metrics::SPACE_2)
+        );
+        assert_eq!(
+            sidebar.right() - item.right(),
+            metrics::at_100(metrics::SPACE_2) + px(1.)
+        );
         if let Some(bottom) = last_bottom {
-            assert_eq!(item.origin.y - bottom, metrics::GAP_NAV_ITEM, "{section:?}");
+            assert_eq!(
+                item.origin.y - bottom,
+                metrics::at_100(metrics::GAP_NAV_ITEM),
+                "{section:?}"
+            );
         }
         last_bottom = Some(item.bottom());
     }
     // The first item sits at the top of the sidebar: no vault header above it.
     let hosts = ui.bounds("nav-hosts", cx).unwrap();
-    assert_eq!(hosts.origin.y - sidebar.origin.y, metrics::SPACE_2);
+    assert_eq!(
+        hosts.origin.y - sidebar.origin.y,
+        metrics::at_100(metrics::SPACE_2)
+    );
 
     // Every section has its screen since stage 6 (D28 placeholders are
     // gone from the sidebar): Logs, the Keychain, Port Forwarding, Snippets.
@@ -476,6 +507,88 @@ fn last_serial_target(ui: &Ui, cx: &mut TestAppContext) -> Option<PaneTarget> {
     })
 }
 
+/// UI 1.4, D96: Ctrl+= / Ctrl+- / Ctrl+0 outside a terminal and View >
+/// Zoom In / Zoom Out / Actual Size scale the whole interface by the steps
+/// (80 to 200 %), keep the zoom for the next launch and leave the
+/// terminal's font as it is; in a terminal the keys go to the program.
+#[gpui_kit::test]
+fn the_interface_zoom_steps_is_kept_and_leaves_the_terminal_font(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let shell = ui.shell(cx);
+    let zoom = |cx: &mut TestAppContext| cx.update(|cx| metrics::zoom(cx));
+    let stored = |ui: &Ui, cx: &mut TestAppContext| {
+        ui.state.read_with(cx, |state, _| {
+            state.core().unwrap().settings_get().unwrap()["appearance.ui_zoom"].clone()
+        })
+    };
+    let top_bar =
+        |ui: &Ui, cx: &mut TestAppContext| ui.bounds("main-area", cx).expect("main area").origin.y;
+    assert_eq!(zoom(cx), 1.);
+    assert_eq!(top_bar(&ui, cx), px(44.));
+    ui.press("ctrl-=", cx);
+    assert_eq!(zoom(cx), 1.1);
+    assert_eq!(stored(&ui, cx), json!(1.1));
+    assert!((top_bar(&ui, cx) - px(44. * 1.1)).abs() < px(0.5));
+    ui.press("ctrl-=", cx);
+    assert_eq!(zoom(cx), 1.25);
+    ui.press("ctrl--", cx);
+    ui.press("ctrl--", cx);
+    ui.press("ctrl--", cx);
+    ui.press("ctrl--", cx);
+    ui.press("ctrl--", cx);
+    assert_eq!(zoom(cx), 0.8, "the smallest step stays");
+    assert!((top_bar(&ui, cx) - px(44. * 0.8)).abs() < px(0.5));
+    ui.press("ctrl-0", cx);
+    assert_eq!(zoom(cx), 1.);
+    assert_eq!(stored(&ui, cx), json!(1.0));
+    assert_eq!(top_bar(&ui, cx), px(44.));
+
+    // A terminal: the keys go to the program, and the zoom of the menu
+    // leaves its font (the grid keeps its columns).
+    ui.press("ctrl-l", cx);
+    let tab = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
+    let columns = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let pane = shell.read(cx).pane(tab.id()).expect("pane").read(cx);
+            pane.terminal()
+                .expect("terminal")
+                .read(cx)
+                .handle()
+                .size()
+                .cols
+        })
+    };
+    ui.next_frame(cx);
+    let before = columns(cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        let pane = shell.read(cx).pane(tab.id()).expect("pane").clone();
+        let terminal = pane.read(cx).terminal().expect("terminal").clone();
+        terminal.update(cx, |terminal, cx| terminal.focus(window, cx));
+    })
+    .unwrap();
+    ui.frame(cx);
+    ui.press("ctrl-=", cx);
+    assert_eq!(zoom(cx), 1., "Ctrl+= went to the program");
+    // What View > Zoom In runs (twice).
+    shell.update(cx, |shell, cx| {
+        shell.zoom(Some(true), cx);
+        shell.zoom(Some(true), cx);
+    });
+    ui.next_frame(cx);
+    assert_eq!(zoom(cx), 1.25);
+    assert_eq!(columns(cx), before, "the terminal's font is its own");
+
+    // The next launch starts at the kept zoom.
+    cx.update(|cx| crate::theme::zoom::set(1., cx));
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    cx.update(|cx| crate::theme::zoom::apply_stored(&core, cx));
+    assert_eq!(zoom(cx), 1.25);
+    cx.update(|cx| crate::theme::zoom::set(1., cx));
+    ui.finish(cx);
+}
+
 /// D95: a port name typed by hand opens like a listed one, marked "Not
 /// found now" when the system does not list it; an empty field leaves
 /// Connect disabled. The settings of the last Connect outlive a restart,
@@ -591,7 +704,7 @@ fn many_session_tabs_scroll_into_view(cx: &mut TestAppContext) {
         .size
         .width;
     assert!(
-        width >= title_bar::SESSION_TAB_MIN_WIDTH - px(0.5),
+        width >= metrics::at_100(title_bar::SESSION_TAB_MIN_WIDTH) - px(0.5),
         "{width:?}"
     );
     // "+" stays in the bar, right of the strip, left of the bell.
@@ -688,7 +801,10 @@ fn toasts_and_notification_center(cx: &mut TestAppContext) {
     // Centered in the main area, 16 px above its bottom edge.
     let center = toast.center().x - main.center().x;
     assert!(center.abs() <= px(1.), "centered: {center:?}");
-    assert_eq!(main.bottom() - toast.bottom(), metrics::SPACE_4);
+    assert_eq!(
+        main.bottom() - toast.bottom(),
+        metrics::at_100(metrics::SPACE_4)
+    );
 
     // The unread counter, then opening the list marks everything read.
     assert!(ui.visible("notification-count", cx));
@@ -743,9 +859,12 @@ fn details_panel_container(cx: &mut TestAppContext) {
     .unwrap();
     ui.frame(cx);
     let panel = ui.bounds("right-panel", cx).expect("panel");
-    assert_eq!(panel.size.width, metrics::WIDTH_DETAILS);
+    assert_eq!(panel.size.width, metrics::at_100(metrics::WIDTH_DETAILS));
     let main = ui.bounds("main-area", cx).unwrap();
-    assert_eq!(main.size.width, full.size.width - metrics::WIDTH_DETAILS);
+    assert_eq!(
+        main.size.width,
+        full.size.width - metrics::at_100(metrics::WIDTH_DETAILS)
+    );
     assert_eq!(main.right(), panel.left(), "pushes, never overlaps");
 
     // Dragging the left edge 60 px to the left widens the panel by 60 px.
@@ -765,12 +884,12 @@ fn details_panel_container(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_details_width(px(2000.), cx));
     assert_eq!(
         cx.update(|cx| shell.read(cx).details_width()),
-        metrics::WIDTH_DETAILS_MAX
+        metrics::at_100(metrics::WIDTH_DETAILS_MAX)
     );
     shell.update(cx, |shell, cx| shell.set_details_width(px(10.), cx));
     assert_eq!(
         cx.update(|cx| shell.read(cx).details_width()),
-        metrics::WIDTH_DETAILS_MIN
+        metrics::at_100(metrics::WIDTH_DETAILS_MIN)
     );
     ui.finish(cx);
 }
@@ -780,26 +899,34 @@ fn details_panel_container(cx: &mut TestAppContext) {
 #[test]
 fn details_panel_leaves_the_main_area_its_minimum() {
     use details::fitted_width;
-    let sidebar = metrics::WIDTH_SIDEBAR;
+    let sidebar = metrics::at_100(metrics::WIDTH_SIDEBAR);
     // 960 px window: 960 - 196 - 360 = 404.
     assert_eq!(
-        fitted_width(metrics::WIDTH_DETAILS_MAX, px(960.), sidebar),
+        fitted_width(
+            metrics::at_100(metrics::WIDTH_DETAILS_MAX),
+            px(960.),
+            sidebar
+        ),
         px(404.)
     );
     assert_eq!(
-        fitted_width(metrics::WIDTH_DETAILS, px(960.), sidebar),
-        metrics::WIDTH_DETAILS
+        fitted_width(metrics::at_100(metrics::WIDTH_DETAILS), px(960.), sidebar),
+        metrics::at_100(metrics::WIDTH_DETAILS)
     );
     // Without the sidebar there is room for the widest panel.
     assert_eq!(
-        fitted_width(metrics::WIDTH_DETAILS_MAX, px(960.), px(0.)),
-        metrics::WIDTH_DETAILS_MAX
+        fitted_width(
+            metrics::at_100(metrics::WIDTH_DETAILS_MAX),
+            px(960.),
+            px(0.)
+        ),
+        metrics::at_100(metrics::WIDTH_DETAILS_MAX)
     );
     assert_eq!(fitted_width(px(440.), px(1280.), sidebar), px(440.));
     // Never below the panel's own minimum.
     assert_eq!(
-        fitted_width(metrics::WIDTH_DETAILS, px(800.), sidebar),
-        metrics::WIDTH_DETAILS_MIN
+        fitted_width(metrics::at_100(metrics::WIDTH_DETAILS), px(800.), sidebar),
+        metrics::at_100(metrics::WIDTH_DETAILS_MIN)
     );
 }
 

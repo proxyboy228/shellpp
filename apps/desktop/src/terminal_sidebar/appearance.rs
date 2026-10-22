@@ -23,7 +23,7 @@ use gpui::Focusable as _;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, IntoElement, Render, SharedString,
-    Subscription, Task, Window, div, px,
+    Subscription, Task, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -49,8 +49,12 @@ use crate::theme::{controls, metrics};
 /// Width of a theme card: two columns in the sidebar, 8 px apart. The
 /// sidebar's 1 px left border is taken off its width, and the result is
 /// rounded down, so the two cards always fit one row.
-fn theme_card_width() -> gpui::Pixels {
-    ((super::WIDTH - px(1.) - metrics::SPACE_4 * 2. - metrics::SPACE_2) / 2.).floor()
+fn theme_card_width() -> gpui::Rems {
+    let width = metrics::design_px(super::WIDTH)
+        - 1.
+        - metrics::design_px(metrics::SPACE_4) * 2.
+        - metrics::design_px(metrics::SPACE_2);
+    metrics::rpx((width / 2.).floor())
 }
 
 /// One theme of the list.
@@ -486,7 +490,7 @@ impl AppearanceTab {
             .active(move |style| style.bg(pressed))
             .child(
                 Icon::new(IconName::Type)
-                    .size(px(16.))
+                    .size(metrics::rpx(16.))
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -510,7 +514,7 @@ impl AppearanceTab {
             )
             .child(
                 Icon::new(IconName::ChevronRight)
-                    .size(px(16.))
+                    .size(metrics::rpx(16.))
                     .text_color(theme.muted_foreground),
             )
             .on_click(
@@ -606,9 +610,9 @@ impl AppearanceTab {
         let danger = cx.theme().danger;
         let back = Button::new("terminal-appearance-back")
             .custom(controls::ghost(cx))
-            .icon(Icon::new(IconName::ChevronLeft).size(px(16.)))
-            .size(px(32.))
-            .rounded(metrics::RADIUS_CONTROL)
+            .icon(Icon::new(IconName::ChevronLeft).size(metrics::rpx(16.)))
+            .size(metrics::rpx(32.))
+            .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .tooltip(strings::BACK)
             .focus_ring(false)
             .focus_ring_visible(surface, cx)
@@ -784,7 +788,7 @@ impl AppearanceTab {
                     .child(minus)
                     .child(
                         div()
-                            .w(px(64.))
+                            .w(metrics::rpx(64.))
                             .child(widgets::text_input(input, id, invalid, window, cx)),
                     )
                     .child(plus),

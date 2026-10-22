@@ -304,7 +304,10 @@ fn tab_icons_and_the_state_dot(cx: &mut TestAppContext) {
             window.find(dot.clone()).bounds()
         })
         .unwrap();
-    assert_eq!(title_bounds.size.width, metrics::SIZE_STATUS_DOT);
+    assert_eq!(
+        title_bounds.size.width,
+        metrics::at_100(metrics::SIZE_STATUS_DOT)
+    );
 
     let pane = ui.pane(id, cx);
     ui.set_phase(&pane, Phase::Running, cx);
@@ -1050,7 +1053,10 @@ fn the_terminal_sidebar_toggles_and_finds(cx: &mut TestAppContext) {
     assert!(!ui.visible("terminal-sidebar", cx));
     ui.click("top-bar-terminal-sidebar", cx);
     assert!(ui.visible("terminal-sidebar", cx));
-    assert_eq!(area(cx), full - crate::terminal_sidebar::WIDTH);
+    assert_eq!(
+        area(cx),
+        full - crate::theme::metrics::at_100(crate::terminal_sidebar::WIDTH)
+    );
     let shell = ui.shell(cx);
     let sidebar = cx.update(|cx| shell.read(cx).terminal_sidebar().clone());
     let terminal = cx.update(|cx| pane.read(cx).terminal().cloned().unwrap());

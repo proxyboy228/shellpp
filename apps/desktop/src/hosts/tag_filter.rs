@@ -19,13 +19,13 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, ElementId, Entity, EventEmitter, FocusHandle,
     Focusable, Global, InteractiveElement as _, IntoElement, KeyBinding, NoAction,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement, Styled as _,
-    Subscription, Window, div, prelude::FluentBuilder as _, px,
+    Subscription, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName};
 use gpui_kit::component::{h_flex, v_flex};
 
 use super::controls::{ControlButton, ControlKind, ICON_SIZE};
@@ -67,12 +67,15 @@ pub fn bind_keys(cx: &mut App) {
 /// Width of a chip of a selected tag around its text: padding, the 1 px
 /// border, the gap and the remove icon.
 pub fn selected_chip_width(text: f32) -> f32 {
-    text + 2. * metrics::SPACE_3.as_f32() + 2. + metrics::SPACE_1.as_f32() + CHIP_ICON
+    text + 2. * metrics::design_px(metrics::SPACE_3)
+        + 2.
+        + metrics::design_px(metrics::SPACE_1)
+        + CHIP_ICON
 }
 
 /// Width of the "+N" chip around its text.
 pub fn more_chip_width(text: f32) -> f32 {
-    text + 2. * metrics::SPACE_3.as_f32() + 2.
+    text + 2. * metrics::design_px(metrics::SPACE_3) + 2.
 }
 
 /// Room the chips take after the tag button: `lead` before the first chip,
@@ -248,7 +251,7 @@ impl TagFilterMenu {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -268,7 +271,7 @@ impl TagFilterMenu {
             .when(focused, |this| {
                 this.child(super::controls::focus_ring(
                     metrics::RADIUS_CONTROL,
-                    px(1.),
+                    metrics::rpx(1.),
                     cx,
                 ))
             })
@@ -287,7 +290,7 @@ impl TagFilterMenu {
                 Checkbox::new(ElementId::Name(tag_option_id(&option.name)))
                     .checked(checked)
                     .w_full()
-                    .h(px(ROW_HEIGHT))
+                    .h(metrics::rpx(ROW_HEIGHT))
                     .items_center()
                     .px(metrics::SPACE_2)
                     .text_size(metrics::FONT_SIZE_BODY)
@@ -342,7 +345,7 @@ impl Render for TagFilterMenu {
             .id("tag-filter-menu")
             .test_support()
             .key_context(KEY_CONTEXT)
-            .w(px(MENU_WIDTH))
+            .w(metrics::rpx(MENU_WIDTH))
             .gap(metrics::SPACE_2)
             .text_color(theme.foreground)
             .text_size(metrics::FONT_SIZE_BODY)
@@ -351,7 +354,7 @@ impl Render for TagFilterMenu {
                 v_flex()
                     .id("tag-filter-options")
                     .test_support()
-                    .max_h(px(LIST_MAX_HEIGHT))
+                    .max_h(metrics::rpx(LIST_MAX_HEIGHT))
                     .overflow_y_scroll()
                     .children(rows)
                     .when_some(empty_text, |this, text| {
@@ -368,7 +371,7 @@ impl Render for TagFilterMenu {
             )
             .child(
                 div()
-                    .h(px(1.))
+                    .h(metrics::rpx(1.))
                     .w_full()
                     .bg(theme::tokens(cx).border_strong.hsla()),
             )
@@ -395,7 +398,7 @@ pub fn selected_chip(
         .flex_none()
         .items_center()
         .gap(metrics::SPACE_1)
-        .h(px(CHIP_HEIGHT))
+        .h(metrics::rpx(CHIP_HEIGHT))
         .px(metrics::SPACE_3)
         .rounded(metrics::RADIUS_CONTROL)
         .border_1()
@@ -414,7 +417,7 @@ pub fn selected_chip(
         .child(label)
         .child(
             Icon::new(IconName::Close)
-                .with_size(px(CHIP_ICON))
+                .size(metrics::rpx(CHIP_ICON))
                 .text_color(theme.muted_foreground),
         )
 }

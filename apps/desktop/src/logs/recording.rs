@@ -124,7 +124,7 @@ impl RecordingViewer {
             let confirm = go.clone();
             let on_ok = go.clone();
             dialog
-                .w(px(420.))
+                .w(metrics::scaled(420., cx))
                 .bg(cx.theme().popover)
                 .rounded(metrics::RADIUS_OVERLAY)
                 .close_button(false)
@@ -233,7 +233,7 @@ impl Render for RecordingViewer {
             .id("recording-viewer")
             .test_support()
             .w_full()
-            .h(px(440.))
+            .h(metrics::rpx(440.))
             .gap(metrics::SPACE_2)
             .child(
                 div()
@@ -285,7 +285,7 @@ pub fn open(viewer: Entity<RecordingViewer>, window: &mut Window, cx: &mut App) 
     window.open_dialog(cx, move |dialog, _, cx| {
         let export = viewer.clone();
         dialog
-            .w(px(760.))
+            .w(metrics::scaled(760., cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .title(

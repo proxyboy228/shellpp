@@ -40,9 +40,9 @@ pub const MAIN_AREA_COLLAPSE: Pixels = px(600.);
 /// as soon as the full one leaves the main area 600 px.
 pub fn is_collapsed(window: Pixels, details: Option<Pixels>) -> bool {
     let panel = details.map_or(Pixels::ZERO, |width| {
-        super::details::fitted_width(width, window, metrics::WIDTH_SIDEBAR)
+        super::details::fitted_width(width, window, metrics::at_100(metrics::WIDTH_SIDEBAR))
     });
-    window - metrics::WIDTH_SIDEBAR - panel < MAIN_AREA_COLLAPSE
+    window - metrics::at_100(metrics::WIDTH_SIDEBAR) - panel < MAIN_AREA_COLLAPSE
 }
 
 /// The sidebar's width: full or collapsed.
@@ -50,7 +50,7 @@ pub fn width(collapsed: bool) -> Pixels {
     if collapsed {
         WIDTH_COLLAPSED
     } else {
-        metrics::WIDTH_SIDEBAR
+        metrics::at_100(metrics::WIDTH_SIDEBAR)
     }
 }
 
@@ -189,7 +189,7 @@ pub fn sidebar(
         .id("sidebar")
         .test_support()
         .flex_none()
-        .w(width(collapsed))
+        .w(metrics::rems_of(width(collapsed)))
         .h_full()
         .p(metrics::SPACE_2)
         .gap(metrics::GAP_NAV_ITEM)
@@ -241,15 +241,30 @@ mod tests {
         // Without the details panel the minimum window (960 px) leaves 740.
         assert!(!is_collapsed(px(960.), None));
         // The 380 px panel at 960 px leaves 360: the strip of icons.
-        assert!(is_collapsed(px(960.), Some(metrics::WIDTH_DETAILS)));
+        assert!(is_collapsed(
+            px(960.),
+            Some(metrics::at_100(metrics::WIDTH_DETAILS))
+        ));
         // It expands once the full sidebar leaves the main area 600 px:
         // 196 + 380 + 600 = 1176.
-        assert!(is_collapsed(px(1175.), Some(metrics::WIDTH_DETAILS)));
-        assert!(!is_collapsed(px(1176.), Some(metrics::WIDTH_DETAILS)));
+        assert!(is_collapsed(
+            px(1175.),
+            Some(metrics::at_100(metrics::WIDTH_DETAILS))
+        ));
+        assert!(!is_collapsed(
+            px(1176.),
+            Some(metrics::at_100(metrics::WIDTH_DETAILS))
+        ));
         // A wider panel collapses it in a wider window: 196 + 560 + 600.
-        assert!(is_collapsed(px(1300.), Some(metrics::WIDTH_DETAILS_MAX)));
-        assert!(!is_collapsed(px(1356.), Some(metrics::WIDTH_DETAILS_MAX)));
+        assert!(is_collapsed(
+            px(1300.),
+            Some(metrics::at_100(metrics::WIDTH_DETAILS_MAX))
+        ));
+        assert!(!is_collapsed(
+            px(1356.),
+            Some(metrics::at_100(metrics::WIDTH_DETAILS_MAX))
+        ));
         assert_eq!(width(true), px(56.));
-        assert_eq!(width(false), metrics::WIDTH_SIDEBAR);
+        assert_eq!(width(false), metrics::at_100(metrics::WIDTH_SIDEBAR));
     }
 }

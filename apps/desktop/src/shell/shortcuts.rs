@@ -150,7 +150,7 @@ const fn terminal(
 }
 
 /// Every action of the table, in its order.
-pub const SHORTCUTS: [Shortcut; 30] = [
+pub const SHORTCUTS: [Shortcut; 33] = [
     app("show_vaults", "Go to Vaults", &["ctrl-1"], &["cmd-1"]),
     app("show_sftp", "Go to SFTP", &["ctrl-2"], &["cmd-2"]),
     app("tab_3", "Go to tab 3", &["ctrl-3"], &["cmd-3"]),
@@ -206,6 +206,10 @@ pub const SHORTCUTS: [Shortcut; 30] = [
         &["cmd-k", "cmd-shift-k"],
     ),
     app("open_settings", "Settings", &["ctrl-,"], &["cmd-,"]),
+    // Outside a terminal: there they go to the program (D96).
+    app("zoom_in", "Zoom in", &["ctrl-="], &["cmd-="]),
+    app("zoom_out", "Zoom out", &["ctrl--"], &["cmd--"]),
+    app("actual_size", "Actual size", &["ctrl-0"], &["cmd-0"]),
     app("open_hosts", "Open the Hosts screen", &[], &[]),
     terminal(
         "copy",
@@ -422,6 +426,9 @@ fn binding(id: &str, keys: &str, context: Option<&str>) -> Option<KeyBinding> {
         "previous_tab" => Some(KeyBinding::new(keys, PreviousTab, context)),
         "open_search" => Some(KeyBinding::new(keys, OpenSearch, context)),
         "open_settings" => Some(KeyBinding::new(keys, OpenSettings, context)),
+        "zoom_in" => Some(KeyBinding::new(keys, super::actions::ZoomIn, context)),
+        "zoom_out" => Some(KeyBinding::new(keys, super::actions::ZoomOut, context)),
+        "actual_size" => Some(KeyBinding::new(keys, super::actions::ActualSize, context)),
         "open_hosts" => Some(KeyBinding::new(keys, super::actions::ShowHosts, context)),
         "copy" => Some(KeyBinding::new(keys, crate::terminal::view::Copy, context)),
         "paste" => Some(KeyBinding::new(keys, crate::terminal::view::Paste, context)),

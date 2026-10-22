@@ -97,7 +97,8 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
         Kind::Enum(&["auto", "light", "dark"]),
         json!("auto"),
     );
-    add("appearance.ui_zoom", Kind::Number(0.5, 2.0), json!(1.0));
+    // The interface zoom (D96): 80 % to 200 %, by the steps of UI 1.4.
+    add("appearance.ui_zoom", Kind::Number(0.8, 2.0), json!(1.0));
     // Never by default (decision D29).
     add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
     add("terminal.autocomplete", Kind::Enum(&["off"]), json!("off"));

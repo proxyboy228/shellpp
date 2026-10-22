@@ -38,24 +38,24 @@ use crate::state::records_edit::{IdentityView, KeyKind};
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: Pixels = metrics::SPACE_5;
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// A section heading row ("Keys", "Identities"), as on the Hosts screen.
-const HEADING_HEIGHT: Pixels = px(40.);
+const HEADING_HEIGHT: gpui::Rems = metrics::rpx(40.);
 /// The tile of a list row (the 36 px card tile does not fit a 44 px row).
-const LIST_TILE_SIZE: Pixels = px(28.);
+const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// The search field of the action bar takes the room left, between these
 /// widths (200 px: the owner's polish of run 3).
-const SEARCH_MIN_WIDTH: Pixels = px(200.);
-const SEARCH_MAX_WIDTH: Pixels = px(320.);
+const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(200.);
+const SEARCH_MAX_WIDTH: gpui::Rems = metrics::rpx(320.);
 /// Fixed list columns: a key's type, an identity's username and method.
-const TYPE_COLUMN: Pixels = px(140.);
-const USERNAME_COLUMN: Pixels = px(160.);
-const METHOD_COLUMN: Pixels = px(200.);
+const TYPE_COLUMN: gpui::Rems = metrics::rpx(140.);
+const USERNAME_COLUMN: gpui::Rems = metrics::rpx(160.);
+const METHOD_COLUMN: gpui::Rems = metrics::rpx(200.);
 /// Width of the menus of the screen.
-const MENU_WIDTH: Pixels = px(220.);
+const MENU_WIDTH: gpui::Rems = metrics::rpx(220.);
 
 /// A tile with a white icon on `--tag-graphite`, as host tiles.
-fn tile(icon: impl Into<Icon>, tile_size: Pixels) -> impl IntoElement {
+fn tile(icon: impl Into<Icon>, tile_size: gpui::Rems) -> impl IntoElement {
     div()
         .flex_none()
         .size(tile_size)
@@ -66,7 +66,7 @@ fn tile(icon: impl Into<Icon>, tile_size: Pixels) -> impl IntoElement {
         .justify_center()
         .child(
             Icon::new(icon)
-                .with_size(ICON_SIZE)
+                .size(ICON_SIZE)
                 .text_color(palette::TEXT_ON_TAG.hsla()),
         )
 }
@@ -89,7 +89,7 @@ fn menu_item(id: &'static str, label: &'static str, enabled: bool, cx: &App) -> 
 }
 
 /// Width of the Remove confirmation (as Known Hosts').
-const REMOVE_DIALOG_WIDTH: Pixels = px(420.);
+const REMOVE_DIALOG_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// "Remove key?" (D50): the key's label, then the hosts, groups and
 /// identities that use it with the warning that they lose it, or that
@@ -158,7 +158,7 @@ pub(super) fn open_remove_confirmation(
             content = content.child(div().child(strings::REMOVE_UNUSED));
         }
         dialog
-            .w(REMOVE_DIALOG_WIDTH)
+            .w(metrics::to_px(REMOVE_DIALOG_WIDTH, cx))
             .bg(theme.popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -241,7 +241,7 @@ impl KeychainScreen {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -260,7 +260,11 @@ impl KeychainScreen {
                     ),
             )
             .when(focused, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CONTROL,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
     }
 
@@ -297,8 +301,8 @@ impl KeychainScreen {
         ControlButton::new("kc-sort", ControlKind::Ghost)
             .icon(Lucide::ArrowUpDown)
             .tooltip(strings::SORT)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.min_w(MENU_WIDTH);
+            .dropdown_menu(move |mut menu, _, cx| {
+                menu = menu.min_w(metrics::to_px(MENU_WIDTH, cx));
                 for sort in KeychainSort::ALL {
                     let (id, label) = match sort {
                         KeychainSort::Name => ("kc-sort-name", strings::SORT_NAME),
@@ -339,9 +343,9 @@ impl KeychainScreen {
             .icon(IconName::ChevronDown)
             .tooltip(strings::NEW_KEY_MENU)
             .rounded_sides(false, true)
-            .dropdown_menu(move |menu, _, _| {
+            .dropdown_menu(move |menu, _, cx| {
                 let generate = screen.clone();
-                menu.min_w(MENU_WIDTH)
+                menu.min_w(metrics::to_px(MENU_WIDTH, cx))
                     .item(
                         PopupMenuItem::element(|_, cx| {
                             menu_item("kc-menu-generate", strings::GENERATE_KEY, true, cx)
@@ -362,7 +366,12 @@ impl KeychainScreen {
         let split = h_flex()
             .flex_none()
             .child(new_key)
-            .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
+            .child(
+                div()
+                    .w(metrics::rpx(1.))
+                    .h(metrics::HEIGHT_CONTROL)
+                    .bg(theme.border),
+            )
             .child(new_key_menu);
         // Certificate and FIDO2 are one group: both as wide as the wider.
         let width = controls::group_width(window, &[strings::CERTIFICATE, strings::FIDO2]);
@@ -401,20 +410,25 @@ impl KeychainScreen {
 
     /// The narrowest the right group gets: the search at its minimum, the
     /// view toggle (two buttons 4 px apart) and sort, with their gaps.
-    fn bar_right_min() -> Pixels {
-        SEARCH_MIN_WIDTH + metrics::SPACE_2 * 2. + metrics::HEIGHT_CONTROL * 3. + metrics::SPACE_1
+    fn bar_right_min() -> f32 {
+        metrics::design_px(
+            SEARCH_MIN_WIDTH
+                + metrics::SPACE_2 * 2.
+                + metrics::HEIGHT_CONTROL * 3.
+                + metrics::SPACE_1,
+        )
     }
 
     /// Whether the bar cannot hold the labels of Certificate and FIDO2 next
     /// to the search at its minimum: they show only their icons then, before
     /// the search wraps below (an open panel narrows the bar).
     pub(super) fn compact_bar(&self, window: &Window) -> bool {
-        let label = |labels: &[&str]| controls::group_width(window, labels).as_f32();
-        let gap = metrics::SPACE_2.as_f32();
-        let split = label(&[strings::NEW_KEY]) + 1. + metrics::HEIGHT_CONTROL.as_f32();
+        let label = |labels: &[&str]| metrics::design_px(controls::group_width(window, labels));
+        let gap = metrics::design_px(metrics::SPACE_2);
+        let split = label(&[strings::NEW_KEY]) + 1. + metrics::design_px(metrics::HEIGHT_CONTROL);
         let pair = label(&[strings::CERTIFICATE, strings::FIDO2]);
         let left = split + 2. * (gap + pair);
-        self.grid_width(window) < left + gap + Self::bar_right_min().as_f32()
+        self.grid_width(window) < left + gap + Self::bar_right_min()
     }
 
     /// New key, Certificate and FIDO2 on the left; search, view toggle and
@@ -438,7 +452,7 @@ impl KeychainScreen {
                     .id("kc-action-bar-right")
                     .test_support()
                     .flex_1()
-                    .min_w(Self::bar_right_min())
+                    .min_w(metrics::rpx(Self::bar_right_min()))
                     .justify_end()
                     .items_center()
                     .gap(metrics::SPACE_2)
@@ -451,8 +465,11 @@ impl KeychainScreen {
     // -- Content -------------------------------------------------------------------
 
     fn total_width(&self, window: &Window) -> f32 {
-        self.measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32())
+        self.measured_width.unwrap_or_else(|| {
+            (window.viewport_size().width / metrics::zoom_of(window)
+                - metrics::at_100(metrics::WIDTH_SIDEBAR))
+            .as_f32()
+        })
     }
 
     /// The width of the grid area (the screen without its panel).
@@ -463,14 +480,15 @@ impl KeychainScreen {
         } else {
             0.
         };
-        (total - panel - CONTENT_PADDING.as_f32() * 2.).max(1.)
+        (total - panel - metrics::design_px(CONTENT_PADDING) * 2.).max(1.)
     }
 
     /// The panel on display: the chosen width, narrowed so the grid keeps
     /// 360 px, never below 320 px (design-system 6).
     fn fitted_panel_width(&self, total: f32) -> Pixels {
         let room = px(total) - details::MAIN_AREA_MIN;
-        details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN))
+        details::clamp_width(self.panel_width)
+            .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)))
     }
 
     fn rebuild_rows(&mut self, width: f32) {
@@ -512,18 +530,21 @@ impl KeychainScreen {
                     .map(Row::Identities),
             );
         }
-        let card_row = if tiles {
+        // In design units (D96): the list scales them when it draws.
+        let card_row = metrics::at_100(if tiles {
             metrics::HEIGHT_HOST_CARD + metrics::HOST_CARD_GAP
         } else {
             metrics::HEIGHT_ROW
-        };
+        });
         self.row_sizes = Rc::new(
             rows.iter()
                 .map(|row| {
                     let height = match row {
-                        Row::KeysHeading | Row::IdentitiesHeading => HEADING_HEIGHT,
+                        Row::KeysHeading | Row::IdentitiesHeading => {
+                            metrics::at_100(HEADING_HEIGHT)
+                        }
                         Row::KeyColumns | Row::IdentityColumns | Row::NoKeys => {
-                            metrics::HEIGHT_CONTROL
+                            metrics::at_100(metrics::HEIGHT_CONTROL)
                         }
                         Row::Keys(_) | Row::Identities(_) => card_row,
                     };
@@ -597,7 +618,7 @@ impl KeychainScreen {
         v_flex()
             .flex_1()
             .min_w_0()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .child(
                 div()
                     .text_size(metrics::FONT_SIZE_BODY)
@@ -653,7 +674,7 @@ impl KeychainScreen {
             KeychainLayout::Tiles => (
                 frame
                     .flex_none()
-                    .w(px(self.card_width))
+                    .w(metrics::rpx(self.card_width))
                     .h(metrics::HEIGHT_HOST_CARD)
                     .rounded(metrics::RADIUS_CARD)
                     .bg(theme.secondary)
@@ -686,11 +707,11 @@ impl KeychainScreen {
                             this
                         }
                     }),
-                Pixels::ZERO,
+                gpui::Rems::ZERO,
             ),
         };
         frame.when(keyboard_cursor, |this| {
-            this.child(controls::focus_ring(radius, px(1.), cx))
+            this.child(controls::focus_ring(radius, metrics::rpx(1.), cx))
         })
     }
 
@@ -785,7 +806,7 @@ impl KeychainScreen {
                     v_flex()
                         .flex_1()
                         .min_w_0()
-                        .gap(px(2.))
+                        .gap(metrics::rpx(2.))
                         .child(title.text_size(metrics::FONT_SIZE_BODY))
                         .child(method.text_size(metrics::FONT_SIZE_CAPTION)),
                 )
@@ -908,7 +929,7 @@ impl KeychainScreen {
             .when_some(body, |this, body| {
                 this.child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(metrics::rpx(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
                         .child(body),
@@ -978,7 +999,7 @@ impl KeychainScreen {
                 .id("kc-panel")
                 .test_support()
                 .relative()
-                .w(self.fitted_panel_width(total))
+                .w(metrics::rems_of(self.fitted_panel_width(total)))
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -992,8 +1013,8 @@ impl KeychainScreen {
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(px(-3.))
-                        .w(px(6.))
+                        .left(metrics::rpx(-3.))
+                        .w(metrics::rpx(6.))
                         .cursor_col_resize()
                         .hover(move |style| style.bg(handle_hover.opacity(0.5)))
                         .on_drag(ResizeDetails, |_, _, _, cx| cx.new(|_| ResizePreview)),
@@ -1013,7 +1034,7 @@ impl Render for KeychainScreen {
         let screen = cx.entity().downgrade();
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .measured_width
@@ -1043,7 +1064,7 @@ impl Render for KeychainScreen {
                     v_virtual_list(
                         cx.entity(),
                         "kc-grid",
-                        self.row_sizes.clone(),
+                        metrics::scaled_sizes(&self.row_sizes, cx),
                         |this: &mut Self, range, window, cx| {
                             range
                                 .map(|row| this.render_row(row, window, cx))
@@ -1109,8 +1130,10 @@ impl Render for KeychainScreen {
             .text_color(cx.theme().foreground)
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDetails>, _, cx| {
-                    let width =
-                        details::width_for_drag(event.bounds.right(), event.event.position.x);
+                    let width = details::width_for_drag(
+                        metrics::unscaled(event.bounds.right(), cx),
+                        metrics::unscaled(event.event.position.x, cx),
+                    );
                     this.set_panel_width(width, cx);
                 }),
             )
@@ -1163,7 +1186,7 @@ fn panel_button(
     let icon: Icon = icon.into();
     widgets::hit(id)
         .flex_none()
-        .h(px(32.))
+        .h(metrics::rpx(32.))
         .px(metrics::SPACE_3)
         .flex()
         .items_center()
@@ -1289,10 +1312,10 @@ impl KeyPanel {
         let menu_panel = panel.clone();
         let has_public = self.public_key.is_some();
         let header = DetailsHeader::new(strings::PANEL_TITLE)
-            .menu(move |menu: PopupMenu, _, _| {
+            .menu(move |menu: PopupMenu, _, cx| {
                 let copy = menu_panel.clone();
                 let remove = menu_panel.clone();
-                menu.min_w(MENU_WIDTH)
+                menu.min_w(metrics::to_px(MENU_WIDTH, cx))
                     .item(
                         PopupMenuItem::element(move |_, cx| {
                             menu_item(
@@ -1848,7 +1871,7 @@ impl Render for ImportForm {
                 }
                 SshScan::Found(files) => v_flex()
                     .w_full()
-                    .gap(px(2.))
+                    .gap(metrics::rpx(2.))
                     .children(files.into_iter().map(|file| {
                         let path = file.path.clone();
                         widgets::dropdown_item(
@@ -1874,7 +1897,7 @@ impl Render for ImportForm {
         let text_error = field_error(self.errors(), "private_key");
         let drop_bg = tokens.accent_subtle.hsla();
         let textarea = Textarea::new(&self.text)
-            .px(metrics::SPACE_3 - gpui_kit::component::Size::Medium.input_px())
+            .px(metrics::to_px(metrics::SPACE_3, cx) - gpui_kit::component::Size::Medium.input_px())
             .text_size(metrics::FONT_SIZE_DENSE)
             .font_family(crate::terminal::fonts::JETBRAINS_MONO)
             .bg(tokens.bg_input.hsla())

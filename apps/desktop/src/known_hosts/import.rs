@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
     App, AppContext as _, ClickEvent, Context, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Task, Window, div, px,
+    IntoElement, ParentElement as _, PathPromptOptions, Render, Styled as _, Task, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -216,7 +216,7 @@ impl ImportDialog {
                 .id(id)
                 .test_support()
                 .w_full()
-                .h(px(28.))
+                .h(metrics::rpx(28.))
                 .justify_between()
                 .items_center()
                 .child(
@@ -356,7 +356,7 @@ pub(super) fn open(dialog: Entity<ImportDialog>, window: &mut Window, cx: &mut A
             _ => strings::IMPORT_TITLE,
         };
         modal
-            .w(px(DIALOG_WIDTH))
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

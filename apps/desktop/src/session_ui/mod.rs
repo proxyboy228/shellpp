@@ -344,7 +344,9 @@ impl SessionPane {
             let viewport = window.viewport_size();
             size(
                 viewport.width,
-                (viewport.height - crate::theme::metrics::HEIGHT_TOP_BAR).max(gpui::px(0.)),
+                (viewport.height
+                    - crate::theme::metrics::to_px(crate::theme::metrics::HEIGHT_TOP_BAR, cx))
+                .max(gpui::px(0.)),
             )
         });
         terminal.read(cx).fit(area, window);

@@ -8,8 +8,8 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, DragMoveEvent, Entity, Focusable as _,
     FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Window, canvas, div, prelude::FluentBuilder as _, px,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    canvas, div, prelude::FluentBuilder as _, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -31,10 +31,10 @@ use crate::shell::details::{self, DetailsHeader, ResizeDetails, ResizePreview};
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
-const CONTENT_PADDING: Pixels = metrics::SPACE_5;
-const SEARCH_MIN_WIDTH: Pixels = px(160.);
-const SEARCH_MAX_WIDTH: Pixels = px(320.);
-const DIALOG_WIDTH: Pixels = px(420.);
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(160.);
+const SEARCH_MAX_WIDTH: gpui::Rems = metrics::rpx(320.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// A plain menu item with a stable id; `danger` items use `--danger`.
 fn menu_item(id: &'static str, label: &'static str, danger: bool, cx: &App) -> AnyElement {
@@ -132,7 +132,7 @@ pub(crate) fn open_confirmation(
         let confirm = on_confirm.clone();
         let on_ok = on_confirm.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -228,7 +228,7 @@ pub(super) fn open_leave_dialog(
         let on_ok = leave_choice(&action, LeaveChoice::Save);
         let discard = leave_choice(&action, LeaveChoice::Discard);
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -283,7 +283,7 @@ pub(super) fn open_save_and_run(
         let confirm = on_confirm.clone();
         let on_ok = on_confirm.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -359,7 +359,7 @@ pub(super) fn open_package_dialog(
         let submit = Rc::new(submit);
         let on_ok = submit.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -430,7 +430,7 @@ impl SnippetsScreen {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -449,7 +449,11 @@ impl SnippetsScreen {
                     ),
             )
             .when(focused, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CONTROL,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
     }
 
@@ -465,9 +469,9 @@ impl SnippetsScreen {
             .icon(IconName::ChevronDown)
             .tooltip(strings::NEW_MENU)
             .rounded_sides(false, true)
-            .dropdown_menu(move |menu, _, _| {
+            .dropdown_menu(move |menu, _, cx| {
                 let screen = screen.clone();
-                menu.min_w(px(220.)).item(
+                menu.min_w(metrics::scaled(220., cx)).item(
                     PopupMenuItem::element(|_, cx| {
                         menu_item("snippet-new-package", strings::NEW_PACKAGE, false, cx)
                     })
@@ -496,7 +500,12 @@ impl SnippetsScreen {
                 h_flex()
                     .flex_none()
                     .child(new_snippet)
-                    .child(div().w(px(1.)).h(metrics::HEIGHT_CONTROL).bg(theme.border))
+                    .child(
+                        div()
+                            .w(metrics::rpx(1.))
+                            .h(metrics::HEIGHT_CONTROL)
+                            .bg(theme.border),
+                    )
                     .child(new_menu),
             )
             .child(history)
@@ -576,7 +585,7 @@ impl SnippetsScreen {
             .id(id)
             .relative()
             .flex_none()
-            .w(px(width))
+            .w(metrics::rpx(width))
             .h(metrics::HEIGHT_HOST_CARD)
             .flex()
             .items_center()
@@ -600,7 +609,7 @@ impl SnippetsScreen {
         v_flex()
             .flex_1()
             .min_w_0()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .child(
                 div()
                     .text_size(metrics::FONT_SIZE_BODY)
@@ -638,7 +647,11 @@ impl SnippetsScreen {
         self.card_frame(package_id(id), false, width, cx)
             .test_support()
             .when(keyboard_cursor, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CARD, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CARD,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
             .child(widgets::tile(
                 Lucide::Folder,
@@ -698,7 +711,11 @@ impl SnippetsScreen {
             ))
             .child(Self::texts(card_title(snippet), subtitle, cx))
             .when(keyboard_cursor, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CARD, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CARD,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.focus.focus(window, cx);
@@ -756,7 +773,7 @@ impl SnippetsScreen {
             .when_some(body, |this, body| {
                 this.child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(metrics::rpx(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
                         .child(body),
@@ -784,7 +801,7 @@ impl SnippetsScreen {
         let screen = cx.entity().downgrade();
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .grid_width
@@ -951,15 +968,15 @@ impl SnippetsScreen {
                 cx.listener(|this, _: &ClickEvent, window, cx| this.run_from_panel(window, cx)),
             );
         let room = px(total) - details::MAIN_AREA_MIN;
-        let width =
-            details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN));
+        let width = details::clamp_width(self.panel_width)
+            .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)));
         let handle_hover = theme.drag_border;
         Some(
             div()
                 .id("snippet-panel")
                 .test_support()
                 .relative()
-                .w(width)
+                .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -1003,8 +1020,8 @@ impl SnippetsScreen {
                         .absolute()
                         .top_0()
                         .bottom_0()
-                        .left(px(-3.))
-                        .w(px(6.))
+                        .left(metrics::rpx(-3.))
+                        .w(metrics::rpx(6.))
                         .cursor_col_resize()
                         .hover(move |style| style.bg(handle_hover.opacity(0.5)))
                         .on_drag(ResizeDetails, |_, _, _, cx| cx.new(|_| ResizePreview)),
@@ -1086,13 +1103,15 @@ impl SnippetsScreen {
 
 impl Render for SnippetsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let total = self
-            .measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
+        let total = self.measured_width.unwrap_or_else(|| {
+            (metrics::unscaled(window.viewport_size().width, cx)
+                - metrics::at_100(metrics::WIDTH_SIDEBAR))
+            .as_f32()
+        });
         let screen = cx.entity().downgrade();
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .measured_width
@@ -1168,8 +1187,10 @@ impl Render for SnippetsScreen {
             .text_color(cx.theme().foreground)
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDetails>, _, cx| {
-                    let width =
-                        details::width_for_drag(event.bounds.right(), event.event.position.x);
+                    let width = details::width_for_drag(
+                        metrics::unscaled(event.bounds.right(), cx),
+                        metrics::unscaled(event.event.position.x, cx),
+                    );
                     this.set_panel_width(width, cx);
                 }),
             )

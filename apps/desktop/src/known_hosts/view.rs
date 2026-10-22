@@ -18,8 +18,8 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-    WindowExt as _, h_flex, v_flex, v_virtual_list,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, WindowExt as _, h_flex,
+    v_flex, v_virtual_list,
 };
 use shellpp_core::service::dto::{KnownHostView, TagColor};
 use uuid::Uuid;
@@ -35,18 +35,18 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: Pixels = metrics::SPACE_5;
+const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// The tile of a list row (the 36 px card tile does not fit a 44 px row).
-const LIST_TILE_SIZE: Pixels = px(28.);
+const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// The search field of the action bar: it takes the room left, between
 /// these widths (decision of stage 2b, on the 4 px grid).
-const SEARCH_MIN_WIDTH: Pixels = px(160.);
-const SEARCH_MAX_WIDTH: Pixels = px(320.);
+const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(160.);
+const SEARCH_MAX_WIDTH: gpui::Rems = metrics::rpx(320.);
 /// Fixed list columns (decision of stage 2b): key type and date added.
-const KEY_TYPE_COLUMN: Pixels = px(200.);
-const ADDED_COLUMN: Pixels = px(148.);
+const KEY_TYPE_COLUMN: gpui::Rems = metrics::rpx(200.);
+const ADDED_COLUMN: gpui::Rems = metrics::rpx(148.);
 /// Width of the small dialogs (as the Hosts screen's).
-const DIALOG_WIDTH: Pixels = px(420.);
+const DIALOG_WIDTH: gpui::Rems = metrics::rpx(420.);
 
 /// The element id of a card's title: "Hashed host" titles have their own.
 fn title_id(view: &KnownHostView) -> SharedString {
@@ -58,7 +58,7 @@ fn title_id(view: &KnownHostView) -> SharedString {
 }
 
 /// The fingerprint tile (`--tag-graphite`, white icon), as host tiles.
-fn tile(tile_size: Pixels) -> impl IntoElement {
+fn tile(tile_size: gpui::Rems) -> impl IntoElement {
     div()
         .flex_none()
         .size(tile_size)
@@ -69,7 +69,7 @@ fn tile(tile_size: Pixels) -> impl IntoElement {
         .justify_center()
         .child(
             Icon::new(Lucide::FingerprintPattern)
-                .with_size(ICON_SIZE)
+                .size(ICON_SIZE)
                 .text_color(palette::TEXT_ON_TAG.hsla()),
         )
 }
@@ -84,7 +84,7 @@ fn revoked_badge(id: impl Into<gpui::ElementId>, cx: &App) -> impl IntoElement {
         .flex_none()
         .flex()
         .items_center()
-        .h(px(20.))
+        .h(metrics::rpx(20.))
         .px(metrics::SPACE_2)
         .rounded(metrics::RADIUS_CONTROL)
         .border_1()
@@ -160,7 +160,7 @@ pub(super) fn open_remove_confirmation(
         let confirm = on_confirm.clone();
         let on_ok = on_confirm.clone();
         dialog
-            .w(DIALOG_WIDTH)
+            .w(metrics::to_px(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -231,7 +231,7 @@ impl KnownHostsScreen {
             .border_color(tokens.border_strong.hsla())
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(ICON_SIZE)
+                    .size(ICON_SIZE)
                     .text_color(theme.muted_foreground),
             )
             .child(
@@ -250,7 +250,11 @@ impl KnownHostsScreen {
                     ),
             )
             .when(focused, |this| {
-                this.child(controls::focus_ring(metrics::RADIUS_CONTROL, px(1.), cx))
+                this.child(controls::focus_ring(
+                    metrics::RADIUS_CONTROL,
+                    metrics::rpx(1.),
+                    cx,
+                ))
             })
     }
 
@@ -287,8 +291,8 @@ impl KnownHostsScreen {
         ControlButton::new("kh-sort", ControlKind::Ghost)
             .icon(Lucide::ArrowUpDown)
             .tooltip(strings::SORT)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.min_w(px(200.));
+            .dropdown_menu(move |mut menu, _, cx| {
+                menu = menu.min_w(metrics::scaled(200., cx));
                 for sort in KnownHostsSort::ALL {
                     let (id, label) = match sort {
                         KnownHostsSort::Address => ("kh-sort-address", strings::SORT_ADDRESS),
@@ -361,22 +365,25 @@ impl KnownHostsScreen {
 
     /// The width of the grid area (the screen without its panel).
     fn grid_width(&self, window: &Window) -> f32 {
-        let total = self
-            .measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
+        let total = self.measured_width.unwrap_or_else(|| {
+            (window.viewport_size().width / metrics::zoom_of(window)
+                - metrics::at_100(metrics::WIDTH_SIDEBAR))
+            .as_f32()
+        });
         let panel = if self.has_panel() {
             self.fitted_panel_width(total).as_f32()
         } else {
             0.
         };
-        (total - panel - CONTENT_PADDING.as_f32() * 2.).max(1.)
+        (total - panel - metrics::design_px(CONTENT_PADDING) * 2.).max(1.)
     }
 
     /// The panel on display: the chosen width, narrowed so the grid keeps
     /// 360 px, never below 320 px (design-system 6).
     fn fitted_panel_width(&self, total: f32) -> Pixels {
         let room = px(total) - details::MAIN_AREA_MIN;
-        details::clamp_width(self.panel_width).min(room.max(metrics::WIDTH_DETAILS_MIN))
+        details::clamp_width(self.panel_width)
+            .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)))
     }
 
     fn rebuild_rows(&mut self, width: f32) {
@@ -396,9 +403,10 @@ impl KnownHostsScreen {
         };
         let height = match self.layout {
             KnownHostsLayout::Tiles => {
-                metrics::HEIGHT_HOST_CARD.as_f32() + metrics::HOST_CARD_GAP.as_f32()
+                metrics::design_px(metrics::HEIGHT_HOST_CARD)
+                    + metrics::design_px(metrics::HOST_CARD_GAP)
             }
-            KnownHostsLayout::List => metrics::HEIGHT_ROW.as_f32(),
+            KnownHostsLayout::List => metrics::design_px(metrics::HEIGHT_ROW),
         };
         let rows = self.shown.len().div_ceil(columns.max(1));
         self.row_sizes = Rc::new(vec![size(px(width), px(height)); rows]);
@@ -409,7 +417,7 @@ impl KnownHostsScreen {
         v_flex()
             .flex_1()
             .min_w_0()
-            .gap(px(2.))
+            .gap(metrics::rpx(2.))
             .child(
                 div()
                     .id(title_id(view))
@@ -504,7 +512,7 @@ impl KnownHostsScreen {
             KnownHostsLayout::Tiles => (
                 frame
                     .flex_none()
-                    .w(px(self.card_width))
+                    .w(metrics::rpx(self.card_width))
                     .h(metrics::HEIGHT_HOST_CARD)
                     .rounded(metrics::RADIUS_CARD)
                     .bg(theme.secondary)
@@ -539,13 +547,13 @@ impl KnownHostsScreen {
                         }
                     })
                     .children(self.render_list_cells(view, cx)),
-                Pixels::ZERO,
+                gpui::Rems::ZERO,
             ),
         };
         let screen = cx.entity().downgrade();
         frame
             .when(keyboard_cursor, |this| {
-                this.child(controls::focus_ring(radius, px(1.), cx))
+                this.child(controls::focus_ring(radius, metrics::rpx(1.), cx))
             })
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.focus.focus(window, cx);
@@ -643,7 +651,7 @@ impl KnownHostsScreen {
             .when_some(body, |this, body| {
                 this.child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(metrics::rpx(420.))
                         .text_center()
                         .text_color(theme.muted_foreground)
                         .child(crate::panels::widgets::text_with_paths(body, cx)),
@@ -774,7 +782,7 @@ impl KnownHostsScreen {
                         .items_center()
                         .child(
                             Icon::new(Lucide::Server)
-                                .with_size(ICON_SIZE)
+                                .size(ICON_SIZE)
                                 .text_color(theme.muted_foreground),
                         )
                         .child(
@@ -869,7 +877,7 @@ impl KnownHostsScreen {
             .id("kh-panel")
             .test_support()
             .relative()
-            .w(width)
+            .w(metrics::rems_of(width))
             .flex_none()
             .h_full()
             .border_l_1()
@@ -896,8 +904,8 @@ impl KnownHostsScreen {
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(px(-3.))
-                    .w(px(6.))
+                    .left(metrics::rpx(-3.))
+                    .w(metrics::rpx(6.))
                     .cursor_col_resize()
                     .hover(move |style| style.bg(handle_hover.opacity(0.5)))
                     .on_drag(ResizeDetails, |_, _, _, cx| cx.new(|_| ResizePreview)),
@@ -912,15 +920,17 @@ impl Render for KnownHostsScreen {
         self.load_if_stale(cx);
         let width = self.grid_width(window);
         self.rebuild_rows(width);
-        let total = self
-            .measured_width
-            .unwrap_or_else(|| (window.viewport_size().width - metrics::WIDTH_SIDEBAR).as_f32());
+        let total = self.measured_width.unwrap_or_else(|| {
+            (window.viewport_size().width / metrics::zoom_of(window)
+                - metrics::at_100(metrics::WIDTH_SIDEBAR))
+            .as_f32()
+        });
         let screen = cx.entity().downgrade();
         // Measures the whole screen (the shell's sidebar and window size set
         // it); a new width lays the grid out again on the next frame.
         let measure = canvas(
             move |bounds, _, cx| {
-                let width = bounds.size.width.as_f32();
+                let width = metrics::unscaled(bounds.size.width, cx).as_f32();
                 let _ = screen.update(cx, |screen, cx| {
                     if screen
                         .measured_width
@@ -949,7 +959,7 @@ impl Render for KnownHostsScreen {
                     v_virtual_list(
                         cx.entity(),
                         "kh-grid",
-                        self.row_sizes.clone(),
+                        metrics::scaled_sizes(&self.row_sizes, cx),
                         |this: &mut Self, range, window, cx| {
                             range
                                 .map(|row| this.render_row(row, window, cx))
@@ -1026,8 +1036,10 @@ impl Render for KnownHostsScreen {
             .text_color(cx.theme().foreground)
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDetails>, _, cx| {
-                    let width =
-                        details::width_for_drag(event.bounds.right(), event.event.position.x);
+                    let width = details::width_for_drag(
+                        metrics::unscaled(event.bounds.right(), cx),
+                        metrics::unscaled(event.event.position.x, cx),
+                    );
                     this.set_panel_width(width, cx);
                 }),
             )

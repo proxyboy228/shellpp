@@ -12,7 +12,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription,
-    Window, div, px,
+    Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
@@ -209,7 +209,7 @@ impl SnippetsTab {
         // As `widgets::icon_button`, with the Lucide play icon.
         let run = widgets::hit(run_id(id))
             .flex_none()
-            .size(px(32.))
+            .size(metrics::rpx(32.))
             .flex()
             .items_center()
             .justify_center()
@@ -337,7 +337,7 @@ impl Render for SnippetsTab {
                         v_flex()
                             .id("sidebar-snippets-list")
                             .test_support()
-                            .gap(px(2.))
+                            .gap(metrics::rpx(2.))
                             .children(rows),
                     )
             })

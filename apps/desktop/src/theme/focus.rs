@@ -19,10 +19,13 @@ pub fn ring_shadows(surface: Hsla, cx: &App) -> Vec<BoxShadow> {
     vec![
         BoxShadow::new(px(0.), px(0.), ring)
             .blur_radius(px(0.))
-            .spread_radius(FOCUS_RING_OFFSET + FOCUS_RING_WIDTH),
+            .spread_radius(super::metrics::to_px(
+                FOCUS_RING_OFFSET + FOCUS_RING_WIDTH,
+                cx,
+            )),
         BoxShadow::new(px(0.), px(0.), surface)
             .blur_radius(px(0.))
-            .spread_radius(FOCUS_RING_OFFSET),
+            .spread_radius(super::metrics::to_px(FOCUS_RING_OFFSET, cx)),
     ]
 }
 

@@ -21,7 +21,10 @@
 //!   `WxH` so that Windows does not clamp a window larger than the display.
 //!   Several sizes in one launch (`--size 1920x1200,1280x800,960x600`, what
 //!   `scripts/ui-screens.ps1` passes) keep the number of app launches at one.
-//! - Names: `<W>x<H>-<theme>-<state>.png`, e.g. `1280x800-dark-root.png`.
+//! - Names: `<W>x<H>-<theme>-<state>.png`, e.g. `1280x800-dark-root.png`;
+//!   at an interface zoom other than 100 % (`SHELLPP_SCREENSHOT_ZOOM=<percent>`,
+//!   [`ZOOM_ENV`], D96) `<W>x<H>-<theme>-<zoom>-<state>.png`, e.g.
+//!   `1280x800-dark-125-root.png`.
 //! - States are reached the way a user gets there (clicks, typing, keys on
 //!   the elements' ids, see [`ShotState`]); each demo state starts from the
 //!   same reset (top level, no panel, no selection, empty search, tiles, no
@@ -190,6 +193,33 @@ const SIZE_TOLERANCE: i64 = 2;
 /// Names of the only states to capture, comma-separated (smoke runs);
 /// unset or empty: every state of each size.
 pub const STATES_ENV: &str = "SHELLPP_SCREENSHOT_STATES";
+
+/// The interface zoom of a run, in percent (D96): one of the steps of
+/// View > Zoom In; 100 when unset.
+pub const ZOOM_ENV: &str = "SHELLPP_SCREENSHOT_ZOOM";
+
+/// The zoom of [`ZOOM_ENV`] in percent; an empty value is 100.
+pub fn parse_zoom(value: &str) -> Result<u32, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(100);
+    }
+    let percent: u32 = value
+        .parse()
+        .map_err(|_| format!("'{value}' is not a percentage"))?;
+    let steps = theme::zoom::STEPS.map(|step| (step * 100.).round() as u32);
+    if steps.contains(&percent) {
+        Ok(percent)
+    } else {
+        Err(format!("{percent} is not one of the zoom steps {steps:?}"))
+    }
+}
+
+/// The zoom of this run in percent ([`ZOOM_ENV`]; 100 when it is unset or
+/// not a step).
+fn run_zoom() -> u32 {
+    parse_zoom(&std::env::var(ZOOM_ENV).unwrap_or_default()).unwrap_or(100)
+}
 
 /// The text typed for the address states (owner's step 5.2).
 pub const QUICK_CONNECT_TEXT: &str = "root@10.0.0.5:2222";
@@ -841,8 +871,25 @@ pub fn file_name(size: WindowSize, theme: &str, state: ShotState) -> String {
 /// [`file_name`] for a run on OpenSSH (`real_shell`) or on the russh test
 /// server ([`ShotState::file_label`]).
 pub fn file_name_on(size: WindowSize, theme: &str, state: ShotState, real_shell: bool) -> String {
+    file_name_at(size, theme, state, real_shell, run_zoom())
+}
+
+/// [`file_name_on`] at the interface zoom `percent`: the zoom is in the
+/// name unless it is 100.
+pub fn file_name_at(
+    size: WindowSize,
+    theme: &str,
+    state: ShotState,
+    real_shell: bool,
+    percent: u32,
+) -> String {
+    let zoom = if percent == 100 {
+        String::new()
+    } else {
+        format!("-{percent}")
+    };
     format!(
-        "{}-{theme}-{}.png",
+        "{}-{theme}{zoom}-{}.png",
         size.label(),
         state.file_label(real_shell)
     )
@@ -998,6 +1045,11 @@ fn start_watchdog(profile_path: PathBuf) {
 fn run_inner(options: ScreenshotOptions) -> Outcome {
     let only = parse_states(&std::env::var(STATES_ENV).unwrap_or_default())
         .map_err(|error| vec![ScreenshotError::States(error)])?;
+    let zoom = parse_zoom(&std::env::var(ZOOM_ENV).unwrap_or_default())
+        .map_err(|error| vec![ScreenshotError::States(format!("{ZOOM_ENV}: {error}"))])?;
+    if zoom != 100 {
+        say(&format!("Interface zoom: {zoom} % ({ZOOM_ENV})"));
+    }
     if let Some(only) = &only {
         let names: Vec<&str> = only.iter().map(|state| state.name()).collect();
         say(&format!("States: {} ({STATES_ENV})", names.join(", ")));
@@ -1035,6 +1087,7 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             theme::install(Appearance::Dark, cx);
+            theme::zoom::set(zoom as f32 / 100., cx);
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
             // Never the user's ~/.ssh in the Keychain either.
