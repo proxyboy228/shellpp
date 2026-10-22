@@ -624,10 +624,13 @@ impl KeychainScreen {
     /// The frame of a card or row: selection, hover, pressed and keyboard
     /// focus states when it can be selected (keys), none for read-only
     /// identities.
+    /// A card or row; `cursor`: where the arrows are (the keyboard focus
+    /// ring shows there while the screen has the focus from the keyboard).
     fn item_frame(
         &self,
         id: SharedString,
         selected: bool,
+        cursor: bool,
         interactive: bool,
         window: &Window,
         cx: &App,
@@ -637,7 +640,7 @@ impl KeychainScreen {
         let hover = theme.secondary_hover;
         let pressed = theme.secondary_active;
         let keyboard_cursor =
-            selected && self.focus.is_focused(window) && window.last_input_was_keyboard();
+            cursor && self.focus.is_focused(window) && window.last_input_was_keyboard();
         let frame = div()
             .id(id)
             .relative()
@@ -695,9 +698,10 @@ impl KeychainScreen {
         let view = &self.keys[index];
         let id = view.record_id;
         let selected = self.selected == Some(id);
+        let cursor = self.cursor_key() == Some(id);
         let theme = cx.theme();
         let frame = self
-            .item_frame(key_card_id(id), selected, true, window, cx)
+            .item_frame(key_card_id(id), selected, cursor, true, window, cx)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.focus.focus(window, cx);
                 this.open_key(id, window, cx);
@@ -755,6 +759,7 @@ impl KeychainScreen {
         let theme = cx.theme();
         let frame = gpui_kit::TestSupportExt::test_support(self.item_frame(
             identity_card_id(id),
+            false,
             false,
             false,
             window,

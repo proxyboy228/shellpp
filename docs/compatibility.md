@@ -96,19 +96,20 @@ state checks what the program shows before the capture.
 
 ### Known limits
 
-- **Emoji sequences.** A skin tone modifier (`👍🏽`) is drawn as a second
-  emoji beside the first, a ZWJ sequence (`👨‍👩‍👧`) as its parts side by
-  side, a flag (`🇺🇦`) as two letters: the grid holds one character per cell
-  (as the shell's `wcwidth` counts them, so the columns stay right), and
-  Windows has no flag glyphs at all. An emoji with the variation selector
-  VS16 (`❤️`) is drawn two cells wide in a one-cell slot and covers the next
-  cell. Most terminals behave the same way; a fix needs grapheme clusters in
-  the emulator's grid (alacritty_terminal). Not fixed.
-- **vttest and 80/132 columns.** vttest assumes an 80-column screen and
-  switches columns with DECCOLM, which the emulator does not implement; in
-  a wider window the inner bottom border of test 1 lands to the right of
-  the frame. That switch is the likely cause (not confirmed); the rest of
-  the test screen is right. Not fixed.
+- **Emoji sequences** (run 5, D90). A skin tone modifier (`👍🏽`), a ZWJ
+  sequence (`👨‍👩‍👧`) and a flag (`🇺🇦`) are drawn as one glyph two cells wide
+  at their first cell. The grid still holds one character per cell as the
+  shell's `wcwidth` counts them, so the columns stay right; the cells after
+  the glyph stay blank (`👍🏽` takes four columns, the family six). Windows has
+  no flag glyphs: the font draws the two letters in boxes. An emoji with the
+  variation selector VS16 (`❤️`) is still drawn two cells wide in a one-cell
+  slot and covers the next cell. Not fixed.
+- **vttest and 80/132 columns** (run 5, D90). vttest allows column
+  switching (DECSET 40) and then sets 80 columns with DECCOLM: the grid
+  takes 80 (or 132) columns at once and the remote side is told, so test 1's
+  frame is right in a wider window too. The width stays until the pane is
+  resized or the terminal is reset (RIS, `reset`); a DECCOLM without DECSET
+  40 (as `tput reset` sends it) keeps the width, as in xterm.
 
 Typing, mouse reporting (mc, htop), bracketed paste and resizing are also
 covered by the terminal tests and the stage 2 screenshots; this section

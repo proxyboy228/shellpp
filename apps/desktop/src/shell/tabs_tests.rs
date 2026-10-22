@@ -1521,13 +1521,22 @@ fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
     let opened_group = ui.group(opened, cx);
     assert_eq!(cx.update(|cx| opened_group.read(cx).pane_count()), 2);
 
-    // × removes it.
+    // × removes it at once; the toast's Undo brings it back (D90).
     ui.click("tab-new", cx);
     ui.click(format!("new-tab-workspace-remove-{id}"), cx);
-    assert!(ui.visible("workspace-remove-dialog", cx));
-    ui.click("workspace-remove-confirm", cx);
     assert!(core.workspaces_list(vault).unwrap().is_empty());
     assert!(!ui.visible(format!("new-tab-workspace-{id}"), cx));
+    assert!(ui.visible("toast-undo", cx));
+    ui.click("toast-undo", cx);
+    let back = core.workspaces_list(vault).unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].record.record_id, id);
+    assert_eq!(back[0].name, "Production");
+    assert_eq!(back[0].tabs.len(), 1, "with its tabs");
+    assert!(ui.visible(format!("new-tab-workspace-{id}"), cx));
+    // Removed again, it stays removed.
+    ui.click(format!("new-tab-workspace-remove-{id}"), cx);
+    assert!(core.workspaces_list(vault).unwrap().is_empty());
     drop(core);
     ui.finish(cx);
 }

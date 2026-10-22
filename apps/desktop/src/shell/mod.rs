@@ -1247,6 +1247,45 @@ impl Shell {
 
     /// The tab list of Broadcast input (D86): every session tab, `id` and
     /// the tabs that broadcast now ticked.
+    /// Removes workspace `id` and offers Undo for 5 seconds (D90).
+    fn remove_workspace(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let name = self
+            .state
+            .read(cx)
+            .workspaces()
+            .iter()
+            .find(|(found, _)| *found == id)
+            .map(|(_, name)| name.to_string())
+            .unwrap_or_default();
+        let removed = self
+            .state
+            .update(cx, |state, cx| state.delete_records(vec![id], cx));
+        let deleted = match removed {
+            Ok(result) => result.deleted,
+            Err(error) => {
+                tracing::warn!(code = error.code(), "workspace not removed");
+                self.toast(crate::new_tab::strings::WORKSPACE_NOT_REMOVED, cx);
+                return;
+            }
+        };
+        let state = self.state.clone();
+        self.push_toast(
+            Toast::new(crate::new_tab::strings::workspace_removed(&name)).action_with_id(
+                "toast-undo",
+                crate::hosts::strings::UNDO,
+                move |_, cx| {
+                    let deleted = deleted.clone();
+                    if let Err(error) =
+                        state.update(cx, |state, cx| state.restore_records(deleted, cx))
+                    {
+                        tracing::warn!(code = error.code(), "undo of the workspace removal failed");
+                    }
+                },
+            ),
+            cx,
+        );
+    }
+
     /// New Serial Connection (UI 1.4, 2.2; D88): the dialog, then the port
     /// in a new tab.
     pub fn open_serial_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2196,39 +2235,10 @@ impl Shell {
                 self.rename_workspace(*id, window, cx);
                 return;
             }
+            // Removed at once, with Undo for 5 s like other removals (UI
+            // 2.4; D90): its hosts and open tabs stay.
             NewTabEvent::RemoveWorkspace(id) => {
-                let id = *id;
-                let state = self.state.clone();
-                let name = state
-                    .read(cx)
-                    .workspaces()
-                    .iter()
-                    .find(|(found, _)| *found == id)
-                    .map(|(_, name)| name.to_string())
-                    .unwrap_or_default();
-                crate::snippets::open_confirmation(
-                    "workspace-remove",
-                    crate::new_tab::strings::REMOVE_WORKSPACE_TITLE,
-                    crate::new_tab::strings::remove_workspace_body(&name),
-                    window,
-                    cx,
-                    move |window, cx| {
-                        let state = state.read(cx);
-                        let (Some(core), Some(vault_id)) =
-                            (state.core().cloned(), state.vault_id())
-                        else {
-                            return;
-                        };
-                        let removed = core.record_delete(shellpp_core::service::dto::RecordsRef {
-                            vault_id,
-                            record_ids: vec![id],
-                        });
-                        if let Err(error) = removed {
-                            tracing::warn!(code = error.code(), "workspace not removed");
-                            show_toast(crate::new_tab::strings::WORKSPACE_NOT_REMOVED, window, cx);
-                        }
-                    },
-                );
+                self.remove_workspace(*id, cx);
                 return;
             }
             NewTabEvent::Restore => {

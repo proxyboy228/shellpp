@@ -583,6 +583,17 @@ impl KeychainScreen {
         self.selected
     }
 
+    /// The key the arrows start from: the selected one, else the first on
+    /// display. The keyboard focus ring marks it, also while nothing is
+    /// selected (as on Hosts and Snippets; run 5, plan 11.3).
+    pub fn cursor_key(&self) -> Option<Uuid> {
+        self.selected.or_else(|| {
+            self.shown_keys
+                .first()
+                .map(|index| self.keys[*index].record_id)
+        })
+    }
+
     pub fn panel(&self) -> Option<&PanelContent> {
         self.panel.as_ref()
     }

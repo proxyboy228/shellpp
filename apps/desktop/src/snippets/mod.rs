@@ -27,7 +27,6 @@ mod run;
 pub mod shell_highlight;
 pub mod strings;
 mod view;
-pub(crate) use view::open_confirmation;
 
 #[cfg(test)]
 mod tests;

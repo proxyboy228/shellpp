@@ -505,6 +505,51 @@ fn title_and_bell_events(cx: &mut TestAppContext) {
     assert!(!title.contains('\x1b'));
 }
 
+/// Emoji sequences the shell counts over several cells (D90): a ZWJ
+/// family, a skin tone modifier and a flag are each one segment at their
+/// first cell (one glyph two cells wide); the cells keep the columns the
+/// shell counts, so the text after them stays in place; two flags in a
+/// row stay two.
+#[gpui_kit::test]
+fn emoji_sequences_are_one_glyph(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    let thumb = "\u{1F44D}\u{1F3FD}";
+    let flag = "\u{1F1FA}\u{1F1E6}";
+    let line = format!("a{family}b{thumb}c{flag}{flag}d");
+    fixture.feed(cx, line.as_bytes());
+    let frame = fixture.with_window(cx, |terminal, window, cx| {
+        let style = terminal.read(cx).frame_style(window);
+        let layout = terminal.read(cx).layout_state();
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(200.)));
+        render::prepaint(
+            bounds,
+            &fixture.handle,
+            &mut layout.borrow_mut(),
+            &style,
+            window,
+        )
+    });
+    let segments = frame.segments(0);
+    let texts: Vec<&str> = segments.iter().map(|(_, text)| text.as_str()).collect();
+    assert_eq!(texts, ["a", family, "b", thumb, "c", flag, flag, "d"]);
+    // The family's cells: 2 + 2 + 2 columns, as wcwidth counts them.
+    assert_eq!(segments[0].0, 0);
+    assert_eq!(segments[1].0, 1);
+    assert_eq!(segments[2].0, 7);
+    assert_eq!(segments[3].0, 8);
+    assert_eq!(segments[4].0, 12);
+    let d = segments[7].0;
+    assert_eq!(
+        fixture.handle.screen_text()[0]
+            .chars()
+            .filter(|ch| *ch == 'd')
+            .count(),
+        1
+    );
+    assert!(d > segments[6].0);
+}
+
 /// Wide characters: one segment per wide character, two cells each; the
 /// narrow text around them keeps its columns; the cursor follows.
 #[gpui_kit::test]

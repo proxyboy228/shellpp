@@ -1396,3 +1396,16 @@ Status: run 5 decision, 2026-10-22 (plan, section 10; how D83, items 3, 4 and 7,
 - **Test images.** The main OpenSSH test image is back to openssh-server, htop, mc, procps and busybox (179 MB, as before run 4). `tests/openssh/programs.Dockerfile` adds tmux, vim, nano, less, emacs-nox and vttest on top of it (658 MB, sharing its layers); `start.sh` builds and runs it with `SHELLPP_OPENSSH_PROGRAMS=1`, and `scripts/ui-screens.ps1` asks for it when a run includes a program state. The session tests and the server matrix keep the main image.
 
 **Spec impact:** none in the UI specs; `tests/openssh/README.md`, `docs/compatibility.md` section 2, `docs/assets/README.md`.
+
+### 90. Run 4 tails: emoji sequences, DECCOLM, the Keychain's focus ring, Undo of a workspace removal (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 11).
+
+**Decision:**
+
+- **Emoji sequences.** The grid keeps one character per cell as the shell's `wcwidth` counts them (a skin tone modifier is two more columns, a ZWJ family six in all): changing the columns would move the shell's cursor out of step with the screen. Drawing joins the cells of a ZWJ sequence, an emoji with a skin tone modifier, and a flag's two regional indicators into one glyph two cells wide at the first cell; the other cells stay blank. Selection and copy take the cells as before. VS16 presentation (`❤️`) is unchanged.
+- **DECCOLM.** As in xterm: DECCOLM (mode 3) switches to 132 or 80 columns only after the program allowed it with DECSET 40, which vttest does and `tput reset` does not. The grid takes the width at once, in the middle of the output, and clears with the scrolling region and the cursor home; the remote side gets the new size. The width stays until the pane's own size changes or RIS; the pane draws the narrower grid at its left.
+- **Keychain.** The keyboard focus ring marks the first key on display while nothing is selected, where the arrows start, as on Hosts and Snippets.
+- **Workspaces.** × on a workspace of the new tab page removes it at once, with a toast that offers Undo for 5 s (the undo of UI 2.4): Undo brings it back under its id with its tabs. The question before the removal is gone, as for hosts.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 4.5 (and `docs/ru`); `docs/compatibility.md` section 2.

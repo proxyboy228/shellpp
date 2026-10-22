@@ -769,6 +769,24 @@ fn the_arrows_move_over_the_keys(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// The keyboard focus ring marks the key the arrows start from: the first
+/// key shown while nothing is selected (as on Hosts and Snippets; run 5,
+/// plan 11.3), the selected key otherwise.
+#[gpui_kit::test]
+fn the_focus_ring_starts_on_the_first_key(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, sample);
+    let shown = ui.screen.read_with(cx, |screen, _| screen.shown_key_ids());
+    let cursor =
+        |ui: &Ui, cx: &mut TestAppContext| ui.screen.read_with(cx, |screen, _| screen.cursor_key());
+    assert_eq!(ui.screen.read_with(cx, |screen, _| screen.selected()), None);
+    assert_eq!(cursor(&ui, cx), Some(shown[0]));
+    ui.click(cx, key_card_id(shown[1]));
+    assert_eq!(cursor(&ui, cx), Some(shown[1]));
+    ui.frame(cx, |window, cx| window.press("escape", cx));
+    assert_eq!(cursor(&ui, cx), Some(shown[0]));
+    ui.finish(cx);
+}
+
 // -- Generate key (7.1) -----------------------------------------------------------------
 
 #[gpui_kit::test]

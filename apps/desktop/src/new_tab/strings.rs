@@ -35,11 +35,10 @@ pub fn rename_workspace(name: &str) -> String {
 pub const WORKSPACE_SAVED: &str = "Workspace saved";
 pub const WORKSPACE_NOT_SAVED: &str = "The workspace was not saved";
 pub const WORKSPACE_EMPTY: &str = "None of the workspace's hosts exists any more";
-pub const REMOVE_WORKSPACE_TITLE: &str = "Remove workspace?";
 pub const WORKSPACE_NOT_REMOVED: &str = "The workspace was not removed";
-/// The body of the removal question: the open tabs stay.
-pub fn remove_workspace_body(name: &str) -> String {
-    format!("Remove \"{name}\"? Its hosts and open tabs stay.")
+/// The toast of a removal, with Undo (D90).
+pub fn workspace_removed(name: &str) -> String {
+    format!("Workspace \"{name}\" removed")
 }
 /// The remove button of a workspace (its tooltip).
 pub fn remove_workspace(name: &str) -> String {

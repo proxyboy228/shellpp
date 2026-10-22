@@ -794,6 +794,8 @@ The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases eithe
   new tab page (see section 6).
 - Workspaces are shown as a separate block on the new tab page and can be found
   via Ctrl+K search. [decision]
+- × on a workspace removes it at once; its hosts and open tabs stay, and a toast offers
+  Undo for 5 s, as other removals do (2.4, D90). [decision]
 
 ### 4.6 Session termination and connection drop
 

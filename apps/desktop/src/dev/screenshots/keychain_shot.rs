@@ -87,7 +87,18 @@ pub async fn reach(
     })
     .await?;
     match shot {
-        ShotState::Keychain => Ok(()),
+        // The keyboard focus ring on the first key, nothing selected (run 5,
+        // plan 11.3): the cards have the focus, the last input a key (Esc
+        // with no panel does nothing else).
+        ShotState::Keychain => {
+            cx.update_window(handle, |_, window, cx| {
+                let focus = gpui::Focusable::focus_handle(screen.read(cx), cx);
+                focus.focus(window, cx);
+                window.press("escape", cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
         ShotState::KeychainPanel => {
             let key = cx
                 .update(|cx| first_key(screen.read(cx)))

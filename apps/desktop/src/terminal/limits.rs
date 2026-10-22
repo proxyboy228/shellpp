@@ -30,8 +30,9 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
-    KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, PrivateMode, Rgb,
-    ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode, cursor_icon::CursorIcon,
+    KeyboardModesApplyBehavior, LineClearMode, Mode, ModifyOtherKeys, NamedPrivateMode,
+    PrivateMode, Rgb, ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode,
+    cursor_icon::CursorIcon,
 };
 use unicode_width::UnicodeWidthChar as _;
 
@@ -166,6 +167,54 @@ struct Evictions {
 thread_local! {
     static EVICTIONS: Cell<Option<Evictions>> = const { Cell::new(None) };
     static JOURNAL: RefCell<Option<Arc<Mutex<Journal>>>> = const { RefCell::new(None) };
+    static COLUMNS: Cell<Columns> = const {
+        Cell::new(Columns {
+            allow: false,
+            forced: None,
+            changed: false,
+        })
+    };
+}
+
+/// DECSET 40: the program allows DECCOLM (xterm's "Allow 80 ⇒ 132").
+const ALLOW_COLUMN_MODE: u16 = 40;
+/// The widths of DECCOLM.
+const COLUMNS_80: u16 = 80;
+const COLUMNS_132: u16 = 132;
+
+/// DECCOLM on this parser thread (D90). As in xterm, a program switches
+/// the screen to 132 (DECSET 3) or 80 (DECRST 3) columns only after it
+/// allowed that with DECSET 40 (vttest does; `tput reset` sends DECRST 3
+/// without it, and keeps the width). The grid takes the width at once, in
+/// the middle of the output, so what follows is laid out in it; the parser
+/// loop then tells the view and the remote side ([`take_column_change`]).
+/// RIS ends a forced width and the permission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Columns {
+    allow: bool,
+    /// The width a DECCOLM set, while it lasts.
+    forced: Option<u16>,
+    /// `forced` changed since [`set_forced_columns`].
+    changed: bool,
+}
+
+/// Before parsing a batch: the forced width the terminal has now (the
+/// view ends it when its own size changes).
+pub(super) fn set_forced_columns(forced: Option<u16>) {
+    let mut columns = COLUMNS.get();
+    columns.forced = forced;
+    columns.changed = false;
+    COLUMNS.set(columns);
+}
+
+/// After parsing: `Some(width)` when a DECCOLM or RIS changed the forced
+/// width (`Some(None)`: back to the view's width).
+pub(super) fn take_column_change() -> Option<Option<u16>> {
+    let mut columns = COLUMNS.get();
+    let changed = columns.changed.then_some(columns.forced);
+    columns.changed = false;
+    COLUMNS.set(columns);
+    changed
 }
 
 /// Runs `change` on this thread's journal (the terminal lock is held: the
@@ -244,6 +293,39 @@ impl<T: EventListener> Capped<'_, T> {
         row[column]
             .zerowidth()
             .is_some_and(|extra| extra.len() >= MAX_ZEROWIDTH)
+    }
+
+    /// DECSET or DECRST of mode 40 or 3 (see [`Columns`]). Returns whether
+    /// the term should see the mode too: DECCOLM clears the screen and the
+    /// scrolling region there.
+    fn column_mode(&mut self, mode: PrivateMode, set: bool) -> bool {
+        let mut columns = COLUMNS.get();
+        match mode {
+            PrivateMode::Unknown(ALLOW_COLUMN_MODE) => {
+                columns.allow = set;
+                COLUMNS.set(columns);
+                false
+            }
+            PrivateMode::Named(NamedPrivateMode::ColumnMode) if columns.allow => {
+                let width = if set { COLUMNS_132 } else { COLUMNS_80 };
+                if usize::from(width) != self.0.columns() {
+                    let rows = self.0.screen_lines();
+                    self.counting(|term| {
+                        term.resize(super::model::GridDims {
+                            cols: usize::from(width),
+                            rows,
+                        });
+                    });
+                }
+                columns.changed |= columns.forced != Some(width);
+                columns.forced = Some(width);
+                COLUMNS.set(columns);
+                // xterm homes the cursor as well.
+                Handler::goto(&mut *self.0, 0, 0);
+                true
+            }
+            _ => true,
+        }
     }
 
     /// Runs a call that can scroll lines into the scrollback or clear it,
@@ -360,7 +442,27 @@ impl<T: EventListener> Handler for Capped<'_, T> {
     }
 
     #[inline]
+    fn set_private_mode(&mut self, mode: PrivateMode) {
+        if self.column_mode(mode, true) {
+            Handler::set_private_mode(&mut *self.0, mode);
+        }
+    }
+
+    #[inline]
+    fn unset_private_mode(&mut self, mode: PrivateMode) {
+        if self.column_mode(mode, false) {
+            Handler::unset_private_mode(&mut *self.0, mode);
+        }
+    }
+
+    #[inline]
     fn reset_state(&mut self) {
+        let mut columns = COLUMNS.get();
+        columns.allow = false;
+        if columns.forced.take().is_some() {
+            columns.changed = true;
+        }
+        COLUMNS.set(columns);
         // RIS from the alternate screen clears the primary screen's
         // scrollback too (out of `counting`'s sight): its journal goes, and
         // the grid's cap is set again at the next call.
@@ -415,8 +517,6 @@ impl<T: EventListener> Handler for Capped<'_, T> {
         set_mode(mode: Mode);
         unset_mode(mode: Mode);
         report_mode(mode: Mode);
-        set_private_mode(mode: PrivateMode);
-        unset_private_mode(mode: PrivateMode);
         report_private_mode(mode: PrivateMode);
         set_scrolling_region(top: usize, bottom: Option<usize>);
         set_keypad_application_mode();

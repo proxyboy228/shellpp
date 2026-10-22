@@ -5,9 +5,13 @@
 //! narrow cells is one shaped line with one `TextRun` per style (bold,
 //! italic, color, underline, strikethrough), placed on the cell grid with
 //! GPUI's `force_width`; a wide character (CJK, emoji) is its own segment two
-//! cells wide. Row layouts are cached by the row's cells, so rows that did
-//! not change (or only moved, as in scrolling) are not shaped again; the
-//! cache keeps the rows of the last frame only. A lookup goes by a hash and
+//! cells wide. An emoji sequence that the shell counts over several cells
+//! (a ZWJ sequence, a skin tone modifier, a flag) is one segment two cells
+//! wide at its first cell, shaped as one glyph; its other cells stay blank,
+//! so the columns stay those the shell counts (D90). Row layouts are
+//! cached by the row's cells, so rows that did not change (or only moved,
+//! as in scrolling) are not shaped again; the cache keeps the rows of the
+//! last frame only. A lookup goes by a hash and
 //! is confirmed by comparing the cells themselves, so two rows with the
 //! same hash never share a layout (what is drawn is what is copied).
 //!
@@ -809,6 +813,47 @@ impl NarrowSegment {
     }
 }
 
+/// Whether a cell whose text is `next` continues the emoji sequence `prev`
+/// (the text of the cells before it): after a zero width joiner, a skin
+/// tone modifier after an emoji, or the second regional indicator of a
+/// flag.
+fn continues_emoji(prev: &str, next: &str) -> bool {
+    let Some(first) = next.chars().next() else {
+        return false;
+    };
+    let regional = |ch: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&ch);
+    prev.ends_with('\u{200D}')
+        || (('\u{1F3FB}'..='\u{1F3FF}').contains(&first)
+            && prev
+                .chars()
+                .next_back()
+                .is_some_and(|last| !last.is_ascii()))
+        || (regional(first) && prev.chars().filter(|ch| regional(*ch)).count() % 2 == 1)
+}
+
+/// Adds a cell's background to the row's runs.
+fn add_background(backgrounds: &mut Vec<BackgroundRun>, cell: &CellOut) {
+    let Some(bg) = cell.bg else {
+        return;
+    };
+    let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+        2
+    } else {
+        1
+    };
+    let color = rgb_token(bg).hsla();
+    match backgrounds.last_mut() {
+        Some(last) if last.color == color && last.column + last.cells == cell.column => {
+            last.cells += width;
+        }
+        _ => backgrounds.push(BackgroundRun {
+            column: cell.column,
+            cells: width,
+            color,
+        }),
+    }
+}
+
 fn layout_row(
     cells: &[CellOut],
     style: &FrameStyle,
@@ -818,23 +863,38 @@ fn layout_row(
     let mut backgrounds: Vec<BackgroundRun> = Vec::new();
     let mut segments = Vec::new();
     let mut narrow = NarrowSegment::default();
-    for cell in cells {
-        let wide = cell.flags.contains(Flags::WIDE_CHAR);
-        let width = if wide { 2 } else { 1 };
-        if let Some(bg) = cell.bg {
-            let color = rgb_token(bg).hsla();
-            match backgrounds.last_mut() {
-                Some(last) if last.color == color && last.column + last.cells == cell.column => {
-                    last.cells += width;
-                }
-                _ => backgrounds.push(BackgroundRun {
+    let mut index = 0;
+    while index < cells.len() {
+        let cell = &cells[index];
+        add_background(&mut backgrounds, cell);
+        // An emoji sequence over several cells: one glyph at its first cell.
+        let mut end = index + 1;
+        if !cell.flags.contains(Flags::HIDDEN) {
+            let mut text = cell.text.0.clone();
+            while end < cells.len() && continues_emoji(&text, &cells[end].text.0) {
+                text.push_str(&cells[end].text.0);
+                add_background(&mut backgrounds, &cells[end]);
+                end += 1;
+            }
+            if end > index + 1 {
+                narrow.finish(style, metrics, window, &mut segments);
+                let runs = [RunStyle::of(cell).run(text.len(), &style.fonts)];
+                segments.push(Segment {
                     column: cell.column,
-                    cells: width,
-                    color,
-                }),
+                    line: shape(
+                        window,
+                        &text,
+                        &runs,
+                        metrics.font_size,
+                        metrics.cell_width * 2.,
+                    ),
+                });
+                index = end;
+                continue;
             }
         }
-        if wide {
+        index += 1;
+        if cell.flags.contains(Flags::WIDE_CHAR) {
             narrow.finish(style, metrics, window, &mut segments);
             let run_style = RunStyle::of(cell);
             let runs = [run_style.run(cell.text.0.len(), &style.fonts)];

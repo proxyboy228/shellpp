@@ -89,6 +89,74 @@ impl Default for TerminalSize {
     }
 }
 
+/// The grid at `size` (the view's, or the width a DECCOLM set); tells the
+/// sink. Returns whether it changed.
+fn apply_size(term: &SharedTerm, outbox: &Outbox, scrollback: usize, size: TerminalSize) -> bool {
+    {
+        let Ok(mut current) = outbox.size.lock() else {
+            return false;
+        };
+        if *current == size {
+            return false;
+        }
+        let cells_changed = current.cols != size.cols || current.rows != size.rows;
+        *current = size;
+        if cells_changed {
+            let mut term = term.lock();
+            // A reflow or fewer rows push more lines into the grid's
+            // scrollback: let it hold them, so none is lost between the
+            // journal and the grid; the next output trims the buffer to its
+            // limit, the journal's oldest lines first. Not on the alternate
+            // screen: its grid has no scrollback.
+            if !term.mode().contains(TermMode::ALT_SCREEN) {
+                let history = term.grid().history_size();
+                term.grid_mut().update_history(scrollback.max(history));
+            }
+            term.resize(GridDims::from(size));
+            // A view in the journal shows the grid from its top.
+            let journal = outbox.journal();
+            if journal.view() > 0 {
+                term.scroll_display(Scroll::Top);
+            }
+        }
+    }
+    outbox.resize(size);
+    true
+}
+
+/// A DECCOLM (or RIS) changed the forced width (D90): the grid takes it
+/// (the parser's handler already gave the grid a forced width) and the sink
+/// is told.
+fn columns_changed(term: &SharedTerm, outbox: &Outbox, scrollback: usize, forced: Option<u16>) {
+    let size = {
+        let Ok(mut columns) = outbox.columns.lock() else {
+            return;
+        };
+        columns.0 = forced;
+        let natural = columns
+            .1
+            .unwrap_or_else(|| outbox.size.lock().map(|size| *size).unwrap_or_default());
+        with_columns(natural, forced)
+    };
+    apply_size(term, outbox, scrollback, size);
+}
+
+/// `size` with the width a DECCOLM set, if any; the pixel width in
+/// proportion.
+fn with_columns(size: TerminalSize, forced: Option<u16>) -> TerminalSize {
+    match forced {
+        Some(cols) if cols != size.cols => TerminalSize {
+            cols,
+            pixel_width: (u32::from(size.pixel_width) * u32::from(cols)
+                / u32::from(size.cols.max(1)))
+            .try_into()
+            .unwrap_or(u16::MAX),
+            ..size
+        },
+        _ => size,
+    }
+}
+
 /// Grid dimensions for alacritty (`Dimensions` without scrollback).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct GridDims {
@@ -161,6 +229,9 @@ pub(super) struct Outbox {
     palette: RwLock<Palette>,
     wake: async_channel::Sender<()>,
     size: Mutex<TerminalSize>,
+    /// The width a DECCOLM set (D90; `limits::Columns`) and the size the
+    /// view asked for: `size` is the view's, with the forced width.
+    columns: Mutex<(Option<u16>, Option<TerminalSize>)>,
     /// Lines dropped off the top of the scrollback so far
     /// ([`limits::count_evictions`]); written by the parser thread while it
     /// holds the terminal lock, so a reader holding the lock sees the count
@@ -197,6 +268,11 @@ impl Outbox {
         if let Some(sink) = sink {
             sink.send(bytes);
         }
+    }
+
+    /// The width a DECCOLM set, if any.
+    fn forced_columns(&self) -> Option<u16> {
+        self.columns.lock().map(|columns| columns.0).unwrap_or(None)
     }
 
     fn resize(&self, size: TerminalSize) {
@@ -348,6 +424,7 @@ impl TerminalHandle {
             palette: RwLock::new(palette),
             wake,
             size: Mutex::new(options.size),
+            columns: Mutex::new((None, None)),
             evicted: AtomicUsize::new(0),
             journal: Arc::new(Mutex::new(Journal::default())),
             selection_moved: Default::default(),
@@ -478,38 +555,23 @@ impl TerminalHandle {
             .unwrap_or_default()
     }
 
-    /// Resizes the grid and tells the sink. Returns whether it changed.
+    /// Resizes the grid for the view's size and tells the sink. Returns
+    /// whether it changed. A width a DECCOLM set (D90) stays until the
+    /// view's own size changes.
     pub(super) fn resize(&self, size: TerminalSize) -> bool {
-        {
-            let Ok(mut current) = self.outbox.size.lock() else {
+        let size = {
+            let Ok(mut columns) = self.outbox.columns.lock() else {
                 return false;
             };
-            if *current == size {
-                return false;
+            let (forced, natural) = &mut *columns;
+            if natural.is_some_and(|natural| (natural.cols, natural.rows) != (size.cols, size.rows))
+            {
+                *forced = None;
             }
-            let cells_changed = current.cols != size.cols || current.rows != size.rows;
-            *current = size;
-            if cells_changed {
-                let mut term = self.term.lock();
-                // A reflow or fewer rows push more lines into the grid's
-                // scrollback: let it hold them, so none is lost between the
-                // journal and the grid; the next output trims the buffer to
-                // its limit, the journal's oldest lines first. Not on the
-                // alternate screen: its grid has no scrollback.
-                if !term.mode().contains(TermMode::ALT_SCREEN) {
-                    let history = term.grid().history_size();
-                    term.grid_mut().update_history(self.scrollback.max(history));
-                }
-                term.resize(GridDims::from(size));
-                // A view in the journal shows the grid from its top.
-                let journal = self.outbox.journal();
-                if journal.view() > 0 {
-                    term.scroll_display(Scroll::Top);
-                }
-            }
-        }
-        self.outbox.resize(size);
-        true
+            *natural = Some(size);
+            with_columns(size, *forced)
+        };
+        apply_size(&self.term, &self.outbox, self.scrollback, size)
     }
 
     pub(super) fn set_palette(&self, palette: Palette) {
@@ -685,9 +747,14 @@ fn parse_loop(
                         // The synchronized update timed out: show what it
                         // has.
                         let mut locked = term.lock();
+                        limits::set_forced_columns(outbox.forced_columns());
                         processor.stop_sync(&mut Capped(&mut *locked));
+                        let columns = limits::take_column_change();
                         publish(&outbox);
                         drop(locked);
+                        if let Some(forced) = columns {
+                            columns_changed(&term, &outbox, scrollback, forced);
+                        }
                         outbox.wake();
                     }
                     if compact_at.is_some_and(|at| now >= at) {
@@ -717,6 +784,7 @@ fn parse_loop(
         for slice in batch.chunks(LOCKED_BYTES) {
             let slice = osc.filter(slice);
             let mut locked = term.lock();
+            limits::set_forced_columns(outbox.forced_columns());
             if outbox.capture.watching() {
                 // A command line waits for its end (history capture).
                 super::history_capture::advance(
@@ -729,8 +797,12 @@ fn parse_loop(
                 processor.advance(&mut Capped(&mut *locked), &slice);
             }
             answer_color_requests(&locked, &outbox);
+            let columns = limits::take_column_change();
             publish(&outbox);
             drop(locked);
+            if let Some(forced) = columns {
+                columns_changed(&term, &outbox, scrollback, forced);
+            }
             outbox.wake();
         }
         let history = term.lock().grid().history_size();
@@ -979,6 +1051,56 @@ mod tests {
         handle.send_input(b"typed".to_vec());
         assert!(sink.sent.lock().unwrap().is_empty(), "no sink after close");
         assert_eq!(Arc::strong_count(&sink), 1, "the sink was released");
+    }
+
+    /// DECCOLM (D90): only after DECSET 40, as in xterm; the grid takes 80
+    /// or 132 columns at once (the text after it is laid out in them) and
+    /// the sink is told; the width stays while the view's size does not
+    /// change, and a new view size or RIS ends it.
+    #[test]
+    fn deccolm_switches_columns_only_when_allowed() {
+        let (handle, _woken) = handle(100, 6, 100);
+        let sink = Arc::new(RecordingSink::default());
+        handle.set_sink(Some(sink.clone()));
+        let natural = TerminalSize::cells(100, 6);
+        assert!(!handle.resize(natural));
+        // `tput reset` sends DECRST 3 without DECSET 40: the width stays.
+        handle.feed_blocking(b"\x1b[?3;4l").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 100);
+        // vttest: DECSET 40, then DECRST 3 and a line as wide as the screen.
+        let line = "*".repeat(80);
+        handle
+            .feed_blocking(format!("\x1b[?40h\x1b[?3l{line}x").as_bytes())
+            .unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size(), TerminalSize::cells(80, 6));
+        assert_eq!(
+            sink.sizes.lock().unwrap().last(),
+            Some(&TerminalSize::cells(80, 6))
+        );
+        // The 81st character wrapped at column 80.
+        assert_eq!(handle.screen_text()[..2], [line.clone(), "x".to_owned()]);
+        // DECSET 3: 132 columns.
+        handle.feed_blocking(b"\x1b[?3h").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 132);
+        // The view's size again (every frame): the width stays.
+        assert!(!handle.resize(natural));
+        assert_eq!(handle.size().cols, 132);
+        // A new view size ends it.
+        assert!(handle.resize(TerminalSize::cells(110, 6)));
+        assert_eq!(handle.size().cols, 110);
+        // RIS ends a forced width and the permission.
+        handle.feed_blocking(b"\x1b[?40h\x1b[?3l").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 80);
+        handle.feed_blocking(b"\x1bc").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 110);
+        handle.feed_blocking(b"\x1b[?3l").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 110, "not allowed after RIS");
     }
 
     #[test]
