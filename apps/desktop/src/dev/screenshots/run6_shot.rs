@@ -1,7 +1,7 @@
-//! The run 6 states of the screenshot run (plan, sections 5 and 6): the new
-//! tab page with a workspace that links a host that is gone (D94), and the
+//! The run 6 states of the screenshot run (plan, sections 5, 6 and 10): the
+//! new tab page with a workspace that links a host that is gone (D94), the
 //! Serial dialog with a port name typed that is not among the ports of the
-//! run (D95).
+//! run (D95), and Settings ▸ Updates (D97).
 //!
 //! The workspace state saves a workspace of its own, `Ops (lab)`, linking
 //! two demo hosts and one host that does not exist, named "old-db (lab)" as
@@ -18,9 +18,10 @@ use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 2] = [
+pub const STATES: [ShotState; 3] = [
     ShotState::NewTabWorkspacesMissing,
     ShotState::SerialDialogManualPort,
+    ShotState::SettingsUpdates,
 ];
 
 /// The name of the workspace of these states.
@@ -138,6 +139,16 @@ pub async fn reach(
             type_into(cx, handle, "serial-port", TYPED_PORT)?;
             settle(cx, handle).await
         }
+        ShotState::SettingsUpdates => {
+            let state = state.clone();
+            cx.update_window(handle, |_, window, cx| {
+                crate::settings::open(state, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await?;
+            click(cx, handle, "settings-nav-updates")?;
+            settle(cx, handle).await
+        }
         _ => Err(failed(shot, "not a run 6 state")),
     }
 }
@@ -149,21 +160,29 @@ pub fn check(
     state: &Entity<AppState>,
     shot: ShotState,
 ) -> Result<(), ScreenshotError> {
-    if shot == ShotState::SerialDialogManualPort {
-        let shown = cx
-            .update_window(handle, |_, window, cx| {
-                window.render_frame(cx);
-                ["serial-dialog", "serial-port-not-found"].iter().all(|id| {
-                    window
-                        .try_find(gpui::SharedString::from(*id))
-                        .is_some_and(|found| found.visible())
-                })
+    let all_shown = |cx: &mut AsyncApp, ids: &[&str]| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            ids.iter().all(|id| {
+                window
+                    .try_find(gpui::SharedString::from(*id))
+                    .is_some_and(|found| found.visible())
             })
-            .map_err(|_| ScreenshotError::WindowClosed)?;
-        return if shown {
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)
+    };
+    if shot == ShotState::SerialDialogManualPort {
+        return if all_shown(cx, &["serial-dialog", "serial-port-not-found"])? {
             Ok(())
         } else {
             Err(failed(shot, "no \"Not found now\" under the typed port"))
+        };
+    }
+    if shot == ShotState::SettingsUpdates {
+        return if all_shown(cx, &["settings-updates-auto", "settings-updates-check"])? {
+            Ok(())
+        } else {
+            Err(failed(shot, "the Updates section is not shown"))
         };
     }
     let id = cx

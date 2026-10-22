@@ -352,6 +352,9 @@ pub enum ShotState {
     // Run 6, plan 6 (D95): `run6_shot`.
     /// The Serial dialog with a port name typed that is not found now.
     SerialDialogManualPort,
+    // Run 6, plan 10 (D97): `run6_shot`.
+    /// Settings ▸ Updates as it opens.
+    SettingsUpdates,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -490,7 +493,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 93] = [
+    pub const ALL: [Self; 94] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -551,6 +554,7 @@ impl ShotState {
         Self::SerialDialog,
         Self::NewTabWorkspacesMissing,
         Self::SerialDialogManualPort,
+        Self::SettingsUpdates,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -714,6 +718,7 @@ impl ShotState {
             Self::SerialTab => "serial-tab",
             Self::NewTabWorkspacesMissing => "new-tab-workspaces-missing",
             Self::SerialDialogManualPort => "serial-dialog-manual-port",
+            Self::SettingsUpdates => "settings-updates",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1825,9 +1830,9 @@ pub async fn reach_state(
         ShotState::HostPanelTelnet | ShotState::SerialDialog => {
             stage9_shot::reach(cx, handle, root, state, shot_state).await
         }
-        ShotState::NewTabWorkspacesMissing | ShotState::SerialDialogManualPort => {
-            run6_shot::reach(cx, handle, root, state, shot_state).await
-        }
+        ShotState::NewTabWorkspacesMissing
+        | ShotState::SerialDialogManualPort
+        | ShotState::SettingsUpdates => run6_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2068,9 +2073,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SerialDialog
             | ShotState::TelnetTab
             | ShotState::SerialTab => Err("checked with the stage 9 screens"),
-            ShotState::NewTabWorkspacesMissing | ShotState::SerialDialogManualPort => {
-                Err("checked with the run 6 screens")
-            }
+            ShotState::NewTabWorkspacesMissing
+            | ShotState::SerialDialogManualPort
+            | ShotState::SettingsUpdates => Err("checked with the run 6 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
