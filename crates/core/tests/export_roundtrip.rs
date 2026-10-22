@@ -4,9 +4,10 @@
 //! empty store, and every host, group, tag, key, identity, known host and
 //! setting is the same, plain and encrypted. Then the merge rules: a second
 //! import adds nothing, a conflicting record is kept as a suffixed copy,
-//! wrong passwords and hostile files are refused. Snippets, their packages
-//! and forwarding rules come back with every reference between them and to
-//! the hosts (D62, D63). Every secret is generated at run time.
+//! wrong passwords and hostile files are refused. Snippets, their packages,
+//! forwarding rules and workspaces come back with every reference between
+//! them and to the hosts (D62, D63, D84). Every secret is generated at run
+//! time.
 
 mod common;
 mod stage2;
@@ -21,15 +22,16 @@ use shellpp_core::ValidationReason;
 use shellpp_core::keys::generate::KeyKind;
 use shellpp_core::model::identity::PasswordChange;
 use shellpp_core::service::dto::{
-    DataExportInput, DataImportInput, KeyGenerateInput, KnownHostAddInput, RecordType,
+    DataExportInput, DataImportInput, KeyGenerateInput, KnownHostAddInput, RecordType, RecordsRef,
     SettingsSetInput,
 };
 use shellpp_core::service::keychain::IdentitySaveInput;
+use shellpp_core::service::last_session::SavedSession;
 use shellpp_core::service::snippets::RecordInput;
 use uuid::Uuid;
 
 /// The record types an import takes, compared by the round trips.
-const COMPARED: [&str; 8] = [
+const COMPARED: [&str; 9] = [
     "group",
     "host",
     "key",
@@ -38,6 +40,7 @@ const COMPARED: [&str; 8] = [
     "snippet_package",
     "snippet",
     "forwarding_rule",
+    "workspace",
 ];
 
 /// Content of a vault worth comparing: (type, record id) -> data, for the
@@ -902,4 +905,245 @@ fn a_profile_imports_its_own_export_without_copies() {
     );
     assert_eq!(summary.rules_autostart_off, 0);
     assert_eq!(content(&source.core).0, before);
+}
+
+/// [`with_snippets`] with two workspaces: "Prod" (web-1 in one tab, db and
+/// a local terminal side by side in a tab named "db") and "DB only".
+fn with_workspaces() -> common::Unlocked {
+    let u = with_snippets();
+    let web1 = id_of(&u.core, "host", "label", "web-1");
+    let db = id_of(&u.core, "host", "label", "db");
+    let link = |id: Uuid| json!({"vault_id": u.vault_id.to_string(), "record_id": id.to_string()});
+    for data in [
+        json!({
+            "name": "Prod",
+            "tabs": [
+                {"root": {"session": {"kind": "ssh", "host": link(web1)}}},
+                {"title": "db", "root": {"direction": "row", "sizes": [0.5, 0.5], "children": [
+                    {"session": {"kind": "ssh", "host": link(db)}},
+                    {"session": {"kind": "local"}}
+                ]}}
+            ]
+        }),
+        json!({"name": "DB only", "tabs": [{"root": {"session": {"kind": "ssh", "host": link(db)}}}]}),
+    ] {
+        u.core
+            .workspace_save(record_input(&u, None, data))
+            .expect("workspace");
+    }
+    u
+}
+
+/// The host links of the panes of workspace `name`, in order: (vault,
+/// host); `None` for a local terminal.
+fn workspace_links(core: &Core, vault: Uuid, name: &str) -> Vec<Option<(Uuid, Uuid)>> {
+    let workspace = core
+        .workspaces_list(vault)
+        .unwrap()
+        .into_iter()
+        .find(|workspace| workspace.name == name)
+        .unwrap_or_else(|| panic!("no workspace {name}"));
+    workspace
+        .tabs
+        .iter()
+        .flat_map(|tab| tab.root.sessions())
+        .map(|session| match session {
+            SavedSession::Host(link) => Some((link.vault_id, link.record_id)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Workspaces come back with their tabs, titles and splits, their host
+/// links on the hosts of the vault here, plain and encrypted; the same
+/// file again adds nothing (D84).
+#[test]
+fn workspaces_round_trip_with_their_host_links() {
+    let source = with_workspaces();
+    let expected = content(&source.core).0;
+    let plain = source.core.data_export(DataExportInput::default()).unwrap();
+    let export_password = format!("export-{}", common::random_hex());
+    let encrypted = source
+        .core
+        .data_export(DataExportInput {
+            password: Some(SecretString::from(export_password.clone())),
+            ..DataExportInput::default()
+        })
+        .unwrap();
+    for (text, password) in [
+        (&plain.text, None),
+        (&encrypted.text, Some(export_password.as_str())),
+    ] {
+        let target = first_run();
+        let summary = import(&target.core, text, password);
+        assert!(summary.refused.is_empty(), "{:?}", summary.refused);
+        assert_eq!(summary.added, expected.len());
+        let vault = target.vault_id;
+        let web1 = id_of(&target.core, "host", "label", "web-1");
+        let db = id_of(&target.core, "host", "label", "db");
+        assert_eq!(
+            workspace_links(&target.core, vault, "Prod"),
+            vec![Some((vault, web1)), Some((vault, db)), None]
+        );
+        assert_eq!(
+            workspace_links(&target.core, vault, "DB only"),
+            vec![Some((vault, db))]
+        );
+        let prod = target
+            .core
+            .workspaces_list(vault)
+            .unwrap()
+            .into_iter()
+            .find(|workspace| workspace.name == "Prod")
+            .unwrap();
+        assert_eq!(prod.tabs.len(), 2);
+        assert_eq!(prod.tabs[1].title.as_deref(), Some("db"));
+        assert_eq!(prod.tabs[1].root.sessions().len(), 2, "the split");
+        let again = import(&target.core, text, password);
+        assert_eq!(
+            (again.added, again.conflicts, again.existing),
+            (0, 0, expected.len()),
+            "{again:?}"
+        );
+    }
+}
+
+/// A host changed here is a conflict, and so is a workspace renamed here:
+/// the copy of the workspace gets the suffix and the import key and links
+/// the copy of the host, as a workspace of the file that is new here does;
+/// the workspace here keeps its own links. The next import finds the
+/// copies (D34, D84).
+#[test]
+fn conflicting_workspaces_link_the_imported_copies() {
+    let source = with_workspaces();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let target = first_run();
+    let vault = target.vault_id;
+    import(&target.core, &export.text, None);
+    let web1 = id_of(&target.core, "host", "label", "web-1");
+    let db = id_of(&target.core, "host", "label", "db");
+    let mut data = content(&target.core).0[&("host".to_owned(), db.to_string())].clone();
+    data["notes"] = json!("changed here");
+    save(&target.core, vault, Some(db), RecordType::Host, data, &[]).unwrap();
+    let prod = id_of(&target.core, "workspace", "name", "Prod");
+    let mut workspace =
+        content(&target.core).0[&("workspace".to_owned(), prod.to_string())].clone();
+    workspace["name"] = json!("Prod here");
+    target
+        .core
+        .workspace_save(record_input(&target, Some(prod), workspace))
+        .unwrap();
+    let db_only = id_of(&target.core, "workspace", "name", "DB only");
+    target
+        .core
+        .record_delete(RecordsRef {
+            vault_id: vault,
+            record_ids: vec![db_only],
+        })
+        .unwrap();
+
+    let summary = import(&target.core, &export.text, None);
+    assert!(summary.refused.is_empty(), "{:?}", summary.refused);
+    assert_eq!((summary.conflicts, summary.added), (2, 1), "{summary:?}");
+    let db_copy = id_of(&target.core, "host", "label", "db (imported)");
+    assert_eq!(
+        workspace_links(&target.core, vault, "Prod (imported)"),
+        vec![Some((vault, web1)), Some((vault, db_copy)), None]
+    );
+    assert_eq!(
+        workspace_links(&target.core, vault, "DB only"),
+        vec![Some((vault, db_copy))]
+    );
+    assert_eq!(
+        workspace_links(&target.core, vault, "Prod here"),
+        vec![Some((vault, web1)), Some((vault, db)), None]
+    );
+    let copy = id_of(&target.core, "workspace", "name", "Prod (imported)");
+    assert_eq!(
+        content(&target.core).0[&("workspace".to_owned(), copy.to_string())]["import_key"],
+        format!("json:{prod}")
+    );
+
+    let again = import(&target.core, &export.text, None);
+    assert_eq!((again.added, again.conflicts), (0, 0), "{again:?}");
+}
+
+/// A link to a host that is neither here nor in the file stays, as every
+/// reference (D63; opening the workspace leaves that pane out, D81). A
+/// workspace of a hostile file goes through the rules of a save: more than
+/// 32 tabs, a quick-connect target or a broken split is refused, and an
+/// `import_key` of the file is checked as for other records (D84).
+#[test]
+fn workspace_links_to_missing_hosts_stay_and_hostile_workspaces_are_refused() {
+    let source = with_workspaces();
+    let web1 = id_of(&source.core, "host", "label", "web-1");
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let mut document: Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    let records = document["vaults"][0]["records"].as_array_mut().unwrap();
+    records.retain(|record| record["record_id"] != json!(web1.to_string()));
+    let local = json!({"root": {"session": {"kind": "local"}}});
+    let hostile = [
+        (
+            "0199f6a1-0000-7000-8000-00000000f001",
+            json!({"name": "too many", "tabs": vec![local.clone(); 33]}),
+        ),
+        (
+            "0199f6a1-0000-7000-8000-00000000f002",
+            json!({"name": "quick", "tabs": [
+                {"root": {"session": {"kind": "ssh", "address": "192.0.2.1"}}}
+            ]}),
+        ),
+        (
+            "0199f6a1-0000-7000-8000-00000000f003",
+            json!({"name": "broken split", "tabs": [
+                {"root": {"direction": "row", "sizes": [0.9, 0.9], "children": [local.clone(), local.clone()]}}
+            ]}),
+        ),
+    ];
+    for (id, data) in &hostile {
+        records.push(json!({"record_id": id, "type": "workspace", "data": data}));
+    }
+    records.push(json!({
+        "record_id": "0199f6a1-0000-7000-8000-00000000f004",
+        "type": "workspace",
+        "data": {"name": "long key", "import_key": "x".repeat(600), "tabs": [local]}
+    }));
+    let text = SecretString::from(document.to_string());
+
+    let target = first_run();
+    let vault = target.vault_id;
+    let summary = import(&target.core, &text, None);
+    let refused: Vec<(String, String)> = summary
+        .refused
+        .iter()
+        .map(|refusal| (refusal.record_id.to_string(), refusal.record_type.clone()))
+        .collect();
+    assert_eq!(
+        refused,
+        hostile
+            .iter()
+            .map(|(id, _)| ((*id).to_owned(), "workspace".to_owned()))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        summary
+            .refused
+            .iter()
+            .all(|refusal| refusal.errors.iter().any(|error| error.field == "tabs")),
+        "{:?}",
+        summary.refused
+    );
+    let db = id_of(&target.core, "host", "label", "db");
+    assert_eq!(
+        workspace_links(&target.core, vault, "Prod"),
+        vec![Some((vault, web1)), Some((vault, db)), None],
+        "the link to the missing host stays"
+    );
+    let long = id_of(&target.core, "workspace", "name", "long key");
+    assert!(
+        content(&target.core).0[&("workspace".to_owned(), long.to_string())]
+            .get("import_key")
+            .is_none(),
+        "a bad import key is left out"
+    );
 }

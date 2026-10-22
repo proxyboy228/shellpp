@@ -17,7 +17,11 @@ pub const MAX_NAME_CHARS: usize = 256;
 /// Most tabs of a workspace (`list<tab>[32]`).
 pub const MAX_TABS: usize = 32;
 
-const KNOWN: &[&str] = &["name", "tabs"];
+/// Members a save never takes from its input: the source key of an import
+/// (docs/data-model.md, section 3.3), kept on edit.
+pub const MANAGED: &[&str] = &["import_key"];
+
+const KNOWN: &[&str] = &["name", "tabs", "import_key"];
 
 /// The tabs of a stored or input workspace: `None` when they are missing or
 /// not valid.
@@ -72,7 +76,7 @@ pub fn build(
         return Err(errors.into_vec());
     }
     let mut data = merge_level(KNOWN, normalized, Some(input), stored);
-    keep_from(&mut data, stored, &[]);
+    keep_from(&mut data, stored, MANAGED);
     Ok(data)
 }
 

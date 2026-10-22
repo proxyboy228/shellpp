@@ -19,7 +19,9 @@
 //!   are kept; the imported one gets a new id and an " (imported)" suffix
 //!   on its label or name, and references inside the import point to it.
 //! - Groups, hosts, keys, identities, known hosts, snippets, snippet
-//!   packages and forwarding rules are imported, each checked by the same
+//!   packages, forwarding rules, highlight rules and workspaces are
+//!   imported (a workspace's host links are references like any other,
+//!   D84), each checked by the same
 //!   rules as a save (D63: a rule never starts on launch, and one that
 //!   listens beyond loopback not on connect either, except in a full
 //!   restore); the command history and the
@@ -83,9 +85,9 @@ pub const CONFLICT_SUFFIX: &str = " (imported)";
 const MAX_GROUP_DEPTH: usize = 32;
 
 /// The record types an import takes, in the order they are written: the
-/// snippets after their packages, the history and the connection log after
-/// the hosts they name (D51, D63).
-const IMPORTED: [RecordKind; 12] = [
+/// snippets after their packages, the workspaces, the history and the
+/// connection log after the hosts they name (D51, D63, D84).
+const IMPORTED: [RecordKind; 13] = [
     RecordKind::Group,
     RecordKind::Key,
     RecordKind::Identity,
@@ -95,6 +97,7 @@ const IMPORTED: [RecordKind; 12] = [
     RecordKind::Snippet,
     RecordKind::ForwardingRule,
     RecordKind::HighlightRule,
+    RecordKind::Workspace,
     RecordKind::HistoryEntry,
     RecordKind::HistoryHintState,
     RecordKind::ConnectionLogEntry,
@@ -160,7 +163,7 @@ fn imported(kind: RecordKind, input: &DataImportInput) -> bool {
 /// The label member of a record type (for the conflict suffix).
 fn label_member(kind: RecordKind) -> Option<&'static str> {
     match kind {
-        RecordKind::Group | RecordKind::SnippetPackage => Some("name"),
+        RecordKind::Group | RecordKind::SnippetPackage | RecordKind::Workspace => Some("name"),
         RecordKind::Host
         | RecordKind::Key
         | RecordKind::Identity
@@ -435,6 +438,11 @@ fn check(
         }
         RecordKind::ForwardingRule => snippet::build_rule(&input, None)?,
         RecordKind::HighlightRule => crate::model::highlight_rule::build(&input, None)?,
+        // The tabs by the rules of a save (32 at most, the shape of
+        // Restore, no quick-connect target); a host link to a host that is
+        // neither here nor in the file stays, as every reference (D63),
+        // and opening leaves that pane out (D81).
+        RecordKind::Workspace => crate::model::workspace::build(&input, None)?,
         _ => return Err(vec![FieldError::new("type", ValidationReason::NotAllowed)]),
     };
     if let Some(Value::String(order_key)) = order_key
@@ -631,6 +639,7 @@ fn restore_managed(
             | RecordKind::SnippetPackage
             | RecordKind::Snippet
             | RecordKind::ForwardingRule
+            | RecordKind::Workspace
     ) && let Some(raw) = incoming.get("import_key").and_then(Value::as_str)
         && let Ok(Some(import_key)) = text::string(raw, MAX_IMPORT_KEY_CHARS)
     {

@@ -1271,7 +1271,7 @@ Status: run 4 decision, 2026-10-22 (plan, item 9.3; UI 4.4, 4.7; D68 item 2). Di
 - Add to Workspace ▸ in the host menu lists the workspaces by name, then New Workspace (its name is asked): each chosen host becomes a tab with one pane after the workspace's tabs (32 tabs at most).
 - Ctrl+K finds workspaces by name ("Workspaces", after the open tabs); × asks before it removes one (the hosts and open tabs stay). The names are read with the records (no read of the tabs per frame).
 - A pencil beside a workspace renames it (the tabs are kept).
-- Not done tonight: workspaces in Export and Import Data (their host links would need the import's id mapping).
+- Not done tonight: workspaces in Export and Import Data (their host links would need the import's id mapping). Done in run 5 (D84).
 
 **Spec impact:** `docs/ui-behavior-spec.md` 0 and 4.7 (and `docs/ru`): Broadcast input and Create a workspace are no longer disabled.
 
@@ -1304,3 +1304,19 @@ Status: accepted, 2026-10-22 (owner's choice; the questions in section 3 of the 
 7. Test images: the programs needed only for the screenshots of terminal compatibility (emacs, vttest and the others of plan 9.2) move to an image of their own; the main OpenSSH test image returns to its earlier size.
 
 **Spec impact:** `docs/security.md` 9.5 and RR11 (item 5) now; README "Installing on Windows" (item 2) now; with the implementation in run 5: UI 4.4 and 4.7 (item 6, and `docs/ru`), D70's notification identity (item 4), `tests/openssh` (item 7). Item 1 changes nothing until its run.
+
+## Run 5 of 2026-10-22
+
+The decisions below were taken during the owner's fifth long run (its plan, section 1.1), marked "run 5"; the disputable ones are listed for the owner in the run report.
+
+### 84. Workspaces in Export and Import Data (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 5; D81's "not done").
+
+**Decision:**
+
+- Export Data already wrote workspaces (every record but the recovery key); Import Data now takes them, after the hosts, by the rules of D34 and D63 like snippets and forwarding rules: a new id is added under that id; the same content is "already exists"; other content under an id here is a conflict, imported as a copy with " (imported)" on its name and the `import_key` `json:<exported id>`, which the next import finds.
+- A workspace's host links are references like any other: the import rewrites them with the same id map, so they point to the host that stays here or to the imported copy of a conflicting host, and a link to the exported personal vault names the personal vault here. A link to a host that is neither here nor in the file stays, as every reference (D63); opening the workspace leaves that pane out (D81).
+- Each workspace is checked by the rules of a save: at most 32 tabs, the shape of Restore (splits, sizes, leaves, depth), no quick-connect target; one that breaks them is refused with its errors. `import_key` is now allowed in a workspace (data-model 3.3), managed like the other types: a save never takes it from its input, an edit keeps it.
+
+**Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 3.3, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).

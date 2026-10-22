@@ -165,7 +165,8 @@
    command history or a connection log asks next whether to import them ("Import command
    history", "Import the connection log", only those the file holds, both on); imported
    history goes through the secret detector of 4.2 (D51). The import takes snippets,
-   snippet packages and forwarding rules too; a forwarding rule never starts on launch,
+   snippet packages, forwarding rules and workspaces too (a workspace's host links follow
+   the imported hosts, D84); a forwarding rule never starts on launch,
    and one that listens beyond loopback not on connect either, except in a full restore
    (D63). The summary also counts the keys kept as unknown, the commands left out and the
    rules whose autostart was turned off, when there are any. [decision]

@@ -135,7 +135,7 @@ These are computed when needed and never stored (stage 0 decision):
 
 | Field | Type | Req | Notes |
 |---|---|---|---|
-| `import_key` | string(512)? | no | Allowed in `group`, `host`, `key`, `identity`, `snippet`, `snippet_package`, `forwarding_rule`. The source key of an import (D21, section 18.4). Kept on edit; dropped by Duplicate. |
+| `import_key` | string(512)? | no | Allowed in `group`, `host`, `key`, `identity`, `snippet`, `snippet_package`, `forwarding_rule`, `workspace`. The source key of an import (D21, section 18.4). Kept on edit; dropped by Duplicate. |
 
 ### 3.4 References
 
