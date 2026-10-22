@@ -12,6 +12,7 @@
 //! the app state, the session layer and the lock.
 
 pub mod assets;
+pub mod identity;
 pub mod root;
 
 use gpui::{
@@ -62,15 +63,14 @@ pub fn run(launch: Launch) {
             root::bind_keys(cx);
             crate::terminal::init(cx);
 
-            // System notifications (the signature question while the window
-            // is not focused, D68) need the app's identity, which Windows
-            // registers for the user at the first notification: a temporary
-            // profile or a test run sets none, so it shows none.
+            // The app's identity (D70; D83, item 4): set at every start and
+            // registered for the user at the first one, for the taskbar and
+            // the system notifications (the signature question while the
+            // window is not focused, D68). A temporary profile or a test run
+            // sets and registers none, so it shows no notification.
             let real_profile = matches!(&opened, Ok(opened) if opened.temp_profile.is_none())
                 && !crate::dirs::is_test_run();
-            if real_profile {
-                cx.set_app_identity(APP_USER_MODEL_ID, i18n::APP_NAME);
-            }
+            identity::apply(real_profile, &identity::System(cx));
 
             // A temporary profile (`--demo`) or a test run never uses the
             // user's ~/.ssh keys or SSH agent, its Known Hosts import

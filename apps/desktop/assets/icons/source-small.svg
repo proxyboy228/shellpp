@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Variant B for 16 to 24 px (D83): the same tile and window on the 16 px grid, without the title bar's dots and the plus. -->
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="#2EC4A6"/>
+  <rect x="32" y="48" width="192" height="160" rx="16" fill="#0F1517"/>
+  <path d="M32 64 a16 16 0 0 1 16 -16 h160 a16 16 0 0 1 16 16 v16 H32 Z" fill="#E8ECEF"/>
+  <path d="M68 108 L108 136 L68 164" fill="none" stroke="#2EC4A6" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="128" y="152" width="56" height="20" rx="4" fill="#E8ECEF"/>
+</svg>

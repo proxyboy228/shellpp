@@ -70,7 +70,8 @@ is shown or logged.
 
 ## 2. Terminal programs
 
-Checked in an SSH session to the OpenSSH test image (bash,
+Checked in an SSH session to the OpenSSH test image with the terminal
+programs (`tests/openssh/programs.Dockerfile`, D83; bash,
 `TERM=xterm-256color`, `LANG=C.UTF-8`) at 1280x800, in both themes: the
 screenshot states `terminal-tmux`, `terminal-tmux-resize`, `terminal-mc`,
 `terminal-vim`, `terminal-nano`, `terminal-less`, `terminal-emacs`,

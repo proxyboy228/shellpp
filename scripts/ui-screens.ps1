@@ -327,10 +327,20 @@ try {
     if ($needsServer -and $Server -ne 'russh' -and -not $reason) {
         $opensshDir = Join-Path $dataDir 'openssh'
         New-Item -ItemType Directory -Path $opensshDir | Out-Null
-        $serverJson = (& $bash (Join-Path $repo 'tests\openssh\start.sh') $opensshDir | Select-Object -Last 1)
+        # The program states need the image with the terminal programs
+        # (tests/openssh/programs.Dockerfile, D83); the others the main one.
+        $needsPrograms = ($States.Count -eq 0) -or (@($States | Where-Object { $_ -in $programStates }).Count -gt 0)
+        $env:SHELLPP_OPENSSH_PROGRAMS = if ($needsPrograms) { '1' } else { '' }
+        try {
+            $serverJson = (& $bash (Join-Path $repo 'tests\openssh\start.sh') $opensshDir | Select-Object -Last 1)
+        }
+        finally {
+            Remove-Item Env:\SHELLPP_OPENSSH_PROGRAMS -ErrorAction SilentlyContinue
+        }
         if ($LASTEXITCODE -ne 0 -or -not $serverJson) { Fail "tests/openssh/start.sh failed (exit $LASTEXITCODE)" }
         $serverJson = $serverJson.Trim()
-        Write-Host 'ui-screens: server: OpenSSH in Docker (tests/openssh)'
+        $image = if ($needsPrograms) { 'with the terminal programs' } else { 'main image' }
+        Write-Host "ui-screens: server: OpenSSH in Docker (tests/openssh, $image)"
     }
     elseif ($needsServer) {
         $note = if ($reason) { " - $reason" } else { '' }

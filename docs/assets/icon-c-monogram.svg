@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Variant C, "monogram": S and two pluses on a dark tile. -->
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="#121212"/>
-  <path d="M152 76 C140 64 92 60 84 88 C76 116 152 112 148 150 C144 186 92 184 76 168" fill="none" stroke="#2EC4A6" stroke-width="22" stroke-linecap="round"/>
-  <path d="M190 92 V132 M170 112 H210" stroke="#E8ECEF" stroke-width="12" stroke-linecap="round"/>
-  <path d="M190 148 V188 M170 168 H210" stroke="#E8ECEF" stroke-width="12" stroke-linecap="round"/>
-</svg>

@@ -1,14 +1,25 @@
 //! Windows: the version resource of `shellpp.exe` (run 4, plan 9.5), made
 //! from the package version of Cargo.toml, so Explorer's Details and the
-//! installer see the same version as `--version`. Other platforms: nothing.
+//! installer see the same version as `--version`, and the app icon (D83,
+//! item 3) as icon 1: Explorer shows the first icon of the executable, and
+//! GPUI gives the window icon 1 of the module. Other platforms: nothing.
 
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=assets/icons/icon.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    // The resource compiler takes forward slashes; a quote is written twice.
+    let icon = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("icons")
+        .join("icon.ico")
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('"', "\"\"");
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let mut numbers = version
         .split(['.', '-', '+'])
@@ -21,6 +32,7 @@ fn main() {
         .replace('"', "\"\"");
     let rc = format!(
         r#"#include <winver.h>
+1 ICON "{icon}"
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION {major},{minor},{patch},0
  PRODUCTVERSION {major},{minor},{patch},0

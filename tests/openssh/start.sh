@@ -22,6 +22,9 @@
 # Environment:
 #   SHELLPP_OPENSSH_IMAGE     prebuilt image to run instead of building
 #                             shellpp-test-openssh:local
+#   SHELLPP_OPENSSH_PROGRAMS  1: run the image with the terminal programs of
+#                             the compatibility screenshots
+#                             (programs.Dockerfile on top of the image above)
 #   SHELLPP_OPENSSH_LIFETIME  seconds after which the container stops by
 #                             itself (default 3600)
 #   SHELLPP_OPENSSH_TIMEOUT   seconds to wait for the server (default 60)
@@ -131,6 +134,18 @@ if [ -z "$image" ]; then
 elif ! docker image inspect "$image" >/dev/null 2>&1; then
     die "image $image not found"
 fi
+case "${SHELLPP_OPENSSH_PROGRAMS:-}" in
+'' | 0) ;;
+1)
+    base="$image"
+    image='shellpp-test-openssh-programs:local'
+    log "building $image"
+    docker build --quiet --tag "$image" --build-arg "BASE=$base" \
+        --file "$(native_path "$here/programs.Dockerfile")" "$(native_path "$here")" >/dev/null ||
+        die 'docker build of the programs image failed'
+    ;;
+*) die 'SHELLPP_OPENSSH_PROGRAMS must be 1 or empty' ;;
+esac
 
 # Credentials of this run.
 password_user_secret="$(random_hex)"

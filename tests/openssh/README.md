@@ -89,6 +89,7 @@ failure the container is removed again.
 | Environment variable | Meaning |
 |---|---|
 | `SHELLPP_OPENSSH_IMAGE` | run this prebuilt image instead of building `shellpp-test-openssh:local` |
+| `SHELLPP_OPENSSH_PROGRAMS` | `1`: run the image with the terminal programs (see "The programs image") |
 | `SHELLPP_OPENSSH_LIFETIME` | seconds after which the container stops by itself (default 3600), so a container left behind by a crashed run does not keep running |
 | `SHELLPP_OPENSSH_TIMEOUT` | seconds to wait for the server (default 60) |
 
@@ -166,6 +167,17 @@ docs/compatibility.md; `crates/ssh/tests/compat.rs`):
 | `motd-banner` | a banner before authentication and a 120-line message of the day |
 
 `server.json` names the variant (`"variant"`, empty without one).
+
+## The programs image
+
+`programs.Dockerfile` adds tmux, vim, nano, less, emacs-nox and vttest to the
+main image for the terminal compatibility screenshots (docs/compatibility.md,
+section 2; D83, item 7): `shellpp-test-openssh-programs:local`, built by
+`start.sh` from the image it would run otherwise when
+`SHELLPP_OPENSSH_PROGRAMS=1`. `scripts/ui-screens.ps1` asks for it when a run
+includes a program state; the session tests and the server matrix use the
+main image, which stays small (179 MB; the programs image 658 MB, sharing
+the main image's layers).
 
 ## Compatibility images
 

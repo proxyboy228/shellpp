@@ -1384,3 +1384,15 @@ Status: run 5 decision, 2026-10-22 (plan, section 9.2; UI 1.4 item 6, 2.2 "Seria
 - Not in this run: saved serial profiles, a typed port name, local echo, line endings other than CR, break signals and the charset of a serial tab.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.4 item 6, 2.2 "Serial" and 4.4 (and `docs/ru`).
+
+### 89. The app icon, the app identity and the programs image (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 10; how D83, items 3, 4 and 7, is built). Amends D70 on when the identity is registered.
+
+**Decision:**
+
+- **Icon.** Two masters of variant B: `docs/assets/icon-b-window.svg` from 32 px up, and `icon-b-window-small.svg` for 16 to 24 px, the same tile and window on the 16 px grid without the title bar's dots and the plus (at 16 px they turned into noise; the prompt is drawn thicker). `node scripts/gen-icon.mjs` renders them with the `resvg` command line tool (`cargo install resvg --version 0.46.0 --locked`, a development tool) into `apps/desktop/assets/icons/`: `icon.ico` with 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 px (PNG entries), `icon.icns` (16 to 1024 px) and the sized PNGs. `build.rs` embeds `icon.ico` as icon 1 next to the version resource: Explorer shows it for `shellpp.exe`, and GPUI gives the window icon 1 of the module, so the title bar and the taskbar show it as well. Drafts A and C are removed.
+- **Identity.** At every start on the user's profile the process sets `Shellpp.Desktop` (GPUI's `set_app_identity`: `SetCurrentProcessExplicitAppUserModelID`, and the identity its notifications use). When `HKCU\Software\Classes\AppUserModelId\Shellpp.Desktop` has no `DisplayName`, the start registers it ("Shell++"): the first start, and again after the key was removed. A refused registration is logged and tried again at the next start. A test run and a temporary profile do neither. The calls go through the `IdentitySystem` trait (`app/identity.rs`), whose fake records them in tests. No `IconUri` is registered: the portable zip has no image file outside the executable; the installer (D83, item 2) can add one.
+- **Test images.** The main OpenSSH test image is back to openssh-server, htop, mc, procps and busybox (179 MB, as before run 4). `tests/openssh/programs.Dockerfile` adds tmux, vim, nano, less, emacs-nox and vttest on top of it (658 MB, sharing its layers); `start.sh` builds and runs it with `SHELLPP_OPENSSH_PROGRAMS=1`, and `scripts/ui-screens.ps1` asks for it when a run includes a program state. The session tests and the server matrix keep the main image.
+
+**Spec impact:** none in the UI specs; `tests/openssh/README.md`, `docs/compatibility.md` section 2, `docs/assets/README.md`.

@@ -84,6 +84,8 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Time",
 ] }
+# The registration of the app identity for the user (app/identity.rs, D83).
+windows-registry.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }

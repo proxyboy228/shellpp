@@ -1,11 +1,16 @@
-# App icon drafts
+# App icon
 
-Three variants for the owner to choose from (run 4, plan 9.5; D82). Each is
-a 256×256 SVG with the accent `#2EC4A6` of the design system; the chosen one
-becomes the executable's icon and the sizes the platforms need.
+Variant B of the run 4 drafts, chosen by the owner (D83, item 3): an accent
+tile (`#2EC4A6` of the design system) with a terminal window, its prompt and a
+plus.
 
-| File | Idea |
+| File | Use |
 |---|---|
-| `icon-a-prompt.svg` | a dark tile with the shell prompt `>_` and two pluses |
-| `icon-b-window.svg` | an accent tile with a terminal window, its prompt and a plus |
-| `icon-c-monogram.svg` | a dark tile with the letter S and two pluses |
+| `icon-b-window.svg` | the master, from 32 px up |
+| `icon-b-window-small.svg` | 16 to 24 px: the same tile and window on the 16 px grid, without the title bar's dots and the plus, which do not survive at that size |
+
+The platform files in `apps/desktop/assets/icons/` (`source.svg` and
+`source-small.svg` are copies of these two) are made with
+`node scripts/gen-icon.mjs`: `icon.ico` with 16 to 256 px, embedded in
+`shellpp.exe` and used for its window (`apps/desktop/build.rs`), `icon.icns`
+and the sized PNGs.
