@@ -624,11 +624,33 @@ impl SnippetsScreen {
         let screen = cx.entity().downgrade();
         // The run takes the hosts the confirmation listed.
         let confirmed = hosts.clone();
-        run::confirm(title, hosts, window, cx, move |window, cx| {
-            let _ = screen.update(cx, |screen, cx| {
-                screen.start_run(&snippet, script.clone(), confirmed.clone(), window, cx)
-            });
+        // Two to four hosts: also a split tab, one pane per host (D81).
+        let split: Option<run::SplitRun> = (2..=4).contains(&hosts.len()).then(|| {
+            let title = title.clone();
+            let ids: Vec<Uuid> = hosts.iter().map(|(id, _)| *id).collect();
+            let script = script.clone();
+            std::rc::Rc::new(move |window: &mut Window, cx: &mut App| {
+                crate::shell::open_split_run(
+                    title.clone(),
+                    ids.clone(),
+                    script.clone(),
+                    window,
+                    cx,
+                );
+            }) as run::SplitRun
         });
+        run::confirm(
+            title,
+            hosts,
+            window,
+            cx,
+            move |window, cx| {
+                let _ = screen.update(cx, |screen, cx| {
+                    screen.start_run(&snippet, script.clone(), confirmed.clone(), window, cx)
+                });
+            },
+            split,
+        );
     }
 
     /// The (host id, title) of the snippet's targets, in its order; a host

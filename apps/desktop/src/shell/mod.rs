@@ -163,6 +163,70 @@ fn release_focus(handle: &FocusHandle, cx: &mut App) {
     }
 }
 
+/// A snippet run on two to four hosts in a split tab (UI 9.4, D81): one pane
+/// per host, the script typed in each once it connects.
+pub fn open_split_run(
+    title: String,
+    hosts: Vec<Uuid>,
+    script: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    with_shell(window, cx, move |shell, _, cx| {
+        shell.open_split_run(title, &hosts, script, cx);
+    });
+}
+
+/// The panes of a split run: 2 side by side, 3 in a row, 4 in a grid;
+/// `None` for fewer than two or more than four.
+fn split_run_layout(targets: Vec<PaneTarget>) -> Option<Layout<PaneTarget>> {
+    fn split(
+        direction: Direction,
+        ratio: f32,
+        first: Layout<PaneTarget>,
+        second: Layout<PaneTarget>,
+    ) -> Layout<PaneTarget> {
+        Layout::Split {
+            direction,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+    let mut leaves: Vec<Layout<PaneTarget>> = targets.into_iter().map(Layout::leaf).collect();
+    match leaves.len() {
+        2 => {
+            let second = leaves.pop()?;
+            let first = leaves.pop()?;
+            Some(split(Direction::Row, 0.5, first, second))
+        }
+        3 => {
+            let third = leaves.pop()?;
+            let second = leaves.pop()?;
+            let first = leaves.pop()?;
+            Some(split(
+                Direction::Row,
+                1. / 3.,
+                first,
+                split(Direction::Row, 0.5, second, third),
+            ))
+        }
+        4 => {
+            let fourth = leaves.pop()?;
+            let third = leaves.pop()?;
+            let second = leaves.pop()?;
+            let first = leaves.pop()?;
+            Some(split(
+                Direction::Column,
+                0.5,
+                split(Direction::Row, 0.5, first, second),
+                split(Direction::Row, 0.5, third, fourth),
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Runs `f` on the window's shell after the current update, when no view is
 /// borrowed. Does nothing when the window shows no shell.
 fn with_shell(
@@ -899,6 +963,41 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> SessionId {
         self.open_tab(TabSeed::Target(target), after, None, cx)
+    }
+
+    /// A split tab for a snippet run (UI 9.4, D81): two hosts side by side,
+    /// three in a row, four in a grid; each pane types the script once its
+    /// session runs. Hosts removed since are left out.
+    pub fn open_split_run(
+        &mut self,
+        title: String,
+        hosts: &[Uuid],
+        script: String,
+        cx: &mut Context<Self>,
+    ) -> Option<SessionId> {
+        let targets: Vec<PaneTarget> = {
+            let state = self.state.read(cx);
+            hosts
+                .iter()
+                .filter_map(|id| {
+                    state.host(*id).map(|host| PaneTarget::Host {
+                        vault_id: host.vault_id,
+                        record_id: *id,
+                    })
+                })
+                .collect()
+        };
+        let layout = split_run_layout(targets)?;
+        let id = self.open_snapshot(layout, Some(title), cx);
+        let sessions: Vec<Entity<SessionPane>> = self
+            .group(id)
+            .map(|group| group.read(cx).sessions().into_iter().cloned().collect())
+            .unwrap_or_default();
+        for session in sessions {
+            let script = script.clone();
+            session.update(cx, |session, _| session.run_on_connect(script));
+        }
+        Some(id)
     }
 
     /// Opens a tab with the panes of a Restore snapshot and the title set

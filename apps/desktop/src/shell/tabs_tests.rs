@@ -1370,3 +1370,67 @@ fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
     drop(core);
     ui.finish(cx);
 }
+
+/// UI 9.4, D81: a snippet run in a split tab: one pane per host (three in a
+/// row), and each pane types the script once its session first runs.
+#[gpui_kit::test]
+fn a_split_run_types_the_script_in_every_pane(cx: &mut TestAppContext) {
+    #[derive(Default)]
+    struct Sink(std::sync::Mutex<Vec<u8>>);
+    impl crate::terminal::TerminalSink for Sink {
+        fn send(&self, bytes: Vec<u8>) {
+            self.0.lock().unwrap().extend_from_slice(&bytes);
+        }
+        fn resize(&self, _: crate::terminal::TerminalSize) {}
+    }
+
+    let ui = Ui::open(cx);
+    let hosts: Vec<Uuid> = ["192.0.2.41", "192.0.2.42", "192.0.2.43"]
+        .into_iter()
+        .map(|address| ui.save_host(json!({"address": address}), cx))
+        .collect();
+    let shell = ui.shell(cx);
+    let id = shell
+        .update(cx, |shell, cx| {
+            shell.open_split_run("uptime".into(), &hosts, "uptime".into(), cx)
+        })
+        .expect("a tab");
+    ui.frame(cx);
+    let group = ui.group(id, cx);
+    assert_eq!(cx.update(|cx| group.read(cx).pane_count()), 3);
+    let sessions: Vec<Entity<SessionPane>> =
+        cx.update(|cx| group.read(cx).sessions().into_iter().cloned().collect());
+    let terminals = ui.record.terminals();
+    let sinks: Vec<std::sync::Arc<Sink>> = terminals
+        .iter()
+        .rev()
+        .take(3)
+        .map(|terminal| {
+            let sink = std::sync::Arc::new(Sink::default());
+            terminal.set_sink(Some(sink.clone()));
+            sink
+        })
+        .collect();
+    for session in &sessions {
+        session.update(cx, |session, cx| {
+            session.set_phase(Phase::Running, None, cx)
+        });
+    }
+    for sink in &sinks {
+        assert!(
+            sink.0.lock().unwrap().ends_with(b"uptime\r"),
+            "the script and Enter"
+        );
+    }
+    // Typed once: a later run (a reconnect) does not type it again.
+    for session in &sessions {
+        session.update(cx, |session, cx| {
+            session.set_phase(Phase::Reconnecting(ConnectStep::Connecting), None, cx);
+            session.set_phase(Phase::Running, None, cx);
+        });
+    }
+    for sink in &sinks {
+        assert_eq!(sink.0.lock().unwrap().as_slice(), b"uptime\r");
+    }
+    ui.finish(cx);
+}

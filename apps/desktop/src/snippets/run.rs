@@ -165,13 +165,18 @@ pub fn ask_script_values(
     });
 }
 
-/// "Run on these hosts?" with the list (9.4: two or more hosts).
+/// What "Run in split tab" does (D81).
+pub type SplitRun = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// "Run on these hosts?" with the list (9.4: two or more hosts); `split`
+/// (two to four hosts) offers "Run in split tab" beside Run (D81).
 pub fn confirm(
     title: String,
     hosts: Vec<(Uuid, String)>,
     window: &mut Window,
     cx: &mut App,
     start: impl Fn(&mut Window, &mut App) + 'static,
+    split: Option<SplitRun>,
 ) {
     let start = Rc::new(start);
     let body: SharedString = strings::confirm_body(&title, hosts.len()).into();
@@ -233,6 +238,15 @@ pub fn confirm(
                             .label(strings::CANCEL)
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
+                    .children(split.clone().map(|split| {
+                        ControlButton::new("snippet-confirm-split", ControlKind::Neutral)
+                            .label(strings::RUN_IN_SPLIT_TAB)
+                            .tooltip(strings::RUN_IN_SPLIT_TAB_HINT)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                split(window, cx);
+                            })
+                    }))
                     .child(
                         ControlButton::new("snippet-confirm-run", ControlKind::Accent)
                             .label(strings::RUN)

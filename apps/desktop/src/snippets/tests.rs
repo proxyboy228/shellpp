@@ -299,8 +299,9 @@ fn a_run_asks_values_confirms_and_shows_results(cx: &mut TestAppContext) {
     assert!(ui.visible(cx, "snippet-variables-form"));
     ui.type_into(cx, "snippet-variable-path", "/var");
     ui.click(cx, "snippet-variables-run");
-    // Two hosts: the confirmation lists them.
+    // Two hosts: the confirmation lists them, and offers a split tab (D81).
     assert!(ui.visible(cx, "snippet-confirm"));
+    assert!(ui.visible(cx, "snippet-confirm-split"));
     ui.click(cx, "snippet-confirm-run");
     let results = ui
         .screen

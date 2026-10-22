@@ -170,3 +170,8 @@ pub fn exit_code(code: u32) -> String {
 pub fn summary(succeeded: usize, total: usize) -> String {
     format!("{succeeded} of {total} succeeded")
 }
+
+/// The second button of the run confirmation for two to four hosts (D81).
+pub const RUN_IN_SPLIT_TAB: &str = "Run in split tab";
+pub const RUN_IN_SPLIT_TAB_HINT: &str =
+    "One pane per host; the script is typed in each terminal once it connects";

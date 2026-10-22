@@ -225,6 +225,9 @@ pub struct SessionPane {
     /// The login whose startup snippet the session reports now (`None`
     /// once that login ended).
     startup_live: Option<u64>,
+    /// A snippet run in a split tab (UI 9.4, D81): typed once, when the
+    /// session first runs.
+    run_on_connect: Option<String>,
     reconnect: Option<ReconnectInfo>,
     ask: Option<Ask>,
     paste: Option<PendingPaste>,
@@ -300,6 +303,7 @@ impl SessionPane {
             startup_pending: None,
             startup_asked: 0,
             startup_live: None,
+            run_on_connect: None,
             window: None,
             signature_notice: None,
             reconnect: None,
@@ -494,6 +498,12 @@ impl SessionPane {
         self.theme_slug.as_deref()
     }
 
+    /// Types `script` (and Enter) once, when the session first runs: a
+    /// snippet run in a split tab (UI 9.4, D81).
+    pub fn run_on_connect(&mut self, script: String) {
+        self.run_on_connect = Some(script);
+    }
+
     /// The session layer reports a new phase (with the drop's automatic
     /// reconnection, if any).
     pub fn set_phase(
@@ -530,6 +540,13 @@ impl SessionPane {
         if first_run {
             self.connected_once = true;
             cx.emit(SessionPaneEvent::Connected);
+            // A snippet run in a split tab: the script and Enter, as the
+            // terminal sidebar's Run sends them.
+            if let (Some(script), Some(terminal)) = (self.run_on_connect.take(), &self.terminal) {
+                terminal.update(cx, |terminal, cx| {
+                    terminal.insert_snippet(&script, true, cx);
+                });
+            }
         }
         self.set_reconnect(reconnect, cx);
         cx.notify();

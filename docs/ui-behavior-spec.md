@@ -1309,8 +1309,8 @@ Blocks from top to bottom:
   status (waiting, running, success, error, timed out), exit code and output,
   which expands on click, are shown. The table opens in a dialog over the
   screen (D66). [decision] (D68)
-- A tab split into panes, one session per host for up to 4 targets, comes
-  with Broadcast (stage 9); until then the table is the only view of a run.
+- For 2 to 4 targets the confirmation also offers "Run in split tab": a tab split
+  into panes, one session per host, each typing the script once it connects (D81).
   [decision] (D68)
 - Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
