@@ -63,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 
 - The result is `target\package\shellpp-<version>-windows-x64.zip` with its `.sha256`: `shellpp.exe` (the `dist` profile: fat LTO; version resource from `Cargo.toml`), `LICENSE`, `THIRD_PARTY_NOTICES.md` and `README-portable.txt`. The executable is not signed, so SmartScreen may ask once.
 - Unpack it anywhere and run `shellpp.exe`; nothing is installed.
-- An MSI installer waits for the choice of an installer tool (`docs/decisions.md`, D82).
+- There is no installer: the portable zip is the only package. An NSIS installer comes once the executable is signed; there will be no MSI (`docs/decisions.md`, D83).
 
 Where the data lives on Windows (`docs/storage-format.md`, section 2):
 

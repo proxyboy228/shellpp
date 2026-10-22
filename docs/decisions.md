@@ -1288,3 +1288,19 @@ Status: run 4 decision, 2026-10-22 (plan, item 9.5). The installer tool is liste
 - The three icon variants in `docs/assets/` are drafts for the owner's choice; the executable gets an icon once one is chosen.
 
 **Spec impact:** none; README gains "Installing on Windows".
+
+### 83. The owner's answers to the questions of run 4
+
+Status: accepted, 2026-10-22 (owner's choice; the questions in section 3 of the run 4 report). Amends D70, D78, D81 and D82 where they differ; the plan of run 5.
+
+**Decision:**
+
+1. Interface scale (D78): option (a), the design system in rem with `set_rem_size`, in a separate run later. Not now; the menu items stay placeholders.
+2. Installer (D82): the portable zip only for now. Once code signing exists, an NSIS installer. No MSI.
+3. App icon (D82): one of the three drafts in `docs/assets/` becomes an `.ico` with every size from 16 to 256 px, embedded in the executable and set on the window; 16 and 32 px must stay legible. The other drafts are then removed. The answer did not name the variant (its placeholder "A, B or C" was left), so no draft is removed until the owner names it.
+4. Windows app identity (D70): the process sets `Shellpp.Desktop` with `SetCurrentProcessExplicitAppUserModelID` at every start; its registration under HKCU happens at the first start, not at the first notification. A test run (`SHELLPP_TEST=1`) and a temporary profile (`--demo`) still set and register nothing, as in D70.
+5. No allocator that wipes freed memory. The copies of secrets the code cannot wipe are listed in `docs/security.md` (section 9.5, RR11) as a known limitation.
+6. Broadcast input to panes of other tabs (D81): option (b), the tabs ticked in a list.
+7. Test images: the programs needed only for the screenshots of terminal compatibility (emacs, vttest and the others of plan 9.2) move to an image of their own; the main OpenSSH test image returns to its earlier size.
+
+**Spec impact:** `docs/security.md` 9.5 and RR11 (item 5) now; README "Installing on Windows" (item 2) now; with the implementation in run 5: UI 4.4 and 4.7 (item 6, and `docs/ru`), D70's notification identity (item 4), `tests/openssh` (item 7). Item 1 changes nothing until its run.
