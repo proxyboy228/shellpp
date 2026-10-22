@@ -918,10 +918,12 @@ pub(crate) async fn serve_remote_channel(
         DEST_CONNECT_TIMEOUT,
         TcpStream::connect((dest_host.as_str(), dest_port)),
     );
-    // A rule that stops meanwhile refuses the channel (the reply's drop).
+    // A rule that stops meanwhile refuses the channel (the reply's drop),
+    // also when the connect is ready at the same time.
     let connected = tokio::select! {
-        connected = connect => connected,
+        biased;
         _ = set(&mut stop) => return,
+        connected = connect => connected,
     };
     let mut socket = match connected {
         Ok(Ok(socket)) => socket,
