@@ -2020,6 +2020,10 @@ impl Shell {
                 }
                 return;
             }
+            NewTabEvent::RenameWorkspace(id) => {
+                self.rename_workspace(*id, window, cx);
+                return;
+            }
             NewTabEvent::RemoveWorkspace(id) => {
                 let id = *id;
                 let state = self.state.clone();
@@ -2098,6 +2102,47 @@ impl Shell {
         self.state.read(cx).workspaces().as_ref().clone()
     }
 
+    /// Rename a workspace (UI 4.5): the name dialog, its tabs kept.
+    fn rename_workspace(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.workspace(id, cx) else {
+            return;
+        };
+        let Ok(tabs) = serde_json::to_value(&view.tabs) else {
+            return;
+        };
+        let state = self.state.clone();
+        crate::new_tab::workspace_dialog::open(
+            view.name.clone(),
+            true,
+            window,
+            cx,
+            move |name: String, _: &mut Window, cx: &mut App| {
+                let (core, vault_id) = {
+                    let state = state.read(cx);
+                    match (state.core().cloned(), state.vault_id()) {
+                        (Some(core), Some(vault_id)) => (core, vault_id),
+                        _ => return false,
+                    }
+                };
+                let mut data = serde_json::Map::new();
+                data.insert("name".into(), serde_json::Value::String(name));
+                data.insert("tabs".into(), tabs.clone());
+                match core.workspace_save(shellpp_core::service::snippets::RecordInput {
+                    vault_id,
+                    record_id: Some(id),
+                    data,
+                }) {
+                    Ok(_) => true,
+                    Err(shellpp_core::CoreError::Validation(_)) => false,
+                    Err(error) => {
+                        tracing::info!(code = error.code(), "workspace not renamed");
+                        true
+                    }
+                }
+            },
+        );
+    }
+
     /// A saved workspace of the personal vault.
     fn workspace(
         &self,
@@ -2126,6 +2171,7 @@ impl Shell {
         let state = self.state.clone();
         crate::new_tab::workspace_dialog::open(
             String::new(),
+            false,
             window,
             cx,
             move |name: String, _: &mut Window, cx: &mut App| {

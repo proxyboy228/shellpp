@@ -26,6 +26,12 @@ pub const WORKSPACE_NAME_NEEDED: &str = "Enter a name";
 pub const WORKSPACE_HINT: &str = "The tabs and splits of this window to saved hosts and local terminals; quick connections are left out.";
 pub const CANCEL: &str = "Cancel";
 pub const CREATE: &str = "Create";
+pub const RENAME: &str = "Rename";
+pub const RENAME_WORKSPACE: &str = "Rename workspace";
+/// The rename button of a workspace (its tooltip).
+pub fn rename_workspace(name: &str) -> String {
+    format!("Rename \"{name}\"")
+}
 pub const WORKSPACE_SAVED: &str = "Workspace saved";
 pub const WORKSPACE_NOT_SAVED: &str = "The workspace was not saved";
 pub const WORKSPACE_EMPTY: &str = "None of the workspace's hosts exists any more";

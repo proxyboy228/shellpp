@@ -1,5 +1,6 @@
-//! The name of a new workspace (UI 4.5, 6): one field, Cancel and Create.
-//! An empty name is not sent: the field says a name is needed.
+//! The name of a workspace (UI 4.5, 6): one field, Cancel and Create (or
+//! Rename for an existing one). An empty name is not sent: the field says a
+//! name is needed.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -17,13 +18,20 @@ use crate::theme::metrics;
 
 const DIALOG_WIDTH: gpui::Pixels = px(440.);
 
-/// Asks the name; `save` returns whether the dialog may close.
+/// Asks the name (`rename`: of an existing workspace); `save` returns
+/// whether the dialog may close.
 pub fn open(
     name: String,
+    rename: bool,
     window: &mut Window,
     cx: &mut App,
     save: impl Fn(String, &mut Window, &mut App) -> bool + 'static,
 ) {
+    let (title, button) = if rename {
+        (strings::RENAME_WORKSPACE, strings::RENAME)
+    } else {
+        (strings::CREATE_WORKSPACE, strings::CREATE)
+    };
     let input: Entity<InputState> = cx.new(|cx| {
         InputState::new(window, cx)
             .default_value(name)
@@ -61,7 +69,7 @@ pub fn open(
                 div()
                     .text_size(metrics::FONT_SIZE_TITLE)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(strings::CREATE_WORKSPACE),
+                    .child(title),
             )
             .child(
                 div()
@@ -102,7 +110,7 @@ pub fn open(
                     )
                     .child(
                         ControlButton::new("workspace-create", ControlKind::Accent)
-                            .label(strings::CREATE)
+                            .label(button)
                             .on_click(move |_, window, cx| submit(window, cx)),
                     ),
             )

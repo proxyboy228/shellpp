@@ -1365,6 +1365,17 @@ fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
     assert_eq!(saved[0].tabs[0].root.sessions().len(), 2);
     let id = saved[0].record.record_id;
 
+    // Rename keeps the tabs.
+    ui.click(format!("new-tab-workspace-rename-{id}"), cx);
+    assert!(ui.visible("workspace-dialog", cx));
+    ui.click("workspace-name", cx);
+    ui.press("ctrl-a", cx);
+    ui.input("Production", cx);
+    ui.click("workspace-create", cx);
+    let saved = core.workspaces_list(vault).unwrap();
+    assert_eq!(saved[0].name, "Production");
+    assert_eq!(saved[0].tabs.len(), 1);
+
     // A click on the workspace opens its tab in place of the page.
     let before = ui.tabs(cx).len();
     ui.click(format!("new-tab-workspace-{id}"), cx);

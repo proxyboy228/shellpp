@@ -90,7 +90,8 @@ impl Picker {
                 | NewTabEvent::Restore
                 | NewTabEvent::CreateWorkspace
                 | NewTabEvent::OpenWorkspace(_)
-                | NewTabEvent::RemoveWorkspace(_) => return,
+                | NewTabEvent::RemoveWorkspace(_)
+                | NewTabEvent::RenameWorkspace(_) => return,
             };
             on_choice(group, choice, window, cx)
         });

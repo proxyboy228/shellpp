@@ -1257,6 +1257,7 @@ impl HostsScreen {
                 let screen = cx.entity().downgrade();
                 crate::new_tab::workspace_dialog::open(
                     String::new(),
+                    false,
                     window,
                     cx,
                     move |name: String, _: &mut Window, cx: &mut App| match save(

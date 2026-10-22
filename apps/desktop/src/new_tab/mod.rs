@@ -110,6 +110,8 @@ pub enum NewTabEvent {
     OpenWorkspace(Uuid),
     /// Remove a workspace (its record id).
     RemoveWorkspace(Uuid),
+    /// Rename a workspace (its record id).
+    RenameWorkspace(Uuid),
     /// Esc or a click outside (the overlay; the focus is back where it
     /// was), or Esc in a new pane's picker (the pane closes).
     Dismissed,

@@ -137,6 +137,17 @@ impl NewTabPage {
                 )
                 .child(
                     ControlButton::new(
+                        SharedString::from(format!("new-tab-workspace-rename-{id}")),
+                        ControlKind::Ghost,
+                    )
+                    .icon(IconName::Pencil)
+                    .tooltip(SharedString::from(strings::rename_workspace(name)))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(NewTabEvent::RenameWorkspace(id))
+                    })),
+                )
+                .child(
+                    ControlButton::new(
                         SharedString::from(format!("new-tab-workspace-remove-{id}")),
                         ControlKind::Ghost,
                     )
