@@ -1,6 +1,7 @@
 //! Serial sessions (D88) on a fake port behind [`SerialBackend`]: the
 //! port's output in the terminal, typed input on the port, a device that
-//! goes away, Reconnect, and the reasons a port does not open.
+//! goes away, Reconnect, the reasons a port does not open, and a Cancel
+//! while a slow port opens.
 
 use std::io::ErrorKind;
 use std::sync::mpsc as std_mpsc;
@@ -17,12 +18,23 @@ struct Wire {
     written: Arc<Mutex<Vec<u8>>>,
 }
 
-/// A reader that times out until the device sends something.
-struct Reader(std_mpsc::Receiver<std::io::Result<Vec<u8>>>);
+/// A port: reads time out until the device sends something; what is
+/// written is kept; dropping it lets go of the port (`open_ports`).
+struct Port {
+    from_device: std_mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    written: Arc<Mutex<Vec<u8>>>,
+    open_ports: Arc<AtomicUsize>,
+}
 
-impl std::io::Read for Reader {
+impl Drop for Port {
+    fn drop(&mut self) {
+        self.open_ports.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl std::io::Read for Port {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.0.recv_timeout(Duration::from_millis(20)) {
+        match self.from_device.recv_timeout(Duration::from_millis(20)) {
             Ok(Ok(bytes)) => {
                 buf[..bytes.len()].copy_from_slice(&bytes);
                 Ok(bytes.len())
@@ -34,11 +46,9 @@ impl std::io::Read for Reader {
     }
 }
 
-struct Writer(Arc<Mutex<Vec<u8>>>);
-
-impl std::io::Write for Writer {
+impl std::io::Write for Port {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("written").extend_from_slice(buf);
+        self.written.lock().expect("written").extend_from_slice(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -46,13 +56,16 @@ impl std::io::Write for Writer {
     }
 }
 
-/// Lists `COM3`; each open hands its far end to the test, or fails with
-/// the next queued error.
+/// Lists `COM3`; each open (after `open_delay`) hands its far end to the
+/// test, or fails with the next queued error.
 #[derive(Default)]
 struct FakePorts {
     opened: Mutex<Vec<SerialConfig>>,
     wires: Mutex<Option<std_mpsc::Sender<Wire>>>,
     failures: Mutex<Vec<SerialError>>,
+    open_delay: Duration,
+    /// Ports open now.
+    open_ports: Arc<AtomicUsize>,
 }
 
 impl SerialBackend for FakePorts {
@@ -65,12 +78,18 @@ impl SerialBackend for FakePorts {
 
     fn open(&self, config: &SerialConfig) -> Result<SerialSession, SerialError> {
         self.opened.lock().expect("opened").push(config.clone());
+        std::thread::sleep(self.open_delay);
         if let Some(error) = self.failures.lock().expect("failures").pop() {
             return Err(error);
         }
         let (to_port, from_device) = std_mpsc::channel();
         let written = Arc::new(Mutex::new(Vec::new()));
-        let session = serial::start(Reader(from_device), Writer(written.clone()));
+        self.open_ports.fetch_add(1, Ordering::SeqCst);
+        let session = serial::start(Port {
+            from_device,
+            written: written.clone(),
+            open_ports: Arc::clone(&self.open_ports),
+        });
         if let Some(wires) = self.wires.lock().expect("wires").as_ref() {
             let _ = wires.send(Wire { to_port, written });
         }
@@ -192,4 +211,44 @@ async fn a_port_that_does_not_open_says_why_and_reconnect_tries_again() {
     session.handle.reconnect();
     session.state(SessionState::Connected).await;
     assert_eq!(ports.opened.lock().expect("opened").len(), 3);
+}
+
+/// Cancel while a slow port opens (a Bluetooth port can take seconds):
+/// the tab fails as cancelled at once, and the port the opening still
+/// opens is let go, so the next attempt finds it free (review, D88).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_while_the_port_opens_lets_go_of_it() {
+    let ports = Arc::new(FakePorts {
+        open_delay: Duration::from_millis(300),
+        ..FakePorts::default()
+    });
+    let harness = harness(ports.clone());
+    let mut session = harness
+        .open_with(
+            OpenRequest::Serial(SerialConfig::new("COM3")),
+            Arc::new(TestTerminal::default()),
+        )
+        .expect("opens");
+    // Reconnect while it opens starts no second open.
+    session.handle.reconnect();
+    session.handle.cancel();
+    let view = session.state(SessionState::Failed).await;
+    assert_eq!(view.error, Some(SessionError::Cancelled));
+    assert_eq!(ports.opened.lock().expect("opened").len(), 1);
+    // The cancelled opening's port is let go once it opened.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while ports.open_ports.load(Ordering::SeqCst) != 0
+        || ports.opened.lock().expect("opened").len() != 1
+    {
+        assert!(std::time::Instant::now() < deadline, "the port stayed open");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(ports.open_ports.load(Ordering::SeqCst), 0);
+    // Reconnect opens it again.
+    session.handle.reconnect();
+    session.state(SessionState::Connected).await;
+    assert_eq!(ports.open_ports.load(Ordering::SeqCst), 1);
+    session.handle.close();
+    session.state(SessionState::Closed).await;
 }

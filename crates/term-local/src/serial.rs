@@ -1,25 +1,40 @@
 //! Serial ports (UI 1.4, 2.2; D88): the ports of this device ([`ports`])
-//! and a session on one of them ([`open`]). Output arrives on a tokio
-//! channel from a reader thread; input goes through [`SerialWriter`].
+//! and a session on one of them ([`open`]). One thread owns the port: it
+//! writes what [`SerialWriter`] queued, then reads with a short timeout,
+//! and sends the output on a tokio channel.
 //!
-//! The reader thread reads with a short timeout, so that it notices a
-//! [`SerialWriter::close`] within [`READ_TIMEOUT`] and lets go of the port
-//! (a port opens once: Reconnect needs it free). A read error (the device
-//! was unplugged) or end of file ends the output channel. Nothing here logs
+//! One handle, one thread: Windows serializes the I/O of a synchronous
+//! handle, so a second handle for the reader would hold every write behind
+//! a pending read, and the duplicate would be inheritable by programs the
+//! app starts (which would keep the port busy). The thread looks at the
+//! close flag between reads and between written chunks, so a closed
+//! session lets go of the port within about [`READ_TIMEOUT`] (a port opens
+//! once: Reconnect needs it free) even in the middle of a long paste; the
+//! session is closed by [`SerialWriter::close`] or by dropping both its
+//! output and its writers. A read or write error (the device was
+//! unplugged) or end of file ends the output channel. Nothing here logs
 //! port names, output or input.
 
-use std::io::{ErrorKind, Write as _};
+use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, mpsc as std_mpsc};
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
 use crate::pty::{MAX_CHUNK, OUTPUT_CAPACITY};
 
-/// How long a read waits before the reader thread looks at the close flag
-/// again; also the write timeout.
-pub const READ_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long a read waits before the thread writes what is queued and looks
+/// at the close flag again; also the timeout of one write.
+pub const READ_TIMEOUT: Duration = Duration::from_millis(20);
+/// Queued input is written in chunks of this size, the close flag looked
+/// at between them.
+const WRITE_CHUNK: usize = 64;
+/// How long the thread writes before it reads again (a long paste does not
+/// hold the output back).
+const WRITE_BUDGET: Duration = Duration::from_millis(100);
+/// Chunks the writers may queue before [`SerialWriter::write`] waits.
+const WRITE_QUEUE: usize = 64;
 
 /// Data bits per character.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -216,80 +231,95 @@ pub fn open(config: &SerialConfig) -> Result<SerialSession, SerialError> {
             serialport::ErrorKind::Io(ErrorKind::NotFound) => SerialError::Missing,
             _ => SerialError::Io,
         })?;
-    let reader = port.try_clone().map_err(|_| SerialError::Io)?;
-    Ok(start(reader, port))
+    Ok(start(port))
 }
 
-/// A port as two halves: what the reader thread reads and what the writer
-/// writes (the real port and its clone; a test's pipe).
-pub fn start(
-    reader: impl std::io::Read + Send + 'static,
-    writer: impl std::io::Write + Send + 'static,
-) -> SerialSession {
-    let shared = Arc::new(Shared {
-        writer: Mutex::new(Some(Box::new(writer))),
-        closed: AtomicBool::new(false),
-    });
+/// What the session's thread reads and writes: the real port, a test's
+/// fake.
+pub trait Port: std::io::Read + std::io::Write + Send {}
+
+impl<T: std::io::Read + std::io::Write + Send> Port for T {}
+
+/// Starts the thread of an open port.
+pub fn start(port: impl Port + 'static) -> SerialSession {
+    let closed = Arc::new(AtomicBool::new(false));
     let (output_tx, output_rx) = mpsc::channel(OUTPUT_CAPACITY);
-    let reader_shared = Arc::clone(&shared);
+    let (input_tx, input_rx) = std_mpsc::sync_channel(WRITE_QUEUE);
+    let thread_closed = Arc::clone(&closed);
     let started = std::thread::Builder::new()
-        .name("shellpp-serial-reader".to_owned())
-        .spawn(move || read_loop(reader, &reader_shared, &output_tx));
+        .name("shellpp-serial".to_owned())
+        .spawn(move || run(port, &thread_closed, &input_rx, &output_tx));
     if started.is_err() {
-        // No reader: the output ends at once and the port is let go.
-        shared.close();
+        // No thread: the output ends at once, the port was dropped.
+        closed.store(true, Ordering::SeqCst);
     }
     SerialSession {
         output: output_rx,
-        writer: SerialWriter { shared },
+        writer: SerialWriter {
+            input: input_tx,
+            closed,
+        },
     }
 }
 
-struct Shared {
-    writer: Mutex<Option<Box<dyn std::io::Write + Send>>>,
-    closed: AtomicBool,
-}
-
-impl Shared {
-    fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
-        drop(lock(&self.writer).take());
-    }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-fn read_loop(mut reader: impl std::io::Read, shared: &Shared, output: &mpsc::Sender<Vec<u8>>) {
+/// The thread of an open port: queued input first (for at most
+/// [`WRITE_BUDGET`]), then a read; until the session is closed or the
+/// port fails. The port closes when the thread ends.
+fn run(
+    mut port: impl Port,
+    closed: &AtomicBool,
+    input: &std_mpsc::Receiver<Vec<u8>>,
+    output: &mpsc::Sender<Vec<u8>>,
+) {
     let mut buf = vec![0u8; MAX_CHUNK];
-    while !shared.closed.load(Ordering::SeqCst) {
-        match reader.read(&mut buf) {
+    let open = || !closed.load(Ordering::SeqCst) && !output.is_closed();
+    'run: while open() {
+        let started = Instant::now();
+        while started.elapsed() < WRITE_BUDGET {
+            let chunk = match input.try_recv() {
+                Ok(chunk) => chunk,
+                Err(std_mpsc::TryRecvError::Empty) => break,
+                // Every writer is gone.
+                Err(std_mpsc::TryRecvError::Disconnected) => break 'run,
+            };
+            if !open() {
+                break 'run;
+            }
+            match port.write_all(&chunk).and_then(|()| port.flush()) {
+                Ok(()) => {}
+                // Flow control held it past the timeout: that chunk is lost,
+                // not the session.
+                Err(error) if is_timeout(&error) || error.kind() == ErrorKind::WriteZero => {}
+                Err(_) => break 'run,
+            }
+        }
+        match port.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
                 if output.blocking_send(buf[..n].to_vec()).is_err() {
                     break;
                 }
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    ErrorKind::TimedOut | ErrorKind::Interrupted | ErrorKind::WouldBlock
-                ) => {}
+            Err(error) if is_timeout(&error) => {}
             // The device is gone (or another failure): the output ends.
             Err(_) => break,
         }
     }
-    // The reader's half closes with this thread; the writer's too.
-    shared.close();
+    closed.store(true, Ordering::SeqCst);
 }
 
-/// Writes to the port; clones share it.
+fn is_timeout(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::TimedOut | ErrorKind::Interrupted | ErrorKind::WouldBlock
+    )
+}
+
+/// Queues input for the port; clones share it.
 #[derive(Clone)]
 pub struct SerialWriter {
-    shared: Arc<Shared>,
+    input: std_mpsc::SyncSender<Vec<u8>>,
+    closed: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for SerialWriter {
@@ -301,38 +331,73 @@ impl std::fmt::Debug for SerialWriter {
 }
 
 impl SerialWriter {
-    /// Writes all of `data` (blocking). A write that times out (flow
-    /// control holds it) loses that write, not the session: `Io`.
+    /// Queues `data` in chunks; waits while the queue is full (blocking).
+    /// A chunk that flow control holds past the write timeout is lost, not
+    /// the session.
     pub fn write(&self, data: &[u8]) -> Result<(), SerialError> {
-        let mut writer = lock(&self.shared.writer);
-        let Some(port) = writer.as_mut() else {
-            return Err(SerialError::Closed);
-        };
-        port.write_all(data)
-            .and_then(|()| port.flush())
-            .map_err(|_| SerialError::Io)
+        for chunk in data.chunks(WRITE_CHUNK) {
+            if self.is_closed() || self.input.send(chunk.to_vec()).is_err() {
+                return Err(SerialError::Closed);
+            }
+        }
+        Ok(())
     }
 
-    /// Lets go of the port: the reader thread ends within [`READ_TIMEOUT`].
+    /// Ends the session: the thread lets go of the port after the read or
+    /// the chunk it is in. Never waits.
     pub fn close(&self) {
-        self.shared.close();
+        self.closed.store(true, Ordering::SeqCst);
     }
 
     pub fn is_closed(&self) -> bool {
-        self.shared.closed.load(Ordering::SeqCst)
+        self.closed.load(Ordering::SeqCst)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
-    /// A reader that times out until the test sends it bytes.
-    struct Fake(std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>);
+    /// A port that times out until the test sends it bytes, records what is
+    /// written (slowly, when asked) and when it is dropped.
+    struct Fake {
+        incoming: std_mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        written: Arc<Mutex<Vec<u8>>>,
+        write_delay: Duration,
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct Ends {
+        device: std_mpsc::Sender<std::io::Result<Vec<u8>>>,
+        written: Arc<Mutex<Vec<u8>>>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    fn fake(write_delay: Duration) -> (Fake, Ends) {
+        let (device, incoming) = std_mpsc::channel();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let port = Fake {
+            incoming,
+            written: Arc::clone(&written),
+            write_delay,
+            dropped: Arc::clone(&dropped),
+        };
+        (
+            port,
+            Ends {
+                device,
+                written,
+                dropped,
+            },
+        )
+    }
 
     impl std::io::Read for Fake {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            match self.0.recv_timeout(Duration::from_millis(20)) {
+            match self.incoming.recv_timeout(READ_TIMEOUT) {
                 Ok(Ok(bytes)) => {
                     buf[..bytes.len()].copy_from_slice(&bytes);
                     Ok(bytes.len())
@@ -343,12 +408,10 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Sink {
+    impl std::io::Write for Fake {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            lock(&self.0).extend_from_slice(buf);
+            std::thread::sleep(self.write_delay);
+            self.written.lock().unwrap().extend_from_slice(buf);
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -356,31 +419,82 @@ mod tests {
         }
     }
 
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn wait_for(what: &str, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn output_input_and_a_lost_device() {
-        let (send, receive) = std::sync::mpsc::channel();
-        let sink = Sink::default();
-        let mut session = start(Fake(receive), sink.clone());
-        send.send(Ok(b"login: ".to_vec())).unwrap();
+        let (port, ends) = fake(Duration::ZERO);
+        let mut session = start(port);
+        ends.device.send(Ok(b"login: ".to_vec())).unwrap();
         assert_eq!(
             session.output.blocking_recv().as_deref(),
             Some(&b"login: "[..])
         );
+        // Input goes out between reads, without waiting for output.
+        let typed = Instant::now();
         session.writer.write(b"admin\r").unwrap();
-        assert_eq!(*lock(&sink.0), b"admin\r");
-        // Unplugged: the output ends and writes fail.
-        send.send(Err(ErrorKind::BrokenPipe.into())).unwrap();
+        wait_for("the input written", || {
+            *ends.written.lock().unwrap() == b"admin\r"
+        });
+        assert!(typed.elapsed() < Duration::from_millis(500));
+        // Unplugged: the output ends, the port is let go, writes fail.
+        ends.device.send(Err(ErrorKind::BrokenPipe.into())).unwrap();
         assert_eq!(session.output.blocking_recv(), None);
+        wait_for("the port let go", || ends.dropped.load(Ordering::SeqCst));
         assert_eq!(session.writer.write(b"x"), Err(SerialError::Closed));
     }
 
     #[test]
-    fn close_ends_the_reader() {
-        let (_send, receive) = std::sync::mpsc::channel();
-        let mut session = start(Fake(receive), Sink::default());
+    fn close_lets_go_of_the_port() {
+        let (port, ends) = fake(Duration::ZERO);
+        let mut session = start(port);
         session.writer.close();
-        // The reader notices within its timeout and the channel closes.
         assert_eq!(session.output.blocking_recv(), None);
+        wait_for("the port let go", || ends.dropped.load(Ordering::SeqCst));
+    }
+
+    /// A session dropped without a close (a tab closed while the port was
+    /// opening) lets go of the port as well.
+    #[test]
+    fn a_dropped_session_lets_go_of_the_port() {
+        let (port, ends) = fake(Duration::ZERO);
+        drop(start(port));
+        wait_for("the port let go", || ends.dropped.load(Ordering::SeqCst));
+    }
+
+    /// Closing in the middle of a long paste (9600 baud: about 70 ms per
+    /// chunk) does not wait for the paste and stops it.
+    #[test]
+    fn close_stops_a_long_paste_at_once() {
+        let (port, ends) = fake(Duration::from_millis(70));
+        let session = start(port);
+        let writer = session.writer.clone();
+        let paste = std::thread::spawn(move || writer.write(&[b'x'; 20 * 1024]));
+        wait_for("the paste started", || {
+            !ends.written.lock().unwrap().is_empty()
+        });
+        let closing = Instant::now();
+        session.writer.close();
+        assert!(
+            closing.elapsed() < Duration::from_millis(10),
+            "close waited"
+        );
+        wait_for("the port let go", || ends.dropped.load(Ordering::SeqCst));
+        assert!(closing.elapsed() < Duration::from_millis(500));
+        assert_eq!(paste.join().unwrap(), Err(SerialError::Closed));
+        assert!(ends.written.lock().unwrap().len() < 4 * 1024);
     }
 
     #[test]

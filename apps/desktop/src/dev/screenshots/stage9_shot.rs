@@ -84,16 +84,20 @@ impl SerialBackend for DemoPorts {
         device
             .send(CONSOLE_BANNER.to_vec())
             .map_err(|_| SerialError::Io)?;
-        Ok(serial::start(DemoReader(port), DemoEcho(device)))
+        Ok(serial::start(DemoPort { port, device }))
     }
 }
 
-/// The port's output: what the device sends; a timeout while it is quiet.
-struct DemoReader(mpsc::Receiver<Vec<u8>>);
+/// The port: what the device sends (a timeout while it is quiet), and an
+/// echo of the input; Enter gives a new prompt.
+struct DemoPort {
+    port: mpsc::Receiver<Vec<u8>>,
+    device: mpsc::Sender<Vec<u8>>,
+}
 
-impl std::io::Read for DemoReader {
+impl std::io::Read for DemoPort {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.0.recv_timeout(serial::READ_TIMEOUT) {
+        match self.port.recv_timeout(serial::READ_TIMEOUT) {
             Ok(bytes) => {
                 let len = bytes.len().min(buf.len());
                 buf[..len].copy_from_slice(&bytes[..len]);
@@ -105,10 +109,7 @@ impl std::io::Read for DemoReader {
     }
 }
 
-/// The device echoes input; Enter gives a new prompt.
-struct DemoEcho(mpsc::Sender<Vec<u8>>);
-
-impl std::io::Write for DemoEcho {
+impl std::io::Write for DemoPort {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut echo = Vec::new();
         for &byte in buf {
@@ -118,7 +119,7 @@ impl std::io::Write for DemoEcho {
                 echo.push(byte);
             }
         }
-        self.0
+        self.device
             .send(echo)
             .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
         Ok(buf.len())

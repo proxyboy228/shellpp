@@ -67,8 +67,8 @@ impl TermInput for Input {
     fn write(&self, data: Vec<u8>) -> BoxFuture<'_, bool> {
         let writer = self.0.clone();
         Box::pin(async move {
-            // A write that fails (flow control held it too long) loses that
-            // write; only a closed port ends the input.
+            // Queued for the port's thread (waits while its queue is full);
+            // only a closed port ends the input.
             tokio::task::spawn_blocking(move || {
                 !matches!(writer.write(&data), Err(SerialError::Closed))
             })
@@ -82,6 +82,8 @@ impl TermInput for Input {
         Box::pin(async { true })
     }
 
+    /// Never waits: the port's thread lets go of the port after the read
+    /// or the chunk it is in.
     fn close(&self) -> BoxFuture<'_, ()> {
         self.0.close();
         Box::pin(async {})
@@ -108,12 +110,22 @@ pub(crate) async fn run(
     let mut first = true;
     loop {
         let size = session.lock().size;
-        let opened = tokio::select! {
-            opened = open(&shared, &config) => opened,
-            control = ctrl.recv() => match control {
-                Some(Control::Close) | None => return,
-                Some(Control::Cancel | Control::Reconnect) => continue,
-            },
+        // Close or Cancel while the port opens: the opening goes on in its
+        // blocking thread, and the port it opens is let go as soon as its
+        // result is dropped (shellpp-term-local's thread ends with its
+        // receiver). Reconnect while it opens changes nothing: a second
+        // open would find the port busy.
+        let opening = open(&shared, &config);
+        tokio::pin!(opening);
+        let opened = loop {
+            tokio::select! {
+                opened = &mut opening => break opened.map_err(Some),
+                control = ctrl.recv() => match control {
+                    Some(Control::Close) | None => return,
+                    Some(Control::Cancel) => break Err(None),
+                    Some(Control::Reconnect) => {}
+                },
+            }
         };
         match opened {
             Ok(parts) => {
@@ -147,7 +159,8 @@ pub(crate) async fn run(
                 tracing::info!(session = session.id, "serial port did not open");
                 session.update(|st| {
                     st.view.state = SessionState::Failed;
-                    st.view.error = Some(SessionError::Serial(error));
+                    st.view.error =
+                        Some(error.map_or(SessionError::Cancelled, SessionError::Serial));
                 });
             }
         }
