@@ -233,6 +233,8 @@ impl HostPanel {
         let group_search = new_input(strings::SEARCH_GROUPS, "", window, cx);
         let jump_search = new_input(strings::SEARCH_HOSTS, "", window, cx);
 
+        // Legacy algorithms on (D80): Show more opens, so its warning shows.
+        let show_more = draft.allow_legacy_algorithms;
         let mut this = Self {
             state: state.clone(),
             record_id,
@@ -243,7 +245,7 @@ impl HostPanel {
             proxy_password_dirty: false,
             password_masked: true,
             search_has_address: false,
-            show_more: false,
+            show_more,
             dropdown: None,
             address,
             label,

@@ -83,6 +83,9 @@ pub(crate) struct AuthContext<'a> {
     pub(crate) interaction: &'a dyn Interaction,
     /// Server round-trip timeout.
     pub(crate) timeout: Duration,
+    /// The host allows legacy algorithms (D80): an RSA key may sign with
+    /// SHA-1 (`ssh-rsa`) for a server that accepts nothing else.
+    pub(crate) legacy: bool,
 }
 
 /// A successful authentication with the secrets typed at prompts.
@@ -300,13 +303,21 @@ async fn ask_username(interaction: &dyn Interaction) -> Result<String, AuthError
 }
 
 /// The RSA signature hash for this server: SHA-512 or SHA-256 from
-/// `server-sig-algs`, SHA-256 when the server sent no list. `None` when the
-/// server accepts only `ssh-rsa` (SHA-1), which is never used (decision 22).
-async fn rsa_hash(handle: &Handle<ClientHandler>, timeout: Duration) -> Option<HashAlg> {
+/// `server-sig-algs`, SHA-256 when the server sent no list. A server that
+/// accepts only `ssh-rsa` (SHA-1) gets SHA-1 (`Ok(None)`) only when the host
+/// allows legacy algorithms (D80; never otherwise, decision 22), as does a
+/// server without a list then (OpenSSH before 7.2 knows no `rsa-sha2-*`).
+async fn rsa_hash(
+    handle: &Handle<ClientHandler>,
+    timeout: Duration,
+    legacy: bool,
+) -> Result<Option<HashAlg>, ()> {
     match tokio::time::timeout(timeout, handle.best_supported_rsa_hash()).await {
-        Ok(Ok(Some(Some(hash)))) => Some(hash),
-        Ok(Ok(Some(None))) => None,
-        _ => Some(HashAlg::Sha256),
+        Ok(Ok(Some(Some(hash)))) => Ok(Some(hash)),
+        Ok(Ok(Some(None))) if legacy => Ok(None),
+        Ok(Ok(Some(None))) => Err(()),
+        _ if legacy => Ok(None),
+        _ => Ok(Some(HashAlg::Sha256)),
     }
 }
 
@@ -319,15 +330,12 @@ fn is_rsa(algorithm: &Algorithm) -> bool {
 async fn hash_for(
     handle: &Handle<ClientHandler>,
     algorithm: &Algorithm,
-    timeout: Duration,
+    context: &AuthContext<'_>,
 ) -> Result<Option<HashAlg>, ()> {
     if !is_rsa(algorithm) {
         return Ok(None);
     }
-    match rsa_hash(handle, timeout).await {
-        Some(hash) => Ok(Some(hash)),
-        None => Err(()),
-    }
+    rsa_hash(handle, context.timeout, context.legacy).await
 }
 
 async fn try_key(
@@ -362,7 +370,7 @@ async fn try_key(
         return Ok(Step::Next);
     }
     progress.offered.push(key.public_key().clone());
-    let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
+    let Ok(hash) = hash_for(handle, &key.algorithm(), context).await else {
         tracing::debug!("rsa key skipped: the server accepts only sha-1 signatures");
         return Ok(Step::Next);
     };
@@ -517,7 +525,7 @@ async fn try_agent(
             break;
         }
         progress.offered.push(key.clone());
-        let Ok(hash) = hash_for(handle, &key.algorithm(), context.timeout).await else {
+        let Ok(hash) = hash_for(handle, &key.algorithm(), context).await else {
             continue;
         };
         let Ok(mut client) = agent.client().await else {
@@ -696,7 +704,7 @@ async fn try_file_keys(
             break;
         }
         progress.offered.push(public.clone());
-        let Ok(hash) = hash_for(handle, &public.algorithm(), context.timeout).await else {
+        let Ok(hash) = hash_for(handle, &public.algorithm(), context).await else {
             tracing::debug!("rsa key file skipped: the server accepts only sha-1 signatures");
             continue;
         };

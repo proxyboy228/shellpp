@@ -126,7 +126,7 @@ pub(crate) const KNOWN: &[&str] = &[
 
 /// Legacy algorithms, offered after the modern ones only when the host
 /// allows them (D80).
-const LEGACY_KEX: &[kex::Name] = &[kex::DH_G14_SHA1, kex::DH_GEX_SHA1, kex::DH_G1_SHA1];
+const LEGACY_KEX: &[kex::Name] = &[kex::DH_G14_SHA1, kex::DH_GEX_SHA1];
 const LEGACY_CIPHER: &[cipher::Name] = &[
     cipher::AES_256_CBC,
     cipher::AES_192_CBC,

@@ -621,7 +621,14 @@ async fn attempt(
             if shared.host_key_decision() == Some(HostKeyDecision::Reject) {
                 return Err(FailureKind::HostKeyRejected.into());
             }
-            return Err(FailureKind::from_russh(&error).into());
+            return Err(match FailureKind::from_russh(&error) {
+                // What we offered depends on the host's setting (D80).
+                FailureKind::NoCommonAlgorithm(mismatch) => FailureKind::NoCommonAlgorithm(
+                    mismatch.with_legacy(spec.allow_legacy_algorithms),
+                ),
+                kind => kind,
+            }
+            .into());
         }
     };
 
@@ -632,6 +639,7 @@ async fn attempt(
         agent: spec.agent.as_ref(),
         interaction: interaction.as_ref(),
         timeout,
+        legacy: spec.allow_legacy_algorithms,
     };
     let authenticated = match crate::auth::authenticate(&mut handle, &context, username).await {
         Ok(authenticated) => authenticated,

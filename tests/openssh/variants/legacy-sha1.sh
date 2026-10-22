@@ -1,7 +1,8 @@
 #!/bin/sh
 # Variant legacy-sha1 of the OpenSSH test server (tests/openssh/README.md,
-# "Variants"): only an ssh-rsa (SHA-1) host key and the SHA-1 key exchange
-# diffie-hellman-group14-sha1, as old servers and appliances have them.
+# "Variants"): only an ssh-rsa (SHA-1) host key, the SHA-1 key exchange
+# diffie-hellman-group14-sha1 and AES-CBC with the SHA-1 MAC, as old servers
+# and appliances have them; ssh-rsa user key signatures are accepted too.
 # Run by the entrypoint as root before sshd starts.
 set -eu
 config=/etc/ssh/sshd_config
@@ -13,8 +14,9 @@ cat >"$block" <<'CONF'
 # Variant legacy-sha1.
 HostKeyAlgorithms ssh-rsa
 KexAlgorithms diffie-hellman-group14-sha1
+Ciphers aes128-cbc
 MACs hmac-sha1
-PubkeyAcceptedAlgorithms +ssh-rsa
+PubkeyAcceptedKeyTypes +ssh-rsa
 CONF
 awk 'NR == FNR { lines = lines $0 "\n"; next }
      !done && /^Match / { printf "%s\n", lines; done = 1 }

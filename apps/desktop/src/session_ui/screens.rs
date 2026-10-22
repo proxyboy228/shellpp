@@ -283,10 +283,7 @@ pub fn failed(
                     ))
                     .child(line(
                         "failure-algorithms-supported",
-                        strings::we_support(&shellpp_ssh::supported_algorithms(
-                            mismatch.kind(),
-                            false,
-                        )),
+                        strings::we_support(&mismatch.supported()),
                     ))
                     .when(mismatch.legacy_would_help(), |this| {
                         this.child(
@@ -297,7 +294,11 @@ pub fn failed(
                                 .text_size(metrics::FONT_SIZE_BODY)
                                 .text_color(theme.foreground)
                                 .text_center()
-                                .child(strings::LEGACY_HINT),
+                                .child(if place.is_some() {
+                                    strings::LEGACY_HINT_HOP
+                                } else {
+                                    strings::LEGACY_HINT
+                                }),
                         )
                     }),
             )

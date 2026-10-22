@@ -57,7 +57,8 @@ pub fn we_support(names: &[&str]) -> String {
     format!("Shell++ supports: {}.", names.join(", "))
 }
 
-pub const LEGACY_HINT: &str = "The server offers only legacy (SHA-1 or CBC) algorithms. To connect anyway, turn on Allow legacy algorithms in the host's SSH settings.";
+pub const LEGACY_HINT: &str = "The server offers only legacy (SHA-1 or CBC) algorithms. To connect anyway, turn on Allow legacy algorithms in the host's SSH settings (Quick connect never offers them: save the host first).";
+pub const LEGACY_HINT_HOP: &str = "The server offers only legacy (SHA-1 or CBC) algorithms. To connect anyway, turn on Allow legacy algorithms in the SSH settings of the host named above.";
 pub const REASON_CHANNEL_FAILED: &str = "The server refused to open the session.";
 pub const REASON_DISCONNECTED: &str = "The server closed the connection.";
 pub const REASON_CONNECTION_LOST: &str = "The connection was lost. Check the network connection.";

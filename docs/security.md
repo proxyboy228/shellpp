@@ -654,7 +654,7 @@ S11 algorithm (stage 0 decision; thresholds are tuned in stage 2 against the tes
 - `rsa` crate: RUSTSEC-2023-0071 is a timing side channel; signing happens locally, without a remote oracle, so the risk is low (D4).
 - Agent forwarding is off by default per host (UI 3.1). When it is on, the host can ask the forwarded agent for signatures while the session lasts but cannot extract keys (RR19).
 - The built-in agent works only inside the app: no socket or named pipe is exposed to other processes (D5). It refuses requests while locked (section 8).
-- Legacy SHA-1 algorithms (`ssh-rsa` signatures, SHA-1 key exchange and MACs) and CBC ciphers are disabled by default; the host setting "Allow legacy algorithms" (`ssh.allow_legacy_algorithms`, with a warning while it is on) offers them after all modern ones (D80). 3DES, RC4, Blowfish, `ssh-dss` and MD5 MACs are never offered. (stage 0 decision; opt-in: D80)
+- Legacy SHA-1 algorithms (`ssh-rsa` signatures, SHA-1 key exchange and MACs) and CBC ciphers are disabled by default; the host setting "Allow legacy algorithms" (`ssh.allow_legacy_algorithms`, with a warning while it is on) offers them after all modern ones (D80). 3DES, RC4, Blowfish, `ssh-dss`, `diffie-hellman-group1-sha1` and MD5 MACs are never offered. (stage 0 decision; opt-in: D80)
 
 ### 11.3 Port forwarding
 

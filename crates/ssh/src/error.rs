@@ -114,6 +114,8 @@ pub struct AlgorithmMismatch {
     kind: AlgorithmKind,
     offered: u128,
     others: u8,
+    /// The connection offered the legacy algorithms too (D80).
+    legacy: bool,
 }
 
 impl AlgorithmMismatch {
@@ -123,6 +125,7 @@ impl AlgorithmMismatch {
             kind,
             offered: 0,
             others: 0,
+            legacy: false,
         }
     }
 
@@ -142,11 +145,28 @@ impl AlgorithmMismatch {
             kind,
             offered,
             others,
+            legacy: false,
         }
+    }
+
+    /// The same mismatch of a connection that offered the legacy
+    /// algorithms too.
+    pub fn with_legacy(self, legacy: bool) -> Self {
+        Self { legacy, ..self }
     }
 
     pub fn kind(&self) -> AlgorithmKind {
         self.kind
+    }
+
+    /// Whether the connection offered the legacy algorithms too.
+    pub fn legacy_offered(&self) -> bool {
+        self.legacy
+    }
+
+    /// What Shell++ offered in this negotiation.
+    pub fn supported(&self) -> Vec<&'static str> {
+        crate::algorithms::supported(self.kind, self.legacy)
     }
 
     /// The known names the server offered, in the table's order.
@@ -167,9 +187,11 @@ impl AlgorithmMismatch {
     /// Whether the host setting "Allow legacy algorithms" would let the
     /// negotiation succeed: the server offers one of them.
     pub fn legacy_would_help(&self) -> bool {
-        self.offered()
-            .iter()
-            .any(|name| crate::algorithms::is_legacy(self.kind, name))
+        !self.legacy
+            && self
+                .offered()
+                .iter()
+                .any(|name| crate::algorithms::is_legacy(self.kind, name))
     }
 }
 
@@ -288,6 +310,14 @@ mod tests {
         assert!(
             !modern.legacy_would_help(),
             "3DES and RC4 are not offered at all"
+        );
+        let tried = mismatch.with_legacy(true);
+        assert!(!tried.legacy_would_help(), "the setting is on already");
+        assert!(tried.supported().contains(&"diffie-hellman-group14-sha1"));
+        assert!(
+            !mismatch
+                .supported()
+                .contains(&"diffie-hellman-group14-sha1")
         );
     }
 

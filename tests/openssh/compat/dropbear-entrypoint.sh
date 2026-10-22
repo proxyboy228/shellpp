@@ -27,6 +27,8 @@ set_password() {
 }
 
 [ -d "$input" ] || fail "no credentials in $input: start the container with tests/openssh/start.sh"
+# The variants edit sshd_config: there is none here.
+[ -z "${SHELLPP_OPENSSH_VARIANT:-}" ] || fail "variants are for the OpenSSH images"
 add_user pwuser
 set_password pwuser "$input/pwuser.password"
 add_user keyuser

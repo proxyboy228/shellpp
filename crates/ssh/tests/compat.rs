@@ -112,14 +112,16 @@ async fn key_login(server: &OpenSshServer, legacy: bool) {
     connection.disconnect().await;
 }
 
-async fn keyboard_interactive_login(server: &OpenSshServer) {
+async fn keyboard_interactive_login(server: &OpenSshServer, legacy: bool) {
     let (name, answer) = &server.ki_user;
     let interaction = TestInteraction::answering(vec![text(answer)]);
     let plan = AuthPlan {
         keyboard_interactive: true,
         ..AuthPlan::default()
     };
-    let connection = connect(spec(server.addr, Some(name), plan), interaction.as_dyn())
+    let mut spec = spec(server.addr, Some(name), plan);
+    spec.allow_legacy_algorithms = legacy;
+    let connection = connect(spec, interaction.as_dyn())
         .await
         .expect("keyboard-interactive login");
     connection.disconnect().await;
@@ -236,7 +238,7 @@ async fn compatibility_matrix_entry() {
     connection.disconnect().await;
     key_login(&server, legacy).await;
     // Dropbear has no keyboard-interactive authentication.
-    if software == Software::OpenSsh && !legacy {
-        keyboard_interactive_login(&server).await;
+    if software == Software::OpenSsh {
+        keyboard_interactive_login(&server, legacy).await;
     }
 }
