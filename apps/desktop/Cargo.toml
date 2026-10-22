@@ -96,6 +96,11 @@ keyring = { workspace = true, features = ["async-secret-service", "crypto-rust",
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+[build-dependencies]
+# The version resource of shellpp.exe on Windows (build.rs; D82). MIT/Apache;
+# already in the tree through GPUI.
+embed-resource = "3.0"
+
 [dev-dependencies]
 # Headless UI tests (`#[gpui_kit::test]`, `gpui_kit::test::TestWindowExt`):
 # the same version as the normal dependency, plus `test-support`.

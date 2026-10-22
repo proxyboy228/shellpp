@@ -53,6 +53,27 @@ $env:SHELLPP_DATA_DIR = "D:\shellpp-data"; cargo run -p shellpp-desktop
 
 The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELLPP_DATA_DIR` returns to the permanent profile.
 
+## Installing on Windows
+
+There are no published releases yet. CI builds the Windows artifact on every run (job "Windows release artifact"); locally:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
+```
+
+- The result is `target\package\shellpp-<version>-windows-x64.zip` with its `.sha256`: `shellpp.exe` (release build, version resource from `Cargo.toml`), `LICENSE`, `THIRD_PARTY_NOTICES.md` and `README-portable.txt`. The executable is not signed, so SmartScreen may ask once.
+- Unpack it anywhere and run `shellpp.exe`; nothing is installed.
+- An MSI installer waits for the choice of an installer tool (`docs/decisions.md`, D82).
+
+Where the data lives on Windows (`docs/storage-format.md`, section 2):
+
+- `%LOCALAPPDATA%\shellpp\`: the encrypted database `shellpp.db`, session recordings in `recordings\`, database backups before upgrades in `backups\`;
+- `%LOCALAPPDATA%\shellpp\logs\`: diagnostic logs (no secrets, addresses, user names or terminal text);
+- `%LOCALAPPDATA%\shellpp\tmp\`: files opened from SFTP while they are open;
+- the Windows Credential Manager: the device key, only while "Remember on this device" is on.
+
+To keep everything next to the program (a portable setup), start it with `SHELLPP_DATA_DIR` set to a folder, as `README-portable.txt` shows. Uninstalling the portable build is deleting its folder and, for the default location, `%LOCALAPPDATA%\shellpp\`.
+
 ## Known limitations
 
 - SFTP: a file or folder name on the server that is not valid UTF-8 is shown with the replacement character `�` (U+FFFD) and cannot be opened, renamed or downloaded; a folder transfer leaves it out and lists it at the end. The SFTP library decodes names that way (`docs/decisions.md`, D45, D50).

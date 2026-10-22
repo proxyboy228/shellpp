@@ -7623,6 +7623,7 @@ dependencies = [
  "arboard",
  "async-channel",
  "dirs 7.0.0",
+ "embed-resource",
  "encoding_rs",
  "futures",
  "getrandom 0.4.3",

@@ -1,8 +1,8 @@
 name: CI
 
 # Job set of docs/architecture.md, section 9.2: lint, licenses, linux,
-# windows, macos, plus integration (OpenSSH in Docker). The gitleaks job
-# lives in secret-scan.yml.
+# windows, macos, plus integration (OpenSSH in Docker) and the Windows
+# release artifact (run 4). The gitleaks job lives in secret-scan.yml.
 #
 # The toolchain comes from rust-toolchain.toml (Rust 1.99.1 with rustfmt and
 # clippy; gpui-kit's GPUI needs Rust >= 1.93). The desktop app is GPUI Kit:
@@ -354,6 +354,45 @@ jobs:
         env:
           SHELLPP_TEST: "1"
         run: ./scripts/measure-startup.ps1 -Scenario first-run
+
+  # The Windows release artifact (run 4, plan 9.5;
+  # scripts/package-windows.ps1): the portable zip of the release build
+  # (LTO, one codegen unit, stripped; the version resource from Cargo.toml)
+  # with its SHA-256, kept for 14 days. No signing, no publishing; the MSI
+  # waits for the owner's choice of installer tool (docs/decisions.md, D82).
+  windows-release:
+    name: Windows release artifact
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+
+      - name: Keep the artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shellpp-windows-x64
+          path: |
+            target/package/*.zip
+            target/package/*.sha256
+          retention-days: 14
+          if-no-files-found: error
 
   macos:
     name: macOS

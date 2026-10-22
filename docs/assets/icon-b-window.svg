@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Variant B, "window": a light window frame with a title bar and a cursor. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#2EC4A6"/>
+  <rect x="40" y="52" width="176" height="152" rx="20" fill="#0F1517"/>
+  <path d="M40 72 a20 20 0 0 1 20 -20 h136 a20 20 0 0 1 20 20 v12 H40 Z" fill="#E8ECEF"/>
+  <circle cx="62" cy="68" r="6" fill="#0F1517"/>
+  <circle cx="80" cy="68" r="6" fill="#0F1517" fill-opacity="0.6"/>
+  <path d="M64 118 L92 140 L64 162" fill="none" stroke="#2EC4A6" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="108" y="154" width="40" height="12" rx="6" fill="#E8ECEF"/>
+  <path d="M176 112 V140 M162 126 H190" stroke="#2EC4A6" stroke-width="9" stroke-linecap="round"/>
+</svg>

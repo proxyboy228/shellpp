@@ -149,6 +149,14 @@ print_stderr = "warn"
 
 # Debug info costs most of target/ on a small disk: the workspace crates keep
 # line tables (backtraces with file and line), the dependencies none.
+[profile.release]
+# Run 4, plan 9.5 (D82): one optimization unit for the whole program and
+# no symbols. Unwinding stays: two startup paths catch a panic of the OS
+# keychain library on a helper thread.
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
 [profile.dev]
 debug = "line-tables-only"
 
