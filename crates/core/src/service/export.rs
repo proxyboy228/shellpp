@@ -662,6 +662,19 @@ fn restore_managed(
 /// `import_key` is a string(512) (docs/data-model.md, section 18.4).
 const MAX_IMPORT_KEY_CHARS: usize = 512;
 
+/// Room a record's payload needs besides its data: the envelope members,
+/// and a conflict suffix and import key the import may add.
+const PAYLOAD_ROOM: usize = 1024;
+
+/// Whether `data` is too large for one record: such a record is refused on
+/// its own, as a save would refuse it, instead of failing the whole
+/// import. Counted, not copied: the record may hold secrets.
+fn too_large(data: &Map<String, Value>) -> bool {
+    let mut counter = crate::model::payload::ByteCounter(0);
+    serde_json::to_writer(&mut counter, data).is_err()
+        || counter.0 + PAYLOAD_ROOM > crypto::MAX_PAYLOAD_LEN
+}
+
 /// A stored key: its private key parses (OpenSSH, the stored form), the
 /// label is valid, a certificate fits the key. `None`: a key with a valid
 /// label that this client cannot read (another source, a format of a later
@@ -1186,6 +1199,14 @@ impl Core {
                         continue;
                     }
                 };
+                if too_large(&data) {
+                    summary.refused.push(DataImportRefusal {
+                        record_id: record.record_id,
+                        record_type: record.kind.name().to_owned(),
+                        errors: vec![FieldError::new("record", ValidationReason::TooLong)],
+                    });
+                    continue;
+                }
                 if copy.is_some() {
                     if let Some(member) = label_member(record.kind)
                         && let Some(label) = data.get(member).and_then(Value::as_str)

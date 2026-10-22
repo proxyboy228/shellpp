@@ -23,6 +23,36 @@ pub const MANAGED: &[&str] = &["import_key"];
 
 const KNOWN: &[&str] = &["name", "tabs", "import_key"];
 
+/// Deepest JSON nesting of `tabs` read: a tab with splits four deep and its
+/// sessions stay well below. Checked, with the size, before the tabs are
+/// read: serde copies the subtree of an untagged pane at every level.
+const MAX_TABS_DEPTH: usize = 24;
+
+/// Whether `value` nests deeper than `max` levels.
+fn deeper_than(value: &Value, max: usize) -> bool {
+    let mut stack = vec![(value, 1usize)];
+    while let Some((value, depth)) = stack.pop() {
+        if depth > max {
+            return true;
+        }
+        match value {
+            Value::Array(items) => stack.extend(items.iter().map(|item| (item, depth + 1))),
+            Value::Object(members) => {
+                stack.extend(members.values().map(|member| (member, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `value` is larger than a record's payload can be.
+fn larger_than_a_record(value: &Value) -> bool {
+    let mut counter = crate::model::payload::ByteCounter(0);
+    serde_json::to_writer(&mut counter, value).is_err()
+        || counter.0 > crate::crypto::MAX_PAYLOAD_LEN
+}
+
 /// The tabs of a stored or input workspace: `None` when they are missing or
 /// not valid.
 pub fn tabs(data: &Map<String, Value>) -> Option<Vec<SavedTab>> {
@@ -48,6 +78,12 @@ pub fn build(
     }
     match present(input, "tabs") {
         None => errors.push("tabs", ValidationReason::Required),
+        Some(value) if larger_than_a_record(value) => {
+            errors.push("tabs", ValidationReason::TooLong);
+        }
+        Some(value) if deeper_than(value, MAX_TABS_DEPTH) => {
+            errors.push("tabs", ValidationReason::Invalid);
+        }
         Some(value) => match serde_json::from_value::<Vec<SavedTab>>(value.clone()) {
             Ok(list) if list.is_empty() => errors.push("tabs", ValidationReason::Required),
             Ok(list) if list.len() > MAX_TABS => errors.push("tabs", ValidationReason::TooMany),

@@ -989,16 +989,21 @@ fn workspaces_round_trip_with_their_host_links() {
             workspace_links(&target.core, vault, "DB only"),
             vec![Some((vault, db))]
         );
-        let prod = target
-            .core
-            .workspaces_list(vault)
-            .unwrap()
-            .into_iter()
-            .find(|workspace| workspace.name == "Prod")
+        // Each workspace record whole: the tabs, titles, split direction and
+        // sizes, with the links on the vault here.
+        let here = content(&target.core).0;
+        for ((kind, id), data) in &expected {
+            if kind != "workspace" {
+                continue;
+            }
+            let moved: Value = serde_json::from_str(
+                &data
+                    .to_string()
+                    .replace(&source.vault_id.to_string(), &vault.to_string()),
+            )
             .unwrap();
-        assert_eq!(prod.tabs.len(), 2);
-        assert_eq!(prod.tabs[1].title.as_deref(), Some("db"));
-        assert_eq!(prod.tabs[1].root.sessions().len(), 2, "the split");
+            assert_eq!(here[&(kind.clone(), id.clone())], moved);
+        }
         let again = import(&target.core, text, password);
         assert_eq!(
             (again.added, again.conflicts, again.existing),
@@ -1103,6 +1108,22 @@ fn workspace_links_to_missing_hosts_stay_and_hostile_workspaces_are_refused() {
     for (id, data) in &hostile {
         records.push(json!({"record_id": id, "type": "workspace", "data": data}));
     }
+    // One record too large for a payload is refused on its own.
+    records.push(json!({
+        "record_id": "0199f6a1-0000-7000-8000-00000000f005",
+        "type": "workspace",
+        "data": {"name": "large", "notes": "x".repeat(300 * 1024), "tabs": [local.clone()]}
+    }));
+    // Splits nested far beyond the limits are refused before they are read.
+    let mut deep = json!({"session": {"kind": "local"}});
+    for _ in 0..40 {
+        deep = json!({"direction": "row", "sizes": [0.5, 0.5], "children": [deep, local["root"].clone()]});
+    }
+    records.push(json!({
+        "record_id": "0199f6a1-0000-7000-8000-00000000f006",
+        "type": "workspace",
+        "data": {"name": "deep", "tabs": [{"root": deep}]}
+    }));
     records.push(json!({
         "record_id": "0199f6a1-0000-7000-8000-00000000f004",
         "type": "workspace",
@@ -1118,21 +1139,25 @@ fn workspace_links_to_missing_hosts_stay_and_hostile_workspaces_are_refused() {
         .iter()
         .map(|refusal| (refusal.record_id.to_string(), refusal.record_type.clone()))
         .collect();
-    assert_eq!(
-        refused,
-        hostile
-            .iter()
-            .map(|(id, _)| ((*id).to_owned(), "workspace".to_owned()))
-            .collect::<Vec<_>>()
-    );
+    let mut wanted: Vec<(String, String)> = hostile
+        .iter()
+        .map(|(id, _)| ((*id).to_owned(), "workspace".to_owned()))
+        .collect();
+    for id in ["f005", "f006"] {
+        wanted.push((
+            format!("0199f6a1-0000-7000-8000-00000000{id}"),
+            "workspace".to_owned(),
+        ));
+    }
+    assert_eq!(refused, wanted);
+    let field = |at: usize| summary.refused[at].errors[0].field.clone();
     assert!(
-        summary
-            .refused
-            .iter()
-            .all(|refusal| refusal.errors.iter().any(|error| error.field == "tabs")),
+        (0..3).all(|at| field(at) == "tabs"),
         "{:?}",
         summary.refused
     );
+    assert_eq!(field(3), "record", "too large");
+    assert_eq!(field(4), "tabs", "too deep");
     let db = id_of(&target.core, "host", "label", "db");
     assert_eq!(
         workspace_links(&target.core, vault, "Prod"),
