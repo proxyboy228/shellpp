@@ -225,7 +225,8 @@ pub struct TerminalView {
     /// Backspace setting.
     broadcast: Vec<WeakEntity<TerminalView>>,
     /// Broadcast input stopped at a password prompt until Enter or Ctrl+C
-    /// is typed here (a prompt that echoes `*` stays private too).
+    /// is typed here or the shell is back at its prompt (a prompt that
+    /// echoes `*` stays private too).
     broadcast_paused: bool,
     /// The last cell reported for motion without a button (mode 1003).
     hover_cell: Option<(usize, usize)>,
@@ -372,18 +373,25 @@ impl TerminalView {
     /// Broadcast input (UI 4.4): the terminals typed input also goes to;
     /// empty stops it.
     pub fn set_broadcast(&mut self, targets: Vec<WeakEntity<TerminalView>>) {
+        if targets.is_empty() {
+            self.broadcast_paused = false;
+        }
         self.broadcast = targets;
     }
 
     /// The broadcast targets for `bytes` typed now; none from a password
-    /// prompt until Enter or Ctrl+C ends it here (a `sudo` password stays
-    /// in its pane, its Enter too).
+    /// prompt until Enter or Ctrl+C ends it here or the shell is back at
+    /// its prompt (a `sudo` password stays in its pane, its Enter too).
+    /// While the shell edits its own line (bracketed paste on) no program
+    /// asks a password: a typed `TOKEN:` is mirrored.
     fn broadcast_targets(&mut self, bytes: &[u8]) -> Vec<gpui::Entity<TerminalView>> {
         if self.broadcast.is_empty() {
             self.broadcast_paused = false;
             return Vec::new();
         }
-        if self.broadcast_paused || self.handle.cursor_at_password_prompt() {
+        if self.at_prompt() {
+            self.broadcast_paused = false;
+        } else if self.broadcast_paused || self.handle.cursor_at_password_prompt() {
             self.broadcast_paused = !bytes.iter().any(|byte| matches!(byte, b'\r' | 0x03));
             return Vec::new();
         }

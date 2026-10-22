@@ -222,7 +222,8 @@ const PROMPT_END: &[char] = &[':', '\u{ff1a}'];
 /// The text before the cursor ends in a password prompt: the password
 /// prompt pattern with a `:` last, as `[sudo] password for dev: `
 /// (broadcast input, UI 4.4). A command that names a secret is no prompt:
-/// `kubectl get secret`.
+/// `kubectl get secret`. Typed text can end like one (`echo password:`):
+/// the caller skips the check while the shell edits its own line.
 pub fn ends_in_password_prompt(before_cursor: &str) -> bool {
     let text = before_cursor.trim_end();
     text.ends_with(PROMPT_END) && prompt_looks_like_password(text)

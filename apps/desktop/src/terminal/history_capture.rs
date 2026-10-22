@@ -423,7 +423,9 @@ fn read_line(term: &Term<Listener>, boundary: Boundary) -> Option<Snapshot> {
 impl TerminalHandle {
     /// Broadcast input (UI 4.4): whether the text before the cursor ends
     /// in a password prompt (`sudo`, `su`, `mysql -p`); typed input then
-    /// stays in its own pane. A line too long to follow counts as one.
+    /// stays in its own pane. Only the end of the line is read (at most
+    /// [`MAX_READ_CHARS`] cells before the cursor); a line too long to
+    /// follow counts as one.
     pub fn cursor_at_password_prompt(&self) -> bool {
         let term = self.term().lock();
         let cursor = &term.grid().cursor;
@@ -436,9 +438,10 @@ impl TerminalHandle {
         } else {
             cursor.point.column.0.min(columns)
         };
+        let rows = (MAX_READ_CHARS / columns.max(1)).max(1) as i32;
         let mut before = Zeroizing::new(String::new());
         let mut count = 0;
-        let mut line = start;
+        let mut line = Line(start.0.max(cursor.point.line.0 - rows + 1));
         while line < cursor.point.line {
             count = push_row(&term, line, 0, columns, &mut before, count);
             line += 1;

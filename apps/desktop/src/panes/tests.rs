@@ -818,10 +818,16 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
         terminals[1].feed_blocking(text).unwrap();
         terminals[1].flush_blocking();
     };
-    // A command that names a secret is mirrored, Enter too.
-    shown(b"$ kubectl get secret");
+    let mirrored = || sinks[0].0.lock().unwrap().clone();
+    // At its own prompt (bracketed paste on) the shell edits the line: a
+    // typed `TOKEN:` is mirrored.
+    shown(b"\x1b[?2004h$ curl -H \"PRIVATE-TOKEN:");
+    typed(panes[1], " x\"\r", cx);
+    assert_eq!(mirrored(), b"date\r x\"\r");
+    // Without it, a command that names a secret is mirrored, Enter too.
+    shown(b"\x1b[?2004l\r\n$ kubectl get secret");
     typed(panes[1], "\r", cx);
-    assert_eq!(sinks[0].0.lock().unwrap().as_slice(), b"date\r\r");
+    assert_eq!(mirrored(), b"date\r x\"\r\r");
 
     // At a password prompt (sudo), what is typed stays in its pane until
     // its Enter, also where the prompt echoes `*`.
@@ -829,11 +835,23 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
     typed(panes[1], "sec", cx);
     shown(b"***");
     typed(panes[1], "ret\r", cx);
-    assert_eq!(sinks[0].0.lock().unwrap().as_slice(), b"date\r\r");
+    assert_eq!(mirrored(), b"date\r x\"\r\r");
     assert!(sinks[1].0.lock().unwrap().ends_with(b"secret\r"));
     shown(b"\r\n$ ");
     typed(panes[1], "ls\r", cx);
-    assert!(sinks[0].0.lock().unwrap().ends_with(b"\rls\r"));
+    assert!(mirrored().ends_with(b"\r\rls\r"));
+    // Ctrl+C ends the pause too.
+    shown(b"\r\nPassword: ");
+    typed(panes[1], "\x03", cx);
+    shown(b"^C\r\n$ ");
+    typed(panes[1], "id\r", cx);
+    assert!(mirrored().ends_with(b"ls\rid\r"));
+    // And the shell back at its prompt (a sudo that timed out).
+    shown(b"\r\n[sudo] password for dev: ");
+    typed(panes[1], "a", cx);
+    shown(b"\r\nsudo: timed out reading password\r\n\x1b[?2004h$ ");
+    typed(panes[1], "pwd\r", cx);
+    assert!(mirrored().ends_with(b"id\rpwd\r"));
 
     // Tab and Shift+Tab (completion) are mirrored.
     let source = view(panes[1], cx);
@@ -843,15 +861,21 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
     .unwrap();
     tab.press("tab", cx);
     tab.press("shift-tab", cx);
-    assert!(sinks[0].0.lock().unwrap().ends_with(b"ls\r\t\x1b[Z"));
-    assert!(sinks[1].0.lock().unwrap().ends_with(b"ls\r\t\x1b[Z"));
+    // A key goes through the same check (Enter typed in the pane).
+    tab.press("enter", cx);
+    assert!(mirrored().ends_with(b"pwd\r\t\x1b[Z\r"));
+    assert!(sinks[1].0.lock().unwrap().ends_with(b"pwd\r\t\x1b[Z\r"));
 
-    // A member that stops running leaves (a reconnect is a fresh shell);
-    // fewer than two members end Broadcast input.
-    tab.set_phase(panes[0], Phase::Dropped(Failure::ConnectionLost), cx);
-    tab.frame(cx);
+    // A member that stops running leaves (a reconnect is a fresh shell),
+    // also with no frame drawn (a tab in the background); fewer than two
+    // members end Broadcast input.
+    let dropped = tab.session(panes[0], cx);
+    dropped.update(cx, |session, cx| {
+        session.set_phase(Phase::Dropped(Failure::ConnectionLost), None, cx)
+    });
     assert!(!tab.read(cx, |group, _| group.broadcasting()));
+    tab.frame(cx);
     tab.set_phase(panes[0], Phase::Running, cx);
     typed(panes[0], "x", cx);
-    assert!(sinks[1].0.lock().unwrap().ends_with(b"\x1b[Z"));
+    assert!(sinks[1].0.lock().unwrap().ends_with(b"\x1b[Z\r"));
 }

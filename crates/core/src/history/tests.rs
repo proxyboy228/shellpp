@@ -407,6 +407,9 @@ fn text_that_ends_in_a_password_prompt() {
         "Password:",
         "Enter passphrase for key '/home/a/.ssh/id_ed25519': ",
         "密码：",
+        // Typed text alone cannot be told apart (the view skips the check
+        // at the shell's own prompt).
+        "alice@host:~$ echo password:",
     ] {
         assert!(ends_in_password_prompt(text), "{text}");
     }
