@@ -93,6 +93,11 @@ pub const MENU_VIA_SSH: &str = "via SSH";
 pub const MENU_VIA_SFTP: &str = "via SFTP";
 pub const MENU_NEW_WINDOW_HINT: &str = "Hold Alt to open in a new window";
 pub const MENU_ADD_TO_WORKSPACE: &str = "Add to Workspace";
+pub const MENU_NEW_WORKSPACE: &str = "New Workspace";
+/// "Added to Prod".
+pub fn added_to_workspace(name: &str) -> String {
+    format!("Added to {name}")
+}
 pub const MENU_EDIT_HOST: &str = "Edit Host Details";
 pub const MENU_COLLABORATE: &str = "Collaborate";
 pub const MENU_MOVE_TO: &str = "Move to";

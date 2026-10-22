@@ -517,7 +517,7 @@ impl HostsScreen {
         if self.is_group(card) {
             menu::group_menu(targets.len(), &move_targets)
         } else {
-            menu::host_menu(targets.len(), &move_targets)
+            menu::host_menu(targets.len(), &move_targets, &self.workspaces(cx))
         }
     }
 
@@ -1103,6 +1103,9 @@ impl HostsScreen {
             }
             MenuCommand::MoveTo(group) => self.move_records(records, group, cx),
             MenuCommand::CopyTo(group) => self.copy_hosts(hosts, group, cx),
+            MenuCommand::AddToWorkspace(workspace) => {
+                self.add_to_workspace(hosts, workspace, window, cx)
+            }
             MenuCommand::Duplicate => {
                 if let [id] = hosts.as_slice() {
                     self.duplicate(*id, cx);
@@ -1166,6 +1169,119 @@ impl HostsScreen {
             Err(error) => {
                 tracing::warn!(code = error.code(), "move failed");
                 cx.emit(HostsEvent::Toast(strings::FAILED.into()));
+            }
+        }
+    }
+
+    /// The saved workspaces (id and name), for Add to Workspace ▸.
+    pub(crate) fn workspaces(&self, cx: &App) -> Vec<(Uuid, String)> {
+        let state = self.state.read(cx);
+        state
+            .core()
+            .zip(state.vault_id())
+            .and_then(|(core, vault_id)| core.workspaces_list(vault_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|view| (view.record.record_id, view.name))
+            .collect()
+    }
+
+    /// Add to Workspace ▸ (UI 4.5): a tab with one pane for each host,
+    /// after the workspace's tabs; `None` asks the name of a new one.
+    fn add_to_workspace(
+        &mut self,
+        hosts: Vec<Uuid>,
+        workspace: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use shellpp_core::service::last_session::{SavedPane, SavedSession, SavedTab};
+        let (core, vault_id, tabs) = {
+            let state = self.state.read(cx);
+            let (Some(core), Some(vault_id)) = (state.core().cloned(), state.vault_id()) else {
+                return;
+            };
+            let tabs: Vec<SavedTab> = hosts
+                .iter()
+                .filter_map(|id| {
+                    let host = state.host(*id)?;
+                    Some(SavedTab {
+                        title: None,
+                        root: SavedPane::Leaf {
+                            session: SavedSession::Host(shellpp_core::service::dto::RecordRef {
+                                vault_id: host.vault_id,
+                                record_id: *id,
+                            }),
+                        },
+                    })
+                })
+                .collect();
+            (core, vault_id, tabs)
+        };
+        if tabs.is_empty() {
+            return;
+        }
+        let save = move |record_id: Option<Uuid>, name: String, tabs: Vec<SavedTab>| {
+            let mut data = serde_json::Map::new();
+            data.insert("name".into(), serde_json::Value::String(name));
+            data.insert(
+                "tabs".into(),
+                serde_json::to_value(&tabs).unwrap_or(serde_json::Value::Null),
+            );
+            core.workspace_save(shellpp_core::service::snippets::RecordInput {
+                vault_id,
+                record_id,
+                data,
+            })
+        };
+        match workspace {
+            Some(id) => {
+                let state = self.state.read(cx);
+                let Some(existing) = state
+                    .core()
+                    .and_then(|core| core.workspaces_list(vault_id).ok())
+                    .and_then(|list| list.into_iter().find(|view| view.record.record_id == id))
+                else {
+                    return;
+                };
+                let mut all = existing.tabs;
+                all.extend(tabs);
+                all.truncate(shellpp_core::model::workspace::MAX_TABS);
+                let message = match save(Some(id), existing.name.clone(), all) {
+                    Ok(view) => strings::added_to_workspace(&view.name),
+                    Err(error) => {
+                        tracing::info!(code = error.code(), "workspace not saved");
+                        strings::FAILED.to_owned()
+                    }
+                };
+                cx.emit(HostsEvent::Toast(message.into()));
+            }
+            None => {
+                let screen = cx.entity().downgrade();
+                crate::new_tab::workspace_dialog::open(
+                    String::new(),
+                    window,
+                    cx,
+                    move |name: String, _: &mut Window, cx: &mut App| match save(
+                        None,
+                        name,
+                        tabs.clone(),
+                    ) {
+                        Ok(view) => {
+                            let message = strings::added_to_workspace(&view.name);
+                            let _ = screen.update(cx, |_, cx| {
+                                cx.emit(HostsEvent::Toast(message.into()));
+                            });
+                            true
+                        }
+                        // A name is needed: the dialog stays.
+                        Err(shellpp_core::CoreError::Validation(_)) => false,
+                        Err(error) => {
+                            tracing::info!(code = error.code(), "workspace not saved");
+                            true
+                        }
+                    },
+                );
             }
         }
     }

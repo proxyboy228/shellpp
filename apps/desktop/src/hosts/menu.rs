@@ -48,6 +48,9 @@ pub enum MenuCommand {
     Remove,
     OpenGroup,
     EditGroup,
+    /// Add to Workspace ▸ (UI 4.5): a tab per host in that workspace;
+    /// `None`: a new workspace (its name is asked).
+    AddToWorkspace(Option<Uuid>),
 }
 
 /// One entry of a menu model.
@@ -203,6 +206,29 @@ fn copy_to_entries(targets: &[MoveTarget]) -> Vec<MenuEntry> {
         .collect()
 }
 
+/// The workspaces by name, then New Workspace (UI 4.5).
+fn workspace_entries(workspaces: &[(Uuid, String)]) -> Vec<MenuEntry> {
+    let mut entries: Vec<MenuEntry> = workspaces
+        .iter()
+        .map(|(id, name)| {
+            MenuEntry::command(
+                &format!("menu-workspace-{id}"),
+                name,
+                MenuCommand::AddToWorkspace(Some(*id)),
+            )
+        })
+        .collect();
+    if !entries.is_empty() {
+        entries.push(MenuEntry::Separator);
+    }
+    entries.push(MenuEntry::command(
+        "menu-workspace-new",
+        strings::MENU_NEW_WORKSPACE,
+        MenuCommand::AddToWorkspace(None),
+    ));
+    entries
+}
+
 fn move_to_entries(targets: &[MoveTarget]) -> Vec<MenuEntry> {
     let mut entries: Vec<MenuEntry> = targets
         .iter()
@@ -232,7 +258,11 @@ fn move_to_entries(targets: &[MoveTarget]) -> Vec<MenuEntry> {
 /// Add to Workspace ▸, Edit Host Details, Collaborate, Move to ▸, Copy to ▸,
 /// Duplicate, Copy Link, Remove. `count` is the number of selected cards the
 /// menu acts on.
-pub fn host_menu(count: usize, move_targets: &[MoveTarget]) -> Vec<MenuEntry> {
+pub fn host_menu(
+    count: usize,
+    move_targets: &[MoveTarget],
+    workspaces: &[(Uuid, String)],
+) -> Vec<MenuEntry> {
     let single = count <= 1;
     vec![
         MenuEntry::command(
@@ -264,10 +294,7 @@ pub fn host_menu(count: usize, move_targets: &[MoveTarget]) -> Vec<MenuEntry> {
         MenuEntry::submenu(
             "menu-add-to-workspace",
             strings::MENU_ADD_TO_WORKSPACE,
-            vec![MenuEntry::note(
-                "menu-workspace-placeholder",
-                strings::IN_DEVELOPMENT,
-            )],
+            workspace_entries(workspaces),
         ),
         MenuEntry::command(
             "menu-edit-host",
@@ -533,7 +560,7 @@ mod tests {
 
     #[test]
     fn host_menu_has_the_order_of_ui_2_4() {
-        let entries = host_menu(1, &targets());
+        let entries = host_menu(1, &targets(), &[]);
         assert_eq!(
             entry_ids(&entries),
             [
@@ -654,7 +681,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            enabled(&host_menu(3, &targets())),
+            enabled(&host_menu(3, &targets(), &[])),
             [
                 "menu-quick-connect",
                 "menu-connect",
@@ -664,7 +691,7 @@ mod tests {
                 "menu-remove",
             ]
         );
-        assert_eq!(enabled(&host_menu(1, &targets())).len(), 10);
+        assert_eq!(enabled(&host_menu(1, &targets(), &[])).len(), 10);
     }
 
     #[test]

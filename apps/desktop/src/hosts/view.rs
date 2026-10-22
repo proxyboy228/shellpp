@@ -1040,8 +1040,9 @@ impl HostsScreen {
                 let (entries, handler) = screen.update(cx, |screen, cx| {
                     let records = screen.prepare_menu(id, cx);
                     let targets = screen.move_targets(&records, cx);
+                    let workspaces = screen.workspaces(cx);
                     (
-                        menu::host_menu(records.len(), &targets),
+                        menu::host_menu(records.len(), &targets, &workspaces),
                         screen.menu_handler(records, cx),
                     )
                 });

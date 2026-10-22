@@ -1998,3 +1998,87 @@ fn a_narrow_main_area_collapses_the_sidebar(cx: &mut TestAppContext) {
     cx.run_until_parked();
     state.update(cx, |state, _| state.shutdown());
 }
+
+/// UI 4.5 (D81): Add to Workspace ▸ New Workspace saves the chosen hosts as
+/// one-pane tabs under the name asked; a host added to an existing
+/// workspace comes after its tabs; the menu lists the workspaces.
+#[gpui_kit::test]
+fn hosts_are_added_to_workspaces(cx: &mut TestAppContext) {
+    let (ui, ids) = Screen::open(
+        cx,
+        1280.,
+        &[
+            json!({"address": "192.0.2.51", "label": "One"}),
+            json!({"address": "192.0.2.52", "label": "Two"}),
+        ],
+    );
+    let (one, two) = (ids[0], ids[1]);
+    let screen = ui.screen.clone();
+    cx.update_window(ui.handle, |_, window, cx| {
+        screen.update(cx, |screen, cx| {
+            screen.run_command(MenuCommand::AddToWorkspace(None), vec![one], window, cx);
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    ui.frame(cx, |window, cx| {
+        window.render_frame(cx);
+        window.click("workspace-name", cx);
+        window.input("Lab", cx);
+        window.click("workspace-create", cx);
+    });
+    let (core, vault) = ui.state.read_with(cx, |state, _| {
+        (state.core().cloned().unwrap(), state.vault_id().unwrap())
+    });
+    let saved = core.workspaces_list(vault).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, "Lab");
+    assert_eq!(saved[0].tabs.len(), 1);
+    let lab = saved[0].record.record_id;
+
+    // The menu offers it; adding the second host appends a tab.
+    let menu = ui
+        .screen
+        .read_with(cx, |screen, cx| screen.context_menu_for(two, cx));
+    let ids_of = |entries: &[MenuEntry]| -> Vec<String> {
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuEntry::Submenu { id, entries, .. } if id == "menu-add-to-workspace" => Some(
+                    entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            MenuEntry::Command { id, .. } => Some(id.to_string()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    assert_eq!(
+        ids_of(&menu),
+        [
+            format!("menu-workspace-{lab}"),
+            "menu-workspace-new".to_owned()
+        ]
+    );
+    cx.update_window(ui.handle, |_, window, cx| {
+        screen.update(cx, |screen, cx| {
+            screen.run_command(
+                MenuCommand::AddToWorkspace(Some(lab)),
+                vec![two],
+                window,
+                cx,
+            );
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let saved = core.workspaces_list(vault).unwrap();
+    assert_eq!(saved[0].tabs.len(), 2);
+    drop(core);
+    ui.finish(cx);
+}
