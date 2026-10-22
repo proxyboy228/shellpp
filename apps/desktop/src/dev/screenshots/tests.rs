@@ -103,6 +103,8 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "new-tab-search",
         "sidebar-tools",
         "terminal-scrollback",
+        "broadcast-tabs",
+        "broadcast-marks",
         "sidebar-snippets",
         "sidebar-history",
         "sidebar-appearance",

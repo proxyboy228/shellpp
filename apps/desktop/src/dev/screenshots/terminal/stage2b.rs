@@ -40,7 +40,7 @@ use crate::state::AppState;
 use crate::terminal_sidebar::SidebarTab;
 
 /// The states of this module.
-pub const STATES: [ShotState; 12] = [
+pub const STATES: [ShotState; 14] = [
     ShotState::TerminalConnecting,
     ShotState::TerminalSplits,
     ShotState::SplitPicker,
@@ -49,6 +49,8 @@ pub const STATES: [ShotState; 12] = [
     ShotState::NewTabSearch,
     ShotState::SidebarTools,
     ShotState::TerminalScrollback,
+    ShotState::BroadcastTabs,
+    ShotState::BroadcastMarks,
     ShotState::SidebarSnippets,
     ShotState::SidebarHistory,
     ShotState::SidebarAppearance,
@@ -333,6 +335,40 @@ pub async fn reach(
             )
             .await
         }
+        ShotState::BroadcastTabs | ShotState::BroadcastMarks => {
+            // Two more tabs (D86): the first tab's menu lists the three,
+            // the first and the second ticked.
+            let (second, _) = ssh_session(cx, handle, root, state, rig, 1, shot).await?;
+            ssh_session(cx, handle, root, state, rig, 2, shot).await?;
+            cx.update(|cx| {
+                shell.update(cx, |shell, cx| shell.set_top_tab(TopTab::Session(id), cx))
+            });
+            settle(cx, handle).await?;
+            let tab = cx
+                .update(|cx| {
+                    shell
+                        .read(cx)
+                        .sessions()
+                        .get(id)
+                        .map(|tab| tab.element_id())
+                })
+                .ok_or_else(|| failed(shot, "no tab"))?;
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.right_click(tab, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await?;
+            click(cx, handle, "tab-menu-broadcast")?;
+            settle(cx, handle).await?;
+            click(cx, handle, &format!("broadcast-tab-{second}"))?;
+            settle(cx, handle).await?;
+            if shot == ShotState::BroadcastMarks {
+                click(cx, handle, "broadcast-start")?;
+                settle(cx, handle).await?;
+            }
+            Ok(())
+        }
         ShotState::SidebarSnippets
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance
@@ -589,6 +625,17 @@ pub fn check(
             } else {
                 need(page.query().is_empty(), "a search is typed")
             }
+        }
+        ShotState::BroadcastTabs => need(visible(window, "broadcast-dialog"), "no tab list"),
+        ShotState::BroadcastMarks => {
+            let marked = shell
+                .read(cx)
+                .sessions()
+                .tabs()
+                .iter()
+                .filter(|tab| visible(window, &format!("{}-broadcast", tab.element_id())))
+                .count();
+            need(marked == 2, "not two broadcasting tabs")
         }
         ShotState::TerminalScrollback => {
             need(running, "the session does not run")?;
