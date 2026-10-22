@@ -178,10 +178,12 @@ fn with_journal(change: impl FnOnce(&mut Journal)) {
     });
 }
 
-/// Rows moved into the journal on this thread ([`super::journal::compact`]).
-pub fn journal_grew(lines: usize) {
+/// Rows moved into the journal on this thread and its oldest lines dropped
+/// to keep the buffer within its limit ([`super::journal::compact`]).
+pub fn journal_changed(added: usize, dropped: usize) {
     if let Some(mut count) = EVICTIONS.get() {
-        count.journal += lines;
+        count.journal = (count.journal + added).saturating_sub(dropped);
+        count.dropped += dropped;
         EVICTIONS.set(Some(count));
     }
 }
@@ -286,7 +288,7 @@ impl<T: EventListener> Capped<'_, T> {
         } else if full {
             // Back to the limit: the oldest lines go, the journal's first
             // (they are older than the grid's), as alacritty drops them.
-            let over = after.saturating_sub(limit);
+            let over = (count.journal + after).saturating_sub(count.limit);
             let from_journal = over.min(count.journal);
             if from_journal > 0 {
                 with_journal(|journal| journal.pop_front(from_journal));

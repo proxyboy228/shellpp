@@ -45,6 +45,10 @@ pub const COMPACT_BATCH: usize = 200;
 /// Longest time output can keep the grid over [`LIVE_HISTORY`] +
 /// [`COMPACT_BATCH`] lines.
 pub const COMPACT_INTERVAL: Duration = Duration::from_millis(250);
+/// The pause in the output after which the grid gives its rows over
+/// [`LIVE_HISTORY`] to the journal: a trickle of lines does not move them
+/// (and make alacritty allocate its spare rows again) one at a time.
+pub const COMPACT_QUIET: Duration = Duration::from_millis(100);
 
 /// Cells of one look, in a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -396,13 +400,19 @@ pub fn scroll<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, scrol
 
 /// Moves the scrollback rows of `term` over [`LIVE_HISTORY`] into
 /// `journal` (oldest first) and keeps the view on the same text; returns
-/// the lines moved. `limit` is the scrollback of the whole buffer: the grid
-/// may grow again by what the journal does not hold.
-pub fn compact<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, limit: usize) -> usize {
+/// the lines moved and the journal's oldest lines dropped to keep the
+/// buffer within `limit` (the scrollback of the whole buffer: the grid may
+/// grow again by what the journal does not hold). Never on the alternate
+/// screen, whose grid has no scrollback of the journal's.
+pub fn compact<T: EventListener>(
+    term: &mut Term<T>,
+    journal: &mut Journal,
+    limit: usize,
+) -> (usize, usize) {
     let grid = term.grid();
     let history = grid.history_size();
-    if history <= LIVE_HISTORY {
-        return 0;
+    if history <= LIVE_HISTORY || term.mode().contains(TermMode::ALT_SCREEN) {
+        return (0, 0);
     }
     let moving = history - LIVE_HISTORY;
     let columns = grid.columns();
@@ -421,6 +431,10 @@ pub fn compact<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, limi
     {
         term.selection = None;
     }
+    // A grid that held more than its share (after a resize) leaves the
+    // buffer over its limit: the oldest lines go.
+    let dropped = (journal.len() + LIVE_HISTORY).saturating_sub(limit);
+    journal.pop_front(dropped);
     let grid = term.grid_mut();
     grid.update_history(LIVE_HISTORY);
     // Alacritty keeps up to a thousand rows it dropped for reuse: they go.
@@ -428,9 +442,9 @@ pub fn compact<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, limi
     grid.update_history(limit.saturating_sub(journal.len()).max(LIVE_HISTORY));
     // The rows of the view that moved are now above the grid's top.
     if offset > LIVE_HISTORY {
-        journal.view += offset - LIVE_HISTORY;
+        journal.view = (journal.view + offset - LIVE_HISTORY).min(journal.len());
     }
-    moving
+    (moving, dropped)
 }
 
 #[cfg(test)]
@@ -536,8 +550,8 @@ mod tests {
         let mut journal = Journal::default();
         let history = term.grid().history_size();
         assert!(history >= 10_000, "{history}");
-        let moved = compact(&mut term, &mut journal, 10_000);
-        assert_eq!(moved, history - LIVE_HISTORY);
+        let (moved, dropped) = compact(&mut term, &mut journal, 10_000);
+        assert_eq!((moved, dropped), (history - LIVE_HISTORY, 0));
         let grid_bytes =
             (term.grid().history_size() + term.grid().screen_lines()) * 200 * size_of::<Cell>();
         let total = grid_bytes + journal.bytes();
@@ -580,8 +594,8 @@ mod tests {
         };
         feed(&mut term, &mut parser, 0..2_500);
         let first = limits::evictions();
-        let moved = compact(&mut term, &mut journal.lock().unwrap(), 2_000);
-        limits::journal_grew(moved);
+        let (moved, dropped) = compact(&mut term, &mut journal.lock().unwrap(), 2_000);
+        limits::journal_changed(moved, dropped);
         // As `Term::set_options` does, then a reflow into twice the rows.
         term.grid_mut().update_history(2_000);
         term.resize(GridDims { cols: 10, rows: 3 });

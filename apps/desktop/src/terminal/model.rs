@@ -41,7 +41,9 @@ use alacritty_terminal::term::{Config, Osc52, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor, Rgb, StdSyncHandler};
 
 use super::colors::Palette;
-use super::journal::{self, COMPACT_BATCH, COMPACT_INTERVAL, Journal, LIVE_HISTORY, Lines};
+use super::journal::{
+    self, COMPACT_BATCH, COMPACT_INTERVAL, COMPACT_QUIET, Journal, LIVE_HISTORY, Lines,
+};
 use super::limits::{self, Capped, MAX_ZEROWIDTH, OscLimiter};
 
 /// Largest chunk the queue carries; bigger feeds are split.
@@ -492,9 +494,12 @@ impl TerminalHandle {
                 // A reflow or fewer rows push more lines into the grid's
                 // scrollback: let it hold them, so none is lost between the
                 // journal and the grid; the next output trims the buffer to
-                // its limit, the journal's oldest lines first.
-                let history = term.grid().history_size();
-                term.grid_mut().update_history(self.scrollback.max(history));
+                // its limit, the journal's oldest lines first. Not on the
+                // alternate screen: its grid has no scrollback.
+                if !term.mode().contains(TermMode::ALT_SCREEN) {
+                    let history = term.grid().history_size();
+                    term.grid_mut().update_history(self.scrollback.max(history));
+                }
                 term.resize(GridDims::from(size));
                 // A view in the journal shows the grid from its top.
                 let journal = self.outbox.journal();
@@ -641,7 +646,21 @@ fn parse_loop(
     scrollback: usize,
 ) {
     limits::count_evictions(scrollback, outbox.journal.clone());
+    // The scrollback beyond the newest lines moves to the journal after a
+    // pause in the output, now and then during a long run of it, and before
+    // a flush answers (D85).
     let mut compacted = Instant::now();
+    let mut compact_at: Option<Instant> = None;
+    let compact = |outbox: &Outbox| {
+        let mut locked = term.lock();
+        let had_selection = locked.selection.is_some();
+        let (moved, dropped) = journal::compact(&mut locked, &mut outbox.journal(), scrollback);
+        limits::journal_changed(moved, dropped);
+        outbox.evicted.store(limits::evictions(), Ordering::Release);
+        if had_selection && locked.selection.is_none() {
+            outbox.selection_moved.store(true, Ordering::Release);
+        }
+    };
     // Published before the lock is let go (see `Outbox::evicted`).
     let publish = |outbox: &Outbox| {
         outbox.evicted.store(limits::evictions(), Ordering::Release);
@@ -651,17 +670,31 @@ fn parse_loop(
     let mut batch: Vec<u8> = Vec::with_capacity(CHUNK_BYTES);
     let mut flushes: Vec<mpsc::Sender<()>> = Vec::new();
     loop {
-        let first = match processor.sync_timeout().sync_timeout() {
+        let sync = processor.sync_timeout().sync_timeout();
+        let deadline = match (sync, compact_at) {
+            (Some(sync), Some(compact)) => Some(sync.min(compact)),
+            (sync, compact) => sync.or(compact),
+        };
+        let first = match deadline {
             None => receiver.recv_blocking(),
             Some(deadline) => match receive_until(&receiver, deadline) {
                 Some(message) => message,
                 None => {
-                    // The synchronized update timed out: show what it has.
-                    let mut locked = term.lock();
-                    processor.stop_sync(&mut Capped(&mut *locked));
-                    publish(&outbox);
-                    drop(locked);
-                    outbox.wake();
+                    let now = Instant::now();
+                    if sync.is_some_and(|sync| now >= sync) {
+                        // The synchronized update timed out: show what it
+                        // has.
+                        let mut locked = term.lock();
+                        processor.stop_sync(&mut Capped(&mut *locked));
+                        publish(&outbox);
+                        drop(locked);
+                        outbox.wake();
+                    }
+                    if compact_at.is_some_and(|at| now >= at) {
+                        compact_at = None;
+                        compact(&outbox);
+                        compacted = now;
+                    }
                     continue;
                 }
             },
@@ -700,23 +733,16 @@ fn parse_loop(
             drop(locked);
             outbox.wake();
         }
-        // The scrollback beyond the newest lines moves to the journal once
-        // output pauses, or now and then while it does not (D85).
-        {
-            let mut locked = term.lock();
-            let history = locked.grid().history_size();
-            let due = history > LIVE_HISTORY
-                && (receiver.is_empty()
-                    || (history > LIVE_HISTORY + COMPACT_BATCH
-                        && compacted.elapsed() >= COMPACT_INTERVAL));
-            if due {
-                let had_selection = locked.selection.is_some();
-                let moved = journal::compact(&mut locked, &mut outbox.journal(), scrollback);
-                limits::journal_grew(moved);
-                if had_selection && locked.selection.is_none() {
-                    outbox.selection_moved.store(true, Ordering::Release);
-                }
+        let history = term.lock().grid().history_size();
+        if history > LIVE_HISTORY {
+            let long_run =
+                history > LIVE_HISTORY + COMPACT_BATCH && compacted.elapsed() >= COMPACT_INTERVAL;
+            if long_run || !flushes.is_empty() {
+                compact(&outbox);
                 compacted = Instant::now();
+                compact_at = None;
+            } else {
+                compact_at = Some(Instant::now() + COMPACT_QUIET);
             }
         }
         if batch.capacity() > BATCH_BYTES * 2 {

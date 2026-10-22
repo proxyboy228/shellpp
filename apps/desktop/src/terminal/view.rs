@@ -735,7 +735,11 @@ impl TerminalView {
             _ if grid != self.selection_grid => self.selection = None,
             (Some(_), None) if !moved => self.selection = None,
             (Some(before), Some(after)) if before != after => {
-                let lines = after.0.line as i64 - before.0.line as i64;
+                // An end the emulator clamped (at the edge of the screen or
+                // of a scroll region) moved less: the other one tells.
+                let start = after.0.line as i64 - before.0.line as i64;
+                let end = after.1.line as i64 - before.1.line as i64;
+                let lines = if start.abs() >= end.abs() { start } else { end };
                 self.selection = Some(selection.shifted(lines));
             }
             _ => {}

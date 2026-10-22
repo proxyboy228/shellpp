@@ -1370,6 +1370,16 @@ fn the_compact_scrollback_scrolls_searches_and_selects(cx: &mut TestAppContext) 
     fixture
         .terminal
         .update(cx, |terminal, cx| terminal.clear_search(cx));
+    // A resize there gives the alternate screen no scrollback, and nothing
+    // of it reaches the journal.
+    let journal = fixture.handle.outbox().journal().len();
+    fixture.handle.resize(TerminalSize::cells(50, 10));
+    fixture.feed(cx, lines(0..1_200).as_bytes());
+    {
+        let term = fixture.handle.term().lock();
+        assert_eq!(term.grid().history_size(), 0);
+    }
+    assert_eq!(fixture.handle.outbox().journal().len(), journal);
     fixture.feed(cx, b"\x1b[?1049l");
 
     // RIS from the alternate screen clears the journal too.
