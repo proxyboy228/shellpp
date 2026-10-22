@@ -373,8 +373,9 @@ impl PaneGroup {
 
     /// Points each member's terminal at the other members (while
     /// broadcasting) and every other terminal at none. Runs at each render
-    /// while broadcasting: a member that stopped running or closed leaves,
-    /// and fewer than two members end it.
+    /// and session change while broadcasting (a tab in the background
+    /// too): a member that stopped running or closed leaves, and fewer than
+    /// two members end it.
     fn sync_broadcast(&mut self, cx: &mut App) {
         let members: Vec<(PaneId, Entity<crate::terminal::TerminalView>)> = if self.broadcast {
             self.broadcast_members
@@ -428,7 +429,15 @@ impl PaneGroup {
             cx.subscribe(&session, move |this, session, event, cx| {
                 this.on_session_event(id, &session, event, cx)
             }),
-            cx.observe(&session, |this, _, cx| this.refresh_summary(cx)),
+            cx.observe(&session, |this, _, cx| {
+                if this.broadcast {
+                    this.sync_broadcast(cx);
+                    if !this.broadcast {
+                        cx.notify();
+                    }
+                }
+                this.refresh_summary(cx)
+            }),
         ];
         if !session.read(cx).is_started() {
             self.unstarted.push(session.clone());
@@ -897,7 +906,10 @@ impl PaneGroup {
         let marked = self.panes.len() > 1 && id == self.active;
         // Broadcast input: the panes that receive what is typed in the
         // active one are marked (UI 4.7).
-        let broadcast = self.broadcast && id != self.active && self.broadcast_members.contains(&id);
+        let broadcast = self.broadcast
+            && id != self.active
+            && self.broadcast_members.contains(&id)
+            && self.broadcast_members.contains(&self.active);
         let warning = cx.theme().warning;
         div()
             .id(Self::element_id(id))

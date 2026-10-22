@@ -224,6 +224,9 @@ pub struct TerminalView {
     /// is typed here also goes to; each encodes it with its own modes and
     /// Backspace setting.
     broadcast: Vec<WeakEntity<TerminalView>>,
+    /// Broadcast input stopped at a password prompt until Enter or Ctrl+C
+    /// is typed here (a prompt that echoes `*` stays private too).
+    broadcast_paused: bool,
     /// The last cell reported for motion without a button (mode 1003).
     hover_cell: Option<(usize, usize)>,
     scroll_remainder: f32,
@@ -321,6 +324,7 @@ impl TerminalView {
             autoscroll: None,
             backspace: BackspaceKey::default(),
             broadcast: Vec::new(),
+            broadcast_paused: false,
             hover_cell: None,
             scroll_remainder: 0.,
             marked_text: None,
@@ -359,7 +363,6 @@ impl TerminalView {
         self.focus.focus(window, cx);
     }
 
-    /// What plain Backspace sends from now on (the host's setting, UI 3.1).
     /// Whether the shell waits at its prompt: it turned bracketed paste on
     /// (bash, zsh, fish do at each prompt).
     pub fn at_prompt(&self) -> bool {
@@ -372,10 +375,16 @@ impl TerminalView {
         self.broadcast = targets;
     }
 
-    /// The broadcast targets now; none while the cursor is at a password
-    /// prompt (a `sudo` password stays in its pane).
-    fn broadcast_targets(&self) -> Vec<gpui::Entity<TerminalView>> {
-        if self.broadcast.is_empty() || self.handle.cursor_at_password_prompt() {
+    /// The broadcast targets for `bytes` typed now; none from a password
+    /// prompt until Enter or Ctrl+C ends it here (a `sudo` password stays
+    /// in its pane, its Enter too).
+    fn broadcast_targets(&mut self, bytes: &[u8]) -> Vec<gpui::Entity<TerminalView>> {
+        if self.broadcast.is_empty() {
+            self.broadcast_paused = false;
+            return Vec::new();
+        }
+        if self.broadcast_paused || self.handle.cursor_at_password_prompt() {
+            self.broadcast_paused = !bytes.iter().any(|byte| matches!(byte, b'\r' | 0x03));
             return Vec::new();
         }
         self.broadcast
@@ -414,16 +423,19 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Typed text (the input handler's path), mirrored to the broadcast
-    /// targets.
-    fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        let targets = self.broadcast_targets();
-        self.send_input(text.as_bytes().to_vec(), cx);
+    /// Typed bytes that are the same in every terminal (text, Tab,
+    /// Shift+Tab), mirrored to the broadcast targets.
+    fn type_bytes(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        let targets = self.broadcast_targets(&bytes);
         for target in targets {
-            target.update(cx, |target, cx| {
-                target.mirrored_bytes(text.as_bytes().to_vec(), cx)
-            });
+            target.update(cx, |target, cx| target.mirrored_bytes(bytes.clone(), cx));
         }
+        self.send_input(bytes, cx);
+    }
+
+    /// Typed text (the input handler's path).
+    fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.type_bytes(text.as_bytes().to_vec(), cx);
     }
 
     /// Tests: text as the input handler types it.
@@ -432,6 +444,7 @@ impl TerminalView {
         self.type_text(text, cx);
     }
 
+    /// What plain Backspace sends from now on (the host's setting, UI 3.1).
     pub fn set_backspace(&mut self, backspace: BackspaceKey) {
         self.backspace = backspace;
     }
@@ -695,7 +708,7 @@ impl TerminalView {
         let page = self.layout.borrow().rows.max(2) as i32 - 1;
         match input::map_key(&event.keystroke, self.mode(), self.backspace) {
             KeyAction::Send(bytes) => {
-                let targets = self.broadcast_targets();
+                let targets = self.broadcast_targets(&bytes);
                 self.send_input(bytes, cx);
                 for target in targets {
                     target.update(cx, |target, cx| target.mirrored_key(&event.keystroke, cx));
@@ -748,9 +761,10 @@ impl TerminalView {
     }
 
     fn send_paste(&mut self, cleaned: &str, cx: &mut Context<Self>) {
-        let targets = self.broadcast_targets();
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
-        self.send_input(paste::paste_bytes(cleaned, bracketed), cx);
+        let bytes = paste::paste_bytes(cleaned, bracketed);
+        let targets = self.broadcast_targets(&bytes);
+        self.send_input(bytes, cx);
         for target in targets {
             target.update(cx, |target, cx| target.mirrored_paste(cleaned, cx));
         }
@@ -1136,9 +1150,9 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &edit::SelectAll, window, cx| {
                 this.select_all(&SelectAll, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &SendTab, _, cx| this.send_input(b"\t".to_vec(), cx)))
+            .on_action(cx.listener(|this, _: &SendTab, _, cx| this.type_bytes(b"\t".to_vec(), cx)))
             .on_action(
-                cx.listener(|this, _: &SendBackTab, _, cx| this.send_input(b"\x1b[Z".to_vec(), cx)),
+                cx.listener(|this, _: &SendBackTab, _, cx| this.type_bytes(b"\x1b[Z".to_vec(), cx)),
             )
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::mouse_down))

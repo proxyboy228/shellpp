@@ -62,7 +62,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use gpui::Context;
 use shellpp_core::history::{
-    MAX_COMMAND_CHARS, clean_command, evaluate, prompt_looks_like_password,
+    MAX_COMMAND_CHARS, clean_command, ends_in_password_prompt, evaluate, prompt_looks_like_password,
 };
 use shellpp_core::service::dto::HistoryCandidate;
 use zeroize::Zeroizing;
@@ -421,17 +421,30 @@ fn read_line(term: &Term<Listener>, boundary: Boundary) -> Option<Snapshot> {
 }
 
 impl TerminalHandle {
-    /// Broadcast input (UI 4.4): whether the line the cursor is on looks
-    /// like a password prompt (`sudo`, `su`, `mysql -p`); typed input then
+    /// Broadcast input (UI 4.4): whether the text before the cursor ends
+    /// in a password prompt (`sudo`, `su`, `mysql -p`); typed input then
     /// stays in its own pane. A line too long to follow counts as one.
     pub fn cursor_at_password_prompt(&self) -> bool {
         let term = self.term().lock();
-        let cursor = term.grid().cursor.point.line;
-        let Some(start) = logical_start(&term, cursor) else {
+        let cursor = &term.grid().cursor;
+        let Some(start) = logical_start(&term, cursor.point.line) else {
             return true;
         };
-        let text = Zeroizing::new(rows_text(&term, start, logical_end(&term, cursor), 0));
-        prompt_looks_like_password(&text)
+        let columns = term.grid().columns();
+        let to = if cursor.input_needs_wrap {
+            columns
+        } else {
+            cursor.point.column.0.min(columns)
+        };
+        let mut before = Zeroizing::new(String::new());
+        let mut count = 0;
+        let mut line = start;
+        while line < cursor.point.line {
+            count = push_row(&term, line, 0, columns, &mut before, count);
+            line += 1;
+        }
+        push_row(&term, cursor.point.line, 0, to, &mut before, count);
+        ends_in_password_prompt(&before)
     }
 }
 

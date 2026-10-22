@@ -398,6 +398,29 @@ fn password_prompts_in_every_listed_language() {
     }
 }
 
+/// Broadcast input pauses at a prompt the cursor waits after, not at a
+/// command that names a secret.
+#[test]
+fn text_that_ends_in_a_password_prompt() {
+    for text in [
+        "[sudo] password for alice: ",
+        "Password:",
+        "Enter passphrase for key '/home/a/.ssh/id_ed25519': ",
+        "密码：",
+    ] {
+        assert!(ends_in_password_prompt(text), "{text}");
+    }
+    for text in [
+        "alice@host:~$ kubectl get secret",
+        "alice@host:~$ echo password",
+        "alice@host:~$ ",
+        "[sudo] password for alice: ***",
+        "",
+    ] {
+        assert!(!ends_in_password_prompt(text), "{text}");
+    }
+}
+
 /// A prompt printed after the boundary (input typed before the prompt
 /// appeared) is part of the captured line; it drops the line too.
 #[test]

@@ -10,6 +10,8 @@ pub const MENU_SPLIT_HORIZONTALLY: &str = "Split Horizontally";
 pub const MENU_SPLIT_VERTICALLY: &str = "Split Vertically";
 pub const MENU_BROADCAST_INPUT: &str = "Broadcast Input";
 pub const MENU_BROADCAST_STOP: &str = "Stop Broadcast Input";
+/// Broadcast input asked with fewer than two connected panes (D81).
+pub const BROADCAST_TOO_FEW: &str = "Broadcast input needs two connected panes";
 pub const MENU_CLOSE: &str = "Close";
 
 /// Accessible name of the inline Rename field.

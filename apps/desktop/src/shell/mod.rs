@@ -2354,10 +2354,14 @@ impl Shell {
             }
             TabCommand::BroadcastInput => {
                 if let Some(group) = group {
-                    group.update(cx, |group, cx| {
+                    let refused = group.update(cx, |group, cx| {
                         let on = !group.broadcasting();
                         group.set_broadcast(on, cx);
+                        on && !group.broadcasting()
                     });
+                    if refused {
+                        self.toast(strings::BROADCAST_TOO_FEW, cx);
+                    }
                 }
             }
             TabCommand::Close => {

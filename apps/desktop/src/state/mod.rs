@@ -753,6 +753,7 @@ impl AppState {
             self.vault_id = None;
             self.hosts = Rc::default();
             self.groups = Rc::default();
+            self.workspaces = Rc::default();
             // A lock keeps the place (open group, selection): after unlock the
             // window returns to it (UI 13.3); the next reload drops ids that
             // no longer exist. A new vault starts at the top level.

@@ -568,6 +568,9 @@ impl SessionPane {
                         cx.background_executor().timer(RUN_PROMPT_POLL).await;
                     }
                     let _ = this.update(cx, |this, cx| {
+                        if this.phase != Phase::Running {
+                            return;
+                        }
                         if let Some(terminal) = &this.terminal {
                             terminal.update(cx, |terminal, cx| {
                                 terminal.insert_snippet(&script, true, cx);

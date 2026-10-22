@@ -219,6 +219,15 @@ pub fn prompt_looks_like_password(prompt_text: &str) -> bool {
 /// Characters that end a prompt: `:` and the fullwidth `：`.
 const PROMPT_END: &[char] = &[':', '\u{ff1a}'];
 
+/// The text before the cursor ends in a password prompt: the password
+/// prompt pattern with a `:` last, as `[sudo] password for dev: `
+/// (broadcast input, UI 4.4). A command that names a secret is no prompt:
+/// `kubectl get secret`.
+pub fn ends_in_password_prompt(before_cursor: &str) -> bool {
+    let text = before_cursor.trim_end();
+    text.ends_with(PROMPT_END) && prompt_looks_like_password(text)
+}
+
 /// The captured line itself holds a password prompt: a match of the
 /// password prompt pattern with a `:` after it on the line
 /// (docs/security.md, section 10.1, stage 2b decision). This catches a
