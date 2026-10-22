@@ -366,6 +366,51 @@ fn a_new_pane_offers_the_split_host_first(cx: &mut TestAppContext) {
     tab.finish(cx);
 }
 
+/// A split from a Telnet pane opens Telnet to the same host again
+/// (review, D87), though the host's primary protocol is SSH.
+#[gpui_kit::test]
+fn a_split_from_a_telnet_pane_stays_telnet(cx: &mut TestAppContext) {
+    let tab = Tab::open_with(
+        |state, cx| {
+            state.update(cx, |state, cx| {
+                let saved = state
+                    .save_host(
+                        None,
+                        json!({"label": "router", "address": "192.0.2.20", "telnet": {"port": 23}})
+                            .as_object()
+                            .cloned()
+                            .unwrap(),
+                        cx,
+                    )
+                    .unwrap();
+                PaneTarget::Telnet {
+                    vault_id: saved.vault_id,
+                    record_id: saved.record_id,
+                }
+            })
+        },
+        cx,
+    );
+    let telnet = tab
+        .read(cx, |group, cx| group.active_target(cx))
+        .expect("telnet");
+    let new = tab
+        .update(cx, |group, cx| group.split(Direction::Row, cx))
+        .unwrap();
+    let record_id = telnet.host_id().unwrap();
+    assert!(tab.visible_in(new, &format!("pane-picker-row-origin-{record_id}"), cx));
+    tab.press("enter", cx);
+    assert_eq!(
+        tab.record.calls().last(),
+        Some(&Call::Launch(telnet.open_request()))
+    );
+    assert_eq!(
+        tab.read(cx, |group, cx| group.target(new, cx)),
+        Some(telnet)
+    );
+    tab.finish(cx);
+}
+
 /// Dividers move with the pointer and keep every pane at least
 /// `PANE_MIN` wide.
 #[gpui_kit::test]

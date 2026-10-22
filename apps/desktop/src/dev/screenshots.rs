@@ -307,6 +307,15 @@ pub enum ShotState {
     SettingsLogs,
     /// The Shortcuts section of the Settings window (UI 12.5).
     SettingsShortcuts,
+    // Run 5, plan 9 (D87, D88): `stage9_shot`.
+    /// The host panel scrolled to its Telnet block and the warning.
+    HostPanelTelnet,
+    /// New Serial Connection with the run's two ports.
+    SerialDialog,
+    /// A Telnet tab at the login prompt of the run's Telnet server.
+    TelnetTab,
+    /// A serial tab on a port of the run (a console prompt).
+    SerialTab,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -445,7 +454,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 87] = [
+    pub const ALL: [Self; 91] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -502,6 +511,8 @@ impl ShotState {
         Self::KeychainEmpty,
         Self::FirstRun,
         Self::Unlock,
+        Self::HostPanelTelnet,
+        Self::SerialDialog,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -518,6 +529,8 @@ impl ShotState {
         Self::TerminalScrollback,
         Self::BroadcastTabs,
         Self::BroadcastMarks,
+        Self::TelnetTab,
+        Self::SerialTab,
         Self::SidebarSnippets,
         Self::SidebarHistory,
         Self::SidebarAppearance,
@@ -537,7 +550,7 @@ impl ShotState {
     /// The states with sessions to the SSH test server: the terminal states
     /// (owner's stage 2a and 2b, step 5.1) and the offer to save a
     /// quick-connect host, which needs a session that connected.
-    pub const TERMINAL: [Self; 31] = [
+    pub const TERMINAL: [Self; 33] = [
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -554,6 +567,8 @@ impl ShotState {
         Self::TerminalScrollback,
         Self::BroadcastTabs,
         Self::BroadcastMarks,
+        Self::TelnetTab,
+        Self::SerialTab,
         Self::SidebarSnippets,
         Self::SidebarHistory,
         Self::SidebarAppearance,
@@ -642,6 +657,10 @@ impl ShotState {
             Self::Logs => "logs",
             Self::SettingsLogs => "settings-logs",
             Self::SettingsShortcuts => "settings-shortcuts",
+            Self::HostPanelTelnet => "host-panel-telnet",
+            Self::SerialDialog => "serial-dialog",
+            Self::TelnetTab => "telnet-tab",
+            Self::SerialTab => "serial-tab",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -749,6 +768,8 @@ impl ShotState {
             | Self::TerminalScrollback
             | Self::BroadcastTabs
             | Self::BroadcastMarks
+            | Self::TelnetTab
+            | Self::SerialTab
             | Self::SidebarSnippets
             | Self::SidebarHistory
             | Self::SidebarAppearance
@@ -1011,11 +1032,12 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
             let state = cx.new(|cx| AppState::new(opened, cx));
             // The session tabs of the terminal states: never the user's
             // ~/.ssh or agent (the test server's hosts have a password).
-            let sessions = crate::sessions::ui::install(
-                &state,
-                crate::sessions::ManagerOptions::with_keys(crate::sessions::KeySources::none()),
-                cx,
-            );
+            // The serial ports of the run (stage 9, D88): no hardware.
+            let options = crate::sessions::ManagerOptions {
+                serial: std::sync::Arc::new(stage9_shot::DemoPorts),
+                ..crate::sessions::ManagerOptions::with_keys(crate::sessions::KeySources::none())
+            };
+            let sessions = crate::sessions::ui::install(&state, options, cx);
             if !sessions {
                 complain("the session layer did not start; the terminal states will fail");
             }
@@ -1492,6 +1514,8 @@ pub async fn reset_demo(
             state.clear_selection(cx);
             state.set_location(None, cx);
         });
+        // The Telnet host of the stage 9 states.
+        stage9_shot::remove_telnet_host(state, cx);
     });
     // The search bar is on screen again (Vaults tab): clear it like a user.
     let has_text = cx.update(|cx| !screen.read(cx).filter().text().is_empty());
@@ -1714,6 +1738,9 @@ pub async fn reach_state(
         ShotState::Logs | ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
             logs_shot::reach(cx, handle, root, state, shot_state).await
         }
+        ShotState::HostPanelTelnet | ShotState::SerialDialog => {
+            stage9_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -1744,6 +1771,8 @@ pub async fn reach_state(
         | ShotState::TerminalScrollback
         | ShotState::BroadcastTabs
         | ShotState::BroadcastMarks
+        | ShotState::TelnetTab
+        | ShotState::SerialTab
         | ShotState::SidebarSnippets
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance
@@ -1778,6 +1807,9 @@ pub fn check_state(
     }
     if logs_shot::STATES.contains(&shot_state) {
         return logs_shot::check(cx, handle, shot_state);
+    }
+    if stage9_shot::STATES.contains(&shot_state) {
+        return stage9_shot::check(cx, handle, root, shot_state);
     }
     let shell = cx.update(|cx| root.read(cx).shell().cloned());
     let facts = cx
@@ -1941,6 +1973,10 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::Logs | ShotState::SettingsLogs | ShotState::SettingsShortcuts => {
                 Err("checked with the stage 6 screens")
             }
+            ShotState::HostPanelTelnet
+            | ShotState::SerialDialog
+            | ShotState::TelnetTab
+            | ShotState::SerialTab => Err("checked with the stage 9 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -2240,6 +2276,7 @@ mod known_hosts_shot;
 mod logs_shot;
 mod sftp_shot;
 mod snippets_shot;
+mod stage9_shot;
 mod terminal;
 mod transfer_shot;
 

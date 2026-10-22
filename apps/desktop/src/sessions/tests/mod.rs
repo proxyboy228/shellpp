@@ -18,6 +18,7 @@ mod background;
 mod ends;
 mod history;
 mod local;
+mod serial;
 mod ssh;
 mod telnet;
 

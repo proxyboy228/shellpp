@@ -105,6 +105,11 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "terminal-scrollback",
         "broadcast-tabs",
         "broadcast-marks",
+        // Run 5, plan 9 (D87, D88).
+        "host-panel-telnet",
+        "serial-dialog",
+        "telnet-tab",
+        "serial-tab",
         "sidebar-snippets",
         "sidebar-history",
         "sidebar-appearance",
@@ -158,7 +163,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 84);
+    assert_eq!(ShotState::ALL.len(), 91);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");

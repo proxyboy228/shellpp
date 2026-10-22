@@ -1024,7 +1024,7 @@ impl HostsScreen {
                 .all(|id| self.host(*id).is_some_and(HostItem::has_telnet))
     }
 
-    /// Opens a local terminal or serial session tab (placeholders).
+    /// Opens a local terminal tab, or asks the shell for the Serial dialog.
     fn open_local(&mut self, kind: SessionKind, cx: &mut Context<Self>) {
         let title = match kind {
             SessionKind::Serial => strings::SERIAL,

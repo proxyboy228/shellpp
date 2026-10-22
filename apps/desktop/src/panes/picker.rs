@@ -40,14 +40,20 @@ impl Picker {
         cx: &mut Context<PaneGroup>,
         on_choice: impl Fn(&mut PaneGroup, Choice, &mut Window, &mut Context<PaneGroup>) + 'static,
     ) -> Self {
-        let origin = origin.map(|(target, title)| match target {
-            // A Telnet pane's host comes first too (its protocol is chosen in
-            // the list).
+        // Enter on the first row opens another session of the same kind: a
+        // Telnet pane's host by Telnet again (D87).
+        let telnet_origin = match &origin {
+            Some((PaneTarget::Telnet { record_id, .. }, _)) => Some(*record_id),
+            _ => None,
+        };
+        let origin = origin.and_then(|(target, title)| match target {
             PaneTarget::Host { record_id, .. } | PaneTarget::Telnet { record_id, .. } => {
-                PickerOrigin::Host(record_id)
+                Some(PickerOrigin::Host(record_id))
             }
-            PaneTarget::Quick(quick) => PickerOrigin::Quick(quick),
-            PaneTarget::Local { shell_id } => PickerOrigin::Local { shell_id, title },
+            PaneTarget::Quick(quick) => Some(PickerOrigin::Quick(quick)),
+            PaneTarget::Local { shell_id } => Some(PickerOrigin::Local { shell_id, title }),
+            // A port opens once (D88): nothing to offer first.
+            PaneTarget::Serial(_) => None,
         });
         let view = {
             let state = state.clone();
@@ -61,20 +67,15 @@ impl Picker {
                     new_window,
                 } => {
                     let state = state.read(cx);
-                    let Some(vault_id) = state
-                        .host(*host_id)
-                        .map(|host| host.vault_id)
-                        .or_else(|| state.vault_id())
-                    else {
+                    let target = if telnet_origin == Some(*host_id) {
+                        PaneTarget::telnet(state, *host_id)
+                    } else {
+                        PaneTarget::primary(state, *host_id)
+                    };
+                    let Some(target) = target else {
                         return;
                     };
-                    open(
-                        PaneTarget::Host {
-                            vault_id,
-                            record_id: *host_id,
-                        },
-                        *new_window,
-                    )
+                    open(target, *new_window)
                 }
                 NewTabEvent::QuickConnect { target, new_window } => {
                     open(PaneTarget::Quick(target.clone()), *new_window)

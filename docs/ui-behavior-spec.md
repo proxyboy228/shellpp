@@ -147,7 +147,7 @@
 3. Settings (Ctrl+,).
 4. — separator —
 5. New Local Terminal.
-6. New Serial Connection.
+6. New Serial Connection (Ctrl+Alt+S): the Serial dialog of 2.2 (D88).
    Then, between separators, **Import Data…** and **Export Data…** (D38): the native JSON
    export of all data, plain or encrypted with a password, and its import (principle 4,
    [export-format.md](export-format.md)). The plain export warns first that the file holds
@@ -270,7 +270,21 @@ On the left:
 - **Terminal**: open a local terminal in a new tab. The default shell
   is set in the settings (on Windows, PowerShell / cmd / WSL). [decision]
 - **Serial**: serial port connection, opens as a separate
-  tab in the top bar.
+  tab in the top bar. The New Serial Connection dialog comes first (D88): [decision]
+  - Port: the serial ports of this device, sorted by name (COM9 before COM10), with the
+    USB product name when the system knows it; Refresh lists them again. No port found:
+    "No serial ports found" and Connect stays disabled;
+  - Baud rate: a list from 300 to 921600, 9600 by default;
+  - Data bits 5–8 (8), Parity None / Odd / Even (None), Stop bits 1 / 2 (1), Flow control
+    None / XON/XOFF / RTS/CTS (None), as segments;
+  - Connect (Enter) opens the port in a new session tab titled after the port, with the
+    terminal of SSH; Cancel (Esc) closes the dialog. The dialog offers the settings of
+    the last Connect again (this app run only).
+  The tab: what is typed goes to the port as it is, the port's output to the terminal
+  (UTF-8). A port that does not open fails with the reason (not found, in use or access
+  denied, settings refused); a device that is unplugged drops the tab ("The serial device
+  was disconnected.") and Reconnect opens the port again. A serial tab is not duplicated
+  (a port opens once) and is never saved for Restore or in a workspace.
 
 On the right:
 
@@ -763,7 +777,8 @@ The same form is used for creating and editing; it opens in the details panel.
 
 Items that do not apply stay in place, disabled: Duplicate, Duplicate in a new window
 and the splits while the active pane has no session target (the new tab page, a pane
-still choosing a host, SFTP), and a split that the limits of 4.7 do not allow. [decision]
+still choosing a host, SFTP), Duplicate and Duplicate in a new window on a serial port
+(D88), and a split that the limits of 4.7 do not allow. [decision]
 The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases either.
 [decision]
 

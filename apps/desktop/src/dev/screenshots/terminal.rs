@@ -723,6 +723,9 @@ pub async fn reach(
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance
         | ShotState::SidebarFont => stage2b::reach(cx, handle, root, state, rig, shot).await,
+        ShotState::TelnetTab | ShotState::SerialTab => {
+            super::stage9_shot::reach(cx, handle, root, state, shot).await
+        }
         ShotState::TerminalTmux
         | ShotState::TerminalTmuxResize
         | ShotState::TerminalMc
@@ -903,6 +906,9 @@ pub fn check(
     rig: &Rig,
     shot: ShotState,
 ) -> Result<(), ScreenshotError> {
+    if super::stage9_shot::STATES.contains(&shot) {
+        return super::stage9_shot::check(cx, handle, root, shot);
+    }
     let shell = shell_of(cx, root, shot)?;
     let real_shell = rig.real_shell();
     let result = cx

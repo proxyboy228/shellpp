@@ -1,6 +1,6 @@
 [package]
 name = "shellpp-term-local"
-description = "Shell++ local terminal: shell detection and a portable-pty session (desktop only)."
+description = "Shell++ local terminal: shell detection, a portable-pty session and serial ports (desktop only)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,10 @@ authors.workspace = true
 publish.workspace = true
 
 # Desktop only (decision 5): shellpp-desktop links this crate only for desktop
-# targets. Serial and Telnet join in stage 9.
+# targets. Serial ports since stage 9 (D88); Telnet lives in the desktop app.
 [dependencies]
 portable-pty.workspace = true
+serialport.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 thiserror.workspace = true
 tracing.workspace = true

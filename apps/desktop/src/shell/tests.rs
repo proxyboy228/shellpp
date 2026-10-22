@@ -287,17 +287,48 @@ fn leaving_snippets_with_changes_not_saved_asks_first(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// The ports of the Serial dialog in these tests (D88): two, never opened
+/// here (the tab's session goes through the launcher).
+struct TwoPorts;
+
+impl crate::sessions::SerialBackend for TwoPorts {
+    fn ports(&self) -> Vec<shellpp_term_local::serial::PortInfo> {
+        ["COM10", "COM3"]
+            .into_iter()
+            .map(|name| shellpp_term_local::serial::PortInfo {
+                name: name.into(),
+                description: None,
+            })
+            .collect()
+    }
+
+    fn open(
+        &self,
+        _: &shellpp_term_local::serial::SerialConfig,
+    ) -> Result<shellpp_term_local::serial::SerialSession, shellpp_term_local::serial::SerialError>
+    {
+        Err(shellpp_term_local::serial::SerialError::Missing)
+    }
+}
+
+fn install_ports(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_global(serial_dialog::SerialPorts(std::sync::Arc::new(TwoPorts)));
+    });
+}
+
 /// UI 1.1, 4.6, 12.5: Ctrl+L outside a terminal opens a local terminal
-/// tab and Ctrl+Alt+S a serial placeholder; Alt+Left/Right and Ctrl+N move
-/// between tabs; the active tab closes to its neighbor; the last one
-/// closes to Vaults.
+/// tab and Ctrl+Alt+S the Serial dialog, whose Connect opens a serial tab;
+/// Alt+Left/Right and Ctrl+N move between tabs; the active tab closes to
+/// its neighbor; the last one closes to Vaults.
 #[gpui_kit::test]
 fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let shell = ui.shell(cx);
     assert!(ui.visible("tab-new", cx));
 
-    // Ctrl+L: a local terminal tab, Ctrl+Alt+S: serial (placeholder).
+    // Ctrl+L: a local terminal tab, Ctrl+Alt+S: the Serial dialog.
+    install_ports(cx);
     ui.press("ctrl-l", cx);
     let local = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
     assert_eq!(local.kind(), SessionKind::Local);
@@ -311,13 +342,16 @@ fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     ui.press("ctrl-1", cx);
     ui.press("ctrl-l", cx);
     ui.press("ctrl-alt-s", cx);
+    assert!(ui.visible("serial-dialog", cx));
+    ui.click("serial-connect", cx);
+    assert!(!ui.visible("serial-dialog", cx));
     let tabs = cx.update(|cx| shell.read(cx).sessions().tabs().to_vec());
     assert_eq!(
         tabs.iter().map(SessionTab::kind).collect::<Vec<_>>(),
         [SessionKind::Local, SessionKind::Local, SessionKind::Serial]
     );
     assert_eq!(ui.top_tab(cx), TopTab::Session(tabs[2].id()));
-    assert!(ui.visible("session-placeholder", cx));
+    assert!(ui.visible("session-pane", cx));
 
     // Alt+Left / Alt+Right move between tabs; Ctrl+3 is the first session tab.
     ui.press("alt-left", cx);
@@ -341,6 +375,73 @@ fn session_tabs_open_and_close(cx: &mut TestAppContext) {
     ui.press("ctrl-shift-w", cx);
     assert_eq!(ui.top_tab(cx), TopTab::Vaults);
     assert!(cx.update(|cx| shell.read(cx).sessions().is_empty()));
+    ui.finish(cx);
+}
+
+/// The Serial dialog (D88): the ports in order with the first chosen, the
+/// baud rate from its list and the line settings as segments; Connect
+/// opens the port with them in a tab titled after the port, which is not
+/// duplicated and not saved, and the dialog offers them again.
+#[gpui_kit::test]
+fn the_serial_dialog_opens_the_port_with_its_settings(cx: &mut TestAppContext) {
+    use shellpp_term_local::serial::{FlowControl, Parity, SerialConfig, StopBits};
+    let ui = Ui::open(cx);
+    let shell = ui.shell(cx);
+    install_ports(cx);
+    ui.press("ctrl-alt-s", cx);
+    // COM3 before COM10, the first one chosen.
+    ui.click("serial-port", cx);
+    assert!(ui.visible("serial-port-COM3", cx) && ui.visible("serial-port-COM10", cx));
+    let com3 = ui.bounds("serial-port-COM3", cx).expect("COM3");
+    let com10 = ui.bounds("serial-port-COM10", cx).expect("COM10");
+    assert!(com3.top() < com10.top());
+    ui.click("serial-port-COM10", cx);
+    assert!(!ui.visible("serial-port-list", cx));
+    ui.click("serial-baud", cx);
+    ui.click("serial-baud-38400", cx);
+    ui.click("serial-parity-even", cx);
+    ui.click("serial-stop-2", cx);
+    ui.click("serial-flow-hardware", cx);
+    ui.click("serial-connect", cx);
+
+    let mut expected = SerialConfig::new("COM10");
+    expected.baud = 38_400;
+    expected.parity = Parity::Even;
+    expected.stop_bits = StopBits::Two;
+    expected.flow = FlowControl::Hardware;
+    let tab = cx.update(|cx| shell.read(cx).sessions().tabs()[0].clone());
+    assert_eq!(tab.kind(), SessionKind::Serial);
+    assert_eq!(tab.title().as_ref(), "COM10");
+    let (target, facts, snapshot) = cx.update(|cx| {
+        let shell = shell.read(cx);
+        let group = shell.group(tab.id()).expect("panes").read(cx);
+        (
+            group.active_target(cx),
+            shell.tab_facts(tab.id(), cx),
+            group.snapshot(cx),
+        )
+    });
+    assert_eq!(target, Some(PaneTarget::Serial(expected.clone())));
+    // A port opens once: no Duplicate; a split still works. Never saved.
+    assert!(!facts.can_duplicate && facts.has_target);
+    assert!(snapshot.is_none());
+
+    // The dialog again (from Vaults, where the shell has the keys): the
+    // last settings.
+    ui.press("ctrl-1", cx);
+    ui.press("ctrl-alt-s", cx);
+    ui.click("serial-connect", cx);
+    let tabs = cx.update(|cx| shell.read(cx).sessions().tabs().to_vec());
+    assert_eq!(tabs.len(), 2);
+    let target = cx.update(|cx| {
+        shell
+            .read(cx)
+            .group(tabs[1].id())
+            .expect("panes")
+            .read(cx)
+            .active_target(cx)
+    });
+    assert_eq!(target, Some(PaneTarget::Serial(expected)));
     ui.finish(cx);
 }
 

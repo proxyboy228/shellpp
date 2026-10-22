@@ -45,6 +45,8 @@
     split-picker, tab-menu, new-tab, new-tab-search, sidebar-tools,
     terminal-scrollback, broadcast-tabs, broadcast-marks, sidebar-snippets,
     sidebar-history, sidebar-appearance, sidebar-font,
+    and those of stage 9: telnet-tab, serial-tab (and, without a session,
+    host-panel-telnet and serial-dialog);
     and those of stage 3: keychain, keychain-key-panel, keychain-generate,
     keychain-import-unknown, keychain-empty;
   - 960x600 (the minimum window size): root, host-panel, first-run;
@@ -195,7 +197,8 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'keychain-empty', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
     'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
     'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'terminal-scrollback', 'broadcast-tabs', 'broadcast-marks', 'sidebar-snippets',
-    'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed')
+    'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed',
+    'host-panel-telnet', 'serial-dialog', 'telnet-tab', 'serial-tab')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the two
 # imports, captured after new-host).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config')
@@ -307,8 +310,8 @@ try {
     $terminalOnly = @('terminal-tofu', 'terminal-ls-color', 'terminal-htop', 'terminal-drop', 'terminal-local',
         'terminal-tabs', 'quick-connect-toast', 'terminal-host-key-changed', 'terminal-connecting',
         'terminal-splits', 'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools',
-        'terminal-scrollback', 'broadcast-tabs', 'broadcast-marks', 'sidebar-snippets', 'sidebar-history',
-        'sidebar-appearance', 'sidebar-font') + $programStates
+        'terminal-scrollback', 'broadcast-tabs', 'broadcast-marks', 'telnet-tab', 'serial-tab', 'sidebar-snippets',
+        'sidebar-history', 'sidebar-appearance', 'sidebar-font') + $programStates
     $needsServer = ($States.Count -eq 0) -or (@($States | Where-Object { $_ -in $terminalOnly }).Count -gt 0)
     if (-not $needsServer) {
         Write-Host 'ui-screens: server: none (no terminal state)'

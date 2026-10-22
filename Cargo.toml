@@ -78,6 +78,9 @@ hmac = "0.13.0"
 sha1 = { version = "0.11.0", default-features = false }
 # Local terminal (desktop only, decision 5).
 portable-pty = "0.9.0"
+# Serial ports (shellpp-term-local, D88): without libudev, so that Linux
+# builds need no system library; ports are found through sysfs.
+serialport = { version = "4.10", default-features = false }
 # Terminal emulation for the desktop terminal view (decision 30): VT parser,
 # grid and scrollback; our own GPUI element draws it. Without "serde".
 alacritty_terminal = { version = "0.26.0", default-features = false }

@@ -1,6 +1,6 @@
 //! Shell++ local terminal (desktop only, decision 5; docs/architecture.md,
 //! section 2.4): shell detection per UI 12.4 and a pseudo-terminal session on
-//! portable-pty. Serial ports and Telnet join in stage 9.
+//! portable-pty, and serial ports (stage 9, D88).
 //!
 //! - [`detect_shells`]: Windows: PowerShell, PowerShell 7, cmd, WSL
 //!   distributions, Git Bash; macOS and Linux: the shells listed in
@@ -12,6 +12,8 @@
 //! - [`spawn`]: starts the shell in a PTY; output arrives on a tokio channel
 //!   from a reader thread, input and resizes go through [`PtyWriter`]. See
 //!   the [`pty`] module for the exit and end-of-file order.
+//! - [`serial::ports`] and [`serial::open`]: the serial ports of the device
+//!   and a session on one of them (the [`serial`] module).
 //!
 //! Nothing here logs paths, shell output or input.
 //!
@@ -21,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 pub mod pty;
+pub mod serial;
 pub mod shells;
 
 pub use pty::{ExitInfo, LocalSession, PtyConfig, PtyWriter, spawn};

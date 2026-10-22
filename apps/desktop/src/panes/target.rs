@@ -7,11 +7,14 @@
 //! 12: `{"kind": "ssh", "host": {"vault_id", "record_id"}}` for a saved
 //! host, `{"kind": "ssh", "address", "port"?, "username"?}` for a quick
 //! connect and `{"kind": "local", "shell"?}` for a local terminal (no
-//! `shell`: the default shell of the device that restores it).
+//! `shell`: the default shell of the device that restores it). A serial
+//! port is never saved (port names belong to one device, D88): snapshots
+//! leave it out, and `{"kind": "serial"}` does not read back.
 
 use gpui::SharedString;
 use serde::{Deserialize, Serialize};
 use shellpp_core::service::dto::SessionTarget;
+use shellpp_term_local::serial::SerialConfig;
 use uuid::Uuid;
 
 use crate::hosts::QuickTarget;
@@ -33,6 +36,8 @@ pub enum PaneTarget {
     Local { shell_id: Option<String> },
     /// Telnet to a saved host's Telnet block (D87).
     Telnet { vault_id: Uuid, record_id: Uuid },
+    /// A serial port with its settings (D88).
+    Serial(SerialConfig),
 }
 
 impl PaneTarget {
@@ -65,6 +70,7 @@ impl PaneTarget {
                 vault_id: *vault_id,
                 record_id: *record_id,
             },
+            OpenRequest::Serial(config) => PaneTarget::Serial(config.clone()),
         }
     }
 
@@ -75,10 +81,7 @@ impl PaneTarget {
         match request.kind() {
             SessionKind::Ssh => {
                 if let Some(record_id) = request.host_id() {
-                    let vault_id = state
-                        .host(record_id)
-                        .map(|host| host.vault_id)
-                        .or_else(|| state.vault_id())?;
+                    let vault_id = Self::vault_of(state, record_id)?;
                     return Some(PaneTarget::Host {
                         vault_id,
                         record_id,
@@ -87,19 +90,42 @@ impl PaneTarget {
                 request.quick_target().cloned().map(PaneTarget::Quick)
             }
             SessionKind::Local => Some(PaneTarget::Local { shell_id: None }),
-            SessionKind::Telnet => {
-                let record_id = request.host_id()?;
-                let vault_id = state
-                    .host(record_id)
-                    .map(|host| host.vault_id)
-                    .or_else(|| state.vault_id())?;
-                Some(PaneTarget::Telnet {
-                    vault_id,
-                    record_id,
-                })
-            }
+            SessionKind::Telnet => Self::telnet(state, request.host_id()?),
             SessionKind::Sftp | SessionKind::Serial | SessionKind::NewTab => None,
         }
+    }
+
+    /// A saved host by its primary protocol: Telnet when its
+    /// `primary_protocol` is Telnet and it has a Telnet block (D87), else
+    /// SSH. `None` without a vault for a host that is not known here.
+    pub fn primary(state: &AppState, record_id: Uuid) -> Option<Self> {
+        if state
+            .host(record_id)
+            .is_some_and(|host| host.primary_telnet())
+        {
+            return Self::telnet(state, record_id);
+        }
+        let vault_id = Self::vault_of(state, record_id)?;
+        Some(PaneTarget::Host {
+            vault_id,
+            record_id,
+        })
+    }
+
+    /// Telnet to a saved host.
+    pub fn telnet(state: &AppState, record_id: Uuid) -> Option<Self> {
+        let vault_id = Self::vault_of(state, record_id)?;
+        Some(PaneTarget::Telnet {
+            vault_id,
+            record_id,
+        })
+    }
+
+    fn vault_of(state: &AppState, record_id: Uuid) -> Option<Uuid> {
+        state
+            .host(record_id)
+            .map(|host| host.vault_id)
+            .or_else(|| state.vault_id())
     }
 
     /// The saved host, if any.
@@ -108,8 +134,12 @@ impl PaneTarget {
             PaneTarget::Host { record_id, .. } | PaneTarget::Telnet { record_id, .. } => {
                 Some(*record_id)
             }
-            PaneTarget::Quick(_) | PaneTarget::Local { .. } => None,
+            PaneTarget::Quick(_) | PaneTarget::Local { .. } | PaneTarget::Serial(_) => None,
         }
+    }
+
+    pub fn is_serial(&self) -> bool {
+        matches!(self, PaneTarget::Serial(_))
     }
 
     pub fn is_local(&self) -> bool {
@@ -141,6 +171,7 @@ impl PaneTarget {
                 vault_id: *vault_id,
                 record_id: *record_id,
             },
+            PaneTarget::Serial(config) => OpenRequest::Serial(config.clone()),
         }
     }
 
@@ -183,6 +214,9 @@ impl PaneTarget {
                     initial_icon(None, false),
                 ),
             },
+            PaneTarget::Serial(config) => {
+                TabInfo::local(config.port.clone(), SessionKind::Serial.default_icon())
+            }
         };
         (info, self.open_request())
     }
@@ -196,6 +230,7 @@ impl std::fmt::Display for PaneTarget {
             PaneTarget::Quick(_) => "quick connect",
             PaneTarget::Local { .. } => "local terminal",
             PaneTarget::Telnet { .. } => "telnet",
+            PaneTarget::Serial(_) => "serial",
         })
     }
 }
@@ -262,6 +297,11 @@ impl From<PaneTarget> for WireSession {
                 }),
                 ..Default::default()
             },
+            // Never saved (snapshots leave serial panes out); the kind only.
+            PaneTarget::Serial(_) => WireSession {
+                kind: "serial".into(),
+                ..Default::default()
+            },
         }
     }
 }
@@ -296,6 +336,7 @@ impl TryFrom<WireSession> for PaneTarget {
                 }),
                 None => Err("a Telnet session needs a host link"),
             },
+            "serial" => Err("serial sessions are not saved"),
             _ => Err("unknown session kind"),
         }
     }

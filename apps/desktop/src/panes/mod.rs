@@ -866,10 +866,12 @@ impl PaneGroup {
     }
 
     /// The tab for Restore (lead decision L5): the pane tree with each
-    /// session's target and the shares; panes still choosing a host are
-    /// left out (their sibling takes the space). `None` without sessions.
+    /// session's target and the shares; panes still choosing a host and
+    /// serial ports (never saved, D88) are left out (their sibling takes
+    /// the space). `None` without sessions.
     pub fn snapshot(&self, cx: &App) -> Option<Layout<PaneTarget>> {
-        self.layout.filter_map(&mut |id| self.target(*id, cx))
+        self.layout
+            .filter_map(&mut |id| self.target(*id, cx).filter(|target| !target.is_serial()))
     }
 
     /// Starts the sessions that wait for a window (new panes, a restored

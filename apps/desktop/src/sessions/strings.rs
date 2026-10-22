@@ -122,6 +122,21 @@ pub fn env_refused_notice(names: &[String]) -> String {
 }
 
 /// The text of a failure or drop reason.
+/// Why a serial port did not open (D88).
+pub fn serial_message(error: shellpp_term_local::serial::SerialError) -> &'static str {
+    use shellpp_term_local::serial::SerialError;
+    match error {
+        SerialError::Missing => {
+            "The serial port was not found. Check that the device is connected."
+        }
+        SerialError::Busy => {
+            "The serial port is in use by another program, or access to it is denied."
+        }
+        SerialError::Settings => "The serial port does not accept these settings.",
+        SerialError::Io | SerialError::Closed => "The serial port could not be opened.",
+    }
+}
+
 pub fn error_message(error: SessionError) -> &'static str {
     match error {
         SessionError::Ssh(kind) => match kind {
@@ -159,6 +174,8 @@ pub fn error_message(error: SessionError) -> &'static str {
             "A jump host of this host is missing or listed twice. Check Host Chaining."
         }
         SessionError::ShellUnavailable => "The local shell could not be started.",
+        SessionError::Serial(error) => serial_message(error),
+        SessionError::SerialLost => "The serial device was disconnected.",
         SessionError::Internal => "Something went wrong. Try again.",
     }
 }

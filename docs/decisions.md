@@ -1360,9 +1360,27 @@ Status: run 5 decision, 2026-10-22 (plan, section 9.1; UI 3.1 "Add Telnet", data
 
 - A saved host's Telnet block opens a Telnet session tab: Connect ▸ via Telnet (enabled when every chosen host has a Telnet block), and Quick Connect, Enter and a double click for a host whose `primary_protocol` is `telnet`. The tab is the same terminal as SSH; Duplicate, split panes, Restore and workspaces keep it (`{"kind": "telnet", "host": host_link}`, data-model 12).
 - The connection: the host's address and `telnet.port` (23 by default), the same name resolution and 15 s connect timeout as SSH; RFC 854 with ECHO and SUPPRESS-GO-AHEAD from the server and TERMINAL-TYPE (`terminal.term`) and NAWS from the client, sent again on every resize; any other option is refused, and an option is answered only when its state changes. Input doubles 0xFF and sends CR as `CR NUL`.
+- The host's `charset` and `backspace` apply, as for SSH (data-model 7.4).
 - Login is interactive: the host's saved username and password are not sent (`telnet.username` stays a note for now).
 - The server closing the connection is a drop "closed by the server", a network error one "connection lost": the output stays and Reconnect connects again. Telnet has no exit status, so a tab never closes by itself. There is no automatic reconnect for Telnet.
 - The host panel's Telnet block says that Telnet is not encrypted (the login and password cross the network as plain text).
-- Not in this run: Telnet in the connection log and in Recent connections, quick connect by `telnet://`, and the host's charset (UTF-8 is used).
+- Connect from the host panel, the new tab page, Ctrl+K and a split pane's picker follow the primary protocol too; a split from a Telnet pane opens Telnet to the same host.
+- A server that sends and never reads cannot grow the client's memory: replies and input wait in a bounded queue, and the output side stops reading while it is full; closing the tab ends the writer even when the socket does not drain.
+- Not in this run: Telnet in the connection log and in Recent connections, and quick connect by `telnet://`.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 2.4 (Connect ▸ via Telnet) and 3.1 item 6 (and `docs/ru`).
+
+### 88. Serial connections (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 9.2; UI 1.4 item 6, 2.2 "Serial"; stage 9 of SPEC.md).
+
+**Decision:**
+
+- The Serial button, Ctrl+Alt+S and New Serial Connection open a dialog: the port (the ports the system lists, sorted by name, Refresh), the baud rate (300 to 921600, 9600 by default: the console of most network devices), data bits, parity (None, Odd, Even), stop bits and flow control (None, XON/XOFF, RTS/CTS). 8N1 without flow control by default. Mark and space parity are not offered (the `serialport` crate has none). A port the system does not list cannot be chosen.
+- Connect opens the port in a session tab with the same terminal; the title is the port name. Bytes go to the port as typed and its output is UTF-8. A serial line has no window size and no exit status.
+- A port that does not open fails with the reason: not found, in use or access denied (Windows reports both the same way: a listed port that does not open is "in use"), settings refused, or any other failure. An unplugged device drops the tab; Reconnect opens the port again with the same settings.
+- A port opens once: Duplicate and Duplicate in a new window are disabled on a serial tab; a split still works (the new pane chooses a host). Serial panes are never saved (data-model 12): snapshots for Restore and workspaces leave them out. The dialog offers the settings of the last Connect again during the app run.
+- The ports and the connection live in `shellpp-term-local` (SPEC.md, crates): `serialport` 4.10 (MPL-2.0) without its default `libudev` feature, so that Linux builds need no system library (ports are found through sysfs). The reader thread reads with a 100 ms timeout so that a closed tab lets go of the port at once. Tests use a fake port behind the `SerialBackend` trait; no hardware is needed.
+- Not in this run: saved serial profiles, a typed port name, local echo, line endings other than CR, break signals and the charset of a serial tab.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.4 item 6, 2.2 "Serial" and 4.4 (and `docs/ru`).

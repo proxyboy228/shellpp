@@ -48,6 +48,7 @@ mod background;
 pub mod charset;
 pub mod keys;
 pub mod local;
+pub mod serial;
 mod ssh;
 pub mod strings;
 pub mod telnet;
@@ -71,6 +72,7 @@ use uuid::Uuid;
 pub use backend::{DEFAULT_TERM, DEFAULT_THEME, SessionCore, SessionSettings};
 pub use keys::{AgentSource, KeySources, PassphraseCache};
 pub use local::{LocalBackend, PtyBackend};
+pub use serial::{PortBackend, SerialBackend};
 pub use transport::{BoxFuture, Connector, SshConnector};
 pub use types::{
     ConnectStep, HostKeyChoice, HostKeyInfo, OpenRequest, PromptKind, PromptReply, ReconnectView,
@@ -145,6 +147,8 @@ pub struct ManagerOptions {
     pub runtime: Option<tokio::runtime::Handle>,
     pub connector: Arc<dyn Connector>,
     pub local: Arc<dyn LocalBackend>,
+    /// Serial ports (D88).
+    pub serial: Arc<dyn SerialBackend>,
     /// Automatic reconnection of dropped SSH sessions by the session layer
     /// (the `terminal.autoreconnect` setting still applies). `false`: a
     /// dropped session stays `Dropped` until [`SessionHandle::reconnect`],
@@ -174,6 +178,7 @@ impl ManagerOptions {
             runtime: None,
             connector: Arc::new(SshConnector),
             local: Arc::new(PtyBackend::new()),
+            serial: Arc::new(PortBackend),
             auto_reconnect: true,
         }
     }
@@ -206,6 +211,7 @@ pub(crate) struct Shared {
     pub(crate) core: Arc<dyn SessionCore>,
     pub(crate) connector: Arc<dyn Connector>,
     pub(crate) local: Arc<dyn LocalBackend>,
+    pub(crate) serial: Arc<dyn SerialBackend>,
     pub(crate) keys: KeySources,
     pub(crate) passphrases: PassphraseCache,
     pub(crate) auto_reconnect: bool,
@@ -798,6 +804,7 @@ impl SessionManager {
             core,
             connector: options.connector,
             local: options.local,
+            serial: options.serial,
             keys: options.keys,
             passphrases: PassphraseCache::default(),
             auto_reconnect: options.auto_reconnect,
@@ -979,6 +986,7 @@ impl SessionManager {
                 vault_id,
                 record_id,
             } => self.open_telnet(vault_id, record_id, size, terminal),
+            OpenRequest::Serial(config) => Ok(self.open_serial(config, size, terminal)),
             OpenRequest::Local { shell_id } => {
                 let settings = SessionSettings::read(&*self.shared.core);
                 let view = SessionView {
@@ -1030,6 +1038,56 @@ impl SessionManager {
         self.open_ssh(target, (80, 24), Arc::new(NoTerminal), ssh::Purpose::Sftp)
     }
 
+    /// The serial ports of this device (blocking): what the Serial dialog
+    /// offers.
+    pub fn serial_backend(&self) -> Arc<dyn SerialBackend> {
+        self.shared.serial.clone()
+    }
+
+    /// A serial session on `config.port` (D88): the title is the port, the
+    /// theme the default one.
+    fn open_serial(
+        &self,
+        config: shellpp_term_local::serial::SerialConfig,
+        size: (u16, u16),
+        terminal: Arc<dyn SessionTerminal>,
+    ) -> Opened {
+        let settings = SessionSettings::read(&*self.shared.core);
+        let view = SessionView {
+            id: self.next_id(),
+            kind: SessionKind::Serial,
+            state: SessionState::Connecting,
+            step: None,
+            title: config.port.clone(),
+            host: None,
+            address: None,
+            port: None,
+            username: None,
+            os: None,
+            theme: settings.default_theme,
+            backspace: Backspace::Default,
+            prompt: None,
+            error: None,
+            host_key: None,
+            error_place: None,
+            exit_status: None,
+            exit_signal: None,
+            reconnect: None,
+            shell_id: None,
+            startup_ask: None,
+            rev: 1,
+        };
+        let (session, ctrl, opened) =
+            self.register(view, size, terminal, InputEncoder::new(encoding_rs::UTF_8));
+        tracing::info!(session = session.id, kind = "serial", "session opened");
+        drop(
+            self.shared
+                .rt
+                .spawn(serial::run(self.shared.clone(), session, ctrl, config)),
+        );
+        opened
+    }
+
     /// A Telnet session to the saved host's Telnet block (D87): its address
     /// and Telnet port; the title, OS icon, theme and Backspace of the host.
     fn open_telnet(
@@ -1049,6 +1107,7 @@ impl SessionManager {
             .map_err(|error| core_error(&error))?;
         let port = config.telnet_port.ok_or(SessionError::InvalidTarget)?;
         let settings = SessionSettings::read(&*self.shared.core);
+        let encoding = charset::encoding_for(&config.charset);
         let view = SessionView {
             id: self.next_id(),
             kind: SessionKind::Telnet,
@@ -1075,7 +1134,7 @@ impl SessionManager {
             rev: 1,
         };
         let (session, ctrl, opened) =
-            self.register(view, size, terminal, InputEncoder::new(encoding_rs::UTF_8));
+            self.register(view, size, terminal, InputEncoder::new(encoding));
         tracing::info!(session = session.id, kind = "telnet", "session opened");
         drop(self.shared.rt.spawn(telnet::run(
             self.shared.clone(),
@@ -1085,6 +1144,7 @@ impl SessionManager {
                 address: config.address,
                 port,
                 term: settings.term,
+                encoding,
             },
         )));
         Ok(opened)

@@ -243,35 +243,56 @@ enum Write {
     Close,
 }
 
+/// Writes waiting for the socket. When it is full, the output side stops
+/// reading until the server takes its replies (a server that sends option
+/// requests and never reads cannot grow the queue).
+const WRITE_QUEUE: usize = 64;
+
+/// Ends the writer task once both halves of the session are gone: a server
+/// that stops reading would otherwise hold its `write_all`, and the
+/// socket, for ever.
+struct WriterTask(tokio::task::AbortHandle);
+
+impl Drop for WriterTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// The output side: reads the socket, gives the terminal its data and the
-/// writer the replies. Cancel-safe: a read that is dropped loses nothing.
+/// writer the replies. Cancel-safe: a read or a wait for the writer that
+/// is dropped loses nothing (decoded data and replies wait in `self`).
 struct Events {
     read: OwnedReadHalf,
     codec: Arc<Mutex<Codec>>,
-    writer: mpsc::UnboundedSender<Write>,
+    writer: mpsc::Sender<Write>,
     buffer: Vec<u8>,
+    data: Vec<u8>,
+    reply: Vec<u8>,
+    _task: Arc<WriterTask>,
 }
 
 impl TermEvents for Events {
     fn next(&mut self) -> BoxFuture<'_, TermEvent> {
         Box::pin(async move {
             loop {
+                if !self.reply.is_empty() {
+                    let Ok(permit) = self.writer.reserve().await else {
+                        return TermEvent::End(TermEnd::Dropped(FailureKind::Network));
+                    };
+                    permit.send(Write::Bytes(std::mem::take(&mut self.reply)));
+                }
+                if !self.data.is_empty() {
+                    return TermEvent::Data(std::mem::take(&mut self.data));
+                }
                 self.buffer.resize(16 * 1024, 0);
                 let read = match self.read.read(&mut self.buffer).await {
                     Ok(0) => return TermEvent::End(TermEnd::Dropped(FailureKind::Disconnected)),
                     Ok(read) => read,
                     Err(_) => return TermEvent::End(TermEnd::Dropped(FailureKind::Network)),
                 };
-                let mut data = Vec::with_capacity(read);
-                let mut reply = Vec::new();
                 if let Ok(mut codec) = self.codec.lock() {
-                    codec.decode(&self.buffer[..read], &mut data, &mut reply);
-                }
-                if !reply.is_empty() {
-                    let _ = self.writer.send(Write::Bytes(reply));
-                }
-                if !data.is_empty() {
-                    return TermEvent::Data(data);
+                    codec.decode(&self.buffer[..read], &mut self.data, &mut self.reply);
                 }
             }
         })
@@ -281,13 +302,14 @@ impl TermEvents for Events {
 /// The input side: typed input and window sizes go to the writer task.
 struct Input {
     codec: Arc<Mutex<Codec>>,
-    writer: mpsc::UnboundedSender<Write>,
+    writer: mpsc::Sender<Write>,
+    _task: Arc<WriterTask>,
 }
 
 impl TermInput for Input {
     fn write(&self, data: Vec<u8>) -> BoxFuture<'_, bool> {
-        let sent = self.writer.send(Write::Bytes(Codec::encode(&data))).is_ok();
-        Box::pin(async move { sent })
+        let bytes = Codec::encode(&data);
+        Box::pin(async move { self.writer.send(Write::Bytes(bytes)).await.is_ok() })
     }
 
     fn resize(&self, cols: u16, rows: u16) -> BoxFuture<'_, bool> {
@@ -296,22 +318,25 @@ impl TermInput for Input {
             .lock()
             .ok()
             .and_then(|mut codec| codec.resize(cols, rows));
-        let sent = match report {
-            Some(report) => self.writer.send(Write::Bytes(report)).is_ok(),
-            None => !self.writer.is_closed(),
-        };
-        Box::pin(async move { sent })
+        Box::pin(async move {
+            match report {
+                Some(report) => self.writer.send(Write::Bytes(report)).await.is_ok(),
+                None => !self.writer.is_closed(),
+            }
+        })
     }
 
+    /// Asks for an orderly end when the queue has room; a stuck writer
+    /// ends with the session anyway ([`WriterTask`]).
     fn close(&self) -> BoxFuture<'_, ()> {
-        let _ = self.writer.send(Write::Close);
+        let _ = self.writer.try_send(Write::Close);
         Box::pin(async {})
     }
 }
 
 /// Writes what it is given, in order, until the connection or the channel
 /// closes.
-async fn write_loop(mut write: OwnedWriteHalf, mut queue: mpsc::UnboundedReceiver<Write>) {
+async fn write_loop(mut write: OwnedWriteHalf, mut queue: mpsc::Receiver<Write>) {
     while let Some(item) = queue.recv().await {
         match item {
             Write::Bytes(bytes) => {
@@ -332,21 +357,33 @@ pub async fn connect(
     terminal: &str,
     size: (u16, u16),
 ) -> Result<TermParts, FailureKind> {
-    let addrs = shellpp_ssh::resolve(address, port).await?;
-    let stream =
-        shellpp_ssh::connect_any(&addrs, tokio::time::Instant::now() + CONNECT_TIMEOUT).await?;
+    // One deadline for the name and the connection, as SSH has.
+    let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
+    let addrs = tokio::time::timeout_at(deadline, shellpp_ssh::resolve(address, port))
+        .await
+        .map_err(|_| FailureKind::Timeout)??;
+    let stream = shellpp_ssh::connect_any(&addrs, deadline).await?;
     let (read, write) = stream.into_split();
     let codec = Arc::new(Mutex::new(Codec::new(terminal, size)));
-    let (writer, queue) = mpsc::unbounded_channel();
-    tokio::spawn(write_loop(write, queue));
+    let (writer, queue) = mpsc::channel(WRITE_QUEUE);
+    let task = Arc::new(WriterTask(
+        tokio::spawn(write_loop(write, queue)).abort_handle(),
+    ));
     Ok(TermParts {
         events: Box::new(Events {
             read,
             codec: codec.clone(),
             writer: writer.clone(),
             buffer: Vec::new(),
+            data: Vec::new(),
+            reply: Vec::new(),
+            _task: task.clone(),
         }),
-        input: Arc::new(Input { codec, writer }),
+        input: Arc::new(Input {
+            codec,
+            writer,
+            _task: task,
+        }),
         refused_env: Vec::new(),
     })
 }
@@ -358,6 +395,8 @@ pub(crate) struct TelnetTarget {
     pub port: u16,
     /// What TERMINAL-TYPE reports (`terminal.term`).
     pub term: String,
+    /// The host's charset (data-model 7.4).
+    pub encoding: &'static encoding_rs::Encoding,
 }
 
 /// The task of one Telnet session: connect, run the terminal until it
@@ -400,7 +439,7 @@ pub(crate) async fn run(
                     return;
                 };
                 tracing::info!(session = session.id, "telnet session connected");
-                let decoder = OutputDecoder::new(encoding_rs::UTF_8);
+                let decoder = OutputDecoder::new(target.encoding);
                 match pump(&shared, &session, &mut ctrl, parts, decoder, input, None).await {
                     PumpEnd::Closed => return,
                     PumpEnd::Ended(end) => {

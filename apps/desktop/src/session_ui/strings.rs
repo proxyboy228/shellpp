@@ -74,6 +74,13 @@ pub const REASON_HOST_MISSING: &str = "The host no longer exists.";
 pub const REASON_INVALID_TARGET: &str = "The address, port or username is not valid.";
 pub const REASON_JUMP_HOSTS: &str = "A jump host of this host is missing or listed twice, so it is not connected. Check Host Chaining in the host panel.";
 pub const REASON_LOCAL_SHELL: &str = "The local shell could not be started.";
+pub const REASON_SERIAL_MISSING: &str =
+    "The serial port was not found. Check that the device is connected.";
+pub const REASON_SERIAL_BUSY: &str =
+    "The serial port is in use by another program, or access to it is denied.";
+pub const REASON_SERIAL_SETTINGS: &str = "The serial port does not accept these settings.";
+pub const REASON_SERIAL_FAILED: &str = "The serial port could not be opened.";
+pub const REASON_SERIAL_LOST: &str = "The serial device was disconnected.";
 pub const REASON_OTHER: &str = "Something went wrong. Try again.";
 
 // Session end and drop (UI 4.6).

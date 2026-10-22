@@ -44,7 +44,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EventEmitter, IntoElement, MouseDownEvent,
-    Render, SharedString, Subscription, Window, div, px,
+    Render, ScrollHandle, SharedString, Subscription, Window, div, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -131,8 +131,13 @@ pub struct HostPanel {
     /// The "+" forms and the names of linked identities and keys.
     credentials: Credentials,
     autosave: Autosave,
+    /// The blocks; Add Telnet scrolls its new block into view.
+    body_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+/// The place of the Telnet block among the blocks of the body.
+const TELNET_BLOCK: usize = 5;
 
 impl std::fmt::Debug for HostPanel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -272,6 +277,7 @@ impl HostPanel {
                 .collect(),
             credentials: Credentials::new(window, cx),
             autosave: Autosave::default(),
+            body_scroll: ScrollHandle::new(),
             _subscriptions: Vec::new(),
         };
         let env = this.draft.env.clone();
@@ -835,7 +841,14 @@ impl HostPanel {
         self.draft.telnet = Some(TelnetDraft::default());
         self.telnet_port
             .update(cx, |input, cx| input.focus(window, cx));
+        self.reveal_telnet();
         self.changed(cx);
+    }
+
+    /// Scrolls the Telnet block into view (the last block: below the fold
+    /// on most hosts).
+    pub fn reveal_telnet(&self) {
+        self.body_scroll.scroll_to_item(TELNET_BLOCK);
     }
 
     /// Removes the Telnet block (data-model 7.4: the member is removed).
@@ -2179,9 +2192,11 @@ impl Render for HostPanel {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.body_scroll)
                     .p(metrics::SPACE_4)
                     .gap(metrics::SPACE_3)
-                    // UI 3.1, blocks from top to bottom.
+                    // UI 3.1, blocks from top to bottom; the Telnet block is
+                    // child `TELNET_BLOCK`.
                     .child(self.render_vault(window, cx))
                     .child(self.render_address(window, cx))
                     .child(self.render_general(window, cx))

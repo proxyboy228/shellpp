@@ -347,6 +347,7 @@ pub(crate) fn prompt_of(kind: &PromptKind) -> Prompt {
 
 /// The reason shown for a session error.
 pub fn failure_of(error: SessionError) -> Failure {
+    use shellpp_term_local::serial::SerialError;
     match error {
         SessionError::Ssh(kind) => match kind {
             FailureKind::NotFound => Failure::NotFound,
@@ -375,6 +376,13 @@ pub fn failure_of(error: SessionError) -> Failure {
         SessionError::InvalidTarget => Failure::InvalidTarget,
         SessionError::RouteInvalid => Failure::JumpHosts,
         SessionError::ShellUnavailable => Failure::LocalShell,
+        SessionError::Serial(error) => match error {
+            SerialError::Missing => Failure::SerialMissing,
+            SerialError::Busy => Failure::SerialBusy,
+            SerialError::Settings => Failure::SerialSettings,
+            SerialError::Io | SerialError::Closed => Failure::SerialFailed,
+        },
+        SessionError::SerialLost => Failure::SerialLost,
         SessionError::Internal => Failure::Other,
     }
 }

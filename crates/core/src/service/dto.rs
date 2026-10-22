@@ -681,6 +681,8 @@ pub enum SessionKind {
     Sftp,
     /// A Telnet session to a saved host's Telnet block (stage 9, D87).
     Telnet,
+    /// A serial port of this device (stage 9, D88).
+    Serial,
 }
 
 /// Session lifecycle (UI 4.6, 4.8; stage 2 plan, section 5.4).

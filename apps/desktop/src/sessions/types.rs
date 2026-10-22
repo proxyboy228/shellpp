@@ -366,6 +366,10 @@ pub enum SessionError {
     RouteInvalid,
     /// The local shell could not be started.
     ShellUnavailable,
+    /// The serial port did not open (D88).
+    Serial(shellpp_term_local::serial::SerialError),
+    /// The serial device went away (unplugged).
+    SerialLost,
     /// Something else went wrong (storage error).
     Internal,
 }
@@ -424,6 +428,8 @@ pub enum OpenRequest {
         vault_id: uuid::Uuid,
         record_id: uuid::Uuid,
     },
+    /// A serial port of this device with its settings (D88).
+    Serial(shellpp_term_local::serial::SerialConfig),
 }
 
 /// Why [`super::SessionHandle::write`] took nothing.

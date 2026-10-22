@@ -103,6 +103,16 @@ pub enum Failure {
     JumpHosts,
     /// The local shell could not be started.
     LocalShell,
+    /// The serial port is not listed (D88).
+    SerialMissing,
+    /// Another program has the serial port, or access is denied.
+    SerialBusy,
+    /// The serial port refused the settings.
+    SerialSettings,
+    /// The serial port did not open for another reason.
+    SerialFailed,
+    /// The serial device went away.
+    SerialLost,
     /// Anything else (a storage error, no session layer).
     Other,
 }
@@ -135,6 +145,11 @@ impl Failure {
             Failure::InvalidTarget => strings::REASON_INVALID_TARGET,
             Failure::JumpHosts => strings::REASON_JUMP_HOSTS,
             Failure::LocalShell => strings::REASON_LOCAL_SHELL,
+            Failure::SerialMissing => strings::REASON_SERIAL_MISSING,
+            Failure::SerialBusy => strings::REASON_SERIAL_BUSY,
+            Failure::SerialSettings => strings::REASON_SERIAL_SETTINGS,
+            Failure::SerialFailed => strings::REASON_SERIAL_FAILED,
+            Failure::SerialLost => strings::REASON_SERIAL_LOST,
             Failure::Other => strings::REASON_OTHER,
         }
     }
@@ -179,12 +194,17 @@ impl Failure {
             Failure::InvalidTarget => "invalid_target",
             Failure::JumpHosts => "jump_hosts",
             Failure::LocalShell => "local_shell",
+            Failure::SerialMissing => "serial_missing",
+            Failure::SerialBusy => "serial_busy",
+            Failure::SerialSettings => "serial_settings",
+            Failure::SerialFailed => "serial_failed",
+            Failure::SerialLost => "serial_lost",
             Failure::Other => "other",
         }
     }
 
     /// Every reason (tests).
-    pub const ALL: [Failure; 25] = [
+    pub const ALL: [Failure; 30] = [
         Failure::NotFound,
         Failure::Refused,
         Failure::Timeout,
@@ -211,6 +231,11 @@ impl Failure {
         Failure::InvalidTarget,
         Failure::JumpHosts,
         Failure::LocalShell,
+        Failure::SerialMissing,
+        Failure::SerialBusy,
+        Failure::SerialSettings,
+        Failure::SerialFailed,
+        Failure::SerialLost,
         Failure::Other,
     ];
 }

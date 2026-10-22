@@ -72,9 +72,12 @@ impl TabMenuEntry {
 /// What the menu needs to know about its tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TabFacts {
-    /// The active pane has a session target (SSH or local terminal):
-    /// Duplicate works.
+    /// The active pane has a session target (SSH, Telnet, a local terminal
+    /// or a serial port): the splits work.
     pub has_target: bool,
+    /// Duplicate works: a target other than a serial port, which opens
+    /// once (D88).
+    pub can_duplicate: bool,
     /// The active pane can be split below / to the right (the tab has
     /// panes, and the new halves keep their minimum size).
     pub can_split_down: bool,
@@ -98,14 +101,14 @@ pub fn entries(facts: TabFacts) -> Vec<TabMenuEntry> {
             "tab-menu-duplicate",
             strings::MENU_DUPLICATE,
             None,
-            facts.has_target,
+            facts.can_duplicate,
         ),
         TabMenuEntry::item(
             DuplicateInNewWindow,
             "tab-menu-duplicate-window",
             strings::MENU_DUPLICATE_NEW_WINDOW,
             None,
-            facts.has_target,
+            facts.can_duplicate,
         ),
         TabMenuEntry::Separator,
         TabMenuEntry::item(Rename, "tab-menu-rename", strings::MENU_RENAME, None, true),
@@ -267,6 +270,7 @@ mod tests {
         use TabCommand::*;
         let one_pane = TabFacts {
             has_target: true,
+            can_duplicate: true,
             can_split_down: true,
             can_split_right: true,
             has_splits: false,
@@ -316,6 +320,21 @@ mod tests {
                 (SplitHorizontally, false),
                 (SplitVertically, false),
                 (Close, true),
+            ]
+        );
+        // A serial port: no Duplicate, the splits work (D88).
+        let serial = TabFacts {
+            can_duplicate: false,
+            ..one_pane
+        };
+        assert_eq!(
+            commands(&entries(serial))[..5],
+            [
+                (Duplicate, false),
+                (DuplicateInNewWindow, false),
+                (Rename, true),
+                (SplitHorizontally, true),
+                (SplitVertically, true),
             ]
         );
     }

@@ -42,3 +42,22 @@ pub const RESTORE_NOTHING: &str = "Nothing from the previous launch could be res
 
 /// A split run whose hosts were removed down to fewer than two (D81).
 pub const SPLIT_RUN_TOO_FEW: &str = "A split tab needs two to four saved hosts";
+
+/// New Serial Connection (UI 1.4, 2.2; D88).
+pub const SERIAL_TITLE: &str = "New Serial Connection";
+pub const SERIAL_PORT: &str = "Port";
+pub const SERIAL_LOOKING: &str = "Looking for ports\u{2026}";
+pub const SERIAL_NO_PORTS: &str = "No serial ports found";
+pub const SERIAL_REFRESH: &str = "Look for ports again";
+pub const SERIAL_BAUD: &str = "Baud rate";
+pub const SERIAL_DATA_BITS: &str = "Data bits";
+pub const SERIAL_PARITY: &str = "Parity";
+pub const SERIAL_STOP_BITS: &str = "Stop bits";
+pub const SERIAL_FLOW: &str = "Flow control";
+pub const SERIAL_NONE: &str = "None";
+pub const SERIAL_ODD: &str = "Odd";
+pub const SERIAL_EVEN: &str = "Even";
+pub const SERIAL_XON_XOFF: &str = "XON/XOFF";
+pub const SERIAL_RTS_CTS: &str = "RTS/CTS";
+pub const SERIAL_CANCEL: &str = "Cancel";
+pub const SERIAL_CONNECT: &str = "Connect";

@@ -159,3 +159,101 @@ async fn a_closed_telnet_port_fails_and_a_host_without_telnet_is_refused() {
     );
     assert!(matches!(refused, Err(SessionError::InvalidTarget)));
 }
+
+/// A server that floods option requests and never reads (review, D87): the
+/// client stops reading once its replies wait, instead of queueing them
+/// without end; closing the tab lets go of the socket all the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_that_never_reads_cannot_grow_the_queue() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("address").port();
+    let harness = Harness::new();
+    let SessionTarget::Host {
+        vault_id,
+        record_id,
+    } = harness.host(22, json!({"telnet": {"port": port}}), None)
+    else {
+        panic!("a saved host");
+    };
+    let mut session = harness
+        .open_with(
+            OpenRequest::Telnet {
+                vault_id,
+                record_id,
+            },
+            Arc::new(TestTerminal::default()),
+        )
+        .expect("opens");
+    let (socket, _) = listener.accept().await.expect("accept");
+    let (_read, mut write) = socket.into_split();
+    // TERMINAL-TYPE agreed, then SEND again and again: 6 bytes in, 20
+    // bytes out each.
+    write.write_all(&[IAC, DO, 24]).await.expect("write");
+    let flood: Vec<u8> = [IAC, SB, 24, 1, IAC, SE].repeat(64 * 1024);
+    let mut sent = 0usize;
+    let started = Instant::now();
+    while sent < 64 * 1024 * 1024 && started.elapsed() < Duration::from_secs(5) {
+        match tokio::time::timeout(Duration::from_millis(500), write.write_all(&flood)).await {
+            Ok(Ok(())) => sent += flood.len(),
+            Ok(Err(error)) => panic!("the client closed: {error}"),
+            Err(_) => break,
+        }
+    }
+    assert!(
+        sent < 64 * 1024 * 1024,
+        "the client read {sent} bytes of requests it could not answer"
+    );
+    // Closing the tab ends the stuck writer: the socket closes and the
+    // server's writes fail.
+    session.handle.close();
+    session.state(SessionState::Closed).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let written =
+            tokio::time::timeout(Duration::from_millis(200), write.write_all(&flood)).await;
+        if matches!(written, Ok(Err(_))) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the socket stayed open");
+    }
+}
+
+/// The host's charset applies to Telnet (data-model 7.4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telnet_uses_the_host_charset() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("address").port();
+    let harness = Harness::new();
+    let SessionTarget::Host {
+        vault_id,
+        record_id,
+    } = harness.host(
+        22,
+        json!({"telnet": {"port": port}, "charset": "windows-1251"}),
+        None,
+    )
+    else {
+        panic!("a saved host");
+    };
+    let mut session = harness
+        .open_with(
+            OpenRequest::Telnet {
+                vault_id,
+                record_id,
+            },
+            Arc::new(TestTerminal::default()),
+        )
+        .expect("opens");
+    let (mut socket, _) = listener.accept().await.expect("accept");
+    // "Привет" in windows-1251.
+    socket
+        .write_all(&[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2, b' '])
+        .await
+        .expect("write");
+    session.state(SessionState::Connected).await;
+    session.output_from(0, "Привет").await;
+    // Typed text goes in the same charset.
+    session.type_line("да");
+    let mut seen = Vec::new();
+    read_until(&mut socket, &mut seen, &[0xE4, 0xE0, b'\r', 0]).await;
+}

@@ -95,6 +95,10 @@ pub fn install(state: &Entity<AppState>, options: ManagerOptions, cx: &mut App) 
     });
     let settings =
         cx.observe_global::<crate::settings::terminal::TerminalPrefs>(|_| refresh_history_flags());
+    // The Serial dialog lists the ports of the same backend (D88).
+    cx.set_global(crate::shell::serial_dialog::SerialPorts(
+        manager.serial_backend(),
+    ));
     cx.set_global(Sessions {
         manager,
         _lock: lock,

@@ -44,6 +44,7 @@ pub mod details;
 pub mod notifications;
 pub mod placeholder;
 pub mod restore;
+pub mod serial_dialog;
 pub mod sessions;
 pub mod shortcuts;
 pub mod sidebar;
@@ -463,6 +464,8 @@ pub struct Shell {
     /// The tabs of Broadcast input (UI 4.4, D86): what is typed in a
     /// member pane of one goes to the member panes of all.
     broadcast_tabs: Vec<SessionId>,
+    /// The settings of the last serial Connect (D88; this run only).
+    last_serial: Option<shellpp_term_local::serial::SerialConfig>,
     /// The Ctrl+K search over this window (UI 6), while open.
     search: Option<(Entity<SearchOverlay>, Subscription)>,
     /// Give the keyboard focus back to the shell at the next render (the
@@ -577,6 +580,7 @@ impl Shell {
             terminal_sidebar,
             renaming: None,
             broadcast_tabs: Vec::new(),
+            last_serial: None,
             search: None,
             focus_shell: false,
             focus_page: false,
@@ -1243,6 +1247,23 @@ impl Shell {
 
     /// The tab list of Broadcast input (D86): every session tab, `id` and
     /// the tabs that broadcast now ticked.
+    /// New Serial Connection (UI 1.4, 2.2; D88): the dialog, then the port
+    /// in a new tab.
+    pub fn open_serial_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shell = cx.entity().downgrade();
+        serial_dialog::open(
+            self.last_serial.clone(),
+            window,
+            cx,
+            move |config, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.last_serial = Some(config.clone());
+                    shell.open_tab(TabSeed::Target(PaneTarget::Serial(config)), None, None, cx);
+                });
+            },
+        );
+    }
+
     fn open_broadcast_dialog(
         &mut self,
         id: SessionId,
@@ -1477,6 +1498,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match request {
+            // The Serial button asks for the port first (D88).
+            HostsRequest::OpenSession(request) if request.kind == hosts::SessionKind::Serial => {
+                self.open_serial_dialog(window, cx);
+            }
             HostsRequest::OpenSession(request) => {
                 let kind = match request.kind {
                     hosts::SessionKind::Ssh => SessionKind::Ssh,
@@ -1559,7 +1584,13 @@ impl Shell {
         match request {
             PanelRequest::Connect(id) => {
                 let host = self.state.read(cx).host(*id).cloned();
-                let mut session = SessionRequest::new(SessionKind::Ssh).host(*id);
+                // The host's primary protocol (D87).
+                let kind = if host.as_ref().is_some_and(|host| host.primary_telnet()) {
+                    SessionKind::Telnet
+                } else {
+                    SessionKind::Ssh
+                };
+                let mut session = SessionRequest::new(kind).host(*id);
                 if let Some(host) = host {
                     session = session.title(host.title().to_owned());
                 }
@@ -2113,16 +2144,14 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let (target, new_window) = match event {
+            // The host's primary protocol (D87).
             NewTabEvent::OpenHost {
                 host_id,
                 new_window,
-            } => {
-                let request = SessionRequest::new(SessionKind::Ssh).host(*host_id);
-                (
-                    PaneTarget::from_request(&request, self.state.read(cx)),
-                    *new_window,
-                )
-            }
+            } => (
+                PaneTarget::primary(self.state.read(cx), *host_id),
+                *new_window,
+            ),
             NewTabEvent::QuickConnect { target, new_window } => {
                 (Some(PaneTarget::Quick(target.clone())), *new_window)
             }
@@ -2442,10 +2471,13 @@ impl Shell {
         let group = group.read(cx);
         let active = group.active_pane();
         // UI 4.4: Duplicate and the splits stay disabled while the active
-        // pane has no session target (a pane still choosing a host).
-        let has_target = group.active_target(cx).is_some();
+        // pane has no session target (a pane still choosing a host); a
+        // serial port is not duplicated (D88).
+        let target = group.active_target(cx);
+        let has_target = target.is_some();
         tab_menu::TabFacts {
             has_target,
+            can_duplicate: target.is_some_and(|target| !target.is_serial()),
             can_split_down: has_target && group.can_split(active, Direction::Column),
             can_split_right: has_target && group.can_split(active, Direction::Row),
             has_splits: group.has_splits(),
@@ -2466,12 +2498,18 @@ impl Shell {
         let group = self.group(id).cloned();
         match command {
             TabCommand::Duplicate => {
-                if let Some(target) = group.and_then(|group| group.read(cx).active_target(cx)) {
+                if let Some(target) = group
+                    .and_then(|group| group.read(cx).active_target(cx))
+                    .filter(|target| !target.is_serial())
+                {
                     self.open_target(target, Some(id), cx);
                 }
             }
             TabCommand::DuplicateInNewWindow => {
-                if let Some(target) = group.and_then(|group| group.read(cx).active_target(cx)) {
+                if let Some(target) = group
+                    .and_then(|group| group.read(cx).active_target(cx))
+                    .filter(|target| !target.is_serial())
+                {
                     windows::open_in_new_window(
                         self.state.clone(),
                         window,
@@ -2676,10 +2714,11 @@ enum TabSeed {
 
 /// The kind of a tab whose (first) pane connects to `target`.
 fn target_kind(target: &PaneTarget) -> SessionKind {
-    if target.is_local() {
-        SessionKind::Local
-    } else {
-        SessionKind::Ssh
+    match target {
+        PaneTarget::Local { .. } => SessionKind::Local,
+        PaneTarget::Telnet { .. } => SessionKind::Telnet,
+        PaneTarget::Serial(_) => SessionKind::Serial,
+        PaneTarget::Host { .. } | PaneTarget::Quick(_) => SessionKind::Ssh,
     }
 }
 
@@ -2934,8 +2973,8 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &NewLocalTerminal, _, cx| {
                 this.open_session(SessionRequest::new(SessionKind::Local), cx);
             }))
-            .on_action(cx.listener(|this, _: &NewSerialConnection, _, cx| {
-                this.open_session(SessionRequest::new(SessionKind::Serial), cx);
+            .on_action(cx.listener(|this, _: &NewSerialConnection, window, cx| {
+                this.open_serial_dialog(window, cx);
             }))
             // "+", Ctrl+T outside a terminal, Ctrl+Shift+T (UI 6).
             .on_action(cx.listener(|this, _: &NewTab, window, cx| {
