@@ -101,6 +101,10 @@ fn say(line: &str) {
 /// of their cost (plan of run 4, item 5.5; D77).
 pub const HIGHLIGHT_RULES_ENV: &str = "SHELLPP_BENCH_HIGHLIGHT_RULES";
 
+/// `SHELLPP_BENCH_RECORD_OUTPUT=1`: sessions record their output (the
+/// setting `logs.record_output`, D75), for the measurement of its cost.
+pub const RECORD_OUTPUT_ENV: &str = "SHELLPP_BENCH_RECORD_OUTPUT";
+
 const BENCH_PATTERNS: [&str; 10] = [
     "timeout",
     "refused",
@@ -174,6 +178,26 @@ pub fn run(args: BenchArgs) -> ExitCode {
         }
     };
     say(&format!("demo profile with {} hosts", summary.hosts));
+    if std::env::var(RECORD_OUTPUT_ENV).is_ok_and(|value| value.trim() == "1") {
+        let set = opened
+            .core
+            .settings_set(shellpp_core::service::dto::SettingsSetInput {
+                values: [("logs.record_output".to_owned(), serde_json::json!(true))]
+                    .into_iter()
+                    .collect(),
+                reset: Vec::new(),
+            });
+        match set {
+            Ok(_) => say("output recording: on"),
+            Err(error) => {
+                say(&format!(
+                    "failed turning on output recording: {}",
+                    error.code()
+                ));
+                return ExitCode::from(1);
+            }
+        }
+    }
     let target = match server.save_host(&opened.core, "Benchmark server") {
         Ok((vault_id, record_id)) => SessionTarget::Host {
             vault_id,

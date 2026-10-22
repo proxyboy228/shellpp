@@ -112,6 +112,8 @@ param(
     # Custom keyword highlighting rules installed for the run (run 4, D77).
     [ValidateRange(0, 64)]
     [int] $HighlightRules = 0,
+    # Sessions record their output (logs.record_output; run 4, D75).
+    [switch] $RecordOutput,
     # Use the existing binaries.
     [switch] $NoBuild
 )
@@ -242,6 +244,7 @@ function Invoke-App([string] $label, [string[]] $appArgs, [switch] $WaitReady, [
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
     if ($bash) { $info.EnvironmentVariables['SHELLPP_BASH'] = $bash }
     if ($HighlightRules -gt 0) { $info.EnvironmentVariables['SHELLPP_BENCH_HIGHLIGHT_RULES'] = "$HighlightRules" }
+    if ($RecordOutput) { $info.EnvironmentVariables['SHELLPP_BENCH_RECORD_OUTPUT'] = '1' }
     $lines = New-Object System.Collections.Generic.List[string]
     $samples = New-Object System.Collections.Generic.List[object]
     $memory = $null
