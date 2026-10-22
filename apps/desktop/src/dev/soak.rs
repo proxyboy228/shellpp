@@ -95,6 +95,11 @@ pub async fn run(
     let stop = Arc::new(AtomicBool::new(false));
     let counts = Arc::new(Counts::default());
     let mut threads = Vec::new();
+    // `SHELLPP_SOAK_LOAD=tabs` or `forward`: that part of the load only, to
+    // find what grows; all of it by default.
+    let only = std::env::var("SHELLPP_SOAK_LOAD").unwrap_or_default();
+    let tabs_load = only != "forward";
+    let forward_load = only != "tabs";
 
     // The HTTP server behind the forwards, then the output of every tab.
     let http_port = if real_shell {
@@ -187,18 +192,20 @@ pub async fn run(
     }
 
     // The downloads, until the time is up.
-    threads.push(http_thread(
-        Route::Direct(SocketAddr::from(([127, 0, 0, 1], local_port))),
-        http_port,
-        stop.clone(),
-        counts.clone(),
-    ));
-    threads.push(http_thread(
-        Route::Socks(SocketAddr::from(([127, 0, 0, 1], socks_port))),
-        http_port,
-        stop.clone(),
-        counts.clone(),
-    ));
+    if forward_load {
+        threads.push(http_thread(
+            Route::Direct(SocketAddr::from(([127, 0, 0, 1], local_port))),
+            http_port,
+            stop.clone(),
+            counts.clone(),
+        ));
+        threads.push(http_thread(
+            Route::Socks(SocketAddr::from(([127, 0, 0, 1], socks_port))),
+            http_port,
+            stop.clone(),
+            counts.clone(),
+        ));
+    }
     say("soak load");
 
     let started = Instant::now();
@@ -206,7 +213,7 @@ pub async fn run(
     let mut minute = 0;
     let mut next_seq = Instant::now();
     while Instant::now() < end {
-        if !real_shell && Instant::now() >= next_seq {
+        if !real_shell && tabs_load && Instant::now() >= next_seq {
             for handle in &handles {
                 type_line(handle, "seq 1 20000");
             }
