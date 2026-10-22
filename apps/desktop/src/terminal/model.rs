@@ -321,6 +321,8 @@ pub struct TerminalHandle {
     term: SharedTerm,
     queue: async_channel::Sender<Message>,
     outbox: Arc<Outbox>,
+    /// The scrollback limit (lines, the journal's included).
+    scrollback: usize,
 }
 
 impl std::fmt::Debug for TerminalHandle {
@@ -370,6 +372,7 @@ impl TerminalHandle {
             term,
             queue,
             outbox,
+            scrollback,
         }
     }
 
@@ -486,6 +489,12 @@ impl TerminalHandle {
             *current = size;
             if cells_changed {
                 let mut term = self.term.lock();
+                // A reflow or fewer rows push more lines into the grid's
+                // scrollback: let it hold them, so none is lost between the
+                // journal and the grid; the next output trims the buffer to
+                // its limit, the journal's oldest lines first.
+                let history = term.grid().history_size();
+                term.grid_mut().update_history(self.scrollback.max(history));
                 term.resize(GridDims::from(size));
                 // A view in the journal shows the grid from its top.
                 let journal = self.outbox.journal();
@@ -510,10 +519,7 @@ impl TerminalHandle {
         use super::journal::Buffer as _;
         let term = self.term.lock();
         let journal = self.outbox.journal();
-        let lines = Lines {
-            grid: term.grid(),
-            journal: &journal,
-        };
+        let lines = Lines::new(&term, &journal);
         let top = lines.view_top();
         (0..lines.rows())
             .map(|line| {
@@ -544,7 +550,8 @@ impl TerminalHandle {
     }
 
     /// Bytes the scrollback and the screen take: the grid's rows (each as
-    /// wide as the window) and the journal (tests and benchmarks).
+    /// wide as the window) and the journal (tests and benchmarks). Rows
+    /// alacritty keeps for reuse are not counted; a compaction frees them.
     pub fn buffer_bytes(&self) -> usize {
         let term = self.term.lock();
         let grid = term.grid();
@@ -564,7 +571,8 @@ impl TerminalHandle {
     pub(super) fn scroll_to_bottom(&self) {
         let mut term = self.term.lock();
         let mut journal = self.outbox.journal();
-        if term.grid().display_offset() != 0 || journal.view() != 0 {
+        let alt = term.mode().contains(TermMode::ALT_SCREEN);
+        if term.grid().display_offset() != 0 || (!alt && journal.view() != 0) {
             journal::scroll(&mut term, &mut journal, Scroll::Bottom);
         }
     }
@@ -573,7 +581,8 @@ impl TerminalHandle {
     #[cfg(test)]
     pub(super) fn view_offset(&self) -> usize {
         let term = self.term.lock();
-        term.grid().display_offset() + self.outbox.journal().view()
+        use super::journal::Buffer as _;
+        Lines::new(&term, &self.outbox.journal()).view_offset()
     }
 
     /// Runs `read` on the buffer of `term` (this handle's terminal,
@@ -584,10 +593,7 @@ impl TerminalHandle {
         read: impl FnOnce(&Lines<'_>) -> R,
     ) -> R {
         let journal = self.outbox.journal();
-        read(&Lines {
-            grid: term.grid(),
-            journal: &journal,
-        })
+        read(&Lines::new(term, &journal))
     }
 
     /// Lines dropped off the top of the scrollback so far (a full

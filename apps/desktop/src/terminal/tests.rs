@@ -1336,10 +1336,14 @@ fn the_compact_scrollback_scrolls_searches_and_selects(cx: &mut TestAppContext) 
     assert_eq!(fixture.selected(cx), Some(expected.clone()));
 
     // More output: the view and the selection keep their text, also when
-    // the rows on screen move into the journal.
+    // the rows on screen move into the journal; the buffer stays at its
+    // limit, the oldest lines dropped and counted.
+    let evicted = fixture.handle.evicted_lines();
     fixture.feed(cx, lines(10_500..10_800).as_bytes());
     assert_eq!(fixture.handle.screen_text()[0], rows[0]);
     assert_eq!(fixture.selected(cx), Some(expected));
+    assert_eq!(fixture.handle.history_size(), DEFAULT_SCROLLBACK);
+    assert_eq!(fixture.handle.evicted_lines(), evicted + 300);
     {
         let term = fixture.handle.term().lock();
         let journal = fixture.handle.outbox().journal();
@@ -1354,8 +1358,71 @@ fn the_compact_scrollback_scrolls_searches_and_selects(cx: &mut TestAppContext) 
         assert_eq!(term.grid().display_offset(), term.grid().history_size());
     }
 
+    // The alternate screen has no journal: nothing of it is searched or
+    // scrolled to there.
+    fixture.feed(cx, b"\x1b[?1049h");
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search("line", cx));
+    assert_eq!(summary.count, 0);
+    fixture.handle.scroll(Scroll::Top);
+    assert_eq!(fixture.handle.view_offset(), 0);
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.clear_search(cx));
+    fixture.feed(cx, b"\x1b[?1049l");
+
+    // RIS from the alternate screen clears the journal too.
+    fixture.feed(cx, lines(0..2_000).as_bytes());
+    assert!(!fixture.handle.outbox().journal().is_empty());
+    fixture.feed(cx, b"\x1b[?1049h\x1bc");
+    assert!(fixture.handle.outbox().journal().is_empty());
+    fixture.feed(cx, lines(0..2_000).as_bytes());
+    assert!(
+        fixture.handle.history_size() >= 1_900,
+        "the grid's cap is back"
+    );
+
     // ED 3 clears the whole scrollback, the journal too.
     fixture.feed(cx, b"\x1b[3J");
     assert_eq!(fixture.handle.history_size(), 0);
     assert_eq!(fixture.handle.view_offset(), 0);
+}
+
+/// D85: the selection on the screen follows the emulator's copy of it:
+/// output that clears it ends it, output that scrolls the screen into
+/// the scrollback keeps it on its text, and text that scrolls inside the
+/// screen (the alternate screen, a scroll region) takes it along.
+#[gpui_kit::test]
+fn a_selection_on_the_screen_follows_its_text(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    fixture.feed(cx, b"alpha one\r\nbravo two\r\ncharlie three");
+    fixture.drag(cx, (1, 0), (1, 4));
+    assert_eq!(fixture.selected(cx).as_deref(), Some("bravo"));
+    // New lines scroll the screen: the selection stays on "bravo".
+    let mut more = String::new();
+    for n in 0..40 {
+        more.push_str(&format!("\r\nmore {n}"));
+    }
+    fixture.feed(cx, more.as_bytes());
+    assert_eq!(fixture.selected(cx).as_deref(), Some("bravo"));
+
+    // Output that clears the selected text ends the selection (as
+    // alacritty's own did; plain characters over it do not).
+    fixture.feed(cx, b"\x1b[2J\x1b[Hdelta four\r\necho five");
+    fixture.drag(cx, (1, 0), (1, 3));
+    assert_eq!(fixture.selected(cx).as_deref(), Some("echo"));
+    fixture.feed(cx, b"\x1b[2;1H\x1b[2Kxxxx");
+    assert_eq!(fixture.selected(cx), None);
+
+    // The alternate screen scrolls inside its screen: the selection moves.
+    fixture.feed(cx, b"\x1b[?1049h\x1b[Hfirst\r\nsecond\r\nthird");
+    fixture.drag(cx, (1, 0), (1, 5));
+    assert_eq!(fixture.selected(cx).as_deref(), Some("second"));
+    // Scroll up one line (SU): "second" is now on the first row.
+    fixture.feed(cx, b"\x1b[S");
+    assert_eq!(fixture.selected(cx).as_deref(), Some("second"));
+    assert_eq!(fixture.handle.screen_text()[0], "second");
+    fixture.feed(cx, b"\x1b[?1049l");
+    assert_eq!(fixture.selected(cx), None, "the other screen");
 }

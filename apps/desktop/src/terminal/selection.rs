@@ -7,8 +7,9 @@
 //! dropped off the top before (as the search's positions), so it stays on
 //! its text while output scrolls, and it reaches into the compact part of
 //! the scrollback (D85). Its part on the screen is mirrored in the emulator
-//! ([`Selection::mirror`]): alacritty drops a selection when output writes
-//! over it, and the view then ends its own.
+//! ([`Selection::mirror`]): alacritty drops a selection when output clears
+//! it (an erased line or screen, a reset) and moves it with text that
+//! scrolls on the screen; the view's own follows.
 
 use alacritty_terminal::grid::Row;
 use alacritty_terminal::index::{Column, Line, Point, Side};
@@ -20,6 +21,9 @@ use super::search::BufferPoint;
 
 /// Characters that end a word for a double click (alacritty's default).
 pub const SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
+
+/// Columns between tab stops (alacritty's default stops).
+const TAB_STOP: usize = 8;
 
 /// The selection kind of a click.
 pub fn selection_type(click_count: usize) -> SelectionType {
@@ -87,6 +91,15 @@ impl Selection {
     /// Extends the selection to `point` (a drag).
     pub fn update(&mut self, point: BufferPoint, side: Side) {
         self.head = Anchor { point, side };
+    }
+
+    /// The same selection `lines` further down (up when negative): its text
+    /// moved on the screen.
+    pub fn shifted(mut self, lines: i64) -> Self {
+        for end in [&mut self.anchor, &mut self.head] {
+            end.point.line = (end.point.line as i64 + lines).max(0) as usize;
+        }
+        self
     }
 
     /// The two ends in buffer order.
@@ -202,8 +215,20 @@ impl Selection {
                 first -= 1;
             }
             let length = line_length(&row, columns).min(last + 1);
+            // A tab is copied as a tab, without the blanks up to its stop.
+            let mut tab = false;
             for column in first..length {
                 let cell = &row[Column(column)];
+                if tab {
+                    if column % TAB_STOP == 0 || cell.c != ' ' {
+                        tab = false;
+                    } else {
+                        continue;
+                    }
+                }
+                if cell.c == '\t' {
+                    tab = true;
+                }
                 if cell
                     .flags
                     .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
@@ -485,6 +510,13 @@ mod tests {
         let mut drag = Selection::new(SelectionType::Simple, at(&term, 0, 3), Side::Left);
         drag.update(at(&term, 0, 4), Side::Right);
         assert_eq!(text(&term, &drag).as_deref(), Some("你"));
+    }
+
+    #[test]
+    fn a_tab_is_copied_as_a_tab() {
+        let term = term("a\tb\tc");
+        let line = Selection::new(SelectionType::Lines, at(&term, 0, 0), Side::Left);
+        assert_eq!(text(&term, &line).as_deref(), Some("a\tb\tc"));
     }
 
     #[test]

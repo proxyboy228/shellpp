@@ -247,10 +247,11 @@ pub struct TerminalView {
     /// The selection (UI 4.3), in buffer lines; its part on the screen is
     /// mirrored in the emulator.
     selection: Option<Selection>,
-    /// The emulator holds the selection's screen part.
-    selection_mirrored: bool,
-    /// The selection was made on the alternate screen.
-    selection_alt: bool,
+    /// The first and last cell of the emulator's copy of the selection's
+    /// screen part, counted as the selection is, when it has one.
+    selection_mirror: Option<(BufferPoint, BufferPoint)>,
+    /// The screen (alternate or not) and the columns of the selection.
+    selection_grid: (bool, usize),
     /// The open search, if any (UI 4.2 Tools).
     search: Option<SearchState>,
     /// New output arrived since the search last ran.
@@ -348,8 +349,8 @@ impl TerminalView {
             title: None,
             dimmed: false,
             selection: None,
-            selection_mirrored: false,
-            selection_alt: false,
+            selection_mirror: None,
+            selection_grid: (false, 0),
             search: None,
             search_stale: false,
             search_refresh: None,
@@ -680,7 +681,8 @@ impl TerminalView {
     }
 
     /// Sets the selection and mirrors its part on the screen in the
-    /// emulator, which drops it when output writes over it.
+    /// emulator, which drops it when output writes over it and moves it
+    /// with text that scrolls on the screen.
     fn set_selection(&mut self, selection: Option<Selection>) {
         let mut term = self.handle.term().lock();
         let evicted = self.handle.evicted_lines();
@@ -688,28 +690,57 @@ impl TerminalView {
             self.handle
                 .with_lines(&term, |lines| selection.mirror(lines, evicted))
         });
-        self.selection_mirrored = mirror.is_some();
-        self.selection_alt = term.mode().contains(TermMode::ALT_SCREEN);
         term.selection = mirror;
+        self.selection_mirror = self.mirrored_range(&term);
+        self.selection_grid = (
+            term.mode().contains(TermMode::ALT_SCREEN),
+            term.grid().cols(),
+        );
         self.selection = selection;
     }
 
-    /// Ends the selection when the emulator dropped its copy (output wrote
-    /// over it, a reset, a resize) or the screen switched; keeps it when
-    /// its rows only moved into the journal (D85).
+    /// The cells the emulator's selection covers, counted as the view's
+    /// selection is.
+    fn mirrored_range(
+        &self,
+        term: &alacritty_terminal::Term<super::model::Listener>,
+    ) -> Option<(BufferPoint, BufferPoint)> {
+        let range = term.selection.as_ref()?.to_range(term)?;
+        let evicted = self.handle.evicted_lines() as i64;
+        let screen = self.handle.with_lines(term, |lines| lines.above()) as i64;
+        let point = |point: alacritty_terminal::index::Point| BufferPoint {
+            line: (evicted + screen + i64::from(point.line.0)).max(0) as usize,
+            column: point.column.0,
+        };
+        Some((point(range.start), point(range.end)))
+    }
+
+    /// Follows the emulator's copy of the selection: it ends when output
+    /// wrote over it, a reset or the other screen; it moves with text that
+    /// scrolled on the screen (a scroll region, the alternate screen). A
+    /// copy that only moved into the journal (D85) leaves the selection as
+    /// it is; a new width (rows that reflowed) ends it.
     fn check_selection(&mut self) {
-        if self.selection.is_none() {
+        let Some(selection) = self.selection else {
             return;
-        }
+        };
         let term = self.handle.term().lock();
+        let grid = (
+            term.mode().contains(TermMode::ALT_SCREEN),
+            term.grid().cols(),
+        );
         let moved = self.handle.outbox().take_selection_moved();
-        let dropped = self.selection_mirrored && term.selection.is_none() && !moved;
-        if dropped || term.mode().contains(TermMode::ALT_SCREEN) != self.selection_alt {
-            self.selection = None;
+        let now = self.mirrored_range(&term);
+        match (self.selection_mirror, now) {
+            _ if grid != self.selection_grid => self.selection = None,
+            (Some(_), None) if !moved => self.selection = None,
+            (Some(before), Some(after)) if before != after => {
+                let lines = after.0.line as i64 - before.0.line as i64;
+                self.selection = Some(selection.shifted(lines));
+            }
+            _ => {}
         }
-        if term.selection.is_none() {
-            self.selection_mirrored = false;
-        }
+        self.selection_mirror = now;
     }
 
     /// Rows shaped so far (the row cache's misses; tests and benchmarks).

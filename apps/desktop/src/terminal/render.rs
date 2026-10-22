@@ -395,10 +395,7 @@ pub fn prepaint(
         let journal = handle.outbox().journal();
         // The rows come from the grid and, scrolled far back, the journal
         // (D85); the view's offset covers both.
-        let lines = Lines {
-            grid,
-            journal: &journal,
-        };
+        let lines = Lines::new(&term, &journal);
         let offset = lines.view_offset() as i32;
         let top = lines.view_top();
         let visible = grid.screen_lines().min(rows);

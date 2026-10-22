@@ -28,6 +28,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Grid, Row, Scroll};
 use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use unicode_width::UnicodeWidthChar as _;
@@ -292,7 +293,28 @@ impl std::fmt::Debug for Lines<'_> {
     }
 }
 
-impl Lines<'_> {
+/// The journal of a screen without one (the alternate screen).
+static NO_JOURNAL: Journal = Journal {
+    lines: VecDeque::new(),
+    heap: 0,
+    view: 0,
+};
+
+impl<'a> Lines<'a> {
+    /// The buffer of `term` with `journal`: the journal belongs to the
+    /// primary screen's scrollback, so the alternate screen has none.
+    pub fn new<T: EventListener>(term: &'a Term<T>, journal: &'a Journal) -> Self {
+        let journal = if term.mode().contains(TermMode::ALT_SCREEN) {
+            &NO_JOURNAL
+        } else {
+            journal
+        };
+        Self {
+            grid: term.grid(),
+            journal,
+        }
+    }
+
     /// The grid line of buffer line `line`, when it is in the grid.
     pub fn grid_line(&self, line: usize) -> Option<Line> {
         line.checked_sub(self.journal.len())
@@ -347,6 +369,11 @@ impl Buffer for Lines<'_> {
 /// offset from the bottom covers the grid's scrollback first, then the
 /// journal's lines (the grid then shows its oldest line at the top).
 pub fn scroll<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, scroll: Scroll) {
+    // The alternate screen scrolls its own grid only.
+    if term.mode().contains(TermMode::ALT_SCREEN) {
+        term.scroll_display(scroll);
+        return;
+    }
     let grid = term.grid();
     let history = grid.history_size();
     let current = grid.display_offset();
@@ -396,6 +423,8 @@ pub fn compact<T: EventListener>(term: &mut Term<T>, journal: &mut Journal, limi
     }
     let grid = term.grid_mut();
     grid.update_history(LIVE_HISTORY);
+    // Alacritty keeps up to a thousand rows it dropped for reuse: they go.
+    grid.truncate();
     grid.update_history(limit.saturating_sub(journal.len()).max(LIVE_HISTORY));
     // The rows of the view that moved are now above the grid's top.
     if offset > LIVE_HISTORY {
@@ -515,6 +544,72 @@ mod tests {
         assert!(total <= 5 * 1024 * 1024, "{total} bytes");
         // Before: every line a full row.
         assert!(history * 200 * size_of::<Cell>() > 40 * 1024 * 1024);
+    }
+
+    /// New options set the grid's cap back to the whole limit, and a
+    /// narrower window reflows the grid's rows into more: the next output
+    /// trims the buffer to its limit with the journal's oldest lines first,
+    /// so the lines stay in order without a gap, and the journal is not
+    /// taken for a cleared scrollback.
+    #[test]
+    fn a_reset_cap_and_a_reflow_keep_the_journal_in_order() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::terminal::limits::{self, Capped};
+
+        let journal = Arc::new(Mutex::new(Journal::default()));
+        limits::count_evictions(2_000, journal.clone());
+        let mut term = Term::new(
+            Config {
+                scrolling_history: 2_000,
+                ..Config::default()
+            },
+            &GridDims { cols: 20, rows: 3 },
+            VoidListener,
+        );
+        let mut parser: Processor<StdSyncHandler> = Processor::new();
+        let feed = |term: &mut Term<VoidListener>,
+                    parser: &mut Processor<StdSyncHandler>,
+                    range: std::ops::Range<usize>| {
+            for n in range {
+                parser.advance(
+                    &mut Capped(&mut *term),
+                    format!("n{n:05} abcdefghij\r\n").as_bytes(),
+                );
+            }
+        };
+        feed(&mut term, &mut parser, 0..2_500);
+        let first = limits::evictions();
+        let moved = compact(&mut term, &mut journal.lock().unwrap(), 2_000);
+        limits::journal_grew(moved);
+        // As `Term::set_options` does, then a reflow into twice the rows.
+        term.grid_mut().update_history(2_000);
+        term.resize(GridDims { cols: 10, rows: 3 });
+        feed(&mut term, &mut parser, 2_500..2_501);
+        let journal = journal.lock().unwrap();
+        assert!(!journal.is_empty(), "not cleared");
+        let lines = Lines {
+            grid: term.grid(),
+            journal: &journal,
+        };
+        assert!(lines.above() <= 2_000 + 3, "{}", lines.above());
+        // The grid's reflowed rows took room: the journal's oldest lines
+        // went, counted.
+        assert!(limits::evictions() > first + 1, "{first}");
+        let numbers: Vec<usize> = (0..lines.total())
+            .filter_map(|line| {
+                let text = row_text(&lines.row(line));
+                text.strip_prefix('n')
+                    .and_then(|rest| rest.get(..5))
+                    .and_then(|digits| digits.parse().ok())
+            })
+            .collect();
+        assert!(numbers.len() > 1_000, "{}", numbers.len());
+        assert!(
+            numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "in order, without a gap"
+        );
+        assert_eq!(*numbers.last().unwrap(), 2_500);
     }
 
     #[test]

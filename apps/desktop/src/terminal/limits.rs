@@ -21,7 +21,7 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
@@ -158,6 +158,9 @@ struct Evictions {
     limit: usize,
     dropped: usize,
     journal: usize,
+    /// The grid's cap must be set again (the journal was cleared from the
+    /// alternate screen).
+    recap: bool,
 }
 
 thread_local! {
@@ -169,10 +172,8 @@ thread_local! {
 /// journal's lock is taken after it, as everywhere).
 fn with_journal(change: impl FnOnce(&mut Journal)) {
     JOURNAL.with_borrow(|journal| {
-        if let Some(journal) = journal
-            && let Ok(mut journal) = journal.lock()
-        {
-            change(&mut journal);
+        if let Some(journal) = journal {
+            change(&mut journal.lock().unwrap_or_else(PoisonError::into_inner));
         }
     });
 }
@@ -201,6 +202,7 @@ pub fn count_evictions(limit: usize, journal: Arc<Mutex<Journal>>) {
         limit,
         dropped: 0,
         journal: 0,
+        recap: false,
     }));
     JOURNAL.set(Some(journal));
 }
@@ -255,16 +257,33 @@ impl<T: EventListener> Capped<'_, T> {
         }
         // What the grid may hold: the limit less the journal's lines.
         let limit = count.limit.saturating_sub(count.journal);
+        if count.recap {
+            self.0.grid_mut().update_history(limit);
+            count.recap = false;
+            EVICTIONS.set(Some(count));
+        }
         let room = self.0.screen_lines();
         let before = self.0.grid().history_size();
         let full = before + room > limit;
         if full {
-            self.0.grid_mut().update_history(limit + room);
+            // Room for what the call can push, never less than the grid
+            // holds: new options or a resize may have left it over its cap,
+            // and only a clear may shrink it during the call.
+            self.0.grid_mut().update_history(limit.max(before) + room);
         }
         call(self.0);
         let after = self.0.grid().history_size();
         let mut dropped = 0;
-        if full {
+        let cleared = before.saturating_sub(after);
+        if cleared > 0 {
+            // ED 3 or RIS: the whole scrollback goes, the journal too.
+            dropped += cleared + count.journal;
+            if count.journal > 0 {
+                with_journal(Journal::clear);
+                count.journal = 0;
+            }
+            self.0.grid_mut().update_history(count.limit);
+        } else if full {
             // Back to the limit: the oldest lines go, the journal's first
             // (they are older than the grid's), as alacritty drops them.
             let over = after.saturating_sub(limit);
@@ -277,16 +296,6 @@ impl<T: EventListener> Capped<'_, T> {
                 .grid_mut()
                 .update_history(count.limit.saturating_sub(count.journal));
             dropped += over;
-        }
-        let cleared = before.saturating_sub(after);
-        if cleared > 0 {
-            // ED 3 or RIS: the whole scrollback goes, the journal too.
-            dropped += cleared + count.journal;
-            if count.journal > 0 {
-                with_journal(Journal::clear);
-                count.journal = 0;
-                self.0.grid_mut().update_history(count.limit);
-            }
         }
         if dropped > 0 {
             count.dropped += dropped;
@@ -350,6 +359,19 @@ impl<T: EventListener> Handler for Capped<'_, T> {
 
     #[inline]
     fn reset_state(&mut self) {
+        // RIS from the alternate screen clears the primary screen's
+        // scrollback too (out of `counting`'s sight): its journal goes, and
+        // the grid's cap is set again at the next call.
+        if self.0.mode().contains(TermMode::ALT_SCREEN)
+            && let Some(mut count) = EVICTIONS.get()
+            && count.journal > 0
+        {
+            with_journal(Journal::clear);
+            count.dropped += count.journal;
+            count.journal = 0;
+            count.recap = true;
+            EVICTIONS.set(Some(count));
+        }
         self.counting(Handler::reset_state);
     }
 

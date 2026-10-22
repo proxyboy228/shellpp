@@ -1320,3 +1320,20 @@ Status: run 5 decision, 2026-10-22 (plan, section 5; D81's "not done").
 - Each workspace is checked by the rules of a save: at most 32 tabs, the shape of Restore (splits, sizes, leaves, depth), no quick-connect target; one that breaks them is refused with its errors. `import_key` is now allowed in a workspace (data-model 3.3), managed like the other types: a save never takes it from its input, an edit keeps it.
 
 **Spec impact:** `docs/export-format.md` section 4, `docs/data-model.md` 3.3, `docs/ui-behavior-spec.md` 1.4 (and `docs/ru`).
+
+### 85. A compact journal for the old part of the scrollback (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 6; night 1 report, section 2.4).
+
+**Context.** Alacritty keeps every scrollback row as wide as the window, 24 bytes a cell: a full scrollback of 10 000 lines took 39 MB in night 1. The plan asks for at most 5 MB per session, search and selection over the whole history, and output not slower.
+
+**Decision:**
+
+- The grid keeps the screen and the newest 500 scrollback lines as alacritty rows. Older rows move into a journal (`terminal/journal.rs`): each row as its text without trailing blanks (every cell's character, combining marks after it) and its attributes as runs, plus its wrap. 10 000 typical shell lines in a 200-column window take about 4 MB together with the grid's part (test `ten_thousand_shell_lines_take_a_few_megabytes`).
+- Rows move in batches, on the parser thread: when it has nothing queued, or at most every 250 ms while output keeps coming and the grid is 200 lines over its part. A flood pays nothing per line (encoding each row as it leaves would cost about 0.3 µs a line, more than the parsing); the grid may hold the whole scrollback for the length of a flood, as before, and gives it back when the flood pauses.
+- The scrollback limit (10 000 lines) holds for the journal and the grid together: when output needs room, the journal's oldest lines go first, so the buffer keeps its order and positions counted from the oldest line stay valid. ED 3 and RIS clear the journal with the scrollback.
+- Drawing, search and selection read the journal and the grid as one buffer of lines. The view's scroll offset covers the grid's scrollback first, then the journal; while the view is in the journal, new output keeps it on its text.
+- The selection is now the app's own, in buffer lines counted with the lines that dropped off (as the search's positions), so it reaches into the journal and stays on its text. Its part on the screen is mirrored into alacritty's selection, which alacritty drops when output clears it (an erased line or screen, a reset) and moves with text that scrolls inside the screen (the alternate screen, a scroll region): the app's selection ends or moves with it, as before. A new width ends it. A double click on a bracket no longer selects up to its matching bracket. Copying keeps alacritty's rules (trailing blanks left out, a line break where a line ends, wide characters whole).
+- Not kept in the journal: OSC 8 links and underline colors. Journal rows keep the width they had when they moved: a later resize does not reflow them (a wider row is cut, a narrower one padded).
+
+**Spec impact:** none (UI 4.2's search and 4.3's selection already cover the whole scrollback).

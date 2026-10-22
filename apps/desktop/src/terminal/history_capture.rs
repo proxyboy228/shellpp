@@ -266,7 +266,12 @@ fn logical_start(term: &Term<Listener>, line: Line) -> Option<Line> {
     let top = term.grid().topmost_line();
     let mut start = line;
     for _ in 0..MAX_LINE_ROWS {
-        if start <= top || !wraps(term, start - 1) {
+        if start <= top {
+            // The top of the grid: the line may go on in the journal (D85)
+            // when there is a scrollback, so it is not followed.
+            return (term.grid().history_size() == 0).then_some(start);
+        }
+        if !wraps(term, start - 1) {
             return Some(start);
         }
         start -= 1;
