@@ -279,15 +279,19 @@ On the left:
     An empty field takes the first port found. A name that is not among the ports found
     (typed by hand, or saved from the last Connect while the device is unplugged) stays
     in the field, marked "Not found now" in the warning color; Connect still opens it and
-    fails with the reason if the port is not there. No port found: "No serial ports
-    found. Type the port name."; Connect is disabled while the field is empty;
+    fails with the reason if the port is not there. On Windows names are not
+    case-sensitive and the `\\.\` prefix does not count (`com3` is COM3). No port found:
+    "No serial ports found. Type the port name."; Connect is disabled while the field is
+    empty or the name is longer than 256 bytes ("The port name is too long");
   - Baud rate: a list from 300 to 921600, 9600 by default;
   - Data bits 5–8 (8), Parity None / Odd / Even (None), Stop bits 1 / 2 (1), Flow control
     None / XON/XOFF / RTS/CTS (None), as segments;
   - Connect (Enter) opens the port in a new session tab titled after the port, with the
     terminal of SSH; Cancel (Esc) closes the dialog. The dialog offers the settings of
     the last Connect again, also after a restart: they are settings of this device
-    (`serial.*`, data-model 16.1), which an import never changes.
+    (`serial.*`, data-model 16.1), which an export leaves out and an import never
+    changes, a full restore included. If they cannot be written, the tab still opens and
+    a toast says so.
   The tab: what is typed goes to the port as it is, the port's output to the terminal
   (UTF-8). A port that does not open fails with the reason (not found, in use or access
   denied, settings refused); a device that is unplugged drops the tab ("The serial device

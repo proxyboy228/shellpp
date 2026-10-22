@@ -113,7 +113,7 @@ const MAX_UNKNOWN_KEY_BYTES: usize = 256 * 1024;
 /// paste, delete and name-conflict questions, what is recorded or logged)
 /// never comes from a file: a shared "host list" could otherwise run its
 /// script on every server the user opens (security.md, TB7). Nor does one
-/// that belongs to the device it was set on (the last serial port, D95).
+/// that belongs to the device it was set on ([`device_setting`]).
 pub fn imported_setting(key: &str) -> bool {
     const TERMINAL_AND_SFTP: [&str; 17] = [
         "terminal.autocomplete",
@@ -138,6 +138,13 @@ pub fn imported_setting(key: &str) -> bool {
         .iter()
         .any(|prefix| key.starts_with(prefix))
         || TERMINAL_AND_SFTP.contains(&key)
+}
+
+/// The settings of this device only (D95): the last serial Connect names a
+/// port of this device. An export leaves them out and no import applies
+/// them, a full restore included.
+pub fn device_setting(key: &str) -> bool {
+    key.starts_with("serial.")
 }
 
 /// Whether an export writes records of `kind`: never the recovery key
@@ -806,7 +813,12 @@ impl Core {
             );
             document.insert(
                 "settings".into(),
-                Value::Object(settings.into_iter().collect()),
+                Value::Object(
+                    settings
+                        .into_iter()
+                        .filter(|(key, _)| !device_setting(key))
+                        .collect(),
+                ),
             );
             (WipeOnDrop::new(document), counts)
         };
@@ -1262,9 +1274,10 @@ impl Core {
             let local = self.inner().settings.values();
             // Settings one by one: an unknown or invalid key is left out,
             // and so is every setting D41 keeps local (counted when the
-            // file's value differs from the one here).
+            // file's value differs from the one here); those of the device
+            // stay also in a full restore (D95).
             for (key, value) in settings.values {
-                if !input.full_restore && !imported_setting(&key) {
+                if device_setting(&key) || (!input.full_restore && !imported_setting(&key)) {
                     if local.get(&key).is_some_and(|here| *here != value) {
                         summary.settings_left_out += 1;
                     }

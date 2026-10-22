@@ -410,7 +410,7 @@ fn the_serial_dialog_opens_the_port_with_its_settings(cx: &mut TestAppContext) {
     install_ports(cx);
     ui.press("ctrl-alt-s", cx);
     // COM3 before COM10, the first one chosen.
-    assert!(!ui.visible("serial-port-status", cx), "a listed port");
+    assert!(!ui.visible("serial-port-not-found", cx), "a listed port");
     ui.click("serial-port-choose", cx);
     assert!(ui.visible("serial-port-COM3", cx) && ui.visible("serial-port-COM10", cx));
     let com3 = ui.bounds("serial-port-COM3", cx).expect("COM3");
@@ -491,8 +491,18 @@ fn the_serial_dialog_takes_a_typed_port_and_keeps_it_after_a_restart(cx: &mut Te
     ui.type_into("serial-port", "", cx);
     ui.click("serial-connect", cx);
     assert!(ui.visible("serial-dialog", cx), "no port, no Connect");
+    // A name longer than a port name can be: said, and no Connect.
+    ui.type_into("serial-port", &"A".repeat(257), cx);
+    assert!(ui.visible("serial-port-too-long", cx));
+    ui.click("serial-connect", cx);
+    assert!(ui.visible("serial-dialog", cx), "too long, no Connect");
+    // Windows names are not case-sensitive: `com3` is the listed COM3.
+    if cfg!(windows) {
+        ui.type_into("serial-port", "com3", cx);
+        assert!(!ui.visible("serial-port-not-found", cx));
+    }
     ui.type_into("serial-port", r"  \\.\COM12 ", cx);
-    assert!(ui.visible("serial-port-status", cx), "not found now");
+    assert!(ui.visible("serial-port-not-found", cx));
     ui.click("serial-parity-odd", cx);
     ui.click("serial-baud", cx);
     ui.click("serial-baud-19200", cx);
@@ -511,8 +521,14 @@ fn the_serial_dialog_takes_a_typed_port_and_keeps_it_after_a_restart(cx: &mut Te
     let ui = Ui::open_on(profile.open_unlocked(), cx);
     install_ports(cx);
     ui.press("ctrl-alt-s", cx);
-    assert!(ui.visible("serial-port-status", cx), "still not found now");
-    ui.click("serial-connect", cx);
+    assert!(
+        ui.visible("serial-port-not-found", cx),
+        "still not found now"
+    );
+    // Enter in the port field is Connect.
+    ui.click("serial-port", cx);
+    ui.press("enter", cx);
+    assert!(!ui.visible("serial-dialog", cx));
     assert_eq!(
         last_serial_target(&ui, cx),
         Some(PaneTarget::Serial(expected))
@@ -522,7 +538,7 @@ fn the_serial_dialog_takes_a_typed_port_and_keeps_it_after_a_restart(cx: &mut Te
     ui.press("ctrl-alt-s", cx);
     ui.click("serial-port-choose", cx);
     ui.click("serial-port-COM3", cx);
-    assert!(!ui.visible("serial-port-status", cx));
+    assert!(!ui.visible("serial-port-not-found", cx));
     ui.click("serial-connect", cx);
     let target = last_serial_target(&ui, cx);
     assert!(

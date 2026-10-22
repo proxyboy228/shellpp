@@ -50,6 +50,9 @@ pub const SERIAL_LOOKING: &str = "Looking for ports\u{2026}";
 pub const SERIAL_NO_PORTS: &str = "No serial ports found. Type the port name.";
 /// Under a port name that is not among the ports found.
 pub const SERIAL_NOT_FOUND: &str = "Not found now";
+pub const SERIAL_TOO_LONG: &str = "The port name is too long";
+/// After Connect, when the settings could not be written.
+pub const SERIAL_NOT_KEPT: &str = "The serial settings were not kept for the next time";
 pub const SERIAL_REFRESH: &str = "Look for ports again";
 pub const SERIAL_BAUD: &str = "Baud rate";
 pub const SERIAL_DATA_BITS: &str = "Data bits";

@@ -22,7 +22,9 @@ use gpui_kit::component::{
 };
 use serde_json::{Value, json};
 use shellpp_core::service::dto::SettingsValues;
-use shellpp_term_local::serial::{DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
+use shellpp_term_local::serial::{
+    DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits, same_port,
+};
 
 use super::strings;
 use crate::hosts::controls::{ControlButton, ControlKind};
@@ -57,6 +59,9 @@ const FLOWS: [(&str, &str, FlowControl); 3] = [
     ("software", strings::SERIAL_XON_XOFF, FlowControl::Software),
     ("hardware", strings::SERIAL_RTS_CTS, FlowControl::Hardware),
 ];
+
+/// The longest port name, in bytes (the `serial.port` setting).
+pub const MAX_PORT_BYTES: usize = 256;
 
 /// The hint in an empty port field: a port name of this system.
 const PORT_PLACEHOLDER: &str = if cfg!(windows) {
@@ -225,18 +230,21 @@ impl SerialForm {
         self.config.port = name;
     }
 
-    /// What Connect opens; `None` while the port field is empty.
+    /// What Connect opens; `None` while the port field is empty or holds a
+    /// name longer than a port name can be.
     pub fn config(&self) -> Option<SerialConfig> {
-        (!self.config.port.is_empty()).then(|| self.config.clone())
+        (!self.config.port.is_empty() && self.config.port.len() <= MAX_PORT_BYTES)
+            .then(|| self.config.clone())
     }
 
     /// The port in the field is not among the ports found (D95).
     fn not_found(&self) -> bool {
         !self.config.port.is_empty()
-            && self
-                .ports
-                .as_ref()
-                .is_some_and(|ports| !ports.iter().any(|port| port.name == self.config.port))
+            && self.ports.as_ref().is_some_and(|ports| {
+                !ports
+                    .iter()
+                    .any(|port| same_port(&port.name, &self.config.port))
+            })
     }
 
     fn toggle(&mut self, list: List, cx: &mut Context<Self>) {
@@ -255,19 +263,36 @@ impl SerialForm {
         cx.notify();
     }
 
-    /// Under the port field: the listing, no ports, or that the port in the
-    /// field is not found now.
+    /// Under the port field: a name too long, the listing, that the port in
+    /// the field is not found now, or no ports.
     fn port_status(&self, cx: &App) -> Option<gpui::AnyElement> {
         let theme = cx.theme();
-        let (text, color) = match &self.ports {
-            None => (strings::SERIAL_LOOKING, theme.muted_foreground),
-            Some(_) if self.not_found() => (strings::SERIAL_NOT_FOUND, theme.warning),
-            Some(ports) if ports.is_empty() => (strings::SERIAL_NO_PORTS, theme.muted_foreground),
+        let (id, text, color) = match &self.ports {
+            _ if self.config.port.len() > MAX_PORT_BYTES => (
+                "serial-port-too-long",
+                strings::SERIAL_TOO_LONG,
+                theme.danger,
+            ),
+            None => (
+                "serial-port-looking",
+                strings::SERIAL_LOOKING,
+                theme.muted_foreground,
+            ),
+            Some(_) if self.not_found() => (
+                "serial-port-not-found",
+                strings::SERIAL_NOT_FOUND,
+                theme.warning,
+            ),
+            Some(ports) if ports.is_empty() => (
+                "serial-port-none",
+                strings::SERIAL_NO_PORTS,
+                theme.muted_foreground,
+            ),
             Some(_) => return None,
         };
         Some(
             div()
-                .id("serial-port-status")
+                .id(id)
                 .test_support()
                 .text_size(metrics::FONT_SIZE_CAPTION)
                 .text_color(color)
@@ -315,7 +340,7 @@ impl SerialForm {
                         None,
                         port.name.clone(),
                         port.description.clone().map(Into::into),
-                        port.name == self.config.port,
+                        same_port(&port.name, &self.config.port),
                         cx,
                     )
                     .on_click(cx.listener(

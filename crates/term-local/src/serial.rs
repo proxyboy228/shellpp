@@ -121,6 +121,20 @@ impl SerialConfig {
     }
 }
 
+/// Whether two port names name the same port: on Windows the names are not
+/// case-sensitive and may carry the device prefix (`\\.\COM12` is `COM12`).
+pub fn same_port(a: &str, b: &str) -> bool {
+    if cfg!(windows) {
+        let bare = |name: &str| {
+            let name = name.trim();
+            name.strip_prefix(r"\\.\").unwrap_or(name).to_owned()
+        };
+        bare(a).eq_ignore_ascii_case(&bare(b))
+    } else {
+        a == b
+    }
+}
+
 /// A port of this device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortInfo {
@@ -221,7 +235,9 @@ pub fn open(config: &SerialConfig) -> Result<SerialSession, SerialError> {
         .map_err(|error| match error.kind() {
             // Windows reports a port in use as "no device" too.
             serialport::ErrorKind::NoDevice
-                if ports().iter().any(|port| port.name == config.port) =>
+                if ports()
+                    .iter()
+                    .any(|port| same_port(&port.name, &config.port)) =>
             {
                 SerialError::Busy
             }
@@ -359,6 +375,18 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    /// D95: a typed name and a listed one name the same port; on Windows
+    /// the case and the device prefix do not count.
+    #[test]
+    fn port_names_compare_as_the_system_does() {
+        assert!(same_port("COM3", "COM3"));
+        assert!(!same_port("COM3", "COM30"));
+        assert!(same_port("/dev/ttyUSB0", "/dev/ttyUSB0"));
+        assert_eq!(same_port("com3", "COM3"), cfg!(windows));
+        assert_eq!(same_port(r"\\.\COM12", "COM12"), cfg!(windows));
+        assert!(!same_port("/dev/ttyusb0", "/dev/ttyUSB0") || cfg!(windows));
+    }
 
     /// A port that times out until the test sends it bytes, records what is
     /// written (slowly, when asked) and when it is dropped.

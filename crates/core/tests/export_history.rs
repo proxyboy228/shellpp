@@ -304,8 +304,11 @@ fn a_key_this_client_cannot_read_is_kept_as_unknown() {
     assert_eq!(kept[0]["data"]["future_member"]["kept"], true);
 }
 
+/// A full restore applies every setting of the file but those of the
+/// device (D95): the export leaves them out, and a file that has them
+/// (another version's) does not change them.
 #[test]
-fn a_full_restore_applies_every_setting_of_the_file() {
+fn a_full_restore_applies_the_settings_of_the_file_but_not_the_devices() {
     let source = first_run();
     source
         .core
@@ -314,6 +317,7 @@ fn a_full_restore_applies_every_setting_of_the_file() {
                 ("terminal.os_detection_enabled".to_owned(), json!(false)),
                 ("sftp.confirm_delete".to_owned(), json!(false)),
                 ("terminal.font_size".to_owned(), json!(18)),
+                ("serial.port".to_owned(), json!("COM42")),
             ]),
             reset: Vec::new(),
         })
@@ -322,6 +326,13 @@ fn a_full_restore_applies_every_setting_of_the_file() {
         .core
         .data_export(DataExportInput::default())
         .expect("export");
+    let mut document: serde_json::Value =
+        serde_json::from_str(export.text.expose_secret()).expect("json");
+    assert!(document["settings"].get("serial.port").is_none());
+    assert!(document["settings"].get("serial.baud").is_none());
+    document["settings"]["serial.port"] = json!("COM42");
+    document["settings"]["serial.flow"] = json!("hardware");
+    let text = SecretString::from(document.to_string());
 
     let target = first_run();
     let summary = target
@@ -329,13 +340,15 @@ fn a_full_restore_applies_every_setting_of_the_file() {
         .data_import(DataImportInput {
             apply_settings: false,
             full_restore: true,
-            ..DataImportInput::new(export.text.clone(), None)
+            ..DataImportInput::new(text, None)
         })
         .expect("import");
-    assert_eq!(summary.settings_left_out, 0);
+    assert_eq!(summary.settings_left_out, 2, "serial.port and serial.flow");
     let settings = target.core.settings_get().expect("settings");
     let value = |key: &str| settings[key].clone();
     assert_eq!(value("terminal.os_detection_enabled"), false);
     assert_eq!(value("sftp.confirm_delete"), false);
     assert_eq!(value("terminal.font_size"), 18);
+    assert_eq!(value("serial.port"), serde_json::Value::Null);
+    assert_eq!(value("serial.flow"), "none");
 }

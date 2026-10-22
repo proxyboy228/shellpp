@@ -153,7 +153,7 @@ pub fn check(
         let shown = cx
             .update_window(handle, |_, window, cx| {
                 window.render_frame(cx);
-                ["serial-dialog", "serial-port-status"].iter().all(|id| {
+                ["serial-dialog", "serial-port-not-found"].iter().all(|id| {
                     window
                         .try_find(gpui::SharedString::from(*id))
                         .is_some_and(|found| found.visible())

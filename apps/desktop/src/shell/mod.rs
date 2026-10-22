@@ -1294,17 +1294,18 @@ impl Shell {
             .and_then(|values| serial_dialog::saved(&values));
         let shell = cx.entity().downgrade();
         serial_dialog::open(last, window, cx, move |config, _, cx| {
-            if let Some(core) = &core
-                && let Err(error) =
-                    core.settings_set(shellpp_core::service::dto::SettingsSetInput {
-                        values: serial_dialog::settings_of(&config),
-                        reset: Vec::new(),
-                    })
-            {
-                tracing::warn!(code = error.code(), "the serial settings were not kept");
-            }
+            let kept = core.as_ref().map(|core| {
+                core.settings_set(shellpp_core::service::dto::SettingsSetInput {
+                    values: serial_dialog::settings_of(&config),
+                    reset: Vec::new(),
+                })
+            });
             let _ = shell.update(cx, |shell, cx| {
                 shell.open_tab(TabSeed::Target(PaneTarget::Serial(config)), None, None, cx);
+                if let Some(Err(error)) = kept {
+                    tracing::warn!(code = error.code(), "the serial settings were not kept");
+                    shell.toast(strings::SERIAL_NOT_KEPT, cx);
+                }
             });
         });
     }
