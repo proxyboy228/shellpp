@@ -99,6 +99,17 @@ pub enum AppStateEvent {
 
 /// The application state entity. Field order matters: the core is dropped
 /// before the temporary profile that holds its files.
+/// A saved workspace as the new tab page, Ctrl+K and the menus list it
+/// (UI 4.5, 6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceItem {
+    pub id: Uuid,
+    pub name: SharedString,
+    /// The hosts it links to that do not exist here, named as the workspace
+    /// saved them; an empty name when it did not (D94).
+    pub missing: Rc<[SharedString]>,
+}
+
 pub struct AppState {
     core: Option<Arc<Core>>,
     /// Why the core did not open (shown instead of the app).
@@ -109,7 +120,7 @@ pub struct AppState {
     hosts: Rc<Vec<HostItem>>,
     groups: Rc<Vec<GroupItem>>,
     /// The workspaces' ids and names (UI 4.5), read with the records.
-    workspaces: Rc<Vec<(Uuid, SharedString)>>,
+    workspaces: Rc<Vec<WorkspaceItem>>,
     /// The group whose contents the Hosts screen shows; `None` is the top level.
     location: Option<Uuid>,
     selection: Selection,
@@ -365,7 +376,7 @@ impl AppState {
     }
 
     /// The workspaces' ids and names, by name (UI 4.5).
-    pub fn workspaces(&self) -> Rc<Vec<(Uuid, SharedString)>> {
+    pub fn workspaces(&self) -> Rc<Vec<WorkspaceItem>> {
         self.workspaces.clone()
     }
 
@@ -811,10 +822,18 @@ impl AppState {
         }
         self.workspaces = Rc::new(
             self.vault_id
-                .and_then(|vault_id| core.workspace_names(vault_id).ok())
+                .and_then(|vault_id| core.workspace_summaries(vault_id).ok())
                 .unwrap_or_default()
                 .into_iter()
-                .map(|(id, name)| (id, SharedString::from(name)))
+                .map(|summary| WorkspaceItem {
+                    id: summary.record_id,
+                    name: SharedString::from(summary.name),
+                    missing: summary
+                        .missing_hosts
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect(),
+                })
                 .collect(),
         );
         if self.location.is_some_and(|id| self.group(id).is_none()) {

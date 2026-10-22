@@ -799,6 +799,12 @@ The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases eithe
   via Ctrl+K search. [decision]
 - × on a workspace removes it at once; its hosts and open tabs stay, and a toast offers
   Undo for 5 s, as other removals do (2.4, D90). [decision]
+- A workspace that links hosts which do not exist here (deleted, not imported, or in a
+  vault this device does not hold) shows "N hosts not found" in the warning color next to
+  its button; the tooltip names them as the workspace saved them ("Not found here: db, web
+  01"; "an unknown host" for one it did not name). Opening it leaves those panes out
+  (D81). In Ctrl+K the same count is the workspace's detail. The mark follows the hosts:
+  it goes when the host comes back (Undo, an import). [decision] (D92, D94)
 
 ### 4.6 Session termination and connection drop
 

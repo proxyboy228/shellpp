@@ -1254,8 +1254,8 @@ impl Shell {
             .read(cx)
             .workspaces()
             .iter()
-            .find(|(found, _)| *found == id)
-            .map(|(_, name)| name.to_string())
+            .find(|workspace| workspace.id == id)
+            .map(|workspace| workspace.name.to_string())
             .unwrap_or_default();
         let removed = self
             .state
@@ -2280,7 +2280,7 @@ impl Shell {
 
     /// The workspaces (UI 4.5) by name, for the new tab page and Ctrl+K:
     /// a short list of names from the core.
-    fn workspace_names(&self, cx: &App) -> Vec<(Uuid, SharedString)> {
+    fn workspace_names(&self, cx: &App) -> Vec<crate::state::WorkspaceItem> {
         self.state.read(cx).workspaces().as_ref().clone()
     }
 

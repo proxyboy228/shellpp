@@ -1458,6 +1458,63 @@ fn ctrl_k_activates_a_tab_of_another_window(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// D92, D94: a workspace whose host was deleted is marked "1 host not
+/// found" on the new tab page (named in the tooltip from the names the
+/// workspace saved); the mark goes when the host is back.
+#[gpui_kit::test]
+fn a_workspace_marks_hosts_that_are_gone(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.save_host(web(), cx);
+    let core = cx.update(|cx| ui.state.read(cx).core().cloned().unwrap());
+    let vault = cx.update(|cx| ui.state.read(cx).vault_id().unwrap());
+    let link = json!({"vault_id": vault.to_string(), "record_id": host.to_string()});
+    let saved = core
+        .workspace_save(shellpp_core::service::snippets::RecordInput {
+            vault_id: vault,
+            record_id: None,
+            data: json!({"name": "Prod", "tabs": [{"root": {"session": {"kind": "ssh", "host": link}}}]})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    let id = saved.record.record_id;
+    ui.state.update(cx, |state, cx| state.reload_records(cx));
+    ui.click("tab-new", cx);
+    assert!(ui.visible(format!("new-tab-workspace-{id}"), cx));
+    assert!(!ui.visible(format!("new-tab-workspace-missing-{id}"), cx));
+
+    // The host is deleted: the mark shows, with the saved name.
+    ui.state.update(cx, |state, cx| {
+        state.delete_records(vec![host], cx).unwrap();
+    });
+    ui.frame(cx);
+    assert!(ui.visible(format!("new-tab-workspace-missing-{id}"), cx));
+    let item = cx.update(|cx| {
+        ui.state
+            .read(cx)
+            .workspaces()
+            .iter()
+            .find(|workspace| workspace.id == id)
+            .cloned()
+            .unwrap()
+    });
+    assert_eq!(&*item.missing, [SharedString::from("web")]);
+    assert_eq!(
+        crate::new_tab::strings::missing_hosts_tooltip(&item.missing).as_ref(),
+        "Not found here: web"
+    );
+
+    // Undo brings it back: no mark.
+    ui.state.update(cx, |state, cx| {
+        state.restore_records(vec![host], cx).unwrap();
+    });
+    ui.frame(cx);
+    assert!(!ui.visible(format!("new-tab-workspace-missing-{id}"), cx));
+    drop(core);
+    ui.finish(cx);
+}
+
 /// UI 4.5, 6 (D81): "Create a workspace" saves this window's tabs to saved
 /// hosts and local terminals (a quick connection is left out) under a
 /// name; the page lists it, a click opens its tabs, × removes it.

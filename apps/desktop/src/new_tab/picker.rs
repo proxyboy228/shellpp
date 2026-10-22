@@ -67,7 +67,7 @@ pub(crate) struct Picker {
     query: String,
     tabs: Vec<OpenTab>,
     /// The saved workspaces the search finds (UI 4.5).
-    workspaces: Vec<(uuid::Uuid, SharedString)>,
+    workspaces: Vec<crate::state::WorkspaceItem>,
     origin: Option<PickerOrigin>,
     recents: Vec<RecentConnection>,
     vault_name: String,
@@ -231,7 +231,7 @@ impl Picker {
     /// The saved workspaces the search finds (UI 4.5).
     pub fn set_workspaces(
         &mut self,
-        workspaces: Vec<(uuid::Uuid, SharedString)>,
+        workspaces: Vec<crate::state::WorkspaceItem>,
         cx: &App,
     ) -> bool {
         if self.workspaces == workspaces {

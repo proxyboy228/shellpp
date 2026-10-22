@@ -9,6 +9,7 @@
 //! launch), then the list. While the field holds text the header gives way
 //! to the search results (open tabs, then hosts).
 
+use crate::state::WorkspaceItem;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
@@ -17,7 +18,6 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
-use uuid::Uuid;
 
 use super::model::{Item, Row};
 use super::picker::{self, COLUMN_WIDTH, Picker, PickerHost};
@@ -33,8 +33,8 @@ const SEARCH_SHORTCUT: &str = "secondary-k";
 pub struct NewTabPage {
     picker: Picker,
     restore_available: bool,
-    /// The saved workspaces (record id and name), by name (UI 4.5).
-    workspaces: Vec<(Uuid, SharedString)>,
+    /// The saved workspaces, by name (UI 4.5).
+    workspaces: Vec<WorkspaceItem>,
     /// The window has tabs a workspace can keep.
     can_create_workspace: bool,
 }
@@ -101,7 +101,7 @@ impl NewTabPage {
     /// The saved workspaces and whether this window can make one.
     pub fn set_workspaces(
         &mut self,
-        workspaces: Vec<(Uuid, SharedString)>,
+        workspaces: Vec<WorkspaceItem>,
         can_create: bool,
         cx: &mut Context<Self>,
     ) {
@@ -120,10 +120,31 @@ impl NewTabPage {
             return None;
         }
         let theme = cx.theme();
-        let items = self.workspaces.iter().map(|(id, name)| {
-            let id = *id;
+        let items = self.workspaces.iter().map(|workspace| {
+            let id = workspace.id;
+            let name = &workspace.name;
+            // Hosts it links to that are gone (D94): "N hosts not found",
+            // the tooltip names them.
+            let missing = (!workspace.missing.is_empty()).then(|| {
+                let count = workspace.missing.len();
+                let names = strings::missing_hosts_tooltip(&workspace.missing);
+                gpui::div()
+                    .id(SharedString::from(format!(
+                        "new-tab-workspace-missing-{id}"
+                    )))
+                    .test_support()
+                    .flex_none()
+                    .px(metrics::SPACE_1)
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(theme.warning)
+                    .child(strings::hosts_not_found(count))
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(names.clone()).build(window, cx)
+                    })
+            });
             h_flex()
                 .gap(px(2.))
+                .items_center()
                 .child(
                     ControlButton::new(
                         SharedString::from(format!("new-tab-workspace-{id}")),
@@ -135,6 +156,7 @@ impl NewTabPage {
                         cx.emit(NewTabEvent::OpenWorkspace(id))
                     })),
                 )
+                .children(missing)
                 .child(
                     ControlButton::new(
                         SharedString::from(format!("new-tab-workspace-rename-{id}")),

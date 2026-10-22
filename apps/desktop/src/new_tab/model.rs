@@ -129,8 +129,8 @@ pub struct Sources<'a> {
     pub origin: Option<&'a PickerOrigin>,
     /// The personal vault's name: the first part of a host's path.
     pub vault_name: &'a str,
-    /// The saved workspaces (record id and name), found by name (UI 4.5).
-    pub workspaces: &'a [(Uuid, SharedString)],
+    /// The saved workspaces, found by name (UI 4.5).
+    pub workspaces: &'a [crate::state::WorkspaceItem],
 }
 
 /// The entries of a list for the search text `query`.
@@ -208,14 +208,16 @@ fn search_items(kind: PickerKind, query: &str, sources: &Sources<'_>) -> Vec<Ite
         let workspaces: Vec<Row> = sources
             .workspaces
             .iter()
-            .filter(|(_, name)| name.to_lowercase().contains(&folded))
-            .map(|(id, name)| Row {
-                key: format!("workspace-{id}").into(),
-                choice: Choice::Workspace(*id),
+            .filter(|workspace| workspace.name.to_lowercase().contains(&folded))
+            .map(|workspace| Row {
+                key: format!("workspace-{}", workspace.id).into(),
+                choice: Choice::Workspace(workspace.id),
                 icon: IconName::LayoutDashboard,
                 color: TagColor::Graphite,
-                title: name.clone(),
-                detail: None,
+                title: workspace.name.clone(),
+                // Hosts it links to that are gone (D94).
+                detail: (!workspace.missing.is_empty())
+                    .then(|| strings::hosts_not_found(workspace.missing.len()).into()),
             })
             .collect();
         if !workspaces.is_empty() {
@@ -718,13 +720,34 @@ mod tests {
     #[test]
     fn the_search_finds_workspaces() {
         let id = Uuid::now_v7();
-        let workspaces = [(id, SharedString::from("Production"))];
+        let workspaces = [crate::state::WorkspaceItem {
+            id,
+            name: SharedString::from("Production"),
+            missing: std::rc::Rc::from([]),
+        }];
         let mut sources = sources(&[], &[], &[], &[], None);
         sources.workspaces = &workspaces;
         let found = items(PickerKind::Overlay, "prod", &sources);
         assert_eq!(found[0], Item::Heading(strings::WORKSPACES));
         let row = found[1].row().unwrap();
         assert_eq!(row.choice, Choice::Workspace(id));
+        assert_eq!(row.detail, None);
+        // Hosts it links to that are gone show as its detail (D94).
+        let missing = [crate::state::WorkspaceItem {
+            missing: std::rc::Rc::from([SharedString::from("db"), SharedString::default()]),
+            ..workspaces[0].clone()
+        }];
+        sources.workspaces = &missing;
+        let found = items(PickerKind::Overlay, "prod", &sources);
+        assert_eq!(
+            found[1]
+                .row()
+                .unwrap()
+                .detail
+                .as_ref()
+                .map(|detail| detail.as_ref()),
+            Some("2 hosts not found")
+        );
         assert_eq!(row.choice.event(false), NewTabEvent::OpenWorkspace(id));
         assert!(items(PickerKind::Compact, "prod", &sources).is_empty());
         assert!(items(PickerKind::Overlay, "staging", &sources).is_empty());

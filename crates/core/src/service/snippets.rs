@@ -116,6 +116,49 @@ pub struct WorkspaceView {
     pub tabs: Vec<crate::service::last_session::SavedTab>,
 }
 
+/// A workspace as the new tab page lists it (UI 6): its name and the hosts
+/// it links to that do not exist here (deleted, not imported, in a vault
+/// this device does not hold), named as the workspace saved them, or an
+/// empty name when it did not (D94).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceSummary {
+    pub record_id: Uuid,
+    pub name: String,
+    pub missing_hosts: Vec<String>,
+}
+
+/// `data` with `host_names` written for its tabs (D94): the title of each
+/// linked host that exists, else the name saved before (`stored`, then the
+/// input's own), else none.
+fn with_host_names(
+    session: &Session,
+    data: &Map<String, Value>,
+    stored: Option<&Map<String, Value>>,
+) -> Map<String, Value> {
+    use crate::model::workspace::{host_links, host_name_entry, host_names, tabs};
+    let Some(tabs) = tabs(data) else {
+        return data.clone();
+    };
+    let mut earlier = stored.map(host_names).unwrap_or_default();
+    earlier.extend(host_names(data));
+    let names: Vec<Value> = host_links(&tabs)
+        .into_iter()
+        .filter_map(|link| {
+            let name = match session.index.get_kind(&link.record_id, RecordKind::Host) {
+                Some(record) => crate::model::host::title(record.data()).to_owned(),
+                None => earlier
+                    .iter()
+                    .find(|(known, _)| known.record_id == link.record_id)
+                    .map(|(_, name)| name.clone())?,
+            };
+            (!name.trim().is_empty()).then(|| host_name_entry(link, &name))
+        })
+        .collect();
+    let mut data = data.clone();
+    data.insert("host_names".into(), Value::Array(names));
+    data
+}
+
 fn workspace_view(vault_id: Uuid, record_id: Uuid, data: &Map<String, Value>) -> WorkspaceView {
     WorkspaceView {
         record: RecordRef {
@@ -390,8 +433,8 @@ impl Core {
     /// Creates or updates a workspace (UI 4.5; data-model 12): a name and
     /// the tabs of a window, linking saved hosts and local terminals.
     pub fn workspace_save(&self, input: RecordInput) -> Result<WorkspaceView, CoreError> {
-        let record_id = self.save_kind(&input, RecordKind::Workspace, |_, stored| {
-            crate::model::workspace::build(&input.data, stored)
+        let record_id = self.save_kind(&input, RecordKind::Workspace, |session, stored| {
+            crate::model::workspace::build(&with_host_names(session, &input.data, stored), stored)
         })?;
         let inner = self.inner();
         let session = Self::require_session(&inner)?;
@@ -418,6 +461,50 @@ impl Core {
                 .then_with(|| a.record.record_id.cmp(&b.record.record_id))
         });
         Ok(views)
+    }
+
+    /// Every workspace of the vault, by name, with the hosts it links to that
+    /// do not exist here (UI 6: "N hosts not found"; D94).
+    pub fn workspace_summaries(&self, vault_id: Uuid) -> Result<Vec<WorkspaceSummary>, CoreError> {
+        use crate::model::workspace::{host_links, host_names, tabs};
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(vault_id))?;
+        let mut summaries: Vec<WorkspaceSummary> = session
+            .index
+            .of_kind(RecordKind::Workspace)
+            .map(|record| {
+                let data = record.data();
+                let saved = host_names(data);
+                let missing_hosts = host_links(&tabs(data).unwrap_or_default())
+                    .into_iter()
+                    .filter(|link| {
+                        session
+                            .index
+                            .get_kind(&link.record_id, RecordKind::Host)
+                            .is_none()
+                    })
+                    .map(|link| {
+                        saved
+                            .iter()
+                            .find(|(known, _)| known.record_id == link.record_id)
+                            .map(|(_, name)| name.clone())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                WorkspaceSummary {
+                    record_id: record.record_id,
+                    name: string_member(data, "name").unwrap_or_default(),
+                    missing_hosts,
+                }
+            })
+            .collect();
+        summaries.sort_by(|a, b| {
+            fold(&a.name)
+                .cmp(&fold(&b.name))
+                .then_with(|| a.record_id.cmp(&b.record_id))
+        });
+        Ok(summaries)
     }
 
     /// The workspaces' ids and names, by name: what the new tab page and the

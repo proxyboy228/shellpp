@@ -36,6 +36,34 @@ pub const WORKSPACE_SAVED: &str = "Workspace saved";
 pub const WORKSPACE_NOT_SAVED: &str = "The workspace was not saved";
 pub const WORKSPACE_EMPTY: &str = "None of the workspace's hosts exists any more";
 pub const WORKSPACE_NOT_REMOVED: &str = "The workspace was not removed";
+/// A workspace whose linked hosts do not exist here (D94).
+pub fn hosts_not_found(count: usize) -> String {
+    if count == 1 {
+        "1 host not found".to_owned()
+    } else {
+        format!("{count} hosts not found")
+    }
+}
+
+/// The tooltip of [`hosts_not_found`]: the hosts by the names the workspace
+/// saved; one it did not name is "an unknown host".
+pub fn missing_hosts_tooltip(names: &[gpui::SharedString]) -> gpui::SharedString {
+    let names: Vec<&str> = names
+        .iter()
+        .map(|name| {
+            if name.is_empty() {
+                UNKNOWN_HOST
+            } else {
+                name.as_ref()
+            }
+        })
+        .collect();
+    format!("Not found here: {}", names.join(", ")).into()
+}
+
+/// A missing host the workspace did not name.
+pub const UNKNOWN_HOST: &str = "an unknown host";
+
 /// The toast of a removal, with Undo (D90).
 pub fn workspace_removed(name: &str) -> String {
     format!("Workspace \"{name}\" removed")

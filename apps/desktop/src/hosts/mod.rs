@@ -1209,7 +1209,7 @@ impl HostsScreen {
             .read(cx)
             .workspaces()
             .iter()
-            .map(|(id, name)| (*id, name.to_string()))
+            .map(|workspace| (workspace.id, workspace.name.to_string()))
             .collect()
     }
 

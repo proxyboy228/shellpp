@@ -1490,3 +1490,19 @@ Details we chose while carrying the answers into the documents (marked [decision
 - Certificates: a pin is the SHA-256 of the server certificate, shown as `openssl x509 -fingerprint -sha256` prints it; only an unknown issuer can be pinned or covered by an added CA, while an expired certificate or one for another name is refused; an added CA counts for that server only; any certificate other than the pinned one blocks sync, also one the system trusts; trust choices are kept in a plaintext table, since recovery runs while the app is locked. Cloudflare Tunnel puts Cloudflare in the position of an active server for the transport.
 
 **Spec impact:** `docs/sync-protocol.md` (conventions; 2, 2.1, 2.2 new; 3.1; 3.4; 4.4; 4.6; 4.7; 5.1; 5.6; 5.8; 6.4; 6.5; 6.6; 6.7; 6.8; 6.9; 6.10; 6.11; 7.7; 7.11; 8; 9; 10.2; 10.3; 11; 12; 13; 14), `docs/security.md` (conventions; 1; 3; 4; 5.1; 5.9; 6; 9.1; 9.3; 14.1–14.4; 15; 17; 18), `docs/data-model.md` (conventions; 2.1; 6.1; 6.6; 13.3; 15; 16.6–16.8 new; 18.2; 18.3), `docs/storage-format.md` (conventions; 4.2–4.6; 6.2; 6.6; 12; 14.5), `docs/ui-behavior-spec.md` and `docs/ru/ui-behavior-spec.md` (1.2; 2.4; 7.2; 12.2; 12.3; 13.2; 13.5; 13.6; 13.7 and 14 new); `docs/sync-design-draft.md` is marked closed. SPEC.md is unchanged. `docs/architecture.md` 1.3 (custom CA certificates and pins for sync servers are in the MVP) and 10.2 (the admin subcommands, the backup service, the three ways of access, certificate trust, the quota variables). `server/README.md` follows with the server in stage 7.
+
+## Run 6 of 2026-10-22
+
+The decisions below were taken during the owner's sixth long run (its plan, section 1.1), marked "run 6"; the disputable ones are listed for the owner in the run report.
+
+### 94. Workspaces name the hosts that are gone (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 5; D92, item 1).
+
+**Decision:**
+
+- A workspace's links to hosts that do not exist stay (D63, D92). The new tab page's Workspaces block marks such a workspace "N hosts not found" in the warning color, with the hosts in the tooltip; Ctrl+K shows the count as the workspace's detail. "Do not exist" is: no live host record with that id on this device (deleted, not imported, or in a vault the device does not hold); Telnet panes count like SSH panes.
+- The record had only host links, so a host deleted since could not be named. The workspace gets `host_names` (data-model 12): the name (label, else address) of each linked host, written by the core on every save; a host that is gone keeps the name saved before. The desktop's three save paths (create, Add to Workspace, rename) need no change. An import keeps the file's names, and its id remap rewrites the links inside them like the tabs' links; a file without the member reads as before (no names: "an unknown host").
+- The core lists each workspace with its missing hosts (`workspace_summaries`); the app reloads it with the records, so the mark follows deletions, Undo and imports at once.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 4.5 (and `docs/ru`), `docs/data-model.md` 12.

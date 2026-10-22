@@ -1164,6 +1164,15 @@ fn workspace_links_to_missing_hosts_stay_and_hostile_workspaces_are_refused() {
         vec![Some((vault, web1)), Some((vault, db)), None],
         "the link to the missing host stays"
     );
+    // The new tab page names it from the names the workspace saved (D94).
+    let prod = target
+        .core
+        .workspace_summaries(vault)
+        .unwrap()
+        .into_iter()
+        .find(|summary| summary.name == "Prod")
+        .unwrap();
+    assert_eq!(prod.missing_hosts, ["web-1"]);
     let long = id_of(&target.core, "workspace", "name", "long key");
     assert!(
         content(&target.core).0[&("workspace".to_owned(), long.to_string())]
@@ -1171,4 +1180,58 @@ fn workspace_links_to_missing_hosts_stay_and_hostile_workspaces_are_refused() {
             .is_none(),
         "a bad import key is left out"
     );
+}
+
+/// A workspace keeps the names of its hosts when it is saved; a host deleted
+/// since is listed by that name, and is no longer missing once it is back
+/// (D94; UI 6, "N hosts not found").
+#[test]
+fn a_deleted_host_is_named_by_the_workspace() {
+    let u = with_workspaces();
+    let vault = u.vault_id;
+    let db = id_of(&u.core, "host", "label", "db");
+    let missing = |name: &str| {
+        u.core
+            .workspace_summaries(vault)
+            .unwrap()
+            .into_iter()
+            .find(|summary| summary.name == name)
+            .unwrap()
+            .missing_hosts
+    };
+    assert!(missing("Prod").is_empty());
+    u.core
+        .record_delete(RecordsRef {
+            vault_id: vault,
+            record_ids: vec![db],
+        })
+        .unwrap();
+    assert_eq!(missing("Prod"), ["db"]);
+    assert_eq!(missing("DB only"), ["db"]);
+    // A rename keeps the saved name of the host that is gone.
+    let prod = id_of(&u.core, "workspace", "name", "Prod");
+    let tabs = u
+        .core
+        .workspaces_list(vault)
+        .unwrap()
+        .into_iter()
+        .find(|workspace| workspace.record.record_id == prod)
+        .unwrap()
+        .tabs;
+    u.core
+        .workspace_save(record_input(
+            &u,
+            Some(prod),
+            json!({"name": "Prod 2", "tabs": serde_json::to_value(tabs).unwrap()}),
+        ))
+        .unwrap();
+    assert_eq!(missing("Prod 2"), ["db"]);
+    u.core
+        .record_restore(RecordsRef {
+            vault_id: vault,
+            record_ids: vec![db],
+        })
+        .unwrap();
+    assert!(missing("Prod 2").is_empty());
+    assert!(missing("DB only").is_empty());
 }

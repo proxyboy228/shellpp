@@ -98,7 +98,7 @@ impl SearchOverlay {
     /// The saved workspaces the search finds (UI 4.5).
     pub fn set_workspaces(
         &mut self,
-        workspaces: Vec<(uuid::Uuid, gpui::SharedString)>,
+        workspaces: Vec<crate::state::WorkspaceItem>,
         cx: &mut Context<Self>,
     ) {
         if self.picker.set_workspaces(workspaces, cx) {

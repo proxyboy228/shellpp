@@ -779,6 +779,7 @@ A saved set of tabs and splits with linked hosts (UI 4.5, 6; Ctrl+K search, D23)
 |---|---|---|---|
 | `name` | string(256) | yes | |
 | `tabs` | list<tab>[32] | yes | at least one tab |
+| `host_names` | list<{`host`: host_link, `name`: string(256)}>[512] | no | the name each linked host had when the workspace was saved, written by the core on every save (a host that is gone keeps its earlier name); names the hosts that are missing on the new tab page (UI 4.5). An import keeps the file's. [decision] (D94) |
 
 | Object | Shape | Rules |
 |---|---|---|
