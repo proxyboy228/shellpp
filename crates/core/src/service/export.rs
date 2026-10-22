@@ -1344,3 +1344,84 @@ fn fix_group_parents(
         }
     }
 }
+
+/// Run 4, plan 9.7: the import checks of members a hostile or damaged file
+/// can hold (coverage showed them untested).
+#[cfg(test)]
+mod check_tests {
+    use serde_json::{Map, Value, json};
+
+    use super::{check_connection_log, check_hint_state};
+
+    const VAULT: &str = "0199f6a1-0000-7000-8000-0000000000a1";
+    const HOST: &str = "0199f6a1-0000-7000-8000-0000000000b1";
+    const DEVICE: &str = "0199f6a1-0000-7000-8000-0000000000c1";
+
+    fn map(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().unwrap()
+    }
+
+    fn entry() -> Value {
+        json!({
+            "started_at": "2026-10-22T01:02:03.000Z",
+            "ended_at": "2026-10-22T01:05:00.000Z",
+            "end_reason": "closed",
+            "exit_status": 0,
+            "protocol": "ssh",
+            "host": {"vault_id": VAULT, "record_id": HOST},
+            "host_label": "web",
+            "address": "192.0.2.5",
+            "port": 22,
+            "device_id": DEVICE,
+            "os": {"family": "linux", "name": null},
+            "saved": true,
+        })
+    }
+
+    #[test]
+    fn imported_log_entries_are_checked_member_by_member() {
+        let built = check_connection_log(&map(entry())).unwrap();
+        assert_eq!(built["port"], json!(22));
+        assert_eq!(built["saved"], json!(true));
+        assert_eq!(built["end_reason"], json!("closed"));
+        // An entry still open in the file ends with an unknown end.
+        let mut open = map(entry());
+        open.remove("ended_at");
+        open.remove("end_reason");
+        let built = check_connection_log(&open).unwrap();
+        assert_eq!(built["end_reason"], json!(crate::connlog::UNKNOWN_END));
+        // Each malformed member is refused by its name.
+        for (member, bad) in [
+            ("started_at", json!("yesterday")),
+            ("ended_at", json!(5)),
+            ("end_reason", json!("crashed")),
+            ("exit_status", json!("0")),
+            ("protocol", json!("rdp")),
+            ("host", json!({"vault_id": VAULT})),
+            ("username", json!(7)),
+            ("address", Value::Null),
+            ("port", json!(0)),
+            ("port", json!(70000)),
+            ("os", json!({"family": "x".repeat(65)})),
+            ("user_id", json!("not-a-uuid")),
+            ("device_id", Value::Null),
+            ("saved", json!("yes")),
+        ] {
+            let mut data = map(entry());
+            data.insert(member.into(), bad);
+            let errors = check_connection_log(&data).expect_err(member);
+            assert_eq!(errors[0].field, member, "{member}");
+        }
+    }
+
+    #[test]
+    fn imported_hint_states_need_a_host_and_a_flag() {
+        let host = json!({"vault_id": VAULT, "record_id": HOST});
+        let built = check_hint_state(&map(json!({"host": host, "dismissed": true}))).unwrap();
+        assert_eq!(built["dismissed"], json!(true));
+        let field = |value: Value| check_hint_state(&map(value)).unwrap_err()[0].field.clone();
+        assert_eq!(field(json!({"host": host})), "dismissed");
+        assert_eq!(field(json!({"host": host, "dismissed": "no"})), "dismissed");
+        assert_eq!(field(json!({"dismissed": true})), "host");
+    }
+}
