@@ -266,15 +266,22 @@ async fn a_reset_local_connection_ends_while_the_destination_stays_open() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reset_local_connection_that_stopped_reading_ends() {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     let password = random_secret("pw");
     let server = forwarding_server(&password, true).await;
-    let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sent = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&sent);
-    // Sends until the connection goes; never closes by itself.
-    let (addr, _task) = destination(|mut socket| async move {
+    // Reads everything and sends until the connection goes; never closes
+    // by itself.
+    let (addr, _task) = destination(|socket| async move {
+        let (mut from, mut to) = socket.into_split();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 << 10];
+            while matches!(from.read(&mut buf).await, Ok(n) if n > 0) {}
+        });
         let chunk = vec![b'x'; 64 << 10];
-        while socket.write_all(&chunk).await.is_ok() {
-            counted.fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
+        while to.write_all(&chunk).await.is_ok() {
+            counted.fetch_add(chunk.len(), SeqCst);
         }
         std::future::pending::<()>().await;
     })
@@ -284,19 +291,48 @@ async fn a_reset_local_connection_that_stopped_reading_ends() {
         .forward(local("127.0.0.1", addr.port(), 0))
         .await
         .expect("starts");
-    let stream = TcpStream::connect(local_addr(forward.bound()))
-        .await
-        .expect("connect");
-    // Nothing is read here: the data piles up on the way.
-    assert!(
-        eventually(SHORT, || sent.load(std::sync::atomic::Ordering::SeqCst)
-            >= 2 << 20)
-        .await
+    let stream = Arc::new(
+        TcpStream::connect(local_addr(forward.bound()))
+            .await
+            .expect("connect"),
     );
     stream.set_zero_linger().expect("linger");
+    let uploaded = Arc::new(AtomicUsize::new(0));
+    // Sends without end and reads nothing.
+    let writer = {
+        let stream = Arc::clone(&stream);
+        let uploaded = Arc::clone(&uploaded);
+        tokio::spawn(async move {
+            let chunk = vec![b'y'; 64 << 10];
+            while stream.writable().await.is_ok() {
+                match stream.try_write(&chunk) {
+                    Ok(n) => {
+                        uploaded.fetch_add(n, SeqCst);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => return,
+                }
+            }
+        })
+    };
+    // Until the upload stalls: the data piles up both ways, and the SSH
+    // connection waits for room in the relay's queue.
+    let mut last = (0, tokio::time::Instant::now());
+    let stalled = eventually(SHORT * 3, || {
+        let now = uploaded.load(SeqCst);
+        if now != last.0 {
+            last = (now, tokio::time::Instant::now());
+        }
+        now >= 1 << 20 && last.1.elapsed() >= Duration::from_secs(1)
+    })
+    .await;
+    assert!(stalled, "sent {sent:?}, uploaded {uploaded:?}");
+    writer.abort();
+    let _ = writer.await;
     drop(stream);
 
-    // The writes to the socket fail; our EOF, then our CLOSE.
+    // The socket fails; our EOF goes out while the channel is read, then
+    // our CLOSE.
     assert!(eventually(SHORT * 3, || forward.active_connections() == 0).await);
 }
 
@@ -323,7 +359,7 @@ async fn a_remote_connection_to_a_closed_port_here_ends() {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("the server listens");
-    // Our EOF: nothing here took the connection.
+    // Refused: nothing here took the connection.
     assert!(read_to_end(&mut stream).await.is_empty());
     drop(stream);
     assert!(eventually(SHORT, || forward.active_connections() == 0).await);

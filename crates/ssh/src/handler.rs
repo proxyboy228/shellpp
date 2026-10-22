@@ -330,9 +330,8 @@ impl russh::client::Handler for ClientHandler {
             .destination(connected_address, connected_port)
         {
             Some((host, port, state)) => {
-                reply.accept().await;
                 tokio::spawn(crate::forward::serve_remote_channel(
-                    channel, host, port, state,
+                    channel, reply, host, port, state,
                 ));
             }
             None => reject(reply, "forwarded-tcpip").await,

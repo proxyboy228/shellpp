@@ -899,11 +899,15 @@ async fn start_remote(
     })
 }
 
-/// Serves one accepted `forwarded-tcpip` channel of a Remote rule: connects
-/// to the destination here and copies both ways until either side closes
-/// or the rule stops.
+/// Serves one `forwarded-tcpip` channel the server opens for a Remote rule:
+/// connects to the destination here first and only then accepts the
+/// channel, or refuses it, as OpenSSH does (an accepted channel left unread
+/// while the connect waits could fill its queue and hold the whole SSH
+/// connection); then copies both ways until either side closes or the
+/// rule stops.
 pub(crate) async fn serve_remote_channel(
     channel: russh::Channel<russh::client::Msg>,
+    reply: russh::client::ChannelOpenHandle,
     dest_host: String,
     dest_port: u16,
     state: Arc<ForwardState>,
@@ -914,18 +918,20 @@ pub(crate) async fn serve_remote_channel(
         DEST_CONNECT_TIMEOUT,
         TcpStream::connect((dest_host.as_str(), dest_port)),
     );
-    let mut socket = match connect.await {
+    // A rule that stops meanwhile refuses the channel (the reply's drop).
+    let connected = tokio::select! {
+        connected = connect => connected,
+        _ = set(&mut stop) => return,
+    };
+    let mut socket = match connected {
         Ok(Ok(socket)) => socket,
         _ => {
             tracing::debug!("remote forward destination unreachable");
-            tokio::select! {
-                biased;
-                () = end_channel(channel) => {}
-                _ = set(&mut stop) => {}
-            }
+            reply.reject(russh::ChannelOpenFailure::ConnectFailed).await;
             return;
         }
     };
+    reply.accept().await;
     let _ = socket.set_nodelay(true);
     // The relay first: it holds the channel's close guard once polled, so a
     // rule that stops right away still closes the channel.
