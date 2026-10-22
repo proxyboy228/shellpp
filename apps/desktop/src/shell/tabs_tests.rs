@@ -647,29 +647,51 @@ fn broadcast_input_reaches_the_ticked_tabs(cx: &mut TestAppContext) {
             .element_id()
     };
 
-    // Tab A's menu: the list with A ticked; B ticked too, C not.
+    // Tab A's menu: the list with A ticked; B and C ticked too.
     let a_tab = tab_of(a, cx);
     ui.right_click(a_tab.clone(), cx);
     ui.click("tab-menu-broadcast", cx);
     assert!(ui.visible("broadcast-dialog", cx));
     ui.click(format!("broadcast-tab-{b}"), cx);
+    ui.click(format!("broadcast-tab-{c}"), cx);
     ui.click("broadcast-start", cx);
     let broadcasting = |id: SessionId, cx: &mut TestAppContext| {
         let group = ui.group(id, cx);
         cx.update(|cx| group.read(cx).broadcasting())
     };
-    assert!(broadcasting(a, cx) && broadcasting(b, cx));
-    assert!(!broadcasting(c, cx));
+    assert!(broadcasting(a, cx) && broadcasting(b, cx) && broadcasting(c, cx));
     assert!(ui.visible(format!("{a_tab}-broadcast"), cx));
     assert!(ui.visible(format!("{}-broadcast", tab_of(b, cx)), cx));
+
+    // Typed in B: A and C get it.
+    terminals[1]
+        .0
+        .update(cx, |terminal, cx| terminal.type_for_test("date\r", cx));
+    assert_eq!(terminals[0].1.0.lock().unwrap().as_slice(), b"date\r");
+    assert_eq!(terminals[2].1.0.lock().unwrap().as_slice(), b"date\r");
+
+    // C's session drops: C leaves (no tower), A and B go on.
+    let c_session = {
+        let group = ui.group(c, cx);
+        cx.update(|cx| group.read(cx).sessions()[0].clone())
+    };
+    c_session.update(cx, |session, cx| {
+        session.set_phase(Phase::Dropped(Failure::ConnectionLost), None, cx)
+    });
+    ui.frame(cx);
+    assert!(!broadcasting(c, cx));
     assert!(!ui.visible(format!("{}-broadcast", tab_of(c, cx)), cx));
+    assert!(broadcasting(a, cx) && broadcasting(b, cx));
 
     // Typed in A: B gets it, C does not.
     terminals[0]
         .0
         .update(cx, |terminal, cx| terminal.type_for_test("uptime\r", cx));
-    assert_eq!(terminals[1].1.0.lock().unwrap().as_slice(), b"uptime\r");
-    assert!(terminals[2].1.0.lock().unwrap().is_empty());
+    assert_eq!(
+        terminals[1].1.0.lock().unwrap().as_slice(),
+        b"date\ruptime\r"
+    );
+    assert_eq!(terminals[2].1.0.lock().unwrap().as_slice(), b"date\r");
 
     // B closes: A alone with one pane ends it.
     let shell = ui.shell(cx);

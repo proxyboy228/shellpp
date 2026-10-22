@@ -390,6 +390,14 @@ impl PaneGroup {
         cx.notify();
     }
 
+    /// The panes whose sessions run now (who would join).
+    pub fn running_panes(&self, cx: &App) -> usize {
+        self.panes
+            .iter()
+            .filter(|pane| self.running_terminal(pane.id, cx).is_some())
+            .count()
+    }
+
     /// The terminals of this tab's members.
     pub fn broadcast_terminals(
         &self,
@@ -440,7 +448,8 @@ impl PaneGroup {
             Vec::new()
         };
         self.broadcast_members = members.iter().map(|(id, _)| *id).collect();
-        if members.len() + self.broadcast_peers.len() < 2 {
+        // A tab without a member leaves; fewer than two in all end it.
+        if members.is_empty() || members.len() + self.broadcast_peers.len() < 2 {
             self.broadcast = false;
             self.broadcast_members.clear();
             self.broadcast_peers.clear();

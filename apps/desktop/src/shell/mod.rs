@@ -1141,19 +1141,41 @@ impl Shell {
         }
     }
 
-    /// Ctrl+Shift+B (UI 4.4): Broadcast input off, or on in the active tab.
+    /// Ctrl+Shift+B (UI 4.4): Broadcast input off, or on in the active tab
+    /// of panes.
     fn toggle_broadcast(&mut self, cx: &mut Context<Self>) {
         if !self.broadcast_tabs.is_empty() {
             self.stop_broadcast(cx);
-        } else if let TopTab::Session(id) = self.top_tab {
+        } else if let TopTab::Session(id) = self.top_tab
+            && self.group(id).is_some()
+        {
             self.start_broadcast(vec![id], cx);
         }
         cx.notify();
     }
 
+    /// Session tabs with panes (New Tab pages and SFTP left out).
+    fn pane_tabs(&self) -> usize {
+        self.sessions
+            .tabs()
+            .iter()
+            .filter(|tab| self.group(tab.id()).is_some())
+            .count()
+    }
+
     /// Starts Broadcast input over `tabs` (D86): their panes whose sessions
     /// run take part; with fewer than two, a toast says so.
     fn start_broadcast(&mut self, tabs: Vec<SessionId>, cx: &mut Context<Self>) -> bool {
+        // Refused before anything changes: a broadcast that runs goes on.
+        let running: usize = tabs
+            .iter()
+            .filter_map(|id| self.group(*id))
+            .map(|group| group.read(cx).running_panes(cx))
+            .sum();
+        if running < 2 {
+            self.toast(strings::BROADCAST_TOO_FEW, cx);
+            return false;
+        }
         self.stop_broadcast(cx);
         let mut joined = Vec::new();
         let mut members = 0;
@@ -2426,7 +2448,7 @@ impl Shell {
             can_split_down: has_target && group.can_split(active, Direction::Column),
             can_split_right: has_target && group.can_split(active, Direction::Row),
             has_splits: group.has_splits(),
-            other_tabs: self.sessions.len() > 1,
+            other_tabs: self.pane_tabs() > 1,
             broadcasting: self.broadcast_tabs.contains(&id),
         }
     }
@@ -2477,7 +2499,7 @@ impl Shell {
                 // Several tabs open: the list of tabs to broadcast to (D86).
                 if self.broadcast_tabs.contains(&id) {
                     self.stop_broadcast(cx);
-                } else if group.is_some() && self.sessions.len() > 1 {
+                } else if group.is_some() && self.pane_tabs() > 1 {
                     self.open_broadcast_dialog(id, window, cx);
                 } else if group.is_some() {
                     self.start_broadcast(vec![id], cx);

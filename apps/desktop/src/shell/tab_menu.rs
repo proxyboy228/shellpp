@@ -136,7 +136,9 @@ pub fn entries(facts: TabFacts) -> Vec<TabMenuEntry> {
             } else {
                 strings::MENU_BROADCAST_INPUT
             },
-            Some("Ctrl+Shift+B"),
+            // The key turns it off, or on for this tab only: the same as
+            // the item unless the item opens the tab list.
+            (facts.broadcasting || !facts.other_tabs).then_some("Ctrl+Shift+B"),
             true,
         ));
     }
