@@ -356,12 +356,15 @@ jobs:
         run: ./scripts/measure-startup.ps1 -Scenario first-run
 
   # The Windows release artifact (run 4, plan 9.5;
-  # scripts/package-windows.ps1): the portable zip of the release build
-  # (LTO, one codegen unit, stripped; the version resource from Cargo.toml)
-  # with its SHA-256, kept for 14 days. No signing, no publishing; the MSI
-  # waits for the owner's choice of installer tool (docs/decisions.md, D82).
+  # scripts/package-windows.ps1): the portable zip of the dist profile
+  # (fat LTO, one codegen unit; the version resource from Cargo.toml) with
+  # its SHA-256, and the PDB apart, kept for 14 days. Pushes to main only
+  # (two fat-LTO builds per pull request would cost too much). No signing,
+  # no publishing; the MSI waits for the owner's choice of installer tool
+  # (docs/decisions.md, D82).
   windows-release:
     name: Windows release artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
@@ -393,6 +396,14 @@ jobs:
             target/package/*.sha256
           retention-days: 14
           if-no-files-found: error
+
+      - name: Keep the symbols
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shellpp-windows-x64-pdb
+          path: target/package/shellpp.pdb
+          retention-days: 14
+          if-no-files-found: warn
 
   macos:
     name: macOS

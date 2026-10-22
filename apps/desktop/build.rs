@@ -15,7 +15,10 @@ fn main() {
         .map(|part| part.parse::<u16>().unwrap_or(0));
     let mut next = || numbers.next().unwrap_or(0);
     let (major, minor, patch) = (next(), next(), next());
-    let authors = std::env::var("CARGO_PKG_AUTHORS").unwrap_or_default();
+    // In an .rc string a quote is written twice.
+    let authors = std::env::var("CARGO_PKG_AUTHORS")
+        .unwrap_or_default()
+        .replace('"', "\"\"");
     let rc = format!(
         r#"#include <winver.h>
 VS_VERSION_INFO VERSIONINFO
@@ -49,8 +52,10 @@ END
     );
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("version.rc");
     std::fs::write(&out, rc).expect("version.rc");
-    // Linked into the binaries only (the library stays without it).
-    if let Err(error) = embed_resource::compile(&out, embed_resource::NONE).manifest_optional() {
+    // Linked into the binaries only (the library stays without it). No
+    // resource compiler is a warning, so an artifact without the version
+    // shows up in the build log.
+    if let Err(error) = embed_resource::compile(&out, embed_resource::NONE).manifest_required() {
         println!("cargo:warning=the version resource was not embedded: {error}");
     }
 }

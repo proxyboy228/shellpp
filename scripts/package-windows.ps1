@@ -4,13 +4,15 @@
   build (run 4, plan 9.5). No signing, no publishing.
 
 .DESCRIPTION
-  Builds shellpp.exe with the release profile (unless -NoBuild) and writes
+  Builds shellpp.exe with the dist profile (fat LTO; Cargo.toml, unless
+  -NoBuild) and writes
   <OutDir>\shellpp-<version>-windows-x64.zip with:
   - shellpp.exe (its version resource comes from Cargo.toml);
   - LICENSE and THIRD_PARTY_NOTICES.md;
   - README-portable.txt: where the data lives and how to keep it next to
     the program (SHELLPP_DATA_DIR).
-  and <zip>.sha256 next to it. The MSI waits for the owner's choice of an
+  and <zip>.sha256 next to it, and shellpp.pdb (line tables, for crash
+  reports; not in the zip). The MSI waits for the owner's choice of an
   installer tool (docs/decisions.md, D82).
 
 .EXAMPLE
@@ -22,13 +24,16 @@
 param(
     # Output folder; default <repo>\target\package.
     [string] $OutDir,
-    # Use the existing target\release\shellpp.exe.
+    # Use the existing target\dist\shellpp.exe.
     [switch] $NoBuild
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\package' }
+# A relative folder is the caller's, not the repository's.
+if (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path (Get-Location).Path $OutDir }
+$OutDir = [System.IO.Path]::GetFullPath($OutDir)
 
 function Fail([string] $message) {
     Write-Host "package-windows: $message" -ForegroundColor Red
@@ -44,12 +49,13 @@ try {
     $version = $package.version
 
     if (-not $NoBuild) {
-        Write-Host 'package-windows: cargo build --locked --release -p shellpp-desktop'
-        & cargo build --locked --release -p shellpp-desktop
+        Write-Host 'package-windows: cargo build --locked --profile dist -p shellpp-desktop'
+        & cargo build --locked --profile dist -p shellpp-desktop
         if ($LASTEXITCODE -ne 0) { Fail 'cargo build failed' }
     }
     $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
-    $exe = Join-Path $targetDir 'release\shellpp.exe'
+    $exe = Join-Path $targetDir 'dist\shellpp.exe'
+    $pdb = Join-Path $targetDir 'dist\shellpp.pdb'
     if (-not (Test-Path -LiteralPath $exe)) { Fail "no $exe" }
 
     $name = "shellpp-$version-windows-x64"
@@ -62,8 +68,9 @@ try {
     $readme = @"
 Shell++ $version for Windows (x64), portable
 
-Run shellpp.exe. Nothing is installed and nothing outside the data folder
-is written.
+Run shellpp.exe. Nothing is installed. The app writes only its data
+folder, and, while "Remember on this device" is on, its device key in the
+Windows Credential Manager of this user.
 
 Data (vaults, recordings, backups): %LOCALAPPDATA%\shellpp\
 Diagnostic logs: %LOCALAPPDATA%\shellpp\logs\
@@ -87,6 +94,7 @@ apart from it.
     Set-Content -LiteralPath "$zip.sha256" -Value "$hash  $name.zip" -Encoding ascii
     Remove-Item -LiteralPath $staging -Recurse -Force
 
+    if (Test-Path -LiteralPath $pdb) { Copy-Item -LiteralPath $pdb -Destination $OutDir -Force }
     $exeSize = (Get-Item -LiteralPath $exe).Length
     $zipSize = (Get-Item -LiteralPath $zip).Length
     Write-Host ("package-windows: {0} ({1:N1} MB; shellpp.exe {2:N1} MB)" -f $zip, ($zipSize / 1MB), ($exeSize / 1MB))

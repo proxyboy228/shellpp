@@ -55,13 +55,13 @@ The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELL
 
 ## Installing on Windows
 
-There are no published releases yet. CI builds the Windows artifact on every run (job "Windows release artifact"); locally:
+There are no published releases yet. CI builds the Windows artifact on pushes to main (job "Windows release artifact"); locally:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
 ```
 
-- The result is `target\package\shellpp-<version>-windows-x64.zip` with its `.sha256`: `shellpp.exe` (release build, version resource from `Cargo.toml`), `LICENSE`, `THIRD_PARTY_NOTICES.md` and `README-portable.txt`. The executable is not signed, so SmartScreen may ask once.
+- The result is `target\package\shellpp-<version>-windows-x64.zip` with its `.sha256`: `shellpp.exe` (the `dist` profile: fat LTO; version resource from `Cargo.toml`), `LICENSE`, `THIRD_PARTY_NOTICES.md` and `README-portable.txt`. The executable is not signed, so SmartScreen may ask once.
 - Unpack it anywhere and run `shellpp.exe`; nothing is installed.
 - An MSI installer waits for the choice of an installer tool (`docs/decisions.md`, D82).
 
