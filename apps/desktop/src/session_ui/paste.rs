@@ -70,7 +70,14 @@ pub fn render(
                     dialog::body(strings::paste_lines(preview.line_count), cx)
                         .id("paste-line-count")
                         .test_support(),
-                ),
+                )
+                .when(paste.broadcast() > 0, |this| {
+                    this.child(
+                        dialog::body(strings::paste_broadcast(paste.broadcast()), cx)
+                            .id("paste-broadcast")
+                            .test_support(),
+                    )
+                }),
         )
         .child(block)
         .child(dialog::buttons([

@@ -45,6 +45,9 @@ gpui_kit::actions!(
         /// Ctrl+Shift+W: the active pane of a tab with splits, else the tab
         /// (UI 4.7).
         CloseTab,
+        /// Ctrl+Shift+B: Broadcast input on or off in the active tab
+        /// (UI 4.4).
+        ToggleBroadcast,
         OpenDocumentation,
         ReportIssue,
         CheckForUpdates,
@@ -77,6 +80,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-l", LockApp, None),
         KeyBinding::new("secondary-alt-s", NewSerialConnection, context),
         KeyBinding::new("secondary-shift-w", CloseTab, context),
+        KeyBinding::new("secondary-shift-b", ToggleBroadcast, context),
         // Ctrl+T and Ctrl+K reach the shell only outside a terminal (the
         // terminal keeps Ctrl+letter for the shell); the Ctrl+Shift keys
         // work everywhere (UI 12.5).

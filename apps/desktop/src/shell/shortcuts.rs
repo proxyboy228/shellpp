@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 
 use super::actions::{
     ActivateTab, CloseTab, KEY_CONTEXT, LockApp, NewLocalTerminal, NewSerialConnection, NewTab,
-    NextTab, OpenSearch, OpenSettings, PreviousTab, ShowSftp, ShowVaults,
+    NextTab, OpenSearch, OpenSettings, PreviousTab, ShowSftp, ShowVaults, ToggleBroadcast,
 };
 
 /// The setting that holds the user's changes.
@@ -150,7 +150,7 @@ const fn terminal(
 }
 
 /// Every action of the table, in its order.
-pub const SHORTCUTS: [Shortcut; 29] = [
+pub const SHORTCUTS: [Shortcut; 30] = [
     app("show_vaults", "Go to Vaults", &["ctrl-1"], &["cmd-1"]),
     app("show_sftp", "Go to SFTP", &["ctrl-2"], &["cmd-2"]),
     app("tab_3", "Go to tab 3", &["ctrl-3"], &["cmd-3"]),
@@ -275,6 +275,13 @@ pub const SHORTCUTS: [Shortcut; 29] = [
         "Search in the terminal",
         &["ctrl-shift-f"],
         &["cmd-f"],
+        Scope::App,
+    ),
+    terminal(
+        "broadcast_input",
+        "Broadcast input on or off",
+        &["ctrl-shift-b"],
+        &["cmd-shift-b"],
         Scope::App,
     ),
 ];
@@ -434,6 +441,7 @@ fn binding(id: &str, keys: &str, context: Option<&str>) -> Option<KeyBinding> {
             crate::terminal_sidebar::FindInTerminal,
             context,
         )),
+        "broadcast_input" => Some(KeyBinding::new(keys, ToggleBroadcast, context)),
         _ => None,
     }
 }

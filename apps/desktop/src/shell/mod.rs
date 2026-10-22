@@ -1126,6 +1126,14 @@ impl Shell {
         }
     }
 
+    /// Ctrl+Shift+B (UI 4.4): Broadcast input on or off in the active tab,
+    /// as its menu item.
+    fn toggle_broadcast(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let TopTab::Session(id) = self.top_tab {
+            self.run_tab_command(id, tab_menu::TabCommand::BroadcastInput, window, cx);
+        }
+    }
+
     /// The top-bar tabs in order: Vaults, SFTP, then the session tabs.
     fn tab_order(&self) -> Vec<TopTab> {
         [TopTab::Vaults, TopTab::Sftp]
@@ -2818,6 +2826,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &PreviousTab, _, cx| this.cycle_tab(-1, cx)))
             // The focus goes to the next active pane or tab.
             .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_active(cx)))
+            .on_action(cx.listener(|this, _: &ToggleBroadcast, window, cx| {
+                this.toggle_broadcast(window, cx)
+            }))
             .on_action(cx.listener(|_, _: &OpenDocumentation, _, cx| {
                 cx.open_url(&format!("{}#readme", env!("CARGO_PKG_REPOSITORY")));
             }))

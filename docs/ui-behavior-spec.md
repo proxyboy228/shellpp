@@ -854,9 +854,11 @@ The split shortcuts (Ctrl+Shift+E, Ctrl+Shift+D) do nothing in those cases eithe
 - Restore (section 6) brings the panes back with their sizes; the first pane of each tab
   is active. [decision]
 - **Broadcast input** [decision]: turned on and off with the "Broadcast input" item in the
-  tab menu (4.4). While it is on, keyboard input in the active pane is also sent to all
-  other panes of the tab, and these receiving panes are marked with a border. The item
-  reads "Stop Broadcast Input" while it is on; a tab left with one pane ends it (D81).
+  tab menu (4.4) or Ctrl+Shift+B. While it is on, keyboard input in the active pane is also
+  sent to all other panes of the tab, and these receiving panes are marked with a border.
+  The item reads "Stop Broadcast Input" while it is on; a tab left with one pane ends it.
+  A paste of several lines asks first while it is on, also with the confirmation setting
+  off, and the dialog says the other panes get it too (D81).
 
 ### 4.8 Connecting and authentication [decision]
 
@@ -1660,6 +1662,7 @@ Default set for Windows/Linux:
 | Ctrl+P, Ctrl+Shift+P | open Port Forwarding [decision on Ctrl+Shift+P] |
 | Ctrl+K, Ctrl+Shift+K | search hosts and tabs [decision] |
 | Ctrl+Shift+F | search in the terminal (the Tools tab of the terminal sidebar, 4.2) |
+| Ctrl+Shift+B | Broadcast input on or off in the active tab (4.7, D81) |
 | Ctrl+, | settings |
 
 **Important** [decision]: shortcuts without Shift (Ctrl+L, Ctrl+P, Ctrl+K, Ctrl+T)

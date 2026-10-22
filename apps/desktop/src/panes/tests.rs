@@ -866,6 +866,30 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
     assert!(mirrored().ends_with(b"pwd\r\t\x1b[Z\r"));
     assert!(sinks[1].0.lock().unwrap().ends_with(b"pwd\r\t\x1b[Z\r"));
 
+    // A paste of several lines asks first while broadcasting, also with
+    // the setting off, and says the other pane gets it too.
+    terminals[0].feed_blocking(b"\x1b[?2004h").unwrap();
+    terminals[0].flush_blocking();
+    source.update(cx, |source, cx| {
+        source.set_confirm_multiline_paste_for_test(false);
+        source.paste_text("a\nb\n", cx);
+    });
+    tab.frame(cx);
+    assert!(
+        mirrored().ends_with(b"\x1b[Z\r"),
+        "nothing before the answer"
+    );
+    assert!(tab.visible_in(panes[1], "paste-broadcast", cx));
+    tab.click_in(panes[1], "paste-confirm", cx);
+    assert!(mirrored().ends_with(b"\x1b[200~a\rb\r\x1b[201~"));
+    assert!(
+        sinks[1]
+            .0
+            .lock()
+            .unwrap()
+            .ends_with(b"\x1b[200~a\rb\r\x1b[201~")
+    );
+
     // A member that stops running leaves (a reconnect is a fresh shell),
     // also with no frame drawn (a tab in the background); fewer than two
     // members end Broadcast input.
@@ -877,5 +901,5 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
     tab.frame(cx);
     tab.set_phase(panes[0], Phase::Running, cx);
     typed(panes[0], "x", cx);
-    assert!(sinks[1].0.lock().unwrap().ends_with(b"\x1b[Z\r"));
+    assert!(sinks[1].0.lock().unwrap().ends_with(b"\x1b[201~"));
 }

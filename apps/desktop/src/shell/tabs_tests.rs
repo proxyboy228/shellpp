@@ -571,6 +571,25 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
     for pane in cx.update(|cx| group.read(cx).pane_ids()) {
         assert!(!ui.visible(format!("pane-{pane}-broadcast"), cx));
     }
+    // Ctrl+Shift+B turns it on and off too; with one connected pane a
+    // toast says it needs two.
+    ui.press("ctrl-shift-b", cx);
+    assert!(cx.update(|cx| group.read(cx).broadcasting()));
+    ui.press("ctrl-shift-b", cx);
+    assert!(!cx.update(|cx| group.read(cx).broadcasting()));
+    sessions[1].update(cx, |session, cx| {
+        session.set_phase(Phase::Dropped(Failure::ConnectionLost), None, cx)
+    });
+    let shell = ui.shell(cx);
+    let toasts =
+        |cx: &mut TestAppContext| cx.update(|cx| shell.read(cx).toasts().read(cx).items().len());
+    let before = toasts(cx);
+    ui.press("ctrl-shift-b", cx);
+    assert!(!cx.update(|cx| group.read(cx).broadcasting()));
+    assert_eq!(toasts(cx), before + 1);
+    sessions[1].update(cx, |session, cx| {
+        session.set_phase(Phase::Running, None, cx)
+    });
 
     // Close: the whole tab with its panes.
     ui.right_click(tab.element_id(), cx);

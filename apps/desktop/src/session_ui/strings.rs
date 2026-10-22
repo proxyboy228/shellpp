@@ -232,6 +232,15 @@ pub fn paste_lines(count: usize) -> String {
     }
 }
 
+/// The paste dialog while Broadcast input is on (UI 4.4).
+pub fn paste_broadcast(panes: usize) -> String {
+    if panes == 1 {
+        "Broadcast input is on: the other pane gets it too.".to_owned()
+    } else {
+        format!("Broadcast input is on: the {panes} other panes get it too.")
+    }
+}
+
 /// "… and 12 more lines".
 pub fn paste_more(count: usize) -> String {
     if count == 1 {

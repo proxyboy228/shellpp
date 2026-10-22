@@ -166,12 +166,15 @@ pub struct SearchSummary {
 #[derive(Clone, PartialEq, Eq)]
 pub struct PendingPaste {
     text: Rc<str>,
+    /// The other panes it also goes to (Broadcast input on); 0 when off.
+    broadcast: usize,
 }
 
 impl std::fmt::Debug for PendingPaste {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingPaste")
             .field("lines", &self.line_count())
+            .field("broadcast", &self.broadcast)
             .finish_non_exhaustive()
     }
 }
@@ -190,6 +193,11 @@ impl PendingPaste {
     /// The line count and the first lines for the dialog.
     pub fn preview(&self) -> PastePreview {
         PastePreview::new(&self.text)
+    }
+
+    /// The other panes the paste also goes to (Broadcast input, UI 4.4).
+    pub fn broadcast(&self) -> usize {
+        self.broadcast
     }
 }
 
@@ -450,6 +458,12 @@ impl TerminalView {
     #[cfg(test)]
     pub(crate) fn type_for_test(&mut self, text: &str, cx: &mut Context<Self>) {
         self.type_text(text, cx);
+    }
+
+    /// Tests: the multi-line paste setting.
+    #[cfg(test)]
+    pub(crate) fn set_confirm_multiline_paste_for_test(&mut self, on: bool) {
+        self.settings.confirm_multiline_paste = on;
     }
 
     /// What plain Backspace sends from now on (the host's setting, UI 3.1).
@@ -761,7 +775,10 @@ impl TerminalView {
         if cleaned.is_empty() {
             return;
         }
-        if paste::needs_confirmation(&cleaned, self.settings.confirm_multiline_paste) {
+        // While broadcasting, several lines always ask first (they run in
+        // every pane).
+        let confirm = self.settings.confirm_multiline_paste || !self.broadcast.is_empty();
+        if paste::needs_confirmation(&cleaned, confirm) {
             self.confirm_paste(cleaned, cx);
         } else {
             self.send_paste(&cleaned, cx);
@@ -783,6 +800,7 @@ impl TerminalView {
     fn confirm_paste(&mut self, cleaned: String, cx: &mut Context<Self>) {
         cx.emit(TerminalEvent::ConfirmPaste(PendingPaste {
             text: cleaned.into(),
+            broadcast: self.broadcast.len(),
         }));
     }
 

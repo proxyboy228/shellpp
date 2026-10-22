@@ -132,7 +132,7 @@ pub fn entries(facts: TabFacts) -> Vec<TabMenuEntry> {
             } else {
                 strings::MENU_BROADCAST_INPUT
             },
-            None,
+            Some("Ctrl+Shift+B"),
             true,
         ));
     }
