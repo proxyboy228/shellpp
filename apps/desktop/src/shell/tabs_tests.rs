@@ -1365,6 +1365,8 @@ fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
     // × removes it.
     ui.click("tab-new", cx);
     ui.click(format!("new-tab-workspace-remove-{id}"), cx);
+    assert!(ui.visible("workspace-remove-dialog", cx));
+    ui.click("workspace-remove-confirm", cx);
     assert!(core.workspaces_list(vault).unwrap().is_empty());
     assert!(!ui.visible(format!("new-tab-workspace-{id}"), cx));
     drop(core);

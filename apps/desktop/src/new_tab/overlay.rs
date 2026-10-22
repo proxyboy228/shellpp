@@ -95,6 +95,17 @@ impl SearchOverlay {
         }
     }
 
+    /// The saved workspaces the search finds (UI 4.5).
+    pub fn set_workspaces(
+        &mut self,
+        workspaces: Vec<(uuid::Uuid, gpui::SharedString)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.picker.set_workspaces(workspaces, cx) {
+            cx.notify();
+        }
+    }
+
     /// Esc or a click outside: the focus goes back, then the shell is told.
     pub fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(previous) = self.previous_focus.take() {

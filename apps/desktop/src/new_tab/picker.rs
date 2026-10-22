@@ -66,6 +66,8 @@ pub(crate) struct Picker {
     search: Entity<InputState>,
     query: String,
     tabs: Vec<OpenTab>,
+    /// The saved workspaces the search finds (UI 4.5).
+    workspaces: Vec<(uuid::Uuid, SharedString)>,
     origin: Option<PickerOrigin>,
     recents: Vec<RecentConnection>,
     vault_name: String,
@@ -152,6 +154,7 @@ impl Picker {
             search,
             query: String::new(),
             tabs: Vec::new(),
+            workspaces: Vec::new(),
             origin,
             recents: Vec::new(),
             vault_name: DEFAULT_VAULT_NAME.to_owned(),
@@ -225,6 +228,20 @@ impl Picker {
         true
     }
 
+    /// The saved workspaces the search finds (UI 4.5).
+    pub fn set_workspaces(
+        &mut self,
+        workspaces: Vec<(uuid::Uuid, SharedString)>,
+        cx: &App,
+    ) -> bool {
+        if self.workspaces == workspaces {
+            return false;
+        }
+        self.workspaces = workspaces;
+        self.rebuild(false, cx);
+        true
+    }
+
     /// The split pane's target (the pane picker's first row).
     pub fn set_origin(&mut self, origin: Option<PickerOrigin>, cx: &App) -> bool {
         if self.origin == origin {
@@ -268,6 +285,7 @@ impl Picker {
             recents,
             origin: self.origin.as_ref(),
             vault_name: &self.vault_name,
+            workspaces: &self.workspaces,
         };
         if reset {
             self.moved = false;

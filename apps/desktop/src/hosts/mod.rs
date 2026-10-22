@@ -1175,14 +1175,11 @@ impl HostsScreen {
 
     /// The saved workspaces (id and name), for Add to Workspace ▸.
     pub(crate) fn workspaces(&self, cx: &App) -> Vec<(Uuid, String)> {
-        let state = self.state.read(cx);
-        state
-            .core()
-            .zip(state.vault_id())
-            .and_then(|(core, vault_id)| core.workspaces_list(vault_id).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|view| (view.record.record_id, view.name))
+        self.state
+            .read(cx)
+            .workspaces()
+            .iter()
+            .map(|(id, name)| (*id, name.to_string()))
             .collect()
     }
 

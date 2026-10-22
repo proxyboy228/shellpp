@@ -1926,17 +1926,15 @@ impl Shell {
             && let Some(page) = self.new_tab_page(id).cloned()
         {
             let tabs = self.open_tabs(Some(id), window, cx);
-            // The workspaces (UI 4.5): a short list of names from the core.
-            let state = self.state.read(cx);
-            let workspaces: Vec<(Uuid, SharedString)> = state
-                .core()
-                .zip(state.vault_id())
-                .and_then(|(core, vault_id)| core.workspaces_list(vault_id).ok())
-                .unwrap_or_default()
-                .into_iter()
-                .map(|view| (view.record.record_id, SharedString::from(view.name)))
-                .collect();
-            let can_create = !restore::workspace_tabs(self.snapshot(cx)).is_empty();
+            let workspaces = self.workspace_names(cx);
+            // A tab to a saved host or a local terminal (a quick connection
+            // is not kept): cheap, no serialization per frame.
+            let can_create = self.snapshot(cx).iter().any(|(layout, _)| {
+                layout
+                    .leaves()
+                    .iter()
+                    .all(|target| !matches!(target, PaneTarget::Quick(_)))
+            });
             page.update(cx, |page, cx| {
                 page.set_open_tabs(tabs, cx);
                 page.set_restore_available(restore, cx);
@@ -1951,7 +1949,11 @@ impl Shell {
         if let Some((overlay, _)) = &self.search {
             let overlay = overlay.clone();
             let tabs = self.open_tabs(None, window, cx);
-            overlay.update(cx, |overlay, cx| overlay.set_open_tabs(tabs, cx));
+            let workspaces = self.workspace_names(cx);
+            overlay.update(cx, |overlay, cx| {
+                overlay.set_open_tabs(tabs, cx);
+                overlay.set_workspaces(workspaces, cx);
+            });
         }
     }
 
@@ -2017,17 +2019,38 @@ impl Shell {
                 return;
             }
             NewTabEvent::RemoveWorkspace(id) => {
-                let state = self.state.read(cx);
-                if let (Some(core), Some(vault_id)) = (state.core().cloned(), state.vault_id()) {
-                    let removed = core.record_delete(shellpp_core::service::dto::RecordsRef {
-                        vault_id,
-                        record_ids: vec![*id],
-                    });
-                    if let Err(error) = removed {
-                        tracing::warn!(code = error.code(), "workspace not removed");
-                    }
-                }
-                cx.notify();
+                let id = *id;
+                let state = self.state.clone();
+                let name = state
+                    .read(cx)
+                    .workspaces()
+                    .iter()
+                    .find(|(found, _)| *found == id)
+                    .map(|(_, name)| name.to_string())
+                    .unwrap_or_default();
+                crate::snippets::open_confirmation(
+                    "workspace-remove",
+                    crate::new_tab::strings::REMOVE_WORKSPACE_TITLE,
+                    crate::new_tab::strings::remove_workspace_body(&name),
+                    window,
+                    cx,
+                    move |window, cx| {
+                        let state = state.read(cx);
+                        let (Some(core), Some(vault_id)) =
+                            (state.core().cloned(), state.vault_id())
+                        else {
+                            return;
+                        };
+                        let removed = core.record_delete(shellpp_core::service::dto::RecordsRef {
+                            vault_id,
+                            record_ids: vec![id],
+                        });
+                        if let Err(error) = removed {
+                            tracing::warn!(code = error.code(), "workspace not removed");
+                            show_toast(crate::new_tab::strings::WORKSPACE_NOT_REMOVED, window, cx);
+                        }
+                    },
+                );
                 return;
             }
             NewTabEvent::Restore => {
@@ -2065,6 +2088,12 @@ impl Shell {
                 self.open_target(target, None, cx);
             }
         }
+    }
+
+    /// The workspaces (UI 4.5) by name, for the new tab page and Ctrl+K:
+    /// a short list of names from the core.
+    fn workspace_names(&self, cx: &App) -> Vec<(Uuid, SharedString)> {
+        self.state.read(cx).workspaces().as_ref().clone()
     }
 
     /// A saved workspace of the personal vault.

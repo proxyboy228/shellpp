@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt as _;
-use gpui::{AppContext as _, Context, EventEmitter, Task};
+use gpui::{AppContext as _, Context, EventEmitter, SharedString, Task};
 use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::model::types::RecordKind;
@@ -108,6 +108,8 @@ pub struct AppState {
     vault_id: Option<Uuid>,
     hosts: Rc<Vec<HostItem>>,
     groups: Rc<Vec<GroupItem>>,
+    /// The workspaces' ids and names (UI 4.5), read with the records.
+    workspaces: Rc<Vec<(Uuid, SharedString)>>,
     /// The group whose contents the Hosts screen shows; `None` is the top level.
     location: Option<Uuid>,
     selection: Selection,
@@ -189,6 +191,7 @@ impl AppState {
             vault_id: None,
             hosts: Rc::default(),
             groups: Rc::default(),
+            workspaces: Rc::default(),
             location: None,
             selection: Selection::default(),
             removals: undo::PendingRemovals::default(),
@@ -219,6 +222,7 @@ impl AppState {
             vault_id: None,
             hosts: Rc::default(),
             groups: Rc::default(),
+            workspaces: Rc::default(),
             location: None,
             selection: Selection::default(),
             removals: undo::PendingRemovals::default(),
@@ -358,6 +362,11 @@ impl AppState {
     /// Every host of the personal vault, in manual order.
     pub fn hosts(&self) -> Rc<Vec<HostItem>> {
         self.hosts.clone()
+    }
+
+    /// The workspaces' ids and names, by name (UI 4.5).
+    pub fn workspaces(&self) -> Rc<Vec<(Uuid, SharedString)>> {
+        self.workspaces.clone()
     }
 
     /// Every group of the personal vault, in manual order.
@@ -799,6 +808,14 @@ impl AppState {
                 self.groups = Rc::default();
             }
         }
+        self.workspaces = Rc::new(
+            self.vault_id
+                .and_then(|vault_id| core.workspace_names(vault_id).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, name)| (id, SharedString::from(name)))
+                .collect(),
+        );
         if self.location.is_some_and(|id| self.group(id).is_none()) {
             self.location = None;
         }

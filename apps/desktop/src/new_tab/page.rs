@@ -106,6 +106,7 @@ impl NewTabPage {
         cx: &mut Context<Self>,
     ) {
         if self.workspaces != workspaces || self.can_create_workspace != can_create {
+            self.picker.set_workspaces(workspaces.clone(), cx);
             self.workspaces = workspaces;
             self.can_create_workspace = can_create;
             cx.notify();

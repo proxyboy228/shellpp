@@ -57,6 +57,8 @@ pub enum Choice {
     Quick(QuickTarget),
     /// Open a local terminal (`None`: the default shell).
     Local { shell_id: Option<String> },
+    /// Open the tabs of a workspace (UI 4.5, D81).
+    Workspace(Uuid),
 }
 
 impl Choice {
@@ -80,6 +82,7 @@ impl Choice {
                 shell_id: shell_id.clone(),
                 new_window,
             },
+            Choice::Workspace(id) => NewTabEvent::OpenWorkspace(*id),
         }
     }
 }
@@ -126,6 +129,8 @@ pub struct Sources<'a> {
     pub origin: Option<&'a PickerOrigin>,
     /// The personal vault's name: the first part of a host's path.
     pub vault_name: &'a str,
+    /// The saved workspaces (record id and name), found by name (UI 4.5).
+    pub workspaces: &'a [(Uuid, SharedString)],
 }
 
 /// The entries of a list for the search text `query`.
@@ -196,6 +201,26 @@ fn search_items(kind: PickerKind, query: &str, sources: &Sources<'_>) -> Vec<Ite
         if !tabs.is_empty() {
             items.push(Item::Heading(strings::OPEN_TABS));
             items.extend(tabs.into_iter().map(Item::Row));
+        }
+    }
+    if kind != PickerKind::Compact {
+        let folded = query.to_lowercase();
+        let workspaces: Vec<Row> = sources
+            .workspaces
+            .iter()
+            .filter(|(_, name)| name.to_lowercase().contains(&folded))
+            .map(|(id, name)| Row {
+                key: format!("workspace-{id}").into(),
+                choice: Choice::Workspace(*id),
+                icon: IconName::LayoutDashboard,
+                color: TagColor::Graphite,
+                title: name.clone(),
+                detail: None,
+            })
+            .collect();
+        if !workspaces.is_empty() {
+            items.push(Item::Heading(strings::WORKSPACES));
+            items.extend(workspaces.into_iter().map(Item::Row));
         }
     }
     let exact = crate::hosts::exact_match(sources.hosts, query);
@@ -453,6 +478,7 @@ mod tests {
             recents,
             origin,
             vault_name: "Personal",
+            workspaces: &[],
         }
     }
 
@@ -685,5 +711,22 @@ mod tests {
             title: key.to_owned().into(),
             detail: None,
         }
+    }
+
+    /// UI 4.5 (D81): the search finds workspaces by name, after the open
+    /// tabs; the compact pane picker does not list them.
+    #[test]
+    fn the_search_finds_workspaces() {
+        let id = Uuid::now_v7();
+        let workspaces = [(id, SharedString::from("Production"))];
+        let mut sources = sources(&[], &[], &[], &[], None);
+        sources.workspaces = &workspaces;
+        let found = items(PickerKind::Overlay, "prod", &sources);
+        assert_eq!(found[0], Item::Heading(strings::WORKSPACES));
+        let row = found[1].row().unwrap();
+        assert_eq!(row.choice, Choice::Workspace(id));
+        assert_eq!(row.choice.event(false), NewTabEvent::OpenWorkspace(id));
+        assert!(items(PickerKind::Compact, "prod", &sources).is_empty());
+        assert!(items(PickerKind::Overlay, "staging", &sources).is_empty());
     }
 }

@@ -420,6 +420,26 @@ impl Core {
         Ok(views)
     }
 
+    /// The workspaces' ids and names, by name: what the new tab page and the
+    /// menus show, without reading the tabs.
+    pub fn workspace_names(&self, vault_id: Uuid) -> Result<Vec<(Uuid, String)>, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(vault_id))?;
+        let mut names: Vec<(Uuid, String)> = session
+            .index
+            .of_kind(RecordKind::Workspace)
+            .map(|record| {
+                (
+                    record.record_id,
+                    string_member(record.data(), "name").unwrap_or_default(),
+                )
+            })
+            .collect();
+        names.sort_by(|a, b| fold(&a.1).cmp(&fold(&b.1)).then_with(|| a.0.cmp(&b.0)));
+        Ok(names)
+    }
+
     /// Every snippet package of the vault, by name.
     pub fn snippet_packages_list(
         &self,

@@ -1267,7 +1267,8 @@ Status: run 4 decision, 2026-10-22 (plan, item 9.3; UI 4.4, 4.7; D68 item 2). Di
 - Workspaces, first part: the core keeps `workspace` records (0x0A01, data-model 12: a name and the tabs in the shape of Restore's, checked by the same rules; host links and local terminals only, so a quick connection is left out). "Create a workspace" on the new tab page saves the window's tabs under the name a dialog asks (disabled while no tab can be kept); a "Workspaces" block on the page lists them by name: a click opens the tabs in place of the page (hosts removed since are left out, as in Restore), × removes one.
 - A snippet run on two to four hosts (D68, item 2): the confirmation has "Run in split tab" beside Run. The tab has one pane per host (two side by side, three in a row, four in a grid); each pane types the script and Enter once its session first runs, as the terminal sidebar's Run does (a reconnect does not type it again). Run keeps the results table.
 - Add to Workspace ▸ in the host menu lists the workspaces by name, then New Workspace (its name is asked): each chosen host becomes a tab with one pane after the workspace's tabs (32 tabs at most).
-- Not done tonight: workspaces in the Ctrl+K search, renaming, and workspaces in Export and Import Data (their host links would need the import's id mapping).
+- Ctrl+K finds workspaces by name ("Workspaces", after the open tabs); × asks before it removes one (the hosts and open tabs stay). The names are read with the records (no read of the tabs per frame).
+- Not done tonight: renaming, and workspaces in Export and Import Data (their host links would need the import's id mapping).
 
 **Spec impact:** `docs/ui-behavior-spec.md` 0 and 4.7 (and `docs/ru`): Broadcast input and Create a workspace are no longer disabled.
 

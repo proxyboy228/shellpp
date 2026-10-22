@@ -118,7 +118,7 @@ fn package_menu(menu: PopupMenu, screen: gpui::WeakEntity<SnippetsScreen>, id: U
 
 /// A confirmation with Cancel and a `--danger` Remove; `id` prefixes the
 /// element ids (`<id>-dialog`, `<id>-confirm`).
-pub(super) fn open_confirmation(
+pub(crate) fn open_confirmation(
     id: &'static str,
     title: &'static str,
     body: String,
