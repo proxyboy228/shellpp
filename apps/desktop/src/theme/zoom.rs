@@ -50,31 +50,46 @@ pub fn step(zoom: f32, up: bool) -> f32 {
     }
 }
 
+/// The kit's radii at 100 % (`radius` and `radius.lg` of the theme file):
+/// `--radius-control` and `--radius-overlay`.
+const KIT_RADIUS: f32 = 6.;
+const KIT_RADIUS_LG: f32 = 12.;
+
 /// Applies `zoom` (snapped to a step) to every window: the kit's base font
-/// size of both themes, so a later change of appearance keeps it.
+/// size of both themes, and its radii (they are pixels in the kit), so a
+/// later change of appearance keeps them.
 pub fn set(zoom: f32, cx: &mut App) {
-    let size = metrics::REM_BASE * nearest(zoom);
+    let zoom = nearest(zoom);
+    let size = metrics::REM_BASE * zoom;
+    let radius = (KIT_RADIUS * zoom).round();
+    let radius_lg = (KIT_RADIUS_LG * zoom).round();
     let theme = Theme::global_mut(cx);
     for config in [&mut theme.dark_theme, &mut theme.light_theme] {
         let mut zoomed = (**config).clone();
         zoomed.font_size = Some(size);
         zoomed.mono_font_size = Some(size);
+        zoomed.radius = Some(radius as usize);
+        zoomed.radius_lg = Some(radius_lg as usize);
         *config = Rc::new(zoomed);
     }
     theme.font_size = px(size);
     theme.mono_font_size = px(size);
+    theme.radius = px(radius);
+    theme.radius_lg = px(radius_lg);
     cx.refresh_windows();
 }
 
-/// The zoom of the settings (the last launch's), applied before the first
-/// window opens.
+/// The zoom of the settings: the last launch's, applied before the first
+/// window opens, and again when the setting changes (an import, a reset).
 pub fn apply_stored(core: &shellpp_core::Core, cx: &mut App) {
     let stored = core
         .settings_get()
         .ok()
         .and_then(|values| values.get(SETTING).and_then(serde_json::Value::as_f64))
         .unwrap_or(1.);
-    set(stored as f32, cx);
+    if nearest(stored as f32) != current(cx) {
+        set(stored as f32, cx);
+    }
 }
 
 /// Changes the zoom and keeps it in the settings; `None` is Actual Size.

@@ -567,8 +567,10 @@ fn the_interface_zoom_steps_is_kept_and_leaves_the_terminal_font(cx: &mut TestAp
     })
     .unwrap();
     ui.frame(cx);
-    ui.press("ctrl-=", cx);
-    assert_eq!(zoom(cx), 1., "Ctrl+= went to the program");
+    for key in ["ctrl-=", "ctrl--", "ctrl-0"] {
+        ui.press(key, cx);
+        assert_eq!(zoom(cx), 1., "{key} went to the program");
+    }
     // What View > Zoom In runs (twice).
     shell.update(cx, |shell, cx| {
         shell.zoom(Some(true), cx);
@@ -577,6 +579,11 @@ fn the_interface_zoom_steps_is_kept_and_leaves_the_terminal_font(cx: &mut TestAp
     ui.next_frame(cx);
     assert_eq!(zoom(cx), 1.25);
     assert_eq!(columns(cx), before, "the terminal's font is its own");
+    // The kit's own radii follow (they are pixels in the kit).
+    assert_eq!(
+        cx.update(|cx| gpui_kit::component::Theme::global(cx).radius),
+        px(8.)
+    );
 
     // The next launch starts at the kept zoom.
     cx.update(|cx| crate::theme::zoom::set(1., cx));
@@ -585,6 +592,25 @@ fn the_interface_zoom_steps_is_kept_and_leaves_the_terminal_font(cx: &mut TestAp
         .read_with(cx, |state, _| state.core().cloned().unwrap());
     cx.update(|cx| crate::theme::zoom::apply_stored(&core, cx));
     assert_eq!(zoom(cx), 1.25);
+
+    // In Settings (a dialog of the kit, outside the shell) the keys work.
+    ui.click("tab-vaults", cx);
+    ui.press("ctrl-,", cx);
+    assert!(ui.visible("settings", cx));
+    ui.press("ctrl--", cx);
+    assert_eq!(zoom(cx), 1.1);
+    ui.press("escape", cx);
+
+    // A zoom the settings get from elsewhere (an import) applies at once.
+    core.settings_set(shellpp_core::service::dto::SettingsSetInput {
+        values: [("appearance.ui_zoom".to_owned(), json!(1.5))]
+            .into_iter()
+            .collect(),
+        reset: Vec::new(),
+    })
+    .unwrap();
+    ui.frame(cx);
+    assert_eq!(zoom(cx), 1.5);
     cx.update(|cx| crate::theme::zoom::set(1., cx));
     ui.finish(cx);
 }

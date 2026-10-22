@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gpui::prelude::*;
 use gpui::{
     App, Context, Entity, FontWeight, IntoElement, Render, SharedString, Subscription, Window, div,
-    px, uniform_list,
+    uniform_list,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -27,7 +27,7 @@ use crate::state::AppState;
 use crate::theme::metrics;
 
 /// The height of a line of the viewer.
-const LINE_HEIGHT: gpui::Pixels = px(18.);
+const LINE_HEIGHT: gpui::Rems = metrics::rpx(18.);
 /// Lines the viewer shows at most (Export to .txt has every line).
 pub const MAX_LINES: usize = 200_000;
 

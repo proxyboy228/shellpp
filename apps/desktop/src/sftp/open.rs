@@ -86,7 +86,7 @@ pub fn confirm_run(
     window.open_dialog(cx, move |dialog, _, cx| {
         let on_open = on_open.clone();
         dialog
-            .w(gpui::px(420.))
+            .w(metrics::scaled(420., cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
@@ -217,7 +217,7 @@ fn ask_overwrite(open: Opened, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, cx| {
         let open = open.clone();
         dialog
-            .w(gpui::px(420.))
+            .w(metrics::scaled(420., cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)

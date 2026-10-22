@@ -379,6 +379,15 @@ fn lock_from_anywhere(_: &LockApp, cx: &mut App) {
     }
 }
 
+/// Zoom In / Zoom Out / Actual Size outside a shell (UI 1.4, D96): kept in
+/// the settings when a vault is open.
+fn zoom_from_anywhere(up: Option<bool>, cx: &mut App) {
+    let core = all_shells(cx)
+        .first()
+        .and_then(|shell| shell.read(cx).state.read(cx).core().cloned());
+    crate::theme::zoom::change(core.as_deref(), up, cx);
+}
+
 /// Opens a session tab and makes it active.
 pub fn open_session_tab(request: SessionRequest, window: &mut Window, cx: &mut App) {
     with_shell(window, cx, move |shell, _, cx| {

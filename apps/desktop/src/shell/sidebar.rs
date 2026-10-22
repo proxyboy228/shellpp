@@ -179,7 +179,7 @@ pub fn sidebar(
                     .hover(move |style| style.bg(hover))
                     .active(move |style| style.bg(pressed))
             })
-            .child(Icon::new(section.icon()).size(gpui::px(16.)))
+            .child(Icon::new(section.icon()).size(metrics::rpx(16.)))
             .when(!collapsed, |item| {
                 item.child(div().flex_1().min_w_0().truncate().child(section.label()))
             })

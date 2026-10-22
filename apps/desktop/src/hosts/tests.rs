@@ -1030,10 +1030,15 @@ fn check_bars_fit(cx: &mut TestAppContext, handle: AnyWindowHandle, tags: &[&str
             content.size.height >= metrics::to_px(metrics::HEIGHT_HOST_CARD, cx) * 2.,
             "{content:?}"
         );
-        let cards: Vec<SharedString> = ["heading-groups", "heading-hosts"]
-            .into_iter()
-            .map(SharedString::from)
-            .collect();
+        // A window under 400 px tall at 100 % scrolls the Hosts heading
+        // below the groups: only the first heading is checked there.
+        let short = metrics::unscaled(window.viewport_size().height, cx) < px(400.);
+        let headings: &[&str] = if short {
+            &["heading-groups"]
+        } else {
+            &["heading-groups", "heading-hosts"]
+        };
+        let cards: Vec<SharedString> = headings.iter().copied().map(SharedString::from).collect();
         let cards = bounds_of(window, &cards);
         assert_inside(&cards, screen);
         if let Some(panel) = window
@@ -1244,6 +1249,27 @@ fn min_window_at_150_percent_has_nothing_clipped_or_overlapping(cx: &mut TestApp
         false,
     );
 
+    cx.update(|cx| crate::theme::zoom::set(1., cx));
+    let _ = cx.update_window(handle, |_, window, _| window.remove_window());
+    cx.run_until_parked();
+    state.update(cx, |state, _| state.shutdown());
+}
+
+/// D96: at 175 % and 200 % the minimum window (548 and 480 px wide at
+/// 100 %) still has the bars of the Hosts screen whole and apart without
+/// the details panel (the panel needs a wider window there, D96).
+#[gpui_kit::test]
+fn min_window_at_200_percent_keeps_the_bars_whole(cx: &mut TestAppContext) {
+    let (state, handle, _root, _ids) = open_app(cx, 960., 600.);
+    for zoom in [1.75, 2.] {
+        cx.update(|cx| crate::theme::zoom::set(zoom, cx));
+        for _ in 0..3 {
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            cx.run_until_parked();
+        }
+        check_bars_fit(cx, handle, &[], false);
+    }
     cx.update(|cx| crate::theme::zoom::set(1., cx));
     let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     cx.run_until_parked();

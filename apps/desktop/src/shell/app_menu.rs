@@ -178,7 +178,8 @@ pub fn build(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     add_entries(
-        menu.action_context(shell_focus).min_w(gpui::px(240.)),
+        menu.action_context(shell_focus)
+            .min_w(crate::theme::metrics::scaled(240., cx)),
         entries(),
         window,
         cx,

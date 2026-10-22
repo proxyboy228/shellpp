@@ -100,4 +100,9 @@ pub fn bind_keys(cx: &mut App) {
     }
     cx.bind_keys(bindings);
     cx.on_action(super::lock_from_anywhere);
+    // The interface zoom where no shell takes it (a dialog of the kit, the
+    // lock screen).
+    cx.on_action(|_: &ZoomIn, cx| super::zoom_from_anywhere(Some(true), cx));
+    cx.on_action(|_: &ZoomOut, cx| super::zoom_from_anywhere(Some(false), cx));
+    cx.on_action(|_: &ActualSize, cx| super::zoom_from_anywhere(None, cx));
 }

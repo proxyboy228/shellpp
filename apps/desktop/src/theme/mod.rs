@@ -315,20 +315,20 @@ pub fn tokens(cx: &App) -> &'static InterfaceTokens {
 
 /// `--shadow-overlay` (menus, popovers, toasts) of the active theme.
 pub fn shadow_overlay(cx: &App) -> Vec<BoxShadow> {
-    vec![box_shadow(tokens(cx).shadow_overlay)]
+    vec![box_shadow(tokens(cx).shadow_overlay, metrics::zoom(cx))]
 }
 
 /// `--shadow-modal` (modal windows) of the active theme.
 pub fn shadow_modal(cx: &App) -> Vec<BoxShadow> {
-    vec![box_shadow(tokens(cx).shadow_modal)]
+    vec![box_shadow(tokens(cx).shadow_modal, metrics::zoom(cx))]
 }
 
 /// A design-system shadow (`0 <y>px <blur>px <color>`, CSS terms) as a GPUI
 /// shadow. GPUI's `blur_radius` is the gaussian's standard deviation, CSS's
 /// blur radius is twice that, so the CSS value is halved.
-pub fn box_shadow(shadow: palette::Shadow) -> BoxShadow {
-    BoxShadow::new(px(0.), px(f32::from(shadow.y)), shadow.color.hsla())
-        .blur_radius(px(f32::from(shadow.blur) / 2.))
+pub fn box_shadow(shadow: palette::Shadow, zoom: f32) -> BoxShadow {
+    BoxShadow::new(px(0.), px(f32::from(shadow.y) * zoom), shadow.color.hsla())
+        .blur_radius(px(f32::from(shadow.blur) / 2. * zoom))
 }
 
 #[cfg(test)]

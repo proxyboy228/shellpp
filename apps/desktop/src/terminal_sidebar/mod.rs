@@ -367,7 +367,7 @@ impl TerminalSidebar {
                                 .active(move |style| style.bg(pressed))
                         }
                     })
-                    .child(Icon::new(tab.icon()).size(gpui::px(16.)))
+                    .child(Icon::new(tab.icon()).size(metrics::rpx(16.)))
                     .on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| this.show_tab(tab, cx)),
                     )

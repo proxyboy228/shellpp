@@ -70,6 +70,10 @@ pub enum Scope {
     App,
     /// Everywhere, over dialogs too (Lock).
     Global,
+    /// Every window, over dialogs and the lock screen, at the outermost
+    /// context (the kit's root): a deeper context's key wins (the
+    /// terminal keeps the zoom keys).
+    Window,
     /// A terminal that has the focus.
     Terminal,
     /// A tab of panes.
@@ -81,6 +85,7 @@ impl Scope {
         match self {
             Scope::App => Some(KEY_CONTEXT),
             Scope::Global => None,
+            Scope::Window => Some("Root"),
             Scope::Terminal => Some(crate::terminal::view::KEY_CONTEXT),
             Scope::Panes => Some(crate::panes::KEY_CONTEXT),
         }
@@ -128,6 +133,25 @@ const fn app(
         pc,
         mac,
         scope: Scope::App,
+        group: Group::App,
+    }
+}
+
+/// An interface zoom key: in every window like Lock, so it also works in a
+/// dialog and on the lock screen; the terminal keeps it (`NoAction` in its
+/// context, which is deeper than the root's).
+const fn zoom(
+    id: &'static str,
+    label: &'static str,
+    pc: &'static [&'static str],
+    mac: &'static [&'static str],
+) -> Shortcut {
+    Shortcut {
+        id,
+        label,
+        pc,
+        mac,
+        scope: Scope::Window,
         group: Group::App,
     }
 }
@@ -206,10 +230,10 @@ pub const SHORTCUTS: [Shortcut; 33] = [
         &["cmd-k", "cmd-shift-k"],
     ),
     app("open_settings", "Settings", &["ctrl-,"], &["cmd-,"]),
-    // Outside a terminal: there they go to the program (D96).
-    app("zoom_in", "Zoom in", &["ctrl-="], &["cmd-="]),
-    app("zoom_out", "Zoom out", &["ctrl--"], &["cmd--"]),
-    app("actual_size", "Actual size", &["ctrl-0"], &["cmd-0"]),
+    // Everywhere but in a terminal, where they go to the program (D96).
+    zoom("zoom_in", "Zoom in", &["ctrl-="], &["cmd-="]),
+    zoom("zoom_out", "Zoom out", &["ctrl--"], &["cmd--"]),
+    zoom("actual_size", "Actual size", &["ctrl-0"], &["cmd-0"]),
     app("open_hosts", "Open the Hosts screen", &[], &[]),
     terminal(
         "copy",

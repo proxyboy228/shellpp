@@ -742,9 +742,18 @@ impl AppState {
                     self.reload_and_notify(cx);
                 }
             }
+            // The interface zoom changed elsewhere (an import, a reset): every
+            // window takes it (D96).
+            CoreEventKind::SettingsChanged { keys } => {
+                if keys.iter().any(|key| key == crate::theme::zoom::SETTING)
+                    && let Some(core) = self.core.clone()
+                {
+                    crate::theme::zoom::apply_stored(&core, cx);
+                }
+            }
             // TODO(shell): feed NotificationsChanged into the notification
-            // center and toasts (UI 1.5); settings arrive with the Settings window.
-            CoreEventKind::SettingsChanged { .. } | CoreEventKind::NotificationsChanged { .. } => {}
+            // center and toasts (UI 1.5).
+            CoreEventKind::NotificationsChanged { .. } => {}
         }
     }
 

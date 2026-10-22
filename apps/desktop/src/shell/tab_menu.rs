@@ -165,9 +165,9 @@ pub fn build(
     entries: Vec<TabMenuEntry>,
     on_command: TabCommandHandler,
     _window: &mut Window,
-    _cx: &mut Context<PopupMenu>,
+    cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let mut menu = menu.min_w(gpui::px(240.));
+    let mut menu = menu.min_w(crate::theme::metrics::scaled(240., cx));
     for entry in entries {
         menu = match entry {
             TabMenuEntry::Separator => menu.separator(),

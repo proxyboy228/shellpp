@@ -197,7 +197,7 @@ impl ToolsTab {
         let surface = cx.theme().colors.list;
         let button = Button::new(id)
             .custom(controls::ghost(cx))
-            .icon(Icon::new(icon).size(gpui::px(16.)))
+            .icon(Icon::new(icon).size(metrics::rpx(16.)))
             .size(STEP_BUTTON)
             .rounded(metrics::to_px(metrics::RADIUS_CONTROL, cx))
             .tooltip(tooltip)

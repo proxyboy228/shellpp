@@ -55,7 +55,8 @@ const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// Height of the Connect button inside the 36 px search field.
 const INNER_BUTTON_HEIGHT: gpui::Rems = metrics::rpx(28.);
-/// The kit input's right padding (medium size): the search hint ends before it.
+/// The kit input's right padding (medium size), in pixels on screen (the
+/// kit's own size): the search hint ends before it.
 const SEARCH_INPUT_PAD_RIGHT: f32 = 10.;
 
 /// The width of Terminal and Serial with their labels: one group, as wide
@@ -109,7 +110,8 @@ impl HostsScreen {
     fn render_search(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A hint that fits the measured text area (lead decision 4).
         if let Some(area) = self.search_text_width {
-            let available = area - SEARCH_INPUT_PAD_RIGHT;
+            // The kit's padding in design units (D96).
+            let available = area - SEARCH_INPUT_PAD_RIGHT / metrics::zoom_of(window);
             let hint = layout::search_placeholder(available, |text| {
                 text_width(window, text, metrics::FONT_SIZE_BODY, FontWeight::NORMAL)
             });
@@ -1315,7 +1317,7 @@ impl HostsScreen {
         let hint = self.search.read(cx).presentation().placeholder().clone();
         let fits = self.search_text_width.is_some_and(|area| {
             text_width(window, &hint, metrics::FONT_SIZE_BODY, FontWeight::NORMAL)
-                <= area - SEARCH_INPUT_PAD_RIGHT + 0.5
+                <= area - SEARCH_INPUT_PAD_RIGHT / metrics::zoom_of(window) + 0.5
         });
         (hint, fits)
     }
