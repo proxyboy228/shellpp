@@ -96,9 +96,12 @@ pub async fn run(
     let counts = Arc::new(Counts::default());
     let mut threads = Vec::new();
     // `SHELLPP_SOAK_LOAD=tabs` or `forward`: that part of the load only, to
-    // find what grows; all of it by default.
+    // find what grows; all of it by default. `direct`: the downloads go to
+    // the run's own server without the forwards (russh only): what the run
+    // itself costs.
     let only = std::env::var("SHELLPP_SOAK_LOAD").unwrap_or_default();
-    let tabs_load = only != "forward";
+    let direct = only == "direct" && !real_shell;
+    let tabs_load = only != "forward" && !direct;
     let forward_load = only != "tabs";
 
     // The HTTP server behind the forwards, then the output of every tab.
@@ -192,7 +195,16 @@ pub async fn run(
     }
 
     // The downloads, until the time is up.
-    if forward_load {
+    if direct {
+        for _ in 0..2 {
+            threads.push(http_thread(
+                Route::Direct(SocketAddr::from(([127, 0, 0, 1], http_port))),
+                http_port,
+                stop.clone(),
+                counts.clone(),
+            ));
+        }
+    } else if forward_load {
         threads.push(http_thread(
             Route::Direct(SocketAddr::from(([127, 0, 0, 1], local_port))),
             http_port,
