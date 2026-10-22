@@ -8,7 +8,7 @@
 //! the "In development" placeholder (audit decision 1). The Edit items act on
 //! the focused text field.
 
-use gpui::{Action, Context, FocusHandle, Window};
+use gpui::{Action, Context, FocusHandle, SharedString, Window};
 use gpui_kit::component::input;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
@@ -21,7 +21,7 @@ pub enum MenuEntry {
     Item {
         /// Stable id (tests, logs).
         id: &'static str,
-        label: &'static str,
+        label: SharedString,
         target: Target,
     },
     Separator,
@@ -53,10 +53,14 @@ impl std::fmt::Debug for Target {
 }
 
 impl MenuEntry {
-    fn item(id: &'static str, label: &'static str, action: fn() -> Box<dyn Action>) -> Self {
+    fn item(
+        id: &'static str,
+        label: impl Into<SharedString>,
+        action: fn() -> Box<dyn Action>,
+    ) -> Self {
         Self::Item {
             id,
-            label,
+            label: label.into(),
             target: Target::Shell(action),
         }
     }
@@ -64,7 +68,7 @@ impl MenuEntry {
     fn edit(id: &'static str, label: &'static str, action: fn() -> Box<dyn Action>) -> Self {
         Self::Item {
             id,
-            label,
+            label: label.into(),
             target: Target::FocusedField(action),
         }
     }
@@ -169,6 +173,44 @@ pub fn entries() -> Vec<MenuEntry> {
     ]
 }
 
+/// `entries` with the update found in this run (D97): Help gets an item
+/// with its version, after Check for updates, that opens its release page.
+pub fn with_update(mut entries: Vec<MenuEntry>, version: Option<&str>) -> Vec<MenuEntry> {
+    let Some(version) = version else {
+        return entries;
+    };
+    for entry in &mut entries {
+        if let MenuEntry::Submenu {
+            id: "menu-help",
+            items,
+            ..
+        } = entry
+        {
+            let at = items
+                .iter()
+                .position(|item| {
+                    matches!(
+                        item,
+                        MenuEntry::Item {
+                            id: "menu-check-updates",
+                            ..
+                        }
+                    )
+                })
+                .map_or(items.len(), |index| index + 1);
+            items.insert(
+                at,
+                MenuEntry::item(
+                    "menu-update-available",
+                    crate::updates::strings::menu_available(version),
+                    || Box::new(OpenReleasePage),
+                ),
+            );
+        }
+    }
+    entries
+}
+
 /// Builds the popup menu. `shell_focus` is the shell's focus handle: shell
 /// actions are dispatched there and their shortcut hints resolved there.
 pub fn build(
@@ -177,10 +219,11 @@ pub fn build(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let found = crate::updates::found(cx).map(|(version, _)| version);
     add_entries(
         menu.action_context(shell_focus)
             .min_w(crate::theme::metrics::scaled(240., cx)),
-        entries(),
+        with_update(entries(), found.as_deref()),
         window,
         cx,
     )
@@ -241,6 +284,41 @@ mod tests {
 
     /// UI 1.4, items 1-13 in order, with Import Data and Export Data after
     /// the new connections (D38).
+    /// D97: an update found adds an item with its version to Help, after
+    /// Check for updates; without one, Help is as it was.
+    #[test]
+    fn help_names_an_update_found() {
+        let help = |entries: Vec<MenuEntry>| -> Vec<(&'static str, String)> {
+            entries
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Submenu {
+                        id: "menu-help",
+                        items,
+                        ..
+                    } => Some(items),
+                    _ => None,
+                })
+                .unwrap()
+                .into_iter()
+                .filter_map(|item| match item {
+                    MenuEntry::Item { id, label, .. } => Some((id, label.to_string())),
+                    _ => None,
+                })
+                .collect()
+        };
+        let plain = help(with_update(entries(), None));
+        assert!(plain.iter().all(|(id, _)| *id != "menu-update-available"));
+        let found = help(with_update(entries(), Some("9.9.9")));
+        let at = found
+            .iter()
+            .position(|(id, _)| *id == "menu-check-updates")
+            .unwrap();
+        assert_eq!(found[at + 1].0, "menu-update-available");
+        assert!(found[at + 1].1.contains("9.9.9"), "{found:?}");
+        assert_eq!(found.len(), plain.len() + 1);
+    }
+
     #[test]
     fn app_menu_has_the_spec_items_in_order() {
         let entries = entries();
@@ -266,15 +344,16 @@ mod tests {
                 "menu-exit",
             ]
         );
-        let labels: Vec<&str> = entries
+        let labels: Vec<String> = entries
             .iter()
             .filter_map(|entry| match entry {
-                MenuEntry::Item { label, .. } | MenuEntry::Submenu { label, .. } => Some(*label),
+                MenuEntry::Item { label, .. } => Some(label.to_string()),
+                MenuEntry::Submenu { label, .. } => Some((*label).to_owned()),
                 MenuEntry::Separator => None,
             })
             .collect();
         assert_eq!(
-            labels,
+            labels.iter().map(String::as_str).collect::<Vec<_>>(),
             [
                 "Vaults",
                 "SFTP",

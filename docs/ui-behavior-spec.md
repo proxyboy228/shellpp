@@ -92,7 +92,8 @@
   Tabs are 32 px high inside the 44 px bar, with 10 px inside and 4 px between them
   (`docs/design-system.md`, 6). [decision]
 - On the right:
-  - update button (visible only when a check has found an update, see 12.7);
+  - update button (visible only when a check has found an update, see 12.7); not built:
+    an update found is a toast and an item of the Help menu (D97);
   - notification center (see 1.5);
   - button to show and hide the terminal sidebar (only when a session
     tab is active, see 4.2); it is shown selected while the sidebar is open; [decision]
@@ -183,7 +184,10 @@
 9. Window ▸: new window, next and previous tab, close tab. [decision]
 10. Help ▸: documentation, report an issue (link to issues), check for
     updates, about. [decision] "Check for updates" is always available, even when the
-    automatic check is off (see 12.7). [decision]
+    automatic check is off (see 12.7). [decision] It says what it found in a toast: an
+    update with "Open Release Page", or that this is the latest version, or why the check
+    failed. While an update is known, Help also has "Shell++ X.Y.Z Is Available…", which
+    opens its release page in the system browser. (D97)
 11. Lock (Ctrl+Shift+L): lock the app now (see 13.3).
 12. — separator —
 13. Exit. While sessions, port forwards or file transfers are active, Exit asks for
@@ -1846,15 +1850,22 @@ changed like the app's. Keys the user set stay when the set changes.
 
 ### 12.7 Updates [decision]
 
-- Automatic update check: toggle, off by default. When it is on, the app checks the
-  update source at launch.
+Notification only (D97): the app never downloads or installs an update; it says that one
+exists and opens its release page in the system browser.
+
+- Automatic update check ("Check for updates at launch"): toggle, off by default. When it
+  is on, the app checks the update source at launch, at most once a day.
 - The explanation under the toggle says that a check is a plain request for the update
-  manifest, without any identifiers.
-- Update source: a URL field, the project repository's releases by default, with a
-  "Reset to default" button.
-- "Check now" button: the same action as Help ▸ Check for updates (1.4).
-- When an update is found, the update button appears in the top bar (1.1). An update whose
-  signature does not match the project's signing key is not installed.
+  manifest, without any identifiers, and that nothing is downloaded or installed.
+- Update source: a URL field (`https://` only; another text is marked and not saved), the
+  project repository's releases by default
+  (`https://github.com/proxyboy228/shellpp/releases/latest/download/latest.json`), with a
+  "Reset to Default" button.
+- "Check Now" button: the same check as Help ▸ Check for updates (1.4); its result shows
+  below it ("Checking for updates…", the update with "Open Release Page", the latest
+  version, or why it failed).
+- An update found at launch is a toast with "Open Release Page" in every window; a check at
+  launch that finds nothing or fails shows nothing.
 
 ---
 

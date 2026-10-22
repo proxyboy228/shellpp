@@ -974,6 +974,7 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `shortcuts.overrides` | object: action id → shortcut string or null (unassigned) | `{}` | 12.5 | |
 | `updates.auto_check` | bool | `false` | 12.7 | D7 |
 | `updates.manifest_url` | string or null | null (the default URL, [architecture.md](architecture.md)) | 12.7 | D7 |
+| `updates.last_check` | int, seconds since the epoch | 0 | 12.7 | D97; when the update source last answered: the check at launch waits a day |
 | `serial.port` | string(256 bytes) or null | null (no Connect yet) | 2.2 Serial | D95; a port name of this device: the `serial.*` settings are never exported or imported |
 | `serial.baud` | int 50–4000000 | 9600 | 2.2 Serial | D95 |
 | `serial.data_bits` | enum `5`, `6`, `7`, `8` | `8` | 2.2 Serial | D95 |

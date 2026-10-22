@@ -13,6 +13,13 @@ pub const SFTP: &str = "SFTP";
 pub const LOGS: &str = "Logs";
 pub const SHORTCUTS: &str = "Shortcuts";
 pub const UPDATES: &str = "Updates";
+pub const AUTO_UPDATE_CHECK: &str = "Check for updates at launch";
+pub const AUTO_UPDATE_CHECK_HINT: &str = "A check is a plain request for the update manifest, without any identifiers, at most once a day. Nothing is downloaded or installed: an update found is a notice with its release page.";
+pub const UPDATE_SOURCE: &str = "Update source";
+pub const UPDATE_SOURCE_HINT: &str = "The update manifest (latest.json) of the project's releases.";
+pub const UPDATE_SOURCE_INVALID: &str = "Use an https:// address";
+pub const UPDATE_SOURCE_RESET: &str = "Reset to Default";
+pub const UPDATE_CHECK_NOW: &str = "Check Now";
 
 // Account & Sync (UI 12.2; D67).
 pub const SYNC_SERVER: &str = "Sync server";

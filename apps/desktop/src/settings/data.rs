@@ -40,6 +40,13 @@ pub const CONFLICTS: [(&str, &str); 4] = [
 /// Parallel transfers offered (the setting takes 1 to 10).
 pub const PARALLEL: [u64; 6] = [1, 2, 3, 4, 6, 10];
 
+/// What Check now found (Settings > Updates, D97).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateStatus {
+    Checking,
+    Done(Result<crate::updates::Outcome, crate::updates::CheckError>),
+}
+
 /// Retention periods offered, in days.
 pub const RETENTION: [u64; 5] = [7, 30, 90, 180, 365];
 
@@ -500,6 +507,167 @@ impl SettingsView {
                                 .child(widgets::caption(strings::cleared(count), cx)),
                         )
                     }),
+            )
+            .into_any_element()
+    }
+}
+
+impl SettingsView {
+    /// The update source as it is typed: written when it is empty (the
+    /// default) or an https:// address; otherwise marked, not written.
+    pub(super) fn manifest_url_changed(&mut self, cx: &mut Context<Self>) {
+        let text = self.manifest_url.read(cx).value().trim().to_owned();
+        self.manifest_url_invalid = !text.is_empty() && !text.starts_with("https://");
+        if self.manifest_url_invalid {
+            cx.notify();
+            return;
+        }
+        let value = if text.is_empty() {
+            Value::Null
+        } else {
+            json!(text)
+        };
+        self.set_value(crate::updates::MANIFEST_URL, value, cx);
+    }
+
+    /// Reset to Default: the project's releases.
+    pub fn reset_manifest_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.manifest_url
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.manifest_url_invalid = false;
+        self.set_value(crate::updates::MANIFEST_URL, Value::Null, cx);
+    }
+
+    /// Check now: the same check as Help > Check for updates (1.4).
+    pub fn check_updates_now(&mut self, cx: &mut Context<Self>) {
+        if self.update_status == Some(UpdateStatus::Checking) {
+            return;
+        }
+        let url = crate::updates::manifest_url(&self.values(cx));
+        let core = self.state.read(cx).core().cloned();
+        self.update_status = Some(UpdateStatus::Checking);
+        let task = cx.background_spawn(async move {
+            crate::updates::check(&url, crate::updates::current_version())
+        });
+        self.update_work = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(outcome) = &result {
+                    crate::updates::remember(outcome, core.as_deref(), cx);
+                }
+                this.update_status = Some(UpdateStatus::Done(result));
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    pub(super) fn render_updates(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let values = self.values(cx);
+        let on = values
+            .get(crate::updates::AUTO_CHECK)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let auto = Switch::new("settings-updates-auto")
+            .checked(on)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.set_value(crate::updates::AUTO_CHECK, json!(*checked), cx)
+            }));
+        let reset = widgets::outline_button(
+            "settings-updates-reset",
+            None,
+            strings::UPDATE_SOURCE_RESET,
+            cx,
+        )
+        .on_click(
+            cx.listener(|this, _: &ClickEvent, window, cx| this.reset_manifest_url(window, cx)),
+        );
+        let checking = self.update_status == Some(UpdateStatus::Checking);
+        let check = ControlButton::new("settings-updates-check", ControlKind::Neutral)
+            .label(strings::UPDATE_CHECK_NOW)
+            .disabled(checking)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.check_updates_now(cx)));
+        let theme = cx.theme();
+        let status = self.update_status.as_ref().map(|status| {
+            let (text, color, page): (String, _, Option<String>) = match status {
+                UpdateStatus::Checking => (
+                    crate::updates::strings::CHECKING.to_owned(),
+                    theme.muted_foreground,
+                    None,
+                ),
+                UpdateStatus::Done(Ok(crate::updates::Outcome::Newer { version, page })) => (
+                    crate::updates::strings::available(version),
+                    theme.foreground,
+                    Some(page.clone()),
+                ),
+                UpdateStatus::Done(Ok(crate::updates::Outcome::UpToDate)) => (
+                    crate::updates::strings::up_to_date(crate::updates::current_version()),
+                    theme.muted_foreground,
+                    None,
+                ),
+                UpdateStatus::Done(Err(error)) => {
+                    (crate::updates::strings::failed(*error), theme.danger, None)
+                }
+            };
+            h_flex()
+                .id("settings-updates-status")
+                .test_support()
+                .gap(metrics::SPACE_3)
+                .items_center()
+                .child(
+                    div()
+                        .text_size(metrics::FONT_SIZE_BODY)
+                        .text_color(color)
+                        .child(text),
+                )
+                .children(page.map(|page| {
+                    widgets::outline_button(
+                        "settings-updates-open",
+                        None,
+                        crate::updates::strings::OPEN_PAGE,
+                        cx,
+                    )
+                    .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&page))
+                }))
+        });
+        v_flex()
+            .id("settings-updates")
+            .test_support()
+            .gap(metrics::SPACE_4)
+            .child(heading(strings::UPDATES, cx))
+            .child(switch_row(
+                "settings-updates-auto-row",
+                strings::AUTO_UPDATE_CHECK,
+                strings::AUTO_UPDATE_CHECK_HINT,
+                auto,
+                cx,
+            ))
+            .child(
+                v_flex()
+                    .gap(metrics::SPACE_2)
+                    .child(label(strings::UPDATE_SOURCE, cx))
+                    .child(widgets::caption(strings::UPDATE_SOURCE_HINT, cx))
+                    .child(
+                        h_flex()
+                            .gap(metrics::SPACE_2)
+                            .child(div().flex_1().min_w_0().child(widgets::text_input(
+                                &self.manifest_url,
+                                "settings-updates-url",
+                                self.manifest_url_invalid,
+                                window,
+                                cx,
+                            )))
+                            .child(reset),
+                    )
+                    .when(self.manifest_url_invalid, |this| {
+                        this.child(widgets::error_text(strings::UPDATE_SOURCE_INVALID, cx))
+                    }),
+            )
+            .child(
+                v_flex()
+                    .gap(metrics::SPACE_2)
+                    .child(h_flex().child(check))
+                    .children(status),
             )
             .into_any_element()
     }

@@ -72,6 +72,7 @@ pub mod terminal;
 pub mod terminal_sidebar;
 pub mod testing;
 pub mod theme;
+pub mod updates;
 
 /// Environment variable that marks a test run: with `SHELLPP_TEST=1` the data
 /// directory must come from `SHELLPP_DATA_DIR` (see [`dirs::resolve_current`]).

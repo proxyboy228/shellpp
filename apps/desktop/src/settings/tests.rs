@@ -206,9 +206,10 @@ fn sections_and_a_missing_keychain(cx: &mut TestAppContext) {
             "{section:?}"
         );
     }
-    // Updates is the one section still in development.
+    // Every section shown has its content (Updates last, D97).
     ui.click("settings-nav-updates", cx);
-    assert!(ui.visible("settings-placeholder", cx));
+    assert!(ui.visible("settings-updates", cx));
+    assert!(!ui.visible("settings-placeholder", cx));
     assert!(!ui.visible("settings-security", cx));
     ui.click("settings-nav-security", cx);
     assert!(ui.visible("settings-security", cx));
@@ -315,6 +316,58 @@ fn reveal(ui: &Ui, id: &str, cx: &mut TestAppContext) -> bool {
         }
     }
     on_screen(cx)
+}
+
+/// Settings > Updates (UI 12.7, D97): the check at launch is off until
+/// turned on; the source takes only an https:// address (another text is
+/// marked and not written) and Reset to Default clears it. No check runs
+/// here: no request leaves the test.
+#[gpui::test]
+fn updates_settings_are_written(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-updates", cx);
+    assert!(ui.visible("settings-updates", cx));
+    assert_eq!(
+        stored(&ui, "updates.auto_check", cx),
+        serde_json::json!(false)
+    );
+    ui.click("settings-updates-auto", cx);
+    assert_eq!(
+        stored(&ui, "updates.auto_check", cx),
+        serde_json::json!(true)
+    );
+
+    type_into(
+        &ui,
+        "settings-updates-url",
+        "http://example.com/latest.json",
+        cx,
+    );
+    assert_eq!(
+        stored(&ui, "updates.manifest_url", cx),
+        serde_json::Value::Null
+    );
+    type_into(
+        &ui,
+        "settings-updates-url",
+        "https://example.com/latest.json",
+        cx,
+    );
+    assert_eq!(
+        stored(&ui, "updates.manifest_url", cx),
+        serde_json::json!("https://example.com/latest.json")
+    );
+    click(&ui, "settings-updates-reset", cx);
+    assert_eq!(
+        stored(&ui, "updates.manifest_url", cx),
+        serde_json::Value::Null
+    );
+    assert!(!ui.visible("settings-updates-status", cx), "no check ran");
+    ui.finish(cx);
+    drop(profile);
 }
 
 /// Types `text` into the field with element id `id` (its text replaced).

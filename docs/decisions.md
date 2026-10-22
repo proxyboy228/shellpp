@@ -1538,3 +1538,18 @@ Status: run 6 decision, 2026-10-22 (plan, section 7; closes D78 with its option 
 - Known limit: GPUI cannot change a window's minimum size after it opens, so the minimum stays 960 × 600 px. At 175 and 200 % that window is 548 and 480 px wide at 100 %: with the details panel open (320 px at 100 % at least) the main area gets narrower than its 360 px and the action bar of a screen may be cut; a wider window, or 150 % and less, has none of this.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.4 item 8 and 12.5 (and `docs/ru`), `docs/design-system.md` 6 (and `docs/ru`), `docs/data-model.md` 16.1.
+
+### 97. The update check only notifies (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 10; SPEC stage 9). Amends D7 and UI 12.7 for the GPUI app: no download, no install.
+
+**Decision:**
+
+- Help ▸ Check for updates and Settings ▸ Updates ▸ Check Now always work; the check at launch only when "Check for updates at launch" (`updates.auto_check`) is on (off by default, principle 2), at most once a day (`updates.last_check`, the time the source last answered).
+- The source is the release manifest, by default `https://github.com/proxyboy228/shellpp/releases/latest/download/latest.json` (architecture.md 7; the GitHub releases API was the other choice: it would need a parser of the API's JSON and its rate limits for no gain). A setting changes it (`updates.manifest_url`, `https://` only). One GET, through redirects that stay on `https://`, 15 s at most, 256 KiB at most, with `User-Agent: shellpp/<version>` and nothing else of ours (no cookies, no ids). Plain HTTP only to this machine, for the tests.
+- The manifest's `version` (a leading `v` taken off) is compared with this build's by semver (a pre-release is older than its release). A newer one is a toast with "Open Release Page" and, for the rest of the run, an item "Shell++ X.Y.Z Is Available…" in Help; the page is the manifest's `url` when it is `https://`, else the release tag's page of the repository. Nothing is downloaded or installed; the top bar's update button of UI 1.1 is not built.
+- A manual check says its result (an update, the latest version, or why it failed); the check at launch shows only an update.
+- The HTTPS client is `ureq` 3.5 (MIT OR Apache-2.0) with rustls and webpki-roots (CDLA-Permissive-2.0), and `semver` (MIT OR Apache-2.0); `cargo deny check licenses` passes.
+- Tests run against a server of the test on this machine (no network): newer, not newer, a broken answer, no answer, only https or this machine, and no request at all while the check is off or a day has not passed.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.1, 1.4 item 10 and 12.7 (and `docs/ru`), `docs/data-model.md` 16.1, `docs/architecture.md` 10.1 and the identifiers table.

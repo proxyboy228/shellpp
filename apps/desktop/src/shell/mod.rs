@@ -379,6 +379,55 @@ fn lock_from_anywhere(_: &LockApp, cx: &mut App) {
     }
 }
 
+/// The update check at launch (12.7, D97), once per run: only when
+/// `updates.auto_check` is on and the last check is a day old. An update
+/// found is a toast in every window; nothing else is shown.
+fn check_updates_at_launch(core: std::sync::Arc<shellpp_core::Core>, cx: &mut App) {
+    #[derive(Default)]
+    struct Checked;
+    impl gpui::Global for Checked {}
+    if cx.has_global::<Checked>() {
+        return;
+    }
+    cx.set_global(Checked);
+    let Ok(values) = core.settings_get() else {
+        return;
+    };
+    let values: serde_json::Map<String, serde_json::Value> = values.into_iter().collect();
+    if !crate::updates::due_at_launch(&values, crate::updates::now()) {
+        return;
+    }
+    let task = cx
+        .background_executor()
+        .spawn(async move { crate::updates::at_launch(&values, crate::updates::now()) });
+    cx.spawn(async move |cx| {
+        let Some(Ok(outcome)) = task.await else {
+            return;
+        };
+        cx.update(|cx| {
+            crate::updates::remember(&outcome, Some(&core), cx);
+            if let crate::updates::Outcome::Newer { version, page } = outcome {
+                for shell in all_shells(cx) {
+                    let page = page.clone();
+                    shell.update(cx, |shell, cx| {
+                        shell.push_toast(update_toast(&version, page), cx);
+                    });
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// The toast of an update found: its version and the release page.
+fn update_toast(version: &str, page: String) -> Toast {
+    Toast::new(crate::updates::strings::available(version)).action_with_id(
+        "toast-update-open",
+        crate::updates::strings::OPEN_PAGE,
+        move |_, cx| cx.open_url(&page),
+    )
+}
+
 /// Zoom In / Zoom Out / Actual Size outside a shell (UI 1.4, D96): kept in
 /// the settings when a vault is open.
 fn zoom_from_anywhere(up: Option<bool>, cx: &mut App) {
@@ -544,6 +593,8 @@ impl Shell {
             crate::settings::terminal::TerminalPrefs::refresh(&core, cx);
             // The user's shortcuts (UI 12.5) on top of the defaults.
             shortcuts::apply_stored(&core, cx);
+            // The update check at launch: only when it is on, daily (D97).
+            check_updates_at_launch(core.clone(), cx);
         }
         // The user's keyword highlighting rules (UI 12.4, D77).
         crate::terminal::highlight::load(&state, cx);
@@ -854,6 +905,40 @@ impl Shell {
         crate::theme::zoom::change(core.as_deref(), up, cx);
     }
 
+    /// Help > Check for updates (UI 1.4, D97): asks the update source now
+    /// and says what it found (an update with its release page).
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        let core = self.state.read(cx).core().cloned();
+        let values: serde_json::Map<String, serde_json::Value> = core
+            .as_ref()
+            .and_then(|core| core.settings_get().ok())
+            .map(|values| values.into_iter().collect())
+            .unwrap_or_default();
+        let url = crate::updates::manifest_url(&values);
+        let task = cx.background_spawn(async move {
+            crate::updates::check(&url, crate::updates::current_version())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |shell, cx| match result {
+                Ok(outcome) => {
+                    crate::updates::remember(&outcome, core.as_deref(), cx);
+                    match outcome {
+                        crate::updates::Outcome::Newer { version, page } => {
+                            shell.push_toast(update_toast(&version, page), cx);
+                        }
+                        crate::updates::Outcome::UpToDate => shell.toast(
+                            crate::updates::strings::up_to_date(crate::updates::current_version()),
+                            cx,
+                        ),
+                    }
+                }
+                Err(error) => shell.toast(crate::updates::strings::failed(error), cx),
+            });
+        })
+        .detach();
+    }
+
     /// Shows a toast at the bottom of the main area.
     pub fn toast(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.push_toast(Toast::new(message), cx);
@@ -865,10 +950,6 @@ impl Shell {
         self.toasts.update(cx, |toasts, cx| {
             toasts.push(toast, cx);
         });
-    }
-
-    fn placeholder_toast(&mut self, feature: &str, cx: &mut Context<Self>) {
-        self.toast(i18n::placeholder::feature(feature), cx);
     }
 
     /// Opens a session tab and makes it active. SSH and local terminal tabs
@@ -3047,8 +3128,12 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ExportData, window, cx| {
                 crate::data_transfer::open_export(this.state.clone(), window, cx);
             }))
-            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| {
-                this.placeholder_toast(i18n::menu::CHECK_FOR_UPDATES, cx)
+            // Notification only (UI 1.4, 12.7; D97).
+            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| this.check_for_updates(cx)))
+            .on_action(cx.listener(|_, _: &OpenReleasePage, _, cx| {
+                if let Some((_, page)) = crate::updates::found(cx) {
+                    cx.open_url(&page);
+                }
             }))
             .on_action(
                 cx.listener(|this, _: &About, _, cx| this.toast(i18n::menu::about_text(), cx)),

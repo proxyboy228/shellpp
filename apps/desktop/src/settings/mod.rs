@@ -110,6 +110,7 @@ impl Section {
                 | Section::Sftp
                 | Section::Logs
                 | Section::Shortcuts
+                | Section::Updates
         )
     }
 
@@ -162,6 +163,12 @@ pub struct SettingsView {
     terminal: Entity<terminal::TerminalSection>,
     /// SFTP: the program for Open.
     open_program: Entity<gpui_kit::component::input::InputState>,
+    /// Updates: the update source (empty: the default), whether the text
+    /// is not an https:// address, and the last Check now (D97).
+    manifest_url: Entity<gpui_kit::component::input::InputState>,
+    manifest_url_invalid: bool,
+    update_status: Option<data::UpdateStatus>,
+    update_work: Option<Task<()>>,
     /// Logs: how many entries "Clear the log" removed.
     cleared: Option<usize>,
     /// Shortcuts: the action whose keys are being recorded, and the focus
@@ -207,6 +214,30 @@ impl SettingsView {
                 }
             },
         );
+        let source = state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| {
+                values
+                    .get(crate::updates::MANIFEST_URL)
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        let manifest_url = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx)
+                .default_value(source)
+                .placeholder(crate::updates::DEFAULT_MANIFEST_URL)
+        });
+        let source_subscription = cx.subscribe(
+            &manifest_url,
+            |this: &mut Self, _, event: &gpui_kit::component::input::InputEvent, cx| {
+                if matches!(event, gpui_kit::component::input::InputEvent::Change) {
+                    this.manifest_url_changed(cx);
+                }
+            },
+        );
         Self {
             state,
             section: Section::Security,
@@ -217,10 +248,14 @@ impl SettingsView {
             work: None,
             terminal,
             open_program,
+            manifest_url,
+            manifest_url_invalid: false,
+            update_status: None,
+            update_work: None,
             cleared: None,
             recording: None,
             shortcuts_focus: cx.focus_handle(),
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, source_subscription],
         }
     }
 
@@ -473,6 +508,7 @@ impl Render for SettingsView {
             Section::Sftp => self.render_sftp(window, cx),
             Section::Logs => self.render_logs(cx),
             Section::Shortcuts => self.render_shortcuts(cx),
+            Section::Updates => self.render_updates(window, cx),
             _ => placeholder::placeholder("settings-placeholder", self.section.label(), cx)
                 .into_any_element(),
         };

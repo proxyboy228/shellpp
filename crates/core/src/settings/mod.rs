@@ -190,6 +190,9 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
         json!("none"),
     );
     add("updates.manifest_url", Kind::NullableHttpsUrl, Value::Null);
+    // When the update source last answered, seconds since the epoch (D97):
+    // the check at launch waits a day after it.
+    add("updates.last_check", Kind::Int(0, 32_503_680_000), json!(0));
     for screen in VIEW_SCREENS {
         add(
             &format!("view.{screen}.layout"),
@@ -480,6 +483,8 @@ mod tests {
         );
         assert_eq!(values["terminal.local_shell"], Value::Null);
         assert_eq!(values["serial.port"], Value::Null);
+        assert_eq!(values["updates.auto_check"], json!(false));
+        assert_eq!(values["updates.last_check"], json!(0));
         assert_eq!(values["serial.baud"], json!(9600));
         assert_eq!(values["serial.data_bits"], json!("8"));
         assert_eq!(values["serial.flow"], json!("none"));

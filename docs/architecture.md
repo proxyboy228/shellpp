@@ -583,7 +583,7 @@ The display name is "Shell++"; every technical identifier uses `shellpp` (D2). R
 | HTTP API base path | `/v1` | stage 0 decision |
 | HKDF, hash and AAD label prefix | `shellpp/v1/` (client, including the `shellpp/v1/kdf-salt` label of the Argon2id salt), `shellpp-server/v1/` (server-only keys) | stage 0 decision |
 | Token prefixes | access `shellpp_at_`, refresh `shellpp_rt_`, login ticket `shellpp_lt_`, recovery ticket `shellpp_rc_` | stage 0 decision |
-| User-Agent | sync API `shellpp/<semver>`; update manifest request `shellpp` (no version, no identifiers, D7) | stage 0 decision |
+| User-Agent | sync API `shellpp/<semver>`; update manifest request `shellpp/<semver>` (no identifiers, D7, D97) | stage 0 decision, D97 |
 | Default update manifest URL | `https://github.com/proxyboy228/shellpp/releases/latest/download/latest.json` | D7; URL stage 0 decision |
 | Cargo feature for e2e mocks | `e2e-mocks` | stage 0 decision |
 | Client environment variables | `SHELLPP_DATA_DIR` (data directory), `SHELLPP_TEST_SSHD` (tests only: `openssh` or `russh`) | stage 0 decision |
@@ -725,9 +725,9 @@ Stage 9; summary of D7.
 | Linux | AppImage | yes | bundled LGPL libraries are listed in `THIRD_PARTY_NOTICES.md` (D4) |
 | Linux | `.deb` | no, the package manager updates it | depends on the system WebKitGTK |
 
-- `tauri-plugin-updater` with the project's own updater signing key. The public key is built into the app; the private key exists only as a CI secret. An update whose signature does not verify is not installed (UI 12.7).
+- `tauri-plugin-updater` with the project's own updater signing key. The public key is built into the app; the private key exists only as a CI secret. An update whose signature does not verify is not installed (UI 12.7). (Run 6, D97: the GPUI app only notifies, nothing is downloaded or installed; the in-app update of this table waits for the owner.)
 - The automatic check is off by default; when the user turns it on, it runs at launch. Help ▸ Check for updates and "Check now" always work (UI 1.4, 12.7).
-- The check is a plain GET of a static manifest (default URL in section 7) with User-Agent `shellpp`. The endpoint has no version, target or device placeholders; the manifest lists all platforms (D7).
+- The check is a plain GET of a static manifest (default URL in section 7) with User-Agent `shellpp/<version>` (D97). The endpoint has no version, target or device placeholders; the manifest lists all platforms (D7).
 - The update source is a local setting (Settings → Updates, UI 12.7).
 - Installers register the URL scheme; development and e2e builds do not.
 

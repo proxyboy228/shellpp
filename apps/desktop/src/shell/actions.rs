@@ -51,6 +51,8 @@ gpui_kit::actions!(
         OpenDocumentation,
         ReportIssue,
         CheckForUpdates,
+        /// The release page of an update found (Help menu, toast; D97).
+        OpenReleasePage,
         About,
         /// Ctrl+Shift+L: lock the app now (UI 13.3, decision D29).
         LockApp,
