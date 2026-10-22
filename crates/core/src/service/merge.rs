@@ -50,7 +50,7 @@ pub enum IdentityHintKind {
 }
 
 /// The hint of UI 3.1: N hosts use the same credentials.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct IdentityHint {
     pub username: String,
     pub kind: IdentityHintKind,
@@ -417,6 +417,14 @@ impl Core {
     }
 }
 
+/// Debug without host data or server text (docs/security.md, section 9.1).
+impl std::fmt::Debug for IdentityHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityHint")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
 #[cfg(test)]
 mod tests {
     //! Identical keys arrive only by sync (an import matches keys by

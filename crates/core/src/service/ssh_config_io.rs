@@ -35,7 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -425,21 +425,37 @@ fn problem_text(problem: &ssh_config::Problem) -> String {
 }
 
 /// Reads a key file within the size limit; a network path is never opened
-/// ([`ssh_config::is_network_path`]).
-fn read_key_file(path: &Path) -> Result<String, KeyFileStatus> {
+/// ([`ssh_config::is_network_path`]). The text goes into one buffer of the
+/// file's size and becomes a secret (a growing buffer would leave copies of
+/// the private key in freed memory; docs/security.md, section 9.5).
+fn read_key_file(path: &Path) -> Result<SecretString, KeyFileStatus> {
+    use std::io::Read as _;
     if ssh_config::is_network_path(path) {
         return Err(KeyFileStatus::Invalid(
             "a network path is not read".to_owned(),
         ));
     }
-    match std::fs::metadata(path) {
+    let unreadable = || KeyFileStatus::Invalid("the file cannot be read".to_owned());
+    let len = match std::fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_KEY_FILE_BYTES => {
-            Err(KeyFileStatus::Invalid("the file is too large".to_owned()))
+            return Err(KeyFileStatus::Invalid("the file is too large".to_owned()));
         }
-        Ok(_) => std::fs::read_to_string(path)
-            .map_err(|_| KeyFileStatus::Invalid("the file cannot be read".to_owned())),
-        Err(_) => Err(KeyFileStatus::Missing),
+        Ok(meta) => meta.len(),
+        Err(_) => return Err(KeyFileStatus::Missing),
+    };
+    let capacity = usize::try_from(len)
+        .ok()
+        .and_then(|len| len.checked_add(1))
+        .ok_or_else(unreadable)?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(capacity));
+    std::fs::File::open(path)
+        .and_then(|file| file.take(len + 1).read_to_end(&mut bytes))
+        .map_err(|_| unreadable())?;
+    if bytes.len() as u64 > len {
+        return Err(unreadable());
     }
+    let text = std::str::from_utf8(&bytes).map_err(|_| unreadable())?;
+    Ok(SecretString::from(text.to_owned()))
 }
 
 impl Core {
@@ -535,10 +551,10 @@ impl Core {
                 }
                 let status = match read_key_file(path) {
                     Err(status) => status,
-                    Ok(text) => match keys::inspect(&text) {
+                    Ok(text) => match keys::inspect(text.expose_secret()) {
                         Err(problem) => KeyFileStatus::Invalid(problem.to_string()),
                         Ok((_, encrypted)) => {
-                            let print = keys::prepare(&text, None)
+                            let print = keys::prepare(text.expose_secret(), None)
                                 .ok()
                                 .and_then(|openssh| keys::parse(&openssh).ok())
                                 .map(|parsed| parsed.fingerprint);
@@ -653,7 +669,7 @@ impl Core {
             match self.key_import(KeyImportInput {
                 vault_id,
                 label,
-                private_key: SecretString::from(text),
+                private_key: text,
                 passphrase,
                 save_passphrase: input.save_passphrases,
             }) {

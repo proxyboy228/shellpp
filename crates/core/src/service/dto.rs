@@ -777,7 +777,7 @@ pub struct ReconnectInfo {
 }
 
 /// A presented host key, for the dialogs of UI 10.2.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct HostKeyInfo {
     pub address: String,
     pub port: u16,
@@ -797,7 +797,7 @@ pub struct SessionPrompt {
 }
 
 /// Prompt kinds. Server texts (`name`, `instruction`, `prompt`) are untrusted.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PromptKind {
     /// First connection (TOFU): Accept and save / Connect once / Cancel.
@@ -1295,7 +1295,7 @@ pub enum ImportStatus {
 }
 
 /// One host of an `~/.ssh/config` preview.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct SshConfigHostPreview {
     /// The first alias of its `Host` line; also the label.
     pub alias: String,
@@ -1657,4 +1657,41 @@ pub struct ExitResult {
     pub needs_confirmation: bool,
     /// Active sessions (app-wide for `app_exit`, of the window for `window_close`).
     pub active_sessions: u32,
+}
+
+/// Debug without host data or server text (docs/security.md, section 9.1).
+impl std::fmt::Debug for HostKeyInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostKeyInfo")
+            .field("port", &self.port)
+            .field("key_type", &self.key_type)
+            .field("fingerprint", &self.fingerprint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Debug without host data or server text (docs/security.md, section 9.1).
+impl std::fmt::Debug for SshConfigHostPreview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshConfigHostPreview")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Debug with the variant only: no user names or server text
+/// (docs/security.md, section 9.1).
+impl std::fmt::Debug for PromptKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
+            Self::HostKeyUnknown { .. } => "HostKeyUnknown",
+            Self::HostKeyChanged { .. } => "HostKeyChanged",
+            Self::Username => "Username",
+            Self::Password { .. } => "Password",
+            Self::Passphrase { .. } => "Passphrase",
+            Self::KeyboardInteractive { .. } => "KeyboardInteractive",
+        };
+        f.debug_struct("PromptKind")
+            .field("variant", &variant)
+            .finish_non_exhaustive()
+    }
 }

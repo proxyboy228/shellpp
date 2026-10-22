@@ -306,8 +306,22 @@ impl Recording {
     /// The output as plain text: escape sequences and control characters
     /// removed (the viewer and "Export to .txt", UI 11.2).
     pub fn plain_text(&self) -> String {
-        let output: String = self.events.iter().map(|(_, text)| text.as_str()).collect();
+        let len = self.events.iter().map(|(_, text)| text.len()).sum();
+        let mut output = zeroize::Zeroizing::new(String::with_capacity(len));
+        for (_, text) in &self.events {
+            output.push_str(text);
+        }
         plain_text(&output)
+    }
+}
+
+/// The decrypted output is wiped with the recording (docs/security.md 9.5).
+impl Drop for Recording {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        for (_, text) in &mut self.events {
+            text.zeroize();
+        }
     }
 }
 
@@ -363,7 +377,8 @@ pub fn read(
         return Err(RecordingError::Damaged);
     }
     let complete = complete && opened_all;
-    let text = String::from_utf8_lossy(&plain);
+    // One copy of the size of the text, wiped when parsed.
+    let text = zeroize::Zeroizing::new(String::from_utf8_lossy(&plain).into_owned());
     let mut lines = text.lines();
     let size = lines
         .next()

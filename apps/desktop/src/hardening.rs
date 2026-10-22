@@ -42,3 +42,16 @@ pub fn apply() -> Hardening {
     }
     result
 }
+
+/// CONTRIBUTING.md, "Unsafe code": each block runs in a test on its
+/// platform (the test process gets the same limits as the app).
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn core_dumps_are_disabled() {
+        let applied = super::apply();
+        assert!(applied.core_dumps_disabled);
+        #[cfg(target_os = "linux")]
+        assert!(applied.not_dumpable);
+    }
+}

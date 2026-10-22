@@ -667,9 +667,10 @@ fn check_key(data: &Map<String, Value>) -> Result<Option<Map<String, Value>>, Ve
         None => return Err(vec![FieldError::new("label", ValidationReason::Required)]),
     };
     let unknown = || {
-        let bytes = serde_json::to_vec(data).map(|bytes| Zeroizing::new(bytes).len());
-        match bytes {
-            Ok(len) if len <= MAX_UNKNOWN_KEY_BYTES => Ok(None),
+        // Counted, not copied: the record holds key material.
+        let mut counter = crate::model::payload::ByteCounter(0);
+        match serde_json::to_writer(&mut counter, data) {
+            Ok(()) if counter.0 <= MAX_UNKNOWN_KEY_BYTES => Ok(None),
             _ => Err(vec![FieldError::new("record", ValidationReason::TooLong)]),
         }
     };
@@ -772,11 +773,22 @@ impl Core {
             );
             (WipeOnDrop::new(document), counts)
         };
-        let plain = Zeroizing::new(
-            serde_json::to_string_pretty(&*document)
-                .map_err(|_| CoreError::Internal("export serialization"))?,
-        );
+        // Two passes, as for payloads: the length first, then one buffer of
+        // exactly that size (a growing one leaves partial copies of the
+        // plaintext, secrets included, in the freed smaller buffers;
+        // docs/security.md, section 9.5).
+        let plain = {
+            let mut counter = crate::model::payload::ByteCounter(0);
+            serde_json::to_writer_pretty(&mut counter, &*document)
+                .map_err(|_| CoreError::Internal("export serialization"))?;
+            let mut bytes = Zeroizing::new(Vec::with_capacity(counter.0));
+            serde_json::to_writer_pretty(&mut *bytes, &*document)
+                .map_err(|_| CoreError::Internal("export serialization"))?;
+            bytes
+        };
         drop(document);
+        let plain_text =
+            std::str::from_utf8(&plain).map_err(|_| CoreError::Internal("export serialization"))?;
         let stamp = exported_at
             .replace(['-', ':'], "")
             .split('.')
@@ -791,14 +803,14 @@ impl Core {
         let Some(password) = password else {
             tracing::info!(records = counts.values().sum::<usize>(), "plain export");
             return Ok(DataExport {
-                text: SecretString::from(plain.as_str().to_owned()),
+                text: SecretString::from(plain_text.to_owned()),
                 encrypted: false,
                 counts,
                 file_name: format!("shellpp-export-{stamp}.json"),
             });
         };
         let params = KdfParams::preset(PlatformClass::Desktop);
-        let sealed = crypto::seal_export(&password, &params, plain.as_bytes())?;
+        let sealed = crypto::seal_export(&password, &params, plain_text.as_bytes())?;
         let file = json!({
             "format": EXPORT_FORMAT_ENCRYPTED_V1,
             "kdf": {"alg": params.alg, "v": params.v, "m_kib": params.m_kib, "t": params.t, "p": params.p},

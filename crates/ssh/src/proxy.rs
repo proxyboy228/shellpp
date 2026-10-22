@@ -104,21 +104,34 @@ where
         return Err(ProxyError::Target(FailureKind::NotFound));
     }
     let target = authority(host, port);
-    let mut request = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
-    if let Some(username) = proxy.username.as_deref() {
+    // Every buffer that holds the credentials is wiped and allocated once
+    // at its final size (no plain copy, no growth; docs/security.md 9.5).
+    let encoded = proxy.username.as_deref().map(|username| {
         let password = proxy
             .password
             .as_ref()
-            .map(|password| password.expose_secret().to_owned())
+            .map(|password| password.expose_secret())
             .unwrap_or_default();
-        let credentials = zeroize::Zeroizing::new(format!("{username}:{password}"));
-        let encoded = zeroize::Zeroizing::new(data_encoding::BASE64.encode(credentials.as_bytes()));
-        request.push_str("Proxy-Authorization: Basic ");
-        request.push_str(&encoded);
+        let mut credentials =
+            zeroize::Zeroizing::new(String::with_capacity(username.len() + 1 + password.len()));
+        credentials.push_str(username);
+        credentials.push(':');
+        credentials.push_str(password);
+        zeroize::Zeroizing::new(data_encoding::BASE64.encode(credentials.as_bytes()))
+    });
+    let head = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n");
+    const AUTH: &str = "Proxy-Authorization: Basic ";
+    let extra = encoded
+        .as_ref()
+        .map_or(0, |encoded| AUTH.len() + encoded.len() + 2);
+    let mut request = zeroize::Zeroizing::new(String::with_capacity(head.len() + extra + 2));
+    request.push_str(&head);
+    if let Some(encoded) = &encoded {
+        request.push_str(AUTH);
+        request.push_str(encoded);
         request.push_str("\r\n");
     }
     request.push_str("\r\n");
-    let request = zeroize::Zeroizing::new(request);
     stream
         .write_all(request.as_bytes())
         .await

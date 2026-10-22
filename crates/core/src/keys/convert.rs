@@ -240,8 +240,9 @@ fn check_allowed(private: &PrivateKey) -> Result<(), KeyProblem> {
 fn from_putty(text: &str, passphrase: Option<&SecretString>) -> Result<PrivateKey, KeyProblem> {
     check_ppk_kdf(text)?;
     let encrypted = passphrase.is_some();
-    // ssh-key takes the passphrase as a `String`; this copy is wiped when
-    // the call returns only as far as ssh-key wipes it.
+    // ssh-key takes the passphrase as a `String` and does not wipe it (nor
+    // the decrypted key bytes of a .ppk, ssh-key 0.7.0-rc.11): this copy
+    // stays in freed memory. A known gap (docs/security.md, RR11).
     let passphrase = passphrase.map(|value| value.expose_secret().to_owned());
     PrivateKey::from_ppk(text, passphrase).map_err(|error| match error {
         ssh_key::Error::Crypto | ssh_key::Error::Ppk(_) if encrypted => KeyProblem::WrongPassphrase,

@@ -46,6 +46,9 @@ pub struct KeyPanel {
     pub(super) public_key: Option<String>,
     /// The private key text while it is shown (Show), else `None`.
     revealed: Option<SecretString>,
+    /// Its text for the view, made once at Show (GPUI text cannot be
+    /// wiped; one copy instead of one per frame).
+    revealed_shown: Option<SharedString>,
     /// The key's certificate (UI 7.3), read with the panel.
     pub(super) certificate: Option<shellpp_core::keys::certificate::CertificateInfo>,
     /// The last Show could not read the key.
@@ -102,6 +105,7 @@ impl KeyPanel {
             public_key,
             certificate,
             revealed: None,
+            revealed_shown: None,
             reveal_failed: false,
             _subscriptions: vec![subscription],
         }
@@ -199,12 +203,14 @@ impl KeyPanel {
     pub fn reveal(&mut self, cx: &mut Context<Self>) {
         match self.state.read(cx).reveal_private_key(self.view.record_id) {
             Ok(text) => {
+                self.revealed_shown = Some(SharedString::from(text.expose_secret().to_owned()));
                 self.revealed = Some(text);
                 self.reveal_failed = false;
             }
             Err(error) => {
                 tracing::info!(code = error.code(), "private key not revealed");
                 self.revealed = None;
+                self.revealed_shown = None;
                 self.reveal_failed = true;
             }
         }
@@ -213,6 +219,7 @@ impl KeyPanel {
 
     /// Hide, and every way of leaving the panel: drops the shown text.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
+        self.revealed_shown = None;
         if self.revealed.take().is_some() {
             cx.notify();
         }
@@ -321,12 +328,10 @@ impl KeyPanel {
         cx.emit(KeychainEvent::Close);
     }
 
-    /// The private key text as shown (one string per frame; the source stays
+    /// The private key text as shown (made once at Show; the source stays
     /// in the panel's `SecretString`).
     pub(super) fn revealed_text(&self) -> Option<SharedString> {
-        self.revealed
-            .as_ref()
-            .map(|text| SharedString::from(text.expose_secret().to_owned()))
+        self.revealed_shown.clone()
     }
 }
 

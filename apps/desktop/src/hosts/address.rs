@@ -10,7 +10,7 @@
 use std::net::IpAddr;
 
 /// A connection target parsed from the search text.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct QuickTarget {
     pub username: Option<String>,
     /// Host name or IP address (IPv6 without brackets).
@@ -174,6 +174,14 @@ fn is_address_word(host: &str) -> bool {
         || host.eq_ignore_ascii_case("localhost")
 }
 
+/// Debug without host data or server text (docs/security.md, section 9.1).
+impl std::fmt::Debug for QuickTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuickTarget")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

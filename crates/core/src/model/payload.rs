@@ -186,8 +186,9 @@ impl Drop for Payload {
     }
 }
 
-/// An `io::Write` that only counts bytes (first pass of [`Payload::to_json_bytes`]).
-struct ByteCounter(usize);
+/// An `io::Write` that only counts bytes (first pass of [`Payload::to_json_bytes`]
+/// and of the plain export).
+pub(crate) struct ByteCounter(pub(crate) usize);
 
 impl io::Write for ByteCounter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

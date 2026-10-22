@@ -228,7 +228,7 @@ pub enum ConnectStep {
 
 /// A value the user must provide (UI 4.8). Texts from the server (`name`,
 /// `instruction`, `prompt`) are untrusted and shown as plain text.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Prompt {
     Username,
     /// `error`: the previous password was refused.
@@ -269,6 +269,23 @@ pub enum Prompt {
 pub struct PromptAnswer {
     pub value: SecretString,
     pub save: bool,
+}
+
+/// Debug with the variant only: no user names or server text
+/// (docs/security.md, section 9.1).
+impl std::fmt::Debug for Prompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
+            Self::Username => "Username",
+            Self::Password { .. } => "Password",
+            Self::Passphrase { .. } => "Passphrase",
+            Self::FileKeyPassphrase { .. } => "FileKeyPassphrase",
+            Self::KeyboardInteractive { .. } => "KeyboardInteractive",
+        };
+        f.debug_struct("Prompt")
+            .field("variant", &variant)
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for PromptAnswer {

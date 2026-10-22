@@ -191,9 +191,10 @@ impl Core {
     /// encrypted: the interface warns first (D16).
     pub fn recording_export_txt(&self, log_id: Uuid, path: &Path) -> Result<(), CoreError> {
         let recording = self.recording_read(log_id)?.ok_or(CoreError::NotFound)?;
+        let text = zeroize::Zeroizing::new(recording.plain_text());
         shellpp_private_file::write(
             path,
-            recording.plain_text().as_bytes(),
+            text.as_bytes(),
             shellpp_private_file::Existing::Replace,
         )
         .map_err(io)

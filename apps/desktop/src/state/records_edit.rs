@@ -293,7 +293,7 @@ pub struct HostSecrets {
 /// The values of the host panel form (UI 3.1), as typed. Text fields keep the
 /// raw text so an invalid value can be reported; [`HostDraft::apply`] writes
 /// them into a data object.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct HostDraft {
     pub address: String,
     pub label: String,
@@ -1481,6 +1481,14 @@ impl AppState {
     }
 }
 
+/// Debug without host data or server text (docs/security.md, section 9.1).
+impl std::fmt::Debug for HostDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostDraft")
+            .field("group_id", &self.group_id)
+            .finish_non_exhaustive()
+    }
+}
 #[cfg(test)]
 mod tests {
     use gpui::TestAppContext;
