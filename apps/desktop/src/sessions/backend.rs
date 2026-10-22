@@ -75,6 +75,11 @@ pub trait SessionCore: Send + Sync + 'static {
         drop(input);
         Ok(HistoryDecision::Dropped(HistoryDropReason::Off))
     }
+    /// The session of [`SessionCore::history_record`]'s `session_id` ended:
+    /// its previous command is forgotten. Fakes keep nothing.
+    fn history_session_end(&self, session_id: Uuid) {
+        let _ = session_id;
+    }
     /// Whether a session to `host` records history now (docs/security.md,
     /// section 10.1, rule 4: the host's override, else the setting);
     /// `false` when the core cannot tell (locked). Fakes say yes.
@@ -167,6 +172,10 @@ impl SessionCore for Core {
 
     fn history_record(&self, input: HistoryRecordInput) -> Result<HistoryDecision, CoreError> {
         Core::history_record(self, input)
+    }
+
+    fn history_session_end(&self, session_id: Uuid) {
+        Core::history_session_end(self, session_id);
     }
 
     fn record_history_now(&self, host: RecordRef) -> bool {

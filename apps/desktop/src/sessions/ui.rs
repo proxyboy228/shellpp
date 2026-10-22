@@ -243,6 +243,17 @@ impl HistoryRecorder {
     }
 }
 
+/// The session ended (its terminal let go of the recorder): the core
+/// forgets the session's previous command (section 12 review).
+impl Drop for HistoryRecorder {
+    fn drop(&mut self) {
+        let id = self.id;
+        self.session
+            .shared
+            .background(move |core| core.history_session_end(id));
+    }
+}
+
 impl HistorySink for HistoryRecorder {
     fn record(&self, candidate: HistoryCandidate) {
         if !self.record.load(Ordering::Acquire) {

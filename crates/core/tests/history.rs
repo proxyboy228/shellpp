@@ -125,6 +125,15 @@ fn drop_reasons_through_the_facade() {
     assert_eq!(decide(base("ls")), HistoryDecision::Recorded);
     assert_eq!(decide(base("git status")), HistoryDecision::Recorded);
     assert_eq!(list(&u.core, None, None, None).len(), 4);
+    // The same command again is a duplicate until the session ends: then
+    // its previous command is forgotten (section 12 review), and the same
+    // id records it again.
+    assert_eq!(
+        decide(base("git status")),
+        HistoryDecision::Dropped(Duplicate)
+    );
+    u.core.history_session_end(session);
+    assert_eq!(decide(base("git status")), HistoryDecision::Recorded);
 
     // Locked: dropped with `Locked`, not an error.
     u.core.lock().unwrap();

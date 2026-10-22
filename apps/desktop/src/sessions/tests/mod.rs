@@ -252,6 +252,10 @@ impl SessionCore for RecordingCore {
         self.core.history_record(input)
     }
 
+    fn history_session_end(&self, session_id: Uuid) {
+        self.core.history_session_end(session_id);
+    }
+
     fn record_history_now(&self, host: RecordRef) -> bool {
         let on = SessionCore::record_history_now(&*self.core, host);
         self.history_flag_reads.fetch_add(1, Ordering::SeqCst);

@@ -183,3 +183,28 @@ fn the_end_of_a_recording_reads_back() {
         )
     );
 }
+
+/// A recording stops at its size limit with a marker; the session's later
+/// output is not written, and the file still closes and opens (section 12
+/// review).
+#[test]
+fn a_recording_stops_at_its_size_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = header();
+    let path = dir.path().join(format!("{}.{EXTENSION}", header.file_id));
+    let mut writer = RecordingWriter::create(&path, header, key(), (80, 24), 1).unwrap();
+    writer.max_chunks = 2;
+    let block = vec![b'x'; CHUNK / 2];
+    for second in 0..20 {
+        writer.output_at(f64::from(second), &block).unwrap();
+    }
+    writer.finish().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    // Two full chunks, then the final one with what waited and the marker.
+    assert!(bytes.len() <= HEADER_LEN + 3 * FRAME, "{}", bytes.len());
+    let recording = read(&bytes, |_| Some(key())).unwrap();
+    assert!(recording.complete);
+    let written: usize = recording.events.iter().map(|(_, text)| text.len()).sum();
+    assert!(written < 4 * CHUNK, "{written}");
+    assert!(written >= 2 * CHUNK - 4096, "{written}");
+}

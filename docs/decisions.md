@@ -1404,8 +1404,23 @@ Status: run 5 decision, 2026-10-22 (plan, section 11).
 **Decision:**
 
 - **Emoji sequences.** The grid keeps one character per cell as the shell's `wcwidth` counts them (a skin tone modifier is two more columns, a ZWJ family six in all): changing the columns would move the shell's cursor out of step with the screen. Drawing joins the cells of a ZWJ sequence, an emoji with a skin tone modifier, and a flag's two regional indicators into one glyph two cells wide at the first cell; the other cells stay blank. Selection and copy take the cells as before. VS16 presentation (`❤️`) is unchanged.
-- **DECCOLM.** As in xterm: DECCOLM (mode 3) switches to 132 or 80 columns only after the program allowed it with DECSET 40, which vttest does and `tput reset` does not. The grid takes the width at once, in the middle of the output, and clears with the scrolling region and the cursor home; the remote side gets the new size. The width stays until the pane's own size changes or RIS; the pane draws the narrower grid at its left.
+- **DECCOLM.** As in xterm: DECCOLM (mode 3) switches to 132 or 80 columns only after the program allowed it with DECSET 40, which vttest does and `tput reset` does not. The grid takes the width at once, in the middle of the output, and clears with the scrolling region and the cursor home; the remote side gets the new size. The width stays until the pane's own size changes, RIS or DECRST 40 (which a reconnect sends with its mode reset, so a new shell does not inherit it); the pane draws the narrower grid at its left. The resize keeps the scrollback as a view resize does.
 - **Keychain.** The keyboard focus ring marks the first key on display while nothing is selected, where the arrows start, as on Hosts and Snippets.
 - **Workspaces.** × on a workspace of the new tab page removes it at once, with a toast that offers Undo for 5 s (the undo of UI 2.4): Undo brings it back under its id with its tabs. The question before the removal is gone, as for hosts.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 4.5 (and `docs/ru`); `docs/compatibility.md` section 2.
+
+### 91. Long-running fixes (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 12: a review of what grows or stays alive over hours and days).
+
+**Decision:**
+
+- **Shortcuts.** GPUI's keymap only grows and is searched on every keystroke: applying the shortcuts binds only the actions whose keys changed since the last time, so a new window binds nothing (before: about 90 bindings per window and per edit).
+- **Forwarding.** A rule an autostart (on launch, on connect) cannot start is stopped as the Forwarding screen stops a failed rule, so its host's connection does not stay up and reconnect after every drop with nothing on it; its failure is still shown until the rule is started or stopped.
+- **SFTP Open.** The copies of an SFTP session that ended (the panel went to another host or closed) leave the list checked every 2 s; a copy without changes is removed at once, a saved one stays for the question at exit or at the next start. A program started for "Program for Open" is waited for on a thread, so no zombie process stays per opened file on macOS and Linux.
+- **History.** The core forgets a session's previous command (the "same as the previous entry" rule) when the session ends, instead of keeping the plain text of every session's last command until the lock.
+- **Recordings.** A recording stops at 4 096 chunks (256 MiB of text) with a marker event (storage-format 8.3); the rest of that session's output is not recorded.
+- Not changed: the SFTP Back history and the finished jobs of the transfer queue (until "Clear finished") grow with the user's own actions; the forwarding maps are bounded by the number of hosts and rules.
+
+**Spec impact:** `docs/storage-format.md` 8.3.

@@ -1538,6 +1538,13 @@ impl Core {
         Ok(HistoryDecision::Recorded)
     }
 
+    pub(super) fn history_session_end_impl(&self, session_id: Uuid) {
+        let mut guard = self.inner();
+        if let Ok(parts) = parts(&mut guard) {
+            parts.session.history_last.remove(&session_id);
+        }
+    }
+
     pub(super) fn record_history_now_impl(
         &self,
         host: Option<RecordRef>,

@@ -277,6 +277,59 @@ async fn launch_rules_start_once_per_run() {
     server.shutdown().await;
 }
 
+/// An "on launch" rule that cannot start (its port is taken) shows its
+/// failure and leaves no connection behind: no rule runs on it, and it
+/// would reconnect after every drop (section 12 review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_launch_rule_leaves_no_connection() {
+    let harness = Harness::new();
+    let password = random_secret("pw");
+    let mut config = ServerConfig::new(vec![password_user("alice", &password)]);
+    config.forwarding = true;
+    let server = start_with(config).await;
+    trust(&harness, &server);
+    let target = harness.password_host(&server, "alice", &password);
+    let host = record(&target);
+    // The port is taken for the whole test.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let launch = harness
+        .core
+        .forwarding_rule_save(RecordInput {
+            vault_id: harness.vault_id,
+            record_id: None,
+            data: json!({"type": "local", "host_id": host.record_id.to_string(),
+                "bind_port": port, "dest_address": "127.0.0.1", "dest_port": 9,
+                "autostart_on_launch": true})
+            .as_object()
+            .cloned()
+            .unwrap(),
+        })
+        .expect("rule");
+    let mut options = ManagerOptions::with_keys(KeySources {
+        key_dir: Some(harness.key_dir.path().to_path_buf()),
+        agent: AgentSource::None,
+    });
+    options.runtime = Some(tokio::runtime::Handle::current());
+    let run = SessionManager::start(harness.calls.clone() as Arc<dyn SessionCore>, options)
+        .expect("start");
+    let failed = super::eventually_async(|| async {
+        matches!(
+            run.forward_status(launch.record.record_id),
+            Some(RuleStatus::Failed(_))
+        )
+    })
+    .await;
+    assert!(failed, "{:?}", run.forward_status(launch.record.record_id));
+    let closed = super::eventually_async(|| async { server.connection_count() == 0 }).await;
+    assert!(closed, "{} connections left", server.connection_count());
+    // Stopped by the user, the failure is gone too.
+    run.forward_stop(launch.record.record_id).await;
+    assert_eq!(run.forward_status(launch.record.record_id), None);
+    drop(taken);
+    server.shutdown().await;
+}
+
 /// A rule whose connection drops while the app is locked comes back after
 /// the unlock (security.md 8: reconnects wait for unlock; the review of
 /// stage 5: it ended with ConnectFailed).

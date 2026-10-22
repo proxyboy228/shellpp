@@ -15,6 +15,11 @@
 //!   not; the terminal holds the same text anyway).
 //! - A write that fails stops the recording: nothing more is written, so
 //!   the chunks already in the file still open (as an incomplete file).
+//! - A recording holds at most [`MAX_CHUNKS`] chunks (256 MiB of text): then
+//!   a marker event (`"m"`, "size limit") ends what is recorded, and the
+//!   rest of the session's output is not written (section 12 review: a
+//!   session left running for days grew the file, and opening it, without
+//!   bound).
 //!   Reading keeps the chunks that open and stops at the first one that
 //!   does not (incomplete); only a file whose first chunk fails is refused.
 
@@ -38,6 +43,8 @@ pub const HEADER_LEN: usize = 63;
 pub const CHUNK: usize = 65_536;
 /// The tag of each sealed chunk.
 const TAG: usize = 16;
+/// Chunks a recording holds at most (256 MiB of plaintext).
+pub const MAX_CHUNKS: u32 = 4096;
 /// A non-final chunk as stored.
 const FRAME: usize = CHUNK + TAG;
 /// The directory of the recordings in the data directory.
@@ -136,6 +143,10 @@ pub struct RecordingWriter {
     finished: bool,
     /// A write failed: the recording stopped there.
     failed: bool,
+    /// The size limit ([`MAX_CHUNKS`]; smaller in tests).
+    max_chunks: u32,
+    /// The limit was reached: later output is not written.
+    full: bool,
 }
 
 impl std::fmt::Debug for RecordingWriter {
@@ -178,6 +189,8 @@ impl RecordingWriter {
             started: Instant::now(),
             finished: false,
             failed: false,
+            max_chunks: MAX_CHUNKS,
+            full: false,
         };
         let (width, height) = size;
         let first = serde_json::json!({
@@ -205,8 +218,15 @@ impl RecordingWriter {
         if self.failed || self.finished {
             return Err(RecordingError::Format);
         }
-        if data.is_empty() {
+        if data.is_empty() || self.full {
             return Ok(());
+        }
+        if self.index >= self.max_chunks {
+            self.full = true;
+            self.carry.clear();
+            let line = serde_json::to_string(&(seconds, "m", "size limit"))
+                .map_err(|_| RecordingError::Format)?;
+            return self.push_line(&line);
         }
         let mut bytes = std::mem::take(&mut self.carry);
         bytes.extend_from_slice(data);

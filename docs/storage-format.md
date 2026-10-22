@@ -485,6 +485,7 @@ asciicast v2: newline-delimited JSON, UTF-8.
 
 - First line: header `{"version": 2, "width": <columns>, "height": <rows>, "timestamp": <unix seconds>}`. No `env`, `title` or other fields, so the file holds no host data (stage 0 decision); the host and time are in the connection log entry.
 - Then one line per output event: `[<seconds since start, float>, "o", "<output text>"]`. Only output events are recorded; input is never recorded.
+- Size limit (run 5, D91): a recording holds at most 4 096 chunks (256 MiB of plaintext). The first output past it writes one marker event `[<seconds>, "m", "size limit"]`; later output of the session is not recorded, and the file closes as usual. Readers skip events other than `"o"`.
 
 ### 8.4 Lifecycle
 

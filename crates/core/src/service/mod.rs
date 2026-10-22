@@ -792,6 +792,14 @@ impl Core {
         self.history_record_impl(input)
     }
 
+    /// The session `session_id` of [`Core::history_record`] ended: the core
+    /// forgets its previous command (kept in memory for the "same as the
+    /// previous entry" rule, until the lock otherwise). Nothing while
+    /// locked: the lock forgot them all.
+    pub fn history_session_end(&self, session_id: Uuid) {
+        self.history_session_end_impl(session_id);
+    }
+
     /// Whether a session linked to `host` (`None`: quick connect or local
     /// terminal) records history now: the host's `record_history` override,
     /// else `terminal.record_history`; `false` for a host of the personal

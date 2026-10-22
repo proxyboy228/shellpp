@@ -140,12 +140,34 @@ pub fn open_program(state: &AppState) -> Option<PathBuf> {
 pub fn launch(path: &Path, program: Option<&Path>, window: &mut Window, cx: &mut App) {
     match program {
         Some(program) => {
-            if let Err(error) = std::process::Command::new(program).arg(path).spawn() {
+            if let Err(error) = start_program(program, path) {
                 tracing::warn!(kind = %error.kind(), "open program not started");
                 crate::shell::show_toast(strings::OPEN_FAILED, window, cx);
             }
         }
         None => cx.open_with_system(path),
+    }
+}
+
+/// Starts `program` on `path` and waits for it on a thread of its own, so
+/// that its exit is collected (on macOS and Linux a child nobody waits for
+/// stays a zombie until the app exits). Returns the waiting thread.
+fn start_program(program: &Path, path: &Path) -> std::io::Result<std::thread::JoinHandle<()>> {
+    let mut child = std::process::Command::new(program).arg(path).spawn()?;
+    std::thread::Builder::new()
+        .name("shellpp-open-program".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+}
+
+/// Takes the items that `ended` out of `list` and hands them to `discard`,
+/// keeping the order of the others.
+fn prune<T>(list: &mut Vec<T>, ended: impl Fn(&T) -> bool, mut discard: impl FnMut(T)) {
+    let (gone, kept): (Vec<T>, Vec<T>) = std::mem::take(list).into_iter().partition(&ended);
+    *list = kept;
+    for item in gone {
+        discard(item);
     }
 }
 
@@ -297,6 +319,21 @@ impl Opened {
         self.blocked.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Its session ended (the panel went to another host or closed): it can
+    /// never upload again.
+    fn session_ended(&self) -> bool {
+        self.handle.view().state == crate::sessions::SessionState::Closed
+    }
+
+    /// Lets go of the copy: its folder goes when nothing in it is new; a
+    /// saved copy stays for the question at exit or at the next start
+    /// (`discard_all`).
+    fn discard(self) {
+        if let Ok(copy) = Arc::try_unwrap(self.copy) {
+            let _ = copy.into_inner().discard(false);
+        }
+    }
+
     pub fn local_path(&self) -> &Path {
         &self.path
     }
@@ -331,8 +368,11 @@ pub fn watch<T: 'static>(
     async move {
         loop {
             cx.background_executor().timer(WATCH).await;
-            // The copies to check now (not blocked by a question).
+            // The copies to check now (not blocked by a question); those of
+            // ended sessions leave the list (section 12 review: it only
+            // grew, and they were checked every 2 s for ever).
             let Ok(copies) = screen.update(&mut cx, |screen, _| {
+                prune(opened(screen), Opened::session_ended, Opened::discard);
                 opened(screen)
                     .iter()
                     .filter(|open| !open.is_blocked())
@@ -367,5 +407,50 @@ pub fn watch<T: 'static>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The copies of ended sessions leave the watch list and are let go;
+    /// the others stay in order (section 12 review).
+    #[test]
+    fn ended_copies_leave_the_list() {
+        let mut list = vec![(1, false), (2, true), (3, false), (4, true)];
+        let mut discarded = Vec::new();
+        prune(&mut list, |(_, ended)| *ended, |(id, _)| discarded.push(id));
+        assert_eq!(list, [(1, false), (3, false)]);
+        assert_eq!(discarded, [2, 4]);
+        prune(&mut list, |(_, ended)| *ended, |(id, _)| discarded.push(id));
+        assert_eq!(list.len(), 2);
+        assert_eq!(discarded, [2, 4]);
+    }
+
+    /// A program started for Open is waited for: its exit is collected
+    /// (section 12 review: no zombie per opened file on macOS and Linux).
+    #[test]
+    fn an_open_program_is_waited_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, b"x").unwrap();
+        // Programs that take a file name and exit at once.
+        let program = if cfg!(windows) {
+            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+            PathBuf::from(root).join("System32").join("where.exe")
+        } else {
+            PathBuf::from("/bin/cat")
+        };
+        let waiter = start_program(&program, &file).expect("starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !waiter.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the program was not waited for"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        waiter.join().unwrap();
     }
 }

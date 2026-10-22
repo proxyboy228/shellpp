@@ -454,7 +454,10 @@ struct Applied(HashMap<&'static str, Vec<String>>);
 impl Global for Applied {}
 
 /// Binds every action's current keys (`overrides` over `preset`). Call it
-/// after the modules bound their defaults and after each change.
+/// after the modules bound their defaults and after each change. GPUI's
+/// keymap only grows, and every keystroke looks through it: an action whose
+/// keys did not change since the last call is left as it is (a new window
+/// binds nothing; a change binds the changed actions only).
 pub fn apply(overrides: &Map<String, Value>, preset: Preset, cx: &mut App) {
     let mut applied = if cx.has_global::<Applied>() {
         cx.remove_global::<Applied>()
@@ -465,6 +468,10 @@ pub fn apply(overrides: &Map<String, Value>, preset: Preset, cx: &mut App) {
     let mut on = Vec::new();
     for shortcut in &SHORTCUTS {
         let context = shortcut.scope.context();
+        let keys = effective(shortcut, overrides, preset);
+        if applied.0.get(shortcut.id) == Some(&keys) {
+            continue;
+        }
         let previous = applied.0.remove(shortcut.id).unwrap_or_default();
         // Whatever either set or a module's own start could have bound,
         // and what this function bound last.
@@ -483,15 +490,16 @@ pub fn apply(overrides: &Map<String, Value>, preset: Preset, cx: &mut App) {
                 off.push(KeyBinding::new(&keys, Unbind(name.into()), context));
             }
         }
-        let keys = effective(shortcut, overrides, preset);
         on.extend(
             keys.iter()
                 .filter_map(|keys| binding(shortcut.id, keys, context)),
         );
         applied.0.insert(shortcut.id, keys);
     }
-    cx.bind_keys(off);
-    cx.bind_keys(on);
+    if !off.is_empty() || !on.is_empty() {
+        cx.bind_keys(off);
+        cx.bind_keys(on);
+    }
     cx.set_global(applied);
 }
 
@@ -591,6 +599,20 @@ mod tests {
         press(cx, "cmd-c");
         press(cx, "ctrl-shift-c");
         assert_eq!(copies(cx), 4);
+        // The same keys again (a new window): the keymap does not grow; a
+        // change binds the changed action only (section 12 review).
+        let bindings = |cx: &mut gpui::TestAppContext| {
+            cx.update(|cx| cx.key_bindings().borrow().bindings().len())
+        };
+        let before = bindings(cx);
+        for _ in 0..5 {
+            cx.update(|cx| apply(&Map::new(), Preset::Pc, cx));
+        }
+        assert_eq!(bindings(cx), before);
+        cx.update(|cx| apply(&map(json!({"copy": "ctrl-insert"})), Preset::Pc, cx));
+        assert!(bindings(cx) - before <= 4, "{}", bindings(cx) - before);
+        press(cx, "ctrl-insert");
+        assert_eq!(copies(cx), 5);
     }
 
     fn map(value: Value) -> Map<String, Value> {

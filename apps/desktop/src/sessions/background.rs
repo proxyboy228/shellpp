@@ -190,6 +190,10 @@ pub(crate) struct ForwardingService {
     /// The forwarder's id of each rule record, and the rule's host.
     rules: Mutex<BTreeMap<Uuid, (u64, Uuid)>>,
     next: Mutex<u64>,
+    /// Rules an autostart could not start: shown as failed, but stopped,
+    /// so that their host's connection does not stay up (and reconnect
+    /// after every drop) with nothing on it (section 12 review).
+    failed: Mutex<HashMap<Uuid, RuleStatus>>,
 }
 
 impl ForwardingService {
@@ -231,6 +235,10 @@ impl ForwardingService {
         shared: &Arc<Shared>,
         rule: &ForwardingRuleView,
     ) -> RuleStatus {
+        self.failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&rule.record.record_id);
         let Some(spec) = rule_spec(rule) else {
             return RuleStatus::Failed(shellpp_ssh::ForwardError::AddressUnavailable);
         };
@@ -258,6 +266,10 @@ impl ForwardingService {
 
     /// Stops `rule` (its host's connection closes with its last rule).
     pub(crate) async fn stop(&self, rule: Uuid) {
+        self.failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&rule);
         let found = self
             .rules
             .lock()
@@ -278,8 +290,19 @@ impl ForwardingService {
         }
     }
 
-    /// The status of `rule`, while it was started.
+    /// The status of `rule`, while it was started; the failure of an
+    /// autostart that could not start it.
     pub(crate) fn status(&self, rule: Uuid) -> Option<RuleStatus> {
+        self.running_status(rule).or_else(|| {
+            self.failed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&rule)
+                .cloned()
+        })
+    }
+
+    fn running_status(&self, rule: Uuid) -> Option<RuleStatus> {
         let (id, host) = self
             .rules
             .lock()
@@ -309,6 +332,10 @@ impl ForwardingService {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Starts the rules of the personal vault that `pick` selects and that
@@ -335,6 +362,16 @@ impl ForwardingService {
                 running = matches!(status, RuleStatus::Running(_)),
                 "forwarding rule autostarted"
             );
+            // As the Forwarding screen does with a rule that failed: off its
+            // connection, the failure kept for the screen.
+            if matches!(status, RuleStatus::Failed(_) | RuleStatus::ConnectFailed(_)) {
+                let id = rule.record.record_id;
+                self.stop(id).await;
+                self.failed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(id, status);
+            }
         }
     }
 }
