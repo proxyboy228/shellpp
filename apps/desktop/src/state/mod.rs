@@ -97,19 +97,19 @@ pub enum AppStateEvent {
     AutoLockDue,
 }
 
-/// The application state entity. Field order matters: the core is dropped
-/// before the temporary profile that holds its files.
 /// A saved workspace as the new tab page, Ctrl+K and the menus list it
 /// (UI 4.5, 6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceItem {
     pub id: Uuid,
     pub name: SharedString,
-    /// The hosts it links to that do not exist here, named as the workspace
-    /// saved them; an empty name when it did not (D94).
+    /// The hosts it links to that do not exist here, by the names the
+    /// workspace keeps; an empty name for one it has no name of (D94).
     pub missing: Rc<[SharedString]>,
 }
 
+/// The application state entity. Field order matters: the core is dropped
+/// before the temporary profile that holds its files.
 pub struct AppState {
     core: Option<Arc<Core>>,
     /// Why the core did not open (shown instead of the app).

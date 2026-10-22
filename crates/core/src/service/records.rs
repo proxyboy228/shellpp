@@ -467,6 +467,42 @@ impl Core {
                     .remove("package_id");
             }
         }
+        // The workspaces that link a removed host name it (D94): the name it
+        // has now, for their "N hosts not found".
+        let removed_hosts: Vec<(super::dto::RecordRef, String)> = ids
+            .iter()
+            .filter(|id| kinds[*id] == RecordKind::Host)
+            .filter_map(|id| {
+                let record = parts.session.index.get(id)?;
+                let link = super::dto::RecordRef {
+                    vault_id: parts.session.ring.vault_id(),
+                    record_id: *id,
+                };
+                Some((link, crate::model::host::title(record.data()).to_owned()))
+            })
+            .collect();
+        if !removed_hosts.is_empty() {
+            let workspaces: Vec<Uuid> = parts
+                .session
+                .index
+                .of_kind(RecordKind::Workspace)
+                .map(|record| record.record_id)
+                .filter(|id| !removed.contains(id))
+                .collect();
+            for workspace in workspaces {
+                let Some(record) = parts.session.index.get(&workspace) else {
+                    continue;
+                };
+                let mut data = record.data().clone();
+                let mut changed = false;
+                for (host, name) in &removed_hosts {
+                    changed |= crate::model::workspace::name_host(&mut data, *host, name);
+                }
+                if changed {
+                    plan.set(RecordKind::Workspace, workspace, data);
+                }
+            }
+        }
         let mut buckets: Vec<(Container, Vec<Uuid>)> = Vec::new();
         for (target, kind, id) in &moves {
             set_container(*kind, plan.entry(parts.session, *kind, *id), *target);

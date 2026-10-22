@@ -135,25 +135,17 @@ fn with_host_names(
     data: &Map<String, Value>,
     stored: Option<&Map<String, Value>>,
 ) -> Map<String, Value> {
-    use crate::model::workspace::{host_links, host_name_entry, host_names, tabs};
+    use crate::model::workspace::{host_links, named_hosts, tabs};
     let Some(tabs) = tabs(data) else {
         return data.clone();
     };
-    let mut earlier = stored.map(host_names).unwrap_or_default();
-    earlier.extend(host_names(data));
-    let names: Vec<Value> = host_links(&tabs)
-        .into_iter()
-        .filter_map(|link| {
-            let name = match session.index.get_kind(&link.record_id, RecordKind::Host) {
-                Some(record) => crate::model::host::title(record.data()).to_owned(),
-                None => earlier
-                    .iter()
-                    .find(|(known, _)| known.record_id == link.record_id)
-                    .map(|(_, name)| name.clone())?,
-            };
-            (!name.trim().is_empty()).then(|| host_name_entry(link, &name))
-        })
-        .collect();
+    let earlier: Vec<&Map<String, Value>> = stored.into_iter().chain([data]).collect();
+    let names = named_hosts(&host_links(&tabs), &earlier, |link| {
+        session
+            .index
+            .get_kind(&link.record_id, RecordKind::Host)
+            .map(|record| crate::model::host::title(record.data()).to_owned())
+    });
     let mut data = data.clone();
     data.insert("host_names".into(), Value::Array(names));
     data
@@ -434,7 +426,10 @@ impl Core {
     /// the tabs of a window, linking saved hosts and local terminals.
     pub fn workspace_save(&self, input: RecordInput) -> Result<WorkspaceView, CoreError> {
         let record_id = self.save_kind(&input, RecordKind::Workspace, |session, stored| {
-            crate::model::workspace::build(&with_host_names(session, &input.data, stored), stored)
+            // Checked first: the names read the tabs, which `build` checks
+            // for size and depth before anything reads them.
+            let checked = crate::model::workspace::build(&input.data, stored)?;
+            crate::model::workspace::build(&with_host_names(session, &checked, stored), stored)
         })?;
         let inner = self.inner();
         let session = Self::require_session(&inner)?;

@@ -129,7 +129,9 @@ merges them into the personal vault (D34):
   rules as a save
   (a record that breaks them is listed with its errors and left out; the
   others are imported). A reference to a record that is neither here nor in
-  the file is kept and reads as missing (D63). A forwarding rule never
+  the file is kept and reads as missing (D63). A workspace's `host_names`
+  hold the names of the hosts the file carries only: an export never
+  writes the name of a host that is gone (data-model 12, D94). A forwarding rule never
   starts on app launch after an ordinary import, and one that listens
   beyond loopback does not start on connect either; a full restore keeps
   the file's flags. The summary counts the rules whose flags were turned

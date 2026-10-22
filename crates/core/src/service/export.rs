@@ -767,6 +767,20 @@ impl Core {
             let mut list = Vec::with_capacity(records.len());
             for record in records {
                 *counts.entry(record.kind.name().to_owned()).or_default() += 1;
+                // A workspace names the hosts the file carries only: never
+                // one that is gone (D94).
+                let data = match record.kind {
+                    RecordKind::Workspace => {
+                        crate::model::workspace::keep_host_names(record.data(), |link| {
+                            parts
+                                .session
+                                .index
+                                .get_kind(&link.record_id, RecordKind::Host)
+                                .is_some()
+                        })
+                    }
+                    _ => record.data().clone(),
+                };
                 list.push(json!({
                     "record_id": record.record_id.to_string(),
                     "revision": record.revision,
@@ -774,7 +788,7 @@ impl Core {
                     "type": record.kind.name(),
                     "hlc": record.payload.hlc.to_text(),
                     "device_id": record.payload.device_id.to_string(),
-                    "data": Value::Object(record.data().clone()),
+                    "data": Value::Object(data),
                 }));
             }
             let mut document = Map::new();

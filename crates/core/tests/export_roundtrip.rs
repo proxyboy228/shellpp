@@ -1267,3 +1267,54 @@ fn a_deleted_host_is_named_by_the_workspace() {
     assert!(missing("Prod 2").is_empty());
     assert!(missing("DB only").is_empty());
 }
+
+/// D94: a workspace saved without names (by an older version, or from a
+/// file without them) names a host when the host is removed, by the name it
+/// has then; an export names the hosts it carries only, never one that is
+/// gone.
+#[test]
+fn a_removed_host_is_named_and_an_export_leaves_its_name_out() {
+    let source = with_workspaces();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let mut document: Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    for record in document["vaults"][0]["records"].as_array_mut().unwrap() {
+        if record["type"] == "workspace" {
+            record["data"].as_object_mut().unwrap().remove("host_names");
+        }
+    }
+    let u = first_run();
+    let vault = u.vault_id;
+    import(&u.core, &SecretString::from(document.to_string()), None);
+    let db = id_of(&u.core, "host", "label", "db");
+    let mut data = content(&u.core).0[&("host".to_owned(), db.to_string())].clone();
+    data["label"] = json!("db-main");
+    save(&u.core, vault, Some(db), RecordType::Host, data, &[]).unwrap();
+    u.core
+        .record_delete(RecordsRef {
+            vault_id: vault,
+            record_ids: vec![db],
+        })
+        .unwrap();
+    let summaries = u.core.workspace_summaries(vault).unwrap();
+    for name in ["Prod", "DB only"] {
+        let summary = summaries.iter().find(|summary| summary.name == name);
+        assert_eq!(summary.unwrap().missing_hosts, ["db-main"], "{name}");
+    }
+
+    let workspaces: Vec<Value> = content(&u.core)
+        .0
+        .into_iter()
+        .filter(|((kind, _), _)| kind == "workspace")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(workspaces.len(), 2);
+    for data in &workspaces {
+        assert!(!data.to_string().contains("db-main"), "{data}");
+    }
+    // The only name the workspaces had was db's.
+    assert!(
+        workspaces
+            .iter()
+            .all(|data| data.get("host_names").is_none())
+    );
+}

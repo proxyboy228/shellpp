@@ -779,7 +779,7 @@ A saved set of tabs and splits with linked hosts (UI 4.5, 6; Ctrl+K search, D23)
 |---|---|---|---|
 | `name` | string(256) | yes | |
 | `tabs` | list<tab>[32] | yes | at least one tab |
-| `host_names` | list<{`host`: host_link, `name`: string(256)}>[512] | no | the name each linked host had when the workspace was saved, written by the core on every save (a host that is gone keeps its earlier name); names the hosts that are missing on the new tab page (UI 4.5). An import keeps the file's. [decision] (D94) |
+| `host_names` | list<{`host`: host_link, `name`: string(256)}>[512] | no | the name of each linked host: written by the core on every save (a host that is gone keeps its earlier name) and when a linked host is removed (the name it has then); names the hosts that are missing on the new tab page (UI 4.5). Advisory: a bad entry is dropped on save and import, never the workspace, and an entry's unknown members are kept. An import keeps the file's; an export writes the entries of the hosts it carries only. A name lives as long as its link (D63). [decision] (D94) |
 
 | Object | Shape | Rules |
 |---|---|---|
