@@ -6,6 +6,7 @@ This is the threat model required by `SPEC.md` ("Security"). It states what Shel
 
 - `Dn` cites decision n in [decisions.md](decisions.md). "UI n.m" cites section n.m of [ui-behavior-spec.md](ui-behavior-spec.md).
 - Choices made while writing the stage 0 documents that are not in the specifications or the decisions are marked "(stage 0 decision)".
+- "[decision] (D93)" marks what was added from the owner's answers to the sync design draft (D93, 2026-10-22). The answers are the owner's; the details that carry them out are ours and can be changed, as D93 lists.
 - This document owns: the threat model, the key hierarchy, the KDF and HKDF parameters, HPKE parameters, fingerprints and human-readable secrets, lock behavior, the list of server-visible metadata, the history capture heuristics and the accepted risks.
 - Byte layouts (wrap blob, record envelope, AAD, padding, export and recording files) are in [storage-format.md](storage-format.md). Components, crates and directories are in [architecture.md](architecture.md); record types and sync classes in [data-model.md](data-model.md); the HTTP API, epochs, invitations, roles and limits in [sync-protocol.md](sync-protocol.md).
 
@@ -16,7 +17,7 @@ Goals:
 1. Confidentiality at rest: everything in the data directory except the metadata listed in section 9.3 and the short-lived files of explicit user actions (section 9.3) is encrypted under keys that only the master password (or the recovery key) opens, and, while "remember on this device" is on (the default since D29), the device key in the OS keychain (section 8).
 2. Zero-knowledge sync: the sync server stores ciphertext and the metadata of section 14.2; keys and plaintext never leave the client (principle 5).
 3. Integrity: a substituted, reordered or modified record is detected and not applied.
-4. Local availability: no server, member or administrator can wipe or lock data already on the device (principle 3).
+4. Local availability: no server, member or administrator can wipe or lock data already on the device (principle 3). A record deleted by another device or member, or by a forged tombstone, stays on each device for 90 days in Recently deleted ([data-model.md](data-model.md), section 16.6). [decision] (D93)
 5. Host authenticity: SSH connections never silently accept a changed host key (UI 10.2).
 6. Least privilege inside the app: the webview gets only the commands and data it needs; untrusted data never becomes code.
 7. Secret hygiene: secrets never reach logs, URLs or plaintext files except through the explicit user actions of section 9.3.
@@ -56,7 +57,7 @@ Non-goals:
 |---|---|---|---|
 | A1 | Local attacker with disk access | Read, copy and modify every file of the user: the data directory, `backups/`, logs, `tmp/`, OS backups, swap and hibernation files; put back an older copy of the database. | Run code in the user's logged-in session; read OS keychain items without the OS account password. |
 | A2 | Malware as the same OS user | Everything A1 can, plus: read process memory, log keystrokes, read and write the clipboard, read the user's keychain items (Windows Credential Manager, an unlocked Secret Service collection), connect to local listeners, replace the per-user installed binary. | — (out of scope while unlocked: section 1, RR8) |
-| A3 | Network attacker | Observe, block, delay and modify traffic to SSH servers, the sync server and the update source; hold a TLS certificate mis-issued for the sync server's name, which makes it an active sync server (A6) for that connection, without the stored data. | Break TLS (rustls), the SSH transport, AEAD, HPKE or Argon2id. |
+| A3 | Network attacker | Observe, block, delay and modify traffic to SSH servers, the sync server and the update source; hold a TLS certificate mis-issued for the sync server's name, which makes it an active sync server (A6) for that connection, without the stored data; a server whose certificate the user pinned refuses any other certificate, so a mis-issued one works only before the pin or with an added CA that issued it ([sync-protocol.md](sync-protocol.md), section 2.1; [decision] (D93)). | Break TLS (rustls), the SSH transport, AEAD, HPKE or Argon2id. |
 | A4 | Malicious SSH server | Control everything a host sends: terminal output and escape sequences, banners and prompts, SFTP listings, file names and contents, channel open requests, history files, OS detection output; learn passwords sent to it; use a forwarded agent while the session lasts. | Obtain data the client never sends to it. |
 | A5 | Passive sync server | Honest-but-curious operator, or a leaked database or backup: read everything stored and every request (metadata, envelopes, wraps, verifiers, KDF parameters and salts); run offline password guessing. | Change responses. |
 | A6 | Active sync server | A5, plus: answer anything; roll back, drop, withhold, reorder or replay records; show different states to different devices; forge member lists, public keys, epochs and wraps; force full resyncs (`cursor_expired`); deny service. | Produce valid envelopes or wraps without the keys; read data under keys it does not hold. |
@@ -92,7 +93,7 @@ Non-goals:
 |---|---|---|---|
 | TB1 | Webview ↔ Rust core | UI requests, display data, events | CSP and capabilities (13); secret fields stay in the core (9.5) |
 | TB2 | App ↔ OS | files, keychain items, clipboard, child processes, dumps | encryption at rest (5), permissions (9.3), only the device key in the keychain, while "remember on this device" is on (8), clipboard clearing (9.4), no core dumps (9.5) |
-| TB3 | Client ↔ sync server | auth keys, tokens, envelopes, wraps, public keys | HTTPS, end-to-end encryption, AAD, KDF bounds, pins (5, 14) |
+| TB3 | Client ↔ sync server | auth keys, tokens, envelopes, wraps, public keys | HTTPS with the system roots, a pinned certificate or an added CA for that server only ([decision] (D93)), end-to-end encryption, AAD, KDF bounds, pins (5, 14) |
 | TB4 | Client ↔ SSH server | credentials, keystrokes, output, files, channel requests | host key checks, escape-sequence policy, name checks, channel allowlist (11, 12) |
 | TB5 | User ↔ team members | vault keys and every record of the vault | HPKE Auth, pins, rosters, fingerprints, epochs, server-enforced roles (5.7, 15) |
 | TB6 | Local listeners ↔ other processes | forwarded connections | loopback bind by default (11.3) |
@@ -116,7 +117,7 @@ No homemade cryptography: only the constructions and crates below (SPEC "Default
 | Constant-time comparison | | `subtle` |
 | Secret memory | wipe on drop, redacted `Debug` | `zeroize`, `secrecy` |
 | SSH | russh with the `ring` backend (D4); `rsa` is a documented exception (RUSTSEC-2023-0071) | `russh`, `russh-sftp`, `ssh-key` |
-| Sync TLS | rustls with the `ring` provider, system roots | `reqwest` |
+| Sync TLS | rustls with the `ring` provider, system roots; for one origin, a pinned certificate or a CA the user added ([sync-protocol.md](sync-protocol.md), section 2.1; [decision] (D93)) | `reqwest` |
 | Hashed `known_hosts` entries | HMAC-SHA1 as defined by OpenSSH, for matching only (D21) | `hmac` and RustCrypto `sha1` ([architecture.md](architecture.md), section 8.2) |
 | Server verifiers and TOTP | Argon2id PHC; RFC 6238 | `argon2`, `totp-rs` (server only) |
 
@@ -326,11 +327,13 @@ Storage-level changes for each event are in [storage-format.md](storage-format.m
 | Invitation confirmation | owner compares the invitee's fingerprint out of band → pin `verified = true`, roster entry `accepted` with the current epoch and its `epoch_commit` → HPKE wrap of the current epoch | D14; roster: stage 0 decision |
 | Member removal, leave, explicit rotation | `vault_key[v, e + 1]` → chain wrap → HPKE wraps for the remaining members under the recipient rules of section 5.7 (verified pins and roster checked) → removed users marked `removed`, recipients' roster entries set to epoch `e + 1` with its `epoch_commit` → background re-encryption → the dialog says that changing the host secrets is the only guaranteed remedy, and Team tracks them (section 15) | D14; recipient rules and tracking: stage 0 decision |
 | Log out | refresh token family revoked and its wrap deleted → keep (default) or delete the local copy; team vaults become read-only archives that still open with the kept keys | D14, UI 12.2 |
-| Account deletion | account deleted on the server; local copy kept; the personal vault becomes local-only | D14 |
+| Account deletion | account deleted on the server; local copy kept; the personal vault becomes local-only. The server keeps only the hashes of the account's refresh tokens for 30 days, so the other devices get `account_deleted` and do the same locally | D14; other devices: [decision] (D93) |
+| Device revoked as lost or stolen | revocation → password change with a personal vault rotation (as with "my old password may be compromised") → explicit rotations of the team vaults the user owns, no removal. The stolen device keeps the user's X25519 private key (RR17), so the new team epochs stay out of its reach only while the server refuses it | [decision] (D93) |
+| Re-post after a server restore | no new key: for each epoch the server lost, the device re-sends the chain wrap it holds and wraps the same key again (personal: under the `kek` of the password the server holds and under `recovery_kek`; team: HPKE to the remaining members under the interactive recipient rules, the users its roster marks `removed` removed again). Every time only after the user's confirmation ([sync-protocol.md](sync-protocol.md), sections 5.1 and 7.7) | [decision] (D93) |
 
 ## 6. What is protected against whom
 
-"Yes": protected by design. "Partial": see the note. "No": not protected. "—": not applicable. The A3 column assumes no valid certificate for the sync server's name; with one, the A6 column applies to sync traffic.
+"Yes": protected by design. "Partial": see the note. "No": not protected. "—": not applicable. The A3 column assumes no valid certificate for the sync server's name; with one, the A6 column applies to sync traffic. A pinned certificate leaves that only to the first connection, before the pin ([decision] (D93), RR22).
 
 | Asset or property | A1 Disk | A2 Malware | A3 Network | A4 SSH server | A5 Passive server | A6 Active server | A7 Member | A8 Removed member | A9 Lost device |
 |---|---|---|---|---|---|---|---|---|---|
@@ -355,13 +358,13 @@ Notes:
 - (h) The app never sends the master password or the recovery key to a host and never asks for them inside a session tab (section 11.2).
 - (i) Tampering fails the AEAD check; putting back an older valid version is a freshness problem (next row).
 - (j) Editors may change records by role; viewers are stopped only by the server. With an active server, any key holder can forge records, because records are not signed (D13, RR4).
-- (k) With an active server, a removed member can still inject records encrypted under the epochs it held (RR4).
+- (k) With an active server, a removed member can still inject records encrypted under the epochs it held (RR4). It cannot change or delete a record that was already re-encrypted: clients refuse a version whose key epoch is below the one they synced ([sync-protocol.md](sync-protocol.md), section 6.4; [decision] (D93)).
 - (l) An attacker can delete files or put back an older copy of the database; this is not detected.
-- (m) The server can roll back, drop or withhold records and show different states to different devices; a forced full resync can bring back records deleted elsewhere, but never deletes local ones (RR1).
-- (n) Editors can delete shared records for every member. Tombstones are kept 90 days and conflict copies keep losing versions, but there is no version history (RR3).
+- (m) The server can roll back, drop or withhold records and show different states to different devices; a forced full resync can bring back records deleted elsewhere, but never deletes local ones (RR1). Records it brings back are listed for review, with "Delete again" ([decision] (D93)).
+- (n) Editors can delete shared records for every member. Tombstones are kept 90 days and conflict copies keep losing versions, but there is no version history (RR3). Every device keeps the last live version of each deleted record for 90 days in Recently deleted, encrypted and never synced, so a deletion by someone else can be restored or exported there ([decision] (D93)).
 - (o) SSH transport encryption and host key verification; the first connection relies on TOFU (RR12).
 - (p) The host sees its sessions and any password sent to it. Private keys never leave the client; a forwarded agent can be used during the session (RR19). Escape sequences and file names are filtered (sections 11.4 and 12).
-- (q) Removal, log out, account deletion and `not_member` never wipe local data (principle 3). Only a received, authenticated tombstone deletes a synced record: records missing from a full or class-limited snapshot are kept and pushed again ([sync-protocol.md](sync-protocol.md), section 6.9), and recordings are deleted only when this device applies the tombstone of their log entry.
+- (q) Removal, log out, account deletion and `not_member` never wipe local data (principle 3). Only a received, authenticated tombstone deletes a synced record: records missing from a full or class-limited snapshot are kept and pushed again ([sync-protocol.md](sync-protocol.md), section 6.9), and recordings are deleted only when this device applies the tombstone of their log entry. A received tombstone also leaves the record's last live version in Recently deleted for 90 days ([decision] (D93)).
 - (r) Plaintext metadata on disk (section 9.3) and on the server (section 14.2).
 - (s) TLS and SSH hide content; addresses, timing and sizes of connections are visible.
 - (t) A host sees the client's address and the times of its own sessions.
@@ -444,7 +447,7 @@ Never written to diagnostic logs (`shellpp.log`), panic messages or the server l
 - passwords, passphrases, PINs, OTP codes, private keys and any key material, auth keys, tokens, tickets, invitation tokens, registration codes, the recovery key, TOTP secrets;
 - envelopes, payloads and decrypted record fields;
 - host addresses, usernames, command text, terminal output and local or remote file names and paths ([architecture.md](architecture.md), section 3.8; stage 0 decision);
-- on the server: emails, keys, tokens and envelopes; server logs carry user ids only ([sync-protocol.md](sync-protocol.md), "Transport").
+- on the server: emails, keys, tokens and envelopes; server logs carry user ids only ([sync-protocol.md](sync-protocol.md), "Transport"). Irreversible events (account deleted, device revoked, vault deleted, members removed) are logged with their ids only, for the restore steps of section 14.4 ([decision] (D93)).
 
 Allowed: event names, error codes, record, vault and device ids, counts, durations, versions.
 
@@ -466,7 +469,7 @@ Enforcement (stage 0 decision):
 
 ### 9.3 Plaintext on disk
 
-Plaintext in the data directory is limited to ids, class codes, revisions, epochs, tombstone flags, sequence numbers, timestamps of local bookkeeping, the account email and server URL, KDF parameters and salt, the unlock attempt counter (section 8), and `local_settings`, which never hold secrets, host data or command text ([storage-format.md](storage-format.md), "What is stored in the clear"; the implemented format is in [data-format.md](data-format.md)). Diagnostic logs follow section 9.1.
+Plaintext in the data directory is limited to ids, class codes, revisions, epochs, tombstone flags, sequence numbers, timestamps of local bookkeeping, the account email and server URL, KDF parameters and salt, the unlock attempt counter (section 8), and `local_settings`, which never hold secrets, host data or command text ([storage-format.md](storage-format.md), "What is stored in the clear"; the implemented format is in [data-format.md](data-format.md)). Since D93 also: the trust choices for sync servers (the hash of a pinned certificate or a CA certificate the user added: public data, kept in the clear because the recovery runs while the app is locked), the ids and times of the "Brought back" and duplicate lists, and the ids, classes and times of Recently deleted, whose records themselves stay envelopes ([decision] (D93)). Diagnostic logs follow section 9.1.
 
 Explicit user actions that write plaintext (D16):
 
@@ -784,17 +787,19 @@ Rules (stage 0 decision):
 - Only `auth_key` reaches the server; it stores an Argon2id verifier of it. The master password, `master_key` and `kek` never leave the client (D11). `auth_key` and `recovery_auth_key` are bound to the server origin (section 5.5), and a registration that moves data bound to another account generates a new salt and recovery key (section 5.9), so no server receives values that sign in to or recover an account on another server.
 - TOTP (RFC 6238) is a second login step; a used time step is rejected again; the secret is encrypted at rest with `totp_at_rest_key`; TOTP is reset only with the admin CLI (D11). TOTP protects access to the account, not the encryption of the data.
 - Sensitive operations repeat the proof of password as `current_auth_key`.
-- Tokens: 32 random bytes with a `shellpp_*` prefix; access tokens live 15 minutes in memory; refresh tokens 30 days, rotated on every use, reuse revokes the family; the server stores only hashes.
-- A password change, an email change, a recovery and a recovery key reissue sign out the other devices. Revoking a device stops its sync; there is no remote wipe (principle 3).
+- Tokens: 32 random bytes with a `shellpp_*` prefix; access tokens live 15 minutes in memory; refresh tokens 30 days, rotated on every use, reuse revokes the family; the server stores only hashes. A used refresh token is accepted once more within 60 seconds while its successor is unused, so a response lost on the way does not sign the device out; the unused successor then counts as used, so someone who replays the token in that window is cut off together with the family as soon as the device presents its own successor ([sync-protocol.md](sync-protocol.md), section 4.6; [decision] (D93)).
+- A password change, an email change, a recovery and a recovery key reissue sign out the other devices. Revoking a device stops its sync; there is no remote wipe (principle 3). A device revoked as lost or stolen continues with a password change that rotates the personal vault and with rotations of the team vaults the user owns (section 5.9; [decision] (D93)).
+- Account deletion is immediate, after a dialog that offers Export. For 30 days the server keeps only the hashes of the account's refresh tokens and the date, to answer the account's other devices `account_deleted`: no email, no user id ([decision] (D93)).
 - Account enumeration is made harder by the fake pre-login salt, dummy Argon2id checks for unknown emails and one generic `invalid_credentials` code; it is not fully prevented (RR15).
-- Registration is invite-only by default (`SHELLPP_REGISTRATION=invite`). Rate limits are in [sync-protocol.md](sync-protocol.md), "Rate limits".
-- Transport: HTTPS only, plain `http://` only for loopback; rustls with the system roots; custom CA certificates are not in the MVP, so a self-hosted server needs a publicly trusted certificate (for example from the reverse proxy).
+- Registration is invite-only by default (`SHELLPP_REGISTRATION=invite`); open registration is the operator's choice in the server's configuration. Optional storage limits per account, off by default, stop only pushes (`quota_exceeded`) and never touch stored or local data ([decision] (D93)). Rate limits are in [sync-protocol.md](sync-protocol.md), "Rate limits".
+- Transport: HTTPS only, plain `http://` only for `localhost` (`127.0.0.1`, `[::1]`); rustls with the system roots. For a server whose certificate the system does not trust, the user either pins the certificate after comparing its SHA-256 fingerprint with the server's (like TOFU for SSH host keys) or adds the CA that issued it, for that server only. Any other certificate than the pinned one stops sync until the user confirms it, also one the system trusts. An expired certificate or one for another name is refused, pinned or not, and no invalid certificate is ever accepted silently ([sync-protocol.md](sync-protocol.md), section 2.1; [decision] (D93); this replaces "custom CA certificates are not in the MVP").
 
 ### 14.2 Server-visible metadata
 
 The complete list (D10). Everything not listed is never sent to the server.
 
-- Account: email and its verification state; KDF parameters and salt; Argon2id verifiers of `auth_key` and `recovery_auth_key`; `kek_wrap` and `recovery_wrap` (opaque); X25519 public key; SSH ID public key; TOTP secret (encrypted at rest with a key derived from `SHELLPP_SERVER_SECRET`) and TOTP state; creation time and time of the last credential change.
+- Account: email and its verification state; KDF parameters and salt; Argon2id verifiers of `auth_key` and `recovery_auth_key`; `kek_wrap` and `recovery_wrap` (opaque); X25519 public key; SSH ID public key; TOTP secret (encrypted at rest with a key derived from `SHELLPP_SERVER_SECRET`) and TOTP state; creation time and time of the last credential change; the storage limits and usage, when the operator set limits ([decision] (D93)).
+- Deleted accounts: for 30 days, the hashes of their refresh tokens and the deletion time, nothing else ([decision] (D93)).
 - Devices: `device_id`, creation time, last-seen day, token metadata. Device names are encrypted records.
 - Vaults: `vault_id` (UUIDv7, so creation time), kind, members and roles, who added whom and when, epoch numbers with creator and time, opaque wraps, `rotation_pending`.
 - Invitations: inviter, role, optional invitee email, invitee account and public key, timestamps, status.
@@ -807,10 +812,13 @@ The complete list (D10). Everything not listed is never sent to the server.
 
 - KDF parameters outside the floor and ceiling of section 5.4 are refused; the Argon2id salt is bound to the email the user typed, not to anything the server says.
 - Envelopes are checked as in section 5.6; a received revision at or below the local synced revision is ignored, and a record whose id belongs to another local vault is rejected ([sync-protocol.md](sync-protocol.md), "Applying pulled records").
-- The absence of a record is never taken as its deletion ([sync-protocol.md](sync-protocol.md), section 6.9).
+- The absence of a record is never taken as its deletion ([sync-protocol.md](sync-protocol.md), section 6.9). Records pushed back for that reason are listed for review ("Brought back"), and a received tombstone leaves the record's last live version in Recently deleted on this device for 90 days ([decision] (D93)).
+- A pulled version whose key epoch is below that of the version the device synced, and such a `current` of a push conflict, are refused with the integrity warning ([sync-protocol.md](sync-protocol.md), section 6.4; [decision] (D93)).
 - Public keys are used only through pins; new epochs pass the checks of section 5.7; rotation recipients come from the client's roster, with verified pins and a commitment to the current epoch's key, never only from the server's member list.
 - The server's `recovery_wrap` is never stored unchecked: each device builds its local `recovery` wrap from the `recovery_key` record (section 5.9).
-- The personal vault epoch never goes back: a server that reports a lower personal epoch, or a wrap of an epoch the device holds that opens to another key, changes no local key row and stops the personal vault's sync with "server state rolled back" ([sync-protocol.md](sync-protocol.md), section 5.1). (stage 0 decision)
+- The personal vault epoch never goes back: a server that reports a lower personal epoch, or a wrap of an epoch the device holds that opens to another key, changes no local key row and stops the personal vault's sync with "server state rolled back" ([sync-protocol.md](sync-protocol.md), section 5.1). (stage 0 decision) Team vault epochs never go back either: a lower team epoch changes no key row and stops writes to that vault. Re-posting the newer epochs with the keys the device holds (both vault kinds) needs the user's explicit confirmation every time, and for a team vault an owner and the interactive recipient rules, because a hostile server can report a lower epoch on purpose ([sync-protocol.md](sync-protocol.md), sections 5.1 and 7.7; [decision] (D93)).
+- A new `server_generation` starts the restore procedure for every vault; an unchanged one proves nothing, since a hostile server can keep it (D14; [decision] (D93)).
+- The server's certificate: system roots, or the user's pin or CA for that server only; a changed pinned certificate stops sync until the user confirms it ([sync-protocol.md](sync-protocol.md), section 2.1; [decision] (D93)).
 - Server text (error messages, emails) is shown as plain text. For known error codes the client shows its own message instead of the server's `message`, so a server cannot place instructions in the app's voice. (stage 0 decision)
 
 ### 14.4 Operator guidance
@@ -822,6 +830,27 @@ The complete list (D10). Everything not listed is never sent to the server.
 - A database backup holds verifiers, wraps, salts and all metadata; whoever gets it is a passive server (A5) and can guess passwords offline. Encrypt backups and restrict access.
 - Keep the default `SHELLPP_BIND` of `127.0.0.1:8080` behind the reverse proxy, and set `SHELLPP_TRUSTED_PROXIES` to the proxy only; otherwise forged `X-Forwarded-For` headers defeat per-IP rate limits.
 - Reverse-proxy logs contain client addresses and request paths (paths carry only ids).
+
+Backups ([decision] (D93); Choice 13 (c): tested recipes, no backup code in the server):
+
+- `server/README.md` gives tested recipes, and the server's CI runs them: back up, restore into an empty database, `admin restored`. For a homelab: a `backup` service in the Docker Compose file that runs on a schedule (daily by default) and pipes the dump straight into an encrypting tool, so no unencrypted dump is written to the backup volume: `pg_dump` for PostgreSQL; for SQLite an online backup (`sqlite3 … ".backup"`) to a file on a tmpfs, encrypted at once and removed.
+- The encrypting tool is `age`, to an operator's public key (`age -r`); the private key is kept off the server, so a copy of the backup volume alone opens nothing.
+- Recommended retention: 30 days; the service deletes older files. The shorter it is, the sooner old wraps and verifiers (RR6, RR7) and deleted accounts leave the backups.
+
+Restore ([decision] (D93); Choices 14 (b) and 15 (c)):
+
+1. Stop the server, decrypt the dump, restore it into the database, run `migrate`.
+2. Run `shellpp-server admin restored`: it replaces `server_generation`, so every client runs the restore procedure for every vault at its next sync ([sync-protocol.md](sync-protocol.md), section 6.9). A restore without this step is detected only while a client's cursor is ahead (D14).
+3. Undo what the backup brings back, from the server log of the time between the backup and the restore, where irreversible events are logged with ids (section 9.1): `admin user delete` for each account deleted after the backup (its old verifiers would otherwise sign in again), `admin device revoke` for each device revoked after it, `admin vault delete` for each team vault deleted after it. Member removals made after the backup come back too; the owners' clients repeat them when they re-post the newer epochs ([sync-protocol.md](sync-protocol.md), section 7.7).
+4. Start the server.
+
+Ways of access ([decision] (D93); [sync-protocol.md](sync-protocol.md), section 2.2):
+
+- Own domain with Caddy and Let's Encrypt: the public certificate needs no choice in the client. Ports 80 and 443 are open to the internet, so rate limits and invite-only registration matter most here.
+- Cloudflare Tunnel: no inbound port is open, but Cloudflare terminates TLS and sees every request in the clear: auth keys, tokens, emails, envelopes, wraps and metadata. It is in the position of an active server (A6) for the transport: it cannot read records or wraps, and with an auth key it can sign in as the user (TOTP still asked, when on). Choose it only if that is acceptable (RR23). Set `SHELLPP_TRUSTED_PROXIES` to the `cloudflared` container.
+- VPN only (Tailscale or WireGuard) with an internal certificate: the server is not reachable from the internet. Each device adds the internal CA once, after comparing its fingerprint, or pins a long-lived certificate (RR22). Keep the internal CA's private key off the devices that use the server.
+- Keep the origin the same when switching between them (`SHELLPP_PUBLIC_URL`, above): credentials are bound to it.
+- Open registration (`SHELLPP_REGISTRATION=open`) is the operator's choice; on an open server, set storage limits per account (`SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES`), which are off by default.
 
 ## 15. Team vaults
 
@@ -836,6 +865,8 @@ Protocol details are in [sync-protocol.md](sync-protocol.md), "Team vaults".
 - After a removal, Team (UI 12.3) shows owners and editors a persistent "Secrets to change" list for that vault: its hosts, identities and keys that hold a password, a private key or a passphrase and whose records have not been modified since the removal (modification time from the HLC, [data-model.md](data-model.md), section 3.2; background re-encryption keeps the HLC and does not count). The list is derived, so it shrinks as the secrets are edited on any device; the removal time is the time of the `removed` roster entry, and hiding the list sets `checklist_hidden` on that entry.
 - Editors can change any field of a shared host, including the address, jump hosts, proxy, environment variables, startup snippet and agent forwarding. A member who connects to such a host uses their own credentials with these settings, so an editor can make other members run commands or send credentials to a host of the editor's choice. A changed address that leads to an unknown host triggers the TOFU dialog (section 11.1). Give editor rights only to people trusted at that level (RR3).
 - A removed member keeps a read-only archive (principle 3, D14).
+- A deletion by an editor, by a removed member with an active server or by a forged tombstone leaves the record's last live version in Recently deleted on every member's device for 90 days, to restore or export there; a removed member also cannot change or delete records already re-encrypted (section 14.3). ([decision] (D93))
+- After a server restore, only an owner's device can bring a team vault back to its newer epochs, with the same keys and after an explicit confirmation; it removes again the users its roster marks `removed` ([sync-protocol.md](sync-protocol.md), section 7.7; [decision] (D93)).
 
 ## 16. Supply chain
 
@@ -859,10 +890,10 @@ These risks are accepted for the MVP and are stated so users can judge them.
 
 | ID | Risk | Why accepted, and what limits it |
 |---|---|---|
-| RR1 | The sync server can roll back, drop or withhold records and show different states to different devices. By forcing a full resync (`cursor_expired`) it can also make records deleted on another device come back, because a client keeps and pushes again every record missing from the snapshot. | Detection needs signed state (D14, deferred). Per-record rollback below the known revision is ignored, and the absence of a record never deletes it, so a forced resync cannot strip pins, roster entries, known hosts, keys or log entries ([sync-protocol.md](sync-protocol.md), section 6.9). Sync status reports records brought back this way. |
+| RR1 | The sync server can roll back, drop or withhold records and show different states to different devices. By forcing a full resync (`cursor_expired`) it can also make records deleted on another device come back, because a client keeps and pushes again every record missing from the snapshot. | Detection needs signed state (D14, deferred). Per-record rollback below the known revision is ignored, and the absence of a record never deletes it, so a forced resync cannot strip pins, roster entries, known hosts, keys or log entries ([sync-protocol.md](sync-protocol.md), section 6.9). Sync status lists the records brought back this way, with "Delete again" for each ([decision] (D93)). `server_generation` makes honest restores visible (D93). |
 | RR2 | The server sees the metadata of section 14.2: who shares with whom, record counts per class, padded sizes, creation times (UUIDv7) and activity patterns. | Needed for sync (D10). Padding to 256 bytes hides exact sizes. |
-| RR3 | Every member, viewers included, reads every secret of a team vault; editors can change execution-relevant host settings and delete shared records for everyone. | Inherent in end-to-end shared vaults (D13). Stated in the invitation dialog. |
-| RR4 | Records are not signed: a key holder together with an active server can forge records, a viewer for the current epoch, a removed member for the epochs it held. Even with an honest server, any member, viewers included, can publish team connection log entries whose user fields name another member, because clients cannot compare them with the server's `created_by`. | Record signatures are deferred (D13). Checking the author of team log entries is an open item (section 18). |
+| RR3 | Every member, viewers included, reads every secret of a team vault; editors can change execution-relevant host settings and delete shared records for everyone. | Inherent in end-to-end shared vaults (D13). Stated in the invitation dialog. A deleted record stays 90 days in Recently deleted on every device, to restore or export ([decision] (D93)). |
+| RR4 | Records are not signed: a key holder together with an active server can forge records, a viewer for the current epoch, a removed member for the epochs it held. Even with an honest server, any member, viewers included, can publish team connection log entries whose user fields name another member, because clients cannot compare them with the server's `created_by`. | Record signatures are deferred (D13). Checking the author of team log entries is an open item (section 18). Clients refuse a version whose key epoch is below the one they synced, so a removed member cannot change or delete records already re-encrypted; it can still add records under old epochs ([decision] (D93)). |
 | RR5 | Key distribution is TOFU: an active server can hand a new member a fake owner key unless fingerprints are compared. A fake member receives a vault key only if an owner confirms it in the recipient dialog without comparing its fingerprint. | Fingerprints in Team and in the recipient dialog; automatic rotations never add recipients outside the client's roster; epoch chain check for existing members (section 5.7). |
 | RR6 | Old wraps open with old credentials: old database copies (`backups/`, OS backups, user copies) keep the wraps of their time, and the server and its backups keep the `kek_wrap` and `recovery_wrap` of every earlier password and recovery key, with the old salt. Until the personal vault key is rotated, such a wrap also yields the key of current and future data. Other devices keep opening their local copy with the old password or the old recovery key until they sign in again. | Recovery and recovery key reissue always rotate the personal vault key, and a password change rotates it when the user says the old password may be compromised (section 5.9); after a rotation, old wraps open only data from before it. Deleting pre-migration copies after credential changes is an open item. Users must protect or delete old copies. |
 | RR7 | Anyone with the database, a server copy or a server backup can guess the master password offline. The minimum length is 8 characters with no composition rules (D29), so a short password is cheaper to guess, and the attempt limit of the unlock screen (section 8) does not apply offline. | Argon2id 64 MiB, t = 3, never below the cost of the mobile preset; the email-bound salt makes every guess cost one Argon2id per account; the first-run screen shows a strength indicator (UI 13.1); the recovery key has 256 bits. A strong password is the user's part. |
@@ -875,11 +906,14 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | RR14 | Forwarded ports and the SOCKS proxy on 127.0.0.1 are open to every local process and user; a web page can reach forwarded web services through DNS rebinding. | Loopback default; non-loopback needs a warning (UI 8.4). |
 | RR15 | Account enumeration is only partly prevented: registration answers `email_taken`, and real accounts whose KDF parameters differ from the desktop preset (mobile or upgraded) are told apart from fake answers. | Invite-only registration by default; fake salts and dummy Argon2id for the common case. |
 | RR16 | The recovery key copy inside the personal vault means anyone who once unlocks the vault learns the recovery key, and can later reset the password with it (plus a TOTP code, if TOTP is on). The core keeps this copy in local mode too, where the app never shows it (D29). | Needed to show the key again (UI 13.4). After a suspected compromise: change the password with "my old password may be compromised" and reissue the recovery key; both rotate the personal vault key and sign out the other devices. |
-| RR17 | A user's X25519 private key cannot be rotated in the MVP; if it leaks, every team vault key wrapped to that user is exposed. | Deferred; the key lives only inside the encrypted personal vault. |
+| RR17 | A user's X25519 private key cannot be rotated in the MVP; if it leaks, every team vault key wrapped to that user is exposed. A lost or stolen device holds it, so the team vault rotations offered after revoking such a device keep new epochs from it only while the server refuses it. | Deferred; the key lives only inside the encrypted personal vault. Revoking a lost device continues with a new password, which stops it from signing in again ([decision] (D93)). |
 | RR18 | Deleted files are not securely erased (SSDs, journaling, snapshots); temporary SFTP files and plaintext exports are plaintext while they exist. | Short-lived temporary files; warnings for exports; full-disk encryption recommended. |
 | RR19 | With agent forwarding on, a malicious host can use the forwarded keys for the length of the session. | Off by default per host (UI 3.1). |
 | RR20 | An update source or network attacker can withhold updates or keep serving an old manifest. | Signatures stop tampering, not withholding; manual checks are always available. |
 | RR21 | With an active server, a removed member can keep reading new records or plant an epoch. The server can hide the new epoch from the remaining members and keep accepting their writes under the old epoch, which the removed member holds. Or it can hide the removal from some members and give them an epoch made by the removed member, who holds the previous key and is still pinned. A removed member's epoch is refused only on devices that hold the removed roster entry; the server can withhold that entry from the account's other devices or serve a new device an older revision, which puts them in the position of members from whom the removal is hidden. | Clients refuse epochs from users they saw removed and from non-owners, and Team shows the epoch, who sent the key and when, so members can compare after a removal (section 5.7). A roster entry written on a device the server keeps on a forked view cannot make a removed user an automatic recipient on the device that removed it: `accepted` counts only with a commitment to the key of the current epoch and a verified pin, and in a sync conflict the version that says `removed` wins (section 5.7). The `owner` role that epoch acceptance checks is the one the server reports in the member list, so an active server can present any listed user who is not `removed` on that device as an owner. Changing the host secrets is the only guaranteed remedy, and Team tracks it (section 15). Signed membership changes are deferred (D14). |
+| RR22 | Trusting a server certificate the system does not trust is TOFU: an attacker in the path at the first connection can present its own certificate, which the user then pins, or the user can add a CA that issues certificates for other names too (it counts only for that server in the app). The trust choices are plaintext on disk, so a local attacker with disk access (A1) can replace them. | Only an unknown issuer can be trusted this way; expired and wrong-name certificates are refused. The fingerprint is shown with the command that prints it on the server; a changed pinned certificate stops sync until the user confirms it; sync contents stay end-to-end encrypted, so a wrong pin gives the A6 position, not the data ([decision] (D93)). |
+| RR23 | With Cloudflare Tunnel, Cloudflare terminates TLS and sees every request: auth keys, tokens, emails, envelopes, wraps and metadata. With an auth key it can sign in as the user. | The operator's choice among the three ways of access (section 14.4); records and wraps stay end-to-end encrypted; TOTP still guards sign-in when on ([decision] (D93)). |
+| RR24 | Recently deleted keeps the last version of every deleted record, secrets included, for 90 days on each device, also when the user deleted it to get rid of a secret. | Encrypted like records and never synced; Delete forever and "Empty trash" remove entries at once; command history is not kept there, because deleting an entry is the remedy for a secret the detector missed ([decision] (D93)). |
 
 ## 18. Open items
 
@@ -891,10 +925,9 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | Exclude the app from Windows Error Reporting dumps; lock key memory pages | [architecture.md](architecture.md) | stage 1 |
 | Tune the secret detector thresholds against the test corpus | this document | stage 2 |
 | Email change: password re-entry at the step that makes the change effective, and the sign-out of other devices (section 5.9) | UI 12.2 | stage 7 |
-| Sync status entry for records brought back by a full resync (RR1) | UI 12.2 | stage 7 |
-| Bring a server whose personal vault epoch is below the device's back to the local epochs, after "server state rolled back" (proposal: the client re-publishes its newer epochs and their wraps after password re-entry) | [sync-protocol.md](sync-protocol.md) | stage 7 |
 | Recovery dialog: editable account email, the hint that the email may have changed on another device, and the offline recovery of the local copy (UI 13.2) | UI 13.2 | stage 7 |
-| Keep the team vault archives of an earlier account readable after the device binds to another account: their HPKE `info` needs that account's `user_id`, which `meta.account_user_id` then no longer holds ([data-model.md](data-model.md), section 18.5) | [storage-format.md](storage-format.md) | stage 7 |
+| Security review of the conflict winner rules for `known_host` and `member_pin` ([sync-protocol.md](sync-protocol.md), section 6.7; [decision] (D93)) | this document | stage 7 |
+| Deployment documentation for the three ways of access and the tested encrypted backup and restore recipes (section 14.4; [decision] (D93)) | `server/README.md` | stage 7 |
 | Recipient dialog for rotations, the "rotation waiting for confirmation" state, epoch refusal warnings and the epoch line in Team (section 5.7) | UI 12.3 | stage 8 |
 | "Secrets to change" list after a removal and the removal dialog wording (section 15) | UI 12.3 | stage 8 |
 | Highlight changes made by other members to execution-relevant fields of team hosts (RR3) | UI 3.1, 12.3 | stage 8 |
@@ -903,6 +936,8 @@ These risks are accepted for the MVP and are stated so users can judge them.
 | OSC 52 clipboard writes as an opt-in | UI 12.4 | after the MVP |
 | Record signatures, signed membership changes, rollback detection | D13, D14 | after the MVP |
 | Biometric unlock | D5 | after stage 6 |
+
+Closed by D93 ([decision]): the sync status entry for records brought back by a full resync (now the "Brought back" list, UI 12.2); bringing a server whose personal vault epoch is below the device's back to the local epochs (the re-post, [sync-protocol.md](sync-protocol.md), section 5.1, also for team vaults in section 7.7); keeping the team vault archives of an earlier account readable (the `account_user_id` and `server_url` of each `vaults` row, [storage-format.md](storage-format.md), section 4.2).
 
 ## 19. Reporting vulnerabilities
 

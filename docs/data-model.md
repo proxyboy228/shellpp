@@ -14,6 +14,7 @@ Conventions:
 
 - "UI x.y" is section x.y of [ui-behavior-spec.md](ui-behavior-spec.md), "SPEC" is [SPEC.md](../SPEC.md), and a bare "section x" is a section of this document.
 - "(stage 0 decision)" marks a choice made while writing the stage 0 documents that is not in the specifications or the accepted decisions. A heading marked this way covers its whole section. In field tables, a default, limit or rule without a cited source is a stage 0 decision.
+- "[decision] (D93)" marks what was added from the owner's answers to the sync design draft (D93, 2026-10-22). The answers are the owner's; the details that carry them out are ours and can be changed, as D93 lists. A heading marked this way covers its whole section.
 
 ## 1. Notation
 
@@ -51,7 +52,7 @@ The "Req" column: "yes" means the field must hold a valid value before the recor
 
 - **Draft** (UI 1.3, D20): a new object is held in memory until all its required fields are valid; only then is the first record version written. Closing the panel discards a draft. An invalid value is not saved, and the last valid value stays in effect.
 - **Autosave** (UI 1.3, UI 3.2): after creation, changes are written automatically, debounced by 500 ms. Each write is a new revision with a new HLC ([sync-protocol.md](sync-protocol.md)).
-- **Remove with undo** (UI 2.4): removal writes the tombstone at once. Undo writes the last live `data` back under the same `record_id` with a fresh HLC (stage 0 decision).
+- **Remove with undo** (UI 2.4): removal writes the tombstone at once. Undo writes the last live `data` back under the same `record_id` with a fresh HLC (stage 0 decision). The undo lasts 5 seconds; after it the record stays 90 days in Recently deleted on each device (section 16.6). [decision] (D93)
 - **Read-only vaults**: nothing is written to an archived vault (D14), and nothing is written to a team vault where the user is a viewer except the viewer's own published connection log copies (D15, section 13.3). Their objects open read-only; actions that only read (connect, copy to the personal vault, export) stay available.
 - **Type restrictions**: a record whose type is not allowed in its vault kind (section 2.3) is ignored on read and never written. The server enforces only the class rules (section 2.2).
 - **Singletons** (`vault_meta`, `user_keypair`, `ssh_id`, `recovery_key`): at most one live record per vault. If concurrent creation leaves several live ones, the one with the greatest (`hlc`, `device_id`) is effective, and the next client allowed to write it tombstones the others (stage 0 decision).
@@ -270,6 +271,7 @@ A vault is the unit of storage, encryption and sharing (D13): exactly one active
 | `role` | `vaults` | enum `owner`, `editor`, `viewer`? | team only | | from the server; null for the personal vault |
 | `current_epoch` | `vaults` | int ≥ 1 | yes | 1 | [sync-protocol.md](sync-protocol.md) |
 | `bound` | `vaults` | bool | yes | `false` | syncing with the bound account |
+| `account_user_id`, `server_url` | `vaults` | uuid?, string(2048)? | no | | the account and normalized server origin the vault was last bound to; set at binding, kept when the vault is archived or unbound, so an archived team vault of an earlier account still opens its HPKE wrap, whose `info` names that `user_id` ([storage-format.md](storage-format.md), sections 4.2 and 14.5). [decision] (D93; Choice 4 (a)) |
 | `name` | `vault_meta` | string(64) | yes | `Personal` for the personal vault | shown in the switcher (UI 1.1) and the Vault fields |
 | `color` | `vault_meta` | tag_color? | no | `graphite` | |
 
@@ -343,6 +345,7 @@ Singleton, created at registration (D13): the user's own Ed25519 key for team ho
 
 - Shown in Keychain as a read-only key card (UI 7.2) and in SSH ID (UI 12.3).
 - Regenerating writes a new key pair as a new revision of the same record, then publishes the public key ([sync-protocol.md](sync-protocol.md)).
+- After concurrent regenerations, the device that wrote the winning version publishes its public key again when the server's differs ([sync-protocol.md](sync-protocol.md), section 5.6). [decision] (D93)
 - May be referenced wherever a key is accepted in the personal vault: `ssh.key_id` of hosts and groups, `identity.key_id`, and `credential_binding` (stage 0 decision).
 
 ### 6.7 Recovery key (`recovery_key`)
@@ -856,7 +859,8 @@ Rules:
 - The personal entry is always written to the personal vault (D15), at session start and again at its end. Snapshots keep the log readable when the host is later renamed, moved or removed.
 - Team copy (D15, UI 11.1, 12.3): for a host in a team vault, when this device has "Publish my connection log" on for that vault (section 16.2), a second record is created in the team vault with the same fields except `recording_file_id` and `published_copy`; its `host` links to the team host. Any member may create it; only its creator or an owner may update or tombstone it ([sync-protocol.md](sync-protocol.md)). On team copies, Saved can be toggled only by its creator and by owners.
 - Entries left without `ended_at` by a crash get `end_reason = unknown` at the next unlock on their device; until then other devices show them as active.
-- Retention (UI 12.6, D19): entries whose end (or start, for active ones) is older than `logs.retention_days` and that are not saved are tombstoned by the device that created them. Each client hides other devices' expired entries. "Clear the log" tombstones the personal entries and this device's own team copies.
+- Retention (UI 12.6, D19): entries whose end (or start, for active ones) is older than `logs.retention_days` and that are not saved are tombstoned by the device that created them. Each client hides other devices' expired entries. "Clear the log" tombstones the personal entries and this device's own team copies. Tombstones written by retention do not go to Recently deleted, on any device: they are expiry, not a deletion (section 16.6). [decision] (D93)
+- Account deletion keeps the user's team copies in their team vaults, and the deletion dialog says so (UI 12.2). [decision] (D93; Choice 12 (c))
 - Recent connections (UI 6, derived): the personal entries newest first, one row per host link (or per address and port for quick connects), at most 10. The row's "vault / group" path comes from the linked host (stage 0 decision).
 - User column (UI 11.1): avatar and account from `user_id` and `user_email`, device name from `device_info`; before stage 8 the column shows the device.
 
@@ -924,6 +928,7 @@ The losing version of a sync conflict, kept as a separate record in the same vau
 - A conflict record is never edited; it is only tombstoned. "Keep this" tombstones it. "Keep other" writes `losing_data` as a new revision of the original with a fresh HLC (or tombstones the original when `losing_deleted`), then tombstones the conflict (UI 13.6).
 - An original that no longer exists locally is shown as "missing"; "Keep other" then recreates it under `original_record_id`.
 - Conflict records sync with their class and follow its toggle. They are included in the plain export.
+- Every type keeps conflict copies; a type without a card of its own is compared in a generic view of its fields, secrets masked (UI 13.6). A few types decide the winner by a rule of their own instead of the stamps alone: `roster_entry`, `known_host` and `member_pin` ([sync-protocol.md](sync-protocol.md), section 6.7). [decision] (D93; Choice 7 (a) and (c))
 
 ## 16. Local-only data
 
@@ -1028,6 +1033,52 @@ A toast shows for 5 seconds. At most 200 notifications are kept; the oldest are 
 
 Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, split layout and broadcast state (UI 4.7; only their structure and targets are saved for Restore, section 16.3), forwarding rule status, the transfer queue (UI 5.6), "Connect once" host keys (UI 10.2), the decrypted record index, VaultMember lists (section 6.2) and OS detection results for read-only hosts (section 7.6).
 
+### 16.6 Recently deleted
+
+[decision] (D93; Choice 8 (b), for every vault, the personal one included)
+
+Local only and never synced. Every deleted record of the types below, deleted on this device or by a tombstone that sync applies, is kept on this device with its last live version for 90 days, so a deletion made elsewhere (another device, a member of a team vault, a forged tombstone) can be undone or exported here. Storage: the local table `recently_deleted` ([storage-format.md](storage-format.md), section 4.2), which keeps a byte copy of the record's last live envelope, so the record stays encrypted under the key epoch it had.
+
+| Field | Clear | Notes |
+|---|---|---|
+| `vault_id`, `record_id` | yes | one entry per record; a later deletion of the same record replaces it |
+| `class` | yes | |
+| `deleted_at` | yes | local time the tombstone was written or applied |
+| `origin` | yes | `local` (deleted on this device) or `sync` (a tombstone from the server) |
+| envelope | no | the last live envelope; the type, the name and every field come from it |
+
+Kept: `group`, `host`, `credential_binding`, `key`, `identity`, `snippet`, `snippet_package`, `forwarding_rule`, `known_host`, `workspace`, `terminal_theme`, `highlight_rule` and `connection_log_entry`, in every vault the device holds, personal and team, also in local mode.
+
+Not kept:
+
+- `history_entry` and `history_hint_state`: deleting a command from history is the remedy for a secret the detector let through ([security.md](security.md), section 10, RR10, RR24), so that deletion stays final; history is never shared and is not synced by default;
+- connection log entries tombstoned by retention (section 13.3): expiry, not a deletion;
+- the source records of a move made on this device (section 18.2): the record lives on in the target vault. Other devices cannot tell a move from a deletion and keep it;
+- conflict copies (resolved in UI 13.6) and the bookkeeping types `vault_meta`, `user_keypair`, `ssh_id`, `recovery_key`, `member_pin`, `roster_entry`, `device_info` and `last_session`, whose tombstones only tidy duplicates;
+- a record that was never live on this device.
+
+Rules:
+
+- The tombstone and the entry are written in one local transaction. A record that is live again (Undo, Restore, "Keep other", a later revision from sync) leaves the list.
+- Restore writes the kept `data` back as a new revision of the same record with a fresh HLC, as Undo does, and it syncs like any edit. Where the user cannot write the vault (a viewer, an archived vault, a vault no longer held), Restore copies the record into the personal vault with a new id, as Copy does (section 18.2, references unlinked). References from a restored record to records that are gone show as missing (section 3.4); restoring those too brings the links back.
+- Export writes the chosen entries as a native JSON export, plain or encrypted, with the warnings of Export Data (UI 1.4).
+- Delete forever removes the chosen entries on this device; "Empty trash" removes all of them. Other devices keep theirs.
+- Entries older than 90 days are removed when the app starts and every 24 hours after.
+- Sign-in on a device with local data re-encrypts the entries of the old personal vault together with its records, under the new record ids (section 18.5). "Delete local copy" at log out removes them with everything else.
+- Export Data does not include them.
+
+### 16.7 Brought back
+
+[decision] (D93; Choice 2 (c))
+
+Local list of the records that a full or class-limited resync pushed back because the server's snapshot lacked them ([sync-protocol.md](sync-protocol.md), section 6.9, step 5), shown in Account & Sync (UI 12.2). Table `resync_returned` ([storage-format.md](storage-format.md), section 4.2): `vault_id`, `record_id`, `returned_at`, all in the clear. An entry leaves the list on "Delete again" (an ordinary deletion), on "Keep", when the record is deleted anyway, and after 90 days. Types the user cannot delete in the interface are pushed back and only counted. A server restore's push-back is not listed.
+
+### 16.8 Duplicate pairs
+
+[decision] (D93; Choice 6 (c))
+
+Local list of the pairs of section 18.3: raised when a pull inserts a record whose natural key (section 18.6) equals that of another live record of the same type in the same vault. Table `duplicate_pairs` ([storage-format.md](storage-format.md), section 4.2): `vault_id`, `record_id`, `other_record_id`, `found_at` and `kept` ("Keep both" chosen), all in the clear. A pair leaves the list when either record is no longer live; a kept pair is not shown again on this device.
+
 ## 17. Sync classes and toggles
 
 (D15, UI 12.2; [sync-protocol.md](sync-protocol.md) defines the class filter, cursors and resync)
@@ -1076,11 +1127,15 @@ Kept in memory only and never written: drafts (UI 1.3), open tabs and sessions, 
 - Moving a group moves its whole subtree; references between moved records are rewritten. A moved or copied host or group gets the target group chosen in the dialog (or the top level) and is appended at the end; a snippet's `package_id` is cleared unless its package is copied together.
 - `import_key` is kept by Move and Copy (it is matched per target vault, section 18.4).
 - On Move, the moving client rewrites host links to the moved hosts in `workspace`, `history_entry` and `history_hint_state` records, and tombstones `credential_binding` records whose target it moved out of a team vault. Connection log entries keep their old link and rely on their snapshots (stage 0 decision).
+- The source records of a move made on this device do not go to Recently deleted (section 16.6). [decision] (D93)
 
 ### 18.3 Merging duplicates in a vault
 
 - Identical keys (UI 7.2, same fingerprint): the record with the smallest `record_id` is kept and takes `certificate`, `passphrase` and `fido2` from the others where it lacks them. Every reference to the others (host and group key slots, `identity.key_id`, `credential_binding.credential_id`) is rewritten to it, then the others are tombstoned (stage 0 decision).
 - Identities: section 9.4.
+- Duplicates from two devices ([decision] (D93); Choice 6 (c)): the same object created on two devices before they sync (the same `~/.ssh/config` imported on both) becomes two records with different ids. When a pull inserts a record whose natural key (section 18.6) equals that of a live record of the same type in the same vault, the pair is listed (section 16.8) and the screen of that type shows a hint with Merge (UI 13.7). Types: `group`, `host`, `identity`, `key`, `snippet_package`, `snippet`, `forwarding_rule`, `known_host`, `workspace`, `terminal_theme` and `highlight_rule`; not history and log entries, which each device writes for itself. The hint shows only to a user who may write the vault, never in an archive.
+  - Merge: the user picks the record to keep (by default the older one, the smaller `record_id`); for keys the rule above applies as it is (the smallest `record_id`, with `certificate`, `passphrase` and `fido2` taken where it lacks them). The kept record's `data` stays as it is: fields are not merged (SPEC excludes field merge). Every reference to the other record is rewritten to the kept one in the same local transaction: same-vault references (a host's group, identity, key slots, jump hosts and startup snippet, a group's parent, a snippet's package, a forwarding rule's host, a snippet's targets), host links and `credential_binding` targets in this device's personal vault, and `theme_ref` values (hosts, groups and the `terminal.default_theme` setting). The children of a merged group move to the kept one. Then the other record is tombstoned and goes to Recently deleted. References in other users' personal vaults cannot be rewritten and show as missing (section 3.4), as after a removal.
+  - "Keep both" leaves both records and does not show the pair again on this device.
 
 ### 18.4 Import idempotency
 

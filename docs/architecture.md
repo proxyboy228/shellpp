@@ -50,7 +50,9 @@ This document owns: components and crates, the process and window model, platfor
 
 ### 1.3 Not in the MVP
 
-Record signatures and rollback detection (D13, D14), biometrics (D5), FIDO2 beyond the stage 3 spike (D5), Mosh (D3), OSC 133 (D16), moving tabs between windows (D23), and (stage 0 decision) rotation of a user's X25519 key pair, shared known hosts in team vaults, server push for sync and custom CA certificates for sync servers. The security-relevant ones are discussed in [security.md](security.md).
+Record signatures and rollback detection (D13, D14), biometrics (D5), FIDO2 beyond the stage 3 spike (D5), Mosh (D3), OSC 133 (D16), moving tabs between windows (D23), and (stage 0 decision) rotation of a user's X25519 key pair, shared known hosts in team vaults and server push for sync. The security-relevant ones are discussed in [security.md](security.md).
+
+Custom CA certificates for sync servers are in the MVP now, together with pinning a server's certificate, for a server in a homelab: a CA the user adds or a certificate the user pins counts for that one server origin only ([sync-protocol.md](sync-protocol.md), section 2.1). [decision] (D93)
 
 ## 2. Components and repository layout
 
@@ -735,10 +737,16 @@ Stage 7; protocol and limits are in [sync-protocol.md](sync-protocol.md). (stage
 
 - Image `ghcr.io/proxyboy228/shellpp-server` with the static `shellpp-server` binary and CA certificates only, running as a non-root user.
 - Subcommands: `serve`, `migrate`, `admin …` (users, registration codes, `purge`). `serve` refuses to start when the database schema is older than the binary; the compose file runs `migrate` as a one-shot service before `serve`. `serve` also runs the purge job once a day.
+- `admin` also has `user quota` (per-account storage limits), `device revoke`, `vault delete`, and `restored`, which replaces `server_generation` at the end of every restore from a backup ([sync-protocol.md](sync-protocol.md), sections 3.4 and 10.3). [decision] (D93)
 - `server/docker-compose.yml`: `migrate`, `server` and PostgreSQL with a volume (SPEC). Small installations use SQLite with `SHELLPP_DATABASE_URL=sqlite://…` on a volume.
-- TLS is terminated by a reverse proxy; `server/Caddyfile.example` is the example configuration (SPEC).
+- The compose file also has a `backup` service that runs on a schedule (daily by default), pipes the dump (`pg_dump`, or an SQLite online backup on a tmpfs) straight into `age` to the operator's public key, and deletes files older than 30 days, the recommended retention; the private key is never on the server ([security.md](security.md), section 14.4). [decision] (D93)
+- The server listens on plain HTTP at `SHELLPP_BIND`; TLS is terminated in front of it. The server is meant for a machine of the user's own, such as a homelab, and `server/README.md` covers three ways to reach it, each with an example configuration that the server's tests run ([sync-protocol.md](sync-protocol.md), section 2.2): [decision] (D93)
+  - an own domain: Caddy as the reverse proxy with automatic Let's Encrypt certificates; `server/Caddyfile.example` (SPEC);
+  - Cloudflare Tunnel: a `cloudflared` service in the compose file, no inbound port; Cloudflare's edge terminates TLS and sees the requests in the clear, record contents stay end-to-end encrypted ([security.md](security.md), RR23);
+  - VPN only (Tailscale or WireGuard): the proxy listens only on the VPN address, with a certificate from an internal CA (such as Caddy's `tls internal`) that the user adds or pins in the client once per device.
+- The client never accepts an invalid certificate silently: a certificate the system does not trust is used only after the user pinned it or added its CA, and a changed pinned certificate stops sync until the user confirms it; plain `http://` only for `localhost` ([sync-protocol.md](sync-protocol.md), sections 2 and 2.1). [decision] (D93)
 - `GET /healthz` reports liveness and `GET /readyz` database readiness.
-- Backup instructions (SPEC) live in `server/README.md`: `pg_dump` for PostgreSQL, an online backup for SQLite, and what a restore means for clients ([sync-protocol.md](sync-protocol.md)).
+- Backup instructions (SPEC) live in `server/README.md`: the tested recipes above, restore into an empty database, `admin restored`, and the manual steps that undo what a restore brings back (`admin user delete`, `admin device revoke`, `admin vault delete`), and what a restore means for clients ([sync-protocol.md](sync-protocol.md), section 6.9; [security.md](security.md), section 14.4). [decision] (D93)
 
 Environment variables:
 
@@ -746,11 +754,12 @@ Environment variables:
 |---|---|---|
 | `SHELLPP_DATABASE_URL` | none (required) | `postgres://…` or `sqlite://…` |
 | `SHELLPP_BIND` | `127.0.0.1:8080` (Docker image: `0.0.0.0:8080`) | listen address |
-| `SHELLPP_PUBLIC_URL` | none (required) | public https origin, used in invitation links and emails. Keep it stable: clients bind account credentials to the origin they connect to ([security.md](security.md), section 14.4) |
+| `SHELLPP_PUBLIC_URL` | none (required) | the https origin the clients use (with VPN-only access, the name inside the VPN), used in invitation links and emails. Keep it stable: clients bind account credentials to the origin they connect to ([security.md](security.md), section 14.4; [sync-protocol.md](sync-protocol.md), section 2.2) |
 | `SHELLPP_SERVER_SECRET` | none (required) | at least 32 bytes, base64; root of the server-only keys ([security.md](security.md)) |
-| `SHELLPP_REGISTRATION` | `invite` | `open` or `invite` |
+| `SHELLPP_REGISTRATION` | `invite` | `open` or `invite`. Invitations only by default; open registration is the operator's choice (D93) |
+| `SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES` | unset (no limit) | storage limits per account: live records and their envelope bytes; `admin user quota` sets them per account. Off by default; set them on an open server. [decision] (D93) |
 | `SHELLPP_SMTP_URL`, `SHELLPP_SMTP_FROM` | unset | optional SMTP; without it only invitation links work and "verified" is hidden (D14) |
-| `SHELLPP_TRUSTED_PROXIES` | unset | CIDR list whose `X-Forwarded-For` header is trusted |
+| `SHELLPP_TRUSTED_PROXIES` | unset | CIDR list whose `X-Forwarded-For` header is trusted: the proxy that talks to the server (Caddy, or the `cloudflared` container) |
 | `SHELLPP_TOMBSTONE_RETENTION_DAYS` | `90` | tombstone retention |
 | `SHELLPP_RATE_LIMIT_*` | see [sync-protocol.md](sync-protocol.md) | rate limit overrides |
 | `SHELLPP_LOG` | `info` | log level; logs carry user ids, never emails, keys, tokens or envelopes |

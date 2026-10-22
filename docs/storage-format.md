@@ -13,6 +13,7 @@ Related documents:
 Conventions:
 
 - "(stage 0 decision)" marks a choice made while writing the stage 0 documents that is not in the specifications or the accepted decisions. A section heading marked this way covers its whole section.
+- "[decision] (D93)" marks what was added from the owner's answers to the sync design draft (D93, 2026-10-22). The answers are the owner's; the details that carry them out are ours and can be changed, as D93 lists. A section heading marked this way covers its whole section.
 - Byte order is big-endian everywhere. `be32(x)` is the 4-byte big-endian encoding of `x`, `be16(x)` the 2-byte one. `‖` is byte concatenation. Quoted labels such as `"shellpp/v1/kek"` are ASCII bytes without a terminator.
 - `[a, b)` is a byte range from offset `a` inclusive to `b` exclusive.
 - "UI x.y" is section x.y of [ui-behavior-spec.md](ui-behavior-spec.md); a bare "section x.y" is a section of this document.
@@ -180,18 +181,65 @@ CREATE TABLE local_settings (     -- per-device settings, JSON values
 );
 ```
 
+Added with stage 7 by an additive migration (section 11) ([decision] (D93)):
+
+```sql
+ALTER TABLE vaults ADD COLUMN account_user_id BLOB;  -- the account the vault was last bound to; kept when archived (D93, Choice 4 (a))
+ALTER TABLE vaults ADD COLUMN server_url TEXT;       -- normalized origin of that account's server
+ALTER TABLE server_account ADD COLUMN server_generation BLOB; -- last `server_generation` seen (sync-protocol 3.4)
+
+CREATE TABLE recently_deleted (   -- data-model 16.6; never synced
+  vault_id   BLOB NOT NULL REFERENCES vaults (vault_id),
+  record_id  BLOB NOT NULL,
+  class      INTEGER NOT NULL,
+  deleted_at TEXT NOT NULL,       -- local time the tombstone was written or applied
+  origin     TEXT NOT NULL CHECK (origin IN ('local', 'sync')),
+  envelope   BLOB NOT NULL,       -- byte copy of the last live envelope (section 5)
+  PRIMARY KEY (vault_id, record_id)
+);
+CREATE INDEX recently_deleted_by_time ON recently_deleted (deleted_at);
+
+CREATE TABLE resync_returned (    -- data-model 16.7: records a full resync pushed back
+  vault_id    BLOB NOT NULL REFERENCES vaults (vault_id),
+  record_id   BLOB NOT NULL,
+  returned_at TEXT NOT NULL,
+  PRIMARY KEY (vault_id, record_id)
+);
+
+CREATE TABLE duplicate_pairs (    -- data-model 16.8
+  vault_id        BLOB NOT NULL REFERENCES vaults (vault_id),
+  record_id       BLOB NOT NULL,
+  other_record_id BLOB NOT NULL,
+  found_at        TEXT NOT NULL,
+  kept            INTEGER NOT NULL DEFAULT 0, -- 1 = "Keep both"
+  PRIMARY KEY (vault_id, record_id, other_record_id)
+);
+
+CREATE TABLE server_tls (         -- sync-protocol 2.1: trust for a server the system does not trust
+  server_url  TEXT PRIMARY KEY,   -- normalized origin
+  kind        TEXT NOT NULL CHECK (kind IN ('pinned', 'ca')),
+  cert_sha256 BLOB NOT NULL,      -- 'pinned': of the server certificate; 'ca': of the CA certificate (DER)
+  ca_der      BLOB,               -- 'ca' only: the CA certificate
+  created_at  TEXT NOT NULL
+);
+```
+
 ### 4.3 Tables
 
 | Table | Role | Notes |
 |---|---|---|
 | `meta` | identity of this installation and app bookkeeping | keys in section 4.5 |
 | `local_auth` | KDF parameters, salt and salt-bound email for the master password; id of the personal vault | KDF JSON in section 6.5. Updated atomically with the `kek` wrap on a password change, an email change, registration and sign-in. |
-| `vaults` | every vault this device holds | `role` is `NULL` for the personal vault. `archived` = read-only local archive of a team vault the user lost access to (D14), or of the personal vault of an earlier account ([data-model.md](data-model.md), section 18.5). `bound = 1` while the vault syncs with the bound account. |
+| `vaults` | every vault this device holds | `role` is `NULL` for the personal vault. `archived` = read-only local archive of a team vault the user lost access to (D14), or of the personal vault of an earlier account ([data-model.md](data-model.md), section 18.5). `bound = 1` while the vault syncs with the bound account. `account_user_id` and `server_url` name the account it was last bound to and stay when it is archived or unbound ([decision] (D93)). |
 | `key_wraps` | wrapped vault keys | section 6.2 |
 | `records` | one row per record: the envelope plus a plaintext copy of its header fields | section 4.6 |
 | `sync_state` | one pull cursor per vault (D12) | semantics in [sync-protocol.md](sync-protocol.md) |
 | `server_account` | the bound sync account, if any | the refresh token is wrapped (section 6.4); access tokens are kept in memory only |
 | `local_settings` | per-device app settings (D15), JSON values | never secrets, host data (addresses, usernames) or command text; anything that contains them is a record |
+| `recently_deleted` | the last live envelope of each deleted record, 90 days ([data-model.md](data-model.md), section 16.6) | ciphertext; never synced, never exported. [decision] (D93) |
+| `resync_returned` | records a full resync pushed back, for review ([data-model.md](data-model.md), section 16.7) | ids and times only. [decision] (D93) |
+| `duplicate_pairs` | pairs of records with the same natural key from two devices ([data-model.md](data-model.md), section 16.8) | ids, times and "Keep both". [decision] (D93) |
+| `server_tls` | the pinned certificate or the added CA of a sync server the system does not trust ([sync-protocol.md](sync-protocol.md), section 2.1) | public data; read while locked by the recovery. [decision] (D93) |
 
 There is no separate migrations table: `PRAGMA user_version` is the schema version and the pre-migration copies in `backups/` are the history (section 11). There is no local devices table: this installation is identified by `meta` (section 4.5), and the other devices of an account are known from the server's device list and from `device_info` records ([data-model.md](data-model.md)).
 
@@ -210,6 +258,10 @@ Only what is needed before unlock or for sync bookkeeping is plaintext (D10). Ev
 | `key_wraps.vault_id`, `epoch`, `kind`, `sender_user_id`, `hpke_enc` | addressing of the wraps; `wrap` itself is ciphertext |
 | `local_auth.*` | the KDF parameters, the salt and the email bound into the Argon2id salt are inputs to the key derivation, so they cannot be encrypted under its output. `kdf_email` stays after log out and account deletion, because the local copy still opens with keys derived from it |
 | `sync_state.*` | cursors, error codes and class lists |
+| `vaults.account_user_id`, `vaults.server_url`, `server_account.server_generation` | needed to open an archived team vault's HPKE wrap and to detect a server restore; the server knows them anyway. [decision] (D93) |
+| `recently_deleted.vault_id`, `record_id`, `class`, `deleted_at`, `origin` | the 90-day purge and the list without decrypting; the record itself stays an envelope. [decision] (D93) |
+| `resync_returned.*`, `duplicate_pairs.*` | ids, times and a flag: the lists of [data-model.md](data-model.md), sections 16.7 and 16.8. [decision] (D93) |
+| `server_tls.*` | the trust choice is needed before unlock (the recovery from the unlock screen calls the server); a certificate and its hash are public. A local attacker can replace it ([security.md](security.md), RR22). [decision] (D93) |
 | `server_account.server_url`, `user_id`, `email`, `secrets_epoch`, `bound_at` | needed while locked: the "forgot password" recovery flow calls the server with the email before anything can be decrypted. The dialog pre-fills the email and lets the user edit it, because an email change made on another device signs this device out without updating this column ([sync-protocol.md](sync-protocol.md), section 5.2). The refresh token is wrapped. |
 | `meta.*` | ids and the app version: needed before unlock and for migrations |
 | `local_settings.*` | settings the locked app needs (theme, auto-lock, window layout, …) |
@@ -226,7 +278,7 @@ The plaintext still reveals metadata: the number of records per class and vault,
 | `last_app_version` | semver of the last app version that opened the database | every start |
 | `account_user_id`, `account_server_url` | `user_id` (UUID text) and server origin of the last bound account | at binding; kept after log out and account deletion (stage 0 decision) |
 
-The last two keys exist because an archived team vault must stay readable after the `server_account` row is gone (principle 3): opening its HPKE wrap needs the recipient's `user_id` in the HPKE `info`, and the sender's public key is found in a `member_pin` record by (`server_url`, `user_id`) (section 14.5).
+The last two keys exist because an archived team vault must stay readable after the `server_account` row is gone (principle 3): opening its HPKE wrap needs the recipient's `user_id` in the HPKE `info`, and the sender's public key is found in a `member_pin` record by (`server_url`, `user_id`) (section 14.5). They name only the last account, so since D93 every `vaults` row also keeps the `account_user_id` and `server_url` it was bound to (section 4.2): an archive of an earlier account stays readable after the device binds to another one, with that account's key pair and pins from its archived personal vault. The `meta` keys stay as the fallback for rows that predate the migration. [decision] (D93; Choice 4 (a))
 
 ### 4.6 The `records` table
 
@@ -242,6 +294,7 @@ Local writes (stage 0 decision for the points not covered by [sync-protocol.md](
 - Every write (edit, deletion, re-encryption) produces a new envelope with `revision + 1` and a fresh nonce; the row is replaced in one transaction.
 - A deletion writes a tombstone: an envelope with the tombstone flag set and the payload `{"v": 1, "type": …, "hlc": …, "device_id": …, "deleted": true}`.
 - Exception: when the vault has `bound = 0` and the record has `synced_revision = 0`, nothing has to be propagated, so a deletion removes the row at once.
+- Writing a tombstone for a live record, or applying a pulled one, also writes the record's last live envelope into `recently_deleted` in the same transaction, for the types [data-model.md](data-model.md), section 16.6, keeps; the exception above keeps that copy too. Undo, Restore and a later live revision remove the entry. [decision] (D93)
 - Tombstones that the server has acknowledged are purged after 90 days (D12).
 - A row is deleted only by a local action, by the purge of an old tombstone or by applying a received tombstone. A record missing from a server snapshot is kept ([sync-protocol.md](sync-protocol.md), section 6.9).
 - No record can be written while the app is locked, because record keys are wiped (D9). Data produced while locked, such as the end time of a connection log entry, is held in memory and written after the next unlock; it is lost if the app exits while locked.
@@ -378,7 +431,7 @@ For a 32-byte key, n = 32 and the blob is 73 bytes.
 
 - `epoch` is the epoch `e` of the key that is wrapped, except for `chain`, where `epoch` is `e`, the newer epoch whose chain key wraps `e − 1`; this matches the server's `prev_key_wrap[v, e]` ([sync-protocol.md](sync-protocol.md)).
 - `kek`, `recovery`, `device` and `hpke` rows are kept only for the vault's `current_epoch`. When a new epoch arrives, its rows are written and the older ones deleted in the same transaction. `chain` rows are kept for every epoch from 2 to `current_epoch`, so every older key can be reached from the newest one (stage 0 decision).
-- Epochs never go back (stage 0 decision): `vaults.current_epoch` is never lowered, and a row of an epoch at or below the local current epoch is never replaced by one whose wrapped key differs (a rewrap of the same key under another wrapping key, as after a password change or a new `recovery_key` revision, stays allowed); a new epoch is always above the local current epoch. Otherwise a server restored from a backup, or one replaying an older genuine wrap, could make the device reuse an epoch number it holds, overwrite that epoch's `kek`, `recovery` or `chain` row and lose every record sealed under the newer local keys. For the personal vault, a server answer that reports a lower epoch, or a wrap of a held epoch that opens to another key, changes nothing and shows "server state rolled back" ([sync-protocol.md](sync-protocol.md), section 5.1); a recovery on that device then opens the local `recovery` row and only rewraps locally, without a rotation. Team vault epochs move only forward through epoch acceptance ([sync-protocol.md](sync-protocol.md), section 7.7).
+- Epochs never go back (stage 0 decision): `vaults.current_epoch` is never lowered, and a row of an epoch at or below the local current epoch is never replaced by one whose wrapped key differs (a rewrap of the same key under another wrapping key, as after a password change or a new `recovery_key` revision, stays allowed); a new epoch is always above the local current epoch. Otherwise a server restored from a backup, or one replaying an older genuine wrap, could make the device reuse an epoch number it holds, overwrite that epoch's `kek`, `recovery` or `chain` row and lose every record sealed under the newer local keys. For the personal vault, a server answer that reports a lower epoch, or a wrap of a held epoch that opens to another key, changes nothing and shows "server state rolled back" ([sync-protocol.md](sync-protocol.md), section 5.1); a recovery on that device then opens the local `recovery` row and only rewraps locally, without a rotation. Team vault epochs move only forward through epoch acceptance ([sync-protocol.md](sync-protocol.md), section 7.7). A team vault whose server epoch is below the local one changes no row either. Bringing a server back to the local epochs (the re-post of [sync-protocol.md](sync-protocol.md), sections 5.1 and 7.7) sends the `chain` rows this device holds as they are and wraps the keys it holds again for the server; it writes no local key row. [decision] (D93)
 - The `recovery` row is built by each device from the synced `recovery_key` record ([data-model.md](data-model.md), section 6.7) while unlocked, and rebuilt whenever a new revision of that record is applied or the personal vault gets a new epoch. It is never copied from the server's `recovery_wrap`, which the client only checks against it ([sync-protocol.md](sync-protocol.md), section 4.4). A device that has not yet pulled the record has no `recovery` row. (stage 0 decision)
 - The old personal vault of an earlier account, kept as an archive when the device binds to another account ([data-model.md](data-model.md), section 18.5), keeps `kek`, `recovery` and `device` rows for its last epoch under the same keys as the current personal vault's rows. They are rewritten in the same transaction whenever the current personal vault's rows of that kind are, so the archive opens wherever the current personal vault does. (stage 0 decision)
 - There is no password verifier on disk: a successful AEAD unwrap of the current personal vault key proves the password.
@@ -433,8 +486,11 @@ The client refuses parameters outside the floor `alg = argon2id`, `v = 1`, `m_ki
 | New revision of the `recovery_key` record applied | the `recovery` row rebuilt from it |
 | Personal vault rotation | new epoch: `kek`, `recovery`, `device` rows for it, a `chain` row, the refresh token rewrapped; records re-encrypted in the background |
 | Team vault key arrives or rotates | `hpke` row for the new epoch, `chain` row, `vaults.current_epoch` |
-| Sign-in on a device with local data | the account's personal vault replaces the local one: its rows and `local_auth` are written, the local records are re-encrypted into it with new record ids (D15), recordings are re-encrypted (section 8.4), then the old personal vault's rows are deleted. A personal vault bound to an earlier account is kept instead (last row) |
+| Sign-in on a device with local data | the account's personal vault replaces the local one: its rows and `local_auth` are written, the local records are re-encrypted into it with new record ids (D15), recordings are re-encrypted (section 8.4), the old personal vault's entries in `recently_deleted` are re-encrypted with the records under the new ids ([decision] (D93)), then the old personal vault's rows are deleted. A personal vault bound to an earlier account is kept instead (last row) |
 | Sign-in to the account the personal vault was last bound to (rebind) | no merge, because the account's `personal_vault_id` equals the local one: `local_auth` and the `kek` row as at sign-in on an empty device, rows of any newer personal epoch (a lower epoch, or a held epoch whose server wrap opens to another key, changes nothing: section 6.2), `vaults.bound = 1`; records and record ids are kept, and the vault runs the full resync of [sync-protocol.md](sync-protocol.md), section 6.9 (stage 0 decision) |
+| Re-post of newer epochs after a server restore (personal or team vault) | none: the device sends wraps of the keys it holds ([sync-protocol.md](sync-protocol.md), sections 5.1 and 7.7). [decision] (D93) |
+| Account deleted, here or from another device (`401 account_deleted`) | `server_account` row deleted; the personal vault `bound = 0`; team vaults `archived` with their key rows, `account_user_id` and `server_url`; the `meta` keys of the last account and `local_auth` kept, so the same password opens the local copy. [decision] (D93) for the other devices |
+| A sync server's certificate trusted or changed by the user | the `server_tls` row of that origin written, replaced or ("Use the system's trust") deleted ([sync-protocol.md](sync-protocol.md), section 2.1). [decision] (D93) |
 | Registration or sign-in to another account on a device whose personal vault was bound before | the local records are re-encrypted with new record ids into a new personal vault (at sign-in the account's, at registration a new `vault_id`, vault key, `kdf_salt` and `recovery_key` record), recordings are re-encrypted (section 8.4), and `local_auth.personal_vault_id` names the new vault. The old personal vault is not deleted: it becomes `archived` and keeps the earlier account's `user_keypair`, `ssh_id`, `member_pin`, `roster_entry` and `credential_binding` records, with its key rows kept as in section 6.2 ([data-model.md](data-model.md), section 18.5; stage 0 decision) |
 
 The key changes of each event are one SQLite transaction; background re-encryption of records is not. Old database copies (pre-migration backups, user backups) keep the wraps they had, so they still open with the password of their time; after a personal vault rotation they open only data from before it. This is an accepted risk described in [security.md](security.md) (D11, RR6).
@@ -555,7 +611,7 @@ After a restore:
 - A restored copy keeps its `device_id` and wrapped refresh token. Running it alongside the installation it came from is not supported: the shared refresh token is detected as reused and both are signed out ([sync-protocol.md](sync-protocol.md)). To set up a second device, sign in on a fresh installation or import an export.
 - When the account password changed after the copy was taken, the copy unlocks with the old password and then needs a sign-in with the new one.
 
-Removing the local copy (log out with "delete local copy", UI 12.2) deletes everything in the data directory, including `backups/` and `recordings/`, the temporary directory and the keychain item; the app then starts at first run.
+Removing the local copy (log out with "delete local copy", UI 12.2) deletes everything in the data directory, including `backups/` and `recordings/`, the temporary directory and the keychain item; the app then starts at first run. Recently deleted and the trust choices for sync servers are tables of the database and go with it ([decision] (D93)).
 
 ## 13. Export formats
 
@@ -914,7 +970,7 @@ Test vectors for every construction in this section are added with the stage 1 i
 Team vault keys are wrapped with HPKE (RFC 9180); any implementation that supports the Auth mode works.
 
 1. Decrypt the personal vault first (section 14.2). Take the X25519 private key from the `user_keypair` record (fields in [data-model.md](data-model.md)).
-2. Find your own `user_id` and server: `server_account.user_id` and `server_url`, or the `meta` keys `account_user_id` and `account_server_url` when no account is bound any more.
+2. Find your own `user_id` and server: the team vault's own `vaults.account_user_id` and `vaults.server_url` ([decision] (D93)); for a row without them (written before that migration), `server_account.user_id` and `server_url`, or the `meta` keys `account_user_id` and `account_server_url` when no account is bound any more.
 3. Read the `hpke` row of the team vault for its `current_epoch`: `sender_user_id`, `hpke_enc` (`enc`) and `wrap` (`ct`).
 4. Find the sender's X25519 public key: your own public key when `sender_user_id` is your own id (the vault creator wraps epoch 1 to itself), otherwise the `member_pin` record with that server and `user_id`.
 5. Open the wrap: mode `mode_auth` (`0x02`); KEM DHKEM(X25519, HKDF-SHA256) `0x0020`; KDF HKDF-SHA256 `0x0001`; AEAD ChaCha20Poly1305 `0x0003`; no PSK; `aad` empty; `info` = `"shellpp/v1/hpke/vault-key"` (25 bytes) ‖ `vault_id` (16) ‖ `be32(epoch)` ‖ recipient `user_id` (16, your own) ‖ `sender_user_id` (16), 77 bytes. The plaintext is `vault_key[v, epoch]` (32 bytes).

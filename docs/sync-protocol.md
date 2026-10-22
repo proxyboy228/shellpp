@@ -5,6 +5,7 @@ This document specifies how Shell++ clients and a self-hosted sync server exchan
 - Status: stage 0 design, 2026-10-18.
 - `D<n>` refers to accepted decision n in [decisions.md](decisions.md).
 - "(stage 0 decision)" marks a choice made in stage 0 that is not in `SPEC.md`, the UI specification or an accepted decision. When a heading or a table is marked, the mark covers everything under it except values that cite a decision.
+- "[decision] (D93)" marks what was added from the owner's answers to the sync design draft (D93, 2026-10-22). The answers are the owner's; the details that carry them out are ours and can be changed, as D93 lists. A heading marked this way covers its whole section.
 - Wire examples use placeholders such as `"<b64u 73 bytes>"` for binary values and `…` inside strings for shortened tokens.
 
 Related documents:
@@ -45,8 +46,8 @@ Record terms (vault, record, class, type, envelope, wrap, tombstone, conflict co
 
 | Item | Rule |
 |---|---|
-| Scheme | HTTPS only. The client accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]` (development and tests). |
-| TLS | Terminated by a reverse proxy in front of the server (Caddy example, SPEC). The server listens on plain HTTP at `SHELLPP_BIND`, default `127.0.0.1:8080`. The client uses `reqwest` with rustls (`ring` provider) and the system root store. Custom CA certificates are not in the MVP. |
+| Scheme | HTTPS only. The client accepts `http://` only for `localhost`, `127.0.0.1` and `[::1]` (development and tests); any other `http://` origin is refused before a request is sent. [decision] (D93) |
+| TLS | Terminated in front of the server: by a reverse proxy (Caddy example, SPEC), by Cloudflare's edge with Cloudflare Tunnel, or by a proxy on a VPN address (section 2.2). The server listens on plain HTTP at `SHELLPP_BIND`, default `127.0.0.1:8080`. The client uses `reqwest` with rustls (`ring` provider) and the system root store, plus, for one origin only, a certificate the user pinned or a CA the user added (section 2.1). [decision] (D93) |
 | Server URL | The user enters an `https` origin. The client normalizes it to scheme, host and port (no path) and stores it as `server_account.server_url`: scheme and host in lowercase ASCII (an internationalized host in its punycode form), the port only when it is not the scheme's default, no trailing slash. The server must be served at the root of its origin. The normalized origin is also an input of `auth_key` and `recovery_auth_key` (section 4.1), so an account signs in only under the origin it was registered with. (stage 0 decision) |
 | Base path | `/v1` for the API. `/healthz` and `/readyz` are not versioned. |
 | Bodies | JSON, `Content-Type: application/json; charset=utf-8`. A response without a body uses `204 No Content`. |
@@ -60,6 +61,42 @@ Record terms (vault, record, class, type, envelope, wrap, tombstone, conflict co
 | Client timeouts | Connect 10 s, whole request 60 s. (stage 0 decision) |
 | IP addresses | Used in memory for rate limiting only and never stored (section 10). |
 
+### 2.1 Certificate trust
+
+[decision] (D93)
+
+The client never accepts an invalid certificate silently. For each server origin it trusts a certificate in one of three ways:
+
+| Trust | When | What is checked on every connection |
+|---|---|---|
+| System | the certificate chain validates against the system root store | rustls' normal checks: chain, host name, validity dates |
+| Pinned | the user chose "Trust this certificate" for this origin | the server's end-entity certificate equals the pinned one (SHA-256 of its DER bytes); its host name and validity dates are still checked |
+| CA added | the user added a CA certificate for this origin | the chain validates against the system roots plus that CA, with the normal name and date checks; the CA counts only for this origin, never for another server or for anything else the app connects to |
+
+- The trust choice is offered only when the handshake fails because the issuer is unknown (a self-signed certificate or a private CA). A certificate that is expired, not yet valid or not issued for the origin's host name is refused with that reason, pinned or not, and so is any other TLS failure: the operator fixes the certificate.
+- The choice dialog (UI 13.5, step 1, and the unlock screen's recovery, UI 13.2) shows the origin, the certificate's subject, issuer and validity dates, the reason the system gives, and the SHA-256 fingerprint of the certificate as 32 uppercase hex byte pairs separated by colons, the form `openssl x509 -noout -fingerprint -sha256` prints, so the operator can compare it on the server. "Add a CA certificate…" takes a PEM or DER file and shows the CA's subject and fingerprint for confirmation; the server's certificate must then validate against it.
+- A pin is like a TOFU host key (UI 10.2): once an origin has a pin, any other certificate stops sync with that server, also one the system trusts, until the user confirms it in the dialog of a changed certificate (UI 12.2): it shows the pinned and the new fingerprint and whether the system trusts the new one, and offers "Trust the new certificate" (a new pin), "Use the system's trust" (only when the system trusts the new one; removes the pin) or Cancel (sync stays stopped). Until then no request is sent to that origin: sync, recovery and invitation lookups wait; nothing is deleted.
+- With an added CA, a new certificate from that CA is accepted without a question (that is how short-lived certificates of an internal CA renew). A certificate that no longer validates offers the choice dialog again.
+- The trust choices are kept per normalized origin in the local table `server_tls` ([storage-format.md](storage-format.md), section 4.2), in plaintext, because the recovery from the unlock screen calls the server while the app is locked; they hold only public certificates and hashes. They stay after log out and go with "Delete local copy".
+- The client keeps rustls; a certificate verifier of its own adds the pin or the CA of the one origin on top of the system roots.
+
+### 2.2 Deployment and access
+
+[decision] (D93)
+
+The server is meant to run on a machine of the user's own, such as a homelab. Its documentation (`server/README.md`, written with the server in stage 7) covers three ways to reach it, each with an example configuration that the server's tests run:
+
+| Access | How | Certificate the client sees |
+|---|---|---|
+| Own domain | a public DNS name; Caddy as the reverse proxy with automatic Let's Encrypt certificates (ports 80 and 443 open); Caddy forwards to `SHELLPP_BIND` | publicly trusted: no question in the client |
+| Cloudflare Tunnel | `cloudflared` in the compose file connects out to Cloudflare; no inbound port is opened; Cloudflare's edge terminates TLS | Cloudflare's, publicly trusted: no question |
+| VPN only (Tailscale or WireGuard) | the proxy listens only on the VPN address; the name resolves only inside the VPN (Tailscale MagicDNS or an internal DNS); the certificate comes from an internal CA, such as Caddy's `tls internal` | from the internal CA: the user adds that CA once per device (section 2.1), or pins a long-lived certificate. A pin of a short-lived certificate would stop sync at every renewal. Tailscale's `tailscale cert` gives a publicly trusted certificate for the `ts.net` name instead, with no question |
+
+- In every case `SHELLPP_PUBLIC_URL` is the exact origin the clients use. Account credentials are bound to it (section 4.1), so moving from one way of access to another keeps the accounts only when scheme, host and port stay the same.
+- `SHELLPP_TRUSTED_PROXIES` names the proxy that talks to the server (Caddy, or the `cloudflared` container), so per-IP rate limits see the client's address from `X-Forwarded-For` ([security.md](security.md), section 14.4).
+- With Cloudflare Tunnel, Cloudflare sees every request in the clear: auth keys, tokens, emails, envelopes, wraps and metadata, as an active server would for the transport. Record contents stay end-to-end encrypted ([security.md](security.md), RR23). A Cloudflare Access policy that asks for a browser login cannot be passed by the client and must not cover the API.
+- Plain HTTP stays for `localhost` only (section 2).
+
 ## 3. Endpoint reference
 
 Auth column: `none`; `access` (bearer access token); `refresh` and `ticket` (the refresh token or ticket is sent in the body).
@@ -70,7 +107,7 @@ Auth column: `none`; `access` (bearer access token); `refresh` and `ticket` (the
 |---|---|---|---|---|
 | GET | `/healthz` | none | liveness: `200 {"status":"ok"}` | 3.4 |
 | GET | `/readyz` | none | readiness: `200` when the database answers, else `503` | 3.4 |
-| GET | `/v1/server` | none | server version, `api_versions`, registration mode, `smtp` flag, limits | 3.4 |
+| GET | `/v1/server` | none | server version, `api_versions`, registration mode, `smtp` flag, limits, `server_generation` | 3.4 |
 | POST | `/v1/auth/prelogin` | none | KDF parameters and salt for an email | 4.2 |
 | POST | `/v1/auth/register` | none | create an account and bind the local personal vault | 4.3 |
 | POST | `/v1/auth/login` | none | sign in, or get a login ticket for the TOTP step | 4.4 |
@@ -140,13 +177,15 @@ Vault-scoped endpoints answer `403 not_member` both for unknown vaults and for v
     "default_pull_limit": 500,
     "max_pull_limit": 1000,
     "tombstone_retention_days": 90
-  }
+  },
+  "server_generation": "<b64u 16 bytes>"
 }
 ```
 
-- `registration`: `open` or `invite` (`SHELLPP_REGISTRATION`).
+- `registration`: `open` or `invite` (`SHELLPP_REGISTRATION`). Invite-only is the default; open registration is the operator's choice in the server's configuration. [decision] (D93)
 - `smtp`: `true` when SMTP is configured. Without it, email invitations and email verification are unavailable and the client hides the "verified" mark (D14).
 - `limits`: the effective values of section 10. The names of the `limits` fields are a stage 0 decision.
+- `server_generation`: 16 random bytes created by the first `migrate` and replaced by `shellpp-server admin restored` at the end of every restore from a backup (`server_state`, section 14). A client that sees another value than the one it stored runs the server restore procedure of section 6.9 for every vault (section 6.11). A server without the field (an older one) is not checked. [decision] (D93)
 
 `GET /healthz` always answers `200 {"status":"ok"}` while the process runs. `GET /readyz` answers `200 {"status":"ok"}` when the database answers a trivial query and `503 {"status":"unavailable"}` otherwise.
 
@@ -318,9 +357,12 @@ Account bundle (`GET /v1/account` and the `account` field):
   },
   "x25519_public_key": "<b64u 32 bytes>",
   "ssh_id_public_key": "ssh-ed25519 AAAAC3Nz… shellpp:alice@example.com",
-  "created_at": "2026-10-18T22:31:05.123Z"
+  "created_at": "2026-10-18T22:31:05.123Z",
+  "quota": {"max_records": 20000, "max_bytes": 268435456, "records": 1532, "bytes": 1048576}
 }
 ```
+
+`quota` is present only when a limit applies to the account (section 10.2): the limits (`null` for one that is not set) and the account's usage. [decision] (D93)
 
 After sign-in on an empty device the client opens `kek_wrap` with its `kek`, writes the local `kek` wrap and `local_auth` (`kdf`, `kdf_salt`, and as `kdf_email` the normalized email the user typed), pulls the personal vault (which holds `user_keypair` and `recovery_key`), then lists and pulls team vaults and writes its `device_info` record. A failed unwrap means the server sent a wrong wrap; the client stops and reports an integrity error. Signing in on a device with local data merges that data into the account's personal vault (D15, [data-model.md](data-model.md), section 18.5). When the account bundle's `personal_vault.vault_id` equals the local personal vault's id (the account this device was last bound to), sign-in is a rebind, not a merge: the client keeps the rows and record ids, binds the vault again and runs the full resync of section 6.9; an account bundle that reports a personal epoch below the local one, or a `kek_wrap` that opens to another key than the one this device holds for that epoch, is a rollback and changes nothing (section 5.1, "Personal epoch rollback"). A personal vault that was bound to another account is merged without that account's `user_keypair`, `ssh_id`, `member_pin`, `roster_entry` and `credential_binding` records, which stay in a read-only archive. (stage 0 decision for the last two rules)
 
@@ -383,9 +425,10 @@ Refresh, `POST /v1/auth/token/refresh`:
 
 Server rules:
 
-- A refresh token whose row is unknown, expired or revoked answers `401 unauthenticated`.
-- A refresh token that was already used (`used_at` set) is a reuse: the server revokes every refresh and access token of its family and answers `401 refresh_token_reused`. The device must sign in again.
-- Otherwise the server sets `used_at`, inserts the successor in the same family with a new 30-day expiry and issues a new access token.
+- A refresh token whose row is unknown, expired or revoked answers `401 unauthenticated`, unless its hash is in `deleted_account_tokens`: then `401 account_deleted` (section 5.8).
+- A refresh token that was already used (`used_at` set) is a reuse: the server revokes every refresh and access token of its family and answers `401 refresh_token_reused`. The device must sign in again. One exception, the retry of a lost response (below).
+- Otherwise the server sets `used_at`, inserts the successor in the same family with a new 30-day expiry, stores the successor's hash in `successor_hash` of the used row and issues a new access token.
+- Retry of a lost response [decision] (D93): a used token is accepted once more when it was used at most 60 seconds ago, its successor has not been used, and no retry was granted for it before (`retried_at` is null). In one transaction the server marks the unused successor as used, so that presenting it later counts as a reuse and revokes the family, sets `retried_at`, inserts a new successor in the same family and issues a new access token. Anything else (a later retry, a second one, a successor already used) is a reuse as above. The access token issued with the lost response simply expires.
 - An access token is valid while its row exists, `expires_at` is in the future, the device is not revoked and the user is not disabled. Earlier access tokens of a family stay valid until they expire; revocation deletes them all.
 - The device's `last_seen_at` is updated at most once per day, with day precision.
 
@@ -394,7 +437,8 @@ Client rules:
 - The refresh token is stored only as a wrap blob under `local_secrets_key` (`server_account.refresh_token`, [storage-format.md](storage-format.md)), so it is usable only while the app is unlocked.
 - The access token lives in memory only and is discarded on lock (stage 0 decision). Sync is paused while locked; after unlock the client refreshes.
 - One refresh at a time (single flight). An `access` call that answers `401 unauthenticated` triggers one refresh and one retry. If the refresh fails with any `401`, the account enters the "signed out" state: sync stops, local data stays, and Account & Sync asks to sign in again.
-- If the response to a successful refresh is lost, the retry with the old token counts as a reuse and the device must sign in again. This is accepted in the MVP. (stage 0 decision)
+- The stored refresh token is replaced only in the transaction that stores a refresh response. A refresh that ends without a response (a network error or the 60 s request timeout) is retried with the same token at the next attempt, with the backoff of section 6.11; within 60 seconds the server accepts it once (above). A `401 refresh_token_reused` after that signs the device out as before. [decision] (D93; replaces the stage 0 rule that a lost refresh response signs the device out)
+- `401 account_deleted`: the account was deleted from another device. The client does what the deleting device did (section 5.8) and says so (UI 12.2). [decision] (D93)
 
 ### 4.7 Devices
 
@@ -416,6 +460,14 @@ A device is one installation with its own `device_id` (UUIDv7 generated locally)
 ```
 
 `DELETE /v1/devices/{device_id}` answers `204`. It sets `revoked_at` and deletes all refresh and access tokens of that device. It never wipes data on the device (principle 3); the revoked device gets `401` and enters the "signed out" state. Revoking the current device equals log out.
+
+A lost or stolen device (client flow; [decision] (D93)): Revoke for another device (UI 12.2, Devices) asks whether the device was lost or stolen. "Revoke only" sends the `DELETE` alone. "Lost or stolen" sends it and continues:
+
+1. A password change with "my old password may be compromised" turned on and fixed (section 5.1): the personal vault rotates, so the stolen device's keys open nothing written later, and the new password stops the thief from signing in again, which would clear the revocation (above).
+2. A list of the team vaults where the user is an owner, all ticked, each rotated with an explicit rotation and no removal (section 7.7, interactive recipient rules).
+3. For the team vaults the user does not own, the dialog names their owners (from the member lists) and says to ask one of them to rotate the vault's key.
+
+The stolen device also holds the user's X25519 private key, which cannot be rotated in the MVP ([security.md](security.md), RR17): a team vault rotation protects that vault only while the server refuses the stolen device, which the revocation and the new password make sure of. Nothing is wiped on the stolen device (principle 3).
 
 ### 4.8 Sensitive operations
 
@@ -478,7 +530,16 @@ Personal epoch rollback (stage 0 decision): the client never lowers `vaults.curr
 
 - When `recover/begin`, the account bundle, `GET /v1/vaults`, `GET /v1/vaults/{personal}/keys` or `details.current_epoch` of a `409 epoch_conflict` reports a personal epoch below the local current epoch, or a `kek_wrap` or `recovery_wrap` for an epoch this device holds opens to another key than the one it holds for that epoch (constant-time comparison), the client changes nothing, does not retry the request with the server's epoch, stops syncing the personal vault and shows "server state rolled back".
 - A recovery on that device then opens its local `recovery` row and only rewraps locally, without a rotation (section 5.2, "Offline recovery of the local copy").
-- Bringing such a server back to the local epochs is an open item ([security.md](security.md), section 18).
+- Bringing such a server back to the local epochs: the re-post below. It is never automatic, because a hostile server can report a lower epoch on purpose.
+
+Re-post of the personal vault's epochs ([decision] (D93); D11 amended): "server state rolled back" offers "Bring the server up to date…". Each time, after the user confirms it and re-enters the account password:
+
+1. The password is the one the server holds now. After a restore it may be the one from before a password change made after the backup: the sign-in and the re-post then use it, and the user can change the password again afterwards.
+2. For each epoch `k` from the server's current epoch + 1 up to the local current epoch, in order, the client calls `POST /v1/vaults/{personal}/key-epochs` (section 7.7) with `current_auth_key`, `epoch = k`, `prev_key_wrap` = the bytes of its local `chain` row of epoch `k`, and `account_wraps`: `vault_key[personal, k]` wrapped under the `kek` of that password and under `recovery_kek` of the local `recovery_key` record. Every step is `current + 1`, so the server's existing checks apply; the keys are the ones the device holds, so no epoch number gets a second key and no local key row changes.
+3. The server restore procedure of section 6.9 then pushes back every record the server lacks or holds older.
+4. When the server's `recovery_key` record is older than the local one (a reissue after the backup), the server's recovery verifier belongs to the older key; the client then offers a recovery key reissue (section 5.3).
+
+A `409 epoch_conflict` in step 2 (another device re-posted in between) refreshes the epochs and goes on from the server's new current epoch.
 
 ### 5.2 Recovery with the recovery key
 
@@ -601,6 +662,8 @@ The normalized email is part of the Argon2id salt ([security.md](security.md), s
 
 After the SSH ID is regenerated (the private key is the `ssh_id` record in the personal vault), the client publishes the new public line: `PUT /v1/account/ssh-id` with `{"ssh_id_public_key": "ssh-ed25519 AAAAC3Nz… shellpp:alice@example.com"}` → `204`.
 
+Two devices that regenerate at the same time can leave the server with the key published last, while the other version of the record wins the conflict (section 6.7). So the device that wrote the effective `ssh_id` version (its payload `device_id` is this device) compares the record's `public_key` with `ssh_id_public_key` of `GET /v1/account` after a pull applies a new revision of the record, after it resolves a conflict on it, and after each sign-in, and publishes the record's key when they differ. Other devices only read it. [decision] (D93)
+
 ### 5.7 Log out
 
 `POST /v1/auth/token/revoke` with `{"refresh_token": "shellpp_rt_…"}` → `204`. The server revokes the token's family and deletes its access tokens; the device row stays. The client then asks whether to keep the local copy (default) or delete it (UI 12.2). If it is kept, the vaults become unbound: the personal vault is local-only and team vaults become read-only archives (section 7.11). Signing in to the same account later is a rebind (section 4.4). Log out works offline too: the client unbinds locally and the server tokens expire on their own.
@@ -611,8 +674,10 @@ After the SSH ID is regenerated (the private key is the `ssh_id` record in the p
 
 - Blocked with `409 sole_owner` while the user is the only owner of a team vault that has other members; `details.vault_ids` lists those vaults (D14). The user transfers ownership first (section 7.6).
 - Otherwise, in one transaction, the server deletes the user, the personal vault with its records, epochs and invitations, the devices and all tokens and tickets. Team vaults where the user is the only member are deleted. In other team vaults the membership and the user's wraps are removed and `rotation_pending` is set, so a remaining owner rotates the key (section 7.7).
-- The deletion is immediate; server backups are the operator's matter ([security.md](security.md)).
-- The local copy stays (UI 12.2): the personal vault becomes local-only and team vaults become archives.
+- The records the user wrote in team vaults that keep other members stay there, its published connection log entries included; their `created_by` names a user that no longer exists. [decision] (D93)
+- In the same transaction the server copies the hash of every refresh token of the user that is not expired or revoked into `deleted_account_tokens` with the time of the deletion, and keeps nothing else: no email, no user id. For 30 days a refresh with one of them answers `401 account_deleted` with `details.deleted_at` (a date without time), so the account's other devices learn why they are signed out; the purge job then deletes the rows. [decision] (D93)
+- The deletion is immediate, with no grace period on the server ([decision] (D93)). Before it, the client's dialog offers Export and says what changes: the account cannot be restored, this device keeps its data, the members of team vaults lose the user's access while the user's records and published log entries stay with them, and the account's other devices are told at their next sync (UI 12.2). Server backups follow [security.md](security.md), section 14.4.
+- The local copy stays (UI 12.2): the personal vault becomes local-only and team vaults become archives. A device that gets `401 account_deleted` does the same in one local transaction (`server_account` row removed, `vaults.bound = 0`, team vaults `archived`, the `meta` keys of the last account kept) and says that the account was deleted from another device and that the data here is kept. [decision] (D93)
 
 ## 6. Record sync
 
@@ -698,6 +763,13 @@ For each record in `seq` order:
 
 Records of an unknown class or type (from a newer client) are stored as received, kept out of the UI and never modified or deleted by this client (section 13).
 
+Key epoch check ([decision] (D93)): a received version with `revision > synced_revision` whose `key_epoch` is below the `key_epoch` of the version this device last synced for that record (the local envelope when the record is synced, its `base_envelope` when it is pending) is refused like a failure of steps 1–3: it is not applied, the cursor advances, and sync status shows the integrity warning. An honest server never sends such a version: it accepts writes only under the current epoch (section 6.6, check 5), and epochs only rise. A removed member with an active server can still write under the epochs it held ([security.md](security.md), RR4); the check stops it from changing or deleting records that were already re-encrypted, not from adding new records under old epochs. The same check applies to `current` of a push conflict (section 6.5). A vault whose server epoch is below the device's is handled by section 5.1 or 7.7 first.
+
+Also, in the transaction of step 7 ([decision] (D93)):
+
+- applying a tombstone to a live local record keeps the record's last live envelope in Recently deleted on this device ([data-model.md](data-model.md), section 16.6);
+- inserting a record whose natural key equals that of another live record of the same type in the same vault raises a duplicate pair for the user to merge or keep ([data-model.md](data-model.md), section 18.3).
+
 ### 6.5 Push
 
 `POST /v1/vaults/{vault_id}/changes`
@@ -737,8 +809,9 @@ Client handling of item results:
 | Status | Client action |
 |---|---|
 | `ok` | `synced_revision` = pushed revision, `server_seq = seq`, clear the base stamp. If the record changed locally meanwhile, it stays pending and its base stamp becomes that of the pushed version. |
-| `conflict` | resolve with `current` as the server version (section 6.7) |
+| `conflict` | resolve with `current` as the server version (section 6.7). A `current` that fails the key epoch check of section 6.4 is not adopted and cannot win: the local version stays, is marked "not synced" with the integrity warning and is not retried automatically. [decision] (D93) |
 | `stale_key_epoch` | fetch keys, re-seal, push again in the same cycle |
+| `quota_exceeded` | the account's storage limit on the server is reached (section 6.6, check 8). Keep the local version and mark it "not synced: the server's storage limit is reached"; sync status shows the usage from the account bundle (section 4.4). Retried at "Sync now" and after this device pushed a deletion, not in every cycle. Local data is never touched (principles 2 and 3). [decision] (D93) |
 | `insufficient_role` | the local role is stale. Refresh `GET /v1/vaults`; the rejected local version stays visible as "not synced: no write access" with "Copy to personal vault" and "Discard". (stage 0 decision) |
 | `invalid_envelope`, `class_not_allowed`, `payload_too_large` | a client bug or an oversized record: keep the local version, mark it "not synced" with the code, show it in sync errors, do not retry automatically |
 | unknown status | keep the record pending and retry in the next cycle |
@@ -760,7 +833,8 @@ Per item, in this order (order: stage 0 decision):
 5. `key_epoch ≠ current_epoch` → `stale_key_epoch`.
 6. A stored record with a different class, or a record with the same `record_id` stored in another vault → `invalid_envelope`. The class of a record never changes; otherwise an editor could overwrite an owner-only record by relabeling it. A record id belongs to one vault, so a member cannot push into a team vault a record that reuses the id of another user's personal record. (stage 0 decision)
 7. Let `stored` be the stored revision (`0` when absent). Accept if and only if `stored = base_revision` and envelope `revision > base_revision`. Otherwise → `conflict` with `current` = the stored `{seq, envelope}`, or `current: null` when the record is absent.
-8. Accept: `seq = ++vaults.last_seq`; write the row with `class`, `revision`, `key_epoch`, `tombstone`, `envelope`, `updated_by`, `updated_by_device` (from the access token), `received_at = now`; set `created_by` on insert; set `tombstoned_at = now` for a tombstone, `NULL` otherwise. Status `ok` with `seq`.
+8. Quota ([decision] (D93); only while a limit applies to the pushing account, section 10.2) → `quota_exceeded` when the item would raise the pushing account's usage above one of its limits. The usage of an account is the number of live records (not tombstones) whose `created_by` is the account, in every vault, and the sum of their envelope lengths. A new record, or a tombstone made live again, adds one record and its length to its creator; an update of a live record adds the growth of its length to the record's creator. The item is refused only when that creator is the pushing account: a member is never stopped by another account's quota, whose growth the record size limit bounds. Tombstones and writes that do not grow (re-encryption among them) are never refused.
+9. Accept: `seq = ++vaults.last_seq`; write the row with `class`, `revision`, `key_epoch`, `tombstone`, `envelope`, `updated_by`, `updated_by_device` (from the access token), `received_at = now`; set `created_by` on insert; set `tombstoned_at = now` for a tombstone, `NULL` otherwise. Status `ok` with `seq`.
 
 A later item in the same request sees the effect of earlier ones.
 
@@ -782,6 +856,10 @@ Inputs: the local pending version L (revision `rL`, stamp `(hL, dL)`), the serve
 - L wins: re-seal L with `revision = max(rL, rS) + 1` under the current epoch, same payload and HLC; set `synced_revision = rS` and base stamp `= (hS, dS)`; L stays pending and is pushed in this cycle.
 - Delete versus edit follows the same rules; a losing deletion becomes a conflict copy with `losing_deleted: true`.
 - Type rule for `roster_entry` (stage 0 decision): under rule 5, a version whose status is `removed` wins over one whose status is not, whatever the stamps; between two versions that both say `removed`, or that both do not, the stamps decide. Rules 1–4 are unchanged, so an explicit accept written on top of a synced `removed` version still wins over a re-encryption of that version (rule 3). This stops a version written on a device that the server keeps on a forked view from overwriting a removal through a push conflict ([security.md](security.md), section 5.7).
+- Type rules of D93 ([decision]; Choice 7 (c): a winner rule only where the type needs one; every type still keeps its conflict copy). Under rule 5, as for `roster_entry`:
+  - `known_host`: a version whose `marker` is `revoked` wins over one that is not revoked, whatever the stamps, so a concurrent edit never brings a revoked host key back;
+  - `member_pin`: when both versions hold the same `x25519_public_key`, the one with `verified = true` wins, so a fingerprint comparison is never lost to a concurrent write; with different keys the stamps decide, and the pin shows the key change of section 7.1.
+  Both rules get a security review before stage 7 ships ([security.md](security.md), section 18).
 - If the record is itself a conflict copy, the loser is dropped and no copy of a copy is created. (stage 0 decision)
 - Only the client that detects the conflict creates the copy; the other side already has its version on the server.
 - Rules 3 and 4 keep background re-encryption (section 7.9) from producing spurious conflict copies.
@@ -792,7 +870,7 @@ Inputs: the local pending version L (revision `rL`, stamp `(hL, dL)`), the serve
 
 - A conflict copy is a new record in the same vault and class: type `conflict` (type code `class << 8 | 0xFF`), a new UUIDv7 `record_id`, `revision = 1`, a fresh HLC and this device's `device_id`. Its `data` holds `original_record_id`, `original_type`, `original_revision`, `losing_hlc`, `losing_device_id`, `losing_deleted` and `losing_data`.
 - It is pushed with `base_revision = 0`, normally in the same request as the winner, so every device sees it.
-- UI: a badge on the object, "Conflicts: N" in Account & Sync and the comparison dialog (UI 13.6). N counts live conflict records.
+- UI: a badge on the object, "Conflicts: N" in Account & Sync and the comparison dialog (UI 13.6). N counts live conflict records. Every type keeps conflict copies (D12); a type without a card or panel of its own (for example `vault_meta`, `snippet_package`, `workspace`, `terminal_theme`, `highlight_rule`, `history_entry`, `connection_log_entry`, `credential_binding`, `device_info`) is compared in a generic view of its fields with secrets masked (UI 13.6). [decision] (D93)
 - "Keep this" tombstones the conflict record. "Keep other" writes `losing_data` (or a deletion when `losing_deleted`) as a new revision of the original with a fresh HLC, then tombstones the conflict record. If the original is absent on the server, rule 1 applies.
 - Role rules apply: a viewer writes only its own connection log copies (section 7.5), so a viewer creates conflict copies only in class `connection_log`, where any member may create records.
 
@@ -811,18 +889,19 @@ Full resync of a vault (on `410 cursor_expired` with `reason = "purged"`, and fo
 2. Synced live local records of the covered classes that were not received are kept and set to `synced_revision = 0`, as in the server restore below: they become pending and are pushed again with `base_revision = 0`. Their `base_envelope` is set to the local synced envelope, so if the server does hold a version after all (the push gets `conflict`), rule 4 of section 6.7 lets the server version win without a conflict copy. Synced local tombstones that were not received stay as they are and are purged after 90 days as usual.
 3. Keep pending local records; if absent on the server, their push gets `current: null` and they are pushed again with `base_revision = 0`.
 4. Set the cursor to the last `next_cursor`. If another `410` arrives during the resync (a purge ran in between), restart once from `0`.
-5. Sync status reports how many records were pushed back because the snapshot did not contain them. (stage 0 decision)
+5. Every record pushed back in step 2 goes into the "Brought back" list of this device for review ([data-model.md](data-model.md), section 16.7; UI 12.2), with "Delete again" (an ordinary deletion, for a user who may write the vault) and "Keep". Records of types the user cannot delete in the interface (`vault_meta`, `user_keypair`, `ssh_id`, `recovery_key`, `member_pin`, `roster_entry`, `device_info`, `history_hint_state`) are pushed back and only counted. [decision] (D93; Choice 2 (c); the stage 0 rule only counted them)
 
-A deletion whose tombstone was purged before this device saw it (the device was away for more than 90 days) is therefore undone: the record returns to the server and to the other devices, where it can be deleted again. In a team vault, a viewer's push of such a record gets `insufficient_role` and the record stays local, as "not synced: no write access" (section 6.5). This is the price of principle 3 against a server that can force resyncs (D12 sets the 90-day retention; [security.md](security.md), RR1).
+A deletion whose tombstone was purged before this device saw it (the device was away for more than 90 days) is therefore undone: the record returns to the server and to the other devices, and the "Brought back" list lets the user delete it again in one place. In a team vault, a viewer's push of such a record gets `insufficient_role` and the record stays local, as "not synced: no write access" (section 6.5). This is the price of principle 3 against a server that can force resyncs (D12 sets the 90-day retention; [security.md](security.md), RR1).
 
-Server restore (`410 cursor_expired` with `reason = "ahead"`, best effort; stage 0 decision): the server database was restored from a backup and lost writes the client had already seen.
+Server restore (`410 cursor_expired` with `reason = "ahead"`, or a new `server_generation` (section 3.4) for every bound vault; best effort; stage 0 decision, the second trigger [decision] (D93)): the server database was restored from a backup and lost writes the client had already seen.
 
 1. Pull a full snapshot from `since = 0`. Records with a revision higher than the local one are applied as usual.
 2. For every local record of the vault, set `synced_revision` to the revision the server returned, or `0` when the server has no such record. Every record newer than the server copy becomes pending, and the normal push restores it. Synced records missing from the snapshot are kept and pushed, as in a full resync.
 3. A conflict that still arises is decided by rule 5 of section 6.7 without a conflict copy only when the server copy's revision is below the synced revision this device held before step 2, because the server copy is then the stale one. Otherwise the normal rules of section 6.7 apply.
-4. Sync status shows a "server state rolled back" warning. Owners should repeat member removals made after the backup.
+4. Sync status shows a "server state rolled back" warning. Records pushed back here are not added to the "Brought back" list: after a restore they are the writes the backup lost.
+5. When the server's epoch of the vault is below the device's, the push of step 2 waits: the device stops writing to the vault and, after the user's confirmation, first re-posts the newer epochs: section 5.1 for the personal vault, section 7.7 for a team vault, whose re-post also removes again the members the owner's roster marks `removed`. This replaces the stage 0 advice that owners repeat member removals made after the backup, which would have made a new key under an epoch number the members already hold with another key, and so a fork. [decision] (D93)
 
-The check only fires while `last_seq` is below the client's cursor; a restored server that has since received more writes than it lost is not detected (D14).
+The cursor check only fires while `last_seq` is below the client's cursor, and a restored server that has since received more writes than it lost is not detected by it (D14). `server_generation` catches every restore that ends with `shellpp-server admin restored`, as the operator documentation requires; a hostile server can skip it, so D14 still holds. What a restore brings back on the server (deleted accounts, revoked devices, deleted vaults) is undone by the operator's documented manual steps ([security.md](security.md), section 14.4; D93). [decision] (D93)
 
 ### 6.10 Selective sync
 
@@ -831,7 +910,7 @@ The check only fires while `last_seq` is below the client's cursor; a restored s
 - Toggles are per device, stored in `local_settings`, and apply to both push and pull of the personal vault. Team vaults always sync every allowed class.
 - Pull passes the enabled classes in `classes`; class 1 is always included. The cursor advances over filtered records.
 - Records of a disabled class are not pushed; their local changes stay pending. Turning a toggle off never deletes data on the server or on the device.
-- Turning a toggle on adds the class to `sync_state.resync_classes`. The next cycle runs a class-limited full resync (section 6.9 with `classes` = the new classes and `since = 0`, then step 2 for those classes only) and removes the classes from the list. An interrupted class-limited resync restarts from `0`. Records it also delivers through the main cursor are ignored as duplicates.
+- Turning a toggle on adds the class to `sync_state.resync_classes`. The next cycle runs a class-limited full resync (section 6.9 with `classes` = the new classes and `since = 0`, then steps 2 and 5 for those classes only, so records it pushes back are listed in "Brought back" too [decision] (D93)) and removes the classes from the list. An interrupted class-limited resync restarts from `0`. Records it also delivers through the main cursor are ignored as duplicates.
 - Conflict copies have the class of their original and follow the same toggle.
 - Two toggles share the class `appearance` (custom terminal themes and keyword highlighting rules, UI 12.2). The class is pulled while either toggle is on, and the per-type rule for pushing and applying records is in [data-model.md](data-model.md), section 17.
 
@@ -841,11 +920,12 @@ Triggers: unlock, app start (after unlock), 2 s after the last local change, eve
 
 One cycle:
 
-1. Ensure a valid access token (section 4.6).
+1. Ensure a valid access token (section 4.6). At unlock, and then at most every 10 minutes, also `GET /v1/server`: a `server_generation` other than the stored `server_account.server_generation` starts the server restore procedure of section 6.9 for every bound vault in this cycle, and the new value is stored only once that procedure has finished for all of them, so an interrupted one runs again. [decision] (D93)
 2. `GET /v1/vaults`; reconcile with local vaults. The team vault items that need keys, pins or the roster (a new vault, a newer epoch, `rotation_pending`) run after the personal vault pull of step 3, because the personal vault holds `user_keypair`, the member pins and the roster entries ([architecture.md](architecture.md), section 4.5):
    - a new vault: fetch keys, open the wrap (section 7.1), full resync;
    - a bound vault missing from the list: confirm with a pull; `403 not_member` archives it (section 7.11);
    - `current_epoch` newer than the local one: fetch the member list and the keys, accept or refuse the epoch (section 7.7);
+   - `current_epoch` below the local one: change no key row, stop writing to the vault and show "server state rolled back"; an owner device may re-post its epochs after the user's confirmation (section 7.7, "A server epoch below the device's") [decision] (D93);
    - `rotation_pending = true` and the caller is an owner: rotate automatically if the roster allows it, otherwise notify the owner and wait for an interactive confirmation (section 7.7, "Rotation recipients").
 3. For each active bound vault with `last_seq ≠ cursor` or non-empty `resync_classes`, the personal vault first: pull until `has_more = false`.
 4. Push pending records per vault and handle results. If resolution produced new pending writes, repeat steps 3–4, at most 3 rounds per cycle. (stage 0 decision)
@@ -1204,6 +1284,14 @@ Epoch acceptance (every member, before using epoch `e + k` of a vault whose epoc
 
 A client that holds no earlier key of the vault (a new member, or a new device of a member) checks only steps 1 and 2. It opens its first wrap only when the sender is this account, or a user whose pin has `verified = true` or `origin = invitation_accept` ([data-model.md](data-model.md), section 6.3). Any other pin does not count, wherever it was made: from this vault's member list, from another vault's member list or `GET /v1/users/{user_id}/keys`, on this or another device of the account. Pins are synced and created on first sight of any key, so an account the server controls can already have one. Otherwise the client shows the epoch warning of step 4 with a fingerprint comparison and opens the wrap only after an explicit accept that follows the comparison, which also marks the sender's pin verified. (stage 0 decision for the pin conditions) Team shows the current epoch, the sender of the wrap this client opened (email and local fingerprint) and the epoch's `created_at`, so members can compare them out of band after a removal.
 
+A server epoch below the device's ([decision] (D93); Choice 3 (b)): after a restore, or a rollback by a hostile server, `GET /v1/vaults` can report a team vault epoch below the one the device holds. The device never lowers it ([storage-format.md](storage-format.md), section 6.2): it changes no key row, keeps reading, stops writing to the vault (local changes stay pending) and shows "server state rolled back" in Team and in sync status. On a member that is not an owner the message says to ask an owner. An owner's device offers "Bring the server up to date…", every time only after the user's explicit confirmation, never automatically, because a hostile server can report a lower epoch on purpose:
+
+1. Fetch the member list and update the roster (section 7.1).
+2. For each epoch `k` from the server's current epoch + 1 up to the local current epoch, in order, `POST /v1/vaults/{vault_id}/key-epochs` with `epoch = k`, `prev_key_wrap` = the bytes of the local `chain` row of epoch `k`, and an HPKE wrap of `vault_key[v, k]` for every remaining member under the interactive recipient rules (rule 3 above: one confirmation dialog for the whole re-post). The first step also carries `remove_user_ids`: the members this device's roster marks `removed`. Each step is `current + 1`, so the server's checks apply unchanged, and every epoch number keeps the key the members already hold: their chain check (step 3 of the epoch acceptance) matches, and no fork arises.
+3. The server restore procedure of section 6.9 then pushes back the records the server lacks or holds older, re-sealed under the current epoch where needed.
+
+Members who joined after the backup are not members on the restored server; the owner invites them again. A `409 epoch_conflict` (another owner re-posted in between) refreshes the keys and goes on from the server's new current epoch.
+
 ### 7.8 Member removal
 
 1. The owner chooses Remove for a member (UI 12.3).
@@ -1259,7 +1347,7 @@ sequenceDiagram
 
 ### 7.11 Archives and vault deletion
 
-- When a team vault becomes inaccessible (removal, leave, vault deletion, account deletion, log out with the local copy kept), the client sets `vaults.status = 'archived'` and keeps every record and key it has. Nothing is wiped (principle 3). The personal vault is never archived: it becomes local-only (`bound = 0`) and stays writable (sections 5.7, 5.8). The one exception is the old personal vault of an earlier account, which becomes an archive when the device binds to another account (section 4.3, [data-model.md](data-model.md), section 18.5).
+- When a team vault becomes inaccessible (removal, leave, vault deletion, account deletion, `401 account_deleted` [decision] (D93), log out with the local copy kept), the client sets `vaults.status = 'archived'` and keeps every record and key it has. The row keeps the `account_user_id` and `server_url` of the account it was bound to, which its HPKE wrap needs to open later ([storage-format.md](storage-format.md), section 4.2; [decision] (D93)). Nothing is wiped (principle 3). The personal vault is never archived: it becomes local-only (`bound = 0`) and stays writable (sections 5.7, 5.8). The one exception is the old personal vault of an earlier account, which becomes an archive when the device binds to another account (section 4.3, [data-model.md](data-model.md), section 18.5).
 - An archived vault is read-only and offers Export and "Copy to personal vault" (D14). Pending local changes in it are kept and can be copied the same way. The client stops syncing it and keeps its old keys to read it.
 - `DELETE /v1/vaults/{vault_id}` (owner, team vault only) → `204`: the server deletes the vault's records, epochs, wraps, members and invitations. Every member, the deleting owner included, keeps a local archive. The personal vault is deleted only with the account (`422 validation_failed`).
 
@@ -1282,7 +1370,8 @@ Error body:
 | 401 | `invalid_credentials` | wrong email, auth key or recovery key (one generic code) | ask for the password or recovery key again; in a recovery, also say that the email may have changed on another device and offer the offline recovery (section 5.2) |
 | 401 | `invalid_totp` | wrong or reused TOTP code | ask for the code again |
 | 401 | `ticket_expired` | login or recovery ticket expired or out of attempts | restart sign-in or recovery |
-| 401 | `refresh_token_reused` | a rotated refresh token was reused; the family is revoked | "signed out", sign in again |
+| 401 | `refresh_token_reused` | a rotated refresh token was reused (other than the one retry of section 4.6); the family is revoked | "signed out", sign in again |
+| 401 | `account_deleted` | the account was deleted, at most 30 days ago; `details.deleted_at` is the date (D93) | keep the local copy as the deleting device does and say so (section 5.8). [decision] (D93) |
 | 403 | `forbidden` | generic denial | show the error |
 | 403 | `not_member` | the caller is not (or no longer) a member of the vault | archive the vault |
 | 403 | `insufficient_role` | the role does not allow the operation | refresh vaults, show the error |
@@ -1304,7 +1393,7 @@ Error body:
 | 500 | `internal` | server error | back off and retry |
 | 503 | `unavailable` | database unavailable or maintenance | back off and retry |
 
-Push item statuses (section 6.5) reuse the codes `conflict`, `stale_key_epoch`, `invalid_envelope`, `insufficient_role`, `class_not_allowed` and `payload_too_large`, plus `ok`.
+Push item statuses (section 6.5) reuse the codes `conflict`, `stale_key_epoch`, `invalid_envelope`, `insufficient_role`, `class_not_allowed` and `payload_too_large`, plus `ok` and `quota_exceeded` (D93: the pushing account's storage limit, section 6.6, check 8). `account_deleted` and `quota_exceeded` are compatible additions to v1 (section 13). [decision] (D93)
 
 ## 9. Server-visible metadata and padding
 
@@ -1312,7 +1401,8 @@ The complete list of what the server sees is owned by [security.md](security.md)
 
 - Per record: `vault_id`, `record_id` (UUIDv7, so its creation time), class (the sync category), revision, key epoch, tombstone flag and its time, padded size, `seq`, receive time, and the user and device of the creating and the latest write. Exact types, names, addresses, secrets, HLC values and `device_id` inside payloads are encrypted.
 - Padding: each payload is padded to a multiple of 256 bytes before encryption, so the server learns the size only in 256-byte steps ([storage-format.md](storage-format.md)). Key wraps have fixed sizes (73 bytes for wrap blobs, 32 + 48 bytes for HPKE).
-- Per account and vault: email, verifiers, KDF parameters, opaque wraps, public keys, TOTP state, devices with day-precision last-seen, members, roles, epochs and invitations.
+- Per account and vault: email, verifiers, KDF parameters, opaque wraps, public keys, TOTP state, devices with day-precision last-seen, members, roles, epochs and invitations; the account's storage limits and usage. [decision] (D93)
+- After an account deletion, for 30 days: the hashes of the account's refresh tokens and the deletion time, nothing else (section 5.8). [decision] (D93)
 - Derived: record counts per class and vault, activity timing, which devices sync when. Request sizes reveal batch sizes.
 - IP addresses and request timing are seen during requests and used in memory for rate limiting only.
 
@@ -1342,6 +1432,7 @@ The failed sign-in limit is keyed by the normalized email whether or not the acc
 | Envelope | 262 232 bytes |
 | Push request | 500 items and 16 MiB body |
 | Pull `limit` | default 500, maximum 1000; the response stops after 8 MiB of envelopes, always with at least one record |
+| Storage per account [decision] (D93) | off by default. `SHELLPP_QUOTA_MAX_RECORDS` and `SHELLPP_QUOTA_MAX_BYTES` set a default for every account (unset: no limit); `shellpp-server admin user quota <user_id>` sets or clears the limits of one account (`users.quota_max_records`, `users.quota_max_bytes`). A limit only stops pushes (`quota_exceeded`, section 6.6, check 8); nothing stored is deleted and no local data is touched (principles 2 and 3) |
 
 ### 10.3 Retention and timers
 
@@ -1349,7 +1440,9 @@ The failed sign-in limit is keyed by the normalized email whether or not the acc
 |---|---|---|
 | Tombstones | 90 days on the server, then purged and `min_valid_seq` raised; clients purge synced tombstones older than 90 days | D12 |
 | Access token | 15 minutes | stage 0 decision |
-| Refresh token | 30 days, rotated on use | stage 0 decision |
+| Refresh token | 30 days, rotated on use; a used token is accepted once more within 60 s while its successor is unused (section 4.6) | stage 0 decision; the retry [decision] (D93) |
+| Refresh token hashes of a deleted account | 30 days, then purged (section 5.8) | [decision] (D93) |
+| Recently deleted (client, never synced) | 90 days on each device, then purged ([data-model.md](data-model.md), section 16.6) | [decision] (D93) |
 | Login ticket | 5 minutes, 5 attempts | stage 0 decision |
 | Recovery ticket | 10 minutes, 5 attempts | stage 0 decision |
 | Vault invitation | 7 days, single use; final-state rows purged after 30 days | stage 0 decision |
@@ -1359,7 +1452,9 @@ The failed sign-in limit is keyed by the normalized email whether or not the acc
 | Device last seen | day precision | stage 0 decision |
 | Sync | push 2 s after the last change; poll every 60 s while unlocked | stage 0 decision |
 
-The purge job (`shellpp-server admin purge`, also run daily by `serve`) deletes expired tombstones (raising `min_valid_seq`), expired or revoked tokens and tickets, expired email and registration codes, and invitations in a final state for more than 30 days; it marks invitations past `expires_at` as `expired`.
+The purge job (`shellpp-server admin purge`, also run daily by `serve`) deletes expired tombstones (raising `min_valid_seq`), expired or revoked tokens and tickets, expired email and registration codes, invitations in a final state for more than 30 days, and rows of `deleted_account_tokens` older than 30 days ([decision] (D93)); it marks invitations past `expires_at` as `expired`. A used refresh token row stays until its family is revoked or it expires, so the retry rule of section 4.6 can find it.
+
+Irreversible events are logged with ids only, at `info`: account deleted (`user_id`), device revoked (`device_id`, `user_id`), vault deleted (`vault_id`), members removed (`vault_id`, `user_id`s). After a restore from a backup, the operator's manual steps ([security.md](security.md), section 14.4) use them to delete again the accounts deleted after the backup (`admin user delete`), revoke again the devices (`admin device revoke`) and delete again the vaults (`admin vault delete`); owners' clients repeat the removals through the re-post of section 7.7. [decision] (D93)
 
 ## 11. Client and server responsibilities
 
@@ -1373,7 +1468,10 @@ The purge job (`shellpp-server admin purge`, also run daily by `serve`) deletes 
 | Roles | hides actions the role does not allow | enforces per class on push and per endpoint |
 | Key pinning | TOFU pins, rosters, epoch acceptance and fingerprint display | none (cannot verify keys) |
 | Record identity | (`vault_id`, `record_id`), with `record_id` unique on the device | (`vault_id`, `record_id`), with `record_id` unique on the server |
-| Deletions | only received tombstones delete; absent records are pushed back | purges tombstones after 90 days |
+| Deletions | only received tombstones delete; absent records are pushed back and listed in "Brought back"; every deleted record is kept 90 days in Recently deleted on each device. [decision] (D93) | purges tombstones after 90 days |
+| TLS trust | system roots, or a pin or an added CA for one origin; a changed pinned certificate stops sync until confirmed (section 2.1). [decision] (D93) | none: TLS ends at the proxy, Cloudflare or the VPN proxy (section 2.2). [decision] (D93) |
+| Restores | runs the restore procedure on a new `server_generation`; re-posts newer epochs after the user's confirmation. [decision] (D93) | `admin restored` replaces `server_generation`; the operator follows the manual steps. [decision] (D93) |
+| Storage limits | shows `quota_exceeded`, keeps the local version. [decision] (D93) | counts and enforces per-account limits when set. [decision] (D93) |
 | Retention | purges own synced tombstones after 90 days | purges tombstones, tokens, tickets, invitations |
 
 ## 12. Testing requirements
@@ -1382,6 +1480,7 @@ The purge job (`shellpp-server admin purge`, also run daily by `serve`) deletes 
 
 - Unit tests in `crates/core`: HLC local and receive rules with drift; every row of the conflict table in section 6.7; pull application table in section 6.4, including a pulled record that reuses the id of a record in another vault; full resync keeps and pushes back every record missing from the snapshot, for every type of section 6.9; selective sync with a class enabled later; roster transitions and the recipient rules of section 7.7 (an automatic rotation stops for a server-added member, for an `accepted` member whose pin is unverified and for an entry whose `epoch_commit` names another key of the current epoch number; an interactive retry after `epoch_conflict` asks again when the set grew); the `roster_entry` type rule of section 6.7; epoch acceptance refuses a removed sender, a non-owner sender and a broken chain over several epochs; a first wrap from a sender whose pin is neither verified nor from an invitation accept shows the epoch warning; a personal epoch below the local one changes no key row; KDF floor, ceilings, the email-bound salt and the origin in both auth keys.
 - Server integration tests on PostgreSQL and SQLite: acceptance rules and check order of section 6.6, including a `record_id` already stored in another vault; `seq` monotonic under concurrent pushes; `next_cursor` with class filters; `410` for purged and ahead cursors; role matrix of section 7.5; rotation checks, including `rotation` inside password change, recovery and reissue; two concurrent recovery key reissues, of which exactly one commits; an `email/verify` or `recover/complete` whose `email` differs from the pending or current email answers `422`, and an email change deletes open recovery tickets; invitation state machine; refresh reuse revokes the family.
+- Added by D93 ([decision]): client: a pulled or `current` version whose key epoch is below the local synced one is refused; a full resync lists what it pushed back and "Delete again" deletes it; a tombstone applied to a live record keeps its last live envelope in Recently deleted, and Restore brings it back under its id; a duplicate pair is raised on a pulled insert with an equal natural key, and Merge rewrites every reference; the `known_host` and `member_pin` type rules of section 6.7; certificate trust (system, pinned, CA added; a changed pinned certificate stops sync, also one the system trusts; expired and wrong-name certificates are refused even when pinned; `http://` refused outside loopback). Server: `quota_exceeded` with the check of section 6.6 (another account's quota never stops a member; tombstones and re-encryption pass); the refresh retry within 60 s once, and a reuse after it; `account_deleted` for 30 days and nothing kept but hashes; `server_generation` replaced by `admin restored`. E2E: a restore from a backup with newer epochs on a device (personal and team vault) re-posted with the same keys and no fork; the encrypted backup recipe and a restore from it.
 - Sync E2E (two clients and a server): concurrent edit and delete versus edit produce one conflict copy on both devices; member removal leaves the removed client with a readable archive; re-encryption finishes and produces no conflict copies; password change signs the other device out; after a recovery key reissue the other device signs in again and rebuilds its local `recovery` wrap from the new record.
 
 ## 13. Versioning and compatibility
@@ -1389,7 +1488,7 @@ The purge job (`shellpp-server admin purge`, also run daily by `serve`) deletes 
 (stage 0 decision)
 
 - The API major version is the path prefix `/v1`. A breaking change gets a new prefix; a server may serve several, listed in `api_versions` of `GET /v1/server`. A client that finds no version it supports shows "incompatible server" and does not sync.
-- Compatible changes within `v1`: new endpoints, new optional request fields, new response fields, new error codes and new item statuses. Both sides ignore unknown JSON fields. A client maps an unknown error code by its HTTP status and treats an unknown item status as "keep pending, retry later".
+- Compatible changes within `v1`: new endpoints, new optional request fields, new response fields, new error codes and new item statuses. Both sides ignore unknown JSON fields. D93 adds such changes only: `server_generation` in `GET /v1/server`, `quota` in the account bundle, the code `account_deleted` and the item status `quota_exceeded`. [decision] (D93) A client maps an unknown error code by its HTTP status and treats an unknown item status as "keep pending, retry later".
 - Formats carry their own versions and evolve independently: envelope and wrap blob `version` bytes ([storage-format.md](storage-format.md)), payload `v` ([data-model.md](data-model.md)) and KDF `v` ([security.md](security.md)). The v1 server accepts only envelope version 1.
 - A new record class needs server support, because the server validates classes. A client pushes a class introduced after v1 only to a server that advertises it; the advertisement field is added together with the first such class.
 - A new record type inside a known class needs no server change. Older clients store such records as received, keep them out of the UI and never modify or delete them, so data written by newer clients survives older ones.
@@ -1417,6 +1516,8 @@ CREATE TABLE users (
   totp_enabled           BOOLEAN NOT NULL DEFAULT FALSE,
   totp_last_step         BIGINT,                   -- replay protection
   disabled               BOOLEAN NOT NULL DEFAULT FALSE,
+  quota_max_records      BIGINT,                   -- NULL: the server default (D93)
+  quota_max_bytes        BIGINT,                   -- NULL: the server default (D93)
   created_at             TIMESTAMPTZ NOT NULL,
   credentials_changed_at TIMESTAMPTZ NOT NULL
 );
@@ -1437,7 +1538,20 @@ CREATE TABLE refresh_tokens (
   created_at TIMESTAMPTZ NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
   used_at    TIMESTAMPTZ,
-  revoked_at TIMESTAMPTZ
+  revoked_at TIMESTAMPTZ,
+  successor_hash BYTEA,                           -- SHA-256 of the token issued when this one was used (D93)
+  retried_at     TIMESTAMPTZ                      -- the one retry of a lost response was granted (D93)
+);
+
+CREATE TABLE deleted_account_tokens (             -- D93: 30 days after an account deletion
+  token_hash BYTEA PRIMARY KEY,                   -- SHA-256 of a refresh token of the deleted account
+  deleted_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE server_state (                       -- D93: one row
+  id                INTEGER PRIMARY KEY CHECK (id = 1),
+  server_generation BYTEA NOT NULL,               -- 16 random bytes, replaced by `admin restored`
+  changed_at        TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE access_tokens (
@@ -1563,4 +1677,5 @@ Schema notes:
 - The personal vault has one `vault_members` row with role `owner`, so authorization is uniform for both vault kinds. (stage 0 decision)
 - Pull uses `UNIQUE (vault_id, seq)`; the partial index serves the tombstone purge.
 - `records_record_id` backs check 6 of section 6.6: an id stored in one vault cannot be written into another. (stage 0 decision)
+- The quota columns, `refresh_tokens.successor_hash` and `retried_at`, and the tables `deleted_account_tokens` and `server_state` come from D93 ([decision]). The usage of check 8 of section 6.6 is counted from `records` (live rows by `created_by`); a server may keep running totals per account, updated in the push transaction.
 - Server migrations are written in stage 7 together with the server; this listing is the target schema.

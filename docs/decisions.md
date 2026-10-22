@@ -1424,3 +1424,52 @@ Status: run 5 decision, 2026-10-22 (plan, section 12: a review of what grows or 
 - Not changed: the SFTP Back history and the finished jobs of the transfer queue (until "Clear finished") grow with the user's own actions; the forwarding maps are bounded by the number of hosts and rules.
 
 **Spec impact:** `docs/storage-format.md` 8.3.
+
+## The owner's answers to the sync design draft
+
+### 93. The owner's answers to the sync design draft
+
+Status: accepted, 2026-10-22 (owner's choice; the 18 questions of `docs/sync-design-draft.md`, section 11, and a new requirement: the server will run in the owner's homelab). The owner gave the number 93. There is no decision 92: run 5 ended at D91 and nothing took 92 since; the owner's number is kept. Amends D11 (a server whose personal epoch is below the device's), D12 (records missing from a snapshot), D14 (server restores, the transport) and D15 (deletions that arrive by sync) where they differ. Closes the draft. SPEC stage 7 is still not started: this changes documents only.
+
+**Decision** (the owner's answers; each option as the draft worded it):
+
+1. The stage 0 design of `docs/sync-protocol.md` and `docs/security.md` (draft, section 2.3) is the accepted basis for stages 7 and 8; only the choices below were open.
+2. Storage quotas (Choice 1): (b), optional per-account limits (records, bytes) set by the operator, off by default; a push item status `quota_exceeded` marks the record "not synced". Registration stays invite-only by default; the operator turns open registration on in the server's configuration (anyone can run a server of their own).
+3. Records missing from a full snapshot (Choice 2): (c), they are pushed back and listed for review, with "Delete again" per record.
+4. A server whose key epoch is below the device's (Choice 3): (b), the device that holds the newer epochs re-posts them with the same keys, one by one, through the existing `key-epochs` endpoint (personal vault: after password re-entry; team vault: an owner, under the interactive recipient rules, removing again the users its roster marks `removed`), then pushes the records back. Every time only after the user's explicit confirmation, never automatically.
+5. Team vault archives of an earlier account (Choice 4): (a), `account_user_id` and `server_url` are stored on each `vaults` row (an additive migration).
+6. A pulled record whose key epoch goes down (Choice 5): yes, (b): a pulled version whose `key_epoch` is below that of the local synced version is refused, with the integrity warning.
+7. The same object created on two devices (Choice 6): (c), a duplicate hint with Merge, extending the merge of identical keys to the other types by natural key.
+8. Conflict copies of types without a view (Choice 7): (a), copies for all types, and a generic comparison (fields, secrets masked) for types without a card; plus (c), a winner rule per type where the type needs one, as for `roster_entry`.
+9. Concurrent SSH ID regeneration: yes, the device whose `ssh_id` version wins re-publishes its public key when the server's differs.
+10. Deletions by other devices and members (Choice 8): (b), and for every vault, the personal one included, not only team vaults. "Recently deleted" (the trash): every deleted record, deleted on this device or arriving from another one, is kept on this device for 90 days, encrypted, and never synced. Actions: Restore, Export, Delete forever and "Empty trash". Its place in the interface is ours to propose (below). Undo for 5 seconds stays.
+11. A lost or stolen device (Choice 9): (b), Revoke asks "Lost or stolen?"; yes continues with a password change that rotates the personal vault and offers to rotate the team vaults the user owns; for the other team vaults it says to ask an owner.
+12. Account deletion (Choice 10): (a), immediate, with the dialog of (c), which offers Export and says what the members lose.
+13. The account's other devices (Choice 11): yes, (b): the server keeps the account's refresh token hashes and the date for 30 days and answers `401 account_deleted`; the client says so, and that the local copy is kept.
+14. The user's published connection log entries in team vaults (Choice 12): (c), they stay, and the deletion dialog says so.
+15. Server backups (Choice 13): (c), tested recipes: a dump piped to an encrypting tool, a scheduled compose service; the recommended retention is 30 days. A recipe for a homelab: Docker Compose with a scheduled encrypted dump.
+16. Detecting a restore (Choice 14): yes, (b): `GET /v1/server` returns a random `server_generation`; every restore ends with `shellpp-server admin restored`, which replaces it; a client that sees a new value runs the restore procedure for every vault.
+17. What a restore brings back (Choice 15): (c) for now, documented manual steps: the server logs carry user ids; `admin user delete` for each account deleted after the backup.
+18. A lost response to a token refresh: the server accepts the previous refresh token once, within 60 seconds, while its successor is unused (instead of signing the device out).
+19. The server will run in the owner's homelab:
+    - deployment documentation for three ways of access: (1) an own domain, a reverse proxy and Let's Encrypt (Caddy); (2) Cloudflare Tunnel; (3) only through a VPN (Tailscale or WireGuard) with an internal certificate;
+    - the client: for a server whose certificate the system does not trust, an explicit choice: "Trust this certificate" with its fingerprint shown (a pin, like TOFU for SSH), or adding one's own CA. A change of the pinned certificate blocks sync until an explicit confirmation. An invalid certificate is never accepted silently. HTTP without TLS only for localhost.
+
+Details we chose while carrying the answers into the documents (marked [decision] there; the owner can change them):
+
+- Quotas: an account's usage is its live records (`created_by`) and their envelope bytes in every vault. A push item counts against the pushing account only for a new record or a record it created that grows, so a member is never stopped by another account's quota, and deletions, re-encryption and writes that do not grow are never refused. `SHELLPP_QUOTA_MAX_RECORDS` and `SHELLPP_QUOTA_MAX_BYTES` (unset: no limit), `admin user quota` per account; the account bundle reports the usage.
+- Brought back: a local list of the records a full resync pushed back, in Account & Sync, with "Delete again" and "Keep"; types the user cannot delete are only counted. A server restore's push-back is not listed.
+- Re-post: personal vault after the password the server holds now; team vault from an owner device with the interactive recipient dialog, the removals in its first step; non-owners and devices that do not hold the newer epochs only show "server state rolled back". Members added after the backup are invited again.
+- The epoch rule also covers `current` of a push conflict.
+- Duplicates: a pair is raised when a pull inserts a record whose natural key equals that of a live record of the same type in the same vault (not for history and log entries). The user picks the record to keep; references are rewritten to it; "Keep both" is remembered on this device. Screen hints and a comparison dialog, as for conflicts.
+- Winner rules: `known_host` (a `revoked` marker wins) and `member_pin` (with the same key, `verified` wins), besides `roster_entry`; both get a security review before stage 7 ships.
+- SSH ID: the device that wrote the winning version checks after each pull, conflict and sign-in.
+- Recently deleted: a sidebar section below Logs and a screen of its own. It keeps the last live envelope of every user-visible record; not command history (its deletion is the remedy for a secret the detector missed), not log entries removed by retention, not moves made on this device, not conflict copies or bookkeeping types. Restore writes the record back under its id, or copies it to the personal vault where the user cannot write.
+- Lost device: a Devices block in Account & Sync (names from `device_info`). A thief also holds the user's X25519 key (RR17), so the team vault rotation protects only while the server refuses the stolen device.
+- `account_deleted`: other devices then do what the deleting device did (local-only personal vault, team archives).
+- Backups: `age` to an operator's public key; the private key never on the server; tested in CI with the server.
+- Manual restore steps also use `admin device revoke` and `admin vault delete`; the server logs each irreversible event with ids only.
+- Token grace: the unused successor is marked used, so presenting it later is a reuse that revokes the family; the grace is granted once per token.
+- Certificates: a pin is the SHA-256 of the server certificate, shown as `openssl x509 -fingerprint -sha256` prints it; only an unknown issuer can be pinned or covered by an added CA, while an expired certificate or one for another name is refused; an added CA counts for that server only; any certificate other than the pinned one blocks sync, also one the system trusts; trust choices are kept in a plaintext table, since recovery runs while the app is locked. Cloudflare Tunnel puts Cloudflare in the position of an active server for the transport.
+
+**Spec impact:** `docs/sync-protocol.md` (conventions; 2, 2.1, 2.2 new; 3.1; 3.4; 4.4; 4.6; 4.7; 5.1; 5.6; 5.8; 6.4; 6.5; 6.6; 6.7; 6.8; 6.9; 6.10; 6.11; 7.7; 7.11; 8; 9; 10.2; 10.3; 11; 12; 13; 14), `docs/security.md` (conventions; 1; 3; 4; 5.1; 5.9; 6; 9.1; 9.3; 14.1–14.4; 15; 17; 18), `docs/data-model.md` (conventions; 2.1; 6.1; 6.6; 13.3; 15; 16.6–16.8 new; 18.2; 18.3), `docs/storage-format.md` (conventions; 4.2–4.6; 6.2; 6.6; 12; 14.5), `docs/ui-behavior-spec.md` and `docs/ru/ui-behavior-spec.md` (1.2; 2.4; 7.2; 12.2; 12.3; 13.2; 13.5; 13.6; 13.7 and 14 new); `docs/sync-design-draft.md` is marked closed. SPEC.md is unchanged. `docs/architecture.md` 1.3 (custom CA certificates and pins for sync servers are in the MVP) and 10.2 (the admin subcommands, the backup service, the three ways of access, certificate trust, the quota variables). `server/README.md` follows with the server in stage 7.

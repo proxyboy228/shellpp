@@ -1,6 +1,8 @@
 # Sync design draft
 
-Status: draft for the owner, 2026-10-22. Not normative: it changes nothing in `SPEC.md`, [decisions.md](decisions.md) or the stage 0 design documents, and SPEC stage 7 is not started. The owner's answers to section 11 would become decisions and then go into [sync-protocol.md](sync-protocol.md), [security.md](security.md), [data-model.md](data-model.md) and [storage-format.md](storage-format.md).
+> **Closed, 2026-10-22.** The owner answered every question of section 11, and the answers are decision D93 in [decisions.md](decisions.md), with a new requirement for a server in a homelab (certificate trust and three ways of access). D93 is carried into [sync-protocol.md](sync-protocol.md), [security.md](security.md), [data-model.md](data-model.md), [storage-format.md](storage-format.md) and [ui-behavior-spec.md](ui-behavior-spec.md), where its places are marked "[decision] (D93)" ("[решение] (D93)" in the Russian copy of the UI specification). Those documents are normative; this draft is kept as the record of the options and is not updated any more.
+
+Status (as written): draft for the owner, 2026-10-22. Not normative: it changes nothing in `SPEC.md`, [decisions.md](decisions.md) or the stage 0 design documents, and SPEC stage 7 is not started. The owner's answers to section 11 would become decisions and then go into [sync-protocol.md](sync-protocol.md), [security.md](security.md), [data-model.md](data-model.md) and [storage-format.md](storage-format.md).
 
 Conventions:
 

@@ -102,6 +102,8 @@
 
 - Sections from top to bottom: **Hosts**, **Keychain**, **Port Forwarding**, **Snippets**,
   **Known Hosts**, **Logs**.
+- Below them, after a separator, **Recently deleted** with a trash icon (see 14). [decision]
+  (D93)
 - The active section is highlighted. Each section opens its own screen in the main area.
 - The sidebar is 196 px wide; its items are 32 px high and 2 px apart, with 12 px inside,
   a 16 px icon and 10 px between the icon and the name; the sidebar keeps 8 px from its
@@ -411,7 +413,8 @@ On the right:
   9. **Copy Link**: a link to the host in the app's own URL scheme
      (`shellpp://host/<id>`). An (i) icon explains who will be able to open the link.
   10. **Remove**: deletion with confirmation and the ability to undo
-      the action for a few seconds. [decision]
+      the action for a few seconds. [decision] After the undo window the host stays in
+      Recently deleted on this device for 90 days (14). [decision] (D93)
 
 ### 2.5 Import dialog [decision]
 
@@ -1150,6 +1153,7 @@ on the Hosts screen. [decision]
   method.
 - Identical keys (matching fingerprint) are detected automatically. A hint
   appears offering to merge them into one key; references from hosts are carried over. [decision]
+  Keys added on two devices before they synced show the same hint (13.7). [decision] (D93)
 - Empty state: buttons "Generate", "Import" and "Import from SSH folder" (the path
   `~/.ssh` in its tooltip). [decision] "Import from SSH folder" opens the New key form
   with the private key files found in `~/.ssh`; a click on one puts its text into the
@@ -1503,6 +1507,9 @@ With a connected server:
 
 - server address; account email marked "verified / not verified";
   email change. The mark is hidden when the server has no email (SMTP) set up; [decision]
+- under the address, how the server's certificate is trusted: "Trusted by the system",
+  "Pinned certificate" with its SHA-256 fingerprint, or "Your CA" with the CA's name and
+  fingerprint (`docs/sync-protocol.md`, 2.1); [decision] (D93)
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
@@ -1512,6 +1519,30 @@ With a connected server:
 - deleting the account on the server. The local copy is kept in that case.
   If the account is the only owner of a team vault, deletion is blocked until ownership is
   transferred to another member (see 12.3). [decision]
+  The deletion dialog [decision] (D93):
+  - says that the account is deleted on the server at once and cannot be restored; that
+    this device keeps its data (the personal vault stays, without sync; team vaults become
+    read-only archives); that the account's other devices are told so at their next sync;
+  - lists the team vaults and says what their members lose: this account's access. The
+    hosts, keys and snippets the user added stay with them, and so do the connection log
+    entries the user published there;
+  - offers "Export data…" (the Export Data dialog of 1.4) before anything is deleted;
+  - asks for the master password, and the TOTP code when TOTP is on; the confirm button is
+    a danger button labeled "Delete account"; Cancel has the focus;
+  - when the deletion is blocked, it lists the vaults to hand over, with a link to Team.
+- **Devices** [decision] (D93): the account's devices, each with its name (from the device's
+  own record; "Unknown device" when there is none), platform, last seen (a day, 1.6) and
+  "This device" for the current one. Revoke on another device asks "Was this device lost
+  or stolen?":
+  - "Revoke only": the device is signed out and stops syncing; its data stays on it;
+  - "Lost or stolen": the device is revoked, then the password change of 13.4 opens with
+    "My old password may be compromised" on and fixed, so the personal vault gets a new
+    key; then a list of the team vaults the user owns, all ticked, offers to give each a
+    new key ("Rotate"); for the team vaults the user does not own, it names their owners and
+    says to ask one of them to rotate the key. The dialog says that nothing is wiped on the
+    lost device, and that changing the passwords of important hosts is the only guaranteed
+    remedy if the device was unlocked;
+  - Revoke on this device is Log out.
 
 **Synchronization** block:
 
@@ -1533,9 +1564,44 @@ With a connected server:
 - app settings are not synced; they stay on each device. Session output recordings are
   never synced (see 11.2); [decision]
 - time of the last sync and errors, if any;
+- when the server's storage limit for the account is reached, the errors say so with the
+  usage ("Storage limit reached: 20 000 of 20 000 objects"); the objects that did not
+  sync stay on this device, marked "not synced", and are sent again after something is
+  deleted here or with "Sync now"; [decision] (D93)
 - a "Conflicts: N" row, shown while there are unresolved conflicts. A click opens the list
   of conflicts (see 13.6); [decision]
+- a "Brought back: N" row, shown while the list is not empty [decision] (D93): objects that
+  were missing on the server and that this device put back (for example, deleted on
+  another device more than 90 days ago, after their deletion was forgotten by the server).
+  A click opens the list: name, type, vault and when. Each row has "Delete again" (an
+  ordinary deletion, with the Undo toast) and "Keep"; "Keep all" closes the list. A viewer
+  of a team vault sees no "Delete again" there;
 - "Sync now" button.
+
+Messages of this section [decision] (D93):
+
+- **Changed certificate**: when the server shows another certificate than the pinned one,
+  sync with it stops and a warning row says "The server's certificate changed" with
+  "Review". The dialog shows the pinned and the new SHA-256 fingerprint, says whether the
+  system trusts the new certificate, and warns that an unannounced change can mean an
+  attack. "Trust the new certificate" pins it; "Use the system's trust" (only when the
+  system trusts the new one) removes the pin; Cancel keeps sync stopped. Nothing is
+  deleted. An expired certificate or one for another name is refused with the reason,
+  with no option to trust it.
+- **Account deleted**: when the server says that the account was deleted from another
+  device, this device keeps its data as the deleting device does (the personal vault
+  without sync, team vaults as archives), and the section says "This account was deleted
+  on <date> from another device. The data on this device is kept." with "Connect sync
+  server".
+- **Server state rolled back**: when the server reports an older key of the personal vault
+  than this device holds (it was restored from a backup), its sync stops and the row offers
+  "Bring the server up to date…". After a confirmation that says why, and the master
+  password (the one the server knows), the app gives the server the newer keys again and
+  puts back what the server lost. It is never done without asking, every time. For team
+  vaults the same row is in Team (12.3).
+- **Server restored**: when the server says it was restored from a backup, the app checks
+  every vault against it and puts back what the server lost; the row says so until it is
+  done.
 
 Also:
 
@@ -1570,6 +1636,17 @@ Also:
   - "Publish my connection log": a toggle for each team vault, off by default. When it is
     on, your log entries for this vault's hosts are visible to its members (see 11.1).
     Viewers can publish too.
+  - objects that other members delete stay in Recently deleted on this device for 90 days
+    (see 14), where they can be restored or exported; [decision] (D93)
+  - server state rolled back [decision] (D93): when the server reports an older key of a
+    team vault than this device holds (it was restored from a backup), the vault stays
+    readable but takes no changes on this device, and Team says "Server state rolled
+    back". An owner sees "Bring the server up to date…": a confirmation that lists every
+    member with the fingerprint and pin state, as for a new vault key, and the members
+    removed earlier, who are removed again; then the app gives the server the newer keys
+    again and puts back what it lost. It is never done without asking, every time. Other
+    members see "Ask an owner to bring the server up to date". Members who joined after
+    the backup must be invited again.
 
 ### 12.4 Terminal
 
@@ -1842,6 +1919,9 @@ server. The same password later becomes the password of the sync account. Sectio
     recover only the data on this device: the new password unlocks the local copy, and this
     device is signed out of the account until the user signs in with the account password
     or recovers through the server.
+  - The server's certificate is checked as in 13.5, step 1: a certificate the system does not
+    trust and that has no pin offers the same choice there; a changed pinned certificate
+    shows the dialog of 12.2 first, and the recovery waits for it. [decision] (D93)
 
 ### 13.3 Lock
 
@@ -1897,6 +1977,19 @@ Settings → Security (see 12.1):
   "Back" button:
   1. **Server**: the server URL. The app checks that the server responds and shows an error
      if it does not.
+     - Only `https://` is accepted, and `http://` only for `localhost`, `127.0.0.1` and
+       `[::1]`; another `http://` address is refused with the reason. [decision] (D93)
+     - When the system does not trust the server's certificate only because its issuer is
+       unknown (a self-signed certificate or an own CA), the step shows the certificate:
+       the server, the subject and issuer, the validity dates, the reason and the SHA-256
+       fingerprint, with the command that prints it on the server
+       (`openssl x509 -noout -fingerprint -sha256 -in <file>`). Choices: "Trust this
+       certificate" (it is pinned, like the key at the first connection to an SSH host,
+       10.2), "Add a CA certificate…" (a PEM or DER file; its name and fingerprint are
+       shown for confirmation, and the server's certificate must then be valid under it,
+       for this server only) and "Cancel". Nothing is trusted without one of these clicks.
+       An expired certificate, one for another name or any other TLS error is refused with
+       the reason, with no option to trust it. [decision] (D93)
   2. **Sign in or register**:
      - Sign in: the email and the account's master password;
      - Register: the email and the current master password, entered again to confirm. If
@@ -1938,3 +2031,67 @@ Settings → Security (see 12.1):
     with the other version.
 - Closing the dialog without a choice leaves the conflict unresolved. After a choice, the
   other version is deleted, and the badge disappears on all devices after the next sync.
+- Every kind of object can have a conflict. Objects without a card of their own (for
+  example workspaces, snippet packages, terminal themes, highlighting rules, history and
+  log entries, credential bindings, device names, a vault's name) open a generic
+  comparison: both versions as lists of their fields, side by side, with the differing
+  fields highlighted and secrets masked, and the same two buttons. The list opened from
+  "Conflicts: N" names each conflict by its object and type. [decision] (D93)
+- A few kinds decide the winner by a rule of their own, so a security choice is never lost
+  to an edit made at the same time: a revoked known host key stays revoked, and a member's
+  key confirmed by a fingerprint comparison stays confirmed. The other version is still
+  kept and shown in the dialog. [decision] (D93)
+
+### 13.7 Duplicates from sync [decision] (D93)
+
+- When sync brings an object that matches one already here (the same host imported from
+  `~/.ssh/config` on two devices, the same snippet, the same known host), the screen of
+  that kind (Hosts, Keychain, Snippets, Port Forwarding, Known Hosts; workspaces on the new
+  tab page; themes and highlighting rules in Settings → Terminal) shows a hint, for example
+  "2 hosts may be duplicates", with "Review". Objects match by their natural key
+  (`docs/data-model.md`, 18.6): a host by its address, port and user, a snippet by its
+  package, name and script, and so on. History and log entries are never offered.
+- Review opens a dialog with each pair side by side, as in 13.6, secrets masked, and three
+  buttons: "Keep left" and "Keep right" (merge into that one; the older one has the focus)
+  and "Keep both". A merge moves every link to the kept object (the hosts of a group, the
+  keys and identities of hosts, jump hosts, startup snippets, a snippet's package,
+  forwarding rules, workspaces, history) and removes the other one, which then stays in
+  Recently deleted (14). Fields of the two are not combined. For keys the hint and its
+  merge are those of 7.2.
+- "Keep both" keeps both objects, and the pair is not offered again on this device.
+- The hint is shown only where the user may change the vault: not to viewers, not in
+  archives.
+
+## 14. Recently deleted screen [decision] (D93)
+
+- Opened with **Recently deleted** in the sidebar (1.2). Every object deleted on this
+  device, or deleted on another device or by another member and received through sync,
+  stays here for 90 days, on this device only: encrypted like the rest of the data and
+  never synced. Works in local mode too.
+- A line at the top explains it: "Deleted objects stay here for 90 days, on this device
+  only."
+- The list, newest first, as a table like Logs (11): name, type (host, group, key,
+  identity, snippet, snippet package, forwarding rule, known host, workspace, terminal
+  theme, highlighting rule, credential binding, log entry), vault, deleted (local time,
+  1.6) and where ("This device" or "Another device"). A search by name and a filter by
+  type.
+- A click selects a row; Ctrl and Shift add rows; Ctrl+A selects every row shown. A
+  selected object opens read-only in the details panel.
+- Actions for the selection, in the action bar and in the row's context menu:
+  - **Restore**: the object goes back where it was, under the same identity, and syncs as
+    an ordinary change; a toast confirms. Links to objects that are gone show as missing
+    until those are restored too. Where the user can no longer change that vault (a
+    viewer, an archive), the button reads "Restore to personal vault" and makes a copy
+    there;
+  - **Export…**: the Export Data dialog (1.4) for the selected objects only, plain or
+    encrypted JSON, with the same warning for a plain file;
+  - **Delete forever**: after a confirmation that names the count; removes them from this
+    device only.
+- **Empty trash**: a danger button at the right of the action bar; after a confirmation
+  that names the count, removes every object here, from this device only.
+- Not kept here: command history entries (deleting one is how a password typed by mistake
+  is removed), log entries removed by the retention of 12.6, and objects moved to another
+  vault on this device.
+- The Undo of a removal (2.4) keeps its 5 seconds; after it, Restore does the same.
+- Objects older than 90 days leave the list when the app starts and every 24 hours after.
+- Empty state: a trash icon and "Nothing deleted in the last 90 days".
