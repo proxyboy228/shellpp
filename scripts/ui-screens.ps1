@@ -49,7 +49,9 @@
     host-panel-telnet and serial-dialog);
     and those of stage 3: keychain, keychain-key-panel, keychain-generate,
     keychain-import-unknown, keychain-empty;
-  - 960x600 (the minimum window size): root, host-panel, first-run;
+  - 960x600 (the minimum window size): root, host-panel, first-run, and the
+    other main screens (run 6, D96): sftp-local, keychain, forwarding-cards,
+    snippets, known-hosts, logs, settings-shortcuts, new-tab;
   - any other size: root, group, host-panel.
 
   Stage 3, the data transfer dialogs (1280x800, after new-host; temporary
@@ -102,8 +104,10 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (180 files for the
-  default sizes). Exits with 1 when the build, the run or a file check fails.
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (214 files for the
+  default sizes; -Zoom other than 100 puts the zoom in the names:
+  <W>x<H>-<theme>-<zoom>-<state>.png). Exits with 1 when the build, the run or
+  a file check fails.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1
@@ -242,7 +246,10 @@ $stage3States = @('keychain', 'keychain-key-panel', 'keychain-generate', 'keycha
     'keychain-empty')
 function Get-SizeStates([string] $size) {
     if ($size -eq '1280x800') { return $allStates }
-    if ($size -eq '960x600') { return @('root', 'host-panel', 'first-run') }
+    if ($size -eq '960x600') {
+        return @('root', 'host-panel', 'first-run', 'sftp-local', 'keychain', 'forwarding-cards', 'snippets',
+            'known-hosts', 'logs', 'settings-shortcuts', 'new-tab')
+    }
     return @('root', 'group', 'host-panel')
 }
 # The file label of a state on the russh test server (no ls, no htop).

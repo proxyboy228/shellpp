@@ -145,7 +145,20 @@ fn the_full_set_covers_every_state_in_both_themes() {
     for state in ShotState::STAGE_3 {
         assert!(ShotState::ALL.contains(&state), "{state:?}");
     }
-    for state in ["root", "host-panel", "first-run"] {
+    for state in [
+        "root",
+        "host-panel",
+        "first-run",
+        // Run 6 (D96): the main screens in the minimum window.
+        "sftp-local",
+        "keychain",
+        "forwarding-cards",
+        "snippets",
+        "known-hosts",
+        "logs",
+        "settings-shortcuts",
+        "new-tab",
+    ] {
         for theme in ["dark", "light"] {
             let name = format!("960x600-{theme}-{state}.png");
             assert!(files.contains(&name), "{name}");
@@ -168,7 +181,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
         }
     }
     assert_eq!(ShotState::ALL.len(), 93);
-    assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 6);
+    assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 22);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");
     }

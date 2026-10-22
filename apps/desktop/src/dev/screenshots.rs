@@ -649,8 +649,21 @@ impl ShotState {
         Self::KeychainEmpty,
     ];
     /// The states at the minimum window size: the Hosts screen without and
-    /// with the details panel, and the tallest lock screen.
-    pub const MINIMUM: [Self; 3] = [Self::Root, Self::HostPanel, Self::FirstRun];
+    /// with the details panel, the tallest lock screen, and (run 6, D96: at
+    /// every interface zoom) the other main screens.
+    pub const MINIMUM: [Self; 11] = [
+        Self::Root,
+        Self::HostPanel,
+        Self::FirstRun,
+        Self::SftpLocal,
+        Self::Keychain,
+        Self::ForwardingCards,
+        Self::Snippets,
+        Self::KnownHosts,
+        Self::Logs,
+        Self::SettingsShortcuts,
+        Self::NewTab,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
