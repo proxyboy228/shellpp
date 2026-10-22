@@ -628,7 +628,7 @@ Licenses below are the expected SPDX values; cargo-deny and the npm license chec
 | Crypto | `x25519-dalek`, `subtle` | BSD-3-Clause | `shellpp-core` |
 | Key formats | RustCrypto `pkcs8`, `pkcs1`, `sec1`, `p256`, `p384`, `aes`, `cbc`, `sha1` (PuTTY `.ppk` and HMAC-SHA1 matching of hashed `known_hosts` entries, D21), `rsa` (D4 exception); `ed25519-dalek` | MIT OR Apache-2.0; BSD-3-Clause | `shellpp-core` |
 | Storage, ids | `rusqlite` (`bundled`), `uuid` (`v7`), `serde`, `serde_json`, `data-encoding` | MIT; Apache-2.0 OR MIT; MIT OR Apache-2.0; MIT OR Apache-2.0; MIT | `shellpp-core` |
-| HTTP | `reqwest` with `rustls` (ring provider, system roots) | MIT OR Apache-2.0; Apache-2.0 OR ISC OR MIT | `shellpp-core` |
+| HTTP | `reqwest` with `rustls` (ring provider, system roots plus, for one sync origin, a pinned certificate or an added CA: [sync-protocol.md](sync-protocol.md), section 2.1) | MIT OR Apache-2.0; Apache-2.0 OR ISC OR MIT | `shellpp-core` |
 | Runtime, logs | `tokio`, `tracing` | MIT | all crates |
 | Keychain | `keyring` (features in section 5.2) | MIT OR Apache-2.0 | `shellpp-desktop` |
 | Local terminal | `portable-pty`, `serialport` | MIT; MPL-2.0 | `shellpp-term-local` |
@@ -737,7 +737,7 @@ Stage 7; protocol and limits are in [sync-protocol.md](sync-protocol.md). (stage
 
 - Image `ghcr.io/proxyboy228/shellpp-server` with the static `shellpp-server` binary and CA certificates only, running as a non-root user.
 - Subcommands: `serve`, `migrate`, `admin …` (users, registration codes, `purge`). `serve` refuses to start when the database schema is older than the binary; the compose file runs `migrate` as a one-shot service before `serve`. `serve` also runs the purge job once a day.
-- `admin` also has `user quota` (per-account storage limits), `device revoke`, `vault delete`, and `restored`, which replaces `server_generation` at the end of every restore from a backup ([sync-protocol.md](sync-protocol.md), sections 3.4 and 10.3). [decision] (D93)
+- `admin` also has `user quota` (per-account storage limits), `device revoke`, `vault delete`, and `restored`, which replaces `server_generation` at the end of every restore from a backup ([sync-protocol.md](sync-protocol.md), sections 3.4, 10.2 and 10.3). [decision] (D93)
 - `server/docker-compose.yml`: `migrate`, `server` and PostgreSQL with a volume (SPEC). Small installations use SQLite with `SHELLPP_DATABASE_URL=sqlite://…` on a volume.
 - The compose file also has a `backup` service that runs on a schedule (daily by default), pipes the dump (`pg_dump`, or an SQLite online backup on a tmpfs) straight into `age` to the operator's public key, and deletes files older than 30 days, the recommended retention; the private key is never on the server ([security.md](security.md), section 14.4). [decision] (D93)
 - The server listens on plain HTTP at `SHELLPP_BIND`; TLS is terminated in front of it. The server is meant for a machine of the user's own, such as a homelab, and `server/README.md` covers three ways to reach it, each with an example configuration that the server's tests run ([sync-protocol.md](sync-protocol.md), section 2.2): [decision] (D93)

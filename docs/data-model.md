@@ -859,7 +859,7 @@ Rules:
 - The personal entry is always written to the personal vault (D15), at session start and again at its end. Snapshots keep the log readable when the host is later renamed, moved or removed.
 - Team copy (D15, UI 11.1, 12.3): for a host in a team vault, when this device has "Publish my connection log" on for that vault (section 16.2), a second record is created in the team vault with the same fields except `recording_file_id` and `published_copy`; its `host` links to the team host. Any member may create it; only its creator or an owner may update or tombstone it ([sync-protocol.md](sync-protocol.md)). On team copies, Saved can be toggled only by its creator and by owners.
 - Entries left without `ended_at` by a crash get `end_reason = unknown` at the next unlock on their device; until then other devices show them as active.
-- Retention (UI 12.6, D19): entries whose end (or start, for active ones) is older than `logs.retention_days` and that are not saved are tombstoned by the device that created them. Each client hides other devices' expired entries. "Clear the log" tombstones the personal entries and this device's own team copies. Tombstones written by retention do not go to Recently deleted, on any device: they are expiry, not a deletion (section 16.6). [decision] (D93)
+- Retention (UI 12.6, D19): entries whose end (or start, for active ones) is older than `logs.retention_days` and that are not saved are tombstoned by the device that created them. Each client hides other devices' expired entries. "Clear the log" tombstones the personal entries and this device's own team copies. Tombstones written by retention do not go to Recently deleted on the device that writes them: they are expiry, not a deletion. Other devices cannot tell them from a deletion and keep them, as for moves (section 16.6). [decision] (D93)
 - Account deletion keeps the user's team copies in their team vaults, and the deletion dialog says so (UI 12.2). [decision] (D93; Choice 12 (c))
 - Recent connections (UI 6, derived): the personal entries newest first, one row per host link (or per address and port for quick connects), at most 10. The row's "vault / group" path comes from the linked host (stage 0 decision).
 - User column (UI 11.1): avatar and account from `user_id` and `user_email`, device name from `device_info`; before stage 8 the column shows the device.
@@ -1052,7 +1052,7 @@ Kept: `group`, `host`, `credential_binding`, `key`, `identity`, `snippet`, `snip
 Not kept:
 
 - `history_entry` and `history_hint_state`: deleting a command from history is the remedy for a secret the detector let through ([security.md](security.md), section 10, RR10, RR24), so that deletion stays final; history is never shared and is not synced by default;
-- connection log entries tombstoned by retention (section 13.3): expiry, not a deletion;
+- connection log entries this device tombstoned by retention (section 13.3): expiry, not a deletion. Other devices cannot tell them from a deletion and keep them;
 - the source records of a move made on this device (section 18.2): the record lives on in the target vault. Other devices cannot tell a move from a deletion and keep it;
 - conflict copies (resolved in UI 13.6) and the bookkeeping types `vault_meta`, `user_keypair`, `ssh_id`, `recovery_key`, `member_pin`, `roster_entry`, `device_info` and `last_session`, whose tombstones only tidy duplicates;
 - a record that was never live on this device.
@@ -1060,7 +1060,7 @@ Not kept:
 Rules:
 
 - The tombstone and the entry are written in one local transaction. A record that is live again (Undo, Restore, "Keep other", a later revision from sync) leaves the list.
-- Restore writes the kept `data` back as a new revision of the same record with a fresh HLC, as Undo does, and it syncs like any edit. Where the user cannot write the vault (a viewer, an archived vault, a vault no longer held), Restore copies the record into the personal vault with a new id, as Copy does (section 18.2, references unlinked). References from a restored record to records that are gone show as missing (section 3.4); restoring those too brings the links back.
+- Restore writes the kept `data` back as a new revision of the same record with a fresh HLC, as Undo does, and it syncs like any edit. Where the user cannot write the record (a viewer, an archived vault, a vault no longer held, or a team connection log entry the user neither created nor owns the vault of, [sync-protocol.md](sync-protocol.md), section 7.5), Restore copies the record into the personal vault with a new id, as Copy does (section 18.2, references unlinked). References from a restored record to records that are gone show as missing (section 3.4); restoring those too brings the links back.
 - Export writes the chosen entries as a native JSON export, plain or encrypted, with the warnings of Export Data (UI 1.4).
 - Delete forever removes the chosen entries on this device; "Empty trash" removes all of them. Other devices keep theirs.
 - Entries older than 90 days are removed when the app starts and every 24 hours after.

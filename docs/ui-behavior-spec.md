@@ -2049,7 +2049,8 @@ Settings → Security (see 12.1):
   that kind (Hosts, Keychain, Snippets, Port Forwarding, Known Hosts; workspaces on the new
   tab page; themes and highlighting rules in Settings → Terminal) shows a hint, for example
   "2 hosts may be duplicates", with "Review". Objects match by their natural key
-  (`docs/data-model.md`, 18.6): a host by its address, port and user, a snippet by its
+  (`docs/data-model.md`, 18.6): a host by its import key (the `~/.ssh/config` alias) when
+  it has one, else by its address, port and user, a snippet by its
   package, name and script, and so on. History and log entries are never offered.
 - Review opens a dialog with each pair side by side, as in 13.6, secrets masked, and three
   buttons: "Keep left" and "Keep right" (merge into that one; the older one has the focus)
@@ -2080,8 +2081,9 @@ Settings → Security (see 12.1):
 - Actions for the selection, in the action bar and in the row's context menu:
   - **Restore**: the object goes back where it was, under the same identity, and syncs as
     an ordinary change; a toast confirms. Links to objects that are gone show as missing
-    until those are restored too. Where the user can no longer change that vault (a
-    viewer, an archive), the button reads "Restore to personal vault" and makes a copy
+    until those are restored too. Where the user cannot write the object any more (a
+    viewer, an archive, another member's log entry in a team vault the user does not own),
+    the button reads "Restore to personal vault" and makes a copy
     there;
   - **Export…**: the Export Data dialog (1.4) for the selected objects only, plain or
     encrypted JSON, with the same warning for a plain file;
@@ -2090,8 +2092,9 @@ Settings → Security (see 12.1):
 - **Empty trash**: a danger button at the right of the action bar; after a confirmation
   that names the count, removes every object here, from this device only.
 - Not kept here: command history entries (deleting one is how a password typed by mistake
-  is removed), log entries removed by the retention of 12.6, and objects moved to another
-  vault on this device.
+  is removed), log entries this device removed by the retention of 12.6 (other devices
+  cannot tell those from a deletion and keep them), and objects moved to another vault on
+  this device.
 - The Undo of a removal (2.4) keeps its 5 seconds; after it, Restore does the same.
 - Objects older than 90 days leave the list when the app starts and every 24 hours after.
 - Empty state: a trash icon and "Nothing deleted in the last 90 days".
