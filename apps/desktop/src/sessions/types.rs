@@ -419,6 +419,11 @@ pub enum OpenRequest {
     /// A local terminal; `shell_id` from the detected shells, `None` = the
     /// `terminal.local_shell` setting or the default (PowerShell on Windows).
     Local { shell_id: Option<String> },
+    /// Telnet to a saved host's Telnet block (D87).
+    Telnet {
+        vault_id: uuid::Uuid,
+        record_id: uuid::Uuid,
+    },
 }
 
 /// Why [`super::SessionHandle::write`] took nothing.

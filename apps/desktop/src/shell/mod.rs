@@ -1483,6 +1483,7 @@ impl Shell {
                     hosts::SessionKind::Sftp => SessionKind::Sftp,
                     hosts::SessionKind::Terminal => SessionKind::Local,
                     hosts::SessionKind::Serial => SessionKind::Serial,
+                    hosts::SessionKind::Telnet => SessionKind::Telnet,
                 };
                 let mut session = SessionRequest::new(kind).title(request.title.clone());
                 if let Some(host) = request.host {

@@ -34,6 +34,8 @@ pub enum MenuCommand {
     QuickConnect,
     ConnectSsh,
     ConnectSftp,
+    /// Connect ▸ via Telnet: the hosts that have a Telnet block (D87).
+    ConnectTelnet,
     EditHost,
     Collaborate,
     /// Move into a group (`None`: the top level).
@@ -262,6 +264,7 @@ pub fn host_menu(
     count: usize,
     move_targets: &[MoveTarget],
     workspaces: &[(Uuid, String)],
+    telnet: bool,
 ) -> Vec<MenuEntry> {
     let single = count <= 1;
     vec![
@@ -287,6 +290,13 @@ pub fn host_menu(
                     MenuCommand::ConnectSftp,
                 )
                 .enabled(false),
+                // The hosts with a Telnet block (UI 3.1 "Add Telnet", D87).
+                MenuEntry::command(
+                    "menu-connect-telnet",
+                    strings::MENU_VIA_TELNET,
+                    MenuCommand::ConnectTelnet,
+                )
+                .enabled(telnet),
                 MenuEntry::Separator,
                 MenuEntry::note("menu-connect-alt-hint", strings::MENU_NEW_WINDOW_HINT),
             ],
@@ -560,7 +570,7 @@ mod tests {
 
     #[test]
     fn host_menu_has_the_order_of_ui_2_4() {
-        let entries = host_menu(1, &targets(), &[]);
+        let entries = host_menu(1, &targets(), &[], false);
         assert_eq!(
             entry_ids(&entries),
             [
@@ -595,18 +605,30 @@ mod tests {
                 "Remove",
             ]
         );
-        // Connect ▸: via SSH, via SFTP, a separator, the Alt hint.
+        // Connect ▸: via SSH, via SFTP, via Telnet (D87), a separator, the
+        // Alt hint.
         let connect = submenu(&entries, "menu-connect");
-        assert_eq!(connect.len(), 4);
+        assert_eq!(connect.len(), 5);
         assert_eq!(
             entry_ids(connect),
             [
                 "menu-connect-ssh",
                 "menu-connect-sftp",
+                "menu-connect-telnet",
                 "menu-connect-alt-hint"
             ]
         );
-        assert_eq!(connect[2], MenuEntry::Separator);
+        assert_eq!(connect[3], MenuEntry::Separator);
+        // Telnet only for hosts with a Telnet block.
+        assert!(matches!(
+            &connect[2],
+            MenuEntry::Command { enabled: false, .. }
+        ));
+        let telnet = host_menu(1, &targets(), &[], true);
+        assert!(matches!(
+            &submenu(&telnet, "menu-connect")[2],
+            MenuEntry::Command { enabled: true, .. }
+        ));
         // SFTP comes in a later stage (D30, D31): shown, disabled.
         assert!(matches!(
             &connect[1],
@@ -681,7 +703,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            enabled(&host_menu(3, &targets(), &[])),
+            enabled(&host_menu(3, &targets(), &[], false)),
             [
                 "menu-quick-connect",
                 "menu-connect",
@@ -691,7 +713,7 @@ mod tests {
                 "menu-remove",
             ]
         );
-        assert_eq!(enabled(&host_menu(1, &targets(), &[])).len(), 10);
+        assert_eq!(enabled(&host_menu(1, &targets(), &[], false)).len(), 10);
     }
 
     #[test]

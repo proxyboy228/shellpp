@@ -17,10 +17,7 @@ use crate::error::FailureKind;
 
 /// Resolves `address` (a host name or an IP literal, IPv6 without brackets).
 /// Any resolution failure, and an empty answer, is `NotFound`.
-pub(crate) async fn resolve(
-    address: &str,
-    port: u16,
-) -> Result<Vec<std::net::SocketAddr>, FailureKind> {
+pub async fn resolve(address: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, FailureKind> {
     let address = address.trim();
     if address.is_empty() {
         return Err(FailureKind::NotFound);
@@ -44,7 +41,7 @@ const MIN_ADDRESS_TIMEOUT: Duration = Duration::from_secs(2);
 /// that black-holes packets) does not use up the time of the others. The
 /// error of the last address decides the kind: refused, timed out, or any
 /// other network error.
-pub(crate) async fn connect_any(
+pub async fn connect_any(
     addrs: &[std::net::SocketAddr],
     deadline: Instant,
 ) -> Result<TcpStream, FailureKind> {

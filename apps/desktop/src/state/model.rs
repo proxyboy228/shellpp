@@ -147,6 +147,13 @@ impl HostItem {
         self.data.get("telnet").is_some_and(Value::is_object)
     }
 
+    /// Quick Connect, Enter and a double click open Telnet
+    /// (`primary_protocol`, docs/data-model.md; D87).
+    pub fn primary_telnet(&self) -> bool {
+        self.has_telnet()
+            && self.data.get("primary_protocol").and_then(Value::as_str) == Some("telnet")
+    }
+
     /// The data object to start an edit from.
     pub fn data_map(&self) -> Map<String, Value> {
         self.data.as_object().cloned().unwrap_or_default()

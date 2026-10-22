@@ -373,6 +373,9 @@ On the right:
      - via SSH (terminal session);
      - via SFTP: opens a new SFTP session tab with the host in the right panel
        (see 5.1); [decision]
+     - via Telnet: a Telnet session tab to the host's Telnet block (3.1), enabled
+       when every chosen host has one; Quick Connect, Enter and a double click use
+       Telnet for a host whose primary protocol is Telnet (D87); [decision]
      - separator;
      - "in a new window" hint: if Alt is held while choosing any option,
        the session opens in a new app window (1.4). Alt + double click on
@@ -527,8 +530,8 @@ The same form is used for creating and editing; it opens in the details panel.
      - terminal theme for this host: a preview thumbnail + name; clicking it
        opens theme selection. The theme set is our own; dark theme by default.
 6. **Add Telnet**: add a second protocol with its own settings to the same host: a Telnet
-   block (port 23 by default) that can be removed again. Its values are saved; Telnet
-   connections come in stage 9 (D29).
+   block (port 23 by default) that can be removed again, with a warning that Telnet is not
+   encrypted. Connect ▸ via Telnet opens it (2.4, D87).
 7. The **Connect** button is pinned to the bottom of the panel. Disabled until the address is filled in.
    Alt + Connect opens the session in a new window (2.4). [decision]
 

@@ -50,6 +50,8 @@ pub enum SessionKind {
     Local,
     /// Serial port connection (Serial button, New Serial Connection).
     Serial,
+    /// Telnet terminal session to a host's Telnet block (D87).
+    Telnet,
     /// The new tab page of "+" (UI 6) until a host is chosen.
     NewTab,
 }
@@ -59,7 +61,7 @@ impl SessionKind {
     /// The new tab page has none.
     pub fn type_icon(self) -> Option<Lucide> {
         match self {
-            SessionKind::Ssh | SessionKind::Local | SessionKind::Serial => {
+            SessionKind::Ssh | SessionKind::Local | SessionKind::Serial | SessionKind::Telnet => {
                 Some(Lucide::SquareTerminal)
             }
             SessionKind::Sftp => Some(Lucide::FolderOpen),
@@ -70,7 +72,7 @@ impl SessionKind {
     /// The icon on the left when the tab has no host OS icon.
     pub fn default_icon(self) -> Lucide {
         match self {
-            SessionKind::Ssh | SessionKind::Sftp => Lucide::Server,
+            SessionKind::Ssh | SessionKind::Sftp | SessionKind::Telnet => Lucide::Server,
             SessionKind::Local => Lucide::Monitor,
             SessionKind::Serial => Lucide::Usb,
             SessionKind::NewTab => Lucide::LayoutGrid,
@@ -84,6 +86,7 @@ impl SessionKind {
             SessionKind::Sftp => i18n::sessions::SFTP,
             SessionKind::Local => i18n::sessions::LOCAL_TERMINAL,
             SessionKind::Serial => i18n::sessions::SERIAL,
+            SessionKind::Telnet => i18n::sessions::TELNET,
             SessionKind::NewTab => i18n::sessions::NEW_TAB,
         }
     }

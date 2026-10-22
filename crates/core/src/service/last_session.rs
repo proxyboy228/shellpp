@@ -122,6 +122,8 @@ pub enum SavedSession {
     /// A local terminal; `shell` is a detected shell's id, `None` the
     /// default shell of this device.
     Local { shell: Option<String> },
+    /// Telnet to a saved host (its Telnet block; D87).
+    Telnet(RecordRef),
 }
 
 /// The JSON form of [`SavedSession`]: `{"kind": "ssh", "host": host_link}`,
@@ -158,6 +160,7 @@ impl TryFrom<RawSession> for SavedSession {
         let plain = port.is_none() && username.is_none() && shell.is_none();
         match (kind.as_str(), host, address) {
             ("ssh", Some(host), None) if plain => Ok(SavedSession::Host(host)),
+            ("telnet", Some(host), None) if plain => Ok(SavedSession::Telnet(host)),
             ("ssh", None, Some(address)) if shell.is_none() => Ok(SavedSession::Quick {
                 address,
                 port,
@@ -196,6 +199,10 @@ impl From<SavedSession> for RawSession {
                 raw.kind = "local".to_owned();
                 raw.shell = shell;
             }
+            SavedSession::Telnet(host) => {
+                raw.kind = "telnet".to_owned();
+                raw.host = Some(host);
+            }
         }
         raw
     }
@@ -212,7 +219,7 @@ fn check_pane(pane: &SavedPane, depth: usize, field: &str) -> Result<usize, Core
     match pane {
         SavedPane::Leaf { session } => {
             let ok = match session {
-                SavedSession::Host(_) => true,
+                SavedSession::Host(_) | SavedSession::Telnet(_) => true,
                 SavedSession::Quick {
                     address,
                     port,
@@ -464,6 +471,10 @@ mod tests {
         let parse = |value: Value| serde_json::from_value::<SavedSession>(value).is_ok();
         assert!(parse(json!({"kind": "local"})));
         assert!(!parse(json!({"kind": "telnet", "address": "x"})));
+        assert!(parse(json!({"kind": "telnet", "host": {
+            "vault_id": "0199f6a1-0000-7000-8000-0000000000a1",
+            "record_id": "0199f6a1-0000-7000-8000-0000000000b1"
+        }})));
         assert!(!parse(json!({"kind": "ssh"})));
         assert!(!parse(json!({"kind": "local", "address": "x"})));
         assert!(!parse(

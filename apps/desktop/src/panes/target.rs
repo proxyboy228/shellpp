@@ -31,6 +31,8 @@ pub enum PaneTarget {
     /// A local terminal; `None` = the default shell (`terminal.local_shell`
     /// or the detected default, UI 12.4).
     Local { shell_id: Option<String> },
+    /// Telnet to a saved host's Telnet block (D87).
+    Telnet { vault_id: Uuid, record_id: Uuid },
 }
 
 impl PaneTarget {
@@ -56,6 +58,13 @@ impl PaneTarget {
             OpenRequest::Local { shell_id } => PaneTarget::Local {
                 shell_id: shell_id.clone(),
             },
+            OpenRequest::Telnet {
+                vault_id,
+                record_id,
+            } => PaneTarget::Telnet {
+                vault_id: *vault_id,
+                record_id: *record_id,
+            },
         }
     }
 
@@ -78,6 +87,17 @@ impl PaneTarget {
                 request.quick_target().cloned().map(PaneTarget::Quick)
             }
             SessionKind::Local => Some(PaneTarget::Local { shell_id: None }),
+            SessionKind::Telnet => {
+                let record_id = request.host_id()?;
+                let vault_id = state
+                    .host(record_id)
+                    .map(|host| host.vault_id)
+                    .or_else(|| state.vault_id())?;
+                Some(PaneTarget::Telnet {
+                    vault_id,
+                    record_id,
+                })
+            }
             SessionKind::Sftp | SessionKind::Serial | SessionKind::NewTab => None,
         }
     }
@@ -85,7 +105,9 @@ impl PaneTarget {
     /// The saved host, if any.
     pub fn host_id(&self) -> Option<Uuid> {
         match self {
-            PaneTarget::Host { record_id, .. } => Some(*record_id),
+            PaneTarget::Host { record_id, .. } | PaneTarget::Telnet { record_id, .. } => {
+                Some(*record_id)
+            }
             PaneTarget::Quick(_) | PaneTarget::Local { .. } => None,
         }
     }
@@ -111,6 +133,13 @@ impl PaneTarget {
             }),
             PaneTarget::Local { shell_id } => OpenRequest::Local {
                 shell_id: shell_id.clone(),
+            },
+            PaneTarget::Telnet {
+                vault_id,
+                record_id,
+            } => OpenRequest::Telnet {
+                vault_id: *vault_id,
+                record_id: *record_id,
             },
         }
     }
@@ -142,6 +171,18 @@ impl PaneTarget {
                 SessionKind::Local.default_title(),
                 SessionKind::Local.default_icon(),
             ),
+            PaneTarget::Telnet { record_id, .. } => match state.host(*record_id) {
+                Some(host) => TabInfo::remote(
+                    host.title().to_owned(),
+                    host.address.clone(),
+                    initial_icon(host.os_family.as_deref(), false),
+                ),
+                None => TabInfo::remote(
+                    SharedString::from(SessionKind::Telnet.default_title()),
+                    "",
+                    initial_icon(None, false),
+                ),
+            },
         };
         (info, self.open_request())
     }
@@ -154,6 +195,7 @@ impl std::fmt::Display for PaneTarget {
             PaneTarget::Host { .. } => "host",
             PaneTarget::Quick(_) => "quick connect",
             PaneTarget::Local { .. } => "local terminal",
+            PaneTarget::Telnet { .. } => "telnet",
         })
     }
 }
@@ -209,6 +251,17 @@ impl From<PaneTarget> for WireSession {
                 shell: shell_id,
                 ..Default::default()
             },
+            PaneTarget::Telnet {
+                vault_id,
+                record_id,
+            } => WireSession {
+                kind: "telnet".into(),
+                host: Some(HostLink {
+                    vault_id,
+                    record_id,
+                }),
+                ..Default::default()
+            },
         }
     }
 }
@@ -236,6 +289,13 @@ impl TryFrom<WireSession> for PaneTarget {
             "local" if wire.host.is_none() && wire.address.is_none() => Ok(PaneTarget::Local {
                 shell_id: nonempty(wire.shell),
             }),
+            "telnet" if wire.address.is_none() && wire.port.is_none() => match wire.host {
+                Some(host) => Ok(PaneTarget::Telnet {
+                    vault_id: host.vault_id,
+                    record_id: host.record_id,
+                }),
+                None => Err("a Telnet session needs a host link"),
+            },
             _ => Err("unknown session kind"),
         }
     }
@@ -274,6 +334,13 @@ mod tests {
                     port: None,
                 }),
                 json!({"kind": "ssh", "address": "2001:db8::1"}),
+            ),
+            (
+                PaneTarget::Telnet {
+                    vault_id,
+                    record_id,
+                },
+                json!({"kind": "telnet", "host": {"vault_id": vault_id, "record_id": record_id}}),
             ),
             (
                 PaneTarget::Local {

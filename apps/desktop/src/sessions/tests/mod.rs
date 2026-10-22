@@ -19,6 +19,7 @@ mod ends;
 mod history;
 mod local;
 mod ssh;
+mod telnet;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

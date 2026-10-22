@@ -679,6 +679,8 @@ pub enum SessionKind {
     Local,
     /// An SFTP session of the SFTP tab (stage 4): no terminal.
     Sftp,
+    /// A Telnet session to a saved host's Telnet block (stage 9, D87).
+    Telnet,
 }
 
 /// Session lifecycle (UI 4.6, 4.8; stage 2 plan, section 5.4).

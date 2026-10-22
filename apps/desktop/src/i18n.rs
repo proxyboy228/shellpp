@@ -102,6 +102,7 @@ pub mod sessions {
     pub const SFTP: &str = "SFTP";
     pub const LOCAL_TERMINAL: &str = "Local terminal";
     pub const SERIAL: &str = "Serial";
+    pub const TELNET: &str = "Telnet";
     pub const NEW_TAB: &str = "New Tab";
 }
 

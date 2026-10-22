@@ -55,6 +55,9 @@ use crate::model::wipe::WipeOnDrop;
 use crate::os_detect::{self, DetectedOs};
 use crate::settings::Settings;
 
+/// The default Telnet port (docs/data-model.md, section 7.4).
+const TELNET_PORT: u16 = 23;
+
 /// One row of Recent connections per host link, else per address and port.
 type RecentKey = (Option<(Uuid, Uuid)>, String, u16);
 
@@ -324,6 +327,14 @@ fn host_session_config(
         }),
         title: host::title(data).to_owned(),
         port,
+        telnet_port: data.get("telnet").and_then(Value::as_object).map(|telnet| {
+            telnet
+                .get("port")
+                .and_then(Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port > 0)
+                .unwrap_or(TELNET_PORT)
+        }),
         username,
         password,
         key: session_key(session, data),
@@ -898,6 +909,7 @@ impl Core {
                     host: None,
                     title: address.clone(),
                     port,
+                    telnet_port: None,
                     username,
                     password: None,
                     key: None,

@@ -106,6 +106,9 @@ pub const SHOW_MORE: &str = "Show more";
 pub const SHOW_LESS: &str = "Show less";
 pub const AGENT_FORWARDING: &str = "Agent Forwarding";
 pub const LEGACY_ALGORITHMS: &str = "Allow legacy algorithms";
+/// Under the Telnet block (D87): Telnet is not encrypted.
+pub const TELNET_WARNING: &str = "Telnet is not encrypted: what you type, the login and \
+password included, crosses the network as plain text.";
 pub const LEGACY_ALGORITHMS_WARNING: &str = "Shell++ also offers SHA-1 key exchange, SHA-1 \
      MACs, ssh-rsa (SHA-1) host key and RSA key signatures and CBC ciphers to this host, after \
      the modern ones. They are weak: turn this on only for an old server or device that offers \

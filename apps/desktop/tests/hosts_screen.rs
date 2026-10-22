@@ -408,7 +408,7 @@ fn context_menu_items_and_order(cx: &mut TestAppContext) {
     // The model, for one card and for several (every item stays visible).
     for count in [1, 3] {
         assert_eq!(
-            menu::entry_ids(&menu::host_menu(count, &[], &[])),
+            menu::entry_ids(&menu::host_menu(count, &[], &[], false)),
             [
                 "menu-quick-connect",
                 "menu-connect",
@@ -456,6 +456,7 @@ fn context_menu_items_and_order(cx: &mut TestAppContext) {
             [
                 "menu-connect-ssh",
                 "menu-connect-sftp",
+                "menu-connect-telnet",
                 "menu-connect-alt-hint"
             ]
         );

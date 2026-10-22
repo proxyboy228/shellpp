@@ -1351,3 +1351,18 @@ Status: run 5 decision, 2026-10-22 (plan, section 7; D83 item 6: "the tabs ticke
 - The window keeps the set of tabs; each tab's pane group keeps its members and the other tabs' members as peers, and tells the window when its members change.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 4.4 item 7 and 4.7 (and `docs/ru`).
+
+### 87. Telnet sessions (run 5)
+
+Status: run 5 decision, 2026-10-22 (plan, section 9.1; UI 3.1 "Add Telnet", data-model 7.4; stage 9 of SPEC.md).
+
+**Decision:**
+
+- A saved host's Telnet block opens a Telnet session tab: Connect ▸ via Telnet (enabled when every chosen host has a Telnet block), and Quick Connect, Enter and a double click for a host whose `primary_protocol` is `telnet`. The tab is the same terminal as SSH; Duplicate, split panes, Restore and workspaces keep it (`{"kind": "telnet", "host": host_link}`, data-model 12).
+- The connection: the host's address and `telnet.port` (23 by default), the same name resolution and 15 s connect timeout as SSH; RFC 854 with ECHO and SUPPRESS-GO-AHEAD from the server and TERMINAL-TYPE (`terminal.term`) and NAWS from the client, sent again on every resize; any other option is refused, and an option is answered only when its state changes. Input doubles 0xFF and sends CR as `CR NUL`.
+- Login is interactive: the host's saved username and password are not sent (`telnet.username` stays a note for now).
+- The server closing the connection is a drop "closed by the server", a network error one "connection lost": the output stays and Reconnect connects again. Telnet has no exit status, so a tab never closes by itself. There is no automatic reconnect for Telnet.
+- The host panel's Telnet block says that Telnet is not encrypted (the login and password cross the network as plain text).
+- Not in this run: Telnet in the connection log and in Recent connections, quick connect by `telnet://`, and the host's charset (UTF-8 is used).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 2.4 (Connect ▸ via Telnet) and 3.1 item 6 (and `docs/ru`).

@@ -41,7 +41,11 @@ impl Picker {
         on_choice: impl Fn(&mut PaneGroup, Choice, &mut Window, &mut Context<PaneGroup>) + 'static,
     ) -> Self {
         let origin = origin.map(|(target, title)| match target {
-            PaneTarget::Host { record_id, .. } => PickerOrigin::Host(record_id),
+            // A Telnet pane's host comes first too (its protocol is chosen in
+            // the list).
+            PaneTarget::Host { record_id, .. } | PaneTarget::Telnet { record_id, .. } => {
+                PickerOrigin::Host(record_id)
+            }
             PaneTarget::Quick(quick) => PickerOrigin::Quick(quick),
             PaneTarget::Local { shell_id } => PickerOrigin::Local { shell_id, title },
         });

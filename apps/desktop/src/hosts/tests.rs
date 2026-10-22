@@ -2082,3 +2082,36 @@ fn hosts_are_added_to_workspaces(cx: &mut TestAppContext) {
     drop(core);
     ui.finish(cx);
 }
+
+/// D87: a host whose primary protocol is Telnet opens Telnet on a double
+/// click; another host opens SSH.
+#[gpui_kit::test]
+fn the_primary_protocol_decides_the_session(cx: &mut TestAppContext) {
+    let (ui, ids) = Screen::open(
+        cx,
+        1280.,
+        &[
+            json!({"address": "router.lan", "primary_protocol": "telnet", "telnet": {"port": 2323}}),
+            json!({"address": "web.example.com", "telnet": {"port": 23}}),
+        ],
+    );
+    let [router, web] = ids[..] else {
+        unreachable!()
+    };
+    ui.frame(cx, |window, cx| {
+        window.double_click(host_card_id(router), cx)
+    });
+    ui.frame(cx, |window, cx| window.double_click(host_card_id(web), cx));
+    let sessions = ui.sessions();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(
+        (sessions[0].host, sessions[0].kind),
+        (Some(router), SessionKind::Telnet)
+    );
+    assert_eq!(
+        (sessions[1].host, sessions[1].kind),
+        (Some(web), SessionKind::Ssh),
+        "Telnet only as the primary protocol"
+    );
+    ui.finish(cx);
+}

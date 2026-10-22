@@ -60,3 +60,6 @@ pub use forward::{
 pub use proxy::{ProxyKind, ProxySpec};
 pub use reconnect::{Backoff, RECONNECT_DELAYS_S, RECONNECT_STEADY_S};
 pub use sftp::{EntryKind, RemoteEntry, Sftp, SftpError};
+/// Name resolution and TCP connection with the failures of an SSH
+/// connection, for the app's other TCP transports (Telnet, D87).
+pub use transport::{connect_any, resolve};

@@ -1042,7 +1042,12 @@ impl HostsScreen {
                     let targets = screen.move_targets(&records, cx);
                     let workspaces = screen.workspaces(cx);
                     (
-                        menu::host_menu(records.len(), &targets, &workspaces),
+                        menu::host_menu(
+                            records.len(),
+                            &targets,
+                            &workspaces,
+                            screen.all_telnet(&records),
+                        ),
                         screen.menu_handler(records, cx),
                     )
                 });

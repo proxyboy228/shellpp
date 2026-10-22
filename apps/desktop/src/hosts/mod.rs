@@ -95,6 +95,9 @@ pub enum SessionKind {
     Terminal,
     /// Serial port (Serial button).
     Serial,
+    /// Telnet to the host's Telnet block (Connect ▸ via Telnet, or the
+    /// host's primary protocol; D87).
+    Telnet,
 }
 
 /// A session tab to open. Until terminals exist the shell shows an "In
@@ -517,7 +520,12 @@ impl HostsScreen {
         if self.is_group(card) {
             menu::group_menu(targets.len(), &move_targets)
         } else {
-            menu::host_menu(targets.len(), &move_targets, &self.workspaces(cx))
+            menu::host_menu(
+                targets.len(),
+                &move_targets,
+                &self.workspaces(cx),
+                self.all_telnet(&targets),
+            )
         }
     }
 
@@ -728,7 +736,7 @@ impl HostsScreen {
             // After a click on a group card (which opened the group) there is
             // no first card, and nothing connects.
             if let Some(first) = self.last_click.take() {
-                self.connect_hosts(&[first], SessionKind::Ssh, event.modifiers().alt, cx);
+                self.connect_primary(&[first], event.modifiers().alt, cx);
             }
             return;
         }
@@ -792,7 +800,7 @@ impl HostsScreen {
                         .into_iter()
                         .filter(|id| !self.is_group(*id))
                         .collect();
-                    self.connect_hosts(&hosts, SessionKind::Ssh, false, cx);
+                    self.connect_primary(&hosts, false, cx);
                 }
             }
             "e" => {
@@ -893,7 +901,7 @@ impl HostsScreen {
     fn connect_from_search(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         match self.search_target.clone() {
             SearchTarget::None => {}
-            SearchTarget::Saved(id) => self.connect_hosts(&[id], SessionKind::Ssh, false, cx),
+            SearchTarget::Saved(id) => self.connect_primary(&[id], false, cx),
             // The offer to save the host (2.1) comes from the shell once the
             // session has connected, not here.
             SearchTarget::Quick(target) => {
@@ -994,6 +1002,28 @@ impl HostsScreen {
         }
     }
 
+    /// Connects each host with its primary protocol: Telnet for a host
+    /// whose `primary_protocol` is Telnet, else SSH (D87).
+    fn connect_primary(&mut self, ids: &[Uuid], new_window: bool, cx: &mut Context<Self>) {
+        for &id in ids {
+            let kind = if self.host(id).is_some_and(HostItem::primary_telnet) {
+                SessionKind::Telnet
+            } else {
+                SessionKind::Ssh
+            };
+            self.connect_hosts(&[id], kind, new_window, cx);
+        }
+    }
+
+    /// Whether every one of `ids` has a Telnet block (Connect ▸ via
+    /// Telnet).
+    pub(crate) fn all_telnet(&self, ids: &[Uuid]) -> bool {
+        !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| self.host(*id).is_some_and(HostItem::has_telnet))
+    }
+
     /// Opens a local terminal or serial session tab (placeholders).
     fn open_local(&mut self, kind: SessionKind, cx: &mut Context<Self>) {
         let title = match kind {
@@ -1089,10 +1119,10 @@ impl HostsScreen {
             .collect();
         let alt = window.modifiers().alt;
         match command {
-            MenuCommand::QuickConnect | MenuCommand::ConnectSsh => {
-                self.connect_hosts(&hosts, SessionKind::Ssh, alt, cx)
-            }
+            MenuCommand::QuickConnect => self.connect_primary(&hosts, alt, cx),
+            MenuCommand::ConnectSsh => self.connect_hosts(&hosts, SessionKind::Ssh, alt, cx),
             MenuCommand::ConnectSftp => self.connect_hosts(&hosts, SessionKind::Sftp, alt, cx),
+            MenuCommand::ConnectTelnet => self.connect_hosts(&hosts, SessionKind::Telnet, alt, cx),
             MenuCommand::EditHost => {
                 if let [id] = hosts.as_slice() {
                     cx.emit(HostsRequest::EditHost(*id));

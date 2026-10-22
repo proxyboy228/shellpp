@@ -50,6 +50,7 @@ pub mod keys;
 pub mod local;
 mod ssh;
 pub mod strings;
+pub mod telnet;
 pub mod transport;
 pub mod types;
 pub mod ui;
@@ -974,6 +975,10 @@ impl SessionManager {
         let size = (clamp_size(size.0), clamp_size(size.1));
         match request {
             OpenRequest::Ssh(target) => self.open_ssh(target, size, terminal, ssh::Purpose::Shell),
+            OpenRequest::Telnet {
+                vault_id,
+                record_id,
+            } => self.open_telnet(vault_id, record_id, size, terminal),
             OpenRequest::Local { shell_id } => {
                 let settings = SessionSettings::read(&*self.shared.core);
                 let view = SessionView {
@@ -1023,6 +1028,66 @@ impl SessionManager {
             return Err(SessionError::Locked);
         }
         self.open_ssh(target, (80, 24), Arc::new(NoTerminal), ssh::Purpose::Sftp)
+    }
+
+    /// A Telnet session to the saved host's Telnet block (D87): its address
+    /// and Telnet port; the title, OS icon, theme and Backspace of the host.
+    fn open_telnet(
+        &self,
+        vault_id: Uuid,
+        record_id: Uuid,
+        size: (u16, u16),
+        terminal: Arc<dyn SessionTerminal>,
+    ) -> Result<Opened, SessionError> {
+        let config = self
+            .shared
+            .core
+            .session_config(&SessionTarget::Host {
+                vault_id,
+                record_id,
+            })
+            .map_err(|error| core_error(&error))?;
+        let port = config.telnet_port.ok_or(SessionError::InvalidTarget)?;
+        let settings = SessionSettings::read(&*self.shared.core);
+        let view = SessionView {
+            id: self.next_id(),
+            kind: SessionKind::Telnet,
+            state: SessionState::Connecting,
+            step: Some(ConnectStep::Connecting),
+            title: config.title.clone(),
+            host: config.host,
+            address: Some(config.address.clone()),
+            port: Some(port),
+            username: None,
+            os: config.os.clone(),
+            theme: backend::theme_slug(&config.terminal_theme)
+                .unwrap_or_else(|| settings.default_theme.clone()),
+            backspace: config.backspace,
+            prompt: None,
+            error: None,
+            host_key: None,
+            error_place: None,
+            exit_status: None,
+            exit_signal: None,
+            reconnect: None,
+            shell_id: None,
+            startup_ask: None,
+            rev: 1,
+        };
+        let (session, ctrl, opened) =
+            self.register(view, size, terminal, InputEncoder::new(encoding_rs::UTF_8));
+        tracing::info!(session = session.id, kind = "telnet", "session opened");
+        drop(self.shared.rt.spawn(telnet::run(
+            self.shared.clone(),
+            session,
+            ctrl,
+            telnet::TelnetTarget {
+                address: config.address,
+                port,
+                term: settings.term,
+            },
+        )));
+        Ok(opened)
     }
 
     /// An SSH session to `target`: a shell or SFTP.

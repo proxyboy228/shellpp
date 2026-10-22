@@ -21,6 +21,10 @@ pub struct SessionConfig {
     pub address: String,
     /// Effective port (own, inherited, else 22).
     pub port: u16,
+    /// The host's Telnet port when it has a Telnet block (`telnet.port`,
+    /// else 23; docs/data-model.md, section 7.4, not inherited); `None`
+    /// without one and for a quick connect.
+    pub telnet_port: Option<u16>,
     /// Effective username (own, inherited); `None` = ask (UI 4.8).
     pub username: Option<String>,
     /// Effective password (`host.ssh.password`, else the identity's,

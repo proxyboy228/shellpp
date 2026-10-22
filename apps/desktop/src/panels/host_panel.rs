@@ -18,8 +18,9 @@
 //!    history, Record output, Mosh (lead decision 2: shown, only the value is
 //!    saved) and the terminal theme.
 //! 6. Telnet (`host-block-telnet`): "Add Telnet" adds a second protocol block
-//!    to the same host (port, placeholder 23, and username; removable). The
-//!    "…" menu's Add Telnet does the same. Sessions come later (stage 9).
+//!    to the same host (port, placeholder 23, and username; removable), with
+//!    the warning that Telnet is not encrypted. The "…" menu's Add Telnet
+//!    does the same; Connect ▸ via Telnet opens a session (D87).
 //! 7. Connect (`host-connect`), pinned to the bottom, disabled until the
 //!    address is valid. It is the screen's one accent button unless the
 //!    search bar holds a recognized address ([`HostPanel::set_search_has_address`]).
@@ -2082,6 +2083,14 @@ impl HostPanel {
             .when_some(port_error, |this, error| {
                 this.child(widgets::error_text(error, cx))
             })
+            .child(
+                div()
+                    .id("host-telnet-warning")
+                    .test_support()
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(cx.theme().warning)
+                    .child(strings::TELNET_WARNING),
+            )
             .child(widgets::field(
                 strings::USERNAME,
                 widgets::text_input(
