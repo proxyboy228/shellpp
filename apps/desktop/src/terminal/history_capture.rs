@@ -55,7 +55,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
@@ -865,13 +865,12 @@ impl TerminalView {
             return;
         }
         let handle = self.handle();
-        let bracketed = {
-            let mut term = handle.term().lock();
-            if term.grid().display_offset() != 0 {
-                term.scroll_display(Scroll::Bottom);
-            }
-            term.mode().contains(TermMode::BRACKETED_PASTE)
-        };
+        handle.scroll_to_bottom();
+        let bracketed = handle
+            .term()
+            .lock()
+            .mode()
+            .contains(TermMode::BRACKETED_PASTE);
         handle.inject_input(paste::paste_bytes(&one_line, bracketed));
         cx.notify();
     }
@@ -903,13 +902,12 @@ impl TerminalView {
             return false;
         }
         let handle = self.handle();
-        let bracketed = {
-            let mut term = handle.term().lock();
-            if term.grid().display_offset() != 0 {
-                term.scroll_display(Scroll::Bottom);
-            }
-            term.mode().contains(TermMode::BRACKETED_PASTE)
-        };
+        handle.scroll_to_bottom();
+        let bracketed = handle
+            .term()
+            .lock()
+            .mode()
+            .contains(TermMode::BRACKETED_PASTE);
         if !run && !bracketed && paste::has_line_break(text) {
             return false;
         }

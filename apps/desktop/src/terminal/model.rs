@@ -28,19 +28,20 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::Column;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Osc52, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle, Processor, Rgb, StdSyncHandler};
 
 use super::colors::Palette;
+use super::journal::{self, COMPACT_BATCH, COMPACT_INTERVAL, Journal, LIVE_HISTORY, Lines};
 use super::limits::{self, Capped, MAX_ZEROWIDTH, OscLimiter};
 
 /// Largest chunk the queue carries; bigger feeds are split.
@@ -163,11 +164,28 @@ pub(super) struct Outbox {
     /// holds the terminal lock, so a reader holding the lock sees the count
     /// of the grid it reads.
     evicted: AtomicUsize,
+    /// The compact part of the scrollback (D85). Locked after the terminal,
+    /// never before it.
+    journal: Arc<Mutex<Journal>>,
+    /// A compaction ended the emulator's selection (its rows moved into the
+    /// journal): the view keeps its own.
+    selection_moved: std::sync::atomic::AtomicBool,
     /// Command history capture (docs/security.md, section 10.1).
     pub(super) capture: super::history_capture::Capture,
 }
 
 impl Outbox {
+    /// The journal (lock the terminal first).
+    pub(super) fn journal(&self) -> MutexGuard<'_, Journal> {
+        self.journal.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether a compaction ended the emulator's selection since the last
+    /// call.
+    pub(super) fn take_selection_moved(&self) -> bool {
+        self.selection_moved.swap(false, Ordering::AcqRel)
+    }
+
     /// Sends bytes to the sink (dropped while there is none).
     pub fn send(&self, bytes: Vec<u8>) {
         if bytes.is_empty() {
@@ -327,6 +345,8 @@ impl TerminalHandle {
             wake,
             size: Mutex::new(options.size),
             evicted: AtomicUsize::new(0),
+            journal: Arc::new(Mutex::new(Journal::default())),
+            selection_moved: Default::default(),
             capture: Default::default(),
         });
         let config = term_config(options.scrollback, options.cursor_shape);
@@ -465,7 +485,13 @@ impl TerminalHandle {
             let cells_changed = current.cols != size.cols || current.rows != size.rows;
             *current = size;
             if cells_changed {
-                self.term.lock().resize(GridDims::from(size));
+                let mut term = self.term.lock();
+                term.resize(GridDims::from(size));
+                // A view in the journal shows the grid from its top.
+                let journal = self.outbox.journal();
+                if journal.view() > 0 {
+                    term.scroll_display(Scroll::Top);
+                }
             }
         }
         self.outbox.resize(size);
@@ -481,14 +507,19 @@ impl TerminalHandle {
     /// The visible screen as text, one string per row with trailing blanks
     /// trimmed (tests and diagnostics; never logged).
     pub fn screen_text(&self) -> Vec<String> {
+        use super::journal::Buffer as _;
         let term = self.term.lock();
-        let grid = term.grid();
-        let offset = grid.display_offset() as i32;
-        (0..grid.screen_lines())
+        let journal = self.outbox.journal();
+        let lines = Lines {
+            grid: term.grid(),
+            journal: &journal,
+        };
+        let top = lines.view_top();
+        (0..lines.rows())
             .map(|line| {
-                let row = &grid[Line(line as i32 - offset)];
+                let row = lines.row(top + line);
                 let mut text = String::new();
-                for column in 0..grid.columns() {
+                for column in 0..lines.cols() {
                     let cell = &row[Column(column)];
                     if cell
                         .flags
@@ -506,9 +537,57 @@ impl TerminalHandle {
             .collect()
     }
 
-    /// Lines in the scrollback (above the screen).
+    /// Lines in the scrollback (above the screen), the journal's included.
     pub fn history_size(&self) -> usize {
-        self.term.lock().grid().history_size()
+        let term = self.term.lock();
+        term.grid().history_size() + self.outbox.journal().len()
+    }
+
+    /// Bytes the scrollback and the screen take: the grid's rows (each as
+    /// wide as the window) and the journal (tests and benchmarks).
+    pub fn buffer_bytes(&self) -> usize {
+        let term = self.term.lock();
+        let grid = term.grid();
+        (grid.history_size() + grid.screen_lines())
+            * grid.columns()
+            * size_of::<alacritty_terminal::term::cell::Cell>()
+            + self.outbox.journal().bytes()
+    }
+
+    /// Scrolls the view: the scrollback and its journal together.
+    pub(super) fn scroll(&self, scroll: Scroll) {
+        let mut term = self.term.lock();
+        journal::scroll(&mut term, &mut self.outbox.journal(), scroll);
+    }
+
+    /// Back to the bottom of the scrollback (typed input, a paste).
+    pub(super) fn scroll_to_bottom(&self) {
+        let mut term = self.term.lock();
+        let mut journal = self.outbox.journal();
+        if term.grid().display_offset() != 0 || journal.view() != 0 {
+            journal::scroll(&mut term, &mut journal, Scroll::Bottom);
+        }
+    }
+
+    /// Rows the view is scrolled up from the bottom (tests).
+    #[cfg(test)]
+    pub(super) fn view_offset(&self) -> usize {
+        let term = self.term.lock();
+        term.grid().display_offset() + self.outbox.journal().view()
+    }
+
+    /// Runs `read` on the buffer of `term` (this handle's terminal,
+    /// locked): the journal and the grid.
+    pub(super) fn with_lines<R>(
+        &self,
+        term: &Term<Listener>,
+        read: impl FnOnce(&Lines<'_>) -> R,
+    ) -> R {
+        let journal = self.outbox.journal();
+        read(&Lines {
+            grid: term.grid(),
+            journal: &journal,
+        })
     }
 
     /// Lines dropped off the top of the scrollback so far (a full
@@ -555,7 +634,8 @@ fn parse_loop(
     outbox: Arc<Outbox>,
     scrollback: usize,
 ) {
-    limits::count_evictions(scrollback);
+    limits::count_evictions(scrollback, outbox.journal.clone());
+    let mut compacted = Instant::now();
     // Published before the lock is let go (see `Outbox::evicted`).
     let publish = |outbox: &Outbox| {
         outbox.evicted.store(limits::evictions(), Ordering::Release);
@@ -613,6 +693,25 @@ fn parse_loop(
             publish(&outbox);
             drop(locked);
             outbox.wake();
+        }
+        // The scrollback beyond the newest lines moves to the journal once
+        // output pauses, or now and then while it does not (D85).
+        {
+            let mut locked = term.lock();
+            let history = locked.grid().history_size();
+            let due = history > LIVE_HISTORY
+                && (receiver.is_empty()
+                    || (history > LIVE_HISTORY + COMPACT_BATCH
+                        && compacted.elapsed() >= COMPACT_INTERVAL));
+            if due {
+                let had_selection = locked.selection.is_some();
+                let moved = journal::compact(&mut locked, &mut outbox.journal(), scrollback);
+                limits::journal_grew(moved);
+                if had_selection && locked.selection.is_none() {
+                    outbox.selection_moved.store(true, Ordering::Release);
+                }
+                compacted = Instant::now();
+            }
         }
         if batch.capacity() > BATCH_BYTES * 2 {
             batch = Vec::with_capacity(CHUNK_BYTES);

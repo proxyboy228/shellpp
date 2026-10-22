@@ -1,5 +1,6 @@
 //! Search in the terminal output (UI 4.2 Tools, Ctrl+Shift+F): plain text,
-//! case-insensitive, over the scrollback and the screen.
+//! case-insensitive, over the scrollback (its journal included, D85) and
+//! the screen.
 //!
 //! - Matching runs over logical lines: a row that wrapped (alacritty's
 //!   `WRAPLINE`) continues into the next one, so a word broken by the
@@ -34,9 +35,11 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use alacritty_terminal::grid::{Dimensions, Grid};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::grid::Row;
+use alacritty_terminal::index::Column;
 use alacritty_terminal::term::cell::{Cell, Flags};
+
+use super::journal::Buffer;
 
 /// Most matches kept for one query; the counter shows "10000+" beyond.
 pub const MAX_MATCHES: usize = 10_000;
@@ -98,11 +101,11 @@ struct Basis {
 }
 
 impl Basis {
-    fn of(grid: &Grid<Cell>, origin: Origin) -> Self {
+    fn of<B: Buffer + ?Sized>(buffer: &B, origin: Origin) -> Self {
         Self {
-            columns: grid.columns(),
-            screen_lines: grid.screen_lines(),
-            history: grid.history_size(),
+            columns: buffer.cols(),
+            screen_lines: buffer.rows(),
+            history: buffer.above(),
             origin,
         }
     }
@@ -113,8 +116,8 @@ impl Basis {
     }
 
     /// The grid still has the size the search ran on.
-    fn same_size(&self, grid: &Grid<Cell>) -> bool {
-        (self.columns, self.screen_lines) == (grid.columns(), grid.screen_lines())
+    fn same_size<B: Buffer + ?Sized>(&self, buffer: &B) -> bool {
+        (self.columns, self.screen_lines) == (buffer.cols(), buffer.rows())
     }
 }
 
@@ -207,45 +210,28 @@ impl<'a> Matcher<'a> {
     }
 }
 
-/// The last column of a row that holds anything but a blank, if any.
-fn last_used_column(grid: &Grid<Cell>, line: Line) -> Option<usize> {
-    let row = &grid[line];
-    (0..grid.columns()).rev().find(|&column| {
+/// The last column of a row (`columns` wide) that holds anything but a
+/// blank, if any.
+fn last_used_column(row: &Row<Cell>, columns: usize) -> Option<usize> {
+    (0..columns).rev().find(|&column| {
         let cell = &row[Column(column)];
         !(cell.c == ' ' || cell.c == '\0' || cell.flags.contains(Flags::HIDDEN))
             || cell.flags.contains(Flags::WRAPLINE)
     })
 }
 
-/// Lines of the buffer: the scrollback and the screen.
-fn total_lines(grid: &Grid<Cell>) -> usize {
-    grid.history_size() + grid.screen_lines()
-}
-
-/// The grid line of buffer line `line`.
-fn grid_line(grid: &Grid<Cell>, line: usize) -> Line {
-    Line(line as i32 - grid.history_size() as i32)
-}
-
-/// Whether buffer line `line` continues on the next row.
-fn wraps(grid: &Grid<Cell>, line: usize) -> bool {
-    grid[grid_line(grid, line)][Column(grid.columns() - 1)]
-        .flags
-        .contains(Flags::WRAPLINE)
-}
-
 /// The first buffer line of the logical line that holds `line`.
-fn logical_start(grid: &Grid<Cell>, mut line: usize) -> usize {
-    while line > 0 && wraps(grid, line - 1) {
+fn logical_start<B: Buffer + ?Sized>(buffer: &B, mut line: usize) -> usize {
+    while line > 0 && buffer.wraps(line - 1) {
         line -= 1;
     }
     line
 }
 
 /// The buffer line after the logical line that holds `line`.
-fn logical_end(grid: &Grid<Cell>, mut line: usize) -> usize {
-    let last = total_lines(grid) - 1;
-    while line < last && wraps(grid, line) {
+fn logical_end<B: Buffer + ?Sized>(buffer: &B, mut line: usize) -> usize {
+    let last = buffer.total() - 1;
+    while line < last && buffer.wraps(line) {
         line += 1;
     }
     line + 1
@@ -254,8 +240,8 @@ fn logical_end(grid: &Grid<Cell>, mut line: usize) -> usize {
 /// Searches the buffer lines `lines` of `grid` for `pattern` and adds the
 /// matches to `out`, their lines raised by `base`, up to `limit` in all.
 /// `lines` starts at the start of a logical line.
-fn scan(
-    grid: &Grid<Cell>,
+fn scan<B: Buffer + ?Sized>(
+    buffer: &B,
     pattern: &[char],
     lines: Range<usize>,
     base: usize,
@@ -266,20 +252,19 @@ fn scan(
         return out;
     }
     let mut matcher = Matcher::new(pattern, limit, out);
-    let columns = grid.columns();
+    let columns = buffer.cols();
     for buffer_line in lines {
         if matcher.full() {
             break;
         }
-        let line = grid_line(grid, buffer_line);
-        let row = &grid[line];
+        let row = buffer.row(buffer_line);
         let wraps = row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
         // A line that ends here drops its trailing blanks; a wrapped row
         // keeps every cell (the blanks are inside the logical line).
         let used = if wraps {
             Some(columns - 1)
         } else {
-            last_used_column(grid, line)
+            last_used_column(&row, columns)
         };
         if let Some(used) = used {
             for column in 0..=used {
@@ -317,22 +302,17 @@ fn scan(
     matcher.out
 }
 
-/// All matches of `query` in the scrollback and the screen of `grid`.
-pub fn find(grid: &Grid<Cell>, query: &str, limit: usize) -> Matches {
+/// All matches of `query` in the scrollback and the screen of `buffer`.
+pub fn find<B: Buffer + ?Sized>(buffer: &B, query: &str, limit: usize) -> Matches {
     let pattern = fold_query(query);
     scan(
-        grid,
+        buffer,
         &pattern,
-        0..total_lines(grid),
+        0..buffer.total(),
         0,
         limit,
         Matches::default(),
     )
-}
-
-/// The buffer line of grid line `line` (negative: in the scrollback).
-pub fn buffer_line(grid: &Grid<Cell>, line: Line) -> usize {
-    (line.0 + grid.history_size() as i32).max(0) as usize
 }
 
 /// A highlighted span on screen: the viewport row, the first and last
@@ -360,17 +340,17 @@ impl SearchState {
     /// current match is the last one that starts at or above the bottom of
     /// the visible rows (the newest output the user sees), else the first
     /// one.
-    pub fn new(query: &str, grid: &Grid<Cell>, origin: Origin) -> Self {
+    pub fn new<B: Buffer + ?Sized>(query: &str, buffer: &B, origin: Origin) -> Self {
         let pattern = fold_query(query);
         let matches = scan(
-            grid,
+            buffer,
             &pattern,
-            0..total_lines(grid),
+            0..buffer.total(),
             origin.evicted,
             MAX_MATCHES,
             Matches::default(),
         );
-        let bottom = visible_bottom(grid) + origin.evicted;
+        let bottom = visible_bottom(buffer) + origin.evicted;
         let current = match matches.list.partition_point(|m| m.start.line <= bottom) {
             0 if matches.list.is_empty() => None,
             0 => Some(0),
@@ -380,7 +360,7 @@ impl SearchState {
             query: query.to_owned(),
             matches: Rc::new(matches),
             current,
-            basis: Basis::of(grid, origin),
+            basis: Basis::of(buffer, origin),
         }
     }
 
@@ -434,19 +414,19 @@ impl SearchState {
     /// one at the same position, else the next one after it (else the
     /// last); after a reflow, the one with the same ordinal (clamped).
     /// Returns whether the matches changed.
-    pub fn refresh(&mut self, grid: &Grid<Cell>, origin: Origin) -> bool {
+    pub fn refresh<B: Buffer + ?Sized>(&mut self, buffer: &B, origin: Origin) -> bool {
         let pattern = fold_query(&self.query);
         let old = self.basis;
-        let new = Basis::of(grid, origin);
+        let new = Basis::of(buffer, origin);
         self.basis = new;
         let reflowed = (old.columns, old.screen_lines) != (new.columns, new.screen_lines);
         let matches = self
-            .search_changed_rows(grid, &pattern, old, new)
+            .search_changed_rows(buffer, &pattern, old, new)
             .unwrap_or_else(|| {
                 scan(
-                    grid,
+                    buffer,
                     &pattern,
-                    0..total_lines(grid),
+                    0..buffer.total(),
                     origin.evicted,
                     MAX_MATCHES,
                     Matches::default(),
@@ -470,9 +450,9 @@ impl SearchState {
 
     /// The matches after new output, searching only the rows that can have
     /// changed since `old`; `None` when everything must be searched.
-    fn search_changed_rows(
+    fn search_changed_rows<B: Buffer + ?Sized>(
         &self,
-        grid: &Grid<Cell>,
+        buffer: &B,
         pattern: &[char],
         old: Basis,
         new: Basis,
@@ -491,17 +471,24 @@ impl SearchState {
             return None;
         }
         // The rows from the logical line at the previous screen top down.
-        let rescan = logical_start(grid, old.screen_top() - top);
+        let rescan = logical_start(buffer, old.screen_top() - top);
         // A logical line whose first rows dropped off is searched anew.
         let head = if top > old.origin.evicted {
-            logical_end(grid, 0)
+            logical_end(buffer, 0)
         } else {
             0
         };
         if head >= rescan {
             return None;
         }
-        let mut out = scan(grid, pattern, 0..head, top, MAX_MATCHES, Matches::default());
+        let mut out = scan(
+            buffer,
+            pattern,
+            0..head,
+            top,
+            MAX_MATCHES,
+            Matches::default(),
+        );
         let kept = (top + head)..(top + rescan);
         for found in &self.matches.list {
             if kept.contains(&found.start.line) && found.end.line < kept.end {
@@ -509,9 +496,9 @@ impl SearchState {
             }
         }
         Some(scan(
-            grid,
+            buffer,
             pattern,
-            rescan..total_lines(grid),
+            rescan..buffer.total(),
             top,
             MAX_MATCHES,
             out,
@@ -522,9 +509,9 @@ impl SearchState {
     /// of the viewport, `columns` wide, on a grid whose buffer stands at
     /// `origin`. None while the grid has another size than the one the
     /// matches were found on, or shows the other screen.
-    pub fn spans(
+    pub fn spans<B: Buffer + ?Sized>(
         &self,
-        grid: &Grid<Cell>,
+        buffer: &B,
         origin: Origin,
         rows: usize,
         columns: usize,
@@ -533,12 +520,12 @@ impl SearchState {
         if list.is_empty()
             || rows == 0
             || columns == 0
-            || !self.basis.same_size(grid)
+            || !self.basis.same_size(buffer)
             || origin.alt_screen != self.basis.origin.alt_screen
         {
             return Vec::new();
         }
-        let top = buffer_line(grid, Line(-(grid.display_offset() as i32))) + origin.evicted;
+        let top = buffer.view_top() + origin.evicted;
         let bottom = top + rows - 1;
         let first = list.partition_point(|m| m.end.line < top);
         let mut spans = Vec::new();
@@ -575,10 +562,14 @@ impl SearchState {
     /// whose buffer has dropped `evicted` lines): the current one when the
     /// match is already visible or has dropped off, else one that puts it
     /// in the middle of the screen.
-    pub fn offset_showing(grid: &Grid<Cell>, evicted: usize, found: SearchMatch) -> usize {
-        let history = grid.history_size();
-        let rows = grid.screen_lines();
-        let offset = grid.display_offset();
+    pub fn offset_showing<B: Buffer + ?Sized>(
+        buffer: &B,
+        evicted: usize,
+        found: SearchMatch,
+    ) -> usize {
+        let history = buffer.above();
+        let rows = buffer.rows();
+        let offset = buffer.view_offset();
         let (Some(start), Some(end)) = (
             found.start.line.checked_sub(evicted),
             found.end.line.checked_sub(evicted),
@@ -595,18 +586,15 @@ impl SearchState {
 }
 
 /// The buffer line of the bottom visible row.
-fn visible_bottom(grid: &Grid<Cell>) -> usize {
-    buffer_line(
-        grid,
-        Line(grid.screen_lines() as i32 - 1 - grid.display_offset() as i32),
-    )
+fn visible_bottom<B: Buffer + ?Sized>(buffer: &B) -> usize {
+    buffer.view_top() + buffer.rows().saturating_sub(1)
 }
 
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::Term;
     use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::grid::Scroll;
+    use alacritty_terminal::grid::{Dimensions, Scroll};
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -812,9 +800,9 @@ mod tests {
     /// The text of the row a match of a state starts on.
     fn row_text(term: &Term<VoidListener>, origin: Origin, found: SearchMatch) -> String {
         let grid = term.grid();
-        let line = grid_line(grid, found.start.line - origin.evicted);
+        let row = grid.row(found.start.line - origin.evicted);
         (0..grid.columns())
-            .map(|column| grid[line][Column(column)].c)
+            .map(|column| row[Column(column)].c)
             .collect::<String>()
             .trim_end()
             .to_owned()
@@ -869,7 +857,7 @@ mod tests {
     /// fresh search) instead of drifting to a newer match.
     #[test]
     fn the_current_match_keeps_its_text_while_lines_drop_off() {
-        limits::count_evictions(20);
+        limits::count_evictions(20, Default::default());
         let mut term = term(20, 4, 20, "");
         let lines = |range: Range<usize>| -> String {
             range.map(|index| format!("hit {index:03}\r\n")).collect()
@@ -934,7 +922,7 @@ mod tests {
     #[test]
     fn searching_the_changed_rows_matches_a_fresh_search() {
         for query in ["aa", "ab", "你a"] {
-            limits::count_evictions(12);
+            limits::count_evictions(12, Default::default());
             let mut term = term(7, 4, 12, "");
             let mut random = Lcg(0x5eed);
             let mut state = SearchState::new(query, term.grid(), origin_of(&term));

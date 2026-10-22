@@ -26,6 +26,8 @@
 //!   [`TerminalEvent::ConfirmPaste`], the tab shows the dialog), focus.
 //! - [`limits`]: caps on what output can make the emulator store (OSC
 //!   string length, zero-width characters per cell).
+//! - [`journal`]: the compact part of the scrollback (D85): rows older than
+//!   the newest few hundred scrollback lines, as text and attribute runs.
 //! - [`render`]: the element: only visible rows, cached row layouts.
 //! - [`input`], [`mouse`], [`paste`], [`selection`], [`colors`]: the pure
 //!   rules, unit tested.
@@ -50,6 +52,7 @@ pub mod fonts;
 pub mod highlight;
 pub mod history_capture;
 pub mod input;
+pub mod journal;
 pub mod limits;
 pub mod model;
 pub mod mouse;

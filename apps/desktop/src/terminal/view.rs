@@ -27,12 +27,13 @@ use gpui_kit::component::input as edit;
 use super::colors::{Palette, rgb_token};
 use super::fonts::{self, FontSet};
 use super::input::{self, BackspaceKey, KeyAction};
+use super::journal::Buffer as _;
 use super::model::{ModelOptions, TerminalHandle, TerminalSize, term_config};
 use super::mouse::{self, ReportButton, ReportKind};
 use super::paste::{self, PastePreview};
-use super::render::{self, FrameStyle, LayoutState, grid_point};
-use super::search::SearchState;
-use super::selection;
+use super::render::{self, FrameStyle, LayoutState};
+use super::search::{BufferPoint, SearchState};
+use super::selection::{self, Selection};
 use super::settings::{CursorStyleSetting, DEFAULT_SCROLLBACK, TerminalSettings, settings};
 use crate::settings::terminal::TerminalPrefs;
 use crate::theme::metrics;
@@ -243,6 +244,13 @@ pub struct TerminalView {
     title: Option<SharedString>,
     /// A dropped session: the content is dimmed and the cursor hidden.
     dimmed: bool,
+    /// The selection (UI 4.3), in buffer lines; its part on the screen is
+    /// mirrored in the emulator.
+    selection: Option<Selection>,
+    /// The emulator holds the selection's screen part.
+    selection_mirrored: bool,
+    /// The selection was made on the alternate screen.
+    selection_alt: bool,
     /// The open search, if any (UI 4.2 Tools).
     search: Option<SearchState>,
     /// New output arrived since the search last ran.
@@ -339,6 +347,9 @@ impl TerminalView {
             marked_text: None,
             title: None,
             dimmed: false,
+            selection: None,
+            selection_mirrored: false,
+            selection_alt: false,
             search: None,
             search_stale: false,
             search_refresh: None,
@@ -429,12 +440,7 @@ impl TerminalView {
     }
 
     fn mirrored_bytes(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
-        {
-            let mut term = self.handle.term().lock();
-            if term.grid().display_offset() != 0 {
-                term.scroll_display(Scroll::Bottom);
-            }
-        }
+        self.handle.scroll_to_bottom();
         self.handle.inject_input(bytes);
         cx.notify();
     }
@@ -519,7 +525,9 @@ impl TerminalView {
         }
         let state = {
             let term = self.handle.term().lock();
-            SearchState::new(query, term.grid(), self.handle.search_origin(&term))
+            let origin = self.handle.search_origin(&term);
+            self.handle
+                .with_lines(&term, |lines| SearchState::new(query, lines, origin))
         };
         self.search = Some(state);
         self.search_stale = false;
@@ -580,12 +588,19 @@ impl TerminalView {
         let Some(found) = self.search.as_ref().and_then(SearchState::current) else {
             return;
         };
-        let mut term = self.handle.term().lock();
-        let offset = term.grid().display_offset();
-        let evicted = self.handle.evicted_lines();
-        let target = SearchState::offset_showing(term.grid(), evicted, found);
+        let (offset, target) = {
+            let term = self.handle.term().lock();
+            let evicted = self.handle.evicted_lines();
+            self.handle.with_lines(&term, |lines| {
+                (
+                    lines.view_offset(),
+                    SearchState::offset_showing(lines, evicted, found),
+                )
+            })
+        };
         if target != offset {
-            term.scroll_display(Scroll::Delta(target as i32 - offset as i32));
+            self.handle
+                .scroll(Scroll::Delta(target as i32 - offset as i32));
         }
     }
 
@@ -634,7 +649,9 @@ impl TerminalView {
         };
         let changed = {
             let term = self.handle.term().lock();
-            search.refresh(term.grid(), self.handle.search_origin(&term))
+            let origin = self.handle.search_origin(&term);
+            self.handle
+                .with_lines(&term, |lines| search.refresh(lines, origin))
         };
         if changed {
             cx.emit(SearchUpdated);
@@ -644,7 +661,55 @@ impl TerminalView {
 
     /// The selected text, if any.
     pub fn selected_text(&self) -> Option<String> {
-        selection::text(&self.handle.term().lock())
+        let selection = self.selection?;
+        let term = self.handle.term().lock();
+        let evicted = self.handle.evicted_lines();
+        self.handle
+            .with_lines(&term, |lines| selection.text(lines, evicted))
+    }
+
+    /// The buffer point of a viewport cell (its line counted with the
+    /// lines dropped before).
+    fn buffer_point(&self, line: usize, column: usize) -> BufferPoint {
+        let term = self.handle.term().lock();
+        let evicted = self.handle.evicted_lines();
+        self.handle.with_lines(&term, |lines| BufferPoint {
+            line: evicted + lines.view_top() + line,
+            column,
+        })
+    }
+
+    /// Sets the selection and mirrors its part on the screen in the
+    /// emulator, which drops it when output writes over it.
+    fn set_selection(&mut self, selection: Option<Selection>) {
+        let mut term = self.handle.term().lock();
+        let evicted = self.handle.evicted_lines();
+        let mirror = selection.and_then(|selection| {
+            self.handle
+                .with_lines(&term, |lines| selection.mirror(lines, evicted))
+        });
+        self.selection_mirrored = mirror.is_some();
+        self.selection_alt = term.mode().contains(TermMode::ALT_SCREEN);
+        term.selection = mirror;
+        self.selection = selection;
+    }
+
+    /// Ends the selection when the emulator dropped its copy (output wrote
+    /// over it, a reset, a resize) or the screen switched; keeps it when
+    /// its rows only moved into the journal (D85).
+    fn check_selection(&mut self) {
+        if self.selection.is_none() {
+            return;
+        }
+        let term = self.handle.term().lock();
+        let moved = self.handle.outbox().take_selection_moved();
+        let dropped = self.selection_mirrored && term.selection.is_none() && !moved;
+        if dropped || term.mode().contains(TermMode::ALT_SCREEN) != self.selection_alt {
+            self.selection = None;
+        }
+        if term.selection.is_none() {
+            self.selection_mirrored = false;
+        }
     }
 
     /// Rows shaped so far (the row cache's misses; tests and benchmarks).
@@ -675,6 +740,7 @@ impl TerminalView {
     }
 
     fn on_wake(&mut self, cx: &mut Context<Self>) {
+        self.check_selection();
         let events = self.handle.outbox().take_events();
         if let Some(title) = events.title {
             self.title = title.map(SharedString::from);
@@ -710,19 +776,14 @@ impl TerminalView {
 
     /// Sends typed input: back to the bottom of the scrollback first.
     fn send_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
-        {
-            let mut term = self.handle.term().lock();
-            if term.grid().display_offset() != 0 {
-                term.scroll_display(Scroll::Bottom);
-            }
-        }
+        self.handle.scroll_to_bottom();
         // Typed input: watched by the history capture.
         self.handle.send_typed(bytes);
         cx.notify();
     }
 
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
-        self.handle.term().lock().scroll_display(scroll);
+        self.handle.scroll(scroll);
         cx.notify();
     }
 
@@ -764,7 +825,13 @@ impl TerminalView {
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
-        selection::select_all(&mut self.handle.term().lock());
+        let all = {
+            let term = self.handle.term().lock();
+            let evicted = self.handle.evicted_lines();
+            self.handle
+                .with_lines(&term, |lines| Selection::all(lines, evicted))
+        };
+        self.set_selection(Some(all));
         cx.notify();
     }
 
@@ -864,12 +931,10 @@ impl TerminalView {
         }
         match event.button {
             MouseButton::Left => {
-                {
-                    let mut term = self.handle.term().lock();
-                    let point = grid_point(line, column, term.grid().display_offset());
-                    let side = if right_half { Side::Right } else { Side::Left };
-                    selection::start(&mut term, point, side, event.click_count);
-                }
+                let point = self.buffer_point(line, column);
+                let side = if right_half { Side::Right } else { Side::Left };
+                let kind = selection::selection_type(event.click_count);
+                self.set_selection(Some(Selection::new(kind, point, side)));
                 self.drag = Some(Drag::Selecting);
                 cx.notify();
             }
@@ -930,11 +995,11 @@ impl TerminalView {
         let Some((line, column, right_half)) = self.cell_at(position) else {
             return;
         };
-        {
-            let mut term = self.handle.term().lock();
-            let point = grid_point(line, column, term.grid().display_offset());
-            let side = if right_half { Side::Right } else { Side::Left };
-            selection::extend(&mut term, point, side);
+        let point = self.buffer_point(line, column);
+        let side = if right_half { Side::Right } else { Side::Left };
+        if let Some(mut selection) = self.selection {
+            selection.update(point, side);
+            self.set_selection(Some(selection));
         }
         cx.notify();
     }
@@ -976,10 +1041,7 @@ impl TerminalView {
         if lines == 0 {
             return false;
         }
-        self.handle
-            .term()
-            .lock()
-            .scroll_display(Scroll::Delta(lines));
+        self.handle.scroll(Scroll::Delta(lines));
         self.extend_selection(position, cx);
         true
     }
@@ -989,7 +1051,13 @@ impl TerminalView {
         self.autoscroll = None;
         match self.drag.take() {
             Some(Drag::Selecting) => {
-                let selected = selection::finish(&mut self.handle.term().lock());
+                // A click without a drag selects nothing.
+                let selected = self
+                    .selection
+                    .is_some_and(|selection| !selection.is_empty());
+                if !selected {
+                    self.set_selection(None);
+                }
                 if selected
                     && self.settings.copy_on_select
                     && let Some(text) = self.selected_text()
@@ -1093,6 +1161,7 @@ impl TerminalView {
             min_contrast: self.settings.min_contrast,
             cursor_hidden: self.dimmed,
             search: self.search.clone(),
+            selection: self.selection,
             highlighting: self.settings.highlighting,
         }
     }
@@ -1120,8 +1189,10 @@ impl TerminalView {
         self.layout.clone()
     }
 
+    /// Rows the view is scrolled up (the journal's included; tests).
+    #[cfg(test)]
     pub(super) fn display_offset(&self) -> usize {
-        self.handle.term().lock().grid().display_offset()
+        self.handle.view_offset()
     }
 }
 

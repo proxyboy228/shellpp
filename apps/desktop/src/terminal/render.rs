@@ -18,8 +18,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use alacritty_terminal::grid::{Dimensions, Row};
-use alacritty_terminal::index::{Column, Line, Point as GridPoint};
-use alacritty_terminal::selection::SelectionRange;
+use alacritty_terminal::index::Column;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{COUNT, Colors};
@@ -32,9 +31,11 @@ use gpui::{
 use super::colors::{Palette, rgb_token};
 use super::contrast::{ContrastCache, MinContrast};
 use super::fonts::FontSet;
+use super::journal::{Buffer as _, Lines};
 use super::limits::MAX_ZEROWIDTH;
 use super::model::{SharedTerm, TerminalHandle, TerminalSize};
 use super::search::{MatchSpan, SearchState};
+use super::selection::Selection;
 
 /// Thickness of the underline and bar cursors and of text decorations.
 const CURSOR_THICKNESS: Pixels = px(2.);
@@ -65,6 +66,8 @@ pub struct FrameStyle {
     pub cursor_hidden: bool,
     /// The search whose matches are highlighted (UI 4.2 Tools).
     pub search: Option<SearchState>,
+    /// The selection (UI 4.3).
+    pub selection: Option<Selection>,
     /// Keyword highlighting (`terminal.highlighting_enabled`, UI 12.4).
     pub highlighting: bool,
 }
@@ -389,24 +392,34 @@ pub fn prepaint(
             layout.cache_key = key;
         }
         let grid = term.grid();
-        let offset = content.display_offset as i32;
+        let journal = handle.outbox().journal();
+        // The rows come from the grid and, scrolled far back, the journal
+        // (D85); the view's offset covers both.
+        let lines = Lines {
+            grid,
+            journal: &journal,
+        };
+        let offset = lines.view_offset() as i32;
+        let top = lines.view_top();
         let visible = grid.screen_lines().min(rows);
         let columns = grid.columns();
-        selection = content
-            .selection
-            .map(|range| selection_spans(range, offset, visible, columns))
-            .unwrap_or_default();
         let origin = handle.search_origin(&term);
+        selection = style
+            .selection
+            .as_ref()
+            .map(|selection| selection.spans(&lines, origin.evicted, visible))
+            .unwrap_or_default();
         matches = style
             .search
             .as_ref()
-            .map(|search| search.spans(grid, origin, visible, columns))
+            .map(|search| search.spans(&lines, origin, visible, columns))
             .unwrap_or_default();
         // A theme's `selectionForeground` recolors the selected text, so the
         // selected columns become part of the row (design-system 7.2).
         let selection_fg = style.palette.selection_foreground();
         for line in 0..visible {
-            let row = &grid[Line(line as i32 - offset)];
+            let row = lines.row(top + line);
+            let row: &Row<Cell> = &row;
             let selected = selection_fg.and_then(|_| {
                 selection
                     .iter()
@@ -664,36 +677,6 @@ fn row_cells(
         }
     }
     cells
-}
-
-/// The selected columns of each visible row: (row, first, last).
-fn selection_spans(
-    range: SelectionRange,
-    offset: i32,
-    visible: usize,
-    columns: usize,
-) -> Vec<(usize, usize, usize)> {
-    let mut spans = Vec::new();
-    for line in range.start.line.0..=range.end.line.0 {
-        let row = line + offset;
-        if row < 0 || row >= visible as i32 {
-            continue;
-        }
-        let first = if range.is_block || line == range.start.line.0 {
-            range.start.column.0
-        } else {
-            0
-        };
-        let last = if range.is_block || line == range.end.line.0 {
-            range.end.column.0
-        } else {
-            columns.saturating_sub(1)
-        };
-        if first <= last {
-            spans.push((row as usize, first, last.min(columns.saturating_sub(1))));
-        }
-    }
-    spans
 }
 
 fn shape(
@@ -974,11 +957,6 @@ pub fn paint(bounds: Bounds<Pixels>, frame: &Frame, window: &mut Window, cx: &mu
     }
 }
 
-/// The grid point of a viewport cell.
-pub fn grid_point(line: usize, column: usize, display_offset: usize) -> GridPoint {
-    GridPoint::new(Line(line as i32 - display_offset as i32), Column(column))
-}
-
 #[cfg(test)]
 impl LayoutState {
     /// Files row `from`'s cached layout under row `to`'s slot, as a hash
@@ -1030,6 +1008,7 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::index::Line;
     use alacritty_terminal::term::{Config, Term};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -1053,6 +1032,7 @@ mod tests {
             min_contrast: MinContrast::Off,
             cursor_hidden: false,
             search: None,
+            selection: None,
             highlighting: false,
         }
     }
@@ -1244,22 +1224,5 @@ mod tests {
             );
             assert_eq!(cells[0].fg, token_rgb(paper.ansi.0[1]));
         }
-    }
-
-    #[test]
-    fn selection_spans_cover_the_visible_rows() {
-        use alacritty_terminal::index::Point as GridPoint;
-        let range = SelectionRange::new(
-            GridPoint::new(Line(-1), Column(4)),
-            GridPoint::new(Line(1), Column(2)),
-            false,
-        );
-        // Scrolled back by one line: grid line -1 is viewport row 0.
-        assert_eq!(
-            selection_spans(range, 1, 3, 10),
-            [(0, 4, 9), (1, 0, 9), (2, 0, 2)]
-        );
-        // Not scrolled: line -1 is above the screen.
-        assert_eq!(selection_spans(range, 0, 3, 10), [(0, 0, 9), (1, 0, 2)]);
     }
 }

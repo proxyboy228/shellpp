@@ -1055,8 +1055,7 @@ fn a_reflow_keeps_the_current_match(cx: &mut TestAppContext) {
 /// down by the matches that dropped off).
 #[gpui_kit::test]
 fn the_current_match_keeps_its_text_in_a_full_scrollback(cx: &mut TestAppContext) {
-    use alacritty_terminal::grid::Dimensions as _;
-    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::index::Column;
 
     let fixture = Fixture::open(cx);
     let lines = |range: std::ops::Range<usize>| -> String {
@@ -1080,15 +1079,18 @@ fn the_current_match_keeps_its_text_in_a_full_scrollback(cx: &mut TestAppContext
         cx.update(|cx| {
             let found = fixture.terminal.read(cx).search_state()?.current()?;
             let term = fixture.handle.term().lock();
-            let grid = term.grid();
             let buffer = found
                 .start
                 .line
                 .checked_sub(fixture.handle.evicted_lines())?;
-            let row = &grid[Line(buffer as i32 - grid.history_size() as i32)];
-            let text: String = (0..grid.columns())
-                .map(|column| row[Column(column)].c)
-                .collect();
+            // The journal and the grid (D85).
+            let text: String = fixture.handle.with_lines(&term, |lines| {
+                use crate::terminal::journal::Buffer as _;
+                let row = lines.row(buffer);
+                (0..lines.cols())
+                    .map(|column| row[Column(column)].c)
+                    .collect()
+            });
             Some(text.trim_end().to_owned())
         })
     };
@@ -1256,4 +1258,104 @@ fn mutated_escape_sequences_never_panic(cx: &mut TestAppContext) {
     let sent = fixture.sink.take();
     assert!(sent.is_empty() || sent.starts_with(b"\x1b"));
     assert!(!sent.windows(7).any(|window| window == b"warning"));
+}
+
+/// D85: once output pauses, the scrollback beyond the newest lines moves
+/// into the journal; the view scrolls, searches and selects over it as over
+/// the grid, with its colors, keeps its place while output goes on, and a
+/// cleared scrollback clears the journal too.
+#[gpui_kit::test]
+fn the_compact_scrollback_scrolls_searches_and_selects(cx: &mut TestAppContext) {
+    use alacritty_terminal::grid::{Dimensions as _, Scroll};
+    use alacritty_terminal::index::Column;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+    use crate::terminal::journal::{Buffer as _, LIVE_HISTORY};
+
+    let fixture = Fixture::open(cx);
+    let lines = |range: std::ops::Range<usize>| -> String {
+        range
+            .map(|index| format!("\x1b[31mline {index:05}\x1b[0m tail\r\n"))
+            .collect()
+    };
+    fixture.feed(cx, lines(0..10_500).as_bytes());
+    assert_eq!(fixture.handle.history_size(), DEFAULT_SCROLLBACK);
+    let (journal, live) = {
+        let term = fixture.handle.term().lock();
+        let journal = fixture.handle.outbox().journal().len();
+        (journal, term.grid().history_size())
+    };
+    assert_eq!(live, LIVE_HISTORY, "the parser was idle after the feed");
+    assert_eq!(journal + live, DEFAULT_SCROLLBACK);
+    assert!(fixture.handle.buffer_bytes() <= 5 * 1024 * 1024);
+
+    // The top: the oldest line kept, red as it came, from the journal.
+    let redraw = |cx: &mut TestAppContext| {
+        fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
+    };
+    fixture.handle.scroll(Scroll::Top);
+    redraw(cx);
+    let rows = fixture.handle.screen_text();
+    let first = 10_500 + 1 - (DEFAULT_SCROLLBACK + rows.len());
+    assert_eq!(rows[0], format!("line {first:05} tail"));
+    {
+        let term = fixture.handle.term().lock();
+        fixture.handle.with_lines(&term, |lines| {
+            let row = lines.row(0);
+            assert_eq!(row[Column(0)].fg, Color::Named(NamedColor::Red));
+            assert_eq!(row[Column(11)].fg, Color::Named(NamedColor::Foreground));
+        });
+    }
+
+    // Search finds a line in the journal and scrolls to it.
+    let wanted = format!("line {:05} tail", first + 100);
+    let summary = fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search(&wanted, cx));
+    assert_eq!(summary.count, 1);
+    fixture.handle.scroll(Scroll::Bottom);
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.search(&wanted, cx));
+    redraw(cx);
+    assert!(fixture.handle.screen_text().contains(&wanted));
+    fixture
+        .terminal
+        .update(cx, |terminal, cx| terminal.clear_search(cx));
+
+    // A selection across the end of the journal and the grid's top.
+    let view_top = journal - 2;
+    fixture.handle.scroll(Scroll::Bottom);
+    fixture
+        .handle
+        .scroll(Scroll::Delta((DEFAULT_SCROLLBACK - view_top) as i32));
+    redraw(cx);
+    let rows = fixture.handle.screen_text();
+    fixture.drag(cx, (0, 0), (3, 9));
+    let expected = format!("{}\n{}\n{}\n{}", rows[0], rows[1], rows[2], &rows[3][..10]);
+    assert_eq!(fixture.selected(cx), Some(expected.clone()));
+
+    // More output: the view and the selection keep their text, also when
+    // the rows on screen move into the journal.
+    fixture.feed(cx, lines(10_500..10_800).as_bytes());
+    assert_eq!(fixture.handle.screen_text()[0], rows[0]);
+    assert_eq!(fixture.selected(cx), Some(expected));
+    {
+        let term = fixture.handle.term().lock();
+        let journal = fixture.handle.outbox().journal();
+        assert!(journal.view() > 0);
+        assert_eq!(term.grid().display_offset(), term.grid().history_size());
+    }
+
+    // A resize keeps the view in the journal on the grid's top.
+    fixture.handle.resize(TerminalSize::cells(60, 12));
+    {
+        let term = fixture.handle.term().lock();
+        assert_eq!(term.grid().display_offset(), term.grid().history_size());
+    }
+
+    // ED 3 clears the whole scrollback, the journal too.
+    fixture.feed(cx, b"\x1b[3J");
+    assert_eq!(fixture.handle.history_size(), 0);
+    assert_eq!(fixture.handle.view_offset(), 0);
 }

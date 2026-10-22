@@ -14,10 +14,14 @@
 //!
 //! [`Capped`] also counts the lines that drop off the top of a full
 //! scrollback ([`count_evictions`]): positions counted from the oldest line
-//! (the search's) stay valid across new output with that count.
+//! (the search's) stay valid across new output with that count. The
+//! scrollback limit covers the grid and the journal together (D85): the
+//! journal's lines are older, so they drop first, and clearing the
+//! scrollback clears the journal.
 
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
@@ -30,6 +34,8 @@ use alacritty_terminal::vte::ansi::{
     ScpCharPath, ScpUpdateMode, StandardCharset, TabulationClearMode, cursor_icon::CursorIcon,
 };
 use unicode_width::UnicodeWidthChar as _;
+
+use super::journal::Journal;
 
 /// Most zero-width characters kept in one cell. Real text puts a few
 /// combining marks on a character; anything beyond this is dropped.
@@ -145,15 +151,38 @@ impl OscLimiter {
 }
 
 /// Eviction counting of this thread: the scrollback limit of the term
-/// parsed here and the lines dropped so far.
+/// parsed here (grid and journal together), the lines dropped so far and
+/// the lines of the journal.
 #[derive(Clone, Copy, Debug)]
 struct Evictions {
     limit: usize,
     dropped: usize,
+    journal: usize,
 }
 
 thread_local! {
     static EVICTIONS: Cell<Option<Evictions>> = const { Cell::new(None) };
+    static JOURNAL: RefCell<Option<Arc<Mutex<Journal>>>> = const { RefCell::new(None) };
+}
+
+/// Runs `change` on this thread's journal (the terminal lock is held: the
+/// journal's lock is taken after it, as everywhere).
+fn with_journal(change: impl FnOnce(&mut Journal)) {
+    JOURNAL.with_borrow(|journal| {
+        if let Some(journal) = journal
+            && let Ok(mut journal) = journal.lock()
+        {
+            change(&mut journal);
+        }
+    });
+}
+
+/// Rows moved into the journal on this thread ([`super::journal::compact`]).
+pub fn journal_grew(lines: usize) {
+    if let Some(mut count) = EVICTIONS.get() {
+        count.journal += lines;
+        EVICTIONS.set(Some(count));
+    }
 }
 
 /// Starts counting, on this thread, the lines that drop off the top of the
@@ -167,8 +196,13 @@ thread_local! {
 /// one call can push (a screen) before a call that can scroll, and trims it
 /// back to `limit` right after: what it trims is what alacritty would have
 /// dropped, and the result is the same grid.
-pub fn count_evictions(limit: usize) {
-    EVICTIONS.set(Some(Evictions { limit, dropped: 0 }));
+pub fn count_evictions(limit: usize, journal: Arc<Mutex<Journal>>) {
+    EVICTIONS.set(Some(Evictions {
+        limit,
+        dropped: 0,
+        journal: 0,
+    }));
+    JOURNAL.set(Some(journal));
 }
 
 /// Lines dropped off the scrollback so far on this thread (0 when not
@@ -219,22 +253,43 @@ impl<T: EventListener> Capped<'_, T> {
         if count.limit == 0 || self.0.mode().contains(TermMode::ALT_SCREEN) {
             return call(self.0);
         }
+        // What the grid may hold: the limit less the journal's lines.
+        let limit = count.limit.saturating_sub(count.journal);
         let room = self.0.screen_lines();
         let before = self.0.grid().history_size();
-        let full = before + room > count.limit;
+        let full = before + room > limit;
         if full {
-            self.0.grid_mut().update_history(count.limit + room);
+            self.0.grid_mut().update_history(limit + room);
         }
         call(self.0);
         let after = self.0.grid().history_size();
+        let mut dropped = 0;
         if full {
-            // Back to the limit: the oldest lines go, as alacritty drops them.
-            self.0.grid_mut().update_history(count.limit);
+            // Back to the limit: the oldest lines go, the journal's first
+            // (they are older than the grid's), as alacritty drops them.
+            let over = after.saturating_sub(limit);
+            let from_journal = over.min(count.journal);
+            if from_journal > 0 {
+                with_journal(|journal| journal.pop_front(from_journal));
+                count.journal -= from_journal;
+            }
+            self.0
+                .grid_mut()
+                .update_history(count.limit.saturating_sub(count.journal));
+            dropped += over;
         }
         let cleared = before.saturating_sub(after);
-        let pushed_out = after.saturating_sub(count.limit);
-        if cleared + pushed_out > 0 {
-            count.dropped += cleared + pushed_out;
+        if cleared > 0 {
+            // ED 3 or RIS: the whole scrollback goes, the journal too.
+            dropped += cleared + count.journal;
+            if count.journal > 0 {
+                with_journal(Journal::clear);
+                count.journal = 0;
+                self.0.grid_mut().update_history(count.limit);
+            }
+        }
+        if dropped > 0 {
+            count.dropped += dropped;
             EVICTIONS.set(Some(count));
         }
     }
@@ -518,7 +573,7 @@ mod tests {
     /// is the one alacritty makes without the count.
     #[test]
     fn lines_dropped_off_the_scrollback_are_counted() {
-        count_evictions(5);
+        count_evictions(5, Default::default());
         let mut counted = sized(6, 3, 5);
         let mut plain = sized(6, 3, 5);
         // 20 lines from the top of 3 rows: 18 scroll into the scrollback
