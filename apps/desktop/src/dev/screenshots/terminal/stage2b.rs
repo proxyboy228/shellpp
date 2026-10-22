@@ -40,7 +40,7 @@ use crate::state::AppState;
 use crate::terminal_sidebar::SidebarTab;
 
 /// The states of this module.
-pub const STATES: [ShotState; 11] = [
+pub const STATES: [ShotState; 12] = [
     ShotState::TerminalConnecting,
     ShotState::TerminalSplits,
     ShotState::SplitPicker,
@@ -48,6 +48,7 @@ pub const STATES: [ShotState; 11] = [
     ShotState::NewTab,
     ShotState::NewTabSearch,
     ShotState::SidebarTools,
+    ShotState::TerminalScrollback,
     ShotState::SidebarSnippets,
     ShotState::SidebarHistory,
     ShotState::SidebarAppearance,
@@ -73,6 +74,12 @@ const NEW_TAB_SEARCH_FIELD: &str = "new-tab-search";
 /// sample on the russh server.
 const TOOLS_QUERY_REAL: &str = "projects";
 const TOOLS_QUERY_RUSSH: &str = "3";
+/// The long output of `terminal-scrollback` (`seq` on both servers), its
+/// last line, and the line its search scrolls back to: by then it is in the
+/// compact part of the scrollback (D85).
+const SCROLLBACK_COMMAND: &str = "seq 1 10000";
+const SCROLLBACK_MARKER: &str = "10000";
+const SCROLLBACK_QUERY: &str = "4242";
 /// Commands of the History state (typed after the colored output: `clear`,
 /// `ls --color`, `ls -l --color` on OpenSSH), each with what its output
 /// shows; some repeat, so the hint has an order.
@@ -301,6 +308,29 @@ pub async fn reach(
             wait_until(cx, handle, shot, "the search matches", STEP_TIMEOUT, |cx| {
                 Ok(match_count(&shell, cx) >= 2)
             })
+            .await
+        }
+        ShotState::TerminalScrollback => {
+            run(
+                cx,
+                handle,
+                &first,
+                shot,
+                SCROLLBACK_COMMAND,
+                SCROLLBACK_MARKER,
+            )
+            .await?;
+            press(cx, handle, FIND)?;
+            settle(cx, handle).await?;
+            type_into(cx, handle, TOOLS_SEARCH, SCROLLBACK_QUERY)?;
+            wait_until(
+                cx,
+                handle,
+                shot,
+                "the old line on screen",
+                STEP_TIMEOUT,
+                |cx| Ok(match_count(&shell, cx) >= 1 && shows(&first, SCROLLBACK_QUERY, cx)),
+            )
             .await
         }
         ShotState::SidebarSnippets
@@ -559,6 +589,18 @@ pub fn check(
             } else {
                 need(page.query().is_empty(), "a search is typed")
             }
+        }
+        ShotState::TerminalScrollback => {
+            need(running, "the session does not run")?;
+            need(match_count(shell, cx) >= 1, "the search found nothing")?;
+            let pane = shell
+                .read(cx)
+                .terminal_sidebar()
+                .read(cx)
+                .tools()
+                .read(cx)
+                .query(cx);
+            need(pane.as_ref() == SCROLLBACK_QUERY, "another search")
         }
         ShotState::SidebarTools
         | ShotState::SidebarSnippets

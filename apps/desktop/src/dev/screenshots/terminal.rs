@@ -716,6 +716,7 @@ pub async fn reach(
         | ShotState::NewTab
         | ShotState::NewTabSearch
         | ShotState::SidebarTools
+        | ShotState::TerminalScrollback
         | ShotState::SidebarSnippets
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance

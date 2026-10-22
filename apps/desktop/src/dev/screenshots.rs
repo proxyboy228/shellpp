@@ -397,6 +397,9 @@ pub enum ShotState {
     /// The terminal sidebar's Tools (UI 4.2): a search with its matches
     /// highlighted (Ctrl+Shift+F).
     SidebarTools,
+    /// 10 000 lines of output, scrolled back by a search to a line in the
+    /// compact part of the scrollback (run 5, plan 6; D85).
+    TerminalScrollback,
     /// The terminal sidebar's Snippets placeholder.
     SidebarSnippets,
     /// The terminal sidebar's History: commands typed in the session and
@@ -437,7 +440,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 84] = [
+    pub const ALL: [Self; 85] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -507,6 +510,7 @@ impl ShotState {
         Self::NewTab,
         Self::NewTabSearch,
         Self::SidebarTools,
+        Self::TerminalScrollback,
         Self::SidebarSnippets,
         Self::SidebarHistory,
         Self::SidebarAppearance,
@@ -526,7 +530,7 @@ impl ShotState {
     /// The states with sessions to the SSH test server: the terminal states
     /// (owner's stage 2a and 2b, step 5.1) and the offer to save a
     /// quick-connect host, which needs a session that connected.
-    pub const TERMINAL: [Self; 28] = [
+    pub const TERMINAL: [Self; 29] = [
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -540,6 +544,7 @@ impl ShotState {
         Self::NewTab,
         Self::NewTabSearch,
         Self::SidebarTools,
+        Self::TerminalScrollback,
         Self::SidebarSnippets,
         Self::SidebarHistory,
         Self::SidebarAppearance,
@@ -662,6 +667,7 @@ impl ShotState {
             Self::NewTab => "new-tab",
             Self::NewTabSearch => "new-tab-search",
             Self::SidebarTools => "sidebar-tools",
+            Self::TerminalScrollback => "terminal-scrollback",
             Self::SidebarSnippets => "sidebar-snippets",
             Self::SidebarHistory => "sidebar-history",
             Self::SidebarAppearance => "sidebar-appearance",
@@ -729,6 +735,7 @@ impl ShotState {
             | Self::NewTab
             | Self::NewTabSearch
             | Self::SidebarTools
+            | Self::TerminalScrollback
             | Self::SidebarSnippets
             | Self::SidebarHistory
             | Self::SidebarAppearance
@@ -1721,6 +1728,7 @@ pub async fn reach_state(
         | ShotState::NewTab
         | ShotState::NewTabSearch
         | ShotState::SidebarTools
+        | ShotState::TerminalScrollback
         | ShotState::SidebarSnippets
         | ShotState::SidebarHistory
         | ShotState::SidebarAppearance
@@ -1943,6 +1951,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::NewTab
             | ShotState::NewTabSearch
             | ShotState::SidebarTools
+            | ShotState::TerminalScrollback
             | ShotState::SidebarSnippets
             | ShotState::SidebarHistory
             | ShotState::SidebarAppearance
