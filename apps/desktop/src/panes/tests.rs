@@ -890,6 +890,22 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
             .ends_with(b"\x1b[200~a\rb\r\x1b[201~")
     );
 
+    // A paste asked while Broadcast input was off stays in its pane, even
+    // when it is turned on before the answer.
+    tab.update(cx, |group, cx| group.set_broadcast(false, cx));
+    source.update(cx, |source, cx| {
+        source.set_confirm_multiline_paste_for_test(true);
+        source.paste_text("c\nd\n", cx);
+    });
+    tab.frame(cx);
+    assert!(tab.visible_in(panes[1], "paste-confirm", cx));
+    assert!(!tab.visible_in(panes[1], "paste-broadcast", cx));
+    tab.update(cx, |group, cx| group.set_broadcast(true, cx));
+    tab.click_in(panes[1], "paste-confirm", cx);
+    let pasted: &[u8] = b"\x1b[200~c\rd\r\x1b[201~";
+    assert!(sinks[1].0.lock().unwrap().ends_with(pasted));
+    assert!(mirrored().ends_with(b"\x1b[200~a\rb\r\x1b[201~"));
+
     // A member that stops running leaves (a reconnect is a fresh shell),
     // also with no frame drawn (a tab in the background); fewer than two
     // members end Broadcast input.
@@ -901,5 +917,5 @@ fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
     tab.frame(cx);
     tab.set_phase(panes[0], Phase::Running, cx);
     typed(panes[0], "x", cx);
-    assert!(sinks[1].0.lock().unwrap().ends_with(b"\x1b[201~"));
+    assert!(sinks[1].0.lock().unwrap().ends_with(pasted));
 }

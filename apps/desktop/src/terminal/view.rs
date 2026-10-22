@@ -781,14 +781,19 @@ impl TerminalView {
         if paste::needs_confirmation(&cleaned, confirm) {
             self.confirm_paste(cleaned, cx);
         } else {
-            self.send_paste(&cleaned, cx);
+            self.send_paste(&cleaned, true, cx);
         }
     }
 
-    fn send_paste(&mut self, cleaned: &str, cx: &mut Context<Self>) {
+    /// Sends a paste; `mirror`: also to the broadcast targets.
+    fn send_paste(&mut self, cleaned: &str, mirror: bool, cx: &mut Context<Self>) {
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         let bytes = paste::paste_bytes(cleaned, bracketed);
-        let targets = self.broadcast_targets(&bytes);
+        let targets = if mirror {
+            self.broadcast_targets(&bytes)
+        } else {
+            Vec::new()
+        };
         self.send_input(bytes, cx);
         for target in targets {
             target.update(cx, |target, cx| target.mirrored_paste(cleaned, cx));
@@ -805,14 +810,16 @@ impl TerminalView {
     }
 
     /// Sends a paste the user confirmed (bracketed per the mode at this
-    /// moment) and returns the focus to the terminal.
+    /// moment) and returns the focus to the terminal. It goes to the other
+    /// panes only if the dialog said so: Broadcast input turned on while
+    /// it was open does not take it along.
     pub fn paste_confirmed(
         &mut self,
         paste: &PendingPaste,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.send_paste(&paste.text, cx);
+        self.send_paste(&paste.text, paste.broadcast > 0, cx);
         self.focus.focus(window, cx);
     }
 
