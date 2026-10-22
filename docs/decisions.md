@@ -1330,7 +1330,7 @@ Status: run 5 decision, 2026-10-22 (plan, section 6; night 1 report, section 2.4
 **Decision:**
 
 - The grid keeps the screen and the newest 500 scrollback lines as alacritty rows. Older rows move into a journal (`terminal/journal.rs`): each row as its text without trailing blanks (every cell's character, combining marks after it) and its attributes as runs, plus its wrap. 10 000 typical shell lines in a 200-column window take about 4 MB together with the grid's part (test `ten_thousand_shell_lines_take_a_few_megabytes`).
-- Rows move in batches, on the parser thread: when it has nothing queued, or at most every 250 ms while output keeps coming and the grid is 200 lines over its part. A flood pays nothing per line (encoding each row as it leaves would cost about 0.3 µs a line, more than the parsing); the grid may hold the whole scrollback for the length of a flood, as before, and gives it back when the flood pauses.
+- Rows move in batches, on the parser thread: when it has nothing queued, or at most every 250 ms (run 6, D99: 2 s) while output keeps coming and the grid is 200 lines over its part. A flood pays nothing per line (encoding each row as it leaves would cost about 0.3 µs a line, more than the parsing); the grid may hold the whole scrollback for the length of a flood, as before, and gives it back when the flood pauses.
 - The scrollback limit (10 000 lines) holds for the journal and the grid together: when output needs room, the journal's oldest lines go first, so the buffer keeps its order and positions counted from the oldest line stay valid. ED 3 and RIS clear the journal with the scrollback.
 - Drawing, search and selection read the journal and the grid as one buffer of lines. The view's scroll offset covers the grid's scrollback first, then the journal; while the view is in the journal, new output keeps it on its text.
 - The selection is now the app's own, in buffer lines counted with the lines that dropped off (as the search's positions), so it reaches into the journal and stays on its text. Its part on the screen is mirrored into alacritty's selection, which alacritty drops when output clears it (an erased line or screen, a reset) and moves with text that scrolls inside the screen (the alternate screen, a scroll region): the app's selection ends or moves with it, as before. A new width ends it. A double click on a bracket no longer selects up to its matching bracket. Copying keeps alacritty's rules (trailing blanks left out, a line break where a line ends, wide characters whole).
@@ -1565,5 +1565,17 @@ Status: run 6 decision, 2026-10-22 (plan, section 8: the soak test found it).
 - Left (for the owner, run report): the same close-first pattern remains in agent forwarding (one channel per use of the agent on the server) and exec channels, at low volume; a one-line patch of russh (remove the client's entry before the early return) would cover every channel type, as a `[patch]` of the dependency and a pull request upstream.
 - Checked by the soak's load of forwards alone: before, private bytes 133 to 194 MB in 15 minutes; after, flat at 133 MB with the same traffic. The forwarding tests of `shellpp-ssh` and of the session layer pass unchanged.
 - Not changed: session, SFTP and exec channels open once per tab or task, not per connection.
+
+**Spec impact:** none.
+
+### 99. The journal compacts every 2 s during a flood (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 9). Amends D85.
+
+**Decision:**
+
+- Measured (run 6, plan 9): `seq 1 3000000` typed into an SSH session of the russh test server, release builds, 5 to 7 runs each, interleaved; medians of the runs whose window stayed active: 613ac41 (run 4) 0.58 s with no custom highlighting rules and 0.55 s with 10; 51b9994 (run 5) 0.62 and 0.67 s; the run 6 head 0.63 and 0.61 s. Run 5's 0.68 s against run 4's 0.55 s was a regression, not noise: 886b295 (just before the journal) 0.54 and 0.54 s, a83b47f (the journal and its review fixes) 0.67 and 0.69 s; a83b47f with the journal off (`LIVE_HISTORY` of a million lines) 0.53 to 0.59 s.
+- Cause: during a flood the journal compacted every 250 ms. Each compaction moved about 9 500 rows into the journal and freed them in the grid (alacritty frees spare rows over a thousand, and the compaction truncates the rest); the flood's next 9 500 lines then allocated and filled a row of the grid each, while the journal gave up a line per new line. About a quarter of the run went to that.
+- Fix: while output keeps coming, the grid gives its rows to the journal at most every 2 s (`COMPACT_INTERVAL`); it still does 100 ms after the output pauses. Measured on the head: 0.52 to 0.58 s, as before the journal. During a long run of output the grid holds up to the whole scrollback for 2 s at most, as it did for the whole flood before D85.
 
 **Spec impact:** none.

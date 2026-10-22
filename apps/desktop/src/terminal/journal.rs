@@ -43,8 +43,10 @@ pub const LIVE_HISTORY: usize = 500;
 /// coming.
 pub const COMPACT_BATCH: usize = 200;
 /// Longest time output can keep the grid over [`LIVE_HISTORY`] +
-/// [`COMPACT_BATCH`] lines.
-pub const COMPACT_INTERVAL: Duration = Duration::from_millis(250);
+/// [`COMPACT_BATCH`] lines. Each compaction during a flood frees the rows it
+/// moves, and the flood's next lines allocate their rows again: at 250 ms
+/// that churn made `seq 1 3000000` over SSH a quarter slower (run 6, D99).
+pub const COMPACT_INTERVAL: Duration = Duration::from_secs(2);
 /// The pause in the output after which the grid gives its rows over
 /// [`LIVE_HISTORY`] to the journal: a trickle of lines does not move them
 /// (and make alacritty allocate its spare rows again) one at a time.
