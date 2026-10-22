@@ -174,7 +174,12 @@
    rules whose autostart was turned off, when there are any. [decision]
 7. Edit ▸: undo, redo, cut, copy, paste, select all. [decision]
 8. View ▸: interface zoom, full-screen mode, show or hide
-   the sidebar. [decision]
+   the sidebar. [decision] Zoom In (Ctrl+=), Zoom Out (Ctrl+-) and Actual Size (Ctrl+0)
+   go by the steps 80, 90, 100, 110, 125, 150, 175 and 200 % and stop at the ends; the
+   whole interface of every window scales at once (text, controls, spacing; on top of the
+   display's scale factor), and the next launch starts at the same zoom. The terminal's
+   font keeps its own size (12.4). In a terminal the three keys go to the program; the
+   menu items work there too. (D96)
 9. Window ▸: new window, next and previous tab, close tab. [decision]
 10. Help ▸: documentation, report an issue (link to issues), check for
     updates, about. [decision] "Check for updates" is always available, even when the
@@ -1785,6 +1790,7 @@ Default set for Windows/Linux:
 | Ctrl+Shift+F | search in the terminal (the Tools tab of the terminal sidebar, 4.2) |
 | Ctrl+Shift+B | Broadcast input on or off in the active tab (4.7, D81) |
 | Ctrl+, | settings |
+| Ctrl+=, Ctrl+-, Ctrl+0 | zoom in, zoom out, actual size (1.4; outside a terminal) (D96) |
 
 **Important** [decision]: shortcuts without Shift (Ctrl+L, Ctrl+P, Ctrl+K, Ctrl+T)
 coincide with shell keys: `Ctrl+L` clears the screen, `Ctrl+P` recalls the previous

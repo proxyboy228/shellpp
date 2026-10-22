@@ -940,7 +940,7 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | Key | Type | Default | UI | Source |
 |---|---|---|---|---|
 | `appearance.ui_theme` | enum `auto`, `light`, `dark` | `auto` | 12.1 | |
-| `appearance.ui_zoom` | number 0.5–2.0 | 1.0 | 1.4 View | |
+| `appearance.ui_zoom` | number 0.8–2.0: the steps 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 (another value snaps to the nearest) | 1.0 | 1.4 View | D96 |
 | `security.auto_lock_minutes` | 1, 5, 15, 30, 60 or null (never); the app offers null, 5, 15, 30 and 60 | null | 13.4 | D9, D29 |
 | `terminal.autocomplete` | enum `off` | `off` | 12.4 | later stage |
 | `terminal.autoreconnect` | bool | `true` | 12.4 | D18 |

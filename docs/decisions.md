@@ -1232,7 +1232,7 @@ Status: run 4 decision, 2026-10-22 (plan, item 5.6; UI 1.4): blocked, with the o
 - Zoom In, Zoom Out and Actual Size stay "In development". GPUI has no window zoom: the window's scale factor comes from the display, and its override (`Window::set_scale_factor`) exists only in test builds. The app's sizes are the design system's absolute pixels (`theme::metrics`, 47 values used at about 1 400 places, besides the `px()` of each view), so a zoom cannot be put on top of them.
 - The options, for the owner: (a) the design system in rems: `theme::metrics` becomes rem-based and `Window::set_rem_size` zooms the whole window (GPUI Kit's own components follow rems already); a refactor of every view, its tests and screenshots, done in one stage with the design system's review; (b) a patch of GPUI's window scale (a fork of `gpui-pre`, against the one-dependency rule of GPUI Kit and the license and update path of D4); (c) zoom of text only (the metrics of font sizes), which leaves controls and spacing as they are and breaks the layout's proportions. Recommendation: (a), in its own stage.
 
-**Spec impact:** none until the choice.
+**Spec impact:** none until the choice. (Run 6: the owner chose (a) for the run's plan, section 7; closed by D96.)
 
 ### 79. "If time remains" of run 3 against the owner's section 9 (run 4)
 
@@ -1522,3 +1522,17 @@ Status: run 6 decision, 2026-10-22 (plan, section 6; D92, item 5). Amends D88 on
 - The `serial.*` settings never leave the device in a file: an export leaves them out, and no import applies them, not even "Full restore from my backup" (D50), which applies every other setting of the file.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 2.2 "Serial" (and `docs/ru`), `docs/data-model.md` 16.1, `docs/export-format.md` 1 and 4.
+
+### 96. Interface zoom with the design system in rems (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 7; closes D78 with its option (a), the owner's choice).
+
+**Decision:**
+
+- Every size of the design system is a rem size: `theme::metrics` holds `Rems` (`rpx(px)`, 1 rem = 14 px at 100 %), and so do the views' own sizes (column widths, dialog fields, tiles, gaps). GPUI Kit takes the theme's base font size as each window's rem, so the zoom sets that size (`font.size` and `mono_font.size` of both themes) and every window, the kit's own components included, scales at once.
+- View > Zoom In / Zoom Out / Actual Size and Ctrl+= / Ctrl+- / Ctrl+0 (Cmd on the Mac set; rows of the shortcuts table, UI 12.5) go by the steps 80, 90, 100, 110, 125, 150, 175 and 200 %; the zoom is kept in `appearance.ui_zoom` (now 0.8 to 2.0) and applied before the first window of the next launch, the lock screen included. In a terminal the three keys go to the program (like Ctrl+letter); the menu items work everywhere.
+- Not zoomed: the terminal's font and grid (`terminal.font_size`, its own setting), the terminal's 8 px padding, the 8 px hit zone of the pane dividers and the offset of a new window (screen pixels). The zoom comes on top of the display's scale factor.
+- Layouts planned in numbers (the host grid and its columns, the action bars, the details panel width and the sidebar collapse) plan in design units, px at 100 %: measured widths and pointer positions are divided by the zoom, the result is drawn in rems. So a zoomed window plans like a window as many times narrower at 100 % (960 × 600 at 150 % like 640 × 400). The APIs that take pixels only (the kit's dialog and menu widths, button radius, box shadows, the item sizes of virtual lists) get the pixels at the zoom; a menu built without a context keeps a 200 px floor.
+- Tests compare measured pixels with `metrics::at_100(...)`; a test at 150 % checks the Hosts screen in the minimum window (nothing clipped or overlapping, with and without the details panel), another the steps, the setting and the terminal font. `ui-screens.ps1 -Zoom <percent>` takes the screenshots at a zoom, named `<W>x<H>-<theme>-<zoom>-<state>.png`.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 1.4 item 8 and 12.5 (and `docs/ru`), `docs/design-system.md` 6 (and `docs/ru`), `docs/data-model.md` 16.1.

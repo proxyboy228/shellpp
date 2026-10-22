@@ -309,6 +309,30 @@ theme file. Colors are `#RRGGBB`; `selection` is `#RRGGBBAA` and is drawn over
 
 ## 6. Shape and spacing
 
+- Units [decision] (D96): every size of sections 5 and 6 is a rem size: 1 rem is 14 px at
+  100 % (the body text), and the px values given here are the sizes at 100 %. The
+  interface zoom (UI 1.4) multiplies all of them, text included, and comes on top of the
+  display's scale factor (Windows at 150 % and a 125 % zoom draw at 187.5 %).
+
+  | At 100 % | rem | 80 % | 125 % | 150 % | 200 % |
+  |---|---|---|---|---|---|
+  | 4 px | 0.286 | 3.2 px | 5 px | 6 px | 8 px |
+  | 8 px | 0.571 | 6.4 px | 10 px | 12 px | 16 px |
+  | 12 px | 0.857 | 9.6 px | 15 px | 18 px | 24 px |
+  | 14 px | 1 | 11.2 px | 17.5 px | 21 px | 28 px |
+  | 16 px | 1.143 | 12.8 px | 20 px | 24 px | 32 px |
+  | 24 px | 1.714 | 19.2 px | 30 px | 36 px | 48 px |
+  | 32 px | 2.286 | 25.6 px | 40 px | 48 px | 64 px |
+  | 36 px | 2.571 | 28.8 px | 45 px | 54 px | 72 px |
+  | 44 px | 3.143 | 35.2 px | 55 px | 66 px | 88 px |
+  | 196 px | 14 | 156.8 px | 245 px | 294 px | 392 px |
+  | 380 px | 27.143 | 304 px | 475 px | 570 px | 760 px |
+
+  Not zoomed: the terminal's font and grid (their own setting, 12.4), its 8 px padding,
+  the 8 px hit zone of the pane dividers and the offset of a new window. A zoomed window
+  plans its layout like a window as many times narrower at 100 %: 960 × 600 at 150 % is
+  laid out as 640 × 400, the sidebar collapses and the bars wrap, and nothing is clipped
+  or overlaps.
 - 4 px grid. Spacing: 4 px (`--space-1`), 8 px (`--space-2`), 12 px (`--space-3`),
   16 px (`--space-4`), 24 px (`--space-5`), 32 px (`--space-6`).
 - Radii:
