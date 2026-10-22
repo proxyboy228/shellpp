@@ -96,10 +96,17 @@ fn apply_size(term: &SharedTerm, outbox: &Outbox, scrollback: usize, size: Termi
         let Ok(mut current) = outbox.size.lock() else {
             return false;
         };
-        if *current == size {
+        // The grid may differ from the size last told: a DECCOLM resized it
+        // in the parser, and a RIS in the same output ended the width.
+        let grid_differs = {
+            let term = term.lock();
+            term.columns() != usize::from(size.cols)
+                || term.screen_lines() != usize::from(size.rows)
+        };
+        if *current == size && !grid_differs {
             return false;
         }
-        let cells_changed = current.cols != size.cols || current.rows != size.rows;
+        let cells_changed = grid_differs || current.cols != size.cols || current.rows != size.rows;
         *current = size;
         if cells_changed {
             let mut term = term.lock();
@@ -1101,6 +1108,48 @@ mod tests {
         handle.feed_blocking(b"\x1b[?3l").unwrap();
         handle.flush_blocking();
         assert_eq!(handle.size().cols, 110, "not allowed after RIS");
+        // DECRST 40 ends a forced width too (a reconnect sends it).
+        handle.feed_blocking(b"\x1b[?40h\x1b[?3l").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 80);
+        handle.feed_blocking(b"\x1b[?40l").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 110);
+        // DECCOLM and RIS in one write: the grid is back at the view's width
+        // (review, D90).
+        handle.feed_blocking(b"\x1b[?40h\x1b[?3h\x1bc").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 110);
+        assert_eq!(handle.term().lock().columns(), 110);
+    }
+
+    /// A DECCOLM keeps the scrollback: a wider reflow joins wrapped rows,
+    /// which is no clear of the journal (review, D90).
+    #[test]
+    fn deccolm_keeps_the_journal() {
+        let (handle, _woken) = handle(100, 6, 2000);
+        handle.set_sink(Some(Arc::new(RecordingSink::default())));
+        assert!(!handle.resize(TerminalSize::cells(100, 6)));
+        // 800 lines, then a line that wraps at 100 columns among the grid's
+        // own scrollback (the newest 500 lines), then a few more.
+        let mut output = String::new();
+        for line in 0..800 {
+            output.push_str(&format!("line {line}\r\n"));
+        }
+        output.push_str(&format!("{}\r\n", "w".repeat(120)));
+        for line in 0..20 {
+            output.push_str(&format!("after {line}\r\n"));
+        }
+        handle.feed_blocking(output.as_bytes()).unwrap();
+        handle.flush_blocking();
+        let journal = handle.outbox().journal().len();
+        assert!(journal > 0, "the old lines are in the journal");
+        let before = handle.history_size();
+        handle.feed_blocking(b"\x1b[?40h\x1b[?3h").unwrap();
+        handle.flush_blocking();
+        assert_eq!(handle.size().cols, 132);
+        assert_eq!(handle.outbox().journal().len(), journal);
+        assert!(handle.history_size() + 1 >= before, "no line was lost");
     }
 
     #[test]

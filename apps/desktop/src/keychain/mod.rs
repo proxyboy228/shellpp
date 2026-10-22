@@ -587,11 +587,16 @@ impl KeychainScreen {
     /// display. The keyboard focus ring marks it, also while nothing is
     /// selected (as on Hosts and Snippets; run 5, plan 11.3).
     pub fn cursor_key(&self) -> Option<Uuid> {
-        self.selected.or_else(|| {
-            self.shown_keys
-                .first()
-                .map(|index| self.keys[*index].record_id)
-        })
+        let mut shown = self
+            .shown_keys
+            .iter()
+            .map(|index| self.keys[*index].record_id);
+        let first = shown.next();
+        // A selected key the search hides: the arrows start at the first.
+        match self.selected {
+            Some(id) if first == Some(id) || shown.any(|shown| shown == id) => Some(id),
+            _ => first,
+        }
     }
 
     pub fn panel(&self) -> Option<&PanelContent> {

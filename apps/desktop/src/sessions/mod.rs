@@ -1372,7 +1372,7 @@ pub(crate) fn open_input(st: &mut SessionMut, started_with: (u16, u16)) -> Input
 /// cursor, and does nothing on the normal screen. The scroll region and
 /// origin mode, which move the cursor home, are reset between a cursor save
 /// and restore. The final CR LF starts the new output on a line of its own.
-pub(crate) const MODE_RESET: &[u8] = b"\x1b[?1049l\
+pub(crate) const MODE_RESET: &[u8] = b"\x1b[?1049l\x1b[?40l\
 \x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\
 \x1b[?2004l\x1b[?1l\x1b>\x1b[?7h\x1b[?25h\x1b[4l\x1b[0 q\
 \x1b7\x1b[?6l\x1b[r\x1b8\

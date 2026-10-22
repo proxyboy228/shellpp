@@ -784,6 +784,19 @@ fn the_focus_ring_starts_on_the_first_key(cx: &mut TestAppContext) {
     assert_eq!(cursor(&ui, cx), Some(shown[1]));
     ui.frame(cx, |window, cx| window.press("escape", cx));
     assert_eq!(cursor(&ui, cx), Some(shown[0]));
+    // A selected key the search hides: the ring goes where the arrows start.
+    ui.click(cx, key_card_id(shown[1]));
+    let hidden_by = |ui: &Ui, cx: &mut TestAppContext, id| {
+        ui.screen
+            .read_with(cx, |screen, _| !screen.shown_key_ids().contains(&id))
+    };
+    ui.type_into(cx, "kc-search", "runner");
+    let visible = ui.screen.read_with(cx, |screen, _| screen.shown_key_ids());
+    if hidden_by(&ui, cx, shown[1]) {
+        assert_eq!(cursor(&ui, cx), visible.first().copied());
+    } else {
+        assert_eq!(cursor(&ui, cx), Some(shown[1]));
+    }
     ui.finish(cx);
 }
 

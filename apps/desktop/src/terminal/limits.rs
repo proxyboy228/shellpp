@@ -303,18 +303,32 @@ impl<T: EventListener> Capped<'_, T> {
         match mode {
             PrivateMode::Unknown(ALLOW_COLUMN_MODE) => {
                 columns.allow = set;
+                // DECRST 40 also ends a forced width (the program is done
+                // with column switching; a reconnect sends it too).
+                if !set && columns.forced.take().is_some() {
+                    columns.changed = true;
+                }
                 COLUMNS.set(columns);
                 false
             }
             PrivateMode::Named(NamedPrivateMode::ColumnMode) if columns.allow => {
                 let width = if set { COLUMNS_132 } else { COLUMNS_80 };
                 if usize::from(width) != self.0.columns() {
+                    // As a resize of the view does (`model::apply_size`):
+                    // the grid may hold every reflowed line for now, and the
+                    // next output trims the buffer to its limit, the
+                    // journal's oldest lines first. Not in `counting`, which
+                    // would take the shorter history of a wider reflow for a
+                    // clear of the scrollback.
+                    if !self.0.mode().contains(TermMode::ALT_SCREEN) {
+                        let history = self.0.grid().history_size();
+                        let limit = EVICTIONS.get().map_or(history, |count| count.limit);
+                        self.0.grid_mut().update_history(limit.max(history));
+                    }
                     let rows = self.0.screen_lines();
-                    self.counting(|term| {
-                        term.resize(super::model::GridDims {
-                            cols: usize::from(width),
-                            rows,
-                        });
+                    self.0.resize(super::model::GridDims {
+                        cols: usize::from(width),
+                        rows,
                     });
                 }
                 columns.changed |= columns.forced != Some(width);
