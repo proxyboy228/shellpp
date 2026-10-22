@@ -218,6 +218,9 @@ pub struct PaneGroup {
     summary: Option<(Option<PaneStatus>, SharedString, IconName, PaneId)>,
     /// Every pane closed (the group is spent).
     empty: bool,
+    /// Broadcast input (UI 4.4): what is typed in a pane goes to every
+    /// pane of the tab.
+    broadcast: bool,
     focus: FocusHandle,
 }
 
@@ -312,6 +315,7 @@ impl PaneGroup {
             focus_request: true,
             summary: None,
             empty: false,
+            broadcast: false,
             focus: cx.focus_handle(),
         }
     }
@@ -319,6 +323,40 @@ impl PaneGroup {
     fn next_id(&mut self) -> PaneId {
         self.last_id += 1;
         self.last_id
+    }
+
+    /// Broadcast input is on (UI 4.4).
+    pub fn broadcasting(&self) -> bool {
+        self.broadcast
+    }
+
+    /// Turns Broadcast input on or off; it needs more than one pane.
+    pub fn set_broadcast(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.broadcast = on && self.has_splits();
+        self.sync_broadcast(cx);
+        cx.notify();
+    }
+
+    /// Points every terminal of the tab at the others (while broadcasting)
+    /// or at none. Runs at each render while broadcasting, so new panes,
+    /// started sessions and closed panes are followed.
+    fn sync_broadcast(&self, cx: &App) {
+        let handles: Vec<crate::terminal::TerminalHandle> = self
+            .panes
+            .iter()
+            .filter_map(|pane| match &pane.content {
+                Content::Session(session) => session
+                    .read(cx)
+                    .terminal()
+                    .map(|terminal| terminal.read(cx).handle()),
+                Content::Picker { .. } => None,
+            })
+            .collect();
+        let targets: &[crate::terminal::TerminalHandle] =
+            if self.broadcast { &handles } else { &[] };
+        for handle in &handles {
+            handle.set_mirror(targets);
+        }
     }
 
     fn pane(&self, id: PaneId) -> Option<&Pane> {
@@ -804,6 +842,10 @@ impl PaneGroup {
             Content::Picker { picker: None, .. } => div().into_any_element(),
         };
         let marked = self.panes.len() > 1 && id == self.active;
+        // Broadcast input: the panes that receive what is typed in the
+        // active one are marked (UI 4.7).
+        let broadcast = self.broadcast && id != self.active;
+        let warning = cx.theme().warning;
         div()
             .id(Self::element_id(id))
             .test_support()
@@ -823,6 +865,20 @@ impl PaneGroup {
                 }
             }))
             .child(content)
+            .when(broadcast, |pane| {
+                pane.child(
+                    div()
+                        .id(SharedString::from(format!("pane-{id}-broadcast")))
+                        .test_support()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .border_2()
+                        .border_color(warning),
+                )
+            })
             .when(marked, |pane| {
                 pane.child(
                     div()
@@ -950,6 +1006,13 @@ impl Render for PaneGroup {
         }
         // New sessions start now, at the size their pane had last.
         self.start_pending(window, cx);
+        // Broadcast input follows the panes; one pane left ends it.
+        if self.broadcast {
+            if !self.has_splits() {
+                self.broadcast = false;
+            }
+            self.sync_broadcast(cx);
+        }
         // Not from under a dialog, nor from the Rename field of the tab
         // (the request waits until they are closed).
         if self.focus_request

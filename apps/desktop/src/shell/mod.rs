@@ -2021,6 +2021,7 @@ impl Shell {
             can_split_down: has_target && group.can_split(active, Direction::Column),
             can_split_right: has_target && group.can_split(active, Direction::Row),
             has_splits: group.has_splits(),
+            broadcasting: group.broadcasting(),
         }
     }
 
@@ -2066,8 +2067,14 @@ impl Shell {
                     });
                 }
             }
-            // Stage 9 (D30): shown disabled.
-            TabCommand::BroadcastInput => {}
+            TabCommand::BroadcastInput => {
+                if let Some(group) = group {
+                    group.update(cx, |group, cx| {
+                        let on = !group.broadcasting();
+                        group.set_broadcast(on, cx);
+                    });
+                }
+            }
             TabCommand::Close => {
                 self.close_session(id, cx);
                 self.focus_active_tab(cx);

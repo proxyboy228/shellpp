@@ -795,6 +795,8 @@ impl TerminalHandle {
     /// history capture, then sent.
     pub fn send_typed(&self, bytes: Vec<u8>) {
         self.watch_input(&bytes, InputOrigin::Typed);
+        // Broadcast input (UI 4.4): the other panes of the tab too.
+        self.mirror_input(&bytes);
         self.send_input(bytes);
     }
 

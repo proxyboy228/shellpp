@@ -1256,3 +1256,14 @@ Status: run 4 decision, 2026-10-22 (plan, item 9.1 [decision of the owner]; clos
 - The compatibility matrix (docs/compatibility.md) runs in Docker: the latest OpenSSH, OpenSSH 7.4 (CentOS 7), Dropbear (Alpine), and the OpenSSH variants legacy-sha1, kbd-2fa, no-sftp and motd-banner of tests/openssh, each in its own container (`crates/ssh/tests/compat.rs`, also in CI).
 
 **Spec impact:** none; docs/security.md (section 11.2 and the open item) and docs/data-model.md (the host's `ssh` fields) are updated.
+
+### 81. Broadcast input; workspaces wait (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 9.3; UI 4.4, 4.7; D68 item 2). Disputable: listed for the owner.
+
+**Decision:**
+
+- Broadcast input works: the tab menu item of a tab with splits turns it on ("Stop Broadcast Input" while on). Typed input (keys, pastes, IME text) of a pane also goes to the sessions of every other pane of the tab; the receiving panes have a `--warning` border. The terminal keeps weak links to the other panes' terminals, so a closed pane drops out; a tab left with one pane ends it. Replies to terminal queries, mouse reports and input the app injects (History insert, snippets) stay in their own pane. Only the active pane records command history.
+- Workspaces (UI 4.5: the record, Add to Workspace, the new tab page block, Ctrl+K, opening with the layout) and the split tab for a snippet run on two to four hosts (D68, item 2) are not started tonight: about two hours and 45 minutes with their tests and screenshots, after 9.4 and 9.5 of the owner's list. Create a workspace stays disabled (D30).
+
+**Spec impact:** `docs/ui-behavior-spec.md` 0 and 4.7 (and `docs/ru`): Broadcast input is no longer disabled.

@@ -760,3 +760,54 @@ fn snapshots_round_trip(cx: &mut TestAppContext) {
     restored.update(cx, |group, cx| group.release(cx));
     tab.finish(cx);
 }
+
+/// Broadcast input (UI 4.4): on, what is typed in one pane reaches every
+/// pane's session and each pane is marked; one pane left ends it.
+#[gpui_kit::test]
+fn broadcast_input_reaches_every_pane(cx: &mut TestAppContext) {
+    #[derive(Default)]
+    struct Sink(std::sync::Mutex<Vec<u8>>);
+    impl crate::terminal::TerminalSink for Sink {
+        fn send(&self, bytes: Vec<u8>) {
+            self.0.lock().unwrap().extend_from_slice(&bytes);
+        }
+        fn resize(&self, _: crate::terminal::TerminalSize) {}
+    }
+
+    let tab = Tab::open(cx);
+    let first = tab.active(cx);
+    tab.set_phase(first, Phase::Running, cx);
+    tab.press("ctrl-shift-d", cx);
+    tab.press("enter", cx);
+    let panes = tab.panes(cx);
+    assert_eq!(panes.len(), 2);
+    tab.set_phase(panes[1], Phase::Running, cx);
+    tab.update(cx, |group, cx| group.set_broadcast(true, cx));
+    assert!(tab.read(cx, |group, _| group.broadcasting()));
+    // The receiving pane is marked, the active one is not.
+    assert_eq!(tab.active(cx), panes[1]);
+    assert!(tab.visible(&format!("pane-{}-broadcast", panes[0]), cx));
+    assert!(!tab.visible(&format!("pane-{}-broadcast", panes[1]), cx));
+    let terminals = tab.record.terminals();
+    assert_eq!(terminals.len(), 2);
+    let sinks: Vec<std::sync::Arc<Sink>> = terminals
+        .iter()
+        .map(|terminal| {
+            let sink = std::sync::Arc::new(Sink::default());
+            terminal.set_sink(Some(sink.clone()));
+            sink
+        })
+        .collect();
+    terminals[1].send_typed(b"date\r".to_vec());
+    for sink in &sinks {
+        assert_eq!(sink.0.lock().unwrap().as_slice(), b"date\r");
+    }
+
+    // Closing a pane leaves one: Broadcast input ends.
+    tab.update(cx, |group, cx| {
+        group.close_pane(panes[1], cx);
+    });
+    assert!(!tab.read(cx, |group, _| group.broadcasting()));
+    terminals[0].send_typed(b"x".to_vec());
+    assert_eq!(sinks[1].0.lock().unwrap().as_slice(), b"date\r");
+}

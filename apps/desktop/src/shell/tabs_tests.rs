@@ -529,11 +529,25 @@ fn the_tab_menu_duplicates_splits_and_closes(cx: &mut TestAppContext) {
             .iter()
             .any(|divider| divider.direction == Direction::Row)
     );
-    // Broadcast input is disabled: a click changes nothing.
+    // Broadcast input (UI 4.4): on, the receiving panes are marked; the
+    // item then stops it.
     ui.right_click(tab.element_id(), cx);
     ui.click("tab-menu-broadcast", cx);
     assert_eq!(cx.update(|cx| group.read(cx).pane_count()), 3);
-    ui.press("escape", cx);
+    assert!(cx.update(|cx| group.read(cx).broadcasting()));
+    let active = cx.update(|cx| group.read(cx).active_pane());
+    for pane in cx.update(|cx| group.read(cx).pane_ids()) {
+        assert_eq!(
+            ui.visible(format!("pane-{pane}-broadcast"), cx),
+            pane != active
+        );
+    }
+    ui.right_click(tab.element_id(), cx);
+    ui.click("tab-menu-broadcast", cx);
+    assert!(!cx.update(|cx| group.read(cx).broadcasting()));
+    for pane in cx.update(|cx| group.read(cx).pane_ids()) {
+        assert!(!ui.visible(format!("pane-{pane}-broadcast"), cx));
+    }
 
     // Close: the whole tab with its panes.
     ui.right_click(tab.element_id(), cx);

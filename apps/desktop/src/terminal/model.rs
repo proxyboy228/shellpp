@@ -165,6 +165,9 @@ pub(super) struct Outbox {
     evicted: AtomicUsize,
     /// Command history capture (docs/security.md, section 10.1).
     pub(super) capture: super::history_capture::Capture,
+    /// Broadcast input (UI 4.4): the terminals that typed input also goes
+    /// to. Weak, so a closed pane drops out by itself.
+    mirror: RwLock<Vec<std::sync::Weak<Outbox>>>,
 }
 
 impl Outbox {
@@ -328,6 +331,7 @@ impl TerminalHandle {
             size: Mutex::new(options.size),
             evicted: AtomicUsize::new(0),
             capture: Default::default(),
+            mirror: RwLock::new(Vec::new()),
         });
         let config = term_config(options.scrollback, options.cursor_shape);
         let dims = GridDims::from(options.size);
@@ -442,6 +446,33 @@ impl TerminalHandle {
     /// Sends bytes to the sink as if typed (snippets, tests).
     pub fn send_input(&self, bytes: Vec<u8>) {
         self.outbox.send(bytes);
+    }
+
+    /// Broadcast input (UI 4.4): typed input also goes to the sessions of
+    /// `targets` (this terminal itself is left out); empty stops it.
+    pub fn set_mirror(&self, targets: &[TerminalHandle]) {
+        let weak = targets
+            .iter()
+            .filter(|target| !Arc::ptr_eq(&target.outbox, &self.outbox))
+            .map(|target| Arc::downgrade(&target.outbox))
+            .collect();
+        match self.outbox.mirror.write() {
+            Ok(mut mirror) => *mirror = weak,
+            Err(poisoned) => *poisoned.into_inner() = weak,
+        }
+    }
+
+    /// Sends typed bytes to the broadcast targets (never on to theirs).
+    pub(super) fn mirror_input(&self, bytes: &[u8]) {
+        let targets = self
+            .outbox
+            .mirror
+            .read()
+            .map(|mirror| mirror.clone())
+            .unwrap_or_default();
+        for target in targets.iter().filter_map(std::sync::Weak::upgrade) {
+            target.send(bytes.to_vec());
+        }
     }
 
     /// The current grid size.
@@ -690,6 +721,41 @@ mod tests {
         assert_eq!(handle.screen_text()[..2], ["hello", "world"]);
         assert!(woken.try_recv().is_ok(), "the UI was woken");
         assert!(woken.try_recv().is_err(), "wakes are coalesced");
+    }
+
+    /// Broadcast input (UI 4.4): typed input reaches every target's session
+    /// once, injected input and replies only the terminal's own.
+    #[test]
+    fn typed_input_is_mirrored_to_the_targets() {
+        let terminals: Vec<(TerminalHandle, Arc<RecordingSink>)> = (0..3)
+            .map(|_| {
+                let (handle, _woken) = handle(20, 4, 100);
+                let sink = Arc::new(RecordingSink::default());
+                handle.set_sink(Some(sink.clone()));
+                (handle, sink)
+            })
+            .collect();
+        let handles: Vec<TerminalHandle> =
+            terminals.iter().map(|(handle, _)| handle.clone()).collect();
+        for handle in &handles {
+            handle.set_mirror(&handles);
+        }
+        handles[0].send_typed(b"uptime\r".to_vec());
+        handles[1].inject_input(b"own".to_vec());
+        let sent: Vec<Vec<u8>> = terminals
+            .iter()
+            .map(|(_, sink)| sink.sent.lock().unwrap().clone())
+            .collect();
+        assert_eq!(sent[0], b"uptime\r");
+        assert_eq!(sent[1], b"uptime\rown");
+        assert_eq!(sent[2], b"uptime\r");
+        // Stopped: only the terminal's own session.
+        for handle in &handles {
+            handle.set_mirror(&[]);
+        }
+        handles[2].send_typed(b"x".to_vec());
+        assert_eq!(terminals[0].1.sent.lock().unwrap().as_slice(), b"uptime\r");
+        assert_eq!(terminals[2].1.sent.lock().unwrap().as_slice(), b"uptime\rx");
     }
 
     #[test]

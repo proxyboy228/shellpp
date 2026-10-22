@@ -9,6 +9,7 @@ pub const MENU_RENAME: &str = "Rename";
 pub const MENU_SPLIT_HORIZONTALLY: &str = "Split Horizontally";
 pub const MENU_SPLIT_VERTICALLY: &str = "Split Vertically";
 pub const MENU_BROADCAST_INPUT: &str = "Broadcast Input";
+pub const MENU_BROADCAST_STOP: &str = "Stop Broadcast Input";
 pub const MENU_CLOSE: &str = "Close";
 
 /// Accessible name of the inline Rename field.

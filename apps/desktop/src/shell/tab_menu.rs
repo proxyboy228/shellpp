@@ -30,7 +30,7 @@ pub enum TabCommand {
     SplitHorizontally,
     /// A new pane to the right of the active one (Ctrl+Shift+D).
     SplitVertically,
-    /// Stage 9: shown disabled on a tab with splits.
+    /// Broadcast input on or off, on a tab with splits (UI 4.4).
     BroadcastInput,
     /// Closes the tab with all its panes.
     Close,
@@ -81,6 +81,8 @@ pub struct TabFacts {
     pub can_split_right: bool,
     /// The tab has more than one pane.
     pub has_splits: bool,
+    /// Broadcast input is on: the item stops it.
+    pub broadcasting: bool,
 }
 
 /// The tab menu of UI 4.4, top to bottom. Items that do not apply to the
@@ -125,9 +127,13 @@ pub fn entries(facts: TabFacts) -> Vec<TabMenuEntry> {
         entries.push(TabMenuEntry::item(
             BroadcastInput,
             "tab-menu-broadcast",
-            strings::MENU_BROADCAST_INPUT,
+            if facts.broadcasting {
+                strings::MENU_BROADCAST_STOP
+            } else {
+                strings::MENU_BROADCAST_INPUT
+            },
             None,
-            false,
+            true,
         ));
     }
     entries.push(TabMenuEntry::Separator);
@@ -258,6 +264,7 @@ mod tests {
             can_split_down: true,
             can_split_right: true,
             has_splits: false,
+            broadcasting: false,
         };
         assert_eq!(
             commands(&entries(one_pane)),
@@ -282,7 +289,7 @@ mod tests {
                 (Rename, true),
                 (SplitHorizontally, true),
                 (SplitVertically, true),
-                (BroadcastInput, false),
+                (BroadcastInput, true),
                 (Close, true),
             ]
         );
