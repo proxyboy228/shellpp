@@ -64,8 +64,12 @@ struct FakePorts {
     wires: Mutex<Option<std_mpsc::Sender<Wire>>>,
     failures: Mutex<Vec<SerialError>>,
     open_delay: Duration,
-    /// Ports open now.
+    /// Ports open now, and opens that succeeded.
     open_ports: Arc<AtomicUsize>,
+    opens: AtomicUsize,
+    /// The far ends nobody asked for: kept, so a quiet device stays
+    /// plugged in (a dropped end reads as unplugged).
+    idle: Mutex<Vec<Wire>>,
 }
 
 impl SerialBackend for FakePorts {
@@ -85,13 +89,18 @@ impl SerialBackend for FakePorts {
         let (to_port, from_device) = std_mpsc::channel();
         let written = Arc::new(Mutex::new(Vec::new()));
         self.open_ports.fetch_add(1, Ordering::SeqCst);
+        self.opens.fetch_add(1, Ordering::SeqCst);
         let session = serial::start(Port {
             from_device,
             written: written.clone(),
             open_ports: Arc::clone(&self.open_ports),
         });
-        if let Some(wires) = self.wires.lock().expect("wires").as_ref() {
-            let _ = wires.send(Wire { to_port, written });
+        let wire = Wire { to_port, written };
+        match self.wires.lock().expect("wires").as_ref() {
+            Some(wires) => {
+                let _ = wires.send(wire);
+            }
+            None => self.idle.lock().expect("idle").push(wire),
         }
         Ok(session)
     }
@@ -229,22 +238,30 @@ async fn cancel_while_the_port_opens_lets_go_of_it() {
             Arc::new(TestTerminal::default()),
         )
         .expect("opens");
+    // The port is opening (its blocking thread is in the open).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while ports.opened.lock().expect("opened").is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the open did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     // Reconnect while it opens starts no second open.
     session.handle.reconnect();
     session.handle.cancel();
     let view = session.state(SessionState::Failed).await;
     assert_eq!(view.error, Some(SessionError::Cancelled));
     assert_eq!(ports.opened.lock().expect("opened").len(), 1);
-    // The cancelled opening's port is let go once it opened.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while ports.open_ports.load(Ordering::SeqCst) != 0
-        || ports.opened.lock().expect("opened").len() != 1
-    {
+    // The cancelled opening still opens the port, which is let go at once.
+    while ports.opens.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while ports.open_ports.load(Ordering::SeqCst) != 0 {
         assert!(std::time::Instant::now() < deadline, "the port stayed open");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    assert_eq!(ports.open_ports.load(Ordering::SeqCst), 0);
     // Reconnect opens it again.
     session.handle.reconnect();
     session.state(SessionState::Connected).await;

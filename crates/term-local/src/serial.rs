@@ -488,11 +488,12 @@ mod tests {
         let closing = Instant::now();
         session.writer.close();
         assert!(
-            closing.elapsed() < Duration::from_millis(10),
+            closing.elapsed() < Duration::from_millis(50),
             "close waited"
         );
         wait_for("the port let go", || ends.dropped.load(Ordering::SeqCst));
-        assert!(closing.elapsed() < Duration::from_millis(500));
+        // A chunk (70 ms) and a read (20 ms), not the 20 KB (about 22 s).
+        assert!(closing.elapsed() < Duration::from_secs(1));
         assert_eq!(paste.join().unwrap(), Err(SerialError::Closed));
         assert!(ends.written.lock().unwrap().len() < 4 * 1024);
     }

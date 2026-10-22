@@ -113,18 +113,21 @@ pub(crate) async fn run(
         // Close or Cancel while the port opens: the opening goes on in its
         // blocking thread, and the port it opens is let go as soon as its
         // result is dropped (shellpp-term-local's thread ends with its
-        // receiver). Reconnect while it opens changes nothing: a second
-        // open would find the port busy.
-        let opening = open(&shared, &config);
-        tokio::pin!(opening);
-        let opened = loop {
-            tokio::select! {
-                opened = &mut opening => break opened.map_err(Some),
-                control = ctrl.recv() => match control {
-                    Some(Control::Close) | None => return,
-                    Some(Control::Cancel) => break Err(None),
-                    Some(Control::Reconnect) => {}
-                },
+        // receiver): the opening is dropped here, so nothing waits for it.
+        // Reconnect while it opens changes nothing: a second open would
+        // find the port busy.
+        let opened = {
+            let opening = open(&shared, &config);
+            tokio::pin!(opening);
+            loop {
+                tokio::select! {
+                    opened = &mut opening => break opened.map_err(Some),
+                    control = ctrl.recv() => match control {
+                        Some(Control::Close) | None => return,
+                        Some(Control::Cancel) => break Err(None),
+                        Some(Control::Reconnect) => {}
+                    },
+                }
             }
         };
         match opened {
