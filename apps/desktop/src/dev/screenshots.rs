@@ -1438,16 +1438,21 @@ pub async fn settle(cx: &mut AsyncApp, handle: AnyWindowHandle) -> Result<(), Sc
     cx.background_executor().timer(SETTLE / 2).await;
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        // Pointer out of the window: no hover state in the capture.
-        window.dispatch_event(
-            MouseMoveEvent {
-                position: point(px(-10.), px(-10.)),
-                pressed_button: None,
-                modifiers: Default::default(),
-            }
-            .to_platform_input(),
-            cx,
-        );
+        // Pointer out of the window: no hover state in the capture. Only
+        // when it is still in: a move counts as mouse input and would hide
+        // the keyboard focus ring a state shows (the Keychain's).
+        let outside = point(px(-10.), px(-10.));
+        if window.mouse_position() != outside {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: outside,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        }
         window.render_frame(cx);
     })
     .map_err(|_| ScreenshotError::WindowClosed)
