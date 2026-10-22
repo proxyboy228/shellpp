@@ -15,8 +15,23 @@ pub const RESTORE_NOTHING: &str = "Nothing to restore from the previous launch";
 /// Tooltip of Restore while it is enabled.
 pub const RESTORE_HINT: &str = "Reopen the windows, tabs and splits of the previous launch";
 pub const CREATE_WORKSPACE: &str = "Create a workspace";
-/// Tooltip of the disabled "Create a workspace" (section 0: later stages).
-pub const WORKSPACES_LATER: &str = "Workspaces arrive in stage 9.";
+/// Tooltip of "Create a workspace".
+pub const CREATE_WORKSPACE_HINT: &str = "Save the tabs and splits of this window under a name";
+/// Tooltip while the window has no tab a workspace can keep.
+pub const CREATE_WORKSPACE_NOTHING: &str = "Open sessions to saved hosts or local terminals first";
+pub const WORKSPACES: &str = "Workspaces";
+pub const WORKSPACE_NAME: &str = "Name";
+pub const WORKSPACE_NAME_PLACEHOLDER: &str = "Production";
+pub const WORKSPACE_HINT: &str = "The tabs and splits of this window to saved hosts and local terminals; quick connections are left out.";
+pub const CANCEL: &str = "Cancel";
+pub const CREATE: &str = "Create";
+pub const WORKSPACE_SAVED: &str = "Workspace saved";
+pub const WORKSPACE_NOT_SAVED: &str = "The workspace was not saved";
+pub const WORKSPACE_EMPTY: &str = "None of the workspace's hosts exists any more";
+/// The remove button of a workspace (its tooltip).
+pub fn remove_workspace(name: &str) -> String {
+    format!("Remove \"{name}\"")
+}
 pub const NO_RECENT: &str = "Hosts you connect to appear here.";
 pub const NO_MATCHES: &str = "No hosts or tabs match the search";
 pub const PANE_NO_MATCHES: &str = "No hosts match the search";

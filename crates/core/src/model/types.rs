@@ -31,10 +31,11 @@ pub enum RecordKind {
     SnippetPackage,
     ForwardingRule,
     HighlightRule,
+    Workspace,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 16] = [
+    pub const ALL: [RecordKind; 17] = [
         RecordKind::VaultMeta,
         RecordKind::RecoveryKey,
         RecordKind::DeviceInfo,
@@ -51,6 +52,7 @@ impl RecordKind {
         RecordKind::SnippetPackage,
         RecordKind::ForwardingRule,
         RecordKind::HighlightRule,
+        RecordKind::Workspace,
     ];
 
     /// The u16 type code.
@@ -72,6 +74,7 @@ impl RecordKind {
             Self::SnippetPackage => 0x0402,
             Self::ForwardingRule => 0x0501,
             Self::HighlightRule => 0x0902,
+            Self::Workspace => 0x0A01,
         }
     }
 
@@ -99,6 +102,7 @@ impl RecordKind {
             Self::SnippetPackage => "snippet_package",
             Self::ForwardingRule => "forwarding_rule",
             Self::HighlightRule => "highlight_rule",
+            Self::Workspace => "workspace",
         }
     }
 
@@ -204,7 +208,11 @@ mod tests {
         assert_eq!(RecordKind::SnippetPackage.code(), 0x0402);
         assert_eq!(RecordKind::ForwardingRule.code(), 0x0501);
         assert_eq!(RecordKind::ForwardingRule.class(), classes::FORWARDING);
-        assert_eq!(RecordKind::from_name("workspace"), None);
+        assert_eq!(
+            RecordKind::from_name("workspace"),
+            Some(RecordKind::Workspace)
+        );
+        assert_eq!(RecordKind::Workspace.code(), 0x0A01);
         assert_eq!(class_of_type_name("key"), Some(0x03));
         assert_eq!(class_of_type_name("conflict"), None);
         assert_eq!(class_of_type_name("unknown_type"), None);

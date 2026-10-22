@@ -109,7 +109,8 @@ fn kinds_of(session: &Session, ids: &[Uuid]) -> Result<HashMap<Uuid, RecordKind>
                 | RecordKind::Snippet
                 | RecordKind::SnippetPackage
                 | RecordKind::ForwardingRule
-                | RecordKind::HighlightRule),
+                | RecordKind::HighlightRule
+                | RecordKind::Workspace),
             ) => {
                 kinds.insert(*id, kind);
             }

@@ -1827,9 +1827,21 @@ impl Shell {
             && let Some(page) = self.new_tab_page(id).cloned()
         {
             let tabs = self.open_tabs(Some(id), window, cx);
+            // The workspaces (UI 4.5): a short list of names from the core.
+            let state = self.state.read(cx);
+            let workspaces: Vec<(Uuid, SharedString)> = state
+                .core()
+                .zip(state.vault_id())
+                .and_then(|(core, vault_id)| core.workspaces_list(vault_id).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|view| (view.record.record_id, SharedString::from(view.name)))
+                .collect();
+            let can_create = !restore::workspace_tabs(self.snapshot(cx)).is_empty();
             page.update(cx, |page, cx| {
                 page.set_open_tabs(tabs, cx);
                 page.set_restore_available(restore, cx);
+                page.set_workspaces(workspaces, can_create, cx);
             });
             if std::mem::take(&mut self.focus_page) {
                 window.defer(cx, move |window, cx| {
@@ -1885,6 +1897,40 @@ impl Shell {
                 self.activate_open_tab(*handle, *tab, window, cx);
                 return;
             }
+            NewTabEvent::CreateWorkspace => {
+                self.create_workspace(window, cx);
+                return;
+            }
+            NewTabEvent::OpenWorkspace(id) => {
+                self.close_search(cx);
+                let tabs = self
+                    .workspace(*id, cx)
+                    .map(|view| view.tabs)
+                    .unwrap_or_default();
+                let opened = restore::open_workspace(self, tabs, cx);
+                if opened == 0 {
+                    self.toast(crate::new_tab::strings::WORKSPACE_EMPTY, cx);
+                }
+                // The workspace's tabs replace the page, as Restore's do.
+                if let Some(page) = page.filter(|_| opened > 0) {
+                    self.close_session(page, cx);
+                }
+                return;
+            }
+            NewTabEvent::RemoveWorkspace(id) => {
+                let state = self.state.read(cx);
+                if let (Some(core), Some(vault_id)) = (state.core().cloned(), state.vault_id()) {
+                    let removed = core.record_delete(shellpp_core::service::dto::RecordsRef {
+                        vault_id,
+                        record_ids: vec![*id],
+                    });
+                    if let Err(error) = removed {
+                        tracing::warn!(code = error.code(), "workspace not removed");
+                    }
+                }
+                cx.notify();
+                return;
+            }
             NewTabEvent::Restore => {
                 self.close_search(cx);
                 let opened = restore::restore_previous_launch(self, window, cx);
@@ -1920,6 +1966,69 @@ impl Shell {
                 self.open_target(target, None, cx);
             }
         }
+    }
+
+    /// A saved workspace of the personal vault.
+    fn workspace(
+        &self,
+        id: Uuid,
+        cx: &App,
+    ) -> Option<shellpp_core::service::snippets::WorkspaceView> {
+        let state = self.state.read(cx);
+        let core = state.core()?;
+        core.workspaces_list(state.vault_id()?)
+            .ok()?
+            .into_iter()
+            .find(|view| view.record.record_id == id)
+    }
+
+    /// "Create a workspace" (UI 4.5, 6): this window's tabs to saved hosts
+    /// and local terminals, under the name the dialog asks.
+    fn create_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = restore::workspace_tabs(self.snapshot(cx));
+        if tabs.is_empty() {
+            return;
+        }
+        let Ok(tabs) = serde_json::to_value(&tabs) else {
+            return;
+        };
+        let shell = cx.entity().downgrade();
+        let state = self.state.clone();
+        crate::new_tab::workspace_dialog::open(
+            String::new(),
+            window,
+            cx,
+            move |name: String, _: &mut Window, cx: &mut App| {
+                let (core, vault_id) = {
+                    let state = state.read(cx);
+                    match (state.core().cloned(), state.vault_id()) {
+                        (Some(core), Some(vault_id)) => (core, vault_id),
+                        _ => return false,
+                    }
+                };
+                let mut data = serde_json::Map::new();
+                data.insert("name".into(), serde_json::Value::String(name));
+                data.insert("tabs".into(), tabs.clone());
+                let saved = core.workspace_save(shellpp_core::service::snippets::RecordInput {
+                    vault_id,
+                    record_id: None,
+                    data,
+                });
+                let message = match &saved {
+                    Ok(_) => crate::new_tab::strings::WORKSPACE_SAVED,
+                    Err(error) => {
+                        tracing::info!(code = error.code(), "workspace not saved");
+                        // A name is needed: the dialog stays.
+                        if matches!(error, shellpp_core::CoreError::Validation(_)) {
+                            return false;
+                        }
+                        crate::new_tab::strings::WORKSPACE_NOT_SAVED
+                    }
+                };
+                let _ = shell.update(cx, |shell, cx| shell.toast(message, cx));
+                true
+            },
+        );
     }
 
     /// Closes the search overlay.

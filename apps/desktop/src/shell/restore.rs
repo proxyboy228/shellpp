@@ -106,6 +106,44 @@ fn layout_of(pane: &SavedPane, state: &AppState) -> Option<Layout<PaneTarget>> {
     })
 }
 
+/// The tabs of this window a workspace keeps (UI 4.5; data-model 12):
+/// saved hosts and local terminals; a tab with a quick connection (not a
+/// host link) is left out.
+pub(super) fn workspace_tabs(snapshot: WindowSnapshot) -> Vec<SavedTab> {
+    saved_windows(vec![snapshot])
+        .into_iter()
+        .flat_map(|window| window.tabs)
+        .filter(|tab| {
+            !tab.root.sessions().iter().any(|session| {
+                matches!(
+                    session,
+                    shellpp_core::service::last_session::SavedSession::Quick { .. }
+                )
+            })
+        })
+        .take(shellpp_core::model::workspace::MAX_TABS)
+        .collect()
+}
+
+/// Opens the tabs of a workspace in `shell` (hosts removed since are left
+/// out, as Restore does). Returns the number of tabs opened.
+pub(super) fn open_workspace(
+    shell: &mut Shell,
+    tabs: Vec<SavedTab>,
+    cx: &mut Context<Shell>,
+) -> usize {
+    let state = shell.state.clone();
+    let layouts: Vec<(Layout<PaneTarget>, Option<String>)> = tabs
+        .into_iter()
+        .filter_map(|tab| Some((layout_of(&tab.root, state.read(cx))?, tab.title)))
+        .collect();
+    let opened = layouts.len();
+    for (layout, title) in layouts {
+        shell.open_snapshot(layout, title, cx);
+    }
+    opened
+}
+
 /// The saved windows of the snapshots, within the limits of the record
 /// (windows, tabs per window, panes in all). Titles are cleaned as Rename
 /// keeps them, and a tab the core would refuse is left out, so one bad tab

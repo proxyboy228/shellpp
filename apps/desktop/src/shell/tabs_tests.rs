@@ -1313,3 +1313,60 @@ fn ctrl_k_activates_a_tab_of_another_window(cx: &mut TestAppContext) {
     assert!(ui.tabs(cx).is_empty(), "no new tab here");
     ui.finish(cx);
 }
+
+/// UI 4.5, 6 (D81): "Create a workspace" saves this window's tabs to saved
+/// hosts and local terminals (a quick connection is left out) under a
+/// name; the page lists it, a click opens its tabs, × removes it.
+#[gpui_kit::test]
+fn a_workspace_is_created_opened_and_removed(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.save_host(web(), cx);
+    let prod = ui.open_tab(SessionRequest::new(SessionKind::Ssh).host(host), cx);
+    let group = ui.group(prod, cx);
+    let new_pane = group
+        .update(cx, |group, cx| group.split(Direction::Row, cx))
+        .unwrap();
+    group.update(cx, |group, cx| {
+        group.open_in(new_pane, &PaneTarget::Local { shell_id: None }, cx);
+    });
+    ui.open_tab(
+        SessionRequest::new(SessionKind::Ssh).quick(QuickTarget {
+            username: None,
+            host: "192.0.2.31".into(),
+            port: None,
+        }),
+        cx,
+    );
+    ui.click("tab-new", cx);
+    ui.click("new-tab-workspace", cx);
+    assert!(ui.visible("workspace-dialog", cx));
+    ui.click("workspace-name", cx);
+    ui.input("Prod", cx);
+    ui.click("workspace-create", cx);
+    assert!(!ui.visible("workspace-dialog", cx));
+
+    let core = cx.update(|cx| ui.state.read(cx).core().cloned().unwrap());
+    let vault = cx.update(|cx| ui.state.read(cx).vault_id().unwrap());
+    let saved = core.workspaces_list(vault).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].name, "Prod");
+    assert_eq!(saved[0].tabs.len(), 1, "the quick connection is left out");
+    assert_eq!(saved[0].tabs[0].root.sessions().len(), 2);
+    let id = saved[0].record.record_id;
+
+    // A click on the workspace opens its tab in place of the page.
+    let before = ui.tabs(cx).len();
+    ui.click(format!("new-tab-workspace-{id}"), cx);
+    assert_eq!(ui.tabs(cx).len(), before, "the page is replaced");
+    let opened = ui.tabs(cx).last().unwrap().id();
+    let opened_group = ui.group(opened, cx);
+    assert_eq!(cx.update(|cx| opened_group.read(cx).pane_count()), 2);
+
+    // × removes it.
+    ui.click("tab-new", cx);
+    ui.click(format!("new-tab-workspace-remove-{id}"), cx);
+    assert!(core.workspaces_list(vault).unwrap().is_empty());
+    assert!(!ui.visible(format!("new-tab-workspace-{id}"), cx));
+    drop(core);
+    ui.finish(cx);
+}

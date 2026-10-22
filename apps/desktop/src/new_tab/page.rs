@@ -12,11 +12,12 @@
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-    Window,
+    SharedString, Window, px,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
+use uuid::Uuid;
 
 use super::model::{Item, Row};
 use super::picker::{self, COLUMN_WIDTH, Picker, PickerHost};
@@ -32,6 +33,10 @@ const SEARCH_SHORTCUT: &str = "secondary-k";
 pub struct NewTabPage {
     picker: Picker,
     restore_available: bool,
+    /// The saved workspaces (record id and name), by name (UI 4.5).
+    workspaces: Vec<(Uuid, SharedString)>,
+    /// The window has tabs a workspace can keep.
+    can_create_workspace: bool,
 }
 
 impl std::fmt::Debug for NewTabPage {
@@ -68,6 +73,8 @@ impl NewTabPage {
         Self {
             picker: Picker::new(PickerKind::Page, "new-tab", state, None, window, cx),
             restore_available: false,
+            workspaces: Vec::new(),
+            can_create_workspace: false,
         }
     }
 
@@ -89,6 +96,72 @@ impl NewTabPage {
 
     pub fn restore_available(&self) -> bool {
         self.restore_available
+    }
+
+    /// The saved workspaces and whether this window can make one.
+    pub fn set_workspaces(
+        &mut self,
+        workspaces: Vec<(Uuid, SharedString)>,
+        can_create: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspaces != workspaces || self.can_create_workspace != can_create {
+            self.workspaces = workspaces;
+            self.can_create_workspace = can_create;
+            cx.notify();
+        }
+    }
+
+    /// The block of saved workspaces (UI 4.5: a block of its own on the
+    /// page): open one with a click, remove it with its ×.
+    fn render_workspaces(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.workspaces.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let items = self.workspaces.iter().map(|(id, name)| {
+            let id = *id;
+            h_flex()
+                .gap(px(2.))
+                .child(
+                    ControlButton::new(
+                        SharedString::from(format!("new-tab-workspace-{id}")),
+                        ControlKind::Neutral,
+                    )
+                    .icon(IconName::LayoutDashboard)
+                    .label(name.clone())
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(NewTabEvent::OpenWorkspace(id))
+                    })),
+                )
+                .child(
+                    ControlButton::new(
+                        SharedString::from(format!("new-tab-workspace-remove-{id}")),
+                        ControlKind::Ghost,
+                    )
+                    .icon(IconName::Close)
+                    .tooltip(SharedString::from(strings::remove_workspace(name)))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                        cx.emit(NewTabEvent::RemoveWorkspace(id))
+                    })),
+                )
+        });
+        Some(
+            v_flex()
+                .id("new-tab-workspaces")
+                .test_support()
+                .w_full()
+                .flex_none()
+                .gap(metrics::SPACE_2)
+                .child(
+                    gpui::div()
+                        .text_size(metrics::FONT_SIZE_HEADING)
+                        .font_weight(metrics::FONT_WEIGHT_SEMIBOLD)
+                        .text_color(theme.foreground)
+                        .child(strings::WORKSPACES),
+                )
+                .child(h_flex().flex_wrap().gap(metrics::SPACE_2).children(items)),
+        )
     }
 
     /// Puts the focus in the search field.
@@ -123,12 +196,22 @@ impl NewTabPage {
         let available = self.restore_available;
         // One group: both as wide as the wider (design-system 6).
         let width = controls::group_width(window, &[strings::CREATE_WORKSPACE, strings::RESTORE]);
+        let can_create = self.can_create_workspace;
         let workspace = ControlButton::new("new-tab-workspace", ControlKind::Ghost)
             .icon(IconName::Plus)
             .label(strings::CREATE_WORKSPACE)
             .min_w(width)
-            .tooltip(strings::WORKSPACES_LATER)
-            .disabled(true);
+            .tooltip(if can_create {
+                strings::CREATE_WORKSPACE_HINT
+            } else {
+                strings::CREATE_WORKSPACE_NOTHING
+            })
+            .disabled(!can_create)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                if this.can_create_workspace {
+                    cx.emit(NewTabEvent::CreateWorkspace);
+                }
+            }));
         let restore = ControlButton::new("new-tab-restore", ControlKind::Ghost)
             .icon(IconName::RotateCcwClock)
             .label(strings::RESTORE)
@@ -176,6 +259,9 @@ impl Render for NewTabPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let field = self.picker.render_field(Some(SEARCH_SHORTCUT), window, cx);
         let header = (!self.picker.is_searching()).then(|| self.render_header(window, cx));
+        let workspaces = (!self.picker.is_searching())
+            .then(|| self.render_workspaces(cx))
+            .flatten();
         let list = self.picker.render_list(None, cx);
         let column = picker::keys(v_flex().id("new-tab-column"), cx)
             .w_full()
@@ -184,6 +270,7 @@ impl Render for NewTabPage {
             .min_h_0()
             .gap(metrics::SPACE_4)
             .child(field)
+            .children(workspaces)
             .children(header)
             .child(list);
         v_flex()

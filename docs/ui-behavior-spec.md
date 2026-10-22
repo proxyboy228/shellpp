@@ -30,8 +30,8 @@
   nothing. The sidebar sections and the SFTP tab keep their placeholders.
   Stage 2b turns on the splits, the terminal sidebar, the new tab page with its "+"
   button, Ctrl+K search, several windows and the Known Hosts screen (D31). Items of later
-  stages inside them follow the D30 rule and are shown disabled: Create a workspace (6, stage 9) and the "Save" button of the history hint
-  (4.2, stage 5). The Snippets tab of the terminal sidebar shows an empty state until
+  stages inside them follow the D30 rule and are shown disabled: the "Save" button of the
+  history hint (4.2, stage 5); Broadcast input and Create a workspace work since run 4 (D81). The Snippets tab of the terminal sidebar shows an empty state until
   stage 5. Start multiplayer (4.4) and Autocomplete (4.2) are not shown at all, as the
   owner asked. [decision]
 - The interface is in English. Interface strings in this document define the meaning; the final

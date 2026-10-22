@@ -86,7 +86,11 @@ impl Picker {
                 ),
                 NewTabEvent::Dismissed => Choice::Dismiss,
                 // The pane picker lists no open tabs and has no Restore.
-                NewTabEvent::ActivateTab { .. } | NewTabEvent::Restore => return,
+                NewTabEvent::ActivateTab { .. }
+                | NewTabEvent::Restore
+                | NewTabEvent::CreateWorkspace
+                | NewTabEvent::OpenWorkspace(_)
+                | NewTabEvent::RemoveWorkspace(_) => return,
             };
             on_choice(group, choice, window, cx)
         });

@@ -1257,13 +1257,28 @@ Status: run 4 decision, 2026-10-22 (plan, item 9.1 [decision of the owner]; clos
 
 **Spec impact:** none; docs/security.md (section 11.2 and the open item) and docs/data-model.md (the host's `ssh` fields) are updated.
 
-### 81. Broadcast input; workspaces wait (run 4)
+### 81. Broadcast input and workspaces (run 4)
 
 Status: run 4 decision, 2026-10-22 (plan, item 9.3; UI 4.4, 4.7; D68 item 2). Disputable: listed for the owner.
 
 **Decision:**
 
 - Broadcast input works: the tab menu item of a tab with splits turns it on ("Stop Broadcast Input" while on). Typed input (keys, pastes, IME text) of a pane also goes to the sessions of every other pane of the tab; the receiving panes have a `--warning` border. The terminal keeps weak links to the other panes' terminals, so a closed pane drops out; a tab left with one pane ends it. Replies to terminal queries, mouse reports and input the app injects (History insert, snippets) stay in their own pane. Only the active pane records command history.
-- Workspaces (UI 4.5: the record, Add to Workspace, the new tab page block, Ctrl+K, opening with the layout) and the split tab for a snippet run on two to four hosts (D68, item 2) are not started tonight: about two hours and 45 minutes with their tests and screenshots, after 9.4 and 9.5 of the owner's list. Create a workspace stays disabled (D30).
+- Workspaces, first part: the core keeps `workspace` records (0x0A01, data-model 12: a name and the tabs in the shape of Restore's, checked by the same rules; host links and local terminals only, so a quick connection is left out). "Create a workspace" on the new tab page saves the window's tabs under the name a dialog asks (disabled while no tab can be kept); a "Workspaces" block on the page lists them by name: a click opens the tabs in place of the page (hosts removed since are left out, as in Restore), × removes one.
+- Not done tonight: Add to Workspace ▸ in the host menu, workspaces in the Ctrl+K search, renaming, workspaces in Export and Import Data (their host links would need the import's id mapping), and the split tab for a snippet run on two to four hosts (D68, item 2; about 45 minutes).
 
-**Spec impact:** `docs/ui-behavior-spec.md` 0 and 4.7 (and `docs/ru`): Broadcast input is no longer disabled.
+**Spec impact:** `docs/ui-behavior-spec.md` 0 and 4.7 (and `docs/ru`): Broadcast input and Create a workspace are no longer disabled.
+
+### 82. The Windows release build, and the MSI waits for an installer tool (run 4)
+
+Status: run 4 decision, 2026-10-22 (plan, item 9.5). The installer tool is listed for the owner.
+
+**Decision:**
+
+- The release profile is built with fat LTO, one codegen unit and stripped symbols. `panic = "abort"` is not used: two startup paths catch a panic of the OS keychain library on a helper thread and go on to the unlock screen (`main.rs` `try_device_unlock`, `platform::desktop`'s probe); with abort, such a panic would end the app.
+- `shellpp.exe` carries a version resource made from the package version of `Cargo.toml` by `apps/desktop/build.rs` (`embed-resource`, MIT, already in the dependency tree through GPUI).
+- The artifact is a portable zip (`scripts/package-windows.ps1`: `shellpp.exe`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `README-portable.txt`, and a `.sha256`), built by the CI job "Windows release artifact" and kept for 14 days. No signing, no publishing.
+- The MSI is not made: the tools that build one do not fit SPEC.md's license list, even for build-only tools (BlueOak-1.0.0 and CC-BY-4.0 are the only additions there). The options, for the owner: (a) WiX Toolset (MS-RL, the common MSI builder; the MSI it produces holds no WiX code unless custom actions are used): an exception to the list for a build-only tool; (b) an NSIS installer (`.exe`, zlib license, which the list allows) instead of an MSI, without MSI's group policy and Intune deployment; (c) the portable zip only until signing exists. Recommendation: (a), because organizations deploy MSIs.
+- The three icon variants in `docs/assets/` are drafts for the owner's choice; the executable gets an icon once one is chosen.
+
+**Spec impact:** none; README gains "Installing on Windows".

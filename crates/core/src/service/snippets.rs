@@ -107,6 +107,26 @@ impl fmt::Debug for ForwardingRuleView {
     }
 }
 
+/// A workspace (UI 4.5): its name and tabs (host links and local
+/// terminals; data-model 12).
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceView {
+    pub record: RecordRef,
+    pub name: String,
+    pub tabs: Vec<crate::service::last_session::SavedTab>,
+}
+
+fn workspace_view(vault_id: Uuid, record_id: Uuid, data: &Map<String, Value>) -> WorkspaceView {
+    WorkspaceView {
+        record: RecordRef {
+            vault_id,
+            record_id,
+        },
+        name: string_member(data, "name").unwrap_or_default(),
+        tabs: crate::model::workspace::tabs(data).unwrap_or_default(),
+    }
+}
+
 fn string_member(data: &Map<String, Value>, key: &str) -> Option<String> {
     data.get(key)
         .and_then(Value::as_str)
@@ -365,6 +385,39 @@ impl Core {
             },
             name: string_member(record.data(), "name").unwrap_or_default(),
         })
+    }
+
+    /// Creates or updates a workspace (UI 4.5; data-model 12): a name and
+    /// the tabs of a window, linking saved hosts and local terminals.
+    pub fn workspace_save(&self, input: RecordInput) -> Result<WorkspaceView, CoreError> {
+        let record_id = self.save_kind(&input, RecordKind::Workspace, |_, stored| {
+            crate::model::workspace::build(&input.data, stored)
+        })?;
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        let record = session
+            .index
+            .get_kind(&record_id, RecordKind::Workspace)
+            .ok_or(CoreError::NotFound)?;
+        Ok(workspace_view(input.vault_id, record_id, record.data()))
+    }
+
+    /// Every workspace of the vault, by name.
+    pub fn workspaces_list(&self, vault_id: Uuid) -> Result<Vec<WorkspaceView>, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(vault_id))?;
+        let mut views: Vec<WorkspaceView> = session
+            .index
+            .of_kind(RecordKind::Workspace)
+            .map(|record| workspace_view(vault_id, record.record_id, record.data()))
+            .collect();
+        views.sort_by(|a, b| {
+            fold(&a.name)
+                .cmp(&fold(&b.name))
+                .then_with(|| a.record.record_id.cmp(&b.record.record_id))
+        });
+        Ok(views)
     }
 
     /// Every snippet package of the vault, by name.

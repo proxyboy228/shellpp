@@ -36,6 +36,7 @@ pub mod time;
 pub mod tree;
 pub mod types;
 pub mod wipe;
+pub mod workspace;
 
 pub use hlc::{Hlc, HlcClock};
 pub use payload::Payload;

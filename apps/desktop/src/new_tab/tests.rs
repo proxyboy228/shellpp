@@ -282,7 +282,8 @@ fn hosts() -> Vec<Value> {
 /// The page opens with the focus in the search field and lists Recent
 /// connections from the connection log: newest first, one row per target,
 /// updated when a connection is logged. Restore is disabled without a
-/// snapshot of the previous launch; "Create a workspace" stays disabled.
+/// snapshot of the previous launch; "Create a workspace" is disabled while
+/// the window has no tab a workspace can keep.
 #[gpui_kit::test]
 fn page_opens_focused_with_recent_connections(cx: &mut TestAppContext) {
     let (ui, ids) = Ui::open(cx, &hosts());
@@ -330,7 +331,7 @@ fn page_opens_focused_with_recent_connections(cx: &mut TestAppContext) {
     page.update(cx, |page, cx| page.set_restore_available(true, cx));
     ui.frame(cx, |window, cx| window.click("new-tab-restore", cx));
     assert_eq!(ui.take_events(), [NewTabEvent::Restore]);
-    // Workspaces arrive in stage 9.
+    // No tab to keep: "Create a workspace" does nothing.
     ui.frame(cx, |window, cx| window.click("new-tab-workspace", cx));
     assert!(ui.take_events().is_empty());
 

@@ -34,6 +34,7 @@ mod overlay;
 mod page;
 mod picker;
 pub mod strings;
+pub mod workspace_dialog;
 
 #[cfg(test)]
 mod tests;
@@ -103,6 +104,12 @@ pub enum NewTabEvent {
     },
     /// Restore the windows, tabs and splits of the previous launch.
     Restore,
+    /// Save this window's tabs as a workspace (UI 4.5, 6).
+    CreateWorkspace,
+    /// Open the tabs of a workspace (its record id).
+    OpenWorkspace(Uuid),
+    /// Remove a workspace (its record id).
+    RemoveWorkspace(Uuid),
     /// Esc or a click outside (the overlay; the focus is back where it
     /// was), or Esc in a new pane's picker (the pane closes).
     Dismissed,
