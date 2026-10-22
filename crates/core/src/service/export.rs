@@ -112,7 +112,8 @@ const MAX_UNKNOWN_KEY_BYTES: usize = 256 * 1024;
 /// somewhere (the update manifest) or guards the user (auto-lock, the
 /// paste, delete and name-conflict questions, what is recorded or logged)
 /// never comes from a file: a shared "host list" could otherwise run its
-/// script on every server the user opens (security.md, TB7).
+/// script on every server the user opens (security.md, TB7). Nor does one
+/// that belongs to the device it was set on (the last serial port, D95).
 pub fn imported_setting(key: &str) -> bool {
     const TERMINAL_AND_SFTP: [&str; 17] = [
         "terminal.autocomplete",

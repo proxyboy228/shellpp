@@ -1,21 +1,27 @@
 //! The run 6 states of the screenshot run (plan, sections 5 and 6): the new
-//! tab page with a workspace that links a host that is gone (D94).
+//! tab page with a workspace that links a host that is gone (D94), and the
+//! Serial dialog with a port name typed that is not among the ports of the
+//! run (D95).
 //!
-//! The state saves a workspace of its own, `Ops (lab)`, linking two demo
-//! hosts and one host that does not exist, named "old-db (lab)" as if it had
-//! been deleted after the save; the reset removes it
-//! ([`remove_workspace`]), so the other states keep the demo as it is.
+//! The workspace state saves a workspace of its own, `Ops (lab)`, linking
+//! two demo hosts and one host that does not exist, named "old-db (lab)" as
+//! if it had been deleted after the save; the reset removes it
+//! ([`remove_workspace`]) and forgets the last serial Connect
+//! ([`forget_serial`]), so the other states keep the demo as it is.
 
 use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, Entity};
 use gpui_kit::test::TestWindowExt as _;
 use serde_json::json;
 
-use super::{ScreenshotError, ShotState, click, settle, shell_of};
+use super::{ScreenshotError, ShotState, click, press, settle, shell_of, type_into};
 use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 1] = [ShotState::NewTabWorkspacesMissing];
+pub const STATES: [ShotState; 2] = [
+    ShotState::NewTabWorkspacesMissing,
+    ShotState::SerialDialogManualPort,
+];
 
 /// The name of the workspace of these states.
 const WORKSPACE_NAME: &str = "Ops (lab)";
@@ -23,6 +29,9 @@ const WORKSPACE_NAME: &str = "Ops (lab)";
 const MISSING_HOST: &str = "old-db (lab)";
 /// A host id no record has.
 const MISSING_ID: &str = "0199f6a1-0000-7000-8000-00000000dead";
+/// A port name typed in the Serial dialog; the run's ports are COM3 and
+/// COM4.
+const TYPED_PORT: &str = "COM7";
 
 fn failed(shot: ShotState, reason: &str) -> ScreenshotError {
     ScreenshotError::state(shot, reason)
@@ -83,6 +92,28 @@ pub fn remove_workspace(state: &Entity<AppState>, cx: &mut gpui::App) {
     }
 }
 
+/// Forgets the last serial Connect (the reset of the demo window calls it):
+/// the Serial dialog states start from the first port of the run.
+pub fn forget_serial(state: &Entity<AppState>, cx: &mut gpui::App) {
+    let Some(core) = state.read(cx).core().cloned() else {
+        return;
+    };
+    let reset = [
+        "serial.port",
+        "serial.baud",
+        "serial.data_bits",
+        "serial.parity",
+        "serial.stop_bits",
+        "serial.flow",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let _ = core.settings_set(shellpp_core::service::dto::SettingsSetInput {
+        values: Default::default(),
+        reset,
+    });
+}
+
 /// From the reset demo window: the state's own steps.
 pub async fn reach(
     cx: &mut AsyncApp,
@@ -100,6 +131,13 @@ pub async fn reach(
             click(cx, handle, "tab-new")?;
             settle(cx, handle).await
         }
+        ShotState::SerialDialogManualPort => {
+            press(cx, handle, "ctrl-alt-s")?;
+            settle(cx, handle).await?;
+            settle(cx, handle).await?;
+            type_into(cx, handle, "serial-port", TYPED_PORT)?;
+            settle(cx, handle).await
+        }
         _ => Err(failed(shot, "not a run 6 state")),
     }
 }
@@ -111,6 +149,23 @@ pub fn check(
     state: &Entity<AppState>,
     shot: ShotState,
 ) -> Result<(), ScreenshotError> {
+    if shot == ShotState::SerialDialogManualPort {
+        let shown = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                ["serial-dialog", "serial-port-status"].iter().all(|id| {
+                    window
+                        .try_find(gpui::SharedString::from(*id))
+                        .is_some_and(|found| found.visible())
+                })
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+        return if shown {
+            Ok(())
+        } else {
+            Err(failed(shot, "no \"Not found now\" under the typed port"))
+        };
+    }
     let id = cx
         .update(|cx| {
             state

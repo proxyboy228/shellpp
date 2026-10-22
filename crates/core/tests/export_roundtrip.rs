@@ -512,6 +512,38 @@ fn settings_that_run_or_open_something_never_come_from_a_file() {
     assert_eq!(settings["terminal.copy_on_select"], true);
 }
 
+/// D95: the last serial settings name a port of the device they were set
+/// on; another device's file never changes them.
+#[test]
+fn the_last_serial_port_stays_on_its_device() {
+    let source = populated();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let mut document: Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    let theirs = [
+        ("serial.port", json!("COM42")),
+        ("serial.baud", json!(115_200)),
+        ("serial.data_bits", json!("7")),
+        ("serial.parity", json!("even")),
+        ("serial.stop_bits", json!("2")),
+        ("serial.flow", json!("hardware")),
+    ];
+    for (key, value) in &theirs {
+        document["settings"][*key] = value.clone();
+    }
+    let target = first_run();
+    let defaults = content(&target.core).1;
+    let summary = import(
+        &target.core,
+        &SecretString::from(document.to_string()),
+        None,
+    );
+    assert_eq!(summary.settings_left_out, theirs.len());
+    let settings = content(&target.core).1;
+    for (key, _) in &theirs {
+        assert_eq!(settings[*key], defaults[*key], "{key} stays as it was");
+    }
+}
+
 #[test]
 fn wrong_passwords_and_hostile_files_are_refused() {
     let source = populated();

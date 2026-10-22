@@ -1381,7 +1381,7 @@ Status: run 5 decision, 2026-10-22 (plan, section 9.2; UI 1.4 item 6, 2.2 "Seria
 - A port that does not open fails with the reason: not found, in use or access denied (Windows reports both the same way: a listed port that does not open is "in use"), settings refused, or any other failure. An unplugged device drops the tab; Reconnect opens the port again with the same settings.
 - A port opens once: Duplicate and Duplicate in a new window are disabled on a serial tab; a split still works (the new pane chooses a host). Serial panes are never saved (data-model 12): snapshots for Restore and workspaces leave them out. The dialog offers the settings of the last Connect again during the app run.
 - The ports and the connection live in `shellpp-term-local` (SPEC.md, crates): `serialport` 4.10 (MPL-2.0) without its default `libudev` feature, so that Linux builds need no system library (ports are found through sysfs). One thread owns the port (one handle: Windows serializes the I/O of a synchronous handle, and a duplicated handle would be inherited by programs the app starts and keep the port busy): it writes the queued input in 64-byte chunks for at most 100 ms, then reads with a 20 ms timeout. It looks at the close flag between chunks and reads, and ends when the session is closed or dropped, so a closed tab lets go of the port at once, also in the middle of a long paste or while the port was still opening. Cancel while the port opens fails the tab as cancelled; Reconnect then opens it again. Tests use a fake port behind the `SerialBackend` trait; no hardware is needed.
-- Not in this run: saved serial profiles, a typed port name, local echo, line endings other than CR, break signals and the charset of a serial tab.
+- Not in this run: saved serial profiles, a typed port name, local echo, line endings other than CR, break signals and the charset of a serial tab. (Run 6, D95: the last settings are kept between runs and a port name can be typed; profiles stay out, D92.)
 
 **Spec impact:** `docs/ui-behavior-spec.md` 1.4 item 6, 2.2 "Serial" and 4.4 (and `docs/ru`).
 
@@ -1506,3 +1506,14 @@ Status: run 6 decision, 2026-10-22 (plan, section 5; D92, item 1).
 - The core lists each workspace with its missing hosts (`workspace_summaries`); the app reloads it with the records, so the mark follows deletions, Undo and imports at once.
 
 **Spec impact:** `docs/ui-behavior-spec.md` 4.5 (and `docs/ru`), `docs/data-model.md` 12.
+
+### 95. The Serial dialog keeps its settings and takes a typed port (run 6)
+
+Status: run 6 decision, 2026-10-22 (plan, section 6; D92, item 5). Amends D88 on the settings of the last Connect and on ports the system does not list.
+
+**Decision:**
+
+- The settings of the last Connect (port, baud rate, data bits, parity, stop bits, flow control) are settings of this device: `serial.port`, `serial.baud`, `serial.data_bits`, `serial.parity`, `serial.stop_bits` and `serial.flow` (data-model 16.1), written at Connect and offered by the dialog of every window, also after a restart. A port name belongs to one device: Import Data never applies them (like the settings of D41 that run or point somewhere). No serial profiles (D92).
+- The port is a text field with the list of ports found beside it. A name typed by hand (`COM7`, `/dev/ttyUSB3`, `\\.\COM12`) opens like a listed one; the spaces around it are dropped; an empty field disables Connect. An empty field takes the first port found; a name in it stays when the ports are listed again, also one the system does not list, which is marked "Not found now" in the warning color (a saved port of an unplugged adapter is not replaced by another port). Open errors stay those of D88.
+
+**Spec impact:** `docs/ui-behavior-spec.md` 2.2 "Serial" (and `docs/ru`), `docs/data-model.md` 16.1.

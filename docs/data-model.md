@@ -974,6 +974,12 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `shortcuts.overrides` | object: action id → shortcut string or null (unassigned) | `{}` | 12.5 | |
 | `updates.auto_check` | bool | `false` | 12.7 | D7 |
 | `updates.manifest_url` | string or null | null (the default URL, [architecture.md](architecture.md)) | 12.7 | D7 |
+| `serial.port` | string(256 bytes) or null | null (no Connect yet) | 2.2 Serial | D95; a port name of this device, never imported |
+| `serial.baud` | int 50–4000000 | 9600 | 2.2 Serial | D95 |
+| `serial.data_bits` | enum `5`, `6`, `7`, `8` | `8` | 2.2 Serial | D95 |
+| `serial.parity` | enum `none`, `odd`, `even` | `none` | 2.2 Serial | D95 |
+| `serial.stop_bits` | enum `1`, `2` | `1` | 2.2 Serial | D95 |
+| `serial.flow` | enum `none`, `software`, `hardware` | `none` | 2.2 Serial | D95 |
 | `view.<screen>.layout` | enum `grid`, `list` | `grid` | 2.2, 7.1, 8.1, 9.1, 10.1 | |
 | `view.<screen>.sort` | enum `manual`, `name`, `created`, `modified` | `manual` on Hosts, else `name` | 2.2, 7.1 | D23 |
 | `view.details_panel_width` | int 320–560 | 380 | 1.3 | design-system §6 |

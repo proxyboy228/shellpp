@@ -168,6 +168,26 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     );
     add("shortcuts.overrides", Kind::ShortcutOverrides, json!({}));
     add("updates.auto_check", Kind::Bool, json!(false));
+    // The last Connect of New Serial Connection (UI 2.2, D95): a port name
+    // belongs to this device, so these are never imported.
+    add("serial.port", Kind::NullableText(256), Value::Null);
+    add("serial.baud", Kind::Int(50, 4_000_000), json!(9600));
+    add(
+        "serial.data_bits",
+        Kind::Enum(&["5", "6", "7", "8"]),
+        json!("8"),
+    );
+    add(
+        "serial.parity",
+        Kind::Enum(&["none", "odd", "even"]),
+        json!("none"),
+    );
+    add("serial.stop_bits", Kind::Enum(&["1", "2"]), json!("1"));
+    add(
+        "serial.flow",
+        Kind::Enum(&["none", "software", "hardware"]),
+        json!("none"),
+    );
     add("updates.manifest_url", Kind::NullableHttpsUrl, Value::Null);
     for screen in VIEW_SCREENS {
         add(
@@ -458,6 +478,10 @@ mod tests {
             json!({"builtin": "graphite"})
         );
         assert_eq!(values["terminal.local_shell"], Value::Null);
+        assert_eq!(values["serial.port"], Value::Null);
+        assert_eq!(values["serial.baud"], json!(9600));
+        assert_eq!(values["serial.data_bits"], json!("8"));
+        assert_eq!(values["serial.flow"], json!("none"));
         assert_eq!(
             Settings::new(OsKind::Macos, &[]).get("shortcuts.preset"),
             Some(json!("mac"))

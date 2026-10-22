@@ -464,8 +464,6 @@ pub struct Shell {
     /// The tabs of Broadcast input (UI 4.4, D86): what is typed in a
     /// member pane of one goes to the member panes of all.
     broadcast_tabs: Vec<SessionId>,
-    /// The settings of the last serial Connect (D88; this run only).
-    last_serial: Option<shellpp_term_local::serial::SerialConfig>,
     /// The Ctrl+K search over this window (UI 6), while open.
     search: Option<(Entity<SearchOverlay>, Subscription)>,
     /// Give the keyboard focus back to the shell at the next render (the
@@ -580,7 +578,6 @@ impl Shell {
             terminal_sidebar,
             renaming: None,
             broadcast_tabs: Vec::new(),
-            last_serial: None,
             search: None,
             focus_shell: false,
             focus_page: false,
@@ -1286,21 +1283,30 @@ impl Shell {
         );
     }
 
-    /// New Serial Connection (UI 1.4, 2.2; D88): the dialog, then the port
-    /// in a new tab.
+    /// New Serial Connection (UI 1.4, 2.2; D88, D95): the dialog with the
+    /// settings of the last Connect, then the port in a new tab; the
+    /// settings are kept on this device for the next time.
     pub fn open_serial_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let core = self.state.read(cx).core().cloned();
+        let last = core
+            .as_ref()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| serial_dialog::saved(&values));
         let shell = cx.entity().downgrade();
-        serial_dialog::open(
-            self.last_serial.clone(),
-            window,
-            cx,
-            move |config, _, cx| {
-                let _ = shell.update(cx, |shell, cx| {
-                    shell.last_serial = Some(config.clone());
-                    shell.open_tab(TabSeed::Target(PaneTarget::Serial(config)), None, None, cx);
-                });
-            },
-        );
+        serial_dialog::open(last, window, cx, move |config, _, cx| {
+            if let Some(core) = &core
+                && let Err(error) =
+                    core.settings_set(shellpp_core::service::dto::SettingsSetInput {
+                        values: serial_dialog::settings_of(&config),
+                        reset: Vec::new(),
+                    })
+            {
+                tracing::warn!(code = error.code(), "the serial settings were not kept");
+            }
+            let _ = shell.update(cx, |shell, cx| {
+                shell.open_tab(TabSeed::Target(PaneTarget::Serial(config)), None, None, cx);
+            });
+        });
     }
 
     fn open_broadcast_dialog(

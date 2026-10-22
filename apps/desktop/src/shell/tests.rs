@@ -27,6 +27,11 @@ struct Ui {
 
 impl Ui {
     fn open(cx: &mut TestAppContext) -> Self {
+        Self::open_on(TestProfile::new().into_unlocked(), cx)
+    }
+
+    /// The window on `opened` (a profile opened again: a restart).
+    fn open_on(opened: crate::state::OpenedCore, cx: &mut TestAppContext) -> Self {
         // Session tabs have terminals that parse on their own threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
@@ -34,7 +39,7 @@ impl Ui {
             app::root::bind_keys(cx);
             crate::terminal::init(cx);
         });
-        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        let state = cx.new(|cx| AppState::new(opened, cx));
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 Default::default(),
@@ -88,6 +93,21 @@ impl Ui {
         let key = key.to_owned();
         cx.update_window(self.handle, move |_, window, cx| window.press(&key, cx))
             .unwrap();
+        self.frame(cx);
+    }
+
+    /// Replaces the text of the input `id` (click, select all, delete, type).
+    fn type_into(&self, id: &str, text: &str, cx: &mut TestAppContext) {
+        self.click(id, cx);
+        let text = text.to_owned();
+        cx.update_window(self.handle, move |_, window, cx| {
+            window.press("secondary-a", cx);
+            window.press("backspace", cx);
+            if !text.is_empty() {
+                window.input(&text, cx);
+            }
+        })
+        .unwrap();
         self.frame(cx);
     }
 
@@ -381,7 +401,7 @@ fn session_tabs_open_and_close(cx: &mut TestAppContext) {
 /// The Serial dialog (D88): the ports in order with the first chosen, the
 /// baud rate from its list and the line settings as segments; Connect
 /// opens the port with them in a tab titled after the port, which is not
-/// duplicated and not saved, and the dialog offers them again.
+/// duplicated and not saved for Restore, and the dialog offers them again.
 #[gpui_kit::test]
 fn the_serial_dialog_opens_the_port_with_its_settings(cx: &mut TestAppContext) {
     use shellpp_term_local::serial::{FlowControl, Parity, SerialConfig, StopBits};
@@ -390,7 +410,8 @@ fn the_serial_dialog_opens_the_port_with_its_settings(cx: &mut TestAppContext) {
     install_ports(cx);
     ui.press("ctrl-alt-s", cx);
     // COM3 before COM10, the first one chosen.
-    ui.click("serial-port", cx);
+    assert!(!ui.visible("serial-port-status", cx), "a listed port");
+    ui.click("serial-port-choose", cx);
     assert!(ui.visible("serial-port-COM3", cx) && ui.visible("serial-port-COM10", cx));
     let com3 = ui.bounds("serial-port-COM3", cx).expect("COM3");
     let com10 = ui.bounds("serial-port-COM10", cx).expect("COM10");
@@ -443,6 +464,73 @@ fn the_serial_dialog_opens_the_port_with_its_settings(cx: &mut TestAppContext) {
     });
     assert_eq!(target, Some(PaneTarget::Serial(expected)));
     ui.finish(cx);
+}
+
+/// The serial target of the last session tab.
+fn last_serial_target(ui: &Ui, cx: &mut TestAppContext) -> Option<PaneTarget> {
+    let shell = ui.shell(cx);
+    cx.update(|cx| {
+        let shell = shell.read(cx);
+        let tab = shell.sessions().tabs().last()?.clone();
+        shell.group(tab.id())?.read(cx).active_target(cx)
+    })
+}
+
+/// D95: a port name typed by hand opens like a listed one, marked "Not
+/// found now" when the system does not list it; an empty field leaves
+/// Connect disabled. The settings of the last Connect outlive a restart,
+/// and a saved port that is not listed stays in the field, not replaced by
+/// the first port found.
+#[gpui_kit::test]
+fn the_serial_dialog_takes_a_typed_port_and_keeps_it_after_a_restart(cx: &mut TestAppContext) {
+    use shellpp_term_local::serial::{Parity, SerialConfig};
+    let mut profile = TestProfile::new();
+    let ui = Ui::open_on(profile.open_unlocked(), cx);
+    install_ports(cx);
+    ui.press("ctrl-alt-s", cx);
+    ui.type_into("serial-port", "", cx);
+    ui.click("serial-connect", cx);
+    assert!(ui.visible("serial-dialog", cx), "no port, no Connect");
+    ui.type_into("serial-port", r"  \\.\COM12 ", cx);
+    assert!(ui.visible("serial-port-status", cx), "not found now");
+    ui.click("serial-parity-odd", cx);
+    ui.click("serial-baud", cx);
+    ui.click("serial-baud-19200", cx);
+    ui.click("serial-connect", cx);
+    assert!(!ui.visible("serial-dialog", cx));
+    let mut expected = SerialConfig::new(r"\\.\COM12");
+    expected.baud = 19_200;
+    expected.parity = Parity::Odd;
+    assert_eq!(
+        last_serial_target(&ui, cx),
+        Some(PaneTarget::Serial(expected.clone()))
+    );
+    ui.finish(cx);
+
+    // Restart: the same profile, a new app state.
+    let ui = Ui::open_on(profile.open_unlocked(), cx);
+    install_ports(cx);
+    ui.press("ctrl-alt-s", cx);
+    assert!(ui.visible("serial-port-status", cx), "still not found now");
+    ui.click("serial-connect", cx);
+    assert_eq!(
+        last_serial_target(&ui, cx),
+        Some(PaneTarget::Serial(expected))
+    );
+    // Chosen from the list, the mark goes.
+    ui.press("ctrl-1", cx);
+    ui.press("ctrl-alt-s", cx);
+    ui.click("serial-port-choose", cx);
+    ui.click("serial-port-COM3", cx);
+    assert!(!ui.visible("serial-port-status", cx));
+    ui.click("serial-connect", cx);
+    let target = last_serial_target(&ui, cx);
+    assert!(
+        matches!(&target, Some(PaneTarget::Serial(config)) if config.port == "COM3" && config.baud == 19_200),
+        "{target:?}"
+    );
+    ui.finish(cx);
+    drop(profile);
 }
 
 /// UI 1.1 [decision]: more session tabs than fit (ten sessions and more)

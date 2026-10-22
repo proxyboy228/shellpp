@@ -272,16 +272,22 @@ On the left:
 - **Terminal**: open a local terminal in a new tab. The default shell
   is set in the settings (on Windows, PowerShell / cmd / WSL). [decision]
 - **Serial**: serial port connection, opens as a separate
-  tab in the top bar. The New Serial Connection dialog comes first (D88): [decision]
-  - Port: the serial ports of this device, sorted by name (COM9 before COM10), with the
-    USB product name when the system knows it; Refresh lists them again. No port found:
-    "No serial ports found" and Connect stays disabled;
+  tab in the top bar. The New Serial Connection dialog comes first (D88, D95): [decision]
+  - Port: a text field with the port name (`COM7`, `/dev/ttyUSB3`, `\\.\COM12`) and a
+    list of the serial ports of this device beside it, sorted by name (COM9 before
+    COM10), with the USB product name when the system knows it; Refresh lists them again.
+    An empty field takes the first port found. A name that is not among the ports found
+    (typed by hand, or saved from the last Connect while the device is unplugged) stays
+    in the field, marked "Not found now" in the warning color; Connect still opens it and
+    fails with the reason if the port is not there. No port found: "No serial ports
+    found. Type the port name."; Connect is disabled while the field is empty;
   - Baud rate: a list from 300 to 921600, 9600 by default;
   - Data bits 5–8 (8), Parity None / Odd / Even (None), Stop bits 1 / 2 (1), Flow control
     None / XON/XOFF / RTS/CTS (None), as segments;
   - Connect (Enter) opens the port in a new session tab titled after the port, with the
     terminal of SSH; Cancel (Esc) closes the dialog. The dialog offers the settings of
-    the last Connect again (this app run only).
+    the last Connect again, also after a restart: they are settings of this device
+    (`serial.*`, data-model 16.1), which an import never changes.
   The tab: what is typed goes to the port as it is, the port's output to the terminal
   (UTF-8). A port that does not open fails with the reason (not found, in use or access
   denied, settings refused); a device that is unplugged drops the tab ("The serial device

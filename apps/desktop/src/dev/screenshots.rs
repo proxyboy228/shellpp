@@ -319,6 +319,9 @@ pub enum ShotState {
     // Run 6, plan 5 (D94): `run6_shot`.
     /// The new tab page with a workspace that links a host that is gone.
     NewTabWorkspacesMissing,
+    // Run 6, plan 6 (D95): `run6_shot`.
+    /// The Serial dialog with a port name typed that is not found now.
+    SerialDialogManualPort,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -457,7 +460,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 92] = [
+    pub const ALL: [Self; 93] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -517,6 +520,7 @@ impl ShotState {
         Self::HostPanelTelnet,
         Self::SerialDialog,
         Self::NewTabWorkspacesMissing,
+        Self::SerialDialogManualPort,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -666,6 +670,7 @@ impl ShotState {
             Self::TelnetTab => "telnet-tab",
             Self::SerialTab => "serial-tab",
             Self::NewTabWorkspacesMissing => "new-tab-workspaces-missing",
+            Self::SerialDialogManualPort => "serial-dialog-manual-port",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1526,8 +1531,9 @@ pub async fn reset_demo(
         });
         // The Telnet host of the stage 9 states.
         stage9_shot::remove_telnet_host(state, cx);
-        // The workspace of the run 6 state.
+        // The workspace and the serial settings of the run 6 states.
         run6_shot::remove_workspace(state, cx);
+        run6_shot::forget_serial(state, cx);
     });
     // The search bar is on screen again (Vaults tab): clear it like a user.
     let has_text = cx.update(|cx| !screen.read(cx).filter().text().is_empty());
@@ -1753,7 +1759,7 @@ pub async fn reach_state(
         ShotState::HostPanelTelnet | ShotState::SerialDialog => {
             stage9_shot::reach(cx, handle, root, state, shot_state).await
         }
-        ShotState::NewTabWorkspacesMissing => {
+        ShotState::NewTabWorkspacesMissing | ShotState::SerialDialogManualPort => {
             run6_shot::reach(cx, handle, root, state, shot_state).await
         }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
@@ -1996,7 +2002,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SerialDialog
             | ShotState::TelnetTab
             | ShotState::SerialTab => Err("checked with the stage 9 screens"),
-            ShotState::NewTabWorkspacesMissing => Err("checked with the run 6 screens"),
+            ShotState::NewTabWorkspacesMissing | ShotState::SerialDialogManualPort => {
+                Err("checked with the run 6 screens")
+            }
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
