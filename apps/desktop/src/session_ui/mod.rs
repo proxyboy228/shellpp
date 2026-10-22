@@ -97,6 +97,11 @@ impl std::fmt::Debug for Launcher {
 
 impl Global for Launcher {}
 
+/// How long a split run waits for the shell's prompt before it types the
+/// script anyway, and how often it looks (D81).
+const RUN_PROMPT_WAIT: Duration = Duration::from_secs(3);
+const RUN_PROMPT_POLL: Duration = Duration::from_millis(100);
+
 /// What the tab shows before the session layer knows more.
 #[derive(Clone, PartialEq, Eq)]
 pub struct TabInfo {
@@ -228,6 +233,8 @@ pub struct SessionPane {
     /// A snippet run in a split tab (UI 9.4, D81): typed once, when the
     /// session first runs.
     run_on_connect: Option<String>,
+    /// Waits for the shell's prompt before it types that script.
+    run_task: Option<Task<()>>,
     reconnect: Option<ReconnectInfo>,
     ask: Option<Ask>,
     paste: Option<PendingPaste>,
@@ -304,6 +311,7 @@ impl SessionPane {
             startup_asked: 0,
             startup_live: None,
             run_on_connect: None,
+            run_task: None,
             window: None,
             signature_notice: None,
             reconnect: None,
@@ -541,11 +549,32 @@ impl SessionPane {
             self.connected_once = true;
             cx.emit(SessionPaneEvent::Connected);
             // A snippet run in a split tab: the script and Enter, as the
-            // terminal sidebar's Run sends them.
-            if let (Some(script), Some(terminal)) = (self.run_on_connect.take(), &self.terminal) {
-                terminal.update(cx, |terminal, cx| {
-                    terminal.insert_snippet(&script, true, cx);
-                });
+            // terminal sidebar's Run sends them, once the shell waits at its
+            // prompt (bracketed paste on), else after RUN_PROMPT_WAIT.
+            if let Some(script) = self.run_on_connect.take() {
+                self.run_task = Some(cx.spawn(async move |this, cx| {
+                    let polls = RUN_PROMPT_WAIT.as_millis() / RUN_PROMPT_POLL.as_millis();
+                    for _ in 0..polls {
+                        let ready = this
+                            .update(cx, |this, cx| {
+                                this.terminal
+                                    .as_ref()
+                                    .is_some_and(|terminal| terminal.read(cx).at_prompt())
+                            })
+                            .unwrap_or(true);
+                        if ready {
+                            break;
+                        }
+                        cx.background_executor().timer(RUN_PROMPT_POLL).await;
+                    }
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(terminal) = &this.terminal {
+                            terminal.update(cx, |terminal, cx| {
+                                terminal.insert_snippet(&script, true, cx);
+                            });
+                        }
+                    });
+                }));
             }
         }
         self.set_reconnect(reconnect, cx);

@@ -360,6 +360,12 @@ impl TerminalView {
     }
 
     /// What plain Backspace sends from now on (the host's setting, UI 3.1).
+    /// Whether the shell waits at its prompt: it turned bracketed paste on
+    /// (bash, zsh, fish do at each prompt).
+    pub fn at_prompt(&self) -> bool {
+        self.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// Broadcast input (UI 4.4): the terminals typed input also goes to;
     /// empty stops it.
     pub fn set_broadcast(&mut self, targets: Vec<WeakEntity<TerminalView>>) {

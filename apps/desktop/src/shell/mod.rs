@@ -173,7 +173,9 @@ pub fn open_split_run(
     cx: &mut App,
 ) {
     with_shell(window, cx, move |shell, _, cx| {
-        shell.open_split_run(title, &hosts, script, cx);
+        if shell.open_split_run(title, &hosts, script, cx).is_none() {
+            shell.toast(strings::SPLIT_RUN_TOO_FEW, cx);
+        }
     });
 }
 

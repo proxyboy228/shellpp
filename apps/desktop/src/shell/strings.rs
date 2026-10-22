@@ -31,3 +31,6 @@ pub fn close_window_body(sessions: usize) -> String {
 
 /// The toast when Restore found nothing it could open (the hosts are gone).
 pub const RESTORE_NOTHING: &str = "Nothing from the previous launch could be restored.";
+
+/// A split run whose hosts were removed down to fewer than two (D81).
+pub const SPLIT_RUN_TOO_FEW: &str = "A split tab needs two to four saved hosts";

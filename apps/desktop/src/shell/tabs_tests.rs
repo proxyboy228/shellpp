@@ -1425,6 +1425,11 @@ fn a_split_run_types_the_script_in_every_pane(cx: &mut TestAppContext) {
             session.set_phase(Phase::Running, None, cx)
         });
     }
+    // No prompt with bracketed paste on the fake terminal: typed after the
+    // wait.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(4));
+    cx.run_until_parked();
     for sink in &sinks {
         assert!(
             sink.0.lock().unwrap().ends_with(b"uptime\r"),
