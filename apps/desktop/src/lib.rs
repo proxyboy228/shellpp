@@ -73,6 +73,7 @@ pub mod terminal;
 pub mod terminal_sidebar;
 pub mod testing;
 pub mod theme;
+pub mod trash;
 pub mod updates;
 
 /// Environment variable that marks a test run: with `SHELLPP_TEST=1` the data

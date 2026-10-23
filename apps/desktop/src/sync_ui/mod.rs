@@ -31,8 +31,8 @@ use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::CoreError;
 use shellpp_core::service::{
-    BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
-    ServerCheck, SignInInput, SignInOutcome, SyncStatus, TrustChoice,
+    BroughtBackItem, ConflictChoice, ConflictItem, DeviceItem, DuplicateItem, ServerCheck,
+    SignInInput, SignInOutcome, SyncStatus, TrustChoice,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
 
@@ -745,8 +745,7 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
         ));
     }
     let totp = state.clone();
-    let (now, again, devices, review, trash, out, delete, repost) = (
-        state.clone(),
+    let (now, again, devices, review, out, delete, repost) = (
         state.clone(),
         state.clone(),
         state.clone(),
@@ -816,11 +815,12 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                 }),
         )
         .child(
+            // The screen of its own (UI 14), below the sidebar's separator.
             ControlButton::new("sync-trash", ControlKind::Neutral)
                 .label(strings::RECENTLY_DELETED)
                 .on_click(move |_, window, cx| {
                     window.close_dialog(cx);
-                    open_trash(trash.clone(), window, cx);
+                    crate::shell::open_section(crate::shell::Section::RecentlyDeleted, window, cx);
                 }),
         );
     block = block.child(buttons).child(widgets::divider(cx));
@@ -1190,146 +1190,6 @@ pub fn open_review(
         dialog.clone(),
         strings::REVIEW_TITLE,
         "sync-review-close",
-        window,
-        cx,
-    );
-    dialog
-}
-
-// ---------------------------------------------------------------------------
-// Recently deleted (UI 14)
-// ---------------------------------------------------------------------------
-
-pub struct TrashDialog {
-    state: Entity<AppState>,
-    pub items: Vec<DeletedItem>,
-    error: Option<&'static str>,
-}
-
-impl TrashDialog {
-    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let mut dialog = Self {
-            state,
-            items: Vec::new(),
-            error: None,
-        };
-        dialog.reload(cx);
-        dialog
-    }
-
-    fn reload(&mut self, cx: &mut Context<Self>) {
-        self.items = self
-            .state
-            .read(cx)
-            .core()
-            .and_then(|core| core.recently_deleted_list().ok())
-            .unwrap_or_default();
-        cx.notify();
-    }
-
-    fn act(&mut self, result: Result<(), CoreError>, cx: &mut Context<Self>) {
-        self.error = result.err().map(|error| error_text(&error));
-        self.reload(cx);
-        self.state.update(cx, |state, cx| {
-            state.refresh_sync_status(cx);
-            state.kick_sync(cx);
-        });
-    }
-}
-
-impl Render for TrashDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut body = v_flex()
-            .id("sync-trash")
-            .test_support()
-            .w_full()
-            .gap(metrics::SPACE_3)
-            .child(widgets::caption(strings::TRASH_HINT, cx));
-        if self.items.is_empty() {
-            body = body.child(widgets::caption(strings::TRASH_EMPTY, cx));
-        }
-        for (index, item) in self.items.clone().into_iter().enumerate() {
-            let id = item.record_id;
-            let mut detail = when(&item.deleted_at);
-            if item.from_sync {
-                detail = format!("{detail} · {}", strings::FROM_SYNC);
-            }
-            body = body.child(
-                h_flex()
-                    .id(("sync-trash-item", index))
-                    .test_support()
-                    .gap(metrics::SPACE_2)
-                    .child(row_text(item.title.clone(), Some(detail), cx))
-                    .child(
-                        ControlButton::new(("sync-restore", index), ControlKind::Neutral)
-                            .label(strings::RESTORE)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                let core = this.state.read(cx).core().cloned();
-                                if let Some(core) = core {
-                                    let result = core.recently_deleted_restore(&[id]).map(|_| ());
-                                    this.act(result, cx);
-                                }
-                            })),
-                    )
-                    .child(
-                        ControlButton::new(("sync-delete-forever", index), ControlKind::Danger)
-                            .label(strings::DELETE_FOREVER)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                let core = this.state.read(cx).core().cloned();
-                                if let Some(core) = core {
-                                    let result = core.recently_deleted_delete(&[id]);
-                                    this.act(result, cx);
-                                }
-                            })),
-                    ),
-            );
-        }
-        if !self.items.is_empty() {
-            let ids: Vec<uuid::Uuid> = self.items.iter().map(|item| item.record_id).collect();
-            let state = self.state.clone();
-            body = body.child(
-                h_flex()
-                    .gap(metrics::SPACE_2)
-                    .child(
-                        // UI 14 "Export…": the Export Data dialog for these
-                        // entries only.
-                        ControlButton::new("sync-export-trash", ControlKind::Neutral)
-                            .label(strings::EXPORT_TRASH)
-                            .on_click(move |_, window, cx| {
-                                window.close_dialog(cx);
-                                let dialog =
-                                    crate::data_transfer::open_export(state.clone(), window, cx);
-                                let ids = ids.clone();
-                                dialog.update(cx, |dialog, _| dialog.recently_deleted = ids);
-                            }),
-                    )
-                    .child(
-                        ControlButton::new("sync-empty-trash", ControlKind::Danger)
-                            .label(strings::EMPTY_TRASH)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                let core = this.state.read(cx).core().cloned();
-                                if let Some(core) = core {
-                                    let result = core.recently_deleted_empty().map(|_| ());
-                                    this.act(result, cx);
-                                }
-                            })),
-                    ),
-            );
-        }
-        body.children(error_line(self.error, cx))
-    }
-}
-
-pub fn open_trash(
-    state: Entity<AppState>,
-    window: &mut Window,
-    cx: &mut App,
-) -> Entity<TrashDialog> {
-    let dialog = cx.new(|cx| TrashDialog::new(state, cx));
-    open_simple(
-        dialog.clone(),
-        strings::TRASH_TITLE,
-        "sync-trash-close",
         window,
         cx,
     );
@@ -1797,7 +1657,6 @@ macro_rules! debug_opaque {
 debug_opaque!(
     ConnectDialog,
     ReviewDialog,
-    TrashDialog,
     DevicesDialog,
     SignOutDialog,
     PasswordDialog

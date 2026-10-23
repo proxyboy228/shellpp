@@ -365,8 +365,9 @@ pub enum ShotState {
     SyncTrust,
     /// Settings ▸ Account & Sync of a bound account.
     SyncAccount,
-    /// Recently deleted with a deleted host.
-    SyncTrash,
+    /// The Recently deleted screen (UI 14): two deleted hosts, one open in
+    /// the read-only panel.
+    RecentlyDeleted,
     /// Review with nothing to review.
     SyncReview,
     /// Export Data with the format "OpenSSH files" (D43): key files and
@@ -573,7 +574,7 @@ impl ShotState {
         Self::SyncConnect,
         Self::SyncTrust,
         Self::SyncAccount,
-        Self::SyncTrash,
+        Self::RecentlyDeleted,
         Self::SyncReview,
         Self::TerminalTofu,
         Self::TerminalLsColor,
@@ -743,7 +744,7 @@ impl ShotState {
             Self::SyncConnect => "sync-connect",
             Self::SyncTrust => "sync-trust",
             Self::SyncAccount => "sync-account",
-            Self::SyncTrash => "sync-trash",
+            Self::RecentlyDeleted => "recently-deleted",
             Self::SyncReview => "sync-review",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
@@ -1886,7 +1887,7 @@ pub async fn reach_state(
         | ShotState::SyncConnect
         | ShotState::SyncTrust
         | ShotState::SyncAccount
-        | ShotState::SyncTrash
+        | ShotState::RecentlyDeleted
         | ShotState::SyncReview => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
@@ -2138,7 +2139,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SyncConnect
             | ShotState::SyncTrust
             | ShotState::SyncAccount
-            | ShotState::SyncTrash
+            | ShotState::RecentlyDeleted
             | ShotState::SyncReview => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu

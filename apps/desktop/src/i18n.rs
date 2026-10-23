@@ -146,6 +146,7 @@ pub mod nav {
     pub const SNIPPETS: &str = "Snippets";
     pub const KNOWN_HOSTS: &str = "Known Hosts";
     pub const LOGS: &str = "Logs";
+    pub const RECENTLY_DELETED: &str = "Recently deleted";
 }
 
 /// Hosts screen (UI 2): `crate::hosts::strings`.

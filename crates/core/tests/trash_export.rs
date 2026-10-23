@@ -40,3 +40,79 @@ fn recently_deleted_entries_export_alone() {
     assert_eq!(export.counts.get("host"), Some(&1));
     let _ = kept;
 }
+
+/// UI 14 in local mode: the entry carries its vault and its last live data
+/// with secrets masked, for the read-only details panel; entries older than
+/// 90 days leave the list without a sync cycle (no server bound here).
+#[test]
+fn recently_deleted_lists_masked_data_and_purges_after_90_days() {
+    let unlocked = first_run();
+    let secret = format!("pw-{}", common::random_hex());
+    let old = unlocked.host_with_password(json!({"address": "old.example.com"}), &secret);
+    let delete = |id| {
+        unlocked
+            .core
+            .record_delete(RecordsRef {
+                vault_id: unlocked.vault_id,
+                record_ids: vec![id],
+            })
+            .expect("deleted")
+    };
+    delete(old.record_id);
+    unlocked
+        .env
+        .mem
+        .clock
+        .advance(std::time::Duration::from_secs(2 * 86_400));
+    let recent = unlocked.host(json!({"address": "recent.example.com"}));
+    delete(recent.record_id);
+
+    let list = unlocked.core.recently_deleted_list().expect("trash");
+    let ids: Vec<_> = list.iter().map(|item| item.record_id).collect();
+    assert_eq!(ids, [recent.record_id, old.record_id], "newest first");
+    let item = &list[1];
+    assert_eq!(item.vault_id, unlocked.vault_id);
+    assert!(!item.from_sync);
+    let data = item.data.as_ref().expect("data");
+    assert_eq!(data["address"], "old.example.com");
+    assert_eq!(data["ssh"]["password"], "••••••", "the password is masked");
+    let listed = serde_json::to_string(&list).expect("json");
+    assert!(
+        !listed.contains(&secret),
+        "the secret never leaves the core"
+    );
+
+    // 89 days after the first deletion both stay; past 90 the old one is
+    // purged (from the store too: it does not come back), the recent one
+    // stays.
+    unlocked
+        .env
+        .mem
+        .clock
+        .advance(std::time::Duration::from_secs(87 * 86_400));
+    assert_eq!(
+        unlocked.core.recently_deleted_list().expect("trash").len(),
+        2
+    );
+    unlocked
+        .env
+        .mem
+        .clock
+        .advance(std::time::Duration::from_secs(2 * 86_400));
+    let left: Vec<_> = unlocked
+        .core
+        .recently_deleted_list()
+        .expect("trash")
+        .into_iter()
+        .map(|item| item.record_id)
+        .collect();
+    assert_eq!(left, [recent.record_id]);
+    assert!(
+        unlocked
+            .core
+            .recently_deleted_restore(&[old.record_id])
+            .expect("restore")
+            .is_empty(),
+        "the purged entry is gone"
+    );
+}

@@ -122,7 +122,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "sync-connect",
         "sync-trust",
         "sync-account",
-        "sync-trash",
+        "recently-deleted",
         "sync-review",
         "sidebar-snippets",
         "sidebar-history",

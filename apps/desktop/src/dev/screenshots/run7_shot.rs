@@ -2,8 +2,8 @@
 //! top bar with the update button of an update found (D100, item 4), and the
 //! sync interface of stage 7: the connect wizard, the certificate trust
 //! dialog (a made-up certificate: no server is asked), Settings ▸ Account &
-//! Sync of a bound account (the status set by hand), Recently deleted after
-//! a host of the demo was deleted, and Review.
+//! Sync of a bound account (the status set by hand), the Recently deleted
+//! screen (UI 14) after two hosts of the demo were deleted, and Review.
 //!
 //! The update state sets the update found of the run by hand (no update
 //! source is asked); the reset clears it ([`reset`]), so the other states
@@ -22,7 +22,7 @@ pub const STATES: [ShotState; 6] = [
     ShotState::SyncConnect,
     ShotState::SyncTrust,
     ShotState::SyncAccount,
-    ShotState::SyncTrash,
+    ShotState::RecentlyDeleted,
     ShotState::SyncReview,
 ];
 
@@ -114,17 +114,16 @@ pub async fn reach(
             .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
         }
-        ShotState::SyncTrash => {
+        ShotState::RecentlyDeleted => {
+            // Two hosts of the demo deleted, the screen opened from the
+            // sidebar, the newest one selected: its read-only panel.
             let state = _state.clone();
-            cx.update_window(handle, move |_, window, cx| {
-                let core = state.read(cx).core().cloned();
-                if let Some(core) = core
-                    && let Some(vault) = core
-                        .vaults()
-                        .ok()
-                        .and_then(|v| v.first().map(|v| v.vault_id))
-                    && let Ok(hosts) =
-                        core.records_query(shellpp_core::service::dto::RecordsQuery {
+            let deleted = cx
+                .update_window(handle, move |_, window, cx| {
+                    let core = state.read(cx).core().cloned()?;
+                    let vault = core.vaults().ok()?.first()?.vault_id;
+                    let hosts = core
+                        .records_query(shellpp_core::service::dto::RecordsQuery {
                             vault_id: None,
                             types: vec![shellpp_core::service::dto::RecordType::Host],
                             scope: shellpp_core::service::dto::QueryScope::All,
@@ -132,14 +131,25 @@ pub async fn reach(
                             tags: Vec::new(),
                             sort: shellpp_core::service::dto::SortMode::Name,
                         })
-                    && let Some(host) = hosts.first()
-                {
-                    let _ = core.record_delete(shellpp_core::service::dto::RecordsRef {
-                        vault_id: vault,
-                        record_ids: vec![host.record_id()],
-                    });
-                }
-                crate::sync_ui::open_trash(state, window, cx);
+                        .ok()?;
+                    let mut last = None;
+                    for host in hosts.iter().take(2) {
+                        core.record_delete(shellpp_core::service::dto::RecordsRef {
+                            vault_id: vault,
+                            record_ids: vec![host.record_id()],
+                        })
+                        .ok()?;
+                        last = Some(host.record_id());
+                    }
+                    crate::shell::open_section(crate::shell::Section::RecentlyDeleted, window, cx);
+                    last
+                })
+                .map_err(|_| ScreenshotError::WindowClosed)?
+                .ok_or_else(|| failed(shot, "no demo host to delete"))?;
+            settle(cx, handle).await?;
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.click(crate::trash::row_id(deleted), cx);
             })
             .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
@@ -177,12 +187,12 @@ pub fn check(
         ShotState::SyncConnect if shown(cx, "sync-server")? => Ok(()),
         ShotState::SyncTrust if shown(cx, "sync-fingerprint")? => Ok(()),
         ShotState::SyncAccount if shown(cx, "sync-account-email")? => Ok(()),
-        ShotState::SyncTrash if shown(cx, "sync-trash")? => Ok(()),
+        ShotState::RecentlyDeleted if shown(cx, "trash-panel")? => Ok(()),
         ShotState::SyncReview if shown(cx, "sync-review")? => Ok(()),
         ShotState::SyncConnect
         | ShotState::SyncTrust
         | ShotState::SyncAccount
-        | ShotState::SyncTrash
+        | ShotState::RecentlyDeleted
         | ShotState::SyncReview => Err(failed(shot, "the sync state is not shown")),
         _ => Err(failed(shot, "not a run 7 state")),
     }

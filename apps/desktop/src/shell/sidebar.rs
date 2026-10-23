@@ -5,8 +5,8 @@
 //! (12 px inside, a 16 px icon, 10 px to the name), radius 6: `--text-secondary`, hover
 //! `--bg-raised-hover`, pressed `--bg-pressed`; the active one has the
 //! `--accent-subtle` background and `--text-primary`. Keyboard focus shows
-//! the design-system focus ring. Sections without a screen yet (all but
-//! Hosts and Known Hosts) open the "In development" placeholder.
+//! the design-system focus ring. Below the six sections, after a
+//! separator, **Recently deleted** with a trash icon (UI 1.2, 14; D93).
 //!
 //! Narrow windows (owner's step 0.5): when the main area next to the full
 //! sidebar would be narrower than 600 px (the details panel open in a
@@ -64,10 +64,12 @@ pub enum Section {
     Snippets,
     KnownHosts,
     Logs,
+    /// Below the separator (UI 1.2, 14).
+    RecentlyDeleted,
 }
 
 impl Section {
-    /// All sections in sidebar order.
+    /// The six sections above the separator, in sidebar order.
     pub const ALL: [Section; 6] = [
         Section::Hosts,
         Section::Keychain,
@@ -75,6 +77,17 @@ impl Section {
         Section::Snippets,
         Section::KnownHosts,
         Section::Logs,
+    ];
+
+    /// Every item, Recently deleted last (the focus handles' order).
+    pub const ITEMS: [Section; 7] = [
+        Section::Hosts,
+        Section::Keychain,
+        Section::PortForwarding,
+        Section::Snippets,
+        Section::KnownHosts,
+        Section::Logs,
+        Section::RecentlyDeleted,
     ];
 
     pub fn label(self) -> &'static str {
@@ -85,11 +98,13 @@ impl Section {
             Section::Snippets => i18n::nav::SNIPPETS,
             Section::KnownHosts => i18n::nav::KNOWN_HOSTS,
             Section::Logs => i18n::nav::LOGS,
+            Section::RecentlyDeleted => i18n::nav::RECENTLY_DELETED,
         }
     }
 
     /// Icons by meaning (Lucide): server, key, arrow-left-right, braces,
-    /// fingerprint (`fingerprint-pattern` in current Lucide), scroll-text.
+    /// fingerprint (`fingerprint-pattern` in current Lucide), scroll-text,
+    /// trash.
     pub fn icon(self) -> Lucide {
         match self {
             Section::Hosts => Lucide::Server,
@@ -98,6 +113,7 @@ impl Section {
             Section::Snippets => Lucide::Braces,
             Section::KnownHosts => Lucide::FingerprintPattern,
             Section::Logs => Lucide::ScrollText,
+            Section::RecentlyDeleted => Lucide::Trash,
         }
     }
 
@@ -110,6 +126,7 @@ impl Section {
             Section::Snippets => "nav-snippets",
             Section::KnownHosts => "nav-known-hosts",
             Section::Logs => "nav-logs",
+            Section::RecentlyDeleted => "nav-recently-deleted",
         };
         id.into()
     }
@@ -128,12 +145,12 @@ impl Section {
 }
 
 /// The sidebar with `active` highlighted; `focus` holds the focus handles of
-/// the items in [`Section::ALL`] order; `on_select` runs on a click (or
+/// the items in [`Section::ITEMS`] order; `on_select` runs on a click (or
 /// Enter / Space on a focused item). `collapsed`: the strip of icons, the
 /// names in tooltips ([`is_collapsed`]).
 pub fn sidebar(
     active: Section,
-    focus: &[FocusHandle; 6],
+    focus: &[FocusHandle; 7],
     collapsed: bool,
     on_select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     cx: &App,
@@ -143,7 +160,7 @@ pub fn sidebar(
     let surface = theme.sidebar;
     let hover = theme.secondary_hover;
     let pressed = theme.secondary_active;
-    let items = Section::ALL.into_iter().zip(focus).map(|(section, focus)| {
+    let item = |section: Section, focus: &FocusHandle| {
         let selected = section == active;
         let on_select = on_select.clone();
         h_flex()
@@ -184,7 +201,13 @@ pub fn sidebar(
                 item.child(div().flex_1().min_w_0().truncate().child(section.label()))
             })
             .on_click(move |_: &ClickEvent, window, cx| on_select(section, window, cx))
-    });
+    };
+    let mut items: Vec<_> = Section::ITEMS
+        .into_iter()
+        .zip(focus)
+        .map(|(section, focus)| item(section, focus))
+        .collect();
+    let trash = items.pop();
     v_flex()
         .id("sidebar")
         .test_support()
@@ -197,6 +220,16 @@ pub fn sidebar(
         .border_r_1()
         .border_color(theme.sidebar_border)
         .children(items)
+        .child(
+            div()
+                .id("sidebar-separator")
+                .test_support()
+                .flex_none()
+                .my(metrics::SPACE_2)
+                .h(px(1.))
+                .bg(theme.sidebar_border),
+        )
+        .children(trash)
 }
 
 #[cfg(test)]
@@ -234,6 +267,11 @@ mod tests {
             .filter(|section| section.is_built())
             .collect();
         assert_eq!(built, [Section::Hosts, Section::KnownHosts]);
+        // Recently deleted comes last, below the separator (UI 1.2, 14).
+        assert_eq!(Section::ITEMS[..6], Section::ALL);
+        assert_eq!(Section::ITEMS[6], Section::RecentlyDeleted);
+        assert_eq!(Section::RecentlyDeleted.label(), "Recently deleted");
+        assert_eq!(Section::RecentlyDeleted.icon(), Lucide::Trash);
     }
 
     #[test]

@@ -247,6 +247,14 @@ fn with_shell(
     });
 }
 
+/// Opens a sidebar section of the window's Vaults tab (from a dialog: the
+/// Recently deleted button of Account & Sync).
+pub fn open_section(section: Section, window: &mut Window, cx: &mut App) {
+    with_shell(window, cx, move |shell, window, cx| {
+        shell.go_to_section(section, window, cx)
+    });
+}
+
 /// Shows a toast at the bottom of the window's main area (5 s).
 pub fn show_toast(toast: impl Into<Toast>, window: &mut Window, cx: &mut App) {
     let toast = toast.into();
@@ -491,6 +499,8 @@ pub struct Shell {
     forwarding: Entity<crate::forwarding::ForwardingScreen>,
     snippets: Entity<crate::snippets::SnippetsScreen>,
     logs: Entity<crate::logs::LogsScreen>,
+    /// Recently deleted (UI 14), below the sidebar's separator.
+    trash: Entity<crate::trash::TrashScreen>,
     sftp: Entity<crate::sftp::SftpScreen>,
     /// The Keychain section (UI 7), with its own details panel.
     keychain: Entity<crate::keychain::KeychainScreen>,
@@ -503,10 +513,10 @@ pub struct Shell {
     notifications: Entity<Notifications>,
     focus: FocusHandle,
     /// Keyboard focus stops: Vaults and SFTP tabs, the sidebar items (in
-    /// `Section::ALL` order), the session tabs.
+    /// `Section::ITEMS` order), the session tabs.
     vaults_focus: FocusHandle,
     sftp_focus: FocusHandle,
-    nav_focus: [FocusHandle; 6],
+    nav_focus: [FocusHandle; 7],
     session_focus: Vec<(SessionId, FocusHandle)>,
     /// The sideways scroll of the session tab strip (more tabs than fit).
     tab_scroll: ScrollHandle,
@@ -558,6 +568,7 @@ impl Shell {
             cx.new(|cx| crate::forwarding::ForwardingScreen::new(state.clone(), window, cx));
         let snippets = cx.new(|cx| crate::snippets::SnippetsScreen::new(state.clone(), window, cx));
         let logs = cx.new(|cx| crate::logs::LogsScreen::new(state.clone(), window, cx));
+        let trash = cx.new(|cx| crate::trash::TrashScreen::new(state.clone(), window, cx));
         let keychain = cx.new(|cx| crate::keychain::KeychainScreen::new(state.clone(), window, cx));
         let sftp = cx.new(|cx| crate::sftp::SftpScreen::new(state.clone(), window, cx));
         let toasts = cx.new(|_| Toasts::new());
@@ -626,6 +637,7 @@ impl Shell {
             forwarding,
             snippets,
             logs,
+            trash,
             sftp,
             keychain,
             panel: None,
@@ -684,6 +696,10 @@ impl Shell {
 
     pub fn snippets_screen(&self) -> &Entity<crate::snippets::SnippetsScreen> {
         &self.snippets
+    }
+
+    pub fn trash_screen(&self) -> &Entity<crate::trash::TrashScreen> {
+        &self.trash
     }
 
     pub fn logs_screen(&self) -> &Entity<crate::logs::LogsScreen> {
@@ -2025,6 +2041,7 @@ impl Shell {
             Section::PortForwarding => self.forwarding.clone().into_any_element(),
             Section::Snippets => self.snippets.clone().into_any_element(),
             Section::Logs => self.logs.clone().into_any_element(),
+            Section::RecentlyDeleted => self.trash.clone().into_any_element(),
         };
         div()
             .id("main-area")
@@ -3083,6 +3100,9 @@ impl Render for Shell {
                                     }
                                     Section::Snippets => self.snippets.read(cx).open_panel_width(),
                                     Section::Logs => self.logs.read(cx).open_panel_width(),
+                                    Section::RecentlyDeleted => {
+                                        self.trash.read(cx).open_panel_width()
+                                    }
                                     _ => None,
                                 }
                             }),

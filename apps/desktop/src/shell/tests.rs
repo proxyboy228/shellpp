@@ -280,6 +280,34 @@ fn sidebar_sections(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// UI 1.2, 14 (D93): Recently deleted below the six sections, after a
+/// separator, opens its screen; it needs no account (local mode).
+#[gpui_kit::test]
+fn recently_deleted_sits_below_a_separator(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let logs = ui.bounds("nav-logs", cx).unwrap();
+    let separator = ui.bounds("sidebar-separator", cx).expect("separator");
+    let trash = ui
+        .bounds(Section::RecentlyDeleted.element_id().as_ref(), cx)
+        .expect("Recently deleted item");
+    assert!(separator.top() >= logs.bottom() && trash.top() >= separator.bottom());
+    assert_eq!(trash.size.height, metrics::at_100(metrics::HEIGHT_NAV_ITEM));
+    assert_eq!(trash.origin.x, logs.origin.x);
+
+    ui.click("nav-recently-deleted", cx);
+    let shell = ui.shell(cx);
+    assert_eq!(
+        cx.update(|cx| shell.read(cx).section()),
+        Section::RecentlyDeleted
+    );
+    assert!(ui.visible("trash-screen", cx));
+    assert!(ui.visible("trash-empty-state", cx));
+    assert!(!ui.visible("hosts-screen", cx));
+    ui.click("nav-hosts", cx);
+    assert!(ui.visible("hosts-screen", cx));
+    ui.finish(cx);
+}
+
 /// D68: another section of the sidebar while the snippet panel holds
 /// changes not saved asks first; Stay stays on Snippets, Discard changes
 /// goes on.

@@ -213,10 +213,14 @@ pub struct SyncReport {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeletedItem {
     pub record_id: Uuid,
+    pub vault_id: Uuid,
     pub type_name: String,
     pub title: String,
     pub deleted_at: String,
     pub from_sync: bool,
+    /// The last live version's data for the read-only details panel,
+    /// secrets masked.
+    pub data: Option<Map<String, Value>>,
 }
 
 /// A conflict copy (data-model 15; UI 13.6).
@@ -3083,10 +3087,18 @@ impl Core {
     // Recently deleted (UI 14)
     // -----------------------------------------------------------------
 
+    /// The entries of the last 90 days, newest first. Older ones are purged
+    /// first, so they leave in local mode too, not only in a sync cycle
+    /// (UI 14: at the start and every 24 hours, when the screen lists).
     pub fn recently_deleted_list(&self) -> Result<Vec<DeletedItem>, CoreError> {
+        let cutoff = format_timestamp(self.now() - Duration::from_secs(trash::KEEP_DAYS * 86_400));
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
+            inner.store.write(|tx| {
+                tx.recently_deleted_purge(&cutoff)?;
+                Ok(())
+            })?;
             let mut items = Vec::new();
             for row in inner.store.recently_deleted()? {
                 if row.vault_id != vault_id {
@@ -3097,10 +3109,12 @@ impl Core {
                 };
                 items.push(DeletedItem {
                     record_id: row.record_id,
+                    vault_id: row.vault_id,
                     title: title_of(&payload.type_name, payload.data.as_ref()),
                     type_name: payload.type_name.clone(),
                     deleted_at: row.deleted_at,
                     from_sync: row.origin == DeletedOrigin::Sync,
+                    data: payload.data.as_ref().map(masked),
                 });
             }
             Ok(items)

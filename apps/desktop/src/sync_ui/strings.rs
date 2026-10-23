@@ -81,14 +81,6 @@ pub const KEEP: &str = "Keep";
 pub const DELETE_AGAIN: &str = "Delete again";
 pub const NOTHING_TO_REVIEW: &str = "Nothing to review.";
 
-pub const TRASH_TITLE: &str = "Recently deleted";
-pub const TRASH_HINT: &str = "Deleted items stay here for 90 days, on this device only, encrypted.";
-pub const TRASH_EMPTY: &str = "Nothing deleted recently.";
-pub const RESTORE: &str = "Restore";
-pub const DELETE_FOREVER: &str = "Delete forever";
-pub const EMPTY_TRASH: &str = "Empty";
-pub const FROM_SYNC: &str = "deleted on another device";
-
 pub const DEVICES_TITLE: &str = "Devices";
 pub const THIS_DEVICE: &str = "this device";
 pub const REVOKED: &str = "signed out";
@@ -152,7 +144,6 @@ pub const LOST_QUESTION: &str = "Was this device lost or stolen?";
 pub const REVOKE_ONLY: &str = "Revoke only";
 pub const LOST_OR_STOLEN: &str = "Lost or stolen";
 pub const LOST_TEXT: &str = "The device is signed out. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too. A new master password and a new vault key stop the old ones from opening your data.";
-pub const EXPORT_TRASH: &str = "Export…";
 
 pub const RECOVERY_TEXT: &str = "Enter your account's recovery key and a new master password. The new password also becomes the account password; your other devices sign in again with it.";
 pub const RECOVERY_KEY: &str = "Recovery key";
