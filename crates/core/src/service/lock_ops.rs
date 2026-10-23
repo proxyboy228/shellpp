@@ -29,12 +29,12 @@ use crate::store::{
 use crate::vault::{self, KeyRing, Rotation};
 
 /// Rows needed to open the personal vault, read under the mutex.
-struct KeyContext {
-    local_auth: LocalAuthRow,
-    vault: VaultRow,
-    db_id: Uuid,
-    device_id: Uuid,
-    kek_row: KeyWrapRow,
+pub(super) struct KeyContext {
+    pub local_auth: LocalAuthRow,
+    pub vault: VaultRow,
+    pub db_id: Uuid,
+    pub device_id: Uuid,
+    pub kek_row: KeyWrapRow,
     recovery_row: Option<KeyWrapRow>,
     device_row: Option<KeyWrapRow>,
 }
@@ -46,7 +46,7 @@ fn meta_uuid(store: &Store, key: &str) -> Result<Uuid, CoreError> {
         .ok_or(CoreError::Damaged)
 }
 
-fn key_context(store: &Store) -> Result<KeyContext, CoreError> {
+pub(super) fn key_context(store: &Store) -> Result<KeyContext, CoreError> {
     let local_auth = store.local_auth()?.ok_or(CoreError::WrongState)?;
     let vault_id = local_auth.personal_vault_id;
     let vault = store.vault(&vault_id)?.ok_or(CoreError::Damaged)?;
@@ -70,7 +70,7 @@ fn key_context(store: &Store) -> Result<KeyContext, CoreError> {
 /// two-phase operation calls it after re-acquiring the mutex, because another
 /// window may have changed the password or rotated the vault while Argon2id
 /// ran; acting on the stale rows could leave a `kek` row that no password opens.
-fn key_rows_unchanged(store: &Store, context: &KeyContext) -> Result<bool, CoreError> {
+pub(super) fn key_rows_unchanged(store: &Store, context: &KeyContext) -> Result<bool, CoreError> {
     let vault_id = context.vault.vault_id;
     let epoch = context.vault.current_epoch;
     Ok(
@@ -101,7 +101,7 @@ fn reseal_or_defer(session: &mut Session, store: &mut Store, now: SystemTime) ->
     })
 }
 
-fn os_name(os: OsKind) -> &'static str {
+pub(super) fn os_name(os: OsKind) -> &'static str {
     match os {
         OsKind::Windows => "windows",
         OsKind::Macos => "macos",
@@ -112,7 +112,7 @@ fn os_name(os: OsKind) -> &'static str {
 }
 
 /// `device_info.name`: `string(64)` from the OS computer name, else `<Platform> device`.
-fn device_name(name: &str, os: OsKind) -> String {
+pub(super) fn device_name(name: &str, os: OsKind) -> String {
     let cleaned: String = name.chars().filter(|c| !c.is_control()).collect();
     let cleaned: String = cleaned.trim().chars().take(64).collect();
     let cleaned = cleaned.trim().to_owned();
@@ -130,7 +130,7 @@ fn device_name(name: &str, os: OsKind) -> String {
     }
 }
 
-fn short_version(version: &str) -> String {
+pub(super) fn short_version(version: &str) -> String {
     let version: String = version
         .chars()
         .filter(|c| !c.is_control())
@@ -191,6 +191,7 @@ impl Core {
     /// clipboard content; emits `lock:changed`.
     pub(super) fn lock_now(&self, inner: &mut Inner) {
         inner.session = None;
+        inner.sync.wipe();
         inner.recovery_grant.clear();
         self.clear_clipboard_if_ours(inner);
         inner.device_unlock_allowed = false;
@@ -701,6 +702,34 @@ impl Core {
             return Err(CoreError::WrongState);
         }
         let vault_id = context.vault.vault_id;
+        // Bound to an account: the offline recovery of storage-format 6.6,
+        // a local rewrap without a rotation (the server would not know the
+        // new epoch); the device signs in again afterwards.
+        if let Some(mut account) = inner.store.server_account()? {
+            let epoch = context.vault.current_epoch;
+            let kek_row = vault::wrap_row(WrapKind::Kek, vault_id, epoch, &kek, &vault_key)?;
+            account.refresh_token = None;
+            let now = self.now();
+            let local_auth = material.to_row(vault_id, format_timestamp(now));
+            inner.store.write(|tx| {
+                tx.key_wrap_put(&kek_row)?;
+                tx.local_auth_put(&local_auth)?;
+                tx.server_account_put(&account)
+            })?;
+            drop(kek);
+            drop(recovery_kek);
+            tracing::info!("recovered with the recovery key; bound, so no rotation");
+            let started = match key_context(&inner.store) {
+                Ok(new_context) => self.start_session(inner, &new_context, vault_key, now),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = started {
+                tracing::warn!(code = error.code(), "unlock after recovery failed");
+            }
+            checkpoint(&inner.store);
+            let status = self.status(inner, available);
+            return Ok(status);
+        }
         let ring = KeyRing::new(vault_id, context.vault.current_epoch, vault_key);
         let device_wrap_key = device_key
             .as_ref()
@@ -779,6 +808,10 @@ impl Core {
     ) -> Result<(), CoreError> {
         let context = self.unlocked_context()?;
         lock::check_new_password(&new, "new_password")?;
+        // A bound vault changes the password on the server first (stage 7).
+        if self.bound()? {
+            return self.password_change_bound(&context, current, new);
+        }
         self.verify_password(&context, &current)?;
         drop(current);
         let class = self.platform.class;
@@ -835,6 +868,13 @@ impl Core {
         &self,
         password: SecretString,
     ) -> Result<RecoveryKeyResult, CoreError> {
+        // Bound: the reissue goes through the server (section 5.3), not in
+        // run 7; a local rotation would leave the server behind.
+        if self.bound()? {
+            return Err(CoreError::Sync(crate::sync::HttpError::Refused(
+                "signed_in",
+            )));
+        }
         // Held until the end: the rotation rewraps the `device` row with the
         // device key fetched below, and a lost device key is deleted last.
         let _remember = self.remember_lock();

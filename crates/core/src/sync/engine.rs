@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use serde_json::{Map, Value};
-use shellpp_sync_api::api::{ItemStatus, PushResult, RecordWrite, SeqEnvelope, B64};
+use shellpp_sync_api::api::{B64, ItemStatus, PushResult, RecordWrite, SeqEnvelope};
 use shellpp_sync_api::envelope;
 use uuid::Uuid;
 
@@ -202,7 +202,9 @@ fn synced_epoch(local: &RecordRow) -> Option<u32> {
         return Some(local.key_epoch);
     }
     let base = local.base_envelope.as_ref()?;
-    envelope::split(base).ok().map(|parts| parts.header.key_epoch)
+    envelope::split(base)
+        .ok()
+        .map(|parts| parts.header.key_epoch)
 }
 
 /// `data` equality after dropping `null` members (data-model 1.2).
@@ -281,10 +283,7 @@ fn conflict_data(original: &RecordRow, losing: &Payload) -> Map<String, Value> {
         "original_type".into(),
         Value::String(losing.type_name.clone()),
     );
-    data.insert(
-        "original_revision".into(),
-        Value::from(original.revision),
-    );
+    data.insert("original_revision".into(), Value::from(original.revision));
     data.insert("losing_hlc".into(), Value::String(losing.hlc.to_text()));
     data.insert(
         "losing_device_id".into(),
@@ -529,7 +528,14 @@ pub fn apply_page(
             if let Opened::Live(kind, payload) = &opened
                 && selection.type_name(kind.name())
             {
-                duplicates(session, &mut result.effects, *kind, payload, &row, &now_text);
+                duplicates(
+                    session,
+                    &mut result.effects,
+                    *kind,
+                    payload,
+                    &row,
+                    &now_text,
+                );
             }
             adopt_version(
                 &mut result.effects,
@@ -566,7 +572,9 @@ pub fn apply_page(
             };
             adopt_version(
                 &mut result.effects,
-                previous_live.as_ref().map(|(kind, payload)| (*kind, payload)),
+                previous_live
+                    .as_ref()
+                    .map(|(kind, payload)| (*kind, payload)),
                 &row,
                 opened,
                 &now_text,
@@ -799,23 +807,35 @@ pub fn apply_push_results(
                 )?;
             }
             ItemStatus::StaleKeyEpoch => {
-                effects.failed.push((local.record_id, "stale_key_epoch".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "stale_key_epoch".into()));
                 effects.newer_epoch = true;
             }
             ItemStatus::QuotaExceeded => {
-                effects.failed.push((local.record_id, "quota_exceeded".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "quota_exceeded".into()));
             }
             ItemStatus::InvalidEnvelope => {
-                effects.failed.push((local.record_id, "invalid_envelope".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "invalid_envelope".into()));
             }
             ItemStatus::InsufficientRole => {
-                effects.failed.push((local.record_id, "insufficient_role".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "insufficient_role".into()));
             }
             ItemStatus::ClassNotAllowed => {
-                effects.failed.push((local.record_id, "class_not_allowed".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "class_not_allowed".into()));
             }
             ItemStatus::PayloadTooLarge => {
-                effects.failed.push((local.record_id, "payload_too_large".into()));
+                effects
+                    .failed
+                    .push((local.record_id, "payload_too_large".into()));
             }
             ItemStatus::Unknown => {}
         }
@@ -939,10 +959,22 @@ mod tests {
             if let Some(marker) = marker {
                 data["marker"] = json!(marker);
             }
-            Payload::live("known_host", 1, Hlc::new(ms, 0), device, data.as_object().cloned().unwrap())
+            Payload::live(
+                "known_host",
+                1,
+                Hlc::new(ms, 0),
+                device,
+                data.as_object().cloned().unwrap(),
+            )
         };
-        assert_eq!(type_rule(&known(Some("revoked"), 1), &known(None, 9)), Some(true));
-        assert_eq!(type_rule(&known(None, 9), &known(Some("revoked"), 1)), Some(false));
+        assert_eq!(
+            type_rule(&known(Some("revoked"), 1), &known(None, 9)),
+            Some(true)
+        );
+        assert_eq!(
+            type_rule(&known(None, 9), &known(Some("revoked"), 1)),
+            Some(false)
+        );
         assert_eq!(type_rule(&known(None, 9), &known(None, 1)), None);
         let pin = |verified: bool, key: &str| {
             Payload::live(
@@ -950,7 +982,10 @@ mod tests {
                 1,
                 Hlc::new(1, 0),
                 device,
-                json!({"x25519_public_key": key, "verified": verified}).as_object().cloned().unwrap(),
+                json!({"x25519_public_key": key, "verified": verified})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
             )
         };
         assert_eq!(type_rule(&pin(true, "k"), &pin(false, "k")), Some(true));

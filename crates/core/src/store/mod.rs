@@ -298,6 +298,15 @@ impl Store {
         self.data_dir.as_deref()
     }
 
+    /// A consistent copy of the database in `backups/`, as before a
+    /// migration (the merge at sign-in writes one first). `None` in memory.
+    pub fn backup_now(&self, now: SystemTime) -> Result<Option<PathBuf>, StoreError> {
+        match &self.data_dir {
+            Some(dir) => migrate::backup(&self.conn, dir, now).map(Some),
+            None => Ok(None),
+        }
+    }
+
     /// Another handle on the lock of the data directory (`None` in memory).
     /// While it lives, other processes stay locked out even after this store
     /// is dropped, and a [`Store::open`] of the same directory in this

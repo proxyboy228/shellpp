@@ -80,7 +80,10 @@ pub fn cert_info(der: &[u8]) -> Option<CertInfo> {
     let time = |t: &x509_cert::time::Time| {
         time::OffsetDateTime::from_unix_timestamp(t.to_unix_duration().as_secs() as i64)
             .ok()
-            .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok())
+            .and_then(|t| {
+                t.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
             .unwrap_or_default()
     };
     Some(CertInfo {
@@ -135,10 +138,12 @@ impl TrustVerifier {
     pub fn new(mode: TrustMode, observed: Observation) -> Result<Self, TlsError> {
         let provider = provider();
         let system: Arc<dyn ServerCertVerifier> = match &mode {
-            TrustMode::Ca(der) => Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
-                [CertificateDer::from(der.clone())],
-                provider.clone(),
-            )?),
+            TrustMode::Ca(der) => {
+                Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
+                    [CertificateDer::from(der.clone())],
+                    provider.clone(),
+                )?)
+            }
             _ => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
         };
         Ok(Self {
@@ -195,7 +200,9 @@ impl TrustVerifier {
             .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
         if cert.verify_is_valid_for_subject_name(server_name).is_err() {
             self.note(TlsProblem::WrongName(info));
-            return Err(TlsError::InvalidCertificate(CertificateError::NotValidForName));
+            return Err(TlsError::InvalidCertificate(
+                CertificateError::NotValidForName,
+            ));
         }
         let parsed = x509_cert::Certificate::from_der(end_entity.as_ref())
             .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
@@ -234,14 +241,22 @@ impl ServerCertVerifier for TrustVerifier {
                 if presented != *pin {
                     let system_trusts = self
                         .system
-                        .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+                        .verify_server_cert(
+                            end_entity,
+                            intermediates,
+                            server_name,
+                            ocsp_response,
+                            now,
+                        )
                         .is_ok();
                     self.note(TlsProblem::PinChanged {
                         pinned: *pin,
                         new: info,
                         system_trusts,
                     });
-                    return Err(TlsError::General("the pinned certificate changed".to_owned()));
+                    return Err(TlsError::General(
+                        "the pinned certificate changed".to_owned(),
+                    ));
                 }
                 self.check_pinned(end_entity, server_name, now, info)?;
                 Ok(ServerCertVerified::assertion())
@@ -285,7 +300,10 @@ impl ServerCertVerifier for TrustVerifier {
 }
 
 /// The rustls client configuration of one origin.
-pub fn client_config(mode: TrustMode, observed: Observation) -> Result<rustls::ClientConfig, TlsError> {
+pub fn client_config(
+    mode: TrustMode,
+    observed: Observation,
+) -> Result<rustls::ClientConfig, TlsError> {
     let verifier = Arc::new(TrustVerifier::new(mode, observed)?);
     Ok(rustls::ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()?
@@ -312,6 +330,9 @@ mod tests {
     #[test]
     fn garbage_is_no_certificate() {
         assert!(cert_info(b"not a certificate").is_none());
-        assert!(ca_der_from_file(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n").is_none());
+        assert!(
+            ca_der_from_file(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+                .is_none()
+        );
     }
 }

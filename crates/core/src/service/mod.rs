@@ -39,6 +39,7 @@ pub(crate) mod session;
 pub mod snippets;
 mod ssh_config_io;
 pub mod ssh_export;
+mod sync_ops;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -74,6 +75,10 @@ use host_api::{
     HostKeyStatus, SessionConfig,
 };
 use session::Session;
+pub use sync_ops::{
+    BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
+    ServerCheck, SignInInput, SignInOutcome, SyncReport, SyncStatus, TotpSetup, TrustChoice,
+};
 
 /// Startup configuration resolved by the host (the core never looks up OS directories).
 #[derive(Clone, Debug)]
@@ -108,6 +113,8 @@ struct Inner {
     /// Stage 2: connection log entries of this process and ends waiting for
     /// unlock (survives locks; `connect.rs`).
     connlog: crate::connlog::Tracker,
+    /// Stage 7: the access token and the retry state (`sync_ops.rs`).
+    sync: sync_ops::SyncRuntime,
 }
 
 /// The core facade.
@@ -121,6 +128,9 @@ pub struct Core {
     /// the keychain calls, which run without `inner`; always taken before
     /// `inner`, never while holding it.
     remember: Mutex<()>,
+    /// Serializes the operations that talk to the sync server; never taken
+    /// while holding `inner`.
+    sync_guard: Mutex<()>,
 }
 
 impl fmt::Debug for Core {
@@ -172,12 +182,14 @@ impl Core {
             device_unlock_allowed: true,
             ids: IdGenerator::new(),
             connlog: crate::connlog::Tracker::new(),
+            sync: sync_ops::SyncRuntime::default(),
         };
         Ok(Core {
             platform,
             config,
             inner: Mutex::new(inner),
             remember: Mutex::new(()),
+            sync_guard: Mutex::new(()),
         })
     }
 

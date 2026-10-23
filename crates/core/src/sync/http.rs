@@ -51,7 +51,8 @@ pub fn normalize_origin(input: &str) -> Result<String, OriginError> {
         _ => return Err(OriginError::NotUrl),
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') || authority.chars().any(char::is_whitespace) {
+    if authority.is_empty() || authority.contains('@') || authority.chars().any(char::is_whitespace)
+    {
         return Err(OriginError::NotUrl);
     }
     let (host, port) = if let Some(stripped) = authority.strip_prefix('[') {
@@ -107,6 +108,10 @@ pub enum HttpError {
     /// The answer is not what the API defines.
     #[error("the server sent a malformed answer")]
     Malformed,
+    /// The client refused the answer: unsafe KDF parameters, a wrap that
+    /// does not open, a rolled-back epoch, an unsupported account state.
+    #[error("the server answer was refused: {0}")]
+    Refused(&'static str),
 }
 
 impl HttpError {
@@ -144,6 +149,7 @@ impl HttpError {
             Self::Tls(_) => "certificate_refused".to_owned(),
             Self::Api { code, .. } => code.clone(),
             Self::Malformed => "malformed_answer".to_owned(),
+            Self::Refused(reason) => (*reason).to_owned(),
         }
     }
 }
@@ -158,7 +164,9 @@ pub struct HttpApi {
 
 impl std::fmt::Debug for HttpApi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HttpApi").field("origin", &self.origin).finish()
+        f.debug_struct("HttpApi")
+            .field("origin", &self.origin)
+            .finish()
     }
 }
 
@@ -277,7 +285,12 @@ impl HttpApi {
             .ok_or(HttpError::Malformed)
     }
 
-    fn post_empty<B: Serialize>(&self, path: &str, body: &B, token: Option<&str>) -> Result<(), HttpError> {
+    fn post_empty<B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        token: Option<&str>,
+    ) -> Result<(), HttpError> {
         self.send::<B, serde_json::Value>(Method::POST, path, Some(body), token, REQUEST_TIMEOUT)
             .map(|_| ())
     }
@@ -296,7 +309,10 @@ impl HttpApi {
         )
     }
 
-    pub fn register(&self, request: &wire::RegisterRequest) -> Result<wire::RegisterResponse, HttpError> {
+    pub fn register(
+        &self,
+        request: &wire::RegisterRequest,
+    ) -> Result<wire::RegisterResponse, HttpError> {
         self.post("/v1/auth/register", request, None)
     }
 
@@ -304,7 +320,10 @@ impl HttpApi {
         self.post("/v1/auth/login", request, None)
     }
 
-    pub fn login_totp(&self, request: &wire::LoginTotpRequest) -> Result<wire::LoginResponse, HttpError> {
+    pub fn login_totp(
+        &self,
+        request: &wire::LoginTotpRequest,
+    ) -> Result<wire::LoginResponse, HttpError> {
         self.post("/v1/auth/login/totp", request, None)
     }
 
@@ -333,11 +352,17 @@ impl HttpApi {
         )
     }
 
-    pub fn recover_begin(&self, request: &wire::RecoverBeginRequest) -> Result<wire::RecoverBeginResponse, HttpError> {
+    pub fn recover_begin(
+        &self,
+        request: &wire::RecoverBeginRequest,
+    ) -> Result<wire::RecoverBeginResponse, HttpError> {
         self.post("/v1/auth/recover/begin", request, None)
     }
 
-    pub fn recover_complete(&self, request: &wire::RecoverCompleteRequest) -> Result<wire::Tokens, HttpError> {
+    pub fn recover_complete(
+        &self,
+        request: &wire::RecoverCompleteRequest,
+    ) -> Result<wire::Tokens, HttpError> {
         self.post::<_, wire::TokensResponse>("/v1/auth/recover/complete", request, None)
             .map(|response| response.tokens)
     }
@@ -346,7 +371,11 @@ impl HttpApi {
         self.get("/v1/account", Some(access))
     }
 
-    pub fn password_change(&self, access: &str, request: &wire::PasswordChangeRequest) -> Result<wire::Tokens, HttpError> {
+    pub fn password_change(
+        &self,
+        access: &str,
+        request: &wire::PasswordChangeRequest,
+    ) -> Result<wire::Tokens, HttpError> {
         self.post::<_, wire::TokensResponse>("/v1/account/password", request, Some(access))
             .map(|response| response.tokens)
     }
@@ -359,7 +388,11 @@ impl HttpApi {
         self.post("/v1/account/recovery-key", request, Some(access))
     }
 
-    pub fn totp_setup(&self, access: &str, request: &wire::CurrentAuth) -> Result<wire::TotpSetupResponse, HttpError> {
+    pub fn totp_setup(
+        &self,
+        access: &str,
+        request: &wire::CurrentAuth,
+    ) -> Result<wire::TotpSetupResponse, HttpError> {
         self.post("/v1/account/totp/setup", request, Some(access))
     }
 
@@ -367,16 +400,30 @@ impl HttpApi {
         self.post_empty("/v1/account/totp/enable", request, Some(access))
     }
 
-    pub fn totp_disable(&self, access: &str, request: &wire::TotpDisableRequest) -> Result<(), HttpError> {
+    pub fn totp_disable(
+        &self,
+        access: &str,
+        request: &wire::TotpDisableRequest,
+    ) -> Result<(), HttpError> {
         self.post_empty("/v1/account/totp/disable", request, Some(access))
     }
 
     pub fn ssh_id(&self, access: &str, request: &wire::SshIdRequest) -> Result<(), HttpError> {
-        self.send::<_, serde_json::Value>(Method::PUT, "/v1/account/ssh-id", Some(request), Some(access), REQUEST_TIMEOUT)
-            .map(|_| ())
+        self.send::<_, serde_json::Value>(
+            Method::PUT,
+            "/v1/account/ssh-id",
+            Some(request),
+            Some(access),
+            REQUEST_TIMEOUT,
+        )
+        .map(|_| ())
     }
 
-    pub fn account_delete(&self, access: &str, request: &wire::AccountDeleteRequest) -> Result<(), HttpError> {
+    pub fn account_delete(
+        &self,
+        access: &str,
+        request: &wire::AccountDeleteRequest,
+    ) -> Result<(), HttpError> {
         self.post_empty("/v1/account/delete", request, Some(access))
     }
 
@@ -409,7 +456,11 @@ impl HttpApi {
         vault_id: Uuid,
         request: &wire::PersonalKeyEpochRequest,
     ) -> Result<wire::KeyEpochResponse, HttpError> {
-        self.post(&format!("/v1/vaults/{vault_id}/key-epochs"), request, Some(access))
+        self.post(
+            &format!("/v1/vaults/{vault_id}/key-epochs"),
+            request,
+            Some(access),
+        )
     }
 
     pub fn pull(
@@ -463,14 +514,32 @@ mod tests {
             normalize_origin("https://Sync.Example.com:8443").as_deref(),
             Ok("https://sync.example.com:8443")
         );
-        assert_eq!(normalize_origin("http://localhost:8080").as_deref(), Ok("http://localhost:8080"));
-        assert_eq!(normalize_origin("http://127.0.0.1:1").as_deref(), Ok("http://127.0.0.1:1"));
-        assert_eq!(normalize_origin("http://[::1]:9").as_deref(), Ok("http://[::1]:9"));
+        assert_eq!(
+            normalize_origin("http://localhost:8080").as_deref(),
+            Ok("http://localhost:8080")
+        );
+        assert_eq!(
+            normalize_origin("http://127.0.0.1:1").as_deref(),
+            Ok("http://127.0.0.1:1")
+        );
+        assert_eq!(
+            normalize_origin("http://[::1]:9").as_deref(),
+            Ok("http://[::1]:9")
+        );
         // Plain HTTP for any other host is refused before a request.
-        assert_eq!(normalize_origin("http://sync.example.com"), Err(OriginError::HttpNotLocal));
-        assert_eq!(normalize_origin("http://192.168.1.10:8080"), Err(OriginError::HttpNotLocal));
+        assert_eq!(
+            normalize_origin("http://sync.example.com"),
+            Err(OriginError::HttpNotLocal)
+        );
+        assert_eq!(
+            normalize_origin("http://192.168.1.10:8080"),
+            Err(OriginError::HttpNotLocal)
+        );
         assert_eq!(normalize_origin("ftp://x"), Err(OriginError::NotUrl));
-        assert_eq!(normalize_origin("https://user@host"), Err(OriginError::NotUrl));
+        assert_eq!(
+            normalize_origin("https://user@host"),
+            Err(OriginError::NotUrl)
+        );
         assert_eq!(normalize_origin("https://"), Err(OriginError::NotUrl));
     }
 

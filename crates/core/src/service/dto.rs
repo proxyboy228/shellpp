@@ -605,6 +605,9 @@ pub enum CoreEventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         latest: Option<Notification>,
     },
+    /// `sync:changed` (stage 7): the account or sync state changed; the
+    /// interface reads `sync_status`.
+    SyncChanged {},
 }
 
 impl CoreEventKind {
@@ -616,6 +619,7 @@ impl CoreEventKind {
             Self::VaultsChanged { .. } => "vaults:changed",
             Self::SettingsChanged { .. } => "settings:changed",
             Self::NotificationsChanged { .. } => "notifications:changed",
+            Self::SyncChanged {} => "sync:changed",
         }
     }
 }

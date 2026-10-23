@@ -46,10 +46,7 @@ pub fn key(kind: RecordKind, data: &Map<String, Value>) -> Option<String> {
                 ]
             }
         }
-        RecordKind::Group => vec![
-            text(data, "parent_id"),
-            text(data, "name"),
-        ],
+        RecordKind::Group => vec![text(data, "parent_id"), text(data, "name")],
         RecordKind::Identity => vec![text(data, "label"), text(data, "username")],
         RecordKind::Key => {
             let public = text(data, "public_key");
@@ -130,7 +127,8 @@ mod tests {
         let a = map(json!({"address": "DB.example.com", "ssh": {"port": 22, "username": "root"}}));
         let b = map(json!({"address": "db.example.com", "ssh": {"username": "root"}}));
         assert_eq!(key(RecordKind::Host, &a), key(RecordKind::Host, &b));
-        let c = map(json!({"address": "db.example.com", "ssh": {"port": 2222, "username": "root"}}));
+        let c =
+            map(json!({"address": "db.example.com", "ssh": {"port": 2222, "username": "root"}}));
         assert_ne!(key(RecordKind::Host, &a), key(RecordKind::Host, &c));
         let d = map(json!({"address": "x", "import_key": "ssh_config:db"}));
         let e = map(json!({"address": "y", "import_key": "ssh_config:db"}));

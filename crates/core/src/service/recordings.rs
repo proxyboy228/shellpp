@@ -49,6 +49,63 @@ pub(super) fn delete_files(store: &Store, file_ids: &[Uuid]) {
     }
 }
 
+/// Re-encrypts every recording of `old`'s vault under `new`'s current key
+/// (the merge at sign-in, storage-format 6.6): read with the old key,
+/// written beside the file, then renamed over it. A file that cannot be
+/// read stays as it was (the backup written before the merge still opens
+/// it).
+pub(super) fn reencrypt_all(
+    store: &Store,
+    old: &crate::vault::KeyRing,
+    new: &crate::vault::KeyRing,
+) {
+    let Some(dir) = store.data_dir().map(|dir| dir.join(recording::DIR_NAME)) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some(recording::EXTENSION) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(header) = Header::parse(&bytes) else {
+            continue;
+        };
+        if header.vault_id != old.vault_id() {
+            continue;
+        }
+        let file_id = header.file_id;
+        let key = old
+            .key(header.key_epoch)
+            .map(|vault_key| crypto::derive_recording_key(vault_key, &file_id));
+        let Ok(read) = recording::read(&bytes, |_| key) else {
+            tracing::warn!("recording not re-encrypted: it does not open");
+            continue;
+        };
+        let written = (|| -> Result<(), recording::RecordingError> {
+            let header = Header::new(file_id, new.vault_id(), new.current_epoch())?;
+            let new_key = crypto::derive_recording_key(new.current_key(), &file_id);
+            let temp = path.with_extension("reencrypt");
+            let _ = std::fs::remove_file(&temp);
+            let mut writer = RecordingWriter::create(&temp, header, new_key, read.size, 0)?;
+            for (seconds, text) in &read.events {
+                writer.output_at(*seconds, text.as_bytes())?;
+            }
+            writer.finish()?;
+            std::fs::rename(&temp, &path)?;
+            Ok(())
+        })();
+        if written.is_err() {
+            tracing::warn!("recording not re-encrypted");
+        }
+    }
+}
+
 fn io(error: std::io::Error) -> CoreError {
     CoreError::Store(StoreError::from(error))
 }

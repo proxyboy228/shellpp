@@ -417,7 +417,9 @@ fn pg_error(error: postgres::Error) -> DbError {
     match error.code() {
         Some(code) if *code == postgres::error::SqlState::UNIQUE_VIOLATION => DbError::Unique,
         Some(code) => DbError::Failed(format!("postgres {}", code.code())),
-        None => DbError::Unavailable,
+        // A client-side error (a type conversion, a protocol error) has no
+        // SQL state; its text names types, never values.
+        None => DbError::Failed(format!("postgres client: {error}")),
     }
 }
 
@@ -516,13 +518,62 @@ pub fn number_placeholders(sql: &str) -> String {
     out
 }
 
+/// An integer for a `SMALLINT`, `INTEGER` or `BIGINT` parameter: the
+/// driver's `i64` binds only to `BIGINT`. A value out of the column's range
+/// is an error, never truncated.
+#[derive(Debug)]
+struct PgInt(i64);
+
+impl postgres::types::ToSql for PgInt {
+    fn to_sql(
+        &self,
+        ty: &postgres::types::Type,
+        out: &mut postgres::types::private::BytesMut,
+    ) -> Result<postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        match *ty {
+            postgres::types::Type::INT2 => i16::try_from(self.0)?.to_sql(ty, out),
+            postgres::types::Type::INT4 => i32::try_from(self.0)?.to_sql(ty, out),
+            _ => self.0.to_sql(ty, out),
+        }
+    }
+
+    fn accepts(ty: &postgres::types::Type) -> bool {
+        matches!(
+            *ty,
+            postgres::types::Type::INT2 | postgres::types::Type::INT4 | postgres::types::Type::INT8
+        )
+    }
+
+    postgres::types::to_sql_checked!();
+}
+
+/// `NULL` for a parameter of any type (`Option<String>` binds only to text).
+#[derive(Debug)]
+struct PgNull;
+
+impl postgres::types::ToSql for PgNull {
+    fn to_sql(
+        &self,
+        _: &postgres::types::Type,
+        _: &mut postgres::types::private::BytesMut,
+    ) -> Result<postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(postgres::types::IsNull::Yes)
+    }
+
+    fn accepts(_: &postgres::types::Type) -> bool {
+        true
+    }
+
+    postgres::types::to_sql_checked!();
+}
+
 fn pg_params(params: &[Val]) -> Vec<Box<dyn postgres::types::ToSql + Sync>> {
     params
         .iter()
         .map(|value| -> Box<dyn postgres::types::ToSql + Sync> {
             match value {
-                Val::Null => Box::new(Option::<String>::None),
-                Val::Int(v) => Box::new(*v),
+                Val::Null => Box::new(PgNull),
+                Val::Int(v) => Box::new(PgInt(*v)),
                 Val::Bool(v) => Box::new(*v),
                 Val::Text(v) => Box::new(v.clone()),
                 Val::Bytes(v) => Box::new(v.clone()),

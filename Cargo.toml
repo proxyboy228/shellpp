@@ -70,6 +70,8 @@ p256 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 p384 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 p521 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8"] }
+# The X25519 keypair of an account (D13; docs/security.md, section 5.1).
+x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize", "precomputed-tables"] }
 md5 = "0.8.1"
 aes = "0.9.3"
 cbc = "0.2.1"

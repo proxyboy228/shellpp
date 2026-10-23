@@ -567,4 +567,26 @@ impl WriteTx<'_> {
         )?;
         Ok(())
     }
+
+    /// Deletes a vault with every row that belongs to it: records, key rows,
+    /// sync state, Recently deleted, brought-back and duplicate entries (the
+    /// old personal vault after a merge at sign-in, data-model 18.5).
+    pub fn vault_purge(&mut self, vault_id: &Uuid) -> Result<(), StoreError> {
+        let id = &vault_id.as_bytes()[..];
+        for table in [
+            "records",
+            "key_wraps",
+            "sync_state",
+            "recently_deleted",
+            "resync_returned",
+            "duplicate_pairs",
+            "vaults",
+        ] {
+            self.tx.execute(
+                &format!("DELETE FROM {table} WHERE vault_id = ?1"),
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
 }
