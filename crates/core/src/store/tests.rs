@@ -20,21 +20,29 @@ fn at(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
 }
 
-static V2_STEPS: [Migration; 1] = [Migration {
-    from: 1,
-    sql: "CREATE TABLE test_extra (id INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT '');",
-}];
+// A future schema: the real steps of this app, then a test step from its
+// version (2) to 3.
+static V2_STEPS: [Migration; 2] = [
+    super::migrate::MIGRATIONS[0],
+    Migration {
+        from: 2,
+        sql: "CREATE TABLE test_extra (id INTEGER PRIMARY KEY, note TEXT NOT NULL DEFAULT '');",
+    },
+];
 
 const V2_PLAN: MigrationPlan = MigrationPlan {
     v1_sql: SCHEMA_V1_SQL,
     steps: &V2_STEPS,
 };
 
-static FAILING_STEPS: [Migration; 1] = [Migration {
-    from: 1,
-    // `meta` already exists: the step fails after creating `half_done`.
-    sql: "CREATE TABLE half_done (id INTEGER); CREATE TABLE meta (x INTEGER);",
-}];
+static FAILING_STEPS: [Migration; 2] = [
+    super::migrate::MIGRATIONS[0],
+    Migration {
+        from: 2,
+        // `meta` already exists: the step fails after creating `half_done`.
+        sql: "CREATE TABLE half_done (id INTEGER); CREATE TABLE meta (x INTEGER);",
+    },
+];
 
 const FAILING_PLAN: MigrationPlan = MigrationPlan {
     v1_sql: SCHEMA_V1_SQL,
@@ -121,12 +129,16 @@ fn create_then_reopen() {
     assert_eq!(
         table_names(&store.conn),
         [
+            "duplicate_pairs",
             "key_wraps",
             "local_auth",
             "local_settings",
             "meta",
+            "recently_deleted",
             "records",
+            "resync_returned",
             "server_account",
+            "server_tls",
             "sync_state",
             "vaults"
         ]
@@ -333,12 +345,12 @@ fn newer_schema_is_refused_and_the_file_is_unchanged() {
     let path = db_file(tmp.path());
     {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 2;")
+        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 3;")
             .unwrap();
     }
     let before = sha256(&std::fs::read(&path).unwrap());
     let err = Store::open(tmp.path(), "0.1.0").unwrap_err();
-    assert!(matches!(err, StoreError::NewerSchema { found: 2 }));
+    assert!(matches!(err, StoreError::NewerSchema { found: 3 }));
     assert_eq!(err.code(), "newer_schema");
     assert_eq!(sha256(&std::fs::read(&path).unwrap()), before);
     assert!(!tmp.path().join("shellpp.db-wal").exists());
@@ -396,11 +408,11 @@ fn migration_writes_a_backup_first() {
     assert_eq!(
         outcome,
         OpenOutcome::Migrated {
-            from: 1,
+            from: 2,
             backup: expected_backup.clone()
         }
     );
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
     assert!(table_names(&store.conn).contains(&"test_extra".to_owned()));
     assert_eq!(store.vault(&vault_id).unwrap().unwrap().vault_id, vault_id);
     assert_eq!(
@@ -408,9 +420,9 @@ fn migration_writes_a_backup_first() {
         Some("0.2.0")
     );
 
-    // The backup is a consistent copy of version 1 with the data.
+    // The backup is a consistent copy of version 2 with the data.
     let copy = Connection::open(&expected_backup).unwrap();
-    assert_eq!(migrate::user_version(&copy).unwrap(), 1);
+    assert_eq!(migrate::user_version(&copy).unwrap(), 2);
     assert!(!table_names(&copy).contains(&"test_extra".to_owned()));
     let n: i64 = copy
         .query_row("SELECT count(*) FROM vaults", [], |r| r.get(0))
@@ -419,10 +431,10 @@ fn migration_writes_a_backup_first() {
     drop(copy);
     drop(store);
 
-    // The current app (schema 1) refuses the migrated database.
+    // The current app (schema 2) refuses the migrated database.
     assert!(matches!(
         Store::open(dir, "0.1.0"),
-        Err(StoreError::NewerSchema { found: 2 })
+        Err(StoreError::NewerSchema { found: 3 })
     ));
     // Reopening with the plan that produced it does nothing new.
     let (_, outcome) = Store::open_with(dir, "0.2.0", &V2_PLAN, at(T0 + 5)).unwrap();
@@ -435,14 +447,14 @@ fn new_database_is_created_at_the_newest_version_without_backup() {
     let tmp = TempDir::new().unwrap();
     let (store, outcome) = Store::open_with(tmp.path(), "0.2.0", &V2_PLAN, at(T0)).unwrap();
     assert_eq!(outcome, OpenOutcome::Created);
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), 3);
     assert!(backups(tmp.path()).is_empty());
 }
 
-/// Puts the database back to version 1 so the test plan migrates it again.
+/// Puts the database back to version 2 so the test plan migrates it again.
 fn downgrade_to_v1(dir: &Path) {
     let conn = Connection::open(db_file(dir)).unwrap();
-    conn.execute_batch("DROP TABLE test_extra; PRAGMA user_version = 1;")
+    conn.execute_batch("DROP TABLE test_extra; PRAGMA user_version = 2;")
         .unwrap();
 }
 
@@ -459,7 +471,7 @@ fn only_the_three_newest_backups_are_kept() {
             downgrade_to_v1(dir);
         }
         let (_, outcome) = Store::open_with(dir, "0.2.0", &V2_PLAN, at(T0 + i * 3600)).unwrap();
-        assert!(matches!(outcome, OpenOutcome::Migrated { from: 1, .. }));
+        assert!(matches!(outcome, OpenOutcome::Migrated { from: 2, .. }));
     }
     assert_eq!(
         backups(dir),
@@ -483,7 +495,7 @@ fn backup_names_never_collide() {
     assert_eq!(
         outcome,
         OpenOutcome::Migrated {
-            from: 1,
+            from: 2,
             backup: dir.join("backups").join("shellpp-20261018T223106Z.db"),
         }
     );
@@ -499,14 +511,14 @@ fn failed_migration_step_is_rolled_back() {
     let dir = tmp.path();
     drop(Store::open(dir, "0.1.0").unwrap());
     let err = Store::open_with(dir, "0.2.0", &FAILING_PLAN, at(T0)).unwrap_err();
-    assert!(matches!(err, StoreError::Migration { to: 2 }));
+    assert!(matches!(err, StoreError::Migration { to: 3 }));
     assert_eq!(err.code(), "storage_error");
     assert_eq!(backups(dir), ["shellpp-20261018T223105Z.db"]);
     let conn = Connection::open(db_file(dir)).unwrap();
-    assert_eq!(migrate::user_version(&conn).unwrap(), 1);
+    assert_eq!(migrate::user_version(&conn).unwrap(), 2);
     assert!(!table_names(&conn).contains(&"half_done".to_owned()));
     drop(conn);
-    // The app of version 1 still opens it.
+    // The app of version 2 still opens it.
     let (_, outcome) = Store::open(dir, "0.1.0").unwrap();
     assert_eq!(outcome, OpenOutcome::Opened);
 }
@@ -855,4 +867,69 @@ fn store_can_move_between_threads() {
     fn assert_send<T: Send>() {}
     assert_send::<Store>();
     assert_send::<Key32>();
+}
+
+/// Run 7 plan, rule 1.7.4: a database of schema 1 with data migrates to
+/// schema 2 (the sync tables, D93) with a backup first, and every row is
+/// still there, unchanged.
+#[test]
+fn schema_1_with_data_migrates_to_2_and_keeps_everything() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    let vault_id = Uuid::from_u128(0x0199_f6a1_0000_7000_8000_0000_0000_0001);
+    let record_id = Uuid::from_u128(0x0199_f6a1_0000_7000_8000_0000_0000_0002);
+    // A schema 1 database as the app of runs 1-6 wrote it.
+    {
+        let mut conn = Connection::open(db_file(dir)).unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(SCHEMA_V1_SQL).unwrap();
+        tx.pragma_update(None, "user_version", 1).unwrap();
+        tx.commit().unwrap();
+        conn.execute(
+            "INSERT INTO vaults (vault_id, kind, status, role, current_epoch, bound, created_at)
+             VALUES (?1, 'personal', 'active', NULL, 3, 0, '2026-10-01T00:00:00.000Z')",
+            [&vault_id.as_bytes()[..]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO records (record_id, vault_id, class, revision, synced_revision, key_epoch,
+             tombstone, envelope) VALUES (?1, ?2, 2, 7, 0, 3, 0, ?3)",
+            rusqlite::params![
+                &record_id.as_bytes()[..],
+                &vault_id.as_bytes()[..],
+                vec![1u8; 344]
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO local_settings (key, value) VALUES ('appearance.ui_theme', '\"dark\"')",
+            [],
+        )
+        .unwrap();
+    }
+    let (store, outcome) = Store::open_with(dir, "0.7.0", &PLAN, at(T0)).unwrap();
+    let OpenOutcome::Migrated { from: 1, backup } = outcome else {
+        panic!("expected a migration from 1: {outcome:?}");
+    };
+    assert!(backup.is_file(), "the backup was written first");
+    assert_eq!(store.schema_version().unwrap(), 2);
+    let vault = store.vault(&vault_id).unwrap().unwrap();
+    assert_eq!(vault.current_epoch, 3);
+    assert_eq!(store.vault_binding(&vault_id).unwrap(), (None, None));
+    let row = store.record(&vault_id, &record_id).unwrap().unwrap();
+    assert_eq!((row.revision, row.key_epoch, row.class), (7, 3, 2));
+    assert_eq!(row.envelope, vec![1u8; 344]);
+    assert_eq!(
+        store.setting("appearance.ui_theme").unwrap().as_deref(),
+        Some("\"dark\"")
+    );
+    assert!(store.server_account().unwrap().is_none());
+    assert!(store.recently_deleted().unwrap().is_empty());
+    // The backup is the schema 1 file with the same rows.
+    let copy = Connection::open(&backup).unwrap();
+    assert_eq!(migrate::user_version(&copy).unwrap(), 1);
+    let n: i64 = copy
+        .query_row("SELECT count(*) FROM records", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
 }

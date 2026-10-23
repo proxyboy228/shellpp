@@ -57,8 +57,12 @@ impl MigrationPlan {
 }
 
 /// The migration steps shipped with this app version. Schema 1 is created
-/// directly from `0001_initial.sql`; there are no later steps yet.
-pub(crate) const MIGRATIONS: &[Migration] = &[];
+/// directly from `0001_initial.sql`; step 1 -> 2 adds the sync tables of
+/// stage 7 (`0002_sync.sql`, D93).
+pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
+    from: 1,
+    sql: include_str!("migrations/0002_sync.sql"),
+}];
 
 /// Number of pre-migration copies kept in `backups/`.
 pub(crate) const BACKUPS_KEPT: usize = 3;

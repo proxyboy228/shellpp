@@ -11,6 +11,7 @@
 mod dir_lock;
 mod migrate;
 mod rows;
+mod sync_rows;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,10 @@ use shellpp_sync_api::envelope as wire;
 use uuid::Uuid;
 
 pub use rows::{KeyWrapRow, LocalAuthRow, RecordRow, VaultRow, WrapKind};
+pub use sync_rows::{
+    DeletedOrigin, DuplicatePairRow, RecentlyDeletedRow, ServerAccountRow, SyncStateRow,
+    TlsTrustKind, TlsTrustRow,
+};
 
 pub(crate) use dir_lock::DirLock;
 use migrate::MigrationPlan;
@@ -31,7 +36,7 @@ use rows::{
 };
 
 /// The schema version created by this app (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The SQL of schema version 1 (docs/storage-format.md, section 4.2).
 pub const SCHEMA_V1_SQL: &str = include_str!("migrations/0001_initial.sql");
