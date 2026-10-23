@@ -57,10 +57,13 @@ impl PublicKey {
         Self::parse(RELEASE_KEY)
     }
 
-    /// A minisign `.pub` file: the line after the untrusted comment.
+    /// A minisign `.pub` file: the untrusted comment on the first line, the
+    /// key on the second (as minisign reads it).
     pub fn parse(text: &str) -> Option<Self> {
-        let mut lines = text.lines().skip_while(|line| !line.starts_with(UNTRUSTED));
-        lines.next()?;
+        let mut lines = text.lines();
+        if !lines.next()?.starts_with(UNTRUSTED) {
+            return None;
+        }
         let mut bytes = [0u8; 42];
         let decoded = Base64::decode(lines.next()?.trim(), &mut bytes).ok()?;
         if decoded.len() != 42 || &decoded[..2] != b"Ed" {
@@ -72,8 +75,8 @@ impl PublicKey {
     }
 
     /// Whether `signature` (a `.minisig` file) signs `data` with this key,
-    /// its trusted comment included.
-    pub fn verify(&self, data: &[u8], signature: &str) -> Result<(), SignatureError> {
+    /// its trusted comment included; the trusted comment when it does.
+    pub fn verify<'s>(&self, data: &[u8], signature: &'s str) -> Result<&'s str, SignatureError> {
         let mut lines = signature.lines();
         if !lines.next().is_some_and(|line| line.starts_with(UNTRUSTED)) {
             return Err(SignatureError::Malformed);
@@ -111,7 +114,8 @@ impl PublicKey {
         signed.extend_from_slice(comment.as_bytes());
         self.key
             .verify_strict(&signed, &global)
-            .map_err(|_| SignatureError::Mismatch)
+            .map_err(|_| SignatureError::Mismatch)?;
+        Ok(comment)
     }
 }
 

@@ -217,31 +217,58 @@ fn check_with(
         .user_agent(format!("shellpp/{current}"))
         .build()
         .into();
-    let body = fetch(&agent, url.trim(), MAX_MANIFEST_BYTES).map_err(|error| match error {
-        Fetch::TooLarge => CheckError::BadManifest,
-        Fetch::Status | Fetch::Failed => CheckError::Unreachable,
-    })?;
-    // A missing signature (an HTTP error status) or one too large is not
-    // the release key's; no answer at all is still "did not answer".
-    let sig = fetch(
-        &agent,
-        &signature::signature_url(url),
-        signature::MAX_SIGNATURE_BYTES,
-    )
-    .map_err(|error| match error {
-        Fetch::Status | Fetch::TooLarge => CheckError::BadSignature,
-        Fetch::Failed => CheckError::Unreachable,
-    })?;
-    let sig = String::from_utf8(sig).map_err(|_| CheckError::BadSignature)?;
-    key.verify(&body, &sig)
-        .map_err(|_| CheckError::BadSignature)?;
-    compare(&body, current)
+    // The manifest and its signature are two requests, and "latest" can
+    // move between them (a release published in that second): a mismatch
+    // asks for both once more.
+    let mut retried = false;
+    loop {
+        let body = fetch(&agent, url.trim(), MAX_MANIFEST_BYTES).map_err(|error| match error {
+            Fetch::TooLarge => CheckError::BadManifest,
+            Fetch::Status(_) | Fetch::Failed => CheckError::Unreachable,
+        })?;
+        // A missing signature (a client error status) or one too large is
+        // not the release key's; a server that is down or busy (5xx, 429)
+        // or no answer at all is "did not answer".
+        let sig = fetch(
+            &agent,
+            &signature::signature_url(url),
+            signature::MAX_SIGNATURE_BYTES,
+        )
+        .map_err(|error| match error {
+            Fetch::Status(429 | 500..) | Fetch::Failed => CheckError::Unreachable,
+            Fetch::Status(_) | Fetch::TooLarge => CheckError::BadSignature,
+        })?;
+        let sig = String::from_utf8(sig).map_err(|_| CheckError::BadSignature)?;
+        match key.verify(&body, &sig) {
+            Ok(comment) if names_manifest(comment, &body) => return compare(&body, current),
+            Err(signature::SignatureError::Mismatch) if !retried => retried = true,
+            _ => return Err(CheckError::BadSignature),
+        }
+    }
+}
+
+/// Whether a verified trusted comment is the one the release workflow
+/// writes for `body`: `shellpp <version> latest.json`, with the manifest's
+/// version (a leading `v` aside). Another signed file of a release is not a
+/// manifest. A manifest without a version is left to [`compare`].
+fn names_manifest(comment: &str, body: &[u8]) -> bool {
+    let Some(named) = comment
+        .strip_prefix("shellpp ")
+        .and_then(|rest| rest.strip_suffix(" latest.json"))
+    else {
+        return false;
+    };
+    let unprefixed = |text: &str| text.trim().trim_start_matches('v').to_owned();
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|manifest| manifest.get("version")?.as_str().map(unprefixed))
+        .is_none_or(|version| version == unprefixed(named))
 }
 
 /// Why [`fetch`] got no body.
 enum Fetch {
     /// An HTTP error status.
-    Status,
+    Status(u16),
     /// More than the limit.
     TooLarge,
     /// No answer: no network, a refused or timed-out connection.
@@ -251,7 +278,7 @@ enum Fetch {
 /// One GET of `url`: its body, at most `max` bytes.
 fn fetch(agent: &ureq::Agent, url: &str, max: u64) -> Result<Vec<u8>, Fetch> {
     let mut response = agent.get(url).call().map_err(|error| match error {
-        ureq::Error::StatusCode(_) => Fetch::Status,
+        ureq::Error::StatusCode(status) => Fetch::Status(status),
         _ => Fetch::Failed,
     })?;
     let mut body = Vec::new();

@@ -104,11 +104,22 @@ fn serve_signed(manifest: &str, signature: Option<String>) -> Server {
     })
 }
 
-/// A manifest signed by `signer`, served with its signature.
+/// A manifest signed by `signer` with the release workflow's trusted
+/// comment, served with its signature.
 fn serve_manifest(signer: &Signer, manifest: &str) -> Server {
-    serve_signed(
-        manifest,
-        Some(signer.sign(manifest.as_bytes(), "shellpp test latest.json")),
+    serve_signed(manifest, Some(sign_manifest(signer, manifest)))
+}
+
+/// The signature the release workflow makes of `manifest`: its trusted
+/// comment names the manifest's version ("test" without one).
+fn sign_manifest(signer: &Signer, manifest: &str) -> String {
+    let version = serde_json::from_str::<Value>(manifest)
+        .ok()
+        .and_then(|value| value.get("version")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "test".to_owned());
+    signer.sign(
+        manifest.as_bytes(),
+        &format!("shellpp {version} latest.json"),
     )
 }
 
@@ -149,12 +160,17 @@ fn serve_with(answer: impl Fn(&str) -> (&'static str, String) + Send + 'static) 
 #[test]
 fn a_signature_of_minisign_itself_verifies() {
     let key = PublicKey::parse(KNOWN_KEY).expect("the key of the vectors");
-    assert_eq!(key.verify(KNOWN_MANIFEST, KNOWN_SIGNATURE), Ok(()));
+    assert_eq!(
+        key.verify(KNOWN_MANIFEST, KNOWN_SIGNATURE),
+        Ok("shellpp 9.9.9 latest.json")
+    );
     // CRLF line ends (a file saved on Windows) read the same.
     assert_eq!(
         key.verify(KNOWN_MANIFEST, &KNOWN_SIGNATURE.replace('\n', "\r\n")),
-        Ok(())
+        Ok("shellpp 9.9.9 latest.json")
     );
+    // The comment is the release workflow's for this manifest.
+    assert!(names_manifest("shellpp 9.9.9 latest.json", KNOWN_MANIFEST));
     // The legacy kind (a signature of the file itself) is refused even
     // though it is the key's.
     assert_eq!(
@@ -226,7 +242,10 @@ fn another_key_does_not_verify() {
     let data = br#"{"version": "1.0.0"}"#;
     let signature = signer.sign(data, "shellpp 1.0.0 latest.json");
     // The round trip.
-    assert_eq!(ours.verify(data, &signature), Ok(()));
+    assert_eq!(
+        ours.verify(data, &signature),
+        Ok("shellpp 1.0.0 latest.json")
+    );
     // Another key: its id differs.
     let other = Signer::new();
     assert_eq!(
@@ -264,16 +283,18 @@ fn only_a_minisign_key_is_a_key() {
             .take(2)
             .collect::<Vec<_>>()
             .join("\n"),
+        // Lines before the comment: minisign itself reads line 2 as the key.
+        &format!("# the release key\n{KNOWN_KEY}"),
     ] {
         assert_eq!(PublicKey::parse(text), None, "{text:?}");
     }
-    // The release key file holds a key exactly when it has the key's
-    // comment line: a broken key in it fails here, not in the release.
+    // The release key file holds a key exactly when it starts with the
+    // key's comment line: a broken key in it fails here, not in the
+    // release.
     let file = include_str!("../../../../release/minisign.pub");
     assert_eq!(
         PublicKey::release().is_some(),
-        file.lines()
-            .any(|line| line.starts_with("untrusted comment:")),
+        file.starts_with("untrusted comment:"),
         "release/minisign.pub"
     );
 }
@@ -346,6 +367,66 @@ fn an_unsigned_or_changed_manifest_is_not_an_update() {
         check_with(&garbage.url, "0.1.0", Some(&key)),
         Err(CheckError::BadSignature)
     );
+    // The key's signature of another file of the release, of the manifest
+    // of another version, or with minisign's default comment.
+    for comment in [
+        "shellpp 9.0.0 shellpp-9.0.0-windows-x64.zip",
+        "shellpp 8.0.0 latest.json",
+        "timestamp:1 file:latest.json hashed",
+    ] {
+        let signature = signer.sign(manifest.as_bytes(), comment);
+        let server = serve_signed(manifest, Some(signature));
+        assert_eq!(
+            check_with(&server.url, "0.1.0", Some(&key)),
+            Err(CheckError::BadSignature),
+            "{comment}"
+        );
+    }
+}
+
+#[test]
+fn a_release_published_between_the_two_requests_is_read_again() {
+    let signer = Signer::new();
+    let old = r#"{"version": "1.0.0"}"#;
+    let new = r#"{"version": "1.1.0"}"#;
+    let signature = sign_manifest(&signer, new);
+    let manifests = Arc::new(AtomicUsize::new(0));
+    let server = serve_with(move |path| match path {
+        // The first manifest is the old release's; then "latest" moves.
+        "/latest.json" if manifests.fetch_add(1, Ordering::SeqCst) == 0 => {
+            ("200 OK", old.to_owned())
+        }
+        "/latest.json" => ("200 OK", new.to_owned()),
+        _ => ("200 OK", signature.clone()),
+    });
+    let outcome = check_with(&server.url, "1.0.0", Some(&signer.public()));
+    assert!(
+        matches!(&outcome, Ok(Outcome::Newer { version, .. }) if version == "1.1.0"),
+        "{outcome:?}"
+    );
+    // Both asked twice.
+    assert_eq!(server.requests.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn a_signature_the_server_cannot_send_now_is_no_answer() {
+    let signer = Signer::new();
+    for (status, expected) in [
+        ("503 Service Unavailable", CheckError::Unreachable),
+        ("429 Too Many Requests", CheckError::Unreachable),
+        ("404 Not Found", CheckError::BadSignature),
+        ("403 Forbidden", CheckError::BadSignature),
+    ] {
+        let server = serve_with(move |path| match path {
+            "/latest.json" => ("200 OK", r#"{"version": "9.0.0"}"#.to_owned()),
+            _ => (status, String::new()),
+        });
+        assert_eq!(
+            check_with(&server.url, "0.1.0", Some(&signer.public())),
+            Err(expected),
+            "{status}"
+        );
+    }
 }
 
 #[test]
@@ -515,4 +596,126 @@ fn the_check_at_launch_is_off_by_default_and_daily() {
         manifest_url(&values(json!({MANIFEST_URL: "https://example.com/m.json"}))),
         "https://example.com/m.json"
     );
+}
+
+/// xorshift64*: varied inputs, the same for every run (as
+/// crates/core/tests/fuzz_parsers.rs; no fuzzing tool is installed).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next() % n as u64) as usize
+        }
+    }
+}
+
+/// Pieces of the formats worth inserting.
+const TOKENS: &[&str] = &[
+    "\n",
+    "\r\n",
+    " ",
+    "=",
+    "+",
+    "/",
+    "untrusted comment: ",
+    "trusted comment: ",
+    "ED",
+    "Ed",
+    "RUR",
+    "RWR",
+    "\"version\": ",
+    "\"url\": \"https://",
+    "v99999999999999999999.0.0",
+    "{",
+    "}",
+    "\u{0}",
+    "\u{202e}",
+];
+
+fn mutate(rng: &mut Rng, seed: &str) -> String {
+    let mut bytes = seed.as_bytes().to_vec();
+    for _ in 0..1 + rng.below(4) {
+        let at = rng.below(bytes.len() + 1);
+        match rng.below(5) {
+            0 if !bytes.is_empty() => {
+                let i = rng.below(bytes.len());
+                bytes[i] ^= 1 << rng.below(8);
+            }
+            1 => bytes.insert(at, rng.next() as u8),
+            2 if at < bytes.len() => {
+                let end = (at + 1 + rng.below(16)).min(bytes.len());
+                bytes.drain(at..end);
+            }
+            3 => {
+                let token = TOKENS[rng.below(TOKENS.len())].as_bytes();
+                bytes.splice(at..at, token.iter().copied());
+            }
+            _ => {
+                let end = (at + 1 + rng.below(32)).min(bytes.len());
+                let chunk = bytes[at.min(end)..end].to_vec();
+                bytes.splice(at..at, chunk);
+            }
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// The signed lines of a signature file (the untrusted comment is not
+/// signed, by minisign's design), trimmed as the parser reads them.
+fn signed_lines(signature: &str) -> Vec<String> {
+    signature
+        .lines()
+        .skip(1)
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// Mutated keys, signatures and manifests never panic, and a mutated
+/// signature verifies only when its signed lines are unchanged (plan of
+/// run 8, C6).
+#[test]
+fn mutated_keys_signatures_and_manifests_are_refused_without_panic() {
+    let key = PublicKey::parse(KNOWN_KEY).unwrap();
+    let mut rng = Rng(0x5eed_c620_2610_2300);
+    for iteration in 0..500 {
+        let signature = mutate(&mut rng, KNOWN_SIGNATURE);
+        if key.verify(KNOWN_MANIFEST, &signature).is_ok() {
+            assert!(
+                signature.starts_with("untrusted comment:")
+                    && signed_lines(&signature) == signed_lines(KNOWN_SIGNATURE),
+                "iteration {iteration}: a changed signature verified: {signature:?}"
+            );
+        }
+        let manifest = mutate(&mut rng, std::str::from_utf8(KNOWN_MANIFEST).unwrap());
+        if key.verify(manifest.as_bytes(), KNOWN_SIGNATURE).is_ok() {
+            assert_eq!(
+                manifest.as_bytes(),
+                KNOWN_MANIFEST,
+                "iteration {iteration}: a changed manifest verified"
+            );
+        }
+        let _ = compare(manifest.as_bytes(), "0.1.0");
+        if let Some(parsed) = PublicKey::parse(&mutate(&mut rng, KNOWN_KEY)) {
+            // Another key never opens the signature of this one.
+            if parsed != key {
+                assert!(
+                    parsed.verify(KNOWN_MANIFEST, KNOWN_SIGNATURE).is_err(),
+                    "iteration {iteration}"
+                );
+            }
+        }
+    }
 }

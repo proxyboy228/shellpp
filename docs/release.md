@@ -45,9 +45,10 @@ minisign -G -p shellpp-release.pub -s shellpp-release.key
 
 minisign asks for a password that encrypts the secret key. Then:
 
-1. **Public half.** Replace the content of
+1. **Public half.** Replace the whole content of
    [`release/minisign.pub`](../release/minisign.pub) with the two lines of
-   `shellpp-release.pub` and commit it. The app builds this file in: it
+   `shellpp-release.pub` (the `untrusted comment:` line first, as minisign
+   reads it) and commit it. The app builds this file in: it
    checks `latest.json` with it (below), and the release workflow refuses
    to run without it.
 2. **Secret half.** In the repository's GitHub settings, Environments,
@@ -112,7 +113,16 @@ when:
 - the signature is a minisign signature (the prehashed kind minisign makes
   by default) of exactly that `latest.json`, made with the key of
   `release/minisign.pub` built into the app, its trusted comment included;
+- the trusted comment is the workflow's for this manifest,
+  `shellpp <version> latest.json` with the manifest's own version, so the
+  signature of another file of a release (or a manifest signed by hand
+  with minisign's default comment) does not count;
 - and the manifest's `version` is newer than the app's.
+
+When "latest" changes between the two requests (a release published in
+that second), the app asks for both once more. A signature that the server
+cannot send right now (5xx, 429) is "the update source did not answer", not
+an unsigned update.
 
 Otherwise the check says why ("the update is not signed with the Shell++
 release key", "this build has no key to check updates with"). A different
