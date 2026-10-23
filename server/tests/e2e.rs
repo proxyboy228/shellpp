@@ -514,3 +514,141 @@ fn server_restore_gets_lost_records_back() {
         vec!["after.example.com", "before.example.com"]
     );
 }
+
+/// "My old password may be compromised": the change rotates the personal
+/// vault through the server; the other device signs in again, learns the
+/// new epoch through the chain and reads everything.
+#[test]
+fn password_change_with_rotation_reaches_the_other_device() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("r1.example.com");
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+
+    let new = new_password();
+    a.core
+        .password_change_rotating(password.clone(), new.clone())
+        .expect("rotated");
+    a.host("r2.example.com");
+    a.sync();
+    assert!(b.core.sync_now().is_err(), "B was signed out");
+    done(b.sign_in(&server, &email, &new));
+    assert_eq!(b.addresses(), vec!["r1.example.com", "r2.example.com"]);
+    b.host("r3.example.com");
+    b.sync();
+    a.sync();
+    assert_eq!(
+        a.addresses(),
+        vec!["r1.example.com", "r2.example.com", "r3.example.com"]
+    );
+    // B's copy opens with the new password; the new epoch is its own.
+    let b = b.reopen("B");
+    b.core.unlock(new).expect("new password");
+    assert_eq!(b.addresses().len(), 3);
+}
+
+/// A recovery key reissue on a bound device: a new epoch and record on
+/// the server; the other device signs in again and rebuilds its recovery
+/// row from the new record, so the new key opens its copy.
+#[test]
+fn recovery_key_reissue_through_the_server() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("k.example.com");
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+
+    let issued = a
+        .core
+        .recovery_key_reissue(password.clone())
+        .expect("reissued");
+    let new_key = secrecy::ExposeSecret::expose_secret(&issued.recovery_key).to_owned();
+    assert!(b.core.sync_now().is_err(), "B was signed out");
+    done(b.sign_in(&server, &email, &password));
+    let shown = b.core.recovery_key_show(password.clone()).expect("shown");
+    assert_eq!(
+        secrecy::ExposeSecret::expose_secret(&shown.recovery_key),
+        new_key
+    );
+    // The new key opens B's local copy (its recovery row was rebuilt).
+    let b = b.reopen("B");
+    let fresh = new_password();
+    b.core
+        .recovery_unlock(SecretString::from(new_key), fresh)
+        .expect("the new recovery key opens the copy");
+    assert_eq!(b.addresses(), vec!["k.example.com"]);
+}
+
+/// A server restored from a backup made before a rotation: the device
+/// stops with "rolled back", changes nothing, and after the user's re-post
+/// the server has the epochs and every record again.
+#[test]
+fn rolled_back_server_epochs_are_reposted_on_request() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("e1.example.com");
+    a.register(&server, &email, &password);
+    let db_path = server.dir.path().join("server.db");
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    a.core
+        .recovery_key_reissue(password.clone())
+        .expect("rotated");
+    a.host("e2.example.com");
+    a.sync();
+    server.stop();
+    server.db = shellpp_server::db::Db::open(&format!("sqlite:{}", backup.display())).expect("db");
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = db_path.clone().into_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+    }
+    std::fs::copy(&backup, &db_path).expect("restore");
+    server.resume();
+    shellpp_server::admin::restored(&server.db).expect("restored");
+
+    // The restored server does not know A's newest refresh token: A is
+    // signed out, and signing in again reports the rollback.
+    assert!(a.core.sync_now().is_err());
+    let again = a.core.sync_sign_in(SignInInput {
+        origin: server.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    });
+    match again {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "rolled_back"),
+        other => panic!("expected rolled_back, got {other:?}"),
+    }
+    match a.core.sync_now() {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "rolled_back"),
+        other => panic!("expected rolled_back, got {other:?}"),
+    }
+    assert_eq!(
+        a.addresses(),
+        vec!["e1.example.com", "e2.example.com"],
+        "nothing changed"
+    );
+    a.core
+        .sync_repost_epochs(password.clone())
+        .expect("re-posted");
+    a.sync();
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    assert_eq!(b.addresses(), vec!["e1.example.com", "e2.example.com"]);
+}

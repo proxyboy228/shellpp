@@ -94,7 +94,11 @@ fn device_row_unchanged(store: &Store, context: &KeyContext) -> Result<bool, Cor
 /// [`Session::reseal_older`] as upkeep after a committed change: on failure
 /// the records stay on their older epochs, readable through the chain, and
 /// the next unlock re-seals them.
-fn reseal_or_defer(session: &mut Session, store: &mut Store, now: SystemTime) -> Vec<Uuid> {
+pub(super) fn reseal_or_defer(
+    session: &mut Session,
+    store: &mut Store,
+    now: SystemTime,
+) -> Vec<Uuid> {
     session.reseal_older(store, now).unwrap_or_else(|error| {
         tracing::warn!(code = error.code(), "re-seal deferred");
         Vec::new()
@@ -170,7 +174,7 @@ pub(super) fn recovery_key_of(session: &Session) -> Result<Key32, CoreError> {
     Key32::from_slice(&bytes).ok_or(CoreError::Damaged)
 }
 
-fn recovery_record_data(key: &Key32, issued_at: &str) -> Map<String, Value> {
+pub(super) fn recovery_record_data(key: &Key32, issued_at: &str) -> Map<String, Value> {
     let encoded = Zeroizing::new(BASE64URL_NOPAD.encode(key.expose()));
     object(json!({ "recovery_key": encoded.as_str(), "issued_at": issued_at }))
 }
@@ -810,7 +814,7 @@ impl Core {
         lock::check_new_password(&new, "new_password")?;
         // A bound vault changes the password on the server first (stage 7).
         if self.bound()? {
-            return self.password_change_bound(&context, current, new);
+            return self.password_change_bound(&context, current, new, false);
         }
         self.verify_password(&context, &current)?;
         drop(current);
@@ -868,12 +872,9 @@ impl Core {
         &self,
         password: SecretString,
     ) -> Result<RecoveryKeyResult, CoreError> {
-        // Bound: the reissue goes through the server (section 5.3), not in
-        // run 7; a local rotation would leave the server behind.
+        // Bound: the reissue goes through the server (section 5.3).
         if self.bound()? {
-            return Err(CoreError::Sync(crate::sync::HttpError::Refused(
-                "signed_in",
-            )));
+            return self.recovery_key_reissue_bound(password);
         }
         // Held until the end: the rotation rewraps the `device` row with the
         // device key fetched below, and a lost device key is deleted last.

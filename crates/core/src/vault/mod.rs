@@ -282,6 +282,11 @@ impl Rotation {
         })
     }
 
+    /// The prepared row of `kind` (`chain`, `kek`, `recovery`, `device`).
+    pub fn row(&self, kind: WrapKind) -> Option<&KeyWrapRow> {
+        self.rows.iter().find(|row| row.kind == kind)
+    }
+
     /// A copy of the new vault key (for [`KeyRing::push_epoch`]).
     pub fn new_key(&self) -> Key32 {
         self.new_key.duplicate()

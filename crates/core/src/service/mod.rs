@@ -567,6 +567,17 @@ impl Core {
         self.password_change_impl(current, new)
     }
 
+    /// UI 13.4 with "My old password may be compromised" (and the "Lost or
+    /// stolen?" flow, UI 12.2): the change also rotates the personal vault
+    /// (docs/sync-protocol.md, section 5.1), through the server when bound.
+    pub fn password_change_rotating(
+        &self,
+        current: SecretString,
+        new: SecretString,
+    ) -> Result<(), CoreError> {
+        self.password_change_rotating_impl(current, new)
+    }
+
     /// UI 13.4 "Show": needs the master password even while unlocked.
     pub fn recovery_key_show(
         &self,
