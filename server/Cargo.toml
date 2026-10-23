@@ -40,7 +40,11 @@ postgres = { version = "0.19.14", features = ["with-uuid-1", "with-time-0_3", "w
 # Cryptography of the server (docs/security.md, sections 5.1, 5.5): verifiers,
 # token and code hashes, server-only keys, the TOTP secret at rest, TOTP.
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash", "zeroize"] }
-sha2 = "0.11.1"
+# `zeroize`: the hash states inside HKDF and HMAC (the server secret, the
+# PRK, the TOTP secret) are wiped on drop (security 9.5; review finding).
+sha2 = { version = "0.11.1", features = ["zeroize"] }
+# Not used directly: turns on the same wipe for the HMAC-SHA1 inside totp-rs.
+sha1 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 hmac = "0.13.0"
 hkdf = "0.13.0"
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }

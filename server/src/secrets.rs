@@ -283,6 +283,16 @@ pub fn totp_code(secret: &[u8; 20], unix_seconds: u64) -> String {
 mod tests {
     use super::*;
 
+    /// The hash cores inside HKDF, HMAC and totp-rs's HMAC-SHA1 wipe
+    /// themselves on drop (security 9.5; review finding: `sha2` and `sha1`
+    /// were built without `zeroize`).
+    #[test]
+    fn hash_states_are_wiped_on_drop() {
+        fn wiped<T: zeroize::ZeroizeOnDrop>() {}
+        wiped::<sha2::Sha256>();
+        wiped::<sha1::Sha1>();
+    }
+
     #[test]
     fn verifiers_accept_only_their_key() {
         let key = [7u8; 32];

@@ -195,21 +195,25 @@ fn client_ip<'a>(
     if !trusted(peer) {
         return peer;
     }
-    let forwarded = forwarded
-        .flat_map(|value| value.split(','))
-        .filter_map(forwarded_ip)
-        .collect::<Vec<_>>();
-    forwarded
-        .iter()
-        .rev()
-        .copied()
-        .find(|ip| !trusted(*ip))
-        .unwrap_or(peer)
+    let elements: Vec<&str> = forwarded.flat_map(|value| value.split(',')).collect();
+    // From the right: past the trusted proxies to the first other element.
+    // One that does not parse (`unknown`, a zone id) stops the walk at the
+    // last trusted hop: going on to its left would let the client's own,
+    // forged elements decide the key (security.md 14.4; review finding).
+    let mut last_trusted = peer;
+    for element in elements.into_iter().rev() {
+        match forwarded_ip(element) {
+            Some(ip) if trusted(ip) => last_trusted = ip,
+            Some(ip) => return ip,
+            None => return last_trusted,
+        }
+    }
+    last_trusted
 }
 
 /// One element of `X-Forwarded-For`: `ip`, `ip:port`, `[ipv6]` or
 /// `[ipv6]:port` (some proxies add the client's port); `None` for anything
-/// else, which is skipped.
+/// else, which ends the walk of [`client_ip`].
 fn forwarded_ip(element: &str) -> Option<IpAddr> {
     let element = element.trim();
     if let Ok(ip) = element.parse::<IpAddr>() {
@@ -793,10 +797,29 @@ mod tests {
             ),
             ip("2001:db8::1")
         );
-        // Garbage is skipped; only trusted addresses: the peer.
+        // An element that does not parse ends the walk at the last trusted
+        // hop: what the client wrote on its left never becomes the key
+        // (review finding: skipping it let a forged element through when
+        // a proxy wrote `unknown` or a zone id).
         assert_eq!(
             client_ip(peer, ["192.0.2.1, junk"].into_iter(), trusted),
-            ip("192.0.2.1")
+            peer
+        );
+        assert_eq!(
+            client_ip(
+                peer,
+                ["198.51.100.7, unknown, 10.0.0.3"].into_iter(),
+                trusted
+            ),
+            ip("10.0.0.3")
+        );
+        assert_eq!(
+            client_ip(
+                peer,
+                ["198.51.100.7, [fe80::1%eth0]:4711"].into_iter(),
+                trusted
+            ),
+            peer
         );
         assert_eq!(
             client_ip(peer, ["10.0.0.3:80, junk"].into_iter(), trusted),
