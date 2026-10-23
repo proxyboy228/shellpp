@@ -741,6 +741,26 @@ impl Drop for PgConn<'_> {
     }
 }
 
+impl Drop for PgPool {
+    /// The synchronous client closes its connection with a runtime of its
+    /// own, which may not start on a thread that runs async tasks (the pool
+    /// goes with the server at shutdown): the idle clients close on a plain
+    /// thread.
+    fn drop(&mut self) {
+        let clients = std::mem::take(
+            &mut *self
+                .idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if clients.is_empty() {
+            return;
+        }
+        let closing = std::thread::spawn(move || drop(clients));
+        let _ = closing.join();
+    }
+}
+
 impl PgPool {
     fn new(url: String, max: usize) -> Result<PgPool, DbError> {
         let pool = PgPool {
