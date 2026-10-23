@@ -16,7 +16,7 @@ When you connect to a host, Shell++ tries these in order:
 3. the keys of the system SSH agent: `SSH_AUTH_SOCK`, the Windows OpenSSH
    agent or Pageant, found automatically;
 4. the key files `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa` and other
-   `~/.ssh/id_*` files. A passphrase is asked only after the server
+   `~/.ssh/id_*` files (not the `*_sk` ones). A passphrase is asked only after the server
    accepts the key, and you can tick **Remember until Shell++ locks or
    exits**;
 5. a password prompt;
@@ -57,8 +57,8 @@ Shell++ reads the key as you paste it and shows its **Format**:
   encryption with AES-CBC;
 - PuTTY `.ppk`, versions 2 and 3, encrypted or not.
 
-Supported key types are Ed25519, ECDSA P-256/P-384/P-521 and RSA of 2048
-bits or more. A key protected by a passphrase asks for it ("Protected by a
+Supported key types are Ed25519, ECDSA P-256/P-384/P-521, RSA of 2048
+bits or more, and FIDO2 keys ([below](#fido2-security-keys)). A key protected by a passphrase asks for it ("Protected by a
 passphrase: enter it to import the key") and offers the same **Save in the
 vault** / **Ask on every connection** choice. PEM and PuTTY keys are
 converted to the OpenSSH format and keep their passphrase.
@@ -149,6 +149,27 @@ fingerprint, and warns when it has expired.
 
 > Certificates are stored, shown and exported, but this version does not
 > sign in with them yet.
+
+## FIDO2 security keys
+
+A FIDO2 key (`sk-ssh-ed25519` or `sk-ecdsa`) stays on a hardware security
+key; the Keychain holds only a handle to it, and signing in asks you to
+touch the key.
+
+- **Add one you made with `ssh-keygen`**: **FIDO2** in the Keychain's
+  action bar opens the **FIDO2 key** form. Paste or choose the private key
+  file that `ssh-keygen -t ed25519-sk` (or `ecdsa-sk`) made.
+- **Make a new one**: in the same form (when a security key can be
+  reached), **Create on the security key**,
+  then touch the key ("Touch the security key…"). The new key fills the
+  form; import it like any key.
+- **Signing in**: set the key on a host as usual. On Windows (10 version
+  1903 or later) the Windows Security dialog asks for the touch, over the
+  Shell++ window. On macOS and Linux, security keys work only in builds
+  made with the `fido2-hid` feature, and a key that needs a PIN is skipped.
+- Connections without a tab (port forwarding rules, snippets on several
+  hosts) never use a security key, so no touch is asked for unexpectedly.
+  The `~/.ssh/*_sk` files are not tried by themselves either.
 
 ## Identities
 

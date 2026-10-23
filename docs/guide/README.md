@@ -12,7 +12,8 @@ devices runs through a server you host yourself, if you want it at all.
    quick connect, importing from `~/.ssh/config`, PuTTY and CSV, known
    hosts.
 3. [Keys, the Keychain and Export to host](03-keys.md): generating and
-   importing keys, putting a key on servers, agent forwarding.
+   importing keys, FIDO2 security keys, putting a key on servers, agent
+   forwarding.
 4. [The terminal](04-terminal.md): tabs, splits, workspaces, broadcast
    input, the terminal sidebar, shortcuts.
 5. [SFTP, port forwarding and snippets](05-sftp-forwarding-snippets.md),

@@ -159,6 +159,29 @@ hosts at once.
 
 ![A snippet](images/snippet-panel.png)
 
+### Generating a script from a description (beta)
+
+Shell++ can write a snippet's script from a description, with an
+OpenAI-compatible service you choose: a hosted one (OpenAI and many
+others) or a local model (Ollama, llama.cpp, LM Studio). It is off by
+default.
+
+1. Settings > **Terminal** > **Script generation (beta)**: turn it on, enter
+   the **Address** of the API (empty means `https://api.openai.com/v1`; a
+   local model is for example `http://localhost:11434/v1`) and the
+   **Model**. For a hosted service, enter the **API key** and click **Save
+   key**: it is kept in the system's credential store for that address's
+   host and sent only there; a local model needs none.
+2. In the snippet form, the **Generate from a description (beta)** row
+   appears. Describe what the script should do and click **Generate**. The
+   line under it names the host the description goes to.
+3. The script is added to the **Script** field. It is never run or saved
+   by itself: read it, then **Create** or **Save**.
+
+The description is sent only when you press **Generate**, and only the
+description (no hosts, passwords or keys). An Import Data file never
+changes these settings.
+
 ### Using a snippet in a session
 
 Open the **Terminal sidebar** in a session tab and its **Snippets** page.
