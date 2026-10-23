@@ -32,7 +32,10 @@ struct Client {
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+    async fn check_server_key(
+        &mut self,
+        _key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
         Ok(true)
     }
 
@@ -118,7 +121,10 @@ async fn an_agent_channel_closed_first_by_the_client_leaves_the_session() {
     let (handle, mut agents) = connect(&server, &password).await;
 
     let shell = handle.channel_open_session().await.expect("opens");
-    shell.agent_forward(true).await.expect("agent forwarding requested");
+    shell
+        .agent_forward(true)
+        .await
+        .expect("agent forwarding requested");
     shell.request_shell(true).await.expect("shell requested");
     for round in 0..3 {
         // `agent-keys` makes the server open an agent channel to the client.
