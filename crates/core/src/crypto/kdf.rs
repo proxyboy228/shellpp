@@ -184,6 +184,37 @@ pub fn derive_master_key(
     derive_with_salt(password, params, argon2_salt, platform)
 }
 
+/// The pauses before the reservation of the Argon2 memory is tried again:
+/// about 3 s in all.
+const RESERVE_WAITS: [std::time::Duration; 4] = [
+    std::time::Duration::from_millis(200),
+    std::time::Duration::from_millis(400),
+    std::time::Duration::from_millis(800),
+    std::time::Duration::from_millis(1600),
+];
+
+/// Reserves the memory of `count` Argon2 blocks. A machine short of memory
+/// for a moment (other programs, builds) refuses the reservation; it is
+/// tried again after each of `waits` before the derivation fails with
+/// [`CryptoError::Kdf`] (run 8, C2: an unlock or a first run failed under
+/// load). The parameters never change.
+fn reserve_blocks(
+    blocks: &mut Vec<Block>,
+    count: usize,
+    waits: &[std::time::Duration],
+) -> Result<(), CryptoError> {
+    if blocks.try_reserve_exact(count).is_ok() {
+        return Ok(());
+    }
+    for wait in waits {
+        std::thread::sleep(*wait);
+        if blocks.try_reserve_exact(count).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(CryptoError::Kdf)
+}
+
 /// [`derive_master_key`] with a salt of any length: the Argon2id output of
 /// the encrypted export, whose salt is 16 bytes (docs/storage-format.md,
 /// section 13.3). The same bounds, the same wiping.
@@ -199,9 +230,7 @@ pub fn derive_with_salt(
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
     let block_count = argon.params().block_count();
     let mut blocks: Zeroizing<Vec<Block>> = Zeroizing::new(Vec::new());
-    blocks
-        .try_reserve_exact(block_count)
-        .map_err(|_| CryptoError::Kdf)?;
+    reserve_blocks(&mut blocks, block_count, &RESERVE_WAITS)?;
     blocks.resize(block_count, Block::default());
     let pwd = normalize_password(password);
     let mut out = Key32::zeroed();
@@ -214,6 +243,22 @@ pub fn derive_with_salt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_argon2_memory_is_asked_for_again_then_refused() {
+        let mut blocks = Vec::new();
+        assert!(reserve_blocks(&mut blocks, 16, &RESERVE_WAITS).is_ok());
+        assert!(blocks.capacity() >= 16);
+        // More than any machine has: refused after every pause, not
+        // before.
+        let waits = [std::time::Duration::from_millis(30); 3];
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            reserve_blocks(&mut Vec::new(), usize::MAX / 2048, &waits),
+            Err(CryptoError::Kdf)
+        ));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(90));
+    }
 
     fn params(m_kib: u32, t: u32, p: u32) -> KdfParams {
         KdfParams {
