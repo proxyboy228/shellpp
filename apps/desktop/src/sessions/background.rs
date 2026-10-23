@@ -96,6 +96,9 @@ fn spec_of(config: &SessionConfig) -> ConnectSpec {
             can_save_password: false,
             can_save_passphrase: false,
             file_keys: Vec::new(),
+            // Nobody to touch a security key here: its dialog would come up
+            // unasked (D143); such a host signs in with its other methods.
+            authenticator: None,
         },
         agent: None,
         keepalive: (config.keepalive_s > 0)

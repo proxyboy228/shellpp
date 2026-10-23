@@ -157,6 +157,10 @@ windows-sys = { version = "0.61.2", default-features = false }
 # The app identity's registration under HKCU (shellpp-desktop, D83); already in
 # the tree through GPUI.
 windows-registry = "0.6.1"
+# FIDO2 security keys over USB HID on macOS and Linux (shellpp-desktop's
+# `fido2-hid` feature, D143); MIT. The ring backend, which russh already
+# brings.
+ctap-hid-fido2 = { version = "3.6.0", default-features = false, features = ["ring"] }
 # Master password strength indicator of the first-run screen (UI 13.1), MIT.
 # Without the default "builder" feature (derive_builder is not needed).
 zxcvbn = { version = "3.1.1", default-features = false }

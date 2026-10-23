@@ -15,14 +15,15 @@ use shellpp_ssh::client::ExecOutput;
 use shellpp_ssh::{FailureKind, SshError};
 use uuid::Uuid;
 
-use super::{ScreenshotError, ShotState, settle, shell_of};
+use super::{ScreenshotError, ShotState, click, settle, shell_of};
 use crate::app::RootView;
 use crate::shell::{Section, TopTab};
 use crate::snippets::{RunResults, RunRow, RunState};
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 7] = [
+pub const STATES: [ShotState; 8] = [
+    ShotState::SnippetGenerate,
     ShotState::Snippets,
     ShotState::SnippetPanel,
     ShotState::SnippetVariables,
@@ -142,6 +143,23 @@ fn output(text: &str, code: u32) -> TargetOutcome {
     })
 }
 
+/// The script generator of [`ShotState::SnippetGenerate`]: shown, never
+/// asked.
+struct ShotProvider;
+
+impl crate::snippets::generate::Provider for ShotProvider {
+    fn destination(&self) -> String {
+        "api.openai.com".to_owned()
+    }
+
+    fn generate(
+        &self,
+        _description: &str,
+    ) -> Result<String, crate::snippets::generate::GenerateError> {
+        Err(crate::snippets::generate::GenerateError::Unreachable)
+    }
+}
+
 /// From the reset demo window: the state's own steps.
 pub async fn reach(
     cx: &mut AsyncApp,
@@ -151,6 +169,14 @@ pub async fn reach(
     shot: ShotState,
 ) -> Result<(), ScreenshotError> {
     let shell = shell_of(cx, root, shot)?;
+    // Script generation (D144) only in its own state: a provider that is
+    // never asked (no request leaves the screenshot run).
+    cx.update(|cx| {
+        crate::snippets::generate::set_provider(
+            (shot == ShotState::SnippetGenerate).then(|| std::sync::Arc::new(ShotProvider) as _),
+            cx,
+        )
+    });
     let snippets = cx
         .update(|cx| prepare(state, cx))
         .ok_or_else(|| not_reached(shot, "the demo snippets could not be saved"))?;
@@ -233,6 +259,20 @@ pub async fn reach(
     })
     .map_err(|_| ScreenshotError::WindowClosed)?;
     settle(cx, handle).await?;
+    if shot == ShotState::SnippetGenerate {
+        // A new snippet with a description typed, before Generate.
+        click(cx, handle, "snippet-new")?;
+        settle(cx, handle).await?;
+        cx.update_window(handle, |_, window, cx| {
+            if let Some(form) = screen.read(cx).form().cloned() {
+                form.update(cx, |form, cx| {
+                    form.set_description("Restart nginx and show its status", window, cx)
+                });
+            }
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+        settle(cx, handle).await?;
+    }
     if shot == ShotState::SnippetLeave {
         // A change typed into the description, then the collapse button.
         cx.update_window(handle, |_, window, cx| {
@@ -258,6 +298,7 @@ pub fn check(
     shot: ShotState,
 ) -> Result<(), ScreenshotError> {
     let wanted: &[&str] = match shot {
+        ShotState::SnippetGenerate => &["snippet-generate-row", "snippet-generate-destination"],
         ShotState::Snippets => &["snippet-packages", "snippet-list"],
         ShotState::SnippetPanel => &["snippet-panel", "snippet-form-targets"],
         ShotState::SnippetVariables => &["snippet-variables-form"],

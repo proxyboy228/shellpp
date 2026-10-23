@@ -358,16 +358,36 @@ async fn try_key(
             return Ok(Step::Next);
         }
     };
-    // A security key (FIDO2) signs on its authenticator, which the SSH layer
-    // does not reach yet (stage 3 keeps it in the Keychain only): unusable
-    // here, the next method runs.
+    // A security key (FIDO2) signs on its authenticator (D143): without one
+    // it is unusable here and the next method runs.
     if matches!(
         key.algorithm(),
         Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256
     ) {
-        tracing::debug!("security key skipped: no authenticator support yet");
-        progress.key_unusable = true;
-        return Ok(Step::Next);
+        let flags = match key.key_data() {
+            KeypairData::SkEd25519(sk) => sk.flags(),
+            KeypairData::SkEcdsaSha2NistP256(sk) => sk.flags(),
+            _ => 0,
+        };
+        let Some(authenticator) = context
+            .plan
+            .authenticator
+            .clone()
+            .filter(|authenticator| authenticator.ready(flags))
+        else {
+            tracing::debug!("security key skipped: no authenticator ready for it");
+            progress.key_unusable = true;
+            return Ok(Step::Next);
+        };
+        return try_security_key(
+            handle,
+            context,
+            progress,
+            key,
+            authenticator,
+            prompted_passphrase,
+        )
+        .await;
     }
     progress.offered.push(key.public_key().clone());
     let Ok(hash) = hash_for(handle, &key.algorithm(), context).await else {
@@ -393,6 +413,55 @@ async fn try_key(
             tracing::debug!(method = "publickey", "refused");
             progress.refused(handle, remaining_methods)?;
             Ok(Step::Next)
+        }
+    }
+}
+
+/// Offers a security key and signs with its authenticator once the server
+/// accepted it (the user touches the key then).
+async fn try_security_key(
+    handle: &mut Handle<ClientHandler>,
+    context: &AuthContext<'_>,
+    progress: &mut Progress,
+    key: PrivateKey,
+    authenticator: Arc<dyn crate::sk::Authenticator>,
+    prompted_passphrase: Option<PromptAnswer>,
+) -> Result<Step, AuthError> {
+    use crate::sk::{SkError, SkSignError, SkSigner};
+    let public = key.public_key().clone();
+    progress.offered.push(public.clone());
+    let mut signer = SkSigner {
+        key: Arc::new(key),
+        authenticator,
+    };
+    // The touch (or PIN) waits for the user: the long limit of answers.
+    let result = tokio::time::timeout(
+        context.timeout.max(AUTH_REPLY_TIMEOUT),
+        handle.authenticate_publickey_with(progress.username.clone(), public, None, &mut signer),
+    )
+    .await
+    .map_err(|_| AuthError::Failed(FailureKind::Timeout))?;
+    match result {
+        Ok(AuthResult::Success) => {
+            // An encrypted key file's passphrase, as for any key.
+            let mut authenticated = progress.outcome(AuthMethod::PublicKey);
+            authenticated.prompted.passphrase = prompted_passphrase;
+            Ok(Step::Success(authenticated))
+        }
+        Ok(AuthResult::Failure {
+            remaining_methods, ..
+        }) => {
+            tracing::debug!(method = "publickey", "security key refused");
+            progress.refused(handle, remaining_methods)?;
+            Ok(Step::Next)
+        }
+        Err(SkSignError::Send) => Err(progress.closed()),
+        Err(SkSignError::Sk(SkError::Cancelled)) => Err(AuthError::Failed(FailureKind::Cancelled)),
+        // The server waits for a signature that cannot be made: this
+        // attempt cannot go on.
+        Err(SkSignError::Sk(error)) => {
+            tracing::debug!(%error, "security key did not sign");
+            Err(AuthError::Failed(FailureKind::KeyUnusable))
         }
     }
 }

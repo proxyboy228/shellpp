@@ -32,10 +32,13 @@ env:
   CARGO_TERM_COLOR: always
   NODE_VERSION: "22"
   # System libraries GPUI links on Linux (xkbcommon, xcb, fontconfig,
-  # freetype; Wayland is loaded at run time) plus pkg-config to find them.
+  # freetype; Wayland is loaded at run time) plus pkg-config to find them,
+  # and libudev for hidapi (the desktop's `fido2-hid` feature, D143, built
+  # by the --all-features steps).
   LINUX_GPUI_PACKAGES: >-
     pkg-config libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev
     libx11-xcb-dev libfontconfig-dev libfreetype-dev libwayland-dev
+    libudev-dev
 
 defaults:
   run:

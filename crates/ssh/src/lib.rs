@@ -40,6 +40,7 @@ pub mod open_with;
 pub mod proxy;
 pub mod reconnect;
 pub mod sftp;
+pub mod sk;
 pub mod transfer;
 pub mod transfer_queue;
 mod transport;

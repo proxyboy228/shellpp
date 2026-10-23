@@ -1170,7 +1170,11 @@ On the left:
 - **Certificate**: add an SSH certificate.
 - **FIDO2**: add a hardware key (`sk-ssh-ed25519`, `sk-ecdsa`). [decision on types]
   It opens the New key form for the private key file that `ssh-keygen -t ed25519-sk`
-  made (a handle; the key stays on the security key). [decision, D64]
+  made (a handle; the key stays on the security key). [decision, D64] Where the system can
+  make one (Windows, WebAuthn), the form also has "Create on the security key": the system
+  asks to touch the key and the new key's file fills the form, imported as any key file.
+  Signing in with a security key asks to touch it (on Windows in the system's Windows
+  Security dialog). [decision, D143]
 - **Certificate** opens "Add a certificate": the `*-cert.pub` text, pasted or chosen, goes
   onto the key whose public key it certifies, and that key's panel opens; a certificate of
   no key in the Keychain is refused with that reason. The key panel shows a key's
@@ -1178,8 +1182,7 @@ On the left:
   a `--danger` line when it has expired or is not valid yet, and "Remove certificate".
   [decision, D65]
 - While a part is not built, its button says so in a tooltip: what does not work yet and
-  when it arrives (FIDO2: creating a key on a security key and signing with it come in a
-  later stage). [decision, D64]
+  when it arrives. [decision, D64]
 
 On the right: search, a tile/list toggle, a sort menu (by name,
 by creation date, by modification date). The same sort icon is used
@@ -1397,7 +1400,7 @@ Blocks from top to bottom:
   [decision] (D68)
 - Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
-### 9.5 Script generation from a description [decision, later stage]
+### 9.5 Script generation from a description [decision] (D144)
 
 - Off by default. Enabled in settings by specifying a provider:
   your own API key for an LLM or a local model.
@@ -1405,6 +1408,13 @@ Blocks from top to bottom:
   generate button. The user is explicitly shown where the text will go.
 - The generated script is only inserted into the Script field. It is never
   executed automatically.
+- Settings > Terminal, "Script generation (beta)": the switch, the address of an
+  OpenAI-compatible API (`https://`, or `http://` on this computer for a local model; empty:
+  the OpenAI API), the model and the API key ("Save key" puts it into the system's
+  credential store; empty removes it). With generation on and a model set, the snippet form
+  shows "Generate from a description (beta)" under Script: a description field, Generate,
+  and a caption naming the host the description goes to. The script goes after what the
+  field holds; an error says why nothing came back. [decision]
 
 ---
 

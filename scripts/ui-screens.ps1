@@ -65,7 +65,15 @@
     demo itself (every record already here, nothing added);
   - import-ssh-config: the import dialog's preview of a sample OpenSSH
     config (never ~/.ssh/config): new hosts, a key file with a passphrase,
-    a missing one, a ProxyCommand that is not imported.
+    a missing one, a ProxyCommand that is not imported;
+  - import-putty: the preview of a fixed list of PuTTY sessions (D140; never
+    the registry): SSH and Telnet sessions, a proxy, a refused protocol;
+  - import-csv-mapping, import-csv-preview: the column mapping of a sample
+    CSV file (D141: delimiter, character set, the columns' roles, the
+    password warning) and its preview (new rows, a duplicate, an error).
+
+  Run 8: snippet-generate, a new snippet's form with "Generate from a
+  description" (D144; no request is sent).
 
   Stage 2b, step 5.1 (-Stage2b selects these states, both themes, 1280x800):
   - known-hosts: the Known Hosts screen after an import of a temporary
@@ -107,7 +115,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (236 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (244 files for the
   default sizes; -Zoom other than 100 puts the zoom in the names:
   <W>x<H>-<theme>-<zoom>-<state>.png). Exits with 1 when the build, the run or
   a file check fails.
@@ -213,9 +221,12 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'serial-dialog-manual-port', 'settings-updates', 'top-bar-update',
     'sync-connect', 'sync-trust', 'sync-account', 'recently-deleted', 'sync-review', 'hosts-duplicates',
     'sync-duplicates', 'sync-conflict')
-# Stage 3, the data transfer dialogs (ShotState::ExportData and the two
-# imports, captured after new-host).
-$allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config')
+# Stage 3, the data transfer dialogs (ShotState::ExportData and the
+# imports, captured after new-host; the PuTTY and CSV ones from run 8).
+$allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config',
+    'import-putty', 'import-csv-mapping', 'import-csv-preview')
+# Run 8: the snippet form's Generate row (ShotState::SnippetGenerate).
+$allStates += @('snippet-generate')
 # Stage 4 (run 3): the SFTP tab and the Keychain's Export to host and
 # certificate (ShotState::Sftp*, Keychain{Export,Certificate}).
 $stage4States = @('sftp-local', 'sftp-picker', 'sftp-queue', 'sftp-actions', 'sftp-delete', 'sftp-permissions',

@@ -127,6 +127,22 @@ pub const MIN_CONTRAST_PALETTE_HINT: &str =
     "Theme colors only; exact colors set by programs stay as they are";
 pub const MIN_CONTRAST_ALWAYS: &str = "Always";
 pub const MIN_CONTRAST_ALWAYS_HINT: &str = "Also exact colors set by programs";
+pub const GENERATION: &str = "Script generation (beta)";
+pub const GENERATION_HINT: &str = "Writes a snippet's script from a description, with an \
+     OpenAI-compatible service you choose. A description is sent only when you press Generate \
+     in the snippet form; the script is never run by itself.";
+pub const GENERATION_URL: &str = "Address";
+pub const GENERATION_URL_INVALID: &str = "Use https://, or http:// on this computer.";
+pub const GENERATION_MODEL: &str = "Model";
+pub const GENERATION_MODEL_PLACEHOLDER: &str = "gpt-4o-mini, llama3.1 …";
+pub const GENERATION_KEY: &str = "API key";
+pub const GENERATION_KEY_SAVE: &str = "Save key";
+pub const GENERATION_KEY_HINT: &str = "Kept in the system's credential store for this address's \
+     host, and sent only there. Leave it empty for a local model.";
+pub const GENERATION_KEY_ADDRESS: &str = "Fix the address first: the key is kept for its host.";
+pub const GENERATION_KEY_SAVED: &str = "The key is saved in the system's credential store.";
+pub const GENERATION_KEY_REMOVED: &str = "The saved key is removed.";
+pub const GENERATION_KEY_FAILED: &str = "The system's credential store did not take the key.";
 pub const AUTOCOMPLETE: &str = "Autocomplete (beta)";
 pub const AUTOCOMPLETE_HINT: &str = "Suggests the rest of a command from this host's history while you type; Tab or → accepts it. Never at a password prompt or in full-screen programs.";
 pub const AUTOCOMPLETE_OFF: &str = "Off";

@@ -855,3 +855,94 @@ fn folders_are_reached_with_the_arrows(cx: &mut TestAppContext) {
     );
     ui.finish(cx);
 }
+
+/// A script generator that answers from a list and counts its calls; no
+/// request leaves the test.
+struct FakeProvider {
+    answer: Result<String, generate::GenerateError>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl generate::Provider for FakeProvider {
+    fn destination(&self) -> String {
+        "generator.example".to_owned()
+    }
+
+    fn generate(&self, description: &str) -> Result<String, generate::GenerateError> {
+        self.asked.lock().unwrap().push(description.to_owned());
+        self.answer.clone()
+    }
+}
+
+/// UI 9.5 (D144): off, the form has no Generate row; on, the row says
+/// where the description goes, sends it only on Generate, and puts the
+/// script into the field without running or saving anything.
+#[gpui_kit::test]
+fn a_script_is_generated_only_on_generate(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[]);
+    ui.click(cx, "snippet-new");
+    assert!(!ui.form(cx).read_with(cx, |form, _| form.can_generate()));
+    assert!(!ui.visible(cx, "snippet-generate-row"));
+
+    let provider = std::sync::Arc::new(FakeProvider {
+        answer: Ok("sudo systemctl restart {{service}}".to_owned()),
+        asked: std::sync::Mutex::new(Vec::new()),
+    });
+    cx.update(|cx| generate::set_provider(Some(provider.clone()), cx));
+    ui.click(cx, "snippet-new");
+    let form = ui.form(cx);
+    assert!(form.read_with(cx, |form, _| form.can_generate()));
+    assert!(ui.visible(cx, "snippet-generate-row"));
+    assert!(ui.visible(cx, "snippet-generate-destination"));
+    // An empty description is not sent.
+    ui.click(cx, "snippet-generate");
+    assert_eq!(
+        form.read_with(cx, |form, _| form.generate_error()),
+        Some(strings::GENERATE_EMPTY)
+    );
+    assert!(provider.asked.lock().unwrap().is_empty());
+    // Typing sends nothing; Generate does, once.
+    ui.type_into(cx, "snippet-describe", "restart a service");
+    assert!(provider.asked.lock().unwrap().is_empty());
+    ui.click(cx, "snippet-generate");
+    cx.run_until_parked();
+    assert_eq!(*provider.asked.lock().unwrap(), ["restart a service"]);
+    assert_eq!(
+        form.read_with(cx, |form, cx| form.script_text(cx)),
+        "sudo systemctl restart {{service}}"
+    );
+    // A second script goes after the first; nothing is saved or run.
+    ui.click(cx, "snippet-generate");
+    cx.run_until_parked();
+    assert_eq!(
+        form.read_with(cx, |form, cx| form.script_text(cx)),
+        "sudo systemctl restart {{service}}\nsudo systemctl restart {{service}}"
+    );
+    assert!(ui.snippets(cx).is_empty());
+    ui.finish(cx);
+}
+
+#[gpui_kit::test]
+fn a_failed_generation_says_why(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx, &[]);
+    cx.update(|cx| {
+        generate::set_provider(
+            Some(std::sync::Arc::new(FakeProvider {
+                answer: Err(generate::GenerateError::Unreachable),
+                asked: std::sync::Mutex::new(Vec::new()),
+            })),
+            cx,
+        )
+    });
+    ui.click(cx, "snippet-new");
+    let form = ui.form(cx);
+    ui.type_into(cx, "snippet-describe", "list big files");
+    ui.click(cx, "snippet-generate");
+    cx.run_until_parked();
+    assert_eq!(
+        form.read_with(cx, |form, _| form.generate_error()),
+        Some(strings::GENERATE_UNREACHABLE)
+    );
+    assert_eq!(form.read_with(cx, |form, cx| form.script_text(cx)), "");
+    ui.finish(cx);
+}

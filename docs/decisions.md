@@ -1704,6 +1704,42 @@ Status: run 8 decision, 2026-10-23 (plan, item B4). Settles UI 4.2 and 12.4 "Aut
 
 **Spec impact:** docs/ui-behavior-spec.md, sections 0, 4.2 and 12.4; docs/data-model.md, section 16.1; `docs/ru`.
 
+
+### 143. FIDO2 security keys sign and are made through the system's authenticator (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B3). Implements item 8 of D50 and the signing left open in D37.
+
+**Context.** D37 imports `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` keys without signing; D50 chose the WebAuthn API on Windows and `ctap-hid-fido2` on macOS and Linux. No security key is at hand during the run: the work is checked at the level of formats, against a software authenticator and the test server, and with a key in the morning check list.
+
+**Decision:**
+
+- `shellpp-ssh` signs through an `Authenticator` trait (`sk.rs`): the request carries the key's application (relying party id, `ssh:`), key handle, flags and the data to sign; the authenticator signs its authenticator data and SHA-256 of the data (its client data hash), as OpenSSH's PROTOCOL.u2f describes. The SSH signature is the Ed25519 signature, or the ECDSA one converted from DER to `mpint r, mpint s`, followed by the flags and the counter; it is checked against the key's public key before it is sent. Without an authenticator, or when it is not ready for the key (no device, several devices over HID, a PIN key over HID), a security key is skipped before it is offered and the next method runs, as before. Once the server accepted the key a failure cannot be passed over (the server waits for that signature): a cancelled touch ends the attempt (`Cancelled`), another failure as a key that cannot be used. An encrypted key file's passphrase is offered for saving as for any key. Connections without a tab (forwarding at launch, snippets on many hosts) get no authenticator, so no dialog comes up unasked. The default key files `~/.ssh/*_sk` stay out (each would ask for a touch at every connection).
+- Windows: the WebAuthn API of `webauthn.dll` (Windows 10 1903 and later), loaded at run time from System32 (`LoadLibraryExW` and `GetProcAddress`, `windows-sys` types; a load-time import would keep the app from starting without the DLL); `unsafe` only in `apps/desktop/src/platform/security_key.rs` with SAFETY comments, listed in CONTRIBUTING.md. The data to sign is passed as the "client data", which the API hashes with SHA-256, the credential as the only allowed one, user verification as the key's flag asks; the system shows its own Windows Security dialog over the active window. The calls that show the dialog (sign and make) are tested only when `SHELLPP_TEST_WEBAUTHN=1` (a person with a key); loading the DLL, the API version and the error mapping are tested always. The dialog belongs to the active window; it cannot be cancelled from the app (that needs options version 3), so after a closed tab it stays up to its 60 s timeout.
+- macOS and Linux: CTAP2 over USB HID through `ctap-hid-fido2` 3.6 (MIT, ring backend) behind the desktop's `fido2-hid` feature, **off by default**: it builds `hidapi`, which needs libudev on Linux (added to the CI packages for the `--all-features` steps), and nobody could check it with a key. It asks the one FIDO device plugged in; a key that requires a PIN is skipped (no PIN prompt yet). The owner turns the feature on for release builds after a check.
+- Key generation: "Create on the security key" in the FIDO2 form, where an authenticator is there: WebAuthn MakeCredential, or CTAP2 makeCredential over HID, with EdDSA first and ES256 second, a non-discoverable credential, user presence required; the COSE public key is read from the attested credential data and the OpenSSH key file (application, flags, key handle) fills the form, imported as any key file.
+- A test run never reaches an authenticator. Nothing logs key handles, data or signatures.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 7 (FIDO2, the tooltip), and `docs/ru`.
+
+
+### 144. Script generation through an OpenAI-compatible API (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B5). Settles UI 9.5.
+
+**Context.** UI 9.5 asks for script generation off by default, with the user's own API key or a local model, the description sent only on the button, the destination shown, and the result only inserted into the Script field. The run plan adds: the provider is configurable (an API key, the address of an OpenAI-compatible API, or a local model), tests on a fake provider, no real requests. Settings are plaintext and must not hold secrets (data-model 16.1).
+
+**Decision:**
+
+- One provider kind: the OpenAI-compatible `POST <address>/chat/completions` (OpenAI and most hosted services, Ollama, llama.cpp and LM Studio locally). The settings are `snippets.generation` (`off` by default), `snippets.generation_url` (empty: `https://api.openai.com/v1`) and `snippets.generation_model`. The address must be `https://`, or plain `http://` to this computer's loopback (a local model, never through a proxy), with no user part; no redirects are followed.
+- The API key is kept in the OS credential store (Windows Credential Manager, the macOS keychain, the Secret Service) under one entry per host (`api-key:<host>`), never in a setting, the vault or an export; it is sent only as the `Authorization: Bearer` header to that host, so a key saved for one service never goes to another after the address changes. It is read and written off the UI thread. A test run and `--demo` keep keys in memory; an unsigned macOS build has no store for them (D7).
+- The generation settings belong to the device: Import Data never applies them, not even a full restore (D41, D50): a file never chooses where descriptions go.
+- The snippet form reads the settings again when Generate is pressed: a row left open while Settings turned generation off sends nothing.
+- The request holds a fixed system instruction (a shell script only, `{{name}}` for values to fill, never passwords or keys) and the description (at most 2,000 characters), temperature 0.2; the answer's first choice is the script, a Markdown fence around it removed. Answers over 256 KiB are refused; the timeout is 120 s (local models are slow).
+- The form shows the row only while generation is on with a model; the caption names the host the description goes to. Generate runs off the UI thread; the script goes after what the Script field holds and is never run or saved by itself.
+- Tests use a fake provider through an override; no test sends a request.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 9.5; docs/data-model.md, section 16.1; docs/security.md (A3, TB2); `docs/ru`.
+
 ## Run 8 of 2026-10-23, agent C
 
 The decisions below were taken during the owner's eighth long run, by its agent C (numbers 170-199), marked "run 8"; the disputable ones are listed for the owner in the run report.

@@ -304,6 +304,10 @@ pub struct ImportForm {
     ssh: Option<SshScan>,
     /// Opened by FIDO2: the form explains a security key's file.
     security_key: bool,
+    /// "Create on the security key" waits for the touch (D143).
+    creating: Option<Task<()>>,
+    /// Why the last "Create on the security key" made no key.
+    create_error: Option<&'static str>,
     _scan: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -384,6 +388,8 @@ impl ImportForm {
             importing: None,
             ssh,
             security_key: false,
+            creating: None,
+            create_error: None,
             _scan: scan,
             _subscriptions: subscriptions,
         }
@@ -396,6 +402,63 @@ impl ImportForm {
 
     pub fn set_security_key(&mut self, cx: &mut Context<Self>) {
         self.security_key = true;
+        cx.notify();
+    }
+
+    pub fn is_creating(&self) -> bool {
+        self.creating.is_some()
+    }
+
+    pub fn create_error(&self) -> Option<&'static str> {
+        self.create_error
+    }
+
+    /// "Create on the security key" (D143): the system asks to touch the
+    /// key; the new key's file fills the form, imported as any key file.
+    pub fn create_on_security_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(authenticator) = crate::platform::security_key::authenticator() {
+            self.create_with(authenticator, window, cx);
+        }
+    }
+
+    /// [`Self::create_on_security_key`] with a given authenticator (tests).
+    pub fn create_with(
+        &mut self,
+        authenticator: std::sync::Arc<dyn shellpp_ssh::sk::Authenticator>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use shellpp_ssh::sk::{CreateRequest, SkError, key_file_text};
+        if self.creating.is_some() {
+            return;
+        }
+        self.create_error = None;
+        let work = cx.background_spawn(async move {
+            let request = CreateRequest {
+                application: "ssh:".to_owned(),
+                user_verification: false,
+            };
+            let attested = authenticator.create(&request)?;
+            key_file_text(&request, &attested, strings::SECURITY_KEY_COMMENT)
+        });
+        self.creating = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |form, window, cx| {
+                form.creating = None;
+                match result {
+                    Ok(text) => form.set_text(&text, window, cx),
+                    Err(error) => {
+                        tracing::info!(%error, "no key made on the security key");
+                        form.create_error = Some(match error {
+                            SkError::Cancelled => strings::CREATE_CANCELLED,
+                            SkError::NoAuthenticator => strings::CREATE_NO_KEY,
+                            _ => strings::CREATE_FAILED,
+                        });
+                        cx.notify();
+                    }
+                }
+            });
+        }));
         cx.notify();
     }
 

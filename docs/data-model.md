@@ -963,6 +963,9 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `terminal.os_detection_script` | string or null | null (the built-in script) | 12.4 | app configuration, not user command history |
 | `terminal.local_shell` | string or null | null (PowerShell 7 on Windows when it is installed, else Windows PowerShell; the login shell elsewhere) | 2.2, 12.4 | owner's stage 2b step 0.5 |
 | `terminal.keepalive_s` | int 0–3600 | 30 | 12.4 | UI 12.4 |
+| `snippets.generation` | enum `off`, `on` | `off` | 9.5, 12.4 | script generation (beta, D144); never imported |
+| `snippets.generation_url` | string(2048)? | null (the OpenAI API) | 9.5, 12.4 | `https://`, or `http://` to this computer; never imported (D144) |
+| `snippets.generation_model` | string(256)? | null | 9.5, 12.4 | the provider's model name; the API key is in the OS credential store, never a setting (D144) |
 | `sftp.show_hidden` | bool | `false` | 12.6 | D19 |
 | `sftp.confirm_delete` | bool | `true` | 12.6 | D19 |
 | `sftp.name_conflict` | enum `ask`, `replace`, `skip`, `rename` | `ask` | 12.6 | D19 |

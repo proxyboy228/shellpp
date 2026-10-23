@@ -95,6 +95,24 @@ pub const TAGS: &str = "Tags";
 pub const TAGS_PLACEHOLDER: &str = "Add a tag";
 pub const TAGS_NOTE: &str = "Enter or a comma adds the tag.";
 pub const SCRIPT: &str = "Script";
+/// Script generation (beta, UI 9.5, D144).
+pub const GENERATE_LABEL: &str = "Generate from a description (beta)";
+pub const GENERATE_PLACEHOLDER: &str = "Restart nginx and show its status";
+pub const GENERATE: &str = "Generate";
+pub const GENERATING: &str = "Generating…";
+pub const GENERATE_EMPTY: &str = "Describe what the script should do.";
+pub const GENERATE_ADDRESS: &str =
+    "The generation address must be https://, or http:// on this computer.";
+pub const GENERATE_UNREACHABLE: &str = "The generation service could not be reached.";
+pub const GENERATE_NOTHING: &str = "The generation service returned no script.";
+
+/// Where the description goes, under the Generate row.
+pub fn generate_destination(host: &str) -> String {
+    format!(
+        "Pressing Generate sends the description to {host}. The script goes into the field \
+         above and never runs by itself."
+    )
+}
 pub const SCRIPT_NOTE: &str = "{{name}} is asked for each time the snippet runs.";
 pub const TARGETS: &str = "Targets for execution";
 pub const TARGETS_NOTE: &str =

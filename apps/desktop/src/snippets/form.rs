@@ -94,6 +94,12 @@ pub struct SnippetForm {
     targets: Vec<Uuid>,
     picker_open: bool,
     errors: BTreeMap<&'static str, &'static str>,
+    /// Script generation (beta, UI 9.5, D144): the provider when it is on,
+    /// the description field, the request in flight and its failure.
+    generator: Option<std::sync::Arc<dyn super::generate::Provider>>,
+    describe: Entity<InputState>,
+    generating: Option<gpui::Task<()>>,
+    generate_error: Option<&'static str>,
     /// The values as saved (empty for a new snippet).
     saved: Values,
     state: Entity<AppState>,
@@ -274,12 +280,23 @@ impl SnippetForm {
                 }
             }),
         );
+        let generator = state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| super::generate::provider(&values, cx));
+        let describe =
+            cx.new(|cx| InputState::new(window, cx).placeholder(strings::GENERATE_PLACEHOLDER));
         let mut form = Self {
             mode,
             label,
             tags,
             tag_input,
             script,
+            generator,
+            describe,
+            generating: None,
+            generate_error: None,
             package,
             package_open: false,
             targets,
@@ -363,6 +380,135 @@ impl SnippetForm {
 
     pub fn script_text(&self, cx: &App) -> String {
         self.script.read(cx).value().to_string()
+    }
+
+    /// Script generation is on: a provider is set (D144).
+    pub fn can_generate(&self) -> bool {
+        self.generator.is_some()
+    }
+
+    pub fn is_generating(&self) -> bool {
+        self.generating.is_some()
+    }
+
+    pub fn generate_error(&self) -> Option<&'static str> {
+        self.generate_error
+    }
+
+    /// Fills the description field (tests).
+    pub fn set_description(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = text.to_owned();
+        self.describe
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    /// Generate (UI 9.5, D144): the description goes to the provider now,
+    /// off the UI thread; the script it returns is put into the Script
+    /// field (after what is there), never run.
+    pub fn generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use super::generate::GenerateError;
+        // The settings as they are now (Settings may have changed them
+        // while this form stayed open): off means nothing is sent.
+        self.generator = self
+            .state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| super::generate::provider(&values, cx));
+        let Some(provider) = self.generator.clone() else {
+            cx.notify();
+            return;
+        };
+        if self.generating.is_some() {
+            return;
+        }
+        let description = self.describe.read(cx).value().trim().to_owned();
+        if description.is_empty() {
+            self.generate_error = Some(strings::GENERATE_EMPTY);
+            cx.notify();
+            return;
+        }
+        self.generate_error = None;
+        let work = cx.background_spawn(async move { provider.generate(&description) });
+        self.generating = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |form, window, cx| {
+                form.generating = None;
+                match result {
+                    Ok(generated) => {
+                        let current = form.script_text(cx);
+                        let text = if current.trim().is_empty() {
+                            generated
+                        } else {
+                            format!("{}\n{generated}", current.trim_end())
+                        };
+                        form.script
+                            .update(cx, |editor, cx| editor.set_value(text, window, cx));
+                    }
+                    Err(error) => {
+                        tracing::info!(%error, "no script generated");
+                        form.generate_error = Some(match error {
+                            GenerateError::Address => strings::GENERATE_ADDRESS,
+                            GenerateError::Unreachable => strings::GENERATE_UNREACHABLE,
+                            GenerateError::Empty => strings::GENERATE_NOTHING,
+                        });
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// The Generate row under the Script field, when generation is on.
+    fn render_generate(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::component::Disableable as _;
+        let provider = self.generator.as_ref()?;
+        let generating = self.is_generating();
+        let button = crate::hosts::controls::ControlButton::new(
+            "snippet-generate",
+            crate::hosts::controls::ControlKind::Neutral,
+        )
+        .label(if generating {
+            strings::GENERATING
+        } else {
+            strings::GENERATE
+        })
+        .disabled(generating)
+        .on_click(cx.listener(|form, _: &ClickEvent, window, cx| form.generate(window, cx)));
+        Some(
+            div()
+                .id("snippet-generate-row")
+                .test_support()
+                .w_full()
+                .child(
+                    widgets::field(
+                        strings::GENERATE_LABEL,
+                        gpui_kit::component::h_flex()
+                            .w_full()
+                            .gap(metrics::SPACE_2)
+                            .child(div().flex_1().min_w_0().child(widgets::text_input(
+                                &self.describe,
+                                "snippet-describe",
+                                self.generate_error.is_some(),
+                                window,
+                                cx,
+                            )))
+                            .child(button),
+                        self.generate_error,
+                        cx,
+                    )
+                    .child(
+                        widgets::caption(
+                            strings::generate_destination(&provider.destination()),
+                            cx,
+                        )
+                        .id("snippet-generate-destination")
+                        .test_support(),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Run is possible: a script and at least one target (9.3).
@@ -610,6 +756,7 @@ impl SnippetForm {
                     .test_support(),
                 ),
             )
+            .children(self.render_generate(window, cx))
     }
 
     /// The chips, the field and, while something is typed, the matching

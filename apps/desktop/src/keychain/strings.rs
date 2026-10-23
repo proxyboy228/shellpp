@@ -169,9 +169,17 @@ pub const CERTIFICATE_REMOVE_FAILED: &str = "The certificate could not be remove
 pub const CERTIFICATE_NO_KEY: &str =
     "No key in the Keychain matches this certificate: import its private key first.";
 pub const CERTIFICATE_INVALID: &str = "This is not an OpenSSH user certificate.";
-pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Creating one here \
-     and signing in with it arrive in a later stage.";
+pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Signing in with it \
+     asks you to touch the key (on Windows in the Windows Security dialog).";
 pub const IMPORT_TEXT_PLACEHOLDER: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
+/// FIDO2: making a new key on the security key (D143).
+pub const CREATE_ON_SECURITY_KEY: &str = "Create on the security key";
+pub const CREATING_ON_SECURITY_KEY: &str = "Touch the security key…";
+pub const CREATE_CANCELLED: &str = "Cancelled: no key was made.";
+pub const CREATE_NO_KEY: &str = "No security key was found.";
+pub const CREATE_FAILED: &str = "The security key made no key.";
+/// The comment of a key made on the security key.
+pub const SECURITY_KEY_COMMENT: &str = "Shell++ security key";
 pub const CHOOSE_FILE: &str = "Choose file…";
 pub const IMPORT_LABEL_PLACEHOLDER: &str = "From the key comment";
 pub const FORMAT: &str = "Format";

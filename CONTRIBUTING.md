@@ -186,7 +186,11 @@ hardening (`apps/desktop/src/hardening.rs`) and of the device name
 (`apps/desktop/src/platform/device_name.rs`), and `GetLogicalDrives` for the
 drive list of the local file panel (`apps/desktop/src/platform/drives.rs`),
 and the time zone and date format calls of the dates on screen
-(`apps/desktop/src/platform/local_time.rs`).
+(`apps/desktop/src/platform/local_time.rs`), and the WebAuthn calls of
+security keys, `webauthn.dll` loaded at run time
+(`apps/desktop/src/platform/security_key.rs`; the calls that show the
+system dialog run in tests only with `SHELLPP_TEST_WEBAUTHN=1` and a person
+at the key).
 
 ## Tests
 

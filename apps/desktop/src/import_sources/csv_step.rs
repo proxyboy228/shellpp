@@ -512,12 +512,13 @@ impl ImportSourcesDialog {
             );
         }
         let has_address = csv.roles.contains(&Role::Address);
+        // The warnings stand above the columns, where they are seen first.
         let body = v_flex()
             .gap(metrics::SPACE_3)
             .child(settings)
-            .child(section(strings::CSV_COLUMNS, cx))
-            .child(widgets::caption(strings::csv_rows(csv.inspection.rows), cx))
-            .child(columns)
+            .when(csv.roles.contains(&Role::Password), |this| {
+                this.child(password_warning(cx))
+            })
             .when(!has_address, |this| {
                 this.child(
                     div()
@@ -528,9 +529,9 @@ impl ImportSourcesDialog {
                         .child(strings::CSV_NO_ADDRESS),
                 )
             })
-            .when(csv.roles.contains(&Role::Password), |this| {
-                this.child(password_warning(cx))
-            });
+            .child(section(strings::CSV_COLUMNS, cx))
+            .child(widgets::caption(strings::csv_rows(csv.inspection.rows), cx))
+            .child(columns);
         div()
             .relative()
             .w_full()

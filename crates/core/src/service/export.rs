@@ -150,7 +150,11 @@ pub fn imported_setting(key: &str) -> bool {
 /// device's (D97). An export leaves them out and no import applies them, a
 /// full restore included.
 pub fn device_setting(key: &str) -> bool {
-    key.starts_with("serial.") || key == "updates.last_check"
+    // Script generation (D144): a file never chooses where descriptions
+    // go, not even a full restore.
+    key.starts_with("serial.")
+        || key.starts_with("snippets.generation")
+        || key == "updates.last_check"
 }
 
 /// Whether an export writes records of `kind`: never the recovery key

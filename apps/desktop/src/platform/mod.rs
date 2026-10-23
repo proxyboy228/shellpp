@@ -18,6 +18,9 @@ pub mod drives;
 pub mod events;
 pub mod keychain;
 pub mod local_time;
+pub mod security_key;
+#[cfg(feature = "fido2-hid")]
+pub mod security_key_hid;
 
 use std::sync::Arc;
 
