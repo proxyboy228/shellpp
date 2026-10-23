@@ -35,7 +35,7 @@ use crate::crypto::{self, KdfParams, Key32, WrapPurpose};
 use crate::error::CoreError;
 use crate::index::IndexedRecord;
 use crate::lock::PasswordMaterial;
-use crate::model::hlc::HlcClock;
+use crate::model::hlc::{Hlc, HlcClock};
 use crate::model::payload::Payload;
 use crate::model::time::{format_timestamp, format_unix_ms, unix_ms, uuid_v7_timestamp};
 use crate::model::types::RecordKind;
@@ -238,6 +238,21 @@ pub struct ConflictItem {
     /// The fields that differ between the current version and the copy
     /// (UI 13.6), secrets masked.
     pub differences: Vec<FieldDifference>,
+    /// The current version is a deletion.
+    pub current_deleted: bool,
+    /// The current version's data with secret members masked (`None` when
+    /// it is deleted).
+    pub current_data: Option<Map<String, Value>>,
+    pub current_device_id: Option<String>,
+    /// The devices' names (their `device_info` records) when known.
+    pub current_device_name: Option<String>,
+    pub losing_device_name: Option<String>,
+    /// The version was made on this device.
+    pub current_this_device: bool,
+    pub losing_this_device: bool,
+    /// When each version was changed (RFC 3339, from its HLC).
+    pub current_changed_at: Option<String>,
+    pub losing_changed_at: Option<String>,
 }
 
 /// One field of a conflict's comparison.
@@ -3261,39 +3276,136 @@ impl Core {
     pub fn sync_conflicts(&self) -> Result<Vec<ConflictItem>, CoreError> {
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+            let vault_id = session.ring.vault_id();
             let rows = conflict_rows(&inner.store, session)?;
-            Ok(rows
-                .into_iter()
-                .map(|(row, payload)| {
-                    let data = payload.data.clone().unwrap_or_default();
-                    let text =
-                        |name: &str| data.get(name).and_then(Value::as_str).map(str::to_owned);
-                    let original_record_id = text("original_record_id")
-                        .and_then(|id| Uuid::parse_str(&id).ok())
-                        .unwrap_or_default();
-                    let original_type = text("original_type").unwrap_or_default();
-                    let losing_data = data.get("losing_data").and_then(Value::as_object).cloned();
-                    let current = session.index.get(&original_record_id);
-                    ConflictItem {
-                        conflict_id: row.record_id,
-                        original_record_id,
-                        title: current
-                            .map(|record| title_of(&original_type, Some(record.data())))
-                            .unwrap_or_else(|| title_of(&original_type, losing_data.as_ref())),
-                        original_type,
-                        losing_deleted: data
-                            .get("losing_deleted")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                        differences: differences(
-                            current.map(|record| record.data()),
-                            losing_data.as_ref(),
-                        ),
-                        losing_data: losing_data.as_ref().map(masked),
-                        losing_device_id: text("losing_device_id"),
-                    }
+            let this_device = session.device_id.to_string();
+            // The names of the account's devices (UI 13.6: the device of each
+            // version).
+            let device_names: HashMap<String, String> = session
+                .index
+                .of_kind(RecordKind::DeviceInfo)
+                .filter_map(|record| {
+                    let data = record.data();
+                    let id = data.get("device_id").and_then(Value::as_str)?;
+                    let name = data.get("name").and_then(Value::as_str)?;
+                    Some((id.to_owned(), name.to_owned()))
                 })
-                .collect())
+                .collect();
+            let mut items = Vec::with_capacity(rows.len());
+            for (row, payload) in rows {
+                let data = payload.data.clone().unwrap_or_default();
+                let text = |name: &str| data.get(name).and_then(Value::as_str).map(str::to_owned);
+                let original_record_id = text("original_record_id")
+                    .and_then(|id| Uuid::parse_str(&id).ok())
+                    .unwrap_or_default();
+                let original_type = text("original_type").unwrap_or_default();
+                let losing_data = data.get("losing_data").and_then(Value::as_object).cloned();
+                // The current version as stored: its device and time, and the
+                // data of a lazy class the index has not opened yet.
+                let stored = inner
+                    .store
+                    .record(&vault_id, &original_record_id)?
+                    .and_then(|row| open_payload(&mut session.ring, &row));
+                let indexed = session
+                    .index
+                    .get(&original_record_id)
+                    .map(|record| record.data().clone());
+                let current_deleted = match &stored {
+                    Some(stored) => stored.deleted,
+                    None => indexed.is_none(),
+                };
+                let current_data = if current_deleted {
+                    None
+                } else {
+                    indexed.or_else(|| stored.as_ref().and_then(|stored| stored.data.clone()))
+                };
+                let current_device_id = stored.as_ref().map(|stored| stored.device_id.to_string());
+                let losing_device_id = text("losing_device_id");
+                let name_of =
+                    |id: &Option<String>| id.as_ref().and_then(|id| device_names.get(id)).cloned();
+                let losing_deleted = data
+                    .get("losing_deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                items.push(ConflictItem {
+                    conflict_id: row.record_id,
+                    original_record_id,
+                    title: current_data
+                        .as_ref()
+                        .map(|data| title_of(&original_type, Some(data)))
+                        .unwrap_or_else(|| title_of(&original_type, losing_data.as_ref())),
+                    original_type,
+                    losing_deleted,
+                    differences: differences(current_data.as_ref(), losing_data.as_ref()),
+                    losing_data: losing_data.as_ref().map(masked),
+                    current_deleted,
+                    current_data: current_data.as_ref().map(masked),
+                    current_device_name: name_of(&current_device_id),
+                    losing_device_name: name_of(&losing_device_id),
+                    current_this_device: current_device_id.as_deref() == Some(this_device.as_str()),
+                    losing_this_device: losing_device_id.as_deref() == Some(this_device.as_str()),
+                    current_changed_at: stored
+                        .as_ref()
+                        .map(|stored| format_unix_ms(stored.hlc.ms())),
+                    losing_changed_at: text("losing_hlc")
+                        .and_then(|hlc| Hlc::parse(&hlc))
+                        .map(|hlc| format_unix_ms(hlc.ms())),
+                    current_device_id,
+                    losing_device_id,
+                });
+            }
+            Ok(items)
+        })
+    }
+
+    /// Test support (feature `test-hooks`): writes a conflict copy of a
+    /// record as a sync merge does when the other version loses
+    /// (data-model 15), so the comparison (UI 13.6) can be shown and tested
+    /// without a server. The losing version is `losing` (`None`: a
+    /// deletion), made on `device_id` at `changed_at`.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn sync_conflict_insert_for_test(
+        &self,
+        record_id: Uuid,
+        losing: Option<Map<String, Value>>,
+        device_id: Uuid,
+        changed_at: SystemTime,
+    ) -> Result<Uuid, CoreError> {
+        let now = self.now();
+        let now_text = format_timestamp(now);
+        self.with_session(|inner| {
+            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+            let vault_id = session.ring.vault_id();
+            let original = inner
+                .store
+                .record(&vault_id, &record_id)?
+                .ok_or(CoreError::NotFound)?;
+            let current = open_payload(&mut session.ring, &original).ok_or(CoreError::NotFound)?;
+            let hlc = Hlc::new(unix_ms(changed_at), 0);
+            let losing = match losing {
+                Some(data) => Payload::live(&current.type_name, current.v, hlc, device_id, data),
+                None => Payload::tombstone(&current.type_name, current.v, hlc, device_id),
+            };
+            let copy_id = Uuid::now_v7();
+            let stamp = session.hlc.tick(unix_ms(now));
+            let payload = Payload::live(
+                "conflict",
+                1,
+                stamp,
+                session.device_id,
+                engine::conflict_data(&original, &losing),
+            );
+            let row = vault::seal_row(
+                &mut session.ring,
+                original.class,
+                copy_id,
+                &payload,
+                None,
+                &now_text,
+            )?;
+            inner.store.write(|tx| tx.record_put(&row))?;
+            self.emit_sync(inner);
+            Ok(copy_id)
         })
     }
 
@@ -4038,6 +4150,155 @@ mod tests {
         // Swapped links do not open.
         let swapped = vec![info(2, c3.wrap), info(3, c2.wrap)];
         assert!(ring_from_chain(vault_id, 3, k3, &swapped).is_err());
+    }
+
+    /// A core with a vault, as at first run.
+    fn unlocked_core() -> (tempfile::TempDir, Core) {
+        use crate::platform::OsKind;
+        use crate::platform::memory::MemoryPlatform;
+        let dir = tempfile::tempdir().unwrap();
+        let mem = MemoryPlatform::new();
+        let core = Core::open(
+            super::super::CoreConfig {
+                data_dir: dir.path().join("data"),
+                app_version: "0.1.0".into(),
+            },
+            mem.platform(OsKind::Linux, "TEST"),
+        )
+        .unwrap();
+        core.first_run_setup(SecretString::from(format!("Pw-{}", random_text())))
+            .unwrap();
+        (dir, core)
+    }
+
+    fn random_text() -> String {
+        crypto::random_array::<12>()
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    fn save_host(core: &Core, label: &str, password: &str) -> Uuid {
+        use crate::service::dto::{RecordSaveInput, RecordType};
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        core.record_save(RecordSaveInput {
+            vault_id,
+            record_id: None,
+            record_type: RecordType::Host,
+            data: json!({"address": "192.0.2.10", "label": label, "ssh": {"port": 22}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            secrets: std::collections::BTreeMap::from([(
+                "ssh.password".to_owned(),
+                Some(SecretString::from(password.to_owned())),
+            )]),
+        })
+        .unwrap()
+        .record_id()
+    }
+
+    fn stored_data(core: &Core, id: Uuid) -> Map<String, Value> {
+        let guard = core.inner();
+        let session = guard.session.as_ref().unwrap();
+        session.index.get(&id).unwrap().data().clone()
+    }
+
+    /// The comparison (UI 13.6) gets both versions: their data with secrets
+    /// masked, their devices and times; a deletion on either side has no
+    /// data. No secret leaves the core in a conflict.
+    #[test]
+    fn conflicts_carry_both_versions_masked() {
+        let (_dir, core) = unlocked_core();
+        let (current_secret, other_secret) = (random_text(), random_text());
+        let host = save_host(&core, "web", &current_secret);
+        let mut other = stored_data(&core, host);
+        assert_eq!(other["ssh"]["password"], json!(current_secret.clone()));
+        other.insert("label".into(), json!("web-2"));
+        other["ssh"]["port"] = json!(2222);
+        other["ssh"]["password"] = json!(other_secret.clone());
+        let device = Uuid::now_v7();
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let edited = core
+            .sync_conflict_insert_for_test(host, Some(other), device, at)
+            .unwrap();
+        let deleted = core
+            .sync_conflict_insert_for_test(host, None, device, at)
+            .unwrap();
+        assert_eq!(core.sync_status().unwrap().conflicts, 2);
+
+        let items = core.sync_conflicts().unwrap();
+        let text = serde_json::to_string(&items).unwrap();
+        assert!(
+            !text.contains(&current_secret),
+            "the current secret is masked"
+        );
+        assert!(!text.contains(&other_secret), "the other secret is masked");
+        let item = items.iter().find(|i| i.conflict_id == edited).unwrap();
+        assert_eq!(item.original_record_id, host);
+        assert_eq!(item.original_type, "host");
+        assert_eq!(item.title, "web");
+        assert!(!item.current_deleted && !item.losing_deleted);
+        let current = item.current_data.as_ref().unwrap();
+        let losing = item.losing_data.as_ref().unwrap();
+        assert_eq!(current["label"], json!("web"));
+        assert_eq!(losing["label"], json!("web-2"));
+        assert_eq!(current["ssh"]["password"], json!(MASK));
+        assert_eq!(losing["ssh"]["password"], json!(MASK));
+        let paths: Vec<&str> = item.differences.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(paths, ["label", "ssh.password", "ssh.port"]);
+        assert!(item.current_this_device);
+        assert!(!item.losing_this_device);
+        assert_eq!(item.losing_device_id, Some(device.to_string()));
+        assert!(item.current_device_id.is_some());
+        assert_ne!(item.current_device_id, item.losing_device_id);
+        assert_eq!(
+            item.losing_changed_at.as_deref(),
+            Some(format_timestamp(at).as_str())
+        );
+        let changed = item.current_changed_at.as_deref().unwrap();
+        assert!(crate::model::time::is_timestamp(changed), "{changed}");
+
+        let gone = items.iter().find(|i| i.conflict_id == deleted).unwrap();
+        assert!(gone.losing_deleted);
+        assert!(gone.losing_data.is_none());
+        assert!(gone.current_data.is_some());
+
+        // "Keep other" makes the copy's version the record's next one.
+        core.sync_conflict_resolve(edited, ConflictChoice::Copy)
+            .unwrap();
+        let now = stored_data(&core, host);
+        assert_eq!(now["label"], json!("web-2"));
+        assert_eq!(now["ssh"]["password"], json!(other_secret));
+        // "Keep this" only drops the copy.
+        core.sync_conflict_resolve(deleted, ConflictChoice::Current)
+            .unwrap();
+        assert!(core.sync_conflicts().unwrap().is_empty());
+        assert_eq!(stored_data(&core, host)["label"], json!("web-2"));
+    }
+
+    /// The current version deleted here: its side has no data.
+    #[test]
+    fn a_deleted_current_version_has_no_data() {
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "db", &random_text());
+        let other = stored_data(&core, host);
+        let conflict = core
+            .sync_conflict_insert_for_test(host, Some(other), Uuid::now_v7(), SystemTime::now())
+            .unwrap();
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        core.record_delete(crate::service::dto::RecordsRef {
+            vault_id,
+            record_ids: vec![host],
+        })
+        .unwrap();
+        let items = core.sync_conflicts().unwrap();
+        let item = items.iter().find(|i| i.conflict_id == conflict).unwrap();
+        assert!(item.current_deleted);
+        assert!(item.current_data.is_none());
+        assert_eq!(item.title, "db", "named after the other version");
+        assert!(item.losing_data.is_some());
     }
 
     #[test]

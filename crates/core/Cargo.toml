@@ -9,6 +9,13 @@ repository.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# `Core::sync_conflict_insert_for_test`: writes a sync conflict copy without
+# a server, for the desktop's UI tests and screenshot run (UI 13.6). Never in
+# a release build (only dev-dependencies and the `screenshots` feature).
+test-hooks = []
+
 # shellpp-core must stay mobile-ready (docs/architecture.md, section 1.2):
 # no tauri, keyring or other desktop-only crates, and no OS directory lookups.
 [dependencies]

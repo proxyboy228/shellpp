@@ -273,7 +273,7 @@ fn type_rule(local: &Payload, server: &Payload) -> Option<bool> {
 }
 
 /// The data of a conflict copy (data-model 15).
-fn conflict_data(original: &RecordRow, losing: &Payload) -> Map<String, Value> {
+pub(crate) fn conflict_data(original: &RecordRow, losing: &Payload) -> Map<String, Value> {
     let mut data = Map::new();
     data.insert(
         "original_record_id".into(),
