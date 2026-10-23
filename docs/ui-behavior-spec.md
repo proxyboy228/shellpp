@@ -92,8 +92,9 @@
   Tabs are 32 px high inside the 44 px bar, with 10 px inside and 4 px between them
   (`docs/design-system.md`, 6). [decision]
 - On the right:
-  - update button (visible only when a check has found an update, see 12.7); not built:
-    an update found is a toast and an item of the Help menu (D97);
+  - update button (visible only when a check of this run has found an update, see 12.7),
+    with the download icon and the version in its tooltip; a click opens the release page,
+    as the toast and the item of the Help menu do (D97, D100). [decision]
   - notification center (see 1.5);
   - button to show and hide the terminal sidebar (only when a session
     tab is active, see 4.2); it is shown selected while the sidebar is open; [decision]

@@ -289,7 +289,15 @@ mod windows {
         command.args(["--list", "--quiet"]);
         match crate::windows::run_in_job(command, WSL_TIMEOUT) {
             Ok(output) if output.success => parse_wsl_list(&output.stdout),
-            Ok(_) | Err(_) => Vec::new(),
+            Ok(_) => Vec::new(),
+            Err(crate::windows::JobError::Setup(error)) => {
+                tracing::debug!(kind = ?error.kind(), "the WSL listing did not start");
+                Vec::new()
+            }
+            Err(crate::windows::JobError::TimedOut) => {
+                tracing::debug!("the WSL listing timed out and was ended");
+                Vec::new()
+            }
         }
     }
 

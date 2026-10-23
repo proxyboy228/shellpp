@@ -355,6 +355,9 @@ pub enum ShotState {
     // Run 6, plan 10 (D97): `run6_shot`.
     /// Settings ▸ Updates as it opens.
     SettingsUpdates,
+    // Run 7, plan 2.4 (D100): `run7_shot`.
+    /// The top bar with the update button of an update found.
+    TopBarUpdate,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -493,7 +496,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 94] = [
+    pub const ALL: [Self; 95] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -555,6 +558,7 @@ impl ShotState {
         Self::NewTabWorkspacesMissing,
         Self::SerialDialogManualPort,
         Self::SettingsUpdates,
+        Self::TopBarUpdate,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -719,6 +723,7 @@ impl ShotState {
             Self::NewTabWorkspacesMissing => "new-tab-workspaces-missing",
             Self::SerialDialogManualPort => "serial-dialog-manual-port",
             Self::SettingsUpdates => "settings-updates",
+            Self::TopBarUpdate => "top-bar-update",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1605,6 +1610,7 @@ pub async fn reset_demo(
         // The workspace and the serial settings of the run 6 states.
         run6_shot::remove_workspace(state, cx);
         run6_shot::forget_serial(state, cx);
+        run7_shot::reset(cx);
     });
     // The search bar is on screen again (Vaults tab): clear it like a user.
     let has_text = cx.update(|cx| !screen.read(cx).filter().text().is_empty());
@@ -1833,6 +1839,7 @@ pub async fn reach_state(
         ShotState::NewTabWorkspacesMissing
         | ShotState::SerialDialogManualPort
         | ShotState::SettingsUpdates => run6_shot::reach(cx, handle, root, state, shot_state).await,
+        ShotState::TopBarUpdate => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -1902,6 +1909,9 @@ pub fn check_state(
     }
     if stage9_shot::STATES.contains(&shot_state) {
         return stage9_shot::check(cx, handle, root, shot_state);
+    }
+    if run7_shot::STATES.contains(&shot_state) {
+        return run7_shot::check(cx, handle, shot_state);
     }
     if run6_shot::STATES.contains(&shot_state) {
         let state = cx.update(|cx| root.read(cx).state().clone());
@@ -2076,6 +2086,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::NewTabWorkspacesMissing
             | ShotState::SerialDialogManualPort
             | ShotState::SettingsUpdates => Err("checked with the run 6 screens"),
+            ShotState::TopBarUpdate => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -2374,6 +2385,7 @@ mod keychain_shot;
 mod known_hosts_shot;
 mod logs_shot;
 mod run6_shot;
+mod run7_shot;
 mod sftp_shot;
 mod snippets_shot;
 mod stage9_shot;

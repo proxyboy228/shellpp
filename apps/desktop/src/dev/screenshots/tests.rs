@@ -116,6 +116,8 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "serial-dialog-manual-port",
         // Run 6, plan 10 (D97).
         "settings-updates",
+        // Run 7, plan 2.4 (D100).
+        "top-bar-update",
         "sidebar-snippets",
         "sidebar-history",
         "sidebar-appearance",

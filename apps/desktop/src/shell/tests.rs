@@ -1224,3 +1224,33 @@ fn tabs_and_sidebar_items_take_keyboard_focus(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|cx| shell.read(cx).section()), Section::Keychain);
     ui.finish(cx);
 }
+
+/// UI 1.1, D100: the update button shows only while a check of this run
+/// found an update, and opens its release page.
+#[gpui_kit::test]
+fn the_update_button_shows_an_update_found(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    assert!(!ui.visible("top-bar-update", cx), "no update found yet");
+    cx.update(|cx| {
+        cx.set_global(crate::updates::Found(Some((
+            "9.9.9".to_owned(),
+            "https://example.com/releases/v9.9.9".to_owned(),
+        ))));
+    });
+    ui.frame(cx);
+    assert!(ui.visible("top-bar-update", cx));
+    // Left of the notification center.
+    let update = ui.bounds("top-bar-update", cx).expect("button");
+    let bell = ui.bounds("top-bar-notifications", cx).expect("bell");
+    assert!(update.right() <= bell.left());
+    ui.click("top-bar-update", cx);
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("https://example.com/releases/v9.9.9")
+    );
+    // A later check that finds nothing newer hides it.
+    cx.update(|cx| cx.set_global(crate::updates::Found(None)));
+    ui.frame(cx);
+    assert!(!ui.visible("top-bar-update", cx));
+    ui.finish(cx);
+}

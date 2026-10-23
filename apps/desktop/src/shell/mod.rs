@@ -566,6 +566,9 @@ impl Shell {
             cx.subscribe_in(&hosts, window, Self::on_hosts_event),
             cx.subscribe_in(&hosts, window, Self::on_hosts_request),
             cx.observe(&notifications, |_, _, cx| cx.notify()),
+            // The update button of the top bar follows the update found in
+            // this run, whichever window checked (UI 1.1, D100).
+            cx.observe_global::<crate::updates::Found>(|_, cx| cx.notify()),
         ];
 
         let this = cx.weak_entity();
@@ -1912,6 +1915,15 @@ impl Shell {
             .rounded(metrics::RADIUS_OVERLAY)
             .shadow(theme::shadow_overlay(cx))
             .content(move |_, _, cx| render_notification_list(&list, cx));
+        // The update button, only while a check of this run found an update
+        // (UI 1.1, D100): it opens the release page, as the toast does.
+        let update = crate::updates::found(cx).map(|(version, _)| {
+            title_bar::icon_button("top-bar-update", Lucide::Download, cx)
+                .tooltip(crate::updates::strings::update_button(&version))
+                .on_click(|_: &ClickEvent, window, cx| {
+                    window.dispatch_action(Box::new(OpenReleasePage), cx);
+                })
+        });
         // The terminal sidebar button, on session tabs only (UI 1.1, 4.2).
         let sidebar_shown = self.terminal_sidebar.read(cx).is_visible();
         let terminal_sidebar = matches!(self.top_tab, TopTab::Session(_)).then(|| {
@@ -1976,6 +1988,7 @@ impl Shell {
                         .flex_none()
                         .gap(metrics::SPACE_1)
                         .items_center()
+                        .children(update.map(|button| div().occlude().child(button)))
                         .child(div().occlude().child(notifications))
                         .children(terminal_sidebar.map(|button| div().occlude().child(button))),
                 ),

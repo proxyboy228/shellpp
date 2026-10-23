@@ -16,6 +16,11 @@ pub fn menu_available(version: &str) -> String {
     format!("Open the Shell++ {version} Release Page")
 }
 
+/// The tooltip of the top bar's update button (UI 1.1, D100).
+pub fn update_button(version: &str) -> String {
+    format!("Shell++ {version} is available: open the release page")
+}
+
 /// After a check that found nothing newer.
 pub fn up_to_date(version: &str) -> String {
     format!("Shell++ {version} is the latest version")
