@@ -1527,10 +1527,9 @@ impl Core {
                 // that only shares the natural key (another group, other
                 // settings) is kept beside it as a duplicate pair (UI 13.7):
                 // principle 3 before tidiness.
-                let same = new
-                    .index
-                    .get(existing)
-                    .is_some_and(|record| same_but_ids(record.data(), &data));
+                let same = new.index.get(existing).is_some_and(|record| {
+                    engine::data_equal(Some(record.data()), Some(&remap_data(&data, &map)))
+                });
                 if same {
                     map.insert(row.record_id.to_string(), existing.to_string());
                     continue;
@@ -1972,6 +1971,8 @@ impl Core {
             self.set_cursor(link.vault_id, 0)?;
         }
         let mut pages = 0;
+        // The pull reached `has_more = false` (a resync needs the whole list).
+        let mut complete = false;
         loop {
             pages += 1;
             if pages > MAX_PULL_PAGES {
@@ -2050,11 +2051,14 @@ impl Core {
             changed.extend(result.effects.changed.iter().copied());
             changed_classes.extend(result.effects.classes.iter().copied());
             received.extend(result.received.iter().map(|(id, _)| *id));
+            if !page.has_more && !result.stopped {
+                complete = true;
+            }
             if result.stopped || !page.has_more {
                 break;
             }
         }
-        if !resync.is_empty() && !report.newer_epoch {
+        if !resync.is_empty() && !report.newer_epoch && complete {
             let back = self.with_session(|inner| {
                 let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
                 let ids = engine::push_back_missing(
@@ -2209,25 +2213,26 @@ impl Core {
     ) -> Result<(), CoreError> {
         let selection = selection(&self.inner().store);
         let mut pages = Vec::new();
+        // What the server holds: only versions that opened (an unreadable
+        // header proves nothing about the server's copy).
         let mut server: HashMap<Uuid, u64> = HashMap::new();
         let mut cursor = 0;
+        let mut complete = false;
         for _ in 0..MAX_PULL_PAGES {
             let page = self.authed(link, |api, token| {
                 api.pull(token, link.vault_id, cursor, None, Some(&selection.classes))
             })?;
-            for record in &page.records {
-                if let Ok(parts) = envelope::split(record.envelope.as_bytes()) {
-                    let id = Uuid::from_bytes(parts.header.record_id);
-                    let entry = server.entry(id).or_insert(0);
-                    *entry = (*entry).max(parts.header.revision);
-                }
-            }
             cursor = page.next_cursor;
             let more = page.has_more;
             pages.push(page);
             if !more {
+                complete = true;
                 break;
             }
+        }
+        if !complete {
+            // A snapshot cut off by the page limit is not a snapshot.
+            return Err(refused("incomplete_snapshot"));
         }
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
@@ -2265,6 +2270,10 @@ impl Core {
                 report.integrity_warnings += result.effects.integrity_warnings;
                 report.conflicts += result.effects.conflicts;
                 changed.extend(result.effects.changed.iter().copied());
+                for (id, revision) in &result.received {
+                    let entry = server.entry(*id).or_insert(0);
+                    *entry = (*entry).max(*revision);
+                }
                 if result.stopped {
                     // A newer epoch: the device signs in again first; the
                     // cursor stays before the record.
@@ -2935,6 +2944,8 @@ impl Core {
                 .filter(|row| row.vault_id == vault_id && record_ids.contains(&row.record_id))
                 .collect();
             let mut writes = Vec::new();
+            // Entries that end here: restored now, or live again already.
+            let mut done = Vec::new();
             for entry in &entries {
                 let Some(payload) = open_envelope_payload(&mut session.ring, &entry.envelope)
                 else {
@@ -2948,8 +2959,10 @@ impl Core {
                 };
                 // A live record with this id (restored elsewhere) is kept.
                 if session.index.get(&entry.record_id).is_some() {
+                    done.push(entry.record_id);
                     continue;
                 }
+                done.push(entry.record_id);
                 writes.push(session.prepare_write(
                     &inner.store,
                     kind,
@@ -2963,8 +2976,9 @@ impl Core {
                 for write in &writes {
                     tx.record_put(&write.row)?;
                 }
-                for entry in &entries {
-                    tx.recently_deleted_delete(&vault_id, &entry.record_id)?;
+                // An entry that could not be restored stays (never lost here).
+                for id in &done {
+                    tx.recently_deleted_delete(&vault_id, id)?;
                 }
                 Ok(())
             })?;
@@ -3299,26 +3313,6 @@ type MergedRows = (
     Vec<RecentlyDeletedRow>,
     Vec<DuplicatePairRow>,
 );
-
-/// `true` when two `data` objects differ only in record ids (the references
-/// a merge rewrites) and `null` members.
-fn same_but_ids(a: &Map<String, Value>, b: &Map<String, Value>) -> bool {
-    fn strip(value: &Value) -> Value {
-        match value {
-            Value::String(text) if Uuid::parse_str(text).is_ok() => Value::Null,
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .filter(|(_, v)| !v.is_null())
-                    .map(|(k, v)| (k.clone(), strip(v)))
-                    .filter(|(_, v)| !v.is_null())
-                    .collect(),
-            ),
-            Value::Array(items) => Value::Array(items.iter().map(strip).collect()),
-            other => other.clone(),
-        }
-    }
-    strip(&Value::Object(a.clone())) == strip(&Value::Object(b.clone()))
-}
 
 /// Live conflict copies of the vault with their payloads.
 fn conflict_rows(

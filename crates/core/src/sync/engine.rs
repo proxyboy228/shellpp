@@ -366,12 +366,40 @@ pub fn resolve(
         effects.integrity_warnings += 1;
         return Ok(());
     };
-    let base = local
+    let base_row = local
         .base_envelope
         .as_ref()
-        .and_then(|bytes| row_from_envelope(local.vault_id, bytes, None, &now_text))
-        .and_then(|row| payload_of(session, &row))
+        .and_then(|bytes| row_from_envelope(local.vault_id, bytes, None, &now_text));
+    let base_revision = base_row.as_ref().map_or(0, |row| row.revision);
+    let base = base_row
+        .as_ref()
+        .and_then(|row| payload_of(session, row))
         .map(|payload| stamp(&payload));
+    // A server version older than the one this device synced (a record
+    // pushed back by a resync or a restore keeps it as its base) is stale:
+    // it never replaces the local version, whatever rules 2-5 would say
+    // (principle 3; section 6.9, step 3: no conflict copy for it).
+    if server.revision < local.synced_revision.max(base_revision) {
+        let previous = RecordRow {
+            revision: local.revision.max(server.revision),
+            synced_revision: server.revision,
+            server_seq: server.server_seq,
+            envelope: server.envelope.clone(),
+            base_envelope: Some(server.envelope.clone()),
+            ..local.clone()
+        };
+        let row = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            local.record_id,
+            &l,
+            Some(&previous),
+            &now_text,
+        )?;
+        effects.put(row);
+        effects.repush = true;
+        return Ok(());
+    }
     let local_live = (!l.deleted)
         .then(|| RecordKind::from_name(&l.type_name))
         .flatten();
@@ -486,7 +514,6 @@ pub fn apply_page(
             result.effects.integrity_warnings += 1;
             continue;
         };
-        result.received.push((row.record_id, row.revision));
         if let Some(other) = store.record_anywhere(&row.record_id)?
             && other.vault_id != vault_id
         {
@@ -505,6 +532,9 @@ pub fn apply_page(
             result.effects.integrity_warnings += 1;
             continue;
         }
+        // Only authenticated versions count as held by the server (a full
+        // resync and a restore build on this list).
+        result.received.push((row.record_id, row.revision));
         let type_name = match &opened {
             Opened::Live(kind, _) => Some(kind.name().to_owned()),
             Opened::Tombstone(payload) => Some(payload.type_name.clone()),

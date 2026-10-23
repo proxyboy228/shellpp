@@ -30,6 +30,13 @@ enum Mode {
     Foreign(String),
     /// `current_epoch` below the device's.
     LowerEpoch,
+    /// Forces a full resync (`410 purged`), leaves `hide` out of the
+    /// snapshot and answers its push-back with the older `stale` version.
+    Purge {
+        hide: [u8; 16],
+        stale: String,
+        sent_410: bool,
+    },
 }
 
 struct Proxy {
@@ -47,6 +54,31 @@ impl Proxy {
     fn seen(&self) -> Vec<Value> {
         self.seen.lock().unwrap().clone()
     }
+}
+
+/// The record id in an envelope's header.
+fn record_id(record: &Value) -> Option<[u8; 16]> {
+    let bytes = BASE64URL_NOPAD
+        .decode(record["envelope"].as_str()?.as_bytes())
+        .ok()?;
+    shellpp_sync_api::envelope::split(&bytes)
+        .ok()
+        .map(|parts| parts.header.record_id)
+}
+
+/// A push answer whose `conflict` for `hide` carries `stale` as `current`.
+fn rewrite_push(mode: &Mode, body: &[u8]) -> Option<Vec<u8>> {
+    let Mode::Purge { hide, stale, .. } = mode else {
+        return None;
+    };
+    let mut answer: Value = serde_json::from_slice(body).ok()?;
+    let hidden = uuid::Uuid::from_bytes(*hide).to_string();
+    for result in answer.get_mut("results")?.as_array_mut()? {
+        if result["record_id"].as_str() == Some(hidden.as_str()) && result["status"] == "conflict" {
+            result["current"] = serde_json::json!({"seq": 1, "envelope": stale});
+        }
+    }
+    serde_json::to_vec(&answer).ok()
 }
 
 fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>> {
@@ -95,6 +127,9 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
             page["next_cursor"] = Value::from(seq);
         }
         Mode::LowerEpoch => page["current_epoch"] = Value::from(0),
+        Mode::Purge { hide, .. } => {
+            records.retain(|record| record_id(record) != Some(*hide));
+        }
     }
     serde_json::to_vec(&page).ok()
 }
@@ -174,6 +209,36 @@ fn proxy(server: &Server) -> Proxy {
                     return;
                 };
                 let pull = head.starts_with("GET /v1/vaults/") && head.contains("/changes");
+                let push = head.starts_with("POST /v1/vaults/") && head.contains("/changes");
+                // The forced resync: one `410 purged` for the first pull.
+                let send_410 = pull && {
+                    let mut current = mode.lock().unwrap();
+                    match &mut *current {
+                        Mode::Purge { sent_410, .. } if !*sent_410 => {
+                            *sent_410 = true;
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                {
+                    if send_410 {
+                        let body = r#"{"error":{"code":"cursor_expired","message":"cursor expired","details":{"reason":"purged"}}}"#;
+                        let head = format!(
+                            "HTTP/1.1 410 Gone
+content-type: application/json
+content-length: {}
+connection: close
+
+",
+                            body.len()
+                        );
+                        let _ = client.write_all(head.as_bytes()).await;
+                        let _ = client.write_all(body.as_bytes()).await;
+                        let _ = client.shutdown().await;
+                        return;
+                    }
+                }
                 let Ok(mut up) = tokio::net::TcpStream::connect(upstream).await else {
                     return;
                 };
@@ -189,6 +254,12 @@ fn proxy(server: &Server) -> Proxy {
                 if pull && response_head.starts_with("HTTP/1.1 200") {
                     let current = mode.lock().unwrap().clone();
                     if let Some(changed) = rewrite(&current, &seen, &response) {
+                        response = changed;
+                    }
+                }
+                if push && response_head.starts_with("HTTP/1.1 200") {
+                    let current = mode.lock().unwrap().clone();
+                    if let Some(changed) = rewrite_push(&current, &response) {
                         response = changed;
                     }
                 }
@@ -371,4 +442,41 @@ fn a_lower_epoch_stops_sync_without_changes() {
     proxy.set(Mode::Pass);
     b.sync();
     assert_eq!(labels(&b), vec!["edited on A", "edited on A"]);
+}
+
+/// Review finding (principle 3): a forced resync leaves a record out, its
+/// push-back meets an older genuine version as `current`. The older
+/// version never replaces the local one, and no copy is made of it.
+#[test]
+fn a_stale_current_after_a_forced_resync_is_not_adopted() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    let id = a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id();
+    // The version B saw first: the stale one to replay.
+    let stale = proxy
+        .seen()
+        .into_iter()
+        .find(|record| record_id(record) == Some(*id.as_bytes()))
+        .and_then(|record| record["envelope"].as_str().map(str::to_owned))
+        .expect("the first version");
+    let mut data = a.data(id);
+    data["label"] = Value::String("current".into());
+    a.save(Some(id), shellpp_core::service::dto::RecordType::Host, data);
+    a.sync();
+    b.sync();
+    assert_eq!(b.data(id)["label"], "current");
+    proxy.set(Mode::Purge {
+        hide: *id.as_bytes(),
+        stale,
+        sent_410: false,
+    });
+    let _ = b.core.sync_now();
+    let _ = b.core.sync_now();
+    assert_eq!(
+        b.data(id)["label"],
+        "current",
+        "the stale version was refused"
+    );
+    assert!(b.core.sync_conflicts().expect("conflicts").is_empty());
+    assert_eq!(b.addresses(), vec!["one.example.com", "two.example.com"]);
 }
