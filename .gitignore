@@ -14,6 +14,10 @@ known_hosts.*
 !/crates/core/src/known_hosts/
 # Source of the Known Hosts screen and its integration test (not key files).
 !/apps/desktop/src/known_hosts/
+# The vendored russh's known hosts module (source, not a key file).
+!/third_party/russh/src/keys/known_hosts.rs
+# The example environment of the server deployment (placeholders only).
+!/server/deploy/.env.example
 !/apps/desktop/tests/known_hosts.rs
 *.p12
 *.pfx
