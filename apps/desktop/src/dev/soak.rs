@@ -379,7 +379,34 @@ fn download(route: Route, http_port: u16) -> std::io::Result<usize> {
     }
 }
 
-/// Uploads and downloads files of [`SFTP_SIZES`] in turn until `stop`.
+/// A source file of the SFTP load: `size` bytes of a fixed pattern.
+fn write_source(
+    folder: &std::path::Path,
+    path: &std::path::Path,
+    size: usize,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(folder)?;
+    let data: Vec<u8> = (0..size).map(|byte| (byte % 251) as u8).collect();
+    std::fs::write(path, data)
+}
+
+/// An SFTP failure as the log shows it: the error's own text, without a
+/// path (a server message that names one is left out).
+fn sftp_failure(step: &str, error: &shellpp_ssh::SftpError) -> String {
+    let text = match error {
+        shellpp_ssh::SftpError::Failure(message) if message.contains(['/', '\\']) => {
+            "the server refused (its message names a path)".to_owned()
+        }
+        other => other.to_string(),
+    };
+    format!("soak sftp {step} failed: {text}")
+}
+
+/// Uploads and downloads files of [`SFTP_SIZES`] in turn until `stop`. A
+/// failure is printed when its text differs from the one before
+/// (`bench: soak sftp <step> failed: ...`); a source file that something
+/// outside the run removed is written again (run 7: a sweep of the
+/// temporary folder at minute 60 took them, and every turn after failed).
 fn sftp_thread(
     sftp: Arc<shellpp_ssh::Sftp>,
     stop: Arc<AtomicBool>,
@@ -389,12 +416,10 @@ fn sftp_thread(
         "shellpp-soak-{}",
         crate::profile::random_suffix().map_err(|error| error.to_string())?
     ));
-    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     let mut files = Vec::new();
     for (index, size) in SFTP_SIZES.iter().enumerate() {
         let path = folder.join(format!("soak-{index}.bin"));
-        let data: Vec<u8> = (0..*size).map(|byte| (byte % 251) as u8).collect();
-        std::fs::write(&path, data).map_err(|error| error.to_string())?;
+        write_source(&folder, &path, *size).map_err(|error| error.to_string())?;
         files.push((path, *size));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -408,20 +433,45 @@ fn sftp_thread(
                 .await
                 .unwrap_or_else(|_| ".".to_owned());
             let mut turn = 0usize;
+            let mut last_failure = None;
             while !stop.load(Ordering::Relaxed) {
                 let (local, size) = &files[turn % files.len()];
+                if !local.exists() {
+                    let made = write_source(&folder, local, *size)
+                        .map_or_else(|error| error.kind().to_string(), |()| "done".to_owned());
+                    say(&format!(
+                        "soak sftp source {} was gone, written again: {made}",
+                        turn % files.len()
+                    ));
+                }
                 let remote = format!("{home}/soak-{}.bin", turn % files.len());
                 let back = local.with_extension("back");
                 let mut progress = |_: u64| {};
                 let done = async {
-                    sftp.upload(local, &remote, false, &mut progress).await?;
-                    let got = sftp.download(&remote, &back, false, &mut progress).await?;
-                    Ok::<bool, shellpp_ssh::SftpError>(got == *size as u64)
+                    sftp.upload(local, &remote, false, &mut progress)
+                        .await
+                        .map_err(|error| sftp_failure("upload", &error))?;
+                    let got = sftp
+                        .download(&remote, &back, false, &mut progress)
+                        .await
+                        .map_err(|error| sftp_failure("download", &error))?;
+                    if got == *size as u64 {
+                        Ok(())
+                    } else {
+                        Err("soak sftp download failed: a short file".to_owned())
+                    }
                 }
                 .await;
                 match done {
-                    Ok(true) => counts.sftp_files.fetch_add(2, Ordering::Relaxed),
-                    _ => {
+                    Ok(()) => {
+                        last_failure = None;
+                        counts.sftp_files.fetch_add(2, Ordering::Relaxed)
+                    }
+                    Err(failure) => {
+                        if last_failure.as_ref() != Some(&failure) {
+                            say(&failure);
+                            last_failure = Some(failure);
+                        }
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         counts.sftp_failed.fetch_add(1, Ordering::Relaxed)
                     }
