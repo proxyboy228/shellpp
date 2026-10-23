@@ -32,8 +32,8 @@
   button, Ctrl+K search, several windows and the Known Hosts screen (D31). Items of later
   stages inside them follow the D30 rule and are shown disabled: the "Save" button of the
   history hint (4.2, stage 5); Broadcast input and Create a workspace work since run 4 (D81). The Snippets tab of the terminal sidebar shows an empty state until
-  stage 5. Start multiplayer (4.4) and Autocomplete (4.2) are not shown at all, as the
-  owner asked. [decision]
+  stage 5. Start multiplayer (4.4) is not shown at all, as the owner asked; Autocomplete
+  (4.2) is shown since run 8 (D142). [decision]
 - The interface is in English. Interface strings in this document define the meaning; the final
   texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
@@ -452,7 +452,12 @@ On the right:
   3. **Preview**: the records found, each with the status "new", "already exists" or
      "error" (with the reason). Only "new" records are imported.
   4. **Summary**: "added N, skipped M, errors K".
-- CSV columns: `label`, `address`, `port`, `username`, `group`, `tags`.
+- CSV columns: `label`, `address`, `port`, `username`, `group`, `tags`, and with the mapping of
+  D141 also `notes` and `password`. After the file step (with "Save template…") a mapping
+  step shows the detected character set and delimiter (each changeable), "First row is a
+  header" and each column with its role and first values; Next needs an address column. A
+  mapped password column, or rows with a password in the preview, show a warning that the
+  file holds passwords in clear text. [decision]
 - Import is idempotent. A record is matched by its source key: the source type plus the
   Host alias, the PuTTY session name, or the record's UUID. A record without a source key is
   matched by (address, port, username). Existing records are never overwritten, even if they
@@ -460,9 +465,17 @@ On the right:
 - `~/.ssh/config`: keys referenced by `IdentityFile` are imported into the Keychain. An
   encrypted key asks for its passphrase (as in 7.3).
 - known_hosts: hashed entries and markers are handled as described in 10.1.
-- Until all sources exist (D39): PuTTY sessions and CSV are shown disabled; the native JSON
-  source goes on in Import Data (1.4, D38) and known_hosts in the import of the Known Hosts
-  screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
+- PuTTY sessions (D140): Next goes from the sources straight to the preview, which lists each
+  saved session but `Default Settings` as a host with its checkbox, status and the settings left
+  out, then its `.ppk` key file as for `~/.ssh/config`. SSH and Telnet sessions are imported
+  with the host name, port, user name, key, SOCKS 5 or HTTP proxy, tunnels (as forwarding
+  rules that start on connect, except one that listens beyond loopback), agent forwarding,
+  keepalive, environment, Backspace key and character set; other protocols and proxies
+  (SOCKS 4, Telnet, SSH, a local command) are "not imported" with the reason, so a host never
+  connects directly instead of through its proxy. A registry that cannot be read shows an
+  error under the source. [decision]
+- The native JSON source goes on in Import Data (1.4, D38) and known_hosts in the import of
+  the Known Hosts screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
   hosts are checked), its status, the reason when it is not imported (ProxyCommand) and the
   options that are not imported; then the key files with their status and, for an encrypted
   one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
@@ -659,10 +672,16 @@ The same form is used for creating and editing; it opens in the details panel.
     search runs again at once and then at most every 250 ms while the size keeps
     changing, the current match keeps its number, and until that search the highlights
     are hidden rather than shown on the moved text. [decision]
-- Autocomplete: a dropdown of modes, off by default.
-  Command suggestions are built from the local history of this host. **Later stage**,
-  marked as beta in the UI. Until that stage it is not shown (section 0). [decision on
-  the suggestion source]
+- Autocomplete (beta): a dropdown of modes, Off (default) or "This host's history"; the same
+  setting as 12.4. Command suggestions are built from the local history of this host.
+  [decision on the suggestion source] (D142): while a command line is typed, the rest of
+  the newest command of the host's history that starts with the typed text is drawn after
+  the cursor in a muted color; Tab or → types it, otherwise both keys go to the shell. Only
+  in sessions to saved hosts (they keep history), at the shell's own prompt (its line
+  editor turned bracketed paste on), with the cursor at the end of the line; never in the
+  alternate screen, at a password prompt, on a line the history capture would not record,
+  before the echo of the last key, or for a command the history filter takes for a secret.
+  [decision]
 
 **Snippets tab** [decision]:
 
@@ -1682,7 +1701,7 @@ Also:
 
 **"Terminal" block:**
 
-- Autocomplete (beta): dropdown, off by default. Later stage.
+- Autocomplete (beta): dropdown, Off (default) or "This host's history" (see 4.2, D142).
 - Autoreconnect: toggle, on by default (see 4.6).
 - Record command history: toggle, on by default. A host can override it (see 3.1). [decision]
   History is kept only for saved hosts (4.2). [decision]

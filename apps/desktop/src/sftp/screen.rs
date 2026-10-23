@@ -197,25 +197,32 @@ impl SftpScreen {
         {
             let screen = cx.entity().downgrade();
             let name = entry.name.clone();
+            let agreed = extension.clone();
             super::open::confirm_run(&name, &extension, window, cx, move |window, cx| {
                 let _ = screen.update(cx, |screen, cx| {
-                    screen.open_confirmed(side, entry.clone(), None, window, cx)
+                    let confirmed = Some(agreed.clone());
+                    screen.open_confirmed(side, entry.clone(), None, confirmed, window, cx)
                 });
             });
             return;
         }
-        self.open_confirmed(side, entry, program, window, cx);
+        self.open_confirmed(side, entry, program, None, window, cx);
     }
 
-    /// Open once it is clear to run.
+    /// Open once it is clear to run: `confirmed` is the type the user
+    /// agreed to run, if any.
     fn open_confirmed(
         &mut self,
         side: Side,
         entry: Entry,
         program: Option<PathBuf>,
+        confirmed: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The system picks the program (Open, not Open with): the copy's own
+        // name is checked too, below.
+        let check_copy = program.is_none();
         let program = program.or_else(|| super::open::open_program(self.state.read(cx)));
         let panel = self.panel(side).read(cx);
         if panel.is_local() {
@@ -239,15 +246,47 @@ impl SftpScreen {
             let _ = this.update_in(cx, |this, window, cx| match copy {
                 Ok(copy) => {
                     super::open::mark_downloaded(copy.local_path());
+                    // The copy is named after the file a link points to: a
+                    // link listed as "notes.txt" can bring "run.cmd", so the
+                    // copy's own type asks too (security.md 11.4).
+                    let local_name = copy
+                        .local_path()
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let runnable =
+                        super::copy_needs_question(&local_name, check_copy, confirmed.as_deref());
                     let opened = Opened::new(copy, handle, name);
-                    super::open::launch(opened.local_path(), program.as_deref(), window, cx);
-                    crate::shell::show_toast(super::strings::OPEN_NOT_ENCRYPTED, window, cx);
+                    let path = opened.local_path().to_path_buf();
                     this.opened.push(opened);
                     if this.watch.is_none() {
                         let screen = cx.entity().downgrade();
+                        let state = this.state.clone();
                         this.watch = Some(cx.spawn_in(window, async move |_, cx| {
-                            super::open::watch(screen, |this: &mut Self| &mut this.opened, cx).await
+                            super::open::watch(
+                                screen,
+                                state,
+                                |this: &mut Self| &mut this.opened,
+                                cx,
+                            )
+                            .await
                         }));
+                    }
+                    // Locked while it downloaded: nothing runs or asks over
+                    // the lock screen; Open again opens the copy.
+                    if !this.state.read(cx).is_unlocked() {
+                        return;
+                    }
+                    let open = move |window: &mut Window, cx: &mut App| {
+                        super::open::launch(&path, program.as_deref(), window, cx);
+                        crate::shell::show_toast(super::strings::OPEN_NOT_ENCRYPTED, window, cx);
+                    };
+                    match runnable {
+                        None => open(window, cx),
+                        Some(extension) => {
+                            super::open::confirm_run(&local_name, &extension, window, cx, open)
+                        }
                     }
                 }
                 Err(reason) => crate::shell::show_toast(

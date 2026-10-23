@@ -1145,6 +1145,14 @@ impl ImportDialog {
                     summary.rules_autostart_off,
                 ))
             })
+            // Hosts whose Agent Forwarding the import turned off (D172).
+            .when(summary.hosts_agent_forwarding_off > 0, |this| {
+                this.child(row(
+                    "data-import-hosts-agent-off",
+                    strings::SUMMARY_HOSTS_AGENT_FORWARDING_OFF,
+                    summary.hosts_agent_forwarding_off,
+                ))
+            })
     }
 
     fn render_contents(

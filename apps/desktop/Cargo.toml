@@ -55,6 +55,11 @@ qrcode = { version = "0.14.1", default-features = false }
 thiserror.workspace = true
 ureq.workspace = true
 semver.workspace = true
+# The release key's signature of the update manifest (updates/signature.rs,
+# D170): Ed25519, BLAKE2b-512, Base64.
+ed25519-dalek.workspace = true
+blake2.workspace = true
+base64ct.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dirs.workspace = true

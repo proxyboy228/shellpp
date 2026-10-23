@@ -284,6 +284,9 @@ impl LogsScreen {
         cx.spawn_in(window, async move |this, cx| {
             let read = read.await;
             let _ = this.update_in(cx, |screen, window, cx| match read {
+                // Locked while it was read: the output never shows over the
+                // lock screen (security.md 8; run 8, C5).
+                Ok(Some(_)) if !screen.state.read(cx).is_unlocked() => {}
                 Ok(Some((text, complete))) => {
                     let state = screen.state.clone();
                     let viewer = cx.new(|cx| {

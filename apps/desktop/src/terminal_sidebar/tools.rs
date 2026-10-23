@@ -11,7 +11,8 @@
 //! - Esc returns the focus to the terminal and keeps the highlights. The
 //!   highlights go away when the field is emptied or the sidebar is hidden,
 //!   and move with the search when the active pane changes [decision].
-//! - Autocomplete (UI 4.2) is a later stage and is not shown.
+//! - Autocomplete (beta, D142): a menu of its modes, Off or this host's
+//!   history; the same setting as Settings > Terminal (UI 12.4).
 
 use gpui::prelude::*;
 use gpui::{ClickEvent, Context, Entity, IntoElement, Render, SharedString, Subscription, Window};
@@ -19,12 +20,16 @@ use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{self, Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, FocusableExt as _, Icon, Sizable as _, h_flex, v_flex,
 };
 
 use super::{SidebarTarget, heading, strings};
+use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
+use crate::settings::terminal::{KEY_AUTOCOMPLETE, TerminalPrefs, save_setting};
+use crate::state::AppState;
 use crate::terminal::{SearchSummary, SearchUpdated, TerminalView};
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{controls, metrics};
@@ -34,6 +39,7 @@ const STEP_BUTTON: gpui::Rems = metrics::rpx(32.);
 
 /// The Tools tab.
 pub struct ToolsTab {
+    state: Entity<AppState>,
     query: Entity<InputState>,
     target: Option<SidebarTarget>,
     /// The sidebar is on screen: the search runs and highlights.
@@ -53,21 +59,23 @@ impl std::fmt::Debug for ToolsTab {
 }
 
 impl ToolsTab {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder(strings::SEARCH_PLACEHOLDER);
             input.set_disabled(true, cx);
             input
         });
-        let subscriptions =
-            vec![
-                cx.subscribe(&query, |this, _, event: &InputEvent, cx| match event {
-                    InputEvent::Change => this.run(cx),
-                    InputEvent::PressEnter { shift, .. } => this.step(!*shift, cx),
-                    InputEvent::Focus | InputEvent::Blur => {}
-                }),
-            ];
+        let subscriptions = vec![
+            cx.subscribe(&query, |this, _, event: &InputEvent, cx| match event {
+                InputEvent::Change => this.run(cx),
+                InputEvent::PressEnter { shift, .. } => this.step(!*shift, cx),
+                InputEvent::Focus | InputEvent::Blur => {}
+            }),
+            // The mode menu follows the setting wherever it changes.
+            cx.observe_global::<TerminalPrefs>(|_, cx| cx.notify()),
+        ];
         Self {
+            state,
             query,
             target: None,
             active: false,
@@ -75,6 +83,57 @@ impl ToolsTab {
             terminal_subscription: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Autocomplete's mode (D142): on suggests from the host's history.
+    pub fn set_autocomplete(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let value = serde_json::json!(if on { "history" } else { "off" });
+        let _ = save_setting(&core, KEY_AUTOCOMPLETE, value, cx);
+        cx.notify();
+    }
+
+    fn render_autocomplete(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let on = TerminalPrefs::current(cx).autocomplete;
+        let tab = cx.entity().downgrade();
+        let menu = ControlButton::new("terminal-autocomplete", ControlKind::Neutral)
+            .label(if on {
+                strings::AUTOCOMPLETE_HISTORY
+            } else {
+                strings::AUTOCOMPLETE_OFF
+            })
+            .trailing_icon(IconName::ChevronDown)
+            .dropdown_menu(move |mut menu, _, cx| {
+                menu = menu.min_w(metrics::scaled(200., cx));
+                for (label, mode) in [
+                    (strings::AUTOCOMPLETE_OFF, false),
+                    (strings::AUTOCOMPLETE_HISTORY, true),
+                ] {
+                    let tab = tab.clone();
+                    menu = menu.item(PopupMenuItem::new(label).checked(mode == on).on_click(
+                        move |_, _, cx| {
+                            let _ = tab.update(cx, |tab, cx| tab.set_autocomplete(mode, cx));
+                        },
+                    ));
+                }
+                menu
+            });
+        let theme = cx.theme();
+        v_flex()
+            .id("terminal-autocomplete-block")
+            .test_support()
+            .gap(metrics::SPACE_2)
+            .child(
+                gpui::div()
+                    .text_size(metrics::FONT_SIZE_BODY)
+                    .font_weight(metrics::FONT_WEIGHT_MEDIUM)
+                    .text_color(theme.foreground)
+                    .child(strings::AUTOCOMPLETE),
+            )
+            .child(h_flex().child(menu))
+            .child(widgets::caption(strings::AUTOCOMPLETE_HINT, cx))
     }
 
     /// The search text.
@@ -303,5 +362,6 @@ impl Render for ToolsTab {
                     )
                     .children(caption.map(|caption| widgets::caption(caption, cx))),
             )
+            .child(self.render_autocomplete(cx))
     }
 }

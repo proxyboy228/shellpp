@@ -87,6 +87,8 @@ pub fn delete_text(folders: usize) -> String {
 
 /// A failed file operation, with the reason.
 pub fn failed(what: &str, reason: &str) -> String {
+    // A reason may be the server's own text (run 8, C5): shown safely.
+    let reason = super::display_name(reason);
     format!("{what} failed: {reason}")
 }
 
@@ -107,6 +109,9 @@ pub const OVERWRITE: &str = "Overwrite";
 
 /// After "Keep the server's file".
 pub fn kept_server_file(name: &str) -> String {
+    // A remote name: control and direction characters shown, not obeyed
+    // (run 8, C5; security.md 11.4).
+    let name = super::display_name(name);
     format!(
         "Saves of your copy of {name} are no longer uploaded. Open the file again to edit the server's version."
     )
@@ -114,11 +119,13 @@ pub fn kept_server_file(name: &str) -> String {
 
 /// "Uploaded report.txt".
 pub fn uploaded_back(name: &str) -> String {
+    let name = super::display_name(name);
     format!("Uploaded {name}")
 }
 
 /// The question when the server's file changed since the copy was made.
 pub fn changed_on_server(name: &str) -> String {
+    let name = super::display_name(name);
     format!(
         "{name} changed on the server after it was opened. Overwrite it with your copy, or keep the server's file?"
     )

@@ -432,9 +432,12 @@ impl TerminalHandle {
     /// [`MAX_READ_CHARS`] cells before the cursor); a line too long to
     /// follow counts as one.
     pub fn cursor_at_password_prompt(&self) -> bool {
-        let term = self.term().lock();
+        self.term_at_password_prompt(&self.term().lock())
+    }
+
+    fn term_at_password_prompt(&self, term: &Term<Listener>) -> bool {
         let cursor = &term.grid().cursor;
-        let Some(start) = logical_start(&term, cursor.point.line) else {
+        let Some(start) = logical_start(term, cursor.point.line) else {
             return true;
         };
         let columns = term.grid().columns();
@@ -448,11 +451,70 @@ impl TerminalHandle {
         let mut count = 0;
         let mut line = Line(start.0.max(cursor.point.line.0 - rows + 1));
         while line < cursor.point.line {
-            count = push_row(&term, line, 0, columns, &mut before, count);
+            count = push_row(term, line, 0, columns, &mut before, count);
             line += 1;
         }
-        push_row(&term, cursor.point.line, 0, to, &mut before, count);
+        push_row(term, cursor.point.line, 0, to, &mut before, count);
         ends_in_password_prompt(&before)
+    }
+
+    /// Autocomplete (UI 4.2, D142): the text typed on the line the history
+    /// capture follows, from its boundary to the cursor, when nothing
+    /// stands after the cursor. `None` without a saved host's capture,
+    /// while the shell's line editor is not active (it turns bracketed
+    /// paste on at its prompt: bash 5.1+, zsh, fish; a pager or a program
+    /// reading a line has it off), in the alternate screen, at a password
+    /// prompt (on the line or, with nothing before the boundary, on the
+    /// line above), or on a line the capture would not record (see
+    /// [`Capture`]).
+    pub fn typed_line(&self) -> Option<Zeroizing<String>> {
+        let capture = &self.outbox().capture;
+        if !capture.enabled() {
+            return None;
+        }
+        let boundary = capture.completable()?;
+        let term = self.term().lock();
+        if alt_screen(&term) || !term.mode().contains(TermMode::BRACKETED_PASTE) {
+            return None;
+        }
+        let cursor = &term.grid().cursor;
+        // At the last column the shell wraps on the next key: no room.
+        if cursor.input_needs_wrap {
+            return None;
+        }
+        let line = cursor.point.line;
+        let column = cursor.point.column.0;
+        let start = logical_start(&term, line)?;
+        let end = logical_end(&term, line);
+        let row = start + boundary.row;
+        if row > line || (row == line && column < boundary.column) {
+            return None;
+        }
+        // The cursor ends the line's text.
+        if !rows_text(&term, line, end, column).is_empty() {
+            return None;
+        }
+        if self.term_at_password_prompt(&term) || cursor_line_is_password_prompt(&term) {
+            return None;
+        }
+        // The capture's prompt rule: the text before the boundary, or the
+        // last line above when there is none.
+        let snapshot = read_line(&term, boundary)?;
+        if prompt_looks_like_password(&snapshot.prompt_text) {
+            return None;
+        }
+        let columns = term.grid().columns();
+        let mut typed = Zeroizing::new(String::new());
+        let mut count = 0;
+        let mut at = row;
+        let mut from = boundary.column;
+        while at < line {
+            count = push_row(&term, at, from, columns, &mut typed, count);
+            from = 0;
+            at += 1;
+        }
+        push_row(&term, line, from, column.min(columns), &mut typed, count);
+        (!typed.trim().is_empty()).then_some(typed)
     }
 }
 
@@ -651,6 +713,19 @@ impl Capture {
         self.enabled.load(Ordering::Acquire)
     }
 
+    /// The boundary of the line being typed, when autocomplete may read
+    /// it (D142): a saved host's session, nothing pending or pasting, a
+    /// line whose boundary is known, started outside the alternate screen,
+    /// with printable keys typed.
+    fn completable(&self) -> Option<Boundary> {
+        let state = self.lock();
+        if state.sink.is_none() || state.pending.is_some() || state.in_paste {
+            return None;
+        }
+        let line = state.line.as_ref()?;
+        (!line.unreliable && !line.alt_screen && line.typed_printable).then_some(line.boundary)
+    }
+
     /// A line is pending or held: output must go through [`advance`].
     pub(super) fn watching(&self) -> bool {
         self.watching.load(Ordering::Acquire)
@@ -830,6 +905,7 @@ impl TerminalHandle {
     /// Typed input (keys, pastes, IME text) for the session: watched by the
     /// history capture, then sent.
     pub fn send_typed(&self, bytes: Vec<u8>) {
+        self.outbox().autocomplete.typed();
         self.watch_input(&bytes, InputOrigin::Typed);
         self.send_input(bytes);
     }
@@ -838,6 +914,7 @@ impl TerminalHandle {
     /// sent like typed input, and the line that holds it is never recorded
     /// (docs/security.md, section 10.1).
     pub fn inject_input(&self, bytes: Vec<u8>) {
+        self.outbox().autocomplete.typed();
         self.watch_input(&bytes, InputOrigin::Injected);
         self.send_input(bytes);
     }

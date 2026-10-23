@@ -24,6 +24,7 @@
 //! `impl` block (bodies in `connect.rs`, stage 2 plan, section 4.4).
 
 mod connect;
+mod csv_io;
 pub mod dto;
 mod export;
 pub mod host_api;
@@ -33,6 +34,7 @@ mod known_hosts_io;
 pub mod last_session;
 mod lock_ops;
 pub mod merge;
+pub mod putty_io;
 mod recordings;
 mod records;
 pub(crate) mod session;
@@ -752,6 +754,52 @@ impl Core {
         input: SshConfigImportInput,
     ) -> Result<SshConfigImportSummary, CoreError> {
         self.ssh_config_import_impl(input)
+    }
+
+    /// The preview of a PuTTY sessions import (UI 2.5 step 3; D140): each
+    /// saved session but `Default Settings` as a host with its status and
+    /// the settings left out, its `.ppk` key file with its status, the
+    /// sessions that could not be read. `Unavailable` when `source` cannot
+    /// be read. Reads the registry and the key files: call it off the UI
+    /// thread.
+    pub fn putty_preview(
+        &self,
+        source: &dyn crate::import::putty::SessionSource,
+    ) -> Result<SshConfigPreview, CoreError> {
+        self.putty_preview_impl(source)
+    }
+
+    /// Imports the chosen PuTTY sessions and their key files (D140);
+    /// idempotent by `putty:<session name>`, existing hosts are never
+    /// overwritten. Slow for encrypted keys: call it off the UI thread.
+    pub fn putty_import(
+        &self,
+        source: &dyn crate::import::putty::SessionSource,
+        input: dto::PuttyImportInput,
+    ) -> Result<SshConfigImportSummary, CoreError> {
+        self.putty_import_impl(source, input)
+    }
+
+    /// The mapping step of a CSV import (UI 2.5; D141): the character set,
+    /// delimiter and header in effect (detected unless `input` gives them),
+    /// the columns with their roles and the first rows. Errors: `encoding`
+    /// or `delimiter` `invalid`, `TooLarge` over 16 MiB.
+    pub fn csv_inspect(&self, input: &dto::CsvInput) -> Result<dto::CsvInspection, CoreError> {
+        self.csv_inspect_impl(input)
+    }
+
+    /// The preview of a CSV import (D141): each row with its status, the
+    /// groups it creates and the rows with a password. Errors as
+    /// `csv_inspect`, and `roles` `required` without an address column.
+    pub fn csv_preview(&self, input: &dto::CsvInput) -> Result<dto::CsvPreview, CoreError> {
+        self.csv_preview_impl(input)
+    }
+
+    /// Imports the new rows of a CSV file (D141); idempotent by (address,
+    /// effective port, effective username), existing hosts are never
+    /// overwritten.
+    pub fn csv_import(&self, input: &dto::CsvInput) -> Result<dto::CsvImportSummary, CoreError> {
+        self.csv_import_impl(input)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The

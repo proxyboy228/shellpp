@@ -942,7 +942,7 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `appearance.ui_theme` | enum `auto`, `light`, `dark` | `auto` | 12.1 | |
 | `appearance.ui_zoom` | number 0.8–2.0: the steps 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 (another value snaps to the nearest) | 1.0 | 1.4 View | D96 |
 | `security.auto_lock_minutes` | 1, 5, 15, 30, 60 or null (never); the app offers null, 5, 15, 30 and 60 | null | 13.4 | D9, D29 |
-| `terminal.autocomplete` | enum `off` | `off` | 12.4 | later stage |
+| `terminal.autocomplete` | enum `off`, `history` | `off` | 4.2, 12.4 | beta: suggestions from the host's history (D142) |
 | `terminal.autoreconnect` | bool | `true` | 12.4 | D18 |
 | `terminal.record_history` | bool | `true` | 12.4 | UI 12.4 |
 | `terminal.import_shell_history` | bool | `false` | 12.4 | SPEC "Security" |
@@ -1163,6 +1163,7 @@ Local list of the pairs of section 18.3: raised when a pull inserts a record who
 - Native JSON (D34, [export-format.md](export-format.md), section 4): records are merged by `record_id`. A new id is added under that id; the same id with the same content is "already exists"; the same id with other content is a conflict, and the imported version is added as a copy with a new id and " (imported)" on its label or name, while the local record stays. Groups, hosts, keys, identities, known hosts, snippets, snippet packages and forwarding rules are imported (D63: a forwarding rule never starts on launch, and one that listens beyond loopback not on connect either, except in a full restore), and the command history, the history hint states and the connection log unless the user turns them off (D51; history through the secret detector); device records are skipped. A key this version cannot read is kept as "unknown" (section 9.1, D50).
 - References inside an import (a host's group, an `IdentityFile` key, ProxyJump hosts, a JSON record's references) point to the matched existing record when the target is skipped, and to the new record otherwise.
 - CSV `group` is a group path with ` / ` between levels; missing groups are created and existing groups are matched by (parent, name) (stage 0 decision).
+- CSV columns are mapped in the import dialog (D141): besides the SPEC's six, `notes` and `password` (stored as `ssh.password`); `tags` are separated by `,` or `;`. A row's effective port and username for matching come from the row and from the chain of its group, or of the deepest existing group on its path when the rest of the path is new.
 
 ### 18.5 Merge at sign-in on a device with local data
 

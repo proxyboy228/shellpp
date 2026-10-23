@@ -46,6 +46,7 @@
 //! loses control characters and bracketed paste markers, OSC strings and
 //! zero-width characters per cell are capped. Nothing logs terminal data.
 
+pub mod autocomplete;
 pub mod colors;
 pub mod contrast;
 pub mod fonts;
@@ -70,6 +71,7 @@ mod tests;
 
 use gpui::App;
 
+pub use autocomplete::HistorySource;
 pub use contrast::MinContrast;
 pub use history_capture::HistorySink;
 pub use model::{FeedError, TerminalHandle, TerminalSink, TerminalSize};

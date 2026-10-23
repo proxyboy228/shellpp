@@ -12,7 +12,6 @@ pub const SOURCE_KNOWN_HOSTS: &str = "Known hosts";
 pub const SOURCE_KNOWN_HOSTS_PATH: &str = "~/.ssh/known_hosts";
 pub const SOURCE_PUTTY: &str = "PuTTY sessions";
 pub const SOURCE_CSV: &str = "CSV";
-pub const SOURCE_LATER: &str = "Arrives in a later version.";
 
 pub const FILE: &str = "File";
 pub const BROWSE: &str = "Choose file…";
@@ -25,6 +24,8 @@ pub const PREVIEW_HOSTS: &str = "Hosts";
 pub const PREVIEW_KEYS: &str = "Key files";
 pub const PREVIEW_PROBLEMS: &str = "Not read";
 pub const PREVIEW_EMPTY: &str = "The file names no hosts.";
+pub const PREVIEW_EMPTY_PUTTY: &str = "PuTTY has no saved sessions.";
+pub const PUTTY_READ_FAILED: &str = "The PuTTY sessions could not be read.";
 pub const STATUS_NEW: &str = "new";
 pub const STATUS_EXISTS: &str = "already exists";
 pub const STATUS_ERROR: &str = "not imported";
@@ -53,6 +54,64 @@ pub const READING: &str = "Reading…";
 pub const BACK: &str = "Back";
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
+
+pub const CSV_FILE_HINT: &str = "Columns such as label, address, port, username, group, tags and notes; the next step maps them.";
+pub const CSV_TEMPLATE: &str = "Save template…";
+pub const CSV_TEMPLATE_SAVED: &str = "Template saved.";
+pub const CSV_TEMPLATE_FAILED: &str = "The template could not be saved.";
+pub const CSV_TOO_LARGE: &str = "The file is larger than 16 MB or has more than 100,000 rows.";
+pub const CSV_OPEN_QUOTE: &str =
+    "A quote in the file is never closed, so its rows cannot be told apart.";
+pub const CSV_ENCODING: &str = "Character set";
+pub const CSV_DELIMITER: &str = "Delimiter";
+pub const CSV_TAB: &str = "Tab";
+pub const CSV_HEADER: &str = "First row is a header";
+pub const CSV_COLUMNS: &str = "Columns";
+pub const CSV_ROLE_IGNORE: &str = "not imported";
+pub const CSV_NO_ADDRESS: &str = "Choose the column that holds the address.";
+pub const CSV_PASSWORDS: &str = "This file holds passwords in clear text. They are stored encrypted in the vault; delete the file after the import.";
+pub const CSV_EMPTY: &str = "The file has no rows.";
+pub const CSV_SUMMARY_SKIPPED: &str = "Skipped (already exist)";
+pub const CSV_SUMMARY_GROUPS: &str = "Groups added";
+pub const CSV_DELETE_FILE: &str =
+    "The CSV file still holds the passwords in clear text: delete it.";
+
+/// "N rows in the file".
+pub fn csv_rows(count: usize) -> String {
+    match count {
+        1 => "1 row in the file".to_owned(),
+        n => format!("{n} rows in the file"),
+    }
+}
+
+/// The counts above the CSV preview.
+pub fn csv_counts(new: usize, existing: usize, errors: usize, groups: usize) -> String {
+    let mut text = format!("{new} new, {existing} already exist, {errors} not imported");
+    if groups > 0 {
+        text.push_str(&format!("; {groups} new groups"));
+    }
+    text
+}
+
+/// A row's group.
+pub fn csv_group(path: &str) -> String {
+    format!("Group: {path}")
+}
+
+/// Why a row is not imported.
+pub fn csv_reason(line: usize, reason: &str) -> String {
+    format!("Line {line}: {reason}")
+}
+
+/// A row without a label or address.
+pub fn csv_line(line: usize) -> String {
+    format!("Line {line}")
+}
+
+/// Rows the preview leaves out.
+pub fn csv_more(count: usize) -> String {
+    format!("and {count} more rows")
+}
 
 /// "N of M hosts selected".
 pub fn selected(chosen: usize, total: usize) -> String {

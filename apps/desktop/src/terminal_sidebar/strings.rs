@@ -58,6 +58,12 @@ pub fn font_summary(family: &str, size: u32, line_height: &str) -> String {
     format!("{family}, {size} px, spacing {line_height}")
 }
 
+pub const AUTOCOMPLETE: &str = "Autocomplete (beta)";
+pub const AUTOCOMPLETE_OFF: &str = "Off";
+pub const AUTOCOMPLETE_HISTORY: &str = "This host's history";
+pub const AUTOCOMPLETE_HINT: &str =
+    "Suggests the rest of a command from this host's history; Tab or → accepts it.";
+
 #[cfg(test)]
 mod tests {
     use super::*;

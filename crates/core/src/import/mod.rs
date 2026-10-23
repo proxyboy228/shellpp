@@ -2,4 +2,6 @@
 //! do not need the vault. The service layer (`crate::service`) turns what
 //! they read into records.
 
+pub mod csv;
+pub mod putty;
 pub mod ssh_config;

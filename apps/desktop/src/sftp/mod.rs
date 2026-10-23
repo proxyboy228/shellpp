@@ -49,15 +49,89 @@ pub fn display_name(name: &str) -> String {
 /// The extensions of files the system would run or install (security.md
 /// 11.4): Open asks first.
 pub const RUNNABLE: &[&str] = &[
-    "exe", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "msi",
-    "msp", "scr", "pif", "lnk", "url", "reg", "hta", "cpl", "jar", "app", "command", "sh",
-    "desktop", "appimage", "run", "pkg", "dmg",
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "psm1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "msi",
+    "msp",
+    "scr",
+    "pif",
+    "lnk",
+    "url",
+    "reg",
+    "hta",
+    "cpl",
+    "jar",
+    "app",
+    "command",
+    "sh",
+    "desktop",
+    "appimage",
+    "run",
+    "pkg",
+    "dmg", // Run 8 (C5): more types Windows runs.
+    "msc",
+    "msu",
+    "appref-ms",
+    "application",
+    "appx",
+    "msix",
+    "appinstaller",
+    "chm",
+    "gadget",
+    "settingcontent-ms",
+    "inf",
+    "scf",
+    "ws",
+    "wsc",
+    "sct",
+    "py",
+    "pyw",
+    "pyz",
+    "pyzw",
+    "theme",
+    "themepack",
+    "library-ms",
+    "searchconnector-ms",
+    "diagcab",
+    "iso",
+    "img",
+    "vhd",
+    "vhdx",
+    "xll",
+    "psc1",
+    "jnlp",
+    "xbap",
+    "website",
+    "hlp",
 ];
 
 /// The extension of `name` when the system would run such a file.
 pub fn runnable_extension(name: &str) -> Option<String> {
     let extension = name.rsplit_once('.')?.1.trim().to_lowercase();
     RUNNABLE.contains(&extension.as_str()).then_some(extension)
+}
+
+/// The type of the downloaded copy `local_name` of an Open that still asks
+/// before it runs: the system picks the program (`by_system`) and the user
+/// has not agreed to run this type already. A link listed under one name
+/// brings the name of the file it points to (run 8, C5; security.md 11.4).
+pub fn copy_needs_question(
+    local_name: &str,
+    by_system: bool,
+    confirmed: Option<&str>,
+) -> Option<String> {
+    runnable_extension(local_name)
+        .filter(|extension| by_system && confirmed != Some(extension.as_str()))
 }
 
 /// What a drag from a file panel carries: the entries and their panel.

@@ -1,16 +1,23 @@
 //! Headless tests of the import dialog (UI 2.5; D39): the `~/.ssh/config`
 //! path with its preview, a host left unchecked, the passphrase of an
 //! encrypted key file and the summary; the hand-over of the JSON and
-//! known_hosts sources; disabled sources; a missing file. Every profile is
-//! a `TestProfile`; the config and the keys are written at run time into a
-//! temporary home folder (never the real `~/.ssh`).
+//! known_hosts sources; disabled sources; a missing file; PuTTY sessions
+//! from a fake registry (D140). Every profile is a `TestProfile`; the
+//! config and the keys are written at run time into a temporary home folder
+//! (never the real `~/.ssh` or registry).
 
 use gpui::{
     AnyWindowHandle, AppContext as _, Bounds, Entity, IntoElement, Render, TestAppContext,
     WindowBounds, WindowOptions, div, px, size,
 };
+use std::sync::Arc;
+
 use gpui_kit::test::TestWindowExt as _;
 use secrecy::ExposeSecret as _;
+use shellpp_core::import::csv::Role;
+use shellpp_core::import::putty::{
+    FixedSessions, Session, SessionSource, Sessions, Value as PuttyValue,
+};
 
 use super::*;
 use crate::testing::TestProfile;
@@ -184,15 +191,9 @@ fn a_config_is_previewed_chosen_and_imported(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn other_sources_hand_over_or_are_disabled(cx: &mut TestAppContext) {
+fn other_sources_hand_over(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let dialog = ui.dialog(cx);
-    // Later sources cannot be selected.
-    dialog.update(cx, |dialog, cx| dialog.select(Source::Csv, cx));
-    assert_eq!(
-        dialog.read_with(cx, |dialog, _| dialog.source()),
-        Source::SshConfig
-    );
     // A Shell++ export goes on in Import Data.
     dialog.update(cx, |dialog, cx| dialog.select(Source::Json, cx));
     ui.click(cx, "import-next");
@@ -206,6 +207,210 @@ fn other_sources_hand_over_or_are_disabled(cx: &mut TestAppContext) {
     ui.click(cx, "import-next");
     assert!(!ui.visible(cx, "import-dialog"));
     assert!(ui.visible(cx, "kh-import-dialog"));
+}
+
+/// A registry that cannot be read.
+struct Unreadable;
+
+impl SessionSource for Unreadable {
+    fn sessions(&self) -> std::io::Result<Sessions> {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    }
+}
+
+fn putty_session(key: &str, host: &str) -> Session {
+    Session {
+        key: key.to_owned(),
+        values: [
+            ("HostName".to_owned(), PuttyValue::Text(host.to_owned())),
+            ("Protocol".to_owned(), PuttyValue::Text("ssh".to_owned())),
+        ]
+        .into(),
+    }
+}
+
+#[gpui_kit::test]
+fn putty_sessions_skip_the_file_step(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    cx.update(|cx| {
+        putty_registry::set_source(
+            Arc::new(FixedSessions(Sessions {
+                sessions: vec![
+                    putty_session("Default%20Settings", ""),
+                    putty_session("web%20prod", "web.example.com"),
+                    putty_session("db", "192.0.2.44"),
+                ],
+                unreadable: Vec::new(),
+                code_page: None,
+            })),
+            cx,
+        )
+    });
+    let dialog = ui.dialog(cx);
+    dialog.update(cx, |dialog, cx| dialog.select(Source::Putty, cx));
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.source()),
+        Source::Putty
+    );
+    // Next goes straight to the preview: there is no file to choose.
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Preview
+    );
+    let preview = dialog.read_with(cx, |dialog, _| dialog.preview().cloned().unwrap());
+    let names: Vec<&str> = preview
+        .hosts
+        .iter()
+        .map(|host| host.alias.as_str())
+        .collect();
+    assert_eq!(names, ["web prod", "db"]);
+    // Back returns to the sources.
+    ui.click(cx, "import-back");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Source
+    );
+    ui.click(cx, "import-next");
+    dialog.update(cx, |dialog, cx| dialog.set_chosen("db", false, cx));
+    ui.click(cx, "import-next");
+    let Step::Summary(summary) = dialog.read_with(cx, |dialog, _| dialog.step().clone()) else {
+        panic!("no summary");
+    };
+    assert_eq!(summary.added, 1);
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let export = core.data_export(Default::default()).unwrap();
+    let text = export.text.expose_secret();
+    assert!(text.contains("putty:web prod"));
+    assert!(!text.contains("192.0.2.44"));
+}
+
+#[gpui_kit::test]
+fn an_unreadable_registry_is_reported(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    cx.update(|cx| putty_registry::set_source(Arc::new(Unreadable), cx));
+    let dialog = ui.dialog(cx);
+    dialog.update(cx, |dialog, cx| dialog.select(Source::Putty, cx));
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Source
+    );
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.putty_error()),
+        Some(strings::PUTTY_READ_FAILED)
+    );
+    assert!(ui.visible(cx, "import-putty-error"));
+}
+
+#[gpui_kit::test]
+fn a_csv_file_is_mapped_previewed_and_imported(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let file = ui.home.path().join("hosts.csv");
+    // Semicolons; the first column has no known name; a password column.
+    std::fs::write(
+        &file,
+        "Name;Host;Port;Password\nweb;web.example.com;22;s3cret-for-test\n\
+         db;db.example.com;5432;\nbad;;22;\n",
+    )
+    .unwrap();
+    let dialog = ui.dialog(cx);
+    dialog.update(cx, |dialog, cx| dialog.select(Source::Csv, cx));
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::File { error: None }
+    );
+    assert!(ui.visible(cx, "import-csv-template"));
+    // No file is suggested for CSV.
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::File {
+            error: Some(strings::FILE_MISSING)
+        }
+    );
+    ui.frame(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.set_path(&file, window, cx))
+    });
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Mapping
+    );
+    assert!(ui.visible(cx, "import-csv-mapping"));
+    let csv = dialog.read_with(cx, |dialog, _| dialog.csv().cloned().unwrap());
+    assert_eq!(csv.inspection.delimiter, ';');
+    assert_eq!(
+        csv.roles,
+        [Role::Label, Role::Address, Role::Port, Role::Password]
+    );
+    assert!(ui.visible(cx, "import-csv-passwords"));
+
+    // Without an address column Next is disabled and says why.
+    dialog.update(cx, |dialog, cx| dialog.set_csv_role(1, Role::Notes, cx));
+    assert!(ui.visible(cx, "import-csv-no-address"));
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Mapping
+    );
+    // Mapping a role moves it: address from notes back to column 1, and
+    // the password column is not imported.
+    dialog.update(cx, |dialog, cx| dialog.set_csv_role(1, Role::Address, cx));
+    dialog.update(cx, |dialog, cx| dialog.set_csv_role(3, Role::Ignore, cx));
+    assert!(!ui.visible(cx, "import-csv-passwords"));
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Preview
+    );
+    let preview = dialog.read_with(cx, |dialog, _| {
+        dialog.csv().unwrap().preview.clone().unwrap()
+    });
+    let statuses: Vec<ImportStatus> = preview.rows.iter().map(|row| row.status).collect();
+    assert_eq!(
+        statuses,
+        [ImportStatus::New, ImportStatus::New, ImportStatus::Error]
+    );
+    // Back goes to the mapping, then forward again.
+    ui.click(cx, "import-back");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Mapping
+    );
+    ui.click(cx, "import-next");
+    ui.click(cx, "import-next");
+    let Step::CsvSummary(summary) = dialog.read_with(cx, |dialog, _| dialog.step().clone()) else {
+        panic!("no summary");
+    };
+    assert_eq!(summary.added, 2);
+    assert_eq!(summary.errors.len(), 1);
+    assert_eq!(summary.passwords, 0);
+    assert!(ui.visible(cx, "import-summary"));
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let export = core.data_export(Default::default()).unwrap();
+    let text = export.text.expose_secret();
+    assert!(text.contains("db.example.com"));
+    assert!(!text.contains("s3cret-for-test"));
+    ui.click(cx, "import-close");
+    assert!(!ui.visible(cx, "import-dialog"));
+}
+
+#[gpui_kit::test]
+fn the_csv_template_is_written(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let dialog = ui.dialog(cx);
+    let file = ui.home.path().join("template.csv");
+    ui.frame(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.write_template(&file, window, cx))
+    });
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("label,address,port,username,group,tags,notes"));
 }
 
 #[gpui_kit::test]

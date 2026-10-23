@@ -1638,6 +1638,26 @@ Status: run 7 decision, 2026-10-23 (plan, sections 3.2-3.4 and 5). Clarifies doc
 
 **Spec impact:** docs/sync-protocol.md, sections 6.7 (a rule 0 before rule 1), 6.9 (step order, authenticated lists), 5.1 (sign-in to a rolled-back server), 5.3 (key shown after commit); docs/data-model.md, section 18.5 (near-duplicates).
 
+## Run 8 of 2026-10-23, agent B
+
+The decisions below were taken by agent B of the owner's eighth run (import and new features; its plan, section "Agent B"), marked "run 8"; the disputable ones are listed for the owner in `docs/overnight/REPORT-B.md`.
+
+### 140. PuTTY sessions are imported through a session source (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B1). Settles the PuTTY fields of D21 and UI 2.5.
+
+**Context.** UI 2.5 lists PuTTY sessions as a source read from the Windows registry, and docs/architecture.md, section 3, has the desktop app read the registry and pass the values to the core. Which values are imported, what happens to settings the host model cannot hold, and how the registry is kept out of tests were not settled.
+
+**Decision:**
+
+- The core reads sessions through a `SessionSource` trait (`shellpp_core::import::putty`): a session is its registry key name (with PuTTY's `%XX` escapes) and its `REG_SZ` and `REG_DWORD` values. `shellpp-desktop` implements it over `HKCU\Software\SimonTatham\PuTTY\Sessions` on Windows; tests, the demo, a test run and other systems use a fixed list. A missing key is "no sessions"; a key that cannot be opened is listed as not read.
+- The preview and the summary are those of the `~/.ssh/config` import (a session is a host whose alias is its name, its `PublicKeyFile` a key file with the same passphrase field). `Default Settings` is a template and never a host. `import_key` is `putty:<session name>`, matched case-insensitively as registry key names are.
+- Mapping: `HostName` (as in PuTTY, a `user@` in it wins over `UserName`, and a single `:port` after the name is dropped), `PortNumber`, `UserName`; `Protocol` `ssh` or `telnet` (a Telnet host with `telnet.port` and `telnet.username`); `PublicKeyFile` (imported into the Keychain and linked); `ProxyMethod` SOCKS 5 and HTTP (with `ProxyUsername` and `ProxyPassword`, the password stored as the host's secret; the `ProxyType` of PuTTY before 0.71 is read too); `PortForwardings` as forwarding rules that start on connect, except one that listens beyond loopback (PuTTY's "accept connections from other hosts" makes a bare port listen on all interfaces); `AgentFwd` as forwarding of the system agent (Pageant, D60); `PingInterval` (minutes) plus `PingIntervalSecs` as the keepalive when it is not 0 (0 leaves the app's default); `Environment`; `BackspaceIsDelete 0` as `^H`; `LineCodePage` as the WHATWG label of the same character set ("Use font encoding" and code pages without a label stay UTF-8, noted).
+- The proxy follows PuTTY's own choice: a host PuTTY reaches without it (a local name, `127.*` or `::1` unless `ProxyLocalhost`, or a match in `ProxyExcludeList` with PuTTY's matching) is imported without the proxy, with a note.
+- Not imported, with the reason: the `raw`, `rlogin`, `serial`, `supdup` and `bare` protocols, a session without a host name, a SOCKS 4, Telnet or SSH proxy or a local proxy command (never run or stored, counted with the commands of the summary), and a Telnet session with a proxy (Telnet connections of this app have no proxy). Such a host is refused rather than imported without its proxy, so it never connects directly (the rule of D44 for jump hosts). A tunnel the forwarding rules cannot hold (a host name as the listen address) is noted, never dropped silently. X11 forwarding, a remote command, a detached certificate and a user name taken from the local user are listed in the host's notes.
+- Session names are UTF-8 in recent PuTTY versions; older ones escaped the bytes of the Windows ANSI code page, which the registry source reports (`HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage\ACP`), so such names are read in that code page.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 2.5 (PuTTY item, CSV alone stays disabled), and `docs/ru`.
 ### 103. Server limits and a resync after the run 7 reviews (run 7)
 
 Status: run 7 decision, 2026-10-23 (plan, section 5: findings of the authentication review handed over first, fixed after the run's goal check). Clarifies docs/sync-protocol.md, sections 6.9, 10.1 and 10.2.
@@ -1650,3 +1670,79 @@ Status: run 7 decision, 2026-10-23 (plan, section 5: findings of the authenticat
 - **A full resync repairs a server rollback.** After a complete pull, a full resync marks the synced revisions as a restore does (section 6.9, step 2): a record the server holds at a revision below the one this device synced (a server restored from a backup while the device was signed out, when the rebind had no generation to compare) is pushed again, an edit or a deletion alike. The mark (here and in a restore) only ever lowers a synced revision: a server revision above it is a version the pull received without applying it (a type that is off, a refused key epoch, a payload that did not open), and raising the mark would take a pending local edit out of the push for good (found by the review of this change).
 
 **Spec impact:** docs/sync-protocol.md, sections 10.1 (client IP, the auth limit before the body, the bearer token row) and 10.2 (the auth body limit); section 6.9 is unchanged in substance (the mark of step 2 now also follows a full resync).
+
+### 141. CSV import with a column mapping (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B2). Extends the CSV columns of D21 and UI 2.5.
+
+**Context.** UI 2.5 fixes the CSV columns (`label, address, port, username, group, tags`) and data-model 18.4 the matching by (address, port, username). The run plan asks for a mapping dialog (which column holds what, with `notes` too), detection of the delimiter and the character set with a way to change them, a warning for passwords and a template to save. Real files come from spreadsheets and other managers: other names, other orders, semicolons, Windows-1251.
+
+**Decision:**
+
+- After the file step, a mapping step shows the character set and the delimiter (both detected, each a menu), "First row is a header", and each column with its role and its first values. Roles: not imported, label, address, port, username, group, tags, notes, password; each role at most one column (choosing it moves it), and Next needs an address column.
+- Detection: a byte order mark (UTF-8, UTF-16 LE or BE), else UTF-8 when the bytes are valid UTF-8, else Windows-1251 when at least 70 % of the bytes above ASCII are in 0xC0-0xFF and at least two thirds of them stand next to another such byte (Cyrillic words), else Windows-1252 (its accented letters stand alone: "Müller"). The delimiter is the one of `,` `;` tab `|` that splits the first 20 lines into the same number of fields (more than one), the most fields winning. The first row is a header when it names a known column (English and Russian names and common synonyms: name, host, hostname, ip, user, login, folder, description, имя, адрес, порт, пользователь, пароль…). A first row that names none but looks like a header (no port number, IP address, `.` or `@` in it) is a header whose columns are all "not imported" until the user maps them, so a password column is never taken for another one by position; otherwise the columns take the SPEC's order. Fields follow RFC 4180 (quotes, doubled quotes, line breaks inside quotes). A file that ends inside a quote is refused (its last field would hold the rest of the file), and so is one over 16 MiB or 100,000 rows (never cut silently).
+- `group` is a path with ` / ` between levels (data-model 18.4): missing groups are created, existing ones matched by parent and exact name. `tags` are separated by `,` or `;`. `password` is stored as the host's `ssh.password` (a secret). The mapping and the preview show a warning while a password column is mapped or rows carry one ("the file holds passwords in clear text; delete it after the import"), the summary repeats it, and the mapping masks that column's values.
+- Matching: a row is "already exists" when a live host has the same address (as stored: brackets removed, case-insensitively), effective port and effective username: the host's own, else its identity's username, else inherited from its groups (data-model 18.4). A row whose group path is new from some level on inherits from the deepest group that exists (the new groups have no settings). Duplicates inside the file are reduced to the first row. Existing hosts are never overwritten.
+- "Save template…" in the file step writes `shellpp-hosts.csv` with the header `label,address,port,username,group,tags,notes` and one example row.
+- The file's bytes, its records, the mapping's sample and the host data built for the preview are wiped from memory when dropped (they may hold passwords); nothing logs the file's content.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 2.5 (CSV columns and steps), docs/data-model.md, section 18.4 (CSV `notes` and `password`), and `docs/ru`.
+### 142. Autocomplete from the host's history (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B4). Settles UI 4.2 and 12.4 "Autocomplete (beta)" and the `terminal.autocomplete` setting (data-model 16.1).
+
+**Context.** UI 4.2 has "Autocomplete: a dropdown of modes, off by default", built from the local history of this host, hidden until its stage (section 0, D28). The run plan asks for it as a beta: Tab or → accepts; it never suggests what the history filter takes for a secret; it does not work in the alternate screen or at a password prompt. How a suggestion is shown, which line it reads and how it is kept away from passwords were not settled.
+
+**Decision:**
+
+- `terminal.autocomplete` takes `off` (default) or `history`. Settings > Terminal (first row of the Terminal block) and the terminal sidebar's Tools tab show the same dropdown, "Off" or "This host's history".
+- A suggestion is the rest of the newest command of the host's local history that starts with the typed text and is longer; it is drawn after the cursor in the theme's foreground at 45 % opacity, cut at the end of the row, only while the cursor can be seen (the view at the bottom, the cursor shown, the session live, no IME composition). Tab or → (without modifiers, not a held key) types the rest as typed input (the line is recorded as any typed line) only when the last frame drew that very suggestion; otherwise both keys go to the shell as before. Between a key and the next output (the echo) nothing is suggested or accepted, so a second Tab before the echo is the shell's, never the rest typed twice.
+- The typed text is what the history capture reads (security.md 10.1): the text on screen from the line's boundary to the cursor, so a key the server does not echo never counts. A suggestion needs a session to a saved host (only they keep history and have a capture); the shell's line editor active (it turned bracketed paste on at its prompt: bash 5.1 and later, zsh, fish; a pager's search or a program reading a line has it off, and an older shell without it gets no suggestions); a line the capture would record (known boundary, not pasted, not pending, started outside the alternate screen, printable keys typed); the cursor at the end of the line's text and not in the last column; and neither the text before the cursor, nor the line, nor the capture's prompt text (with nothing before the boundary: the last line above) looking like a password prompt.
+- Suggestions come from `history_list` of the host (at most 5,000 entries, newest first), read and filtered off the UI thread when the first suggestion is wanted, and grow with the commands the session records (also those recorded while the list loads). A command that starts with a space, spans lines or that the secret detector (security.md 10.2) flags is left out, also when it is in the history (an older entry, an import). The list is dropped and wiped when the app locks, when records change (history may have been deleted) and when the terminal leaves its session; it is read again when next needed.
+
+**Spec impact:** docs/ui-behavior-spec.md, sections 0, 4.2 and 12.4; docs/data-model.md, section 16.1; `docs/ru`.
+
+## Run 8 of 2026-10-23, agent C
+
+The decisions below were taken during the owner's eighth long run, by its agent C (numbers 170-199), marked "run 8"; the disputable ones are listed for the owner in the run report.
+
+### 170. Signed releases and a signed update manifest (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, C4). Amends D7 and D97 for the GPUI app: the manifest the update check reads is signed.
+
+**Context.** D97 made the update check a notice that reads `latest.json`; anyone who can change that file (a taken-over release page, a changed update source, a hostile network path to a custom source) could announce a "new version" with a page of their choice. The plan asks for signed release files, the key generated by the owner, and the app checking the manifest's signature before it shows anything.
+
+**Decision:**
+
+- **minisign** (Ed25519, ISC license) signs every release file, `latest.json` and `SHA256SUMS` included, as `<file>.minisig` with the trusted comment `shellpp <version> <file>`. The signature is the prehashed kind (BLAKE2b-512 of the file), the default of minisign 0.10 and later; the legacy unhashed kind is refused.
+- The key pair is the owner's (docs/release.md): the secret half only in the secrets `MINISIGN_SECRET_KEY` and `MINISIGN_PASSWORD` of the GitHub environment `release`, the public half in `release/minisign.pub`. The release workflow verifies every signature with that file before it creates the draft, so a secret that does not match it stops the release.
+- `.github/workflows/release.yml`, on a `v*` tag: the tag must equal the app's and the server's version; the Windows portable zip (scripts/package-windows.ps1), the server image (`docker save`) and its static Linux binary (copied out of the image), `latest.json` (`version`, `url`, `published`, `files` with SHA-256 and size), `SHA256SUMS`, the signatures, and a **draft** release (`gh release create --draft`); no build cache; nothing is published or pushed to a registry.
+- The app builds `release/minisign.pub` in. The update check fetches the manifest and `<manifest URL>.minisig` (before a query string), verifies the signature and its trusted comment with ed25519-dalek and BLAKE2b-512 (RustCrypto `blake2`, both already in the tree), requires the trusted comment to be the workflow's `shellpp <version> latest.json` with the manifest's version (another signed file of a release is not a manifest), and only then compares versions. A mismatch asks for both files once more (a release published between the two requests); a signature answered with 5xx or 429 is "did not answer". The key file has minisign's own layout (the comment on line 1), checked by the workflow and the app alike. A missing or wrong signature is "the update is not signed with the Shell++ release key"; a build whose `release/minisign.pub` holds no key asks nothing and says "this build has no key to check updates with". A custom update source changes where the manifest comes from, never the key.
+- Tests: vectors made by minisign 0.12 itself (a throwaway key whose secret half was deleted, `apps/desktop/src/updates/testdata`), a round trip with a key generated by the test, and refusals of a changed manifest, a changed trusted comment, flipped signature bits, another key (and another key under the same key id), the legacy kind, a replayed signature of another manifest, a missing or oversized signature.
+
+**Spec impact:** `docs/security.md` 13.4, `docs/architecture.md` 10.1, `docs/release.md` (new). Owner's action: generate the key and fill in `release/minisign.pub` and the two secrets (docs/release.md, "The signing key"); until then the release workflow stops at its first job and the app reports that it cannot check updates.
+
+### 171. Limits of the files an import reads (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, C5: the security review of the local core). Adds to D35 (`~/.ssh/config`) and docs/export-format.md, section 4 (Import Data).
+
+**Context.** The review found two imports that a file from elsewhere (security.md, A10) could make run out of memory or never finish: an Import Data file of tiny values (`[0,0,…]`: gigabytes as a tree, and every broken record kept as a refusal without a limit), and an `~/.ssh/config` whose `Include` lines fan out (one argument per missing file, a file included under another spelling, no limit across files) or that lists so many hosts that matching each host against every block takes hours.
+
+**Decision:**
+
+- Import Data counts the JSON values of the file before it parses it (`,`, `:`, `[` and `{` outside strings, plus one): more than 8,000,000 is refused as "too many" (a real export spends well over 8 bytes of text per value, so 64 MiB of export stays within it). Every element of a vault's `records` counts against the 500,000-record limit, a refused or repeated one too.
+- `~/.ssh/config`: a file is never read twice in one `Include` chain, recognized by its canonical path (so `../.ssh/config`, `CONFIG` or `config.` on Windows is the same file: "Include loops or nests too deep"); the same file included from two `Host` blocks is read for each, as `ssh` does. Limits over the whole import: 1,000 file reads, 16 MiB read, 256 `Include` arguments, 10,000 folder entries looked at by `Include` patterns (names are matched before the file system is asked), 10,000 `Host`/`Match` blocks, words of 4,096 bytes, `Host` patterns and expanded `HostName`s of 1,025 bytes (`NI_MAXHOST`), 100 values of a keyword that adds up per host (`ssh` reads at most 100 identity files), and 1,000 problems; past a limit the reading stops with "the file is too large", which is always kept.
+- Matching is indexed and budgeted: a `Host` block whose patterns all name hosts is looked at only for those names, so a generated config costs one block per host; every other block (patterns, `Match`, global) is looked at for every host. Each block looked at costs its patterns' length and its options; past 50,000,000 the remaining hosts are left out of the preview and the import, with the same problem. A pattern without `*` or `?` is compared without copies.
+- A key file named by `IdentityFile` is read only when it is a regular file (a FIFO or a device would block the read).
+
+**Spec impact:** docs/export-format.md, section 4; the D35 limits (this entry).
+
+### 172. A host from a file does not forward the agent (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, C5). Extends D63 (imported forwarding rules do not start by themselves) to Agent Forwarding (D60).
+
+**Context.** With Agent Forwarding on, a host can sign with the user's keys elsewhere while a session is open (security.md, RR19); the mitigation is that it is off by default and the user's choice per host. An Import Data file from someone else could turn it on for a host it defines.
+
+**Decision:** Import Data turns Agent Forwarding (and "Also offer the system agent's keys") off on every host of the file, and counts the hosts it adds that way (a new host or an imported copy) in the summary ("Hosts imported with Agent Forwarding turned off"), unless the user chose "Full restore from my backup". Such a host is compared with the records here without these flags, like the autostart flags of a rule (D63): a host that is the same here stays "already here" with the user's own setting, and the next import of the same file finds the host or its copy again instead of adding another. The `~/.ssh/config` import keeps mapping `ForwardAgent` (D60): that file is the user's own config.
+
+**Spec impact:** docs/export-format.md, section 4 (the import rules); the user guide, chapter 7.

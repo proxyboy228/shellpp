@@ -15,7 +15,10 @@
 //! - **Terminal theme**: the default theme for new hosts, Graphite or Paper.
 //! - **Keepalive**: the interval in seconds, 30 by default, 0 = off.
 //!
-//! The other blocks of 12.4 (autocomplete, shell history import, cursor, keyword
+//! - **Autocomplete (beta)** first in the Terminal block (D142): Off
+//!   (default) or suggestions from this host's history.
+//!
+//! The other blocks of 12.4 (shell history import, cursor, keyword
 //! highlighting, OS detection, local shell) are hidden until their stage.
 //!
 //! Every change is written to the core at once (UI 12.1). A number field
@@ -63,6 +66,7 @@ pub const KEY_LINE_HEIGHT: &str = "terminal.line_height";
 pub const KEY_MIN_CONTRAST: &str = "terminal.min_contrast";
 pub const KEY_DEFAULT_THEME: &str = "terminal.default_theme";
 pub const KEY_KEEPALIVE: &str = "terminal.keepalive_s";
+pub const KEY_AUTOCOMPLETE: &str = "terminal.autocomplete";
 
 /// The TERM choices of UI 12.4, in menu order.
 pub const TERM_CHOICES: [&str; 4] = ["xterm", "xterm-256color", "vt100", "linux"];
@@ -195,6 +199,9 @@ pub struct TerminalPrefs {
     pub keepalive_s: u32,
     /// Keyword highlighting (UI 12.4).
     pub highlighting: bool,
+    /// Autocomplete from this host's history (beta, D142): the setting is
+    /// `history`; `off` by default.
+    pub autocomplete: bool,
 }
 
 impl Default for TerminalPrefs {
@@ -213,6 +220,7 @@ impl Default for TerminalPrefs {
             default_theme: BuiltinTheme::GRAPHITE,
             keepalive_s: DEFAULT_KEEPALIVE,
             highlighting: true,
+            autocomplete: false,
         }
     }
 }
@@ -277,6 +285,7 @@ impl TerminalPrefs {
                 .unwrap_or_default(),
             keepalive_s: number(KEY_KEEPALIVE, defaults.keepalive_s),
             highlighting: flag(KEY_HIGHLIGHTING, defaults.highlighting),
+            autocomplete: values.get(KEY_AUTOCOMPLETE).and_then(Value::as_str) == Some("history"),
         }
     }
 
@@ -411,6 +420,7 @@ pub(crate) fn installed_monospace(text_system: &TextSystem) -> Vec<SharedString>
 /// Which dropdown of the section is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Open {
+    Autocomplete,
     Term,
     Font,
     MinContrast,
@@ -637,6 +647,18 @@ impl TerminalSection {
         cx.notify();
     }
 
+    /// Autocomplete (beta, D142): on takes suggestions from this host's
+    /// history.
+    pub fn set_autocomplete(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.open = None;
+        self.write(
+            KEY_AUTOCOMPLETE,
+            json!(if on { "history" } else { "off" }),
+            cx,
+        );
+        cx.notify();
+    }
+
     pub fn set_term(&mut self, term: &str, cx: &mut Context<Self>) {
         self.open = None;
         if TERM_CHOICES.contains(&term) {
@@ -832,6 +854,59 @@ impl TerminalSection {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_term(term, cx)))
             }))
         });
+        let autocomplete_open = self.open == Some(Open::Autocomplete);
+        let autocomplete_trigger = widgets::select_trigger(
+            "settings-autocomplete",
+            None,
+            if prefs.autocomplete {
+                strings::AUTOCOMPLETE_HISTORY
+            } else {
+                strings::AUTOCOMPLETE_OFF
+            },
+            autocomplete_open,
+            cx,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+            this.toggle(Open::Autocomplete, window, cx)
+        }));
+        let autocomplete_list =
+            autocomplete_open.then(|| {
+                widgets::dropdown_list("settings-autocomplete-list", cx).children(
+                    [
+                        (
+                            "settings-autocomplete-off",
+                            strings::AUTOCOMPLETE_OFF,
+                            false,
+                        ),
+                        (
+                            "settings-autocomplete-history",
+                            strings::AUTOCOMPLETE_HISTORY,
+                            true,
+                        ),
+                    ]
+                    .map(|(id, label, on)| {
+                        widgets::dropdown_item(
+                            SharedString::from(id),
+                            None,
+                            label,
+                            (!on).then(|| SharedString::from(strings::DEFAULT_CHOICE)),
+                            on == prefs.autocomplete,
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| this.set_autocomplete(on, cx),
+                        ))
+                    }),
+                )
+            });
+        let autocomplete_row = v_flex()
+            .id("settings-autocomplete-row")
+            .test_support()
+            .gap(metrics::SPACE_1)
+            .child(super::label(strings::AUTOCOMPLETE, cx))
+            .child(widgets::caption(strings::AUTOCOMPLETE_HINT, cx))
+            .child(div().w(FIELD_WIDTH).child(autocomplete_trigger))
+            .children(autocomplete_list.map(|list| div().w(FIELD_WIDTH).child(list)));
         let contrast_open = self.open == Some(Open::MinContrast);
         let contrast_trigger = widgets::select_trigger(
             "settings-min-contrast",
@@ -869,6 +944,7 @@ impl TerminalSection {
             .child(div().w(FIELD_WIDTH).child(contrast_trigger))
             .children(contrast_list.map(|list| div().w(FIELD_WIDTH).child(list)));
         block("settings-terminal-block", strings::TERMINAL_BLOCK, cx)
+            .child(autocomplete_row)
             .child(toggle_row(
                 "settings-autoreconnect",
                 strings::AUTORECONNECT,
@@ -1418,6 +1494,11 @@ mod unit_tests {
         assert_eq!(prefs.keepalive_s, 30);
         assert_eq!(prefs.line_height, 1.2);
         assert_eq!(prefs.min_contrast, MinContrast::Palette);
+        // Autocomplete (beta, D142) is off unless the setting is `history`.
+        assert!(!prefs.autocomplete);
+        let on =
+            TerminalPrefs::from_values(&[(KEY_AUTOCOMPLETE.to_owned(), json!("history"))].into());
+        assert!(on.autocomplete);
         assert_eq!(
             BuiltinTheme::from_ref(&json!({"builtin": "paper"})),
             Some(BuiltinTheme::PAPER)

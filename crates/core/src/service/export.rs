@@ -76,6 +76,11 @@ use crate::model::{key, text};
 pub const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
 /// Most records one import takes.
 pub const MAX_IMPORT_RECORDS: usize = 500_000;
+/// Most JSON values one import file may hold, counted before it is parsed
+/// (D171): as a tree, a value costs far more memory than its text, so a
+/// file of tiny values (`[0,0,…]`) is refused before it is built. A real
+/// export spends well over 8 bytes of text per value.
+pub const MAX_IMPORT_VALUES: usize = 8_000_000;
 /// The `import_key` prefix of an imported copy: `json:<exported id>`
 /// (docs/data-model.md, section 18.4).
 const JSON_IMPORT_KEY: &str = "json:";
@@ -184,6 +189,8 @@ fn label_member(kind: RecordKind) -> Option<&'static str> {
 
 /// The autostart flags of a forwarding rule.
 const AUTOSTART: [&str; 2] = ["autostart_on_connect", "autostart_on_launch"];
+/// The Agent Forwarding flags of a host, inside its `ssh` member (D172).
+const AGENT_FLAGS: [&str; 2] = ["ssh.agent_forwarding", "ssh.agent_forward_system"];
 
 /// A forwarding rule from a file starts on its own only when the user
 /// connects to its host, and only when it listens on loopback (D63, as the
@@ -213,6 +220,30 @@ fn as_imported_rule(data: &mut Map<String, Value>) -> bool {
     changed
 }
 
+/// Turns off Agent Forwarding of a host taken from a file (D172): while it
+/// is on, the host can sign with the user's keys elsewhere (security.md,
+/// RR19), so it is the user's own choice, never a file's, unless they
+/// restore a backup of their own. Returns whether it was on; such a host
+/// is compared without these flags ([`Incoming::ignored`]), so a host that
+/// is the same here stays "already here" with the user's own setting, and
+/// the next import of the same file finds its copy again.
+fn as_imported_host(data: &mut Map<String, Value>) -> bool {
+    let Some(Value::Object(ssh)) = data.get_mut("ssh") else {
+        return false;
+    };
+    if ssh.get("agent_forwarding") != Some(&Value::Bool(true)) {
+        return false;
+    }
+    // "Also offer the system agent's keys" goes too: turning forwarding on
+    // later starts from the safe choice.
+    for flag in ["agent_forwarding", "agent_forward_system"] {
+        if ssh.contains_key(flag) {
+            ssh.insert(flag.into(), Value::Bool(false));
+        }
+    }
+    true
+}
+
 /// Whether `local` holds what `incoming` holds once the ids of `map` are
 /// rewritten, the members that change with the place in a list and the
 /// `ignored` ones aside. Compares in place: no copy of the secrets is made.
@@ -224,12 +255,26 @@ fn same_content_except(
 ) -> bool {
     let kept = |name: &str| name != "order_key" && !ignored.contains(&name);
     let members = |data: &Map<String, Value>| data.keys().filter(|name| kept(name)).count();
+    // A dotted entry (`ssh.agent_forwarding`) leaves out a member of an
+    // object member.
+    let inner = |name: &str| -> Vec<&str> {
+        ignored
+            .iter()
+            .filter_map(|path| path.strip_prefix(name)?.strip_prefix('.'))
+            .collect()
+    };
     members(local) == members(incoming)
         && incoming.iter().all(|(name, value)| {
             !kept(name)
-                || local
-                    .get(name)
-                    .is_some_and(|here| same_value(here, value, map))
+                || local.get(name).is_some_and(|here| {
+                    let skipped = inner(name);
+                    match (here, value) {
+                        (Value::Object(here), Value::Object(value)) if !skipped.is_empty() => {
+                            same_content_except(here, value, map, &skipped)
+                        }
+                        _ => same_value(here, value, map),
+                    }
+                })
         })
 }
 
@@ -321,16 +366,22 @@ struct Incoming {
     kind: RecordKind,
     record_id: Uuid,
     data: WipeOnDrop,
-    /// A forwarding rule whose autostart this import turned off (D63).
+    /// A forwarding rule whose autostart this import turned off (D63), or
+    /// a host whose Agent Forwarding it turned off (D172).
     quieted: bool,
 }
 
 impl Incoming {
     /// The members left out when this record is compared with one here: the
-    /// autostart flags of a quieted rule (the local rule keeps the user's own
-    /// choice; an import never overwrites it).
+    /// flags of a quieted rule or host (the local record keeps the user's
+    /// own choice; an import never overwrites it), so that the next import of
+    /// the same file finds the record, or its copy, again.
     fn ignored(&self) -> &'static [&'static str] {
-        if self.quieted { &AUTOSTART } else { &[] }
+        match (self.quieted, self.kind) {
+            (false, _) => &[],
+            (true, RecordKind::Host) => &AGENT_FLAGS,
+            (true, _) => &AUTOSTART,
+        }
     }
 }
 
@@ -913,6 +964,9 @@ impl Core {
         if text.len() > MAX_IMPORT_BYTES {
             return Err(refuse("text", ValidationReason::TooLong));
         }
+        if json_values(text) > MAX_IMPORT_VALUES {
+            return Err(refuse("text", ValidationReason::TooMany));
+        }
         let outer: WipeOnDrop = match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(map)) => WipeOnDrop::new(map),
             _ => return Err(refuse("text", ValidationReason::Invalid)),
@@ -953,6 +1007,9 @@ impl Core {
                     })?;
                 let text = std::str::from_utf8(&plain)
                     .map_err(|_| refuse("text", ValidationReason::Invalid))?;
+                if json_values(text) > MAX_IMPORT_VALUES {
+                    return Err(refuse("text", ValidationReason::TooMany));
+                }
                 Ok(Zeroizing::new(text.to_owned()))
             }
             _ => Err(refuse("text", ValidationReason::Invalid)),
@@ -979,6 +1036,9 @@ impl Core {
         let mut summary = DataImportSummary::default();
         let mut incoming: Vec<Incoming> = Vec::new();
         let mut seen: HashSet<Uuid> = HashSet::new();
+        // Every element of `records` counts, a refused or repeated one too:
+        // the list of refusals stays bounded (D171).
+        let mut examined = 0usize;
         // The exported personal vault: the history and the connection log
         // name its hosts by vault and record id (`host_link`).
         let mut exported_vaults: Vec<Uuid> = Vec::new();
@@ -998,9 +1058,10 @@ impl Core {
                 exported_vaults.push(vault_id);
             }
             for record in records {
-                if incoming.len() + summary.skipped >= MAX_IMPORT_RECORDS {
+                if examined >= MAX_IMPORT_RECORDS {
                     return Err(refuse("text", ValidationReason::TooMany));
                 }
+                examined += 1;
                 let kind = record
                     .get("type")
                     .and_then(Value::as_str)
@@ -1018,9 +1079,14 @@ impl Core {
                             if kind == RecordKind::ConnectionLogEntry {
                                 as_imported_log_entry(&mut data);
                             }
-                            let quieted = kind == RecordKind::ForwardingRule
-                                && !input.full_restore
-                                && as_imported_rule(&mut data);
+                            // A rule from a file never starts by itself
+                            // (D63), a host never forwards the agent (D172).
+                            let quieted = !input.full_restore
+                                && match kind {
+                                    RecordKind::ForwardingRule => as_imported_rule(&mut data),
+                                    RecordKind::Host => as_imported_host(&mut data),
+                                    _ => false,
+                                };
                             incoming.push(Incoming {
                                 kind,
                                 record_id,
@@ -1279,7 +1345,11 @@ impl Core {
                     summary.added += 1;
                 }
                 if record.quieted {
-                    summary.rules_autostart_off += 1;
+                    if record.kind == RecordKind::Host {
+                        summary.hosts_agent_forwarding_off += 1;
+                    } else {
+                        summary.rules_autostart_off += 1;
+                    }
                 }
                 writes.push((record.kind, target, data));
             }
@@ -1327,6 +1397,7 @@ impl Core {
             unknown_keys = summary.unknown_keys,
             history_left_out = summary.history_left_out,
             rules_autostart_off = summary.rules_autostart_off,
+            hosts_agent_forwarding_off = summary.hosts_agent_forwarding_off,
             full_restore = input.full_restore,
             "data imported"
         );
@@ -1370,6 +1441,29 @@ impl Core {
         }
         Ok(contents)
     }
+}
+
+/// At most how many JSON values `text` holds, counted without parsing it:
+/// one, plus every `,`, `:`, `[` and `{` outside strings (D171).
+fn json_values(text: &str) -> usize {
+    let (mut count, mut in_string, mut escaped) = (1usize, false, false);
+    for byte in text.bytes() {
+        if in_string {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match byte {
+                b'"' => in_string = true,
+                b',' | b':' | b'[' | b'{' => count += 1,
+                _ => {}
+            }
+        }
+    }
+    count
 }
 
 /// Clears the `parent_id` of imported groups whose parent chain loops or

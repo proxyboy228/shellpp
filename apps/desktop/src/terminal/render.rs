@@ -64,6 +64,9 @@ pub struct FrameStyle {
     pub focused: bool,
     /// IME composition text, drawn at the cursor.
     pub marked_text: Option<String>,
+    /// An autocomplete suggestion (D142), drawn muted from the cursor to
+    /// the end of its row.
+    pub ghost_text: Option<String>,
     /// `terminal.min_contrast`: which text is moved to 4.5:1.
     pub min_contrast: MinContrast,
     /// The cursor is not drawn (a dropped session, UI 1.1).
@@ -223,6 +226,8 @@ pub struct Frame {
     cursor_color: Hsla,
     focused: bool,
     marked: Option<(ShapedLine, usize)>,
+    /// The autocomplete suggestion, painted at the cursor.
+    ghost: Option<ShapedLine>,
 }
 
 /// An exact description of a row's cells (or of the frame style) as
@@ -565,6 +570,42 @@ pub fn prepaint(
             );
             (line, cells)
         });
+    // The suggestion: from the cursor to the end of its row, muted, never
+    // over IME composition text.
+    let ghost = style
+        .ghost_text
+        .as_ref()
+        .filter(|_| marked.is_none() && !style.cursor_hidden)
+        .zip(cursor.as_ref())
+        .and_then(|(text, (at, _))| {
+            let room = cols.saturating_sub(at.column);
+            let mut cells = 0;
+            let text: String = text
+                .chars()
+                .take_while(|ch| {
+                    cells += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(1);
+                    cells <= room
+                })
+                .collect();
+            if text.is_empty() {
+                return None;
+            }
+            let color = rgb_token(style.palette.foreground()).hsla().opacity(0.45);
+            Some(shape(
+                window,
+                &text,
+                &[TextRun {
+                    len: text.len(),
+                    font: style.fonts.get(false, false).clone(),
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                metrics.font_size,
+                metrics.cell_width,
+            ))
+        });
 
     Frame {
         rows: rows_out,
@@ -579,6 +620,7 @@ pub fn prepaint(
         cursor_color: rgb_token(style.palette.cursor()).hsla(),
         focused: style.focused,
         marked,
+        ghost,
     }
 }
 
@@ -1006,6 +1048,12 @@ pub fn paint(bounds: Bounds<Pixels>, frame: &Frame, window: &mut Window, cx: &mu
         ));
         let _ = glyph.paint(at, line_height, TextAlign::Left, None, window, cx);
     }
+    if let (Some(line), Some((cursor, _))) = (&frame.ghost, &frame.cursor) {
+        // After the cursor's own glyph: the first character shows through
+        // a bar or underline cursor and sits on a block one.
+        let at = point(cell_x(cursor.column), row_y(cursor.line));
+        let _ = line.paint(at, line_height, TextAlign::Left, None, window, cx);
+    }
     if let (Some((line, cells)), Some((cursor, _))) = (&frame.marked, &frame.cursor) {
         let rect = cell_rect(cursor.line, cursor.column, *cells);
         window.paint_quad(fill(rect, frame.background));
@@ -1086,6 +1134,7 @@ mod tests {
             bold_is_bright: true,
             focused: true,
             marked_text: None,
+            ghost_text: None,
             min_contrast: MinContrast::Off,
             cursor_hidden: false,
             search: None,

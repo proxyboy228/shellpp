@@ -1,0 +1,254 @@
+name: Release
+
+# The release of a version tag (run 8, plan C4; docs/release.md): the
+# portable zip for Windows, the sync server as a Docker image and a static
+# Linux binary, SHA256SUMS of every file, the update manifest latest.json
+# (D97) and a minisign signature of each file, gathered in a DRAFT release.
+# Nothing is published here: the owner checks the draft and publishes it.
+#
+# The signing key is the owner's (docs/release.md). Its secret half lives
+# only in the secrets MINISIGN_SECRET_KEY and MINISIGN_PASSWORD of the
+# environment "release"; its public half is release/minisign.pub, which the
+# app builds in to check latest.json before it shows an update (D170).
+#
+# No build cache: a release is built from the tag alone.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: Version and signing key
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The tag names the version of the app and of the server.
+      - name: The tag matches the versions
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          app="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['workspace']['package']['version'])")"
+          server="$(python3 -c "import tomllib; print(tomllib.load(open('server/Cargo.toml', 'rb'))['package']['version'])")"
+          if [ "$version" != "$app" ] || [ "$version" != "$server" ]; then
+            echo "::error::tag $TAG: the app is $app and the server is $server (Cargo.toml, server/Cargo.toml)"
+            exit 1
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      # Without the owner's public key the app could not check the manifest:
+      # no release without it.
+      - name: release/minisign.pub holds a public key
+        run: |
+          # minisign's own layout: the comment on line 1, the key on line 2.
+          if ! head -n 1 release/minisign.pub | grep -q '^untrusted comment:'; then
+            echo "::error::release/minisign.pub must start with the key's \"untrusted comment:\" line (docs/release.md, \"The signing key\")"
+            exit 1
+          fi
+          key="$(sed -n 2p release/minisign.pub | tr -d '\r')"
+          bytes="$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c || true)"
+          if [ "$bytes" != 42 ] || [ "$(printf '%s' "$key" | base64 -d | head -c 2)" != Ed ]; then
+            echo "::error::release/minisign.pub holds no minisign public key (docs/release.md, \"The signing key\")"
+            exit 1
+          fi
+
+  windows:
+    name: Windows portable zip
+    needs: check
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+
+      - name: Build and package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+
+      - name: Keep the zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: |
+            target/package/*.zip
+            target/package/shellpp.pdb
+          retention-days: 7
+          if-no-files-found: error
+
+  server:
+    name: Server image and Linux binary
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The binary is the image's: one build, the same bytes in both.
+      - name: Build the image
+        run: docker build -f server/Dockerfile -t "shellpp-server:${VERSION}" -t shellpp-server:latest .
+
+      - name: Image archive and Linux binary
+        run: |
+          mkdir -p dist staging
+          docker save "shellpp-server:${VERSION}" shellpp-server:latest | gzip -9 > "dist/shellpp-server-${VERSION}-docker-image.tar.gz"
+          id="$(docker create "shellpp-server:${VERSION}")"
+          docker cp "$id:/usr/local/bin/shellpp-server" staging/shellpp-server
+          docker rm "$id"
+          cp server/LICENSE server/README.md staging/
+          cp -r server/deploy staging/deploy
+          tar -C staging -czf "dist/shellpp-server-${VERSION}-linux-x64.tar.gz" .
+          ls -l dist
+
+      - name: Keep the server files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-server
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error
+
+  draft:
+    name: Signed draft release
+    needs: [check, windows, server]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The signing secrets belong to this environment (docs/release.md): the
+    # owner can require an approval before the job reads them.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      PRERELEASE: ${{ needs.check.outputs.prerelease }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          minisign -v
+
+      # The update manifest of D97: the app reads `version` and `url`; the
+      # files with their SHA-256 are for people.
+      - name: latest.json
+        run: |
+          files='[]'
+          for path in dist/*; do
+            name="$(basename "$path")"
+            sum="$(sha256sum "$path" | cut -d' ' -f1)"
+            size="$(stat -c %s "$path")"
+            files="$(jq -c --arg name "$name" --arg sha256 "$sum" --argjson size "$size" '. + [{name: $name, sha256: $sha256, size: $size}]' <<< "$files")"
+          done
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson files "$files" \
+            '{version: $version, url: $url, published: $published, files: $files}' > dist/latest.json
+          cat dist/latest.json
+
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      # Every file gets <file>.minisig; the trusted comment names the file
+      # and the version. The key file lives only for this step.
+      - name: Sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::error::the secret MINISIGN_SECRET_KEY of the environment \"release\" is not set (docs/release.md)"
+            exit 1
+          fi
+          umask 077
+          key="$RUNNER_TEMP/minisign.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          for path in dist/*; do
+            name="$(basename "$path")"
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$path" -t "shellpp ${VERSION} ${name}" > /dev/null
+          done
+
+      # The signatures open with the public key the app builds in: a secret
+      # that does not belong to release/minisign.pub stops the release.
+      - name: Verify the signatures
+        run: |
+          for path in dist/*; do
+            case "$path" in *.minisig) continue ;; esac
+            minisign -V -q -p release/minisign.pub -m "$path"
+          done
+          ls -l dist
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Shell++ ${VERSION}."
+            echo
+            echo "Every file has a minisign signature (\`<file>.minisig\`) made with the key in"
+            echo "\`release/minisign.pub\`; \`SHA256SUMS\` lists the SHA-256 of every file."
+            echo "Checking a download: docs/release.md, \"Checking a download\"."
+            echo
+            echo "- \`shellpp-${VERSION}-windows-x64.zip\`: the portable app for Windows (unsigned executable)."
+            echo "- \`shellpp-server-${VERSION}-docker-image.tar.gz\`: the sync server image (\`docker load\`)."
+            echo "- \`shellpp-server-${VERSION}-linux-x64.tar.gz\`: the same server as a static Linux binary, with \`deploy/\`."
+            echo "- \`latest.json\`: the update manifest the app reads (D97)."
+          } > "$RUNNER_TEMP/notes.md"
+          flags=(--draft --verify-tag --title "Shell++ ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "${flags[@]}" dist/*

@@ -13,7 +13,8 @@
 //! `--text-secondary`; the name is in the tooltip); below it the tab's
 //! content, which scrolls on its own.
 //!
-//! - Tools ([`tools`]): search in the output and the scrollback.
+//! - Tools ([`tools`]): search in the output and the scrollback, and the
+//!   mode of autocomplete (beta, D142).
 //!   Autocomplete is not shown (later stage).
 //! - Snippets: the vault's snippets, inserted or run in the active pane
 //!   ([`snippets`]).
@@ -222,7 +223,7 @@ impl std::fmt::Debug for TerminalSidebar {
 impl TerminalSidebar {
     /// A hidden sidebar on Tools without a target.
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let tools = cx.new(|cx| tools::ToolsTab::new(window, cx));
+        let tools = cx.new(|cx| tools::ToolsTab::new(state.clone(), window, cx));
         let appearance = cx.new(|cx| appearance::AppearanceTab::new(state.clone(), window, cx));
         let snippets = cx.new(|cx| snippets::SnippetsTab::new(state.clone(), window, cx));
         let history = cx.new(|cx| history::HistoryTab::new(state, window, cx));

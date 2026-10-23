@@ -828,6 +828,7 @@ impl SessionPane {
             handle.set_sink(None);
             // The history recorder holds the session too (stage 2b).
             handle.set_history_sink(None);
+            handle.set_history_source(None);
         }
     }
 

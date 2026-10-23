@@ -87,6 +87,12 @@ pub trait SessionCore: Send + Sync + 'static {
         let _ = host;
         true
     }
+    /// The commands of `host`'s local history, newest first (autocomplete,
+    /// D142). Fakes have none.
+    fn history_commands(&self, host: RecordRef) -> Vec<String> {
+        let _ = host;
+        Vec::new()
+    }
 }
 
 impl SessionCore for Core {
@@ -180,6 +186,21 @@ impl SessionCore for Core {
 
     fn record_history_now(&self, host: RecordRef) -> bool {
         Core::record_history_now(self, Some(host)).unwrap_or(false)
+    }
+
+    fn history_commands(&self, host: RecordRef) -> Vec<String> {
+        let input = shellpp_core::service::dto::HistoryListInput {
+            host: Some(host),
+            text: None,
+            limit: Some(crate::terminal::autocomplete::MAX_COMMANDS as u32),
+        };
+        match Core::history_list(self, input) {
+            Ok(entries) => entries.into_iter().map(|entry| entry.command).collect(),
+            Err(error) => {
+                tracing::debug!(code = error.code(), "history not read for autocomplete");
+                Vec::new()
+            }
+        }
     }
 
     fn agent_keys(&self) -> Result<Vec<shellpp_core::service::host_api::SessionKey>, CoreError> {

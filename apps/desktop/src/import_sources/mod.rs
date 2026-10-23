@@ -5,7 +5,11 @@
 //!
 //! - Sources: the OpenSSH config (selected), a Shell++ export (goes on in
 //!   Import Data, D38), known_hosts (goes on in the Known Hosts import),
-//!   PuTTY sessions (Windows only) and CSV, shown disabled until they exist.
+//!   PuTTY sessions (Windows only; D140) and CSV (D141, [`csv_step`]: the
+//!   file, a column mapping, the preview and the summary).
+//! - PuTTY sessions are read from the registry ([`putty_registry`]), so
+//!   their file step is skipped: Next goes from the sources to the same
+//!   preview (a session is a host, its `.ppk` a key file) and summary.
 //! - The suggested file is `~/.ssh/config`; tests and the demo set another
 //!   one with [`set_default_path`] (never the real file in a test run).
 //! - The preview comes from the core (`ssh_config_preview`), off the UI
@@ -17,6 +21,8 @@
 //!
 //! Nothing here logs paths, host names or passphrases.
 
+pub mod csv_step;
+pub mod putty_registry;
 pub mod strings;
 
 #[cfg(test)]
@@ -39,8 +45,8 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::SecretString;
 use shellpp_core::service::dto::{
-    ImportStatus, KeyFileStatus, SshConfigImportInput, SshConfigImportSummary, SshConfigPreview,
-    SshConfigSource,
+    CsvImportSummary, ImportStatus, KeyFileStatus, PuttyImportInput, SshConfigImportInput,
+    SshConfigImportSummary, SshConfigPreview, SshConfigSource,
 };
 
 use crate::hosts::controls::{ControlButton, ControlKind};
@@ -153,11 +159,6 @@ impl Source {
     fn shown(self) -> bool {
         self != Self::Putty || cfg!(windows)
     }
-
-    /// Sources that come later are shown disabled (D30 rule).
-    fn available(self) -> bool {
-        !matches!(self, Self::Putty | Self::Csv)
-    }
 }
 
 /// Where the dialog is.
@@ -169,14 +170,21 @@ pub enum Step {
     },
     /// Reading the preview or importing.
     Running,
+    /// The column mapping of a CSV file (D141).
+    Mapping,
     Preview,
     Summary(SshConfigImportSummary),
+    CsvSummary(CsvImportSummary),
 }
 
 pub struct ImportSourcesDialog {
     state: Entity<AppState>,
     source: Source,
     path: Entity<InputState>,
+    /// The CSV file field (no file is suggested).
+    csv_path: Entity<InputState>,
+    /// The CSV file and its mapping, once read.
+    csv: Option<csv_step::CsvState>,
     step: Step,
     preview: Option<SshConfigPreview>,
     /// Aliases (lowercase) of the new hosts that are checked.
@@ -187,6 +195,8 @@ pub struct ImportSourcesDialog {
     /// The preview scrolls (with a scrollbar) when it is taller than
     /// [`PREVIEW_HEIGHT`].
     preview_scroll: ScrollHandle,
+    /// Why the PuTTY sessions could not be read or imported.
+    putty_error: Option<&'static str>,
     task: Option<Task<()>>,
 }
 
@@ -205,16 +215,20 @@ impl ImportSourcesDialog {
             .map(|path| path.display().to_string())
             .unwrap_or_default();
         let path = cx.new(|cx| InputState::new(window, cx).default_value(value));
+        let csv_path = cx.new(|cx| InputState::new(window, cx));
         Self {
             state,
             source: Source::SshConfig,
             path,
+            csv_path,
+            csv: None,
             step: Step::Source,
             preview: None,
             chosen: HashSet::new(),
             passphrases: Vec::new(),
             save_passphrases: false,
             preview_scroll: ScrollHandle::new(),
+            putty_error: None,
             task: None,
         }
     }
@@ -232,15 +246,23 @@ impl ImportSourcesDialog {
     }
 
     pub fn select(&mut self, source: Source, cx: &mut Context<Self>) {
-        if source.available() {
-            self.source = source;
-            cx.notify();
+        self.source = source;
+        self.putty_error = None;
+        cx.notify();
+    }
+
+    /// The file field of the current source.
+    fn path_input(&self) -> &Entity<InputState> {
+        match self.source {
+            Source::Csv => &self.csv_path,
+            _ => &self.path,
         }
     }
 
     pub fn set_path(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let text = path.display().to_string();
-        self.path
+        self.path_input()
+            .clone()
             .update(cx, |input, cx| input.set_value(text, window, cx));
         if let Step::File { error } = &mut self.step {
             *error = None;
@@ -319,23 +341,68 @@ impl ImportSourcesDialog {
                     window.close_dialog(cx);
                     crate::known_hosts::open_import_dialog(state, window, cx);
                 }
-                Source::Putty | Source::Csv => {}
+                Source::Putty => self.read_putty_preview(window, cx),
+                Source::Csv => {
+                    self.step = Step::File { error: None };
+                    cx.notify();
+                }
             },
+            Step::File { .. } if self.source == Source::Csv => self.read_csv(window, cx),
             Step::File { .. } => self.read_preview(window, cx),
+            Step::Mapping => self.read_csv_preview(window, cx),
+            Step::Preview if self.source == Source::Csv => self.import_csv(window, cx),
             Step::Preview => self.import(window, cx),
-            Step::Running | Step::Summary(_) => {}
+            Step::Running | Step::Summary(_) | Step::CsvSummary(_) => {}
         }
     }
 
-    /// "Back" from the file step to the sources.
+    /// "Back": from the file step to the sources, from the preview to the
+    /// file step (to the sources for PuTTY, which has none; to the mapping
+    /// for CSV), from the mapping to the file step.
     pub fn back(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.step, Step::File { .. } | Step::Preview) {
-            self.step = match self.step {
-                Step::Preview => Step::File { error: None },
+        if matches!(self.step, Step::File { .. } | Step::Mapping | Step::Preview) {
+            self.step = match (&self.step, self.source) {
+                (Step::Preview, Source::Csv) => Step::Mapping,
+                (Step::Preview, Source::Putty) => Step::Source,
+                (Step::Preview | Step::Mapping, _) => Step::File { error: None },
                 _ => Step::Source,
             };
+            self.putty_error = None;
             cx.notify();
         }
+    }
+
+    /// The PuTTY error shown under the sources: the registry could not be
+    /// read, or the import failed.
+    pub fn putty_error(&self) -> Option<&'static str> {
+        self.putty_error
+    }
+
+    /// Reads the saved PuTTY sessions into the preview, off the UI thread.
+    fn read_putty_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let source = putty_registry::source(cx);
+        self.putty_error = None;
+        self.step = Step::Running;
+        cx.notify();
+        let work = cx.background_spawn(async move { core.putty_preview(&*source) });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                dialog.task = None;
+                match result {
+                    Ok(preview) => dialog.show_preview(preview, window, cx),
+                    Err(error) => {
+                        tracing::info!(code = error.code(), "putty sessions not read");
+                        dialog.putty_error = Some(strings::PUTTY_READ_FAILED);
+                        dialog.step = Step::Source;
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn read_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -420,6 +487,33 @@ impl ImportSourcesDialog {
                 (!value.is_empty()).then(|| (key.clone(), SecretString::from(value)))
             })
             .collect();
+        if self.source == Source::Putty {
+            let source = putty_registry::source(cx);
+            let input = PuttyImportInput {
+                sessions: Some(self.chosen.iter().cloned().collect()),
+                passphrases,
+                save_passphrases: self.save_passphrases,
+            };
+            self.step = Step::Running;
+            cx.notify();
+            let work = cx.background_spawn(async move { core.putty_import(&*source, input) });
+            self.task = Some(cx.spawn_in(window, async move |this, cx| {
+                let result = work.await;
+                let _ = this.update(cx, |dialog, cx| {
+                    dialog.task = None;
+                    dialog.step = match result {
+                        Ok(summary) => Step::Summary(summary),
+                        Err(error) => {
+                            tracing::warn!(code = error.code(), "putty sessions not imported");
+                            dialog.putty_error = Some(strings::IMPORT_FAILED);
+                            Step::Source
+                        }
+                    };
+                    cx.notify();
+                });
+            }));
+            return;
+        }
         let input = SshConfigImportInput {
             source: SshConfigSource {
                 home: home_for(&path),
@@ -462,7 +556,6 @@ impl ImportSourcesDialog {
                     Radio::new(source.id())
                         .label(source.label())
                         .checked(self.source == source)
-                        .disabled(!source.available())
                         .on_click(
                             cx.listener(move |this, _: &bool, _, cx| this.select(source, cx)),
                         ),
@@ -472,14 +565,19 @@ impl ImportSourcesDialog {
                         .pl(metrics::rpx(24.))
                         .child(widgets::caption(path, cx))
                 }));
-            list = list.child(if source.available() {
-                row
-            } else {
+            let error = self.putty_error.filter(|_| source == Source::Putty);
+            list = list.child(if let Some(error) = error {
                 row.child(
                     div()
+                        .id("import-putty-error")
+                        .test_support()
                         .pl(metrics::rpx(24.))
-                        .child(widgets::caption(strings::SOURCE_LATER, cx)),
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .text_color(cx.theme().danger)
+                        .child(error),
                 )
+            } else {
+                row
             });
         }
         list
@@ -500,7 +598,7 @@ impl ImportSourcesDialog {
                     .w_full()
                     .gap(metrics::SPACE_2)
                     .child(div().flex_1().min_w_0().child(widgets::text_input(
-                        &self.path,
+                        self.path_input(),
                         "import-path",
                         error.is_some(),
                         window,
@@ -516,7 +614,13 @@ impl ImportSourcesDialog {
                 error,
                 cx,
             ))
-            .child(widgets::caption(strings::FILE_HINT, cx))
+            .map(|this| {
+                if self.source == Source::Csv {
+                    this.child(self.render_csv_file_extras(cx).into_any_element())
+                } else {
+                    this.child(widgets::caption(strings::FILE_HINT, cx))
+                }
+            })
     }
 
     fn render_preview(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -531,7 +635,13 @@ impl ImportSourcesDialog {
             .count();
         let mut hosts = v_flex().gap(metrics::SPACE_2);
         if preview.hosts.is_empty() {
-            hosts = hosts.child(widgets::caption(strings::PREVIEW_EMPTY, cx));
+            hosts = hosts.child(widgets::caption(
+                match self.source {
+                    Source::Putty => strings::PREVIEW_EMPTY_PUTTY,
+                    _ => strings::PREVIEW_EMPTY,
+                },
+                cx,
+            ));
         }
         for host in &preview.hosts {
             let alias = host.alias.clone();
@@ -789,8 +899,13 @@ impl Render for ImportSourcesDialog {
         let body = match self.step.clone() {
             Step::Source => self.render_sources(cx).into_any_element(),
             Step::File { error } => self.render_file(error, window, cx).into_any_element(),
+            Step::Mapping => self.render_csv_mapping(cx).into_any_element(),
+            Step::Preview if self.source == Source::Csv => {
+                self.render_csv_preview(cx).into_any_element()
+            }
             Step::Preview => self.render_preview(window, cx).into_any_element(),
             Step::Summary(summary) => self.render_summary(&summary, cx).into_any_element(),
+            Step::CsvSummary(summary) => self.render_csv_summary(&summary, cx).into_any_element(),
             Step::Running => div()
                 .id("import-running")
                 .test_support()
@@ -809,11 +924,14 @@ impl Render for ImportSourcesDialog {
 
 fn footer(dialog: &Entity<ImportSourcesDialog>, cx: &App) -> impl IntoElement {
     let step = dialog.read(cx).step.clone();
-    let source = dialog.read(cx).source;
+    let no_address = dialog.read(cx).csv.as_ref().is_some_and(|csv| {
+        !csv.roles
+            .contains(&shellpp_core::import::csv::Role::Address)
+    });
     let next = dialog.downgrade();
     let back = dialog.downgrade();
     let row = h_flex().w_full().justify_end().gap(metrics::SPACE_2);
-    if let Step::Summary(_) = step {
+    if let Step::Summary(_) | Step::CsvSummary(_) = step {
         return row.child(
             ControlButton::new("import-close", ControlKind::Accent)
                 .label(strings::CLOSE)
@@ -826,21 +944,24 @@ fn footer(dialog: &Entity<ImportSourcesDialog>, cx: &App) -> impl IntoElement {
         Step::Running => strings::IMPORTING,
         _ => strings::NEXT,
     };
-    let disabled = running || (step == Step::Source && !source.available());
+    let disabled = running || (step == Step::Mapping && no_address);
     row.child(
         ControlButton::new("import-cancel", ControlKind::Neutral)
             .label(strings::CANCEL)
             .on_click(|_, window, cx| window.close_dialog(cx)),
     )
-    .when(matches!(step, Step::File { .. } | Step::Preview), |row| {
-        row.child(
-            ControlButton::new("import-back", ControlKind::Neutral)
-                .label(strings::BACK)
-                .on_click(move |_, _, cx| {
-                    let _ = back.update(cx, |dialog, cx| dialog.back(cx));
-                }),
-        )
-    })
+    .when(
+        matches!(step, Step::File { .. } | Step::Mapping | Step::Preview),
+        |row| {
+            row.child(
+                ControlButton::new("import-back", ControlKind::Neutral)
+                    .label(strings::BACK)
+                    .on_click(move |_, _, cx| {
+                        let _ = back.update(cx, |dialog, cx| dialog.back(cx));
+                    }),
+            )
+        },
+    )
     .child(
         ControlButton::new("import-next", ControlKind::Accent)
             .label(label)
@@ -861,7 +982,7 @@ pub fn open(
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
         let heading = match shown.read(cx).step {
-            Step::Summary(_) => strings::SUMMARY_TITLE,
+            Step::Summary(_) | Step::CsvSummary(_) => strings::SUMMARY_TITLE,
             _ => strings::TITLE,
         };
         modal
