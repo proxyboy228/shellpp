@@ -5,11 +5,14 @@
 
 mod support;
 
+use std::sync::{Barrier, mpsc};
+
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use shellpp_core::CoreError;
 use shellpp_core::service::dto::RecordType;
 use shellpp_core::service::{ConflictChoice, SignInInput, SignInOutcome};
+use shellpp_server::db::{DbError, TxKind, Ty, Val};
 use shellpp_sync_api::api::Registration;
 use support::*;
 
@@ -911,4 +914,189 @@ fn recovery_through_the_server_resets_the_account_password() {
     a.core
         .unlock(new)
         .expect("the new one opens the local copy");
+}
+
+// ---------------------------------------------------------------------------
+// Token refresh (docs/sync-protocol.md, section 4.6; D93)
+// ---------------------------------------------------------------------------
+
+/// Every access token of the server expires now: the client's next call
+/// gets `401 unauthenticated` and refreshes.
+fn expire_access_tokens(server: &Server) {
+    let past = Val::Time(shellpp_server::model::now() - time::Duration::seconds(1));
+    server
+        .db
+        .tx(TxKind::Write, |tx| -> Result<(), DbError> {
+            tx.exec("UPDATE access_tokens SET expires_at = ?", &[past])?;
+            Ok(())
+        })
+        .expect("access tokens expired");
+}
+
+/// How many refresh tokens the server holds as used.
+fn used_refresh_tokens(server: &Server) -> usize {
+    server
+        .db
+        .tx(TxKind::Read, |tx| -> Result<usize, DbError> {
+            let rows = tx.query(
+                "SELECT token_hash FROM refresh_tokens WHERE used_at IS NOT NULL",
+                &[],
+                &[Ty::Bytes],
+            )?;
+            Ok(rows.len())
+        })
+        .expect("refresh tokens read")
+}
+
+/// The server's 60 s retry window passes (the server reads the wall clock,
+/// so its uses move back) and the client's clock moves with it.
+fn retry_window_passes(server: &Server, client: &Client) {
+    let by = time::Duration::seconds(61);
+    server
+        .db
+        .tx(TxKind::Write, |tx| -> Result<(), DbError> {
+            let rows = tx.query(
+                "SELECT token_hash, used_at FROM refresh_tokens WHERE used_at IS NOT NULL",
+                &[],
+                &[Ty::Bytes, Ty::Time],
+            )?;
+            for row in rows {
+                let (Some(hash), Some(used_at)) = (row[0].bytes(), row[1].time()) else {
+                    continue;
+                };
+                tx.exec(
+                    "UPDATE refresh_tokens SET used_at = ? WHERE token_hash = ?",
+                    &[Val::Time(used_at - by), Val::Bytes(hash.to_vec())],
+                )?;
+            }
+            Ok(())
+        })
+        .expect("uses moved back");
+    client.mem.clock.advance(std::time::Duration::from_secs(61));
+}
+
+/// Single flight (section 4.6): calls on several threads with an expired
+/// access token refresh once. Overlapping refreshes with one token spend
+/// the server's one retry (the first successor is marked used) or are a
+/// reuse, and the device is signed out once the 60 s pass.
+#[test]
+fn parallel_calls_with_an_expired_access_token_refresh_once() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("a.example.com");
+    a.register(&server, &email, &password);
+    a.sync();
+    expire_access_tokens(&server);
+    let used_before = used_refresh_tokens(&server);
+
+    const THREADS: usize = 8;
+    let barrier = Barrier::new(THREADS);
+    let results: Vec<Result<(), CoreError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..THREADS)
+            .map(|index| {
+                let (barrier, core) = (&barrier, &a.core);
+                scope.spawn(move || {
+                    barrier.wait();
+                    if index % 4 == 3 {
+                        core.sync_now().map(drop)
+                    } else {
+                        core.sync_devices().map(drop)
+                    }
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("thread"))
+            .collect()
+    });
+    for result in &results {
+        if let Err(error) = result {
+            panic!("a parallel call failed: {error}");
+        }
+    }
+    assert_eq!(
+        used_refresh_tokens(&server),
+        used_before + 1,
+        "one refresh for all the calls"
+    );
+
+    // Past the retry window, with the access token expired again: the
+    // stored refresh token is the live successor, not a spent one.
+    retry_window_passes(&server, &a);
+    expire_access_tokens(&server);
+    let devices = a
+        .core
+        .sync_devices()
+        .unwrap_or_else(|error| panic!("refresh after 60 s: {error}"));
+    assert_eq!(devices.len(), 1);
+    a.host("after.example.com");
+    a.sync();
+    assert!(a.status().signed_in, "the device is still signed in");
+}
+
+/// A refresh answered after the app locked keeps the rotated token (D93):
+/// the device unlocks after the 60 s retry window and the next call
+/// refreshes with the successor instead of reusing the spent token.
+///
+/// The race is made deterministic on the server: a transaction of the test
+/// holds what the refresh locks (the database on SQLite, the user row on
+/// PostgreSQL), so its answer cannot arrive before the app locks.
+#[test]
+fn a_refresh_answered_after_a_lock_keeps_the_rotated_token() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+
+    let mut raced = false;
+    for attempt in 1..=3u64 {
+        // A fresh unlock holds no access token: the next call refreshes.
+        a.core.lock().expect("locked");
+        a.core.unlock(password.clone()).expect("unlocked");
+        let used_before = used_refresh_tokens(&server);
+        let result = std::thread::scope(|scope| {
+            let (held_tx, held_rx) = mpsc::channel::<()>();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let db = &server.db;
+            let hold = scope.spawn(move || {
+                db.tx(TxKind::Write, |tx| -> Result<(), DbError> {
+                    let sql = format!("SELECT user_id FROM users{}", tx.for_update());
+                    tx.query(&sql, &[], &[Ty::Uuid])?;
+                    held_tx.send(()).expect("held");
+                    let _ = release_rx.recv();
+                    Ok(())
+                })
+            });
+            held_rx.recv().expect("the server's rows are held");
+            let call = scope.spawn(|| a.core.sync_devices().map(drop));
+            // The refresh request is sent and waits on the held rows.
+            std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
+            a.core.lock().expect("locked during the refresh");
+            release_tx.send(()).expect("released");
+            hold.join().expect("hold thread").expect("hold transaction");
+            call.join().expect("call thread")
+        });
+        assert!(
+            matches!(result, Err(CoreError::Locked)),
+            "the call ends locked"
+        );
+        // The server rotated the token only if the request was in flight
+        // when the app locked; otherwise the call stopped before sending.
+        if used_refresh_tokens(&server) > used_before {
+            raced = true;
+            break;
+        }
+    }
+    assert!(raced, "a refresh was answered after the lock");
+
+    retry_window_passes(&server, &a);
+    a.core.unlock(password).expect("unlocked");
+    a.core
+        .sync_devices()
+        .unwrap_or_else(|error| panic!("refresh after the lock: {error}"));
+    assert!(a.status().signed_in, "the device is still signed in");
 }
