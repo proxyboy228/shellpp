@@ -28,6 +28,8 @@ use support::{TestInteraction, key_user, secret, spec, start_server};
 enum Behavior {
     Sign,
     Cancel,
+    /// No device (or a PIN key): not ready, never asked.
+    NotReady,
 }
 
 /// A software authenticator holding one credential.
@@ -56,6 +58,10 @@ fn ssh_ecdsa_to_der(mut blob: &[u8]) -> Vec<u8> {
 }
 
 impl Authenticator for Fake {
+    fn ready(&self, _flags: u8) -> bool {
+        self.behavior != Behavior::NotReady
+    }
+
     fn sign(&self, request: &SignRequest) -> Result<Assertion, SkError> {
         if self.behavior == Behavior::Cancel {
             return Err(SkError::Cancelled);
@@ -319,4 +325,29 @@ async fn a_key_made_on_the_authenticator_signs_in() {
         key_file(&request, &attested, "x").unwrap_err(),
         SkError::Invalid
     );
+}
+
+/// An authenticator that is not ready (no device, a PIN key) is never
+/// asked: the key is skipped before it is offered and the password signs
+/// in (D143).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_the_authenticator_cannot_sign_now_is_skipped() {
+    let (key, absent) = security_key(ED25519, Behavior::NotReady);
+    let password = support::random_secret("pw");
+    let public = key.public_key().to_openssh().unwrap();
+    let server = start_server(vec![
+        key_user("ivan", &public).with_password(secret(&password)),
+    ])
+    .await;
+    let mut auth = plan(&key, Some(absent.clone()));
+    auth.password = Some(secret(&password));
+    let connection = connect(
+        spec(server.addr(), Some("ivan"), auth),
+        TestInteraction::accepting().as_dyn(),
+    )
+    .await
+    .expect("password after the skipped security key");
+    assert_eq!(connection.auth().method, AuthMethod::Password);
+    assert_eq!(absent.signed.load(Ordering::SeqCst), 0);
+    connection.disconnect().await;
 }

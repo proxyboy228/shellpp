@@ -96,8 +96,9 @@ fn spec_of(config: &SessionConfig) -> ConnectSpec {
             can_save_password: false,
             can_save_passphrase: false,
             file_keys: Vec::new(),
-            // Security keys sign through the system (D143).
-            authenticator: crate::platform::security_key::authenticator(),
+            // Nobody to touch a security key here: its dialog would come up
+            // unasked (D143); such a host signs in with its other methods.
+            authenticator: None,
         },
         agent: None,
         keepalive: (config.keepalive_s > 0)

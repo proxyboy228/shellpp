@@ -100,6 +100,7 @@ windows-sys = { workspace = true, features = [
     "Win32_Globalization",
     "Win32_Networking_WindowsWebServices",
     "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
     "Win32_System_Time",
     "Win32_UI_WindowsAndMessaging",
 ] }

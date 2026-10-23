@@ -147,6 +147,16 @@ pub trait Authenticator: Send + Sync + 'static {
     /// enters its PIN) or it fails: call it on a blocking thread.
     fn sign(&self, request: &SignRequest) -> Result<Assertion, SkError>;
 
+    /// Whether a signature for a key with these flags can be asked now
+    /// (a device is there, the authenticator handles the key's PIN). The
+    /// SSH layer checks it before it offers the key: once the server
+    /// accepted it, a failure ends the attempt, while a key that cannot
+    /// sign is skipped and the next method runs.
+    fn ready(&self, flags: u8) -> bool {
+        let _ = flags;
+        true
+    }
+
     /// Makes a new credential, Ed25519 when the key can, else ECDSA P-256
     /// (blocking, as [`Authenticator::sign`]). Not every authenticator can.
     fn create(&self, request: &CreateRequest) -> Result<Attested, SkError> {

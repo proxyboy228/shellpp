@@ -364,12 +364,30 @@ async fn try_key(
         key.algorithm(),
         Algorithm::SkEd25519 | Algorithm::SkEcdsaSha2NistP256
     ) {
-        let Some(authenticator) = context.plan.authenticator.clone() else {
-            tracing::debug!("security key skipped: no authenticator");
+        let flags = match key.key_data() {
+            KeypairData::SkEd25519(sk) => sk.flags(),
+            KeypairData::SkEcdsaSha2NistP256(sk) => sk.flags(),
+            _ => 0,
+        };
+        let Some(authenticator) = context
+            .plan
+            .authenticator
+            .clone()
+            .filter(|authenticator| authenticator.ready(flags))
+        else {
+            tracing::debug!("security key skipped: no authenticator ready for it");
             progress.key_unusable = true;
             return Ok(Step::Next);
         };
-        return try_security_key(handle, context, progress, key, authenticator).await;
+        return try_security_key(
+            handle,
+            context,
+            progress,
+            key,
+            authenticator,
+            prompted_passphrase,
+        )
+        .await;
     }
     progress.offered.push(key.public_key().clone());
     let Ok(hash) = hash_for(handle, &key.algorithm(), context).await else {
@@ -407,6 +425,7 @@ async fn try_security_key(
     progress: &mut Progress,
     key: PrivateKey,
     authenticator: Arc<dyn crate::sk::Authenticator>,
+    prompted_passphrase: Option<PromptAnswer>,
 ) -> Result<Step, AuthError> {
     use crate::sk::{SkError, SkSignError, SkSigner};
     let public = key.public_key().clone();
@@ -423,7 +442,12 @@ async fn try_security_key(
     .await
     .map_err(|_| AuthError::Failed(FailureKind::Timeout))?;
     match result {
-        Ok(AuthResult::Success) => Ok(Step::Success(progress.outcome(AuthMethod::PublicKey))),
+        Ok(AuthResult::Success) => {
+            // An encrypted key file's passphrase, as for any key.
+            let mut authenticated = progress.outcome(AuthMethod::PublicKey);
+            authenticated.prompted.passphrase = prompted_passphrase;
+            Ok(Step::Success(authenticated))
+        }
         Ok(AuthResult::Failure {
             remaining_methods, ..
         }) => {

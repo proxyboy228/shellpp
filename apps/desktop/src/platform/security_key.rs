@@ -28,10 +28,9 @@ pub fn authenticator() -> Option<Arc<dyn Authenticator>> {
     system()
 }
 
-/// Whether this system can make a new key on a security key (WebAuthn;
-/// the HID path signs only).
+/// Whether this system can make a new key on a security key.
 pub fn can_create() -> bool {
-    cfg!(windows) && authenticator().is_some()
+    authenticator().is_some()
 }
 
 #[cfg(windows)]
@@ -74,6 +73,7 @@ mod windows {
         Assertion, Attested, Authenticator, CreateRequest, SignRequest, SkError,
         USER_VERIFICATION_REQUIRED,
     };
+    use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::Networking::WindowsWebServices::{
         WEBAUTHN_ASSERTION, WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
         WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
@@ -82,8 +82,7 @@ mod windows {
         WEBAUTHN_CREDENTIAL_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY,
         WEBAUTHN_CREDENTIALS, WEBAUTHN_HASH_ALGORITHM_SHA_256,
         WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED,
-        WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED, WebAuthNAuthenticatorGetAssertion,
-        WebAuthNFreeAssertion, WebAuthNGetApiVersionNumber,
+        WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
     };
     use windows_sys::Win32::Networking::WindowsWebServices::{
         WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
@@ -93,10 +92,90 @@ mod windows {
         WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
         WEBAUTHN_CREDENTIAL_ATTESTATION, WEBAUTHN_RP_ENTITY_INFORMATION,
         WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
-        WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION, WebAuthNAuthenticatorMakeCredential,
-        WebAuthNFreeCredentialAttestation,
+        WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+    };
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    use windows_sys::core::{HRESULT, PCWSTR};
+
+    type GetApiVersionNumber = unsafe extern "system" fn() -> u32;
+    type GetAssertion = unsafe extern "system" fn(
+        HWND,
+        PCWSTR,
+        *const WEBAUTHN_CLIENT_DATA,
+        *const WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
+        *mut *mut WEBAUTHN_ASSERTION,
+    ) -> HRESULT;
+    type FreeAssertion = unsafe extern "system" fn(*const WEBAUTHN_ASSERTION);
+    type MakeCredential = unsafe extern "system" fn(
+        HWND,
+        *const WEBAUTHN_RP_ENTITY_INFORMATION,
+        *const WEBAUTHN_USER_ENTITY_INFORMATION,
+        *const WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
+        *const WEBAUTHN_CLIENT_DATA,
+        *const WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
+        *mut *mut WEBAUTHN_CREDENTIAL_ATTESTATION,
+    ) -> HRESULT;
+    type FreeCredentialAttestation =
+        unsafe extern "system" fn(*const WEBAUTHN_CREDENTIAL_ATTESTATION);
+
+    /// The functions of `webauthn.dll`, loaded at run time from System32:
+    /// a load-time import would keep the app from starting where the DLL
+    /// does not exist (Windows before 10 1903).
+    pub(super) struct Api {
+        get_api_version_number: GetApiVersionNumber,
+        get_assertion: GetAssertion,
+        free_assertion: FreeAssertion,
+        make_credential: MakeCredential,
+        free_credential_attestation: FreeCredentialAttestation,
+    }
+
+    /// `webauthn.dll`, loaded once and never unloaded; `None` without it.
+    pub(super) fn api() -> Option<&'static Api> {
+        static API: std::sync::OnceLock<Option<Api>> = std::sync::OnceLock::new();
+        API.get_or_init(load).as_ref()
+    }
+
+    fn load() -> Option<Api> {
+        let name = wide("webauthn.dll");
+        // SAFETY: `name` is a NUL-terminated UTF-16 string that lives through
+        // the call; the search is limited to System32, so no other folder's
+        // DLL of that name is loaded. The module stays loaded for the life
+        // of the process (never freed), so the function pointers below
+        // stay valid.
+        let module =
+            unsafe { LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+        if module.is_null() {
+            return None;
+        }
+        /// A function of the loaded module by its NUL-terminated name.
+        macro_rules! function {
+            ($name:literal, $type:ty) => {{
+                // SAFETY: `module` is the loaded webauthn.dll and the name is
+                // NUL-terminated ASCII. The address is that of the exported
+                // function named, whose signature in webauthn.h is `$type`;
+                // a missing export is `None`.
+                let address = unsafe { GetProcAddress(module, concat!($name, "\0").as_ptr()) }?;
+                // SAFETY: both are function pointers of the same size; the
+                // export has exactly the signature `$type`.
+                unsafe {
+                    std::mem::transmute::<unsafe extern "system" fn() -> isize, $type>(address)
+                }
+            }};
+        }
+        Some(Api {
+            get_api_version_number: function!("WebAuthNGetApiVersionNumber", GetApiVersionNumber),
+            get_assertion: function!("WebAuthNAuthenticatorGetAssertion", GetAssertion),
+            free_assertion: function!("WebAuthNFreeAssertion", FreeAssertion),
+            make_credential: function!("WebAuthNAuthenticatorMakeCredential", MakeCredential),
+            free_credential_attestation: function!(
+                "WebAuthNFreeCredentialAttestation",
+                FreeCredentialAttestation
+            ),
+        })
+    }
 
     /// How long the system dialog waits for the touch.
     const TIMEOUT_MS: u32 = 60_000;
@@ -120,12 +199,15 @@ mod windows {
         unsafe { std::slice::from_raw_parts(data, len as usize).to_vec() }
     }
 
-    /// The version of the WebAuthn API (1 or more where it exists).
+    /// The version of the WebAuthn API: 1 or more where it exists, 0
+    /// without `webauthn.dll`.
     pub(super) fn api_version() -> u32 {
+        let Some(api) = api() else {
+            return 0;
+        };
         // SAFETY: takes no arguments and returns a number; it reads and
-        // writes no memory of ours. `webauthn.dll` ships with Windows 10
-        // 1903 and later.
-        unsafe { WebAuthNGetApiVersionNumber() }
+        // writes no memory of ours.
+        unsafe { (api.get_api_version_number)() }
     }
 
     pub(super) fn available() -> bool {
@@ -146,6 +228,7 @@ mod windows {
 
     impl Authenticator for WebAuthn {
         fn sign(&self, request: &SignRequest) -> Result<Assertion, SkError> {
+            let api = api().ok_or(SkError::NoAuthenticator)?;
             let rp_id = wide(&request.application);
             // The API takes mutable pointers but only reads these buffers.
             let mut data = request.data.clone();
@@ -186,7 +269,7 @@ mod windows {
             // API writes one pointer into `assertion`, which it allocated and
             // `WebAuthNFreeAssertion` frees below.
             let result = unsafe {
-                WebAuthNAuthenticatorGetAssertion(
+                (api.get_assertion)(
                     owner_window(),
                     rp_id.as_ptr(),
                     &client_data,
@@ -207,13 +290,14 @@ mod windows {
                     copy(found.pbAuthenticatorData, found.cbAuthenticatorData),
                     copy(found.pbSignature, found.cbSignature),
                 );
-                WebAuthNFreeAssertion(assertion);
+                (api.free_assertion)(assertion);
                 copied
             };
             Assertion::from_authenticator_data(&auth_data, signature).ok_or(SkError::Invalid)
         }
 
         fn create(&self, request: &CreateRequest) -> Result<Attested, SkError> {
+            let api = api().ok_or(SkError::NoAuthenticator)?;
             let rp_id = wide(&request.application);
             let user_name = wide("openssh");
             // A credential that is not discoverable: its user id is not
@@ -277,7 +361,7 @@ mod windows {
             // lengths. The API writes one pointer into `attestation`, which it
             // allocated and `WebAuthNFreeCredentialAttestation` frees below.
             let result = unsafe {
-                WebAuthNAuthenticatorMakeCredential(
+                (api.make_credential)(
                     owner_window(),
                     &rp,
                     &user,
@@ -300,7 +384,7 @@ mod windows {
                     copy(found.pbAuthenticatorData, found.cbAuthenticatorData),
                     copy(found.pbCredentialId, found.cbCredentialId),
                 );
-                WebAuthNFreeCredentialAttestation(attestation);
+                (api.free_credential_attestation)(attestation);
                 copied
             };
             if key_handle.is_empty() {
@@ -366,5 +450,28 @@ mod tests {
             result,
             Err(SkError::UnknownCredential | SkError::Cancelled | SkError::NoAuthenticator)
         ));
+    }
+
+    /// The making call with a real key, as above (`SHELLPP_TEST_WEBAUTHN=1`):
+    /// a touch makes a credential whose key file is read back; a cancel is
+    /// an answer too.
+    #[cfg(windows)]
+    #[test]
+    fn the_webauthn_create_call_answers() {
+        use shellpp_ssh::sk::{Authenticator as _, CreateRequest, key_file};
+        if std::env::var_os("SHELLPP_TEST_WEBAUTHN").is_none_or(|value| value != "1") {
+            return;
+        }
+        let request = CreateRequest {
+            application: "ssh:".to_owned(),
+            user_verification: false,
+        };
+        match windows::WebAuthn.create(&request) {
+            Ok(attested) => assert!(key_file(&request, &attested, "webauthn test").is_ok()),
+            Err(error) => assert!(matches!(
+                error,
+                SkError::Cancelled | SkError::NoAuthenticator
+            )),
+        }
     }
 }
