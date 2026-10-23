@@ -13,7 +13,7 @@ use shellpp_sync_api::api::{
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::db::{Tx, Ty, Val};
+use crate::db::{DbError, Tx, Ty, Val};
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
     self, DELETED_ACCOUNT_DAYS, LOGIN_TICKET_LIFETIME, RECOVERY_TICKET_LIFETIME, REFRESH_LIFETIME,
@@ -224,7 +224,17 @@ pub fn register(
             now.into(),
             now.into(),
         ],
-    )?;
+    )
+    // Two registrations of one email at once: the check of step 3 saw
+    // neither, the unique email of the second insert answers.
+    .map_err(|error| match error {
+        DbError::Unique => ApiError::new(
+            StatusCode::CONFLICT,
+            code::EMAIL_TAKEN,
+            "email already registered",
+        ),
+        other => other.into(),
+    })?;
     tx.exec(
         "INSERT INTO vaults (vault_id, kind, current_epoch, created_by, created_at) \
          VALUES (?, 'personal', ?, ?, ?)",

@@ -104,7 +104,14 @@ impl From<DbError> for ApiError {
                 code::UNAVAILABLE,
                 "database unavailable",
             ),
-            DbError::Unique => Self::new(StatusCode::CONFLICT, code::VALIDATION_FAILED, "conflict"),
+            // A duplicate the checks before the write did not see (two
+            // requests at once): a protocol pair of section 8, not 409 with
+            // `validation_failed` (review finding).
+            DbError::Unique => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                code::VALIDATION_FAILED,
+                "conflicting value",
+            ),
             DbError::Failed(reason) => {
                 tracing::error!(%reason, "database error");
                 Self::internal()

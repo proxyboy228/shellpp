@@ -395,8 +395,15 @@ impl Db {
 
 fn sqlite_error(error: rusqlite::Error) -> DbError {
     match &error {
+        // A duplicate key only: other constraints (a foreign key, NOT NULL,
+        // CHECK) are server errors, as on PostgreSQL (review finding).
         rusqlite::Error::SqliteFailure(code, _)
-            if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+            if code.code == rusqlite::ErrorCode::ConstraintViolation
+                && matches!(
+                    code.extended_code,
+                    rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                        | rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+                ) =>
         {
             DbError::Unique
         }
@@ -918,5 +925,19 @@ mod tests {
             Ok(())
         });
         assert!(matches!(duplicate, Err(DbError::Unique)));
+        // Another constraint is no duplicate: a server error, as on
+        // PostgreSQL.
+        db.batch("CREATE TABLE c (i INTEGER NOT NULL CHECK (i > 0))")
+            .unwrap();
+        let check: Result<(), DbError> = db.tx(TxKind::Write, |tx| {
+            tx.exec("INSERT INTO c VALUES (0)", &[])?;
+            Ok(())
+        });
+        assert!(matches!(check, Err(DbError::Failed(_))), "{check:?}");
+        let null: Result<(), DbError> = db.tx(TxKind::Write, |tx| {
+            tx.exec("INSERT INTO c VALUES (NULL)", &[])?;
+            Ok(())
+        });
+        assert!(matches!(null, Err(DbError::Failed(_))), "{null:?}");
     }
 }
