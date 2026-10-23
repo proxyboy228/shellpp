@@ -225,6 +225,17 @@ pub struct DeletedItem {
     pub data: Option<Map<String, Value>>,
 }
 
+impl std::fmt::Debug for ConflictItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConflictItem")
+            .field("conflict_id", &self.conflict_id)
+            .field("original_record_id", &self.original_record_id)
+            .field("original_type", &self.original_type)
+            .field("losing_deleted", &self.losing_deleted)
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::fmt::Debug for DeletedItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeletedItem")
@@ -236,8 +247,10 @@ impl std::fmt::Debug for DeletedItem {
     }
 }
 
-/// A conflict copy (data-model 15; UI 13.6).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// A conflict copy (data-model 15; UI 13.6). `Debug` shows no title or
+/// data of either version: they carry addresses and user names (security
+/// 9.1).
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ConflictItem {
     pub conflict_id: Uuid,
     pub original_record_id: Uuid,

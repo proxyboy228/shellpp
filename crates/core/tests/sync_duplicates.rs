@@ -120,6 +120,10 @@ fn env_values_are_masked_and_debug_shows_no_host_data() {
     let conflicts = serde_json::to_string(&core.sync_conflicts().expect("conflicts")).unwrap();
     assert!(conflicts.contains("DEPLOY_TOKEN"));
     assert!(!conflicts.contains(&value), "masked in a conflict");
+    // security 9.1: a conflict item's Debug shows no data of either side.
+    let debug = format!("{:?}", core.sync_conflicts().expect("conflicts"));
+    assert!(!debug.contains("DEPLOY_TOKEN"), "{debug}");
+    assert!(!debug.contains(".example."), "{debug}");
     core.record_delete(shellpp_core::service::dto::RecordsRef {
         vault_id: unlocked.vault_id,
         record_ids: vec![first.record_id],
