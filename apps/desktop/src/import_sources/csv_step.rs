@@ -419,15 +419,17 @@ impl ImportSourcesDialog {
             .w_full()
             .gap(metrics::SPACE_3)
             .items_end()
+            // Each menu keeps its own width under its label (a field stretches
+            // its control, and a stretched button centres its text).
             .child(widgets::field(
                 strings::CSV_ENCODING,
-                encoding_menu,
+                h_flex().child(encoding_menu),
                 None,
                 cx,
             ))
             .child(widgets::field(
                 strings::CSV_DELIMITER,
-                delimiter_menu,
+                h_flex().child(delimiter_menu),
                 None,
                 cx,
             ))
@@ -575,8 +577,9 @@ impl ImportSourcesDialog {
                 target = format!("{target}:{port}");
             }
             let title = match &row.label {
+                Some(label) if row.address.is_empty() => label.clone(),
                 Some(label) => format!("{label}  ·  {target}"),
-                None if target.is_empty() => strings::csv_line(row.line),
+                None if row.address.is_empty() => strings::csv_line(row.line),
                 None => target,
             };
             let status = match row.status {

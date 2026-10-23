@@ -449,3 +449,19 @@ fn key_paths_under_the_home_folder_are_written_with_a_tilde() {
     assert_eq!(tilde(&beside, home), beside);
     assert_eq!(tilde("/etc/ssh/key", home), "/etc/ssh/key");
 }
+
+#[test]
+fn the_csv_counts_agree_with_their_numbers() {
+    assert_eq!(
+        strings::csv_counts(3, 1, 1, 1),
+        "3 new, 1 already exists, 1 not imported; 1 new group"
+    );
+    assert_eq!(
+        strings::csv_counts(1, 2, 0, 2),
+        "1 new, 2 already exist, 0 not imported; 2 new groups"
+    );
+    assert_eq!(
+        strings::csv_counts(0, 0, 0, 0),
+        "0 new, 0 already exist, 0 not imported"
+    );
+}
