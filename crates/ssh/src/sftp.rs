@@ -288,6 +288,18 @@ struct Watched<S> {
     ended: Arc<AtomicBool>,
 }
 
+// russh-sftp also ends a session on a protocol error (a packet over the
+// length limit, one it cannot parse, an unexpected type): its loops stop
+// and drop the stream without an end of stream or an I/O error being seen
+// here. The stream is dropped only once both loops have ended, so its drop
+// marks the end too (review finding; a server can cause it with one bad
+// packet).
+impl<S> Drop for Watched<S> {
+    fn drop(&mut self) {
+        self.ended.store(true, Ordering::SeqCst);
+    }
+}
+
 impl<S> Watched<S> {
     fn mark<T>(&self, poll: &Poll<std::io::Result<T>>) {
         if matches!(poll, Poll::Ready(Err(_))) {
@@ -1024,6 +1036,18 @@ mod tests {
         drop(far);
         assert!(watched.write_all(b"xyz").await.is_err());
         assert!(ended.load(Ordering::SeqCst), "a write error");
+
+        // russh-sftp stopped on a protocol error: the stream is dropped
+        // with no end of stream or error seen through it.
+        let (near, _far) = tokio::io::duplex(64);
+        let ended = Arc::new(AtomicBool::new(false));
+        let watched = Watched {
+            inner: near,
+            ended: Arc::clone(&ended),
+        };
+        assert!(!ended.load(Ordering::SeqCst));
+        drop(watched);
+        assert!(ended.load(Ordering::SeqCst), "the session's loops ended");
     }
 
     #[test]
