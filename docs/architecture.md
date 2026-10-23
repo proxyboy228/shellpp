@@ -725,7 +725,7 @@ Stage 9; summary of D7.
 | Linux | AppImage | yes | bundled LGPL libraries are listed in `THIRD_PARTY_NOTICES.md` (D4) |
 | Linux | `.deb` | no, the package manager updates it | depends on the system WebKitGTK |
 
-- `tauri-plugin-updater` with the project's own updater signing key. The public key is built into the app; the private key exists only as a CI secret. An update whose signature does not verify is not installed (UI 12.7). (Run 6, D97: the GPUI app only notifies, nothing is downloaded or installed; the in-app update of this table waits for the owner.)
+- `tauri-plugin-updater` with the project's own updater signing key. The public key is built into the app; the private key exists only as a CI secret. An update whose signature does not verify is not installed (UI 12.7). (Run 6, D97: the GPUI app only notifies, nothing is downloaded or installed; the in-app update of this table waits for the owner. Run 8, D170: the manifest it reads is signed with minisign and checked with the key built into the app; the release workflow `.github/workflows/release.yml` builds and signs the files of a draft release, docs/release.md.)
 - The automatic check is off by default; when the user turns it on, it runs at launch. Help ▸ Check for updates and "Check now" always work (UI 1.4, 12.7).
 - The check is a plain GET of a static manifest (default URL in section 7) with User-Agent `shellpp/<version>` (D97). The endpoint has no version, target or device placeholders; the manifest lists all platforms (D7).
 - The update source is a local setting (Settings → Updates, UI 12.7).
