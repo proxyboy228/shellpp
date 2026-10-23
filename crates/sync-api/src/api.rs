@@ -630,6 +630,9 @@ pub mod limits {
     pub const MAX_ENVELOPE_BYTES: u64 = 262_232;
     pub const MAX_PUSH_ITEMS: u64 = 500;
     pub const MAX_PUSH_BODY_BYTES: u64 = 16 * 1024 * 1024;
+    /// A request to the unauthenticated auth endpoints (keys, wraps and a
+    /// few fields: far below this).
+    pub const MAX_AUTH_BODY_BYTES: u64 = 1024 * 1024;
     pub const DEFAULT_PULL_LIMIT: u64 = 500;
     pub const MAX_PULL_LIMIT: u64 = 1000;
     /// A pull stops after this many envelope bytes (always one record at least).

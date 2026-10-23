@@ -491,3 +491,113 @@ fn recover_complete_with_another_email_is_refused() {
         other => panic!("expected 422, got {other:?}"),
     }
 }
+
+/// The per-IP limit of the auth endpoints runs before the body is read: a
+/// client over it gets `429` even for a body that would not parse (review
+/// finding: rate-limited requests used to cost a full parse of up to
+/// 16 MiB).
+#[test]
+fn the_auth_limit_comes_before_the_body() {
+    let server = Server::with(Options {
+        rate_limits: RateLimits {
+            auth_per_minute: 1,
+            auth_burst: 1,
+            ..RateLimits::generous()
+        },
+        ..Options::default()
+    });
+    let post = |body: &[u8]| {
+        raw_http(
+            &server,
+            "POST",
+            "/v1/auth/login",
+            &[("content-type", "application/json")],
+            body,
+        )
+    };
+    let first = post(b"not json");
+    assert_eq!((first.status, first.code()), (400, Some("bad_request")));
+    let limited = post(b"not json");
+    assert_eq!(
+        (limited.status, limited.code()),
+        (429, Some("rate_limited"))
+    );
+}
+
+/// The auth endpoints take bodies of at most `limits::MAX_AUTH_BODY_BYTES`
+/// (sync-protocol 10.2): a larger one is `413` before anything parses it;
+/// the push keeps its own, larger limit.
+#[test]
+fn auth_bodies_have_a_limit_of_their_own() {
+    use tower::ServiceExt as _;
+    let server = Server::start();
+    let db = shellpp_server::db::Db::open(&server.database_url).expect("db");
+    let app = shellpp_server::api::router(shellpp_server::state::Shared::new(
+        db,
+        server.config.clone(),
+    ));
+    let send = |path: &str, size: usize| {
+        let mut body = vec![b' '; size];
+        body[0] = b'{';
+        let request = axum::http::Request::post(path)
+            .header("content-type", "application/json")
+            .header("content-length", size.to_string())
+            .body(axum::body::Body::from(body))
+            .expect("request");
+        server
+            .runtime()
+            .block_on(app.clone().oneshot(request))
+            .expect("answer")
+            .status()
+            .as_u16()
+    };
+    let limit = wire::limits::MAX_AUTH_BODY_BYTES as usize;
+    for path in ["/v1/auth/login", "/v1/auth/register", "/v1/auth/prelogin"] {
+        assert_eq!(send(path, limit + 1), 413, "{path}");
+        // Within the limit the body reaches the parser (it is not JSON).
+        assert_eq!(send(path, limit), 400, "{path}");
+    }
+    // The push still takes more than the auth limit (it answers 401 for the
+    // missing token, not 413).
+    let vault = Uuid::now_v7();
+    assert_eq!(send(&format!("/v1/vaults/{vault}/changes"), limit + 1), 401);
+}
+
+/// Bearer tokens that do not authenticate are counted per client IP; over
+/// the limit the next request is `429` before the database is asked
+/// (review finding: each bogus token opened a write transaction, the global
+/// lock on SQLite). Another IP is not affected.
+#[test]
+fn bogus_bearer_tokens_are_limited_per_ip() {
+    let server = Server::with(Options {
+        trusted_proxies: vec![Cidr::parse("127.0.0.1").expect("cidr")],
+        rate_limits: RateLimits {
+            token_failures_per_window: 3,
+            ..RateLimits::generous()
+        },
+        ..Options::default()
+    });
+    let get = |token: &str, client: &str| {
+        let bearer = format!("Bearer {token}");
+        raw_http(
+            &server,
+            "GET",
+            "/v1/devices",
+            &[
+                ("authorization", bearer.as_str()),
+                ("x-forwarded-for", client),
+            ],
+            b"",
+        )
+    };
+    let bogus = format!("{}{}", wire::token_prefix::ACCESS, Uuid::now_v7().simple());
+    assert_eq!(get(&bogus, "192.0.2.1").status, 401);
+    assert_eq!(get("not-a-token", "192.0.2.1").status, 401);
+    assert_eq!(get(&bogus, "192.0.2.1").status, 401);
+    let limited = get(&bogus, "192.0.2.1");
+    assert_eq!(
+        (limited.status, limited.code()),
+        (429, Some("rate_limited"))
+    );
+    assert_eq!(get(&bogus, "192.0.2.2").status, 401, "another client");
+}

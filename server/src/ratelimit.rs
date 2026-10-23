@@ -30,6 +30,8 @@ pub struct RateLimits {
     pub failures_per_window: u32,
     /// Failed TOTP codes per account per 15 minutes.
     pub totp_failures_per_window: u32,
+    /// Bearer tokens that did not authenticate, per IP per 15 minutes.
+    pub token_failures_per_window: u32,
 }
 
 impl Default for RateLimits {
@@ -42,6 +44,7 @@ impl Default for RateLimits {
             push_per_minute: 60,
             failures_per_window: 10,
             totp_failures_per_window: 10,
+            token_failures_per_window: 60,
         }
     }
 }
@@ -49,7 +52,7 @@ impl Default for RateLimits {
 impl RateLimits {
     pub fn from_env(get: &impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let mut limits = Self::default();
-        let fields: [(&str, &mut u32); 7] = [
+        let fields: [(&str, &mut u32); 8] = [
             (
                 "SHELLPP_RATE_LIMIT_AUTH_PER_MINUTE",
                 &mut limits.auth_per_minute,
@@ -71,6 +74,10 @@ impl RateLimits {
             (
                 "SHELLPP_RATE_LIMIT_FAILED_TOTP",
                 &mut limits.totp_failures_per_window,
+            ),
+            (
+                "SHELLPP_RATE_LIMIT_FAILED_TOKENS",
+                &mut limits.token_failures_per_window,
             ),
         ];
         for (name, field) in fields {
@@ -96,6 +103,7 @@ impl RateLimits {
             push_per_minute: 100_000,
             failures_per_window: 10,
             totp_failures_per_window: 10,
+            token_failures_per_window: 100_000,
         }
     }
 }
@@ -104,9 +112,18 @@ impl RateLimits {
 pub const WINDOW: Duration = Duration::from_secs(15 * 60);
 
 /// Counts failures per key in fixed windows.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FailureWindows<K: std::hash::Hash + Eq> {
     windows: Mutex<HashMap<K, (Instant, u32)>>,
+}
+
+// Not derived: the key needs no `Default` (an `IpAddr` has none).
+impl<K: std::hash::Hash + Eq> Default for FailureWindows<K> {
+    fn default() -> Self {
+        Self {
+            windows: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
@@ -151,6 +168,8 @@ pub struct Limiters {
     pub failures: FailureWindows<String>,
     /// Keyed by account.
     pub totp_failures: FailureWindows<Uuid>,
+    /// Bearer tokens that did not authenticate, keyed by client IP.
+    pub token_failures: FailureWindows<IpAddr>,
 }
 
 impl std::fmt::Debug for Limiters {
@@ -205,6 +224,7 @@ impl Limiters {
             )),
             failures: FailureWindows::default(),
             totp_failures: FailureWindows::default(),
+            token_failures: FailureWindows::default(),
         }
     }
 
@@ -244,6 +264,16 @@ impl Limiters {
     pub fn totp_failed(&self, user: Uuid) {
         self.totp_failures.fail(&user, Instant::now());
     }
+
+    /// Before a bearer token is looked up for a request from `ip`.
+    pub fn token_allowed(&self, ip: IpAddr) -> Result<(), u64> {
+        self.token_failures
+            .check(&ip, self.limits.token_failures_per_window, Instant::now())
+    }
+
+    pub fn token_failed(&self, ip: IpAddr) {
+        self.token_failures.fail(&ip, Instant::now());
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +301,21 @@ mod tests {
         assert!(windows.check(&key, 10, start + WINDOW).is_ok());
         windows.fail(&key, start + WINDOW);
         assert!(windows.check(&key, 10, start + WINDOW).is_ok());
+    }
+
+    #[test]
+    fn bogus_tokens_are_limited_per_ip() {
+        let limiters = Limiters::new(RateLimits {
+            token_failures_per_window: 3,
+            ..RateLimits::default()
+        });
+        let ip: IpAddr = "192.0.2.1".parse().unwrap();
+        for _ in 0..3 {
+            assert!(limiters.token_allowed(ip).is_ok());
+            limiters.token_failed(ip);
+        }
+        assert!(limiters.token_allowed(ip).unwrap_err() >= 1);
+        assert!(limiters.token_allowed("192.0.2.2".parse().unwrap()).is_ok());
     }
 
     #[test]

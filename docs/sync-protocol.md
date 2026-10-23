@@ -1411,11 +1411,12 @@ The complete list of what the server sees is owned by [security.md](security.md)
 
 ### 10.1 Rate limits
 
-In-memory token buckets (crate `governor`), keyed by client IP (from the socket, or from `X-Forwarded-For` only when the peer is in `SHELLPP_TRUSTED_PROXIES`), by account or by device. Defaults are overridable with `SHELLPP_RATE_LIMIT_*` ([architecture.md](architecture.md)). Exceeding a limit answers `429 rate_limited` with `Retry-After`. (stage 0 decision)
+In-memory token buckets (crate `governor`), keyed by client IP (from the socket, or from `X-Forwarded-For` only when the peer is in `SHELLPP_TRUSTED_PROXIES`; an element may carry a port, `ip:port` or `[ipv6]:port`, and an IPv4-mapped IPv6 address counts as the IPv4 address [decision] (D103)), by account or by device. Defaults are overridable with `SHELLPP_RATE_LIMIT_*` ([architecture.md](architecture.md)). Exceeding a limit answers `429 rate_limited` with `Retry-After`. (stage 0 decision)
 
 | Scope | Key | Default limit |
 |---|---|---|
-| prelogin, register, login, login/totp, recover/*, token/refresh, invitations/lookup | IP | 20 per minute, burst 10 |
+| prelogin, register, login, login/totp, recover/*, token/refresh, invitations/lookup | IP | 20 per minute, burst 10; checked before the request body is read [decision] (D103) |
+| bearer tokens that do not authenticate | IP | 60 per 15 minutes, then `429` before the database is asked, until the window ends [decision] (D103) |
 | failed sign-ins, failed `current_auth_key` checks and recovery attempts | normalized email, known or not | 10 per 15 minutes, then `429` until the window ends |
 | TOTP attempts | ticket and account | 5 per ticket; 10 failures per 15 minutes per account |
 | authenticated API | device | 300 per minute, burst 60 |
@@ -1432,6 +1433,7 @@ The failed sign-in limit is keyed by the normalized email whether or not the acc
 | Padded plaintext per record | 256 KiB |
 | Envelope | 262 232 bytes |
 | Push request | 500 items and 16 MiB body |
+| Request to the unauthenticated auth endpoints (`/v1/auth/*`) [decision] (D103) | 1 MiB body; a larger one is `413` |
 | Pull `limit` | default 500, maximum 1000; the response stops after 8 MiB of envelopes, always with at least one record |
 | Storage per account [decision] (D93) | off by default. `SHELLPP_QUOTA_MAX_RECORDS` and `SHELLPP_QUOTA_MAX_BYTES` set a default for every account (unset: no limit); `shellpp-server admin user quota <user_id>` sets or clears the limits of one account (`users.quota_max_records`, `users.quota_max_bytes`). A limit only stops pushes (`quota_exceeded`, section 6.6, check 8); nothing stored is deleted and no local data is touched (principles 2 and 3) |
 

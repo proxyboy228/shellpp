@@ -69,6 +69,9 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 shellpp-core = { path = "../crates/core" }
 tempfile = "3.27.0"
 secrecy = { version = "0.10.3", features = ["serde"] }
+# Requests to the router in-process (`ServiceExt::oneshot`): the body limit
+# answers before a socket would have to carry the whole body.
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 
 [profile.dev.package.argon2]
 opt-level = 3

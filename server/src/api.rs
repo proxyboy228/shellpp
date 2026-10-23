@@ -13,6 +13,7 @@ use axum::extract::{
 };
 use axum::http::StatusCode;
 use axum::http::request::Parts;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -22,7 +23,7 @@ use shellpp_sync_api::api::{
     Limits, LoginRequest, LoginTotpRequest, PasswordChangeRequest, PersonalKeyEpochRequest,
     PreloginRequest, PushRequest, RecoverBeginRequest, RecoverCompleteRequest,
     RecoveryKeyReissueRequest, RefreshRequest, RegisterRequest, ServerInfo, SshIdRequest,
-    TokensResponse, TotpCode, TotpDisableRequest, code, limits,
+    TokensResponse, TotpCode, TotpDisableRequest, code, limits, token_prefix,
 };
 use uuid::Uuid;
 
@@ -111,20 +112,37 @@ impl FromRequestParts<AppState> for Auth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        // Bogus tokens are counted per client IP and stopped before the
+        // database once over the limit (each lookup is a write transaction,
+        // the global lock on SQLite; review finding).
+        let ClientIp(ip) = ClientIp::from_request_parts(parts, state).await?;
+        state
+            .limiters
+            .token_allowed(ip)
+            .map_err(ApiError::rate_limited)?;
         let token = parts
             .headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::trim)
-            .ok_or_else(ApiError::unauthenticated)?
-            .to_owned();
+            .filter(|token| token.starts_with(token_prefix::ACCESS))
+            .map(str::to_owned);
+        let Some(token) = token else {
+            state.limiters.token_failed(ip);
+            return Err(ApiError::unauthenticated());
+        };
         let principal = state
             .db
             .run(TxKind::Write, move |tx| {
                 accounts::authenticate(tx, &token, model::now())
             })
-            .await?;
+            .await
+            .inspect_err(|error| {
+                if error.code == code::UNAUTHENTICATED {
+                    state.limiters.token_failed(ip);
+                }
+            })?;
         state
             .limiters
             .api(principal.device_id)
@@ -148,7 +166,7 @@ impl FromRequestParts<AppState> for ClientIp {
         let peer = parts
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
-            .map(|info| info.0.ip())
+            .map(|info| info.0.ip().to_canonical())
             .unwrap_or(IpAddr::from([127, 0, 0, 1]));
         let trusted = |ip: IpAddr| {
             state
@@ -195,25 +213,36 @@ fn client_ip<'a>(
 fn forwarded_ip(element: &str) -> Option<IpAddr> {
     let element = element.trim();
     if let Ok(ip) = element.parse::<IpAddr>() {
-        return Some(ip);
+        return Some(ip.to_canonical());
     }
     if let Ok(addr) = element.parse::<SocketAddr>() {
-        return Some(addr.ip());
+        return Some(addr.ip().to_canonical());
     }
     let inner = element.strip_prefix('[')?.strip_suffix(']')?;
-    inner.parse::<Ipv6Addr>().ok().map(IpAddr::V6)
+    inner
+        .parse::<Ipv6Addr>()
+        .ok()
+        .map(|ip| IpAddr::V6(ip).to_canonical())
 }
 
-fn limit_auth(state: &Shared, ip: IpAddr) -> ApiResult<()> {
-    state.limiters.auth(ip).map_err(ApiError::rate_limited)
+/// The per-IP limit of the unauthenticated auth endpoints (section 10.1),
+/// as a middleware: it runs before the body is read, so a request over the
+/// limit costs no parse (review finding).
+async fn limit_auth(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    request: Request,
+    next: Next,
+) -> ApiResult<Response> {
+    state.limiters.auth(ip).map_err(ApiError::rate_limited)?;
+    Ok(next.run(request).await)
 }
 
 /// The router of the whole API.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/v1/server", get(server_info))
+    // The unauthenticated auth endpoints: the per-IP limit before the body,
+    // and a body limit of their own (section 10.2).
+    let auth = Router::new()
         .route("/v1/auth/prelogin", post(prelogin))
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/login", post(login))
@@ -222,6 +251,13 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/token/revoke", post(revoke))
         .route("/v1/auth/recover/begin", post(recover_begin))
         .route("/v1/auth/recover/complete", post(recover_complete))
+        .route_layer(middleware::from_fn_with_state(state.clone(), limit_auth))
+        .layer(DefaultBodyLimit::max(limits::MAX_AUTH_BODY_BYTES as usize));
+    Router::new()
+        .merge(auth)
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/v1/server", get(server_info))
         .route("/v1/account", get(account))
         .route("/v1/account/password", post(password))
         .route("/v1/account/recovery-key", post(recovery_key))
@@ -304,10 +340,8 @@ async fn server_info(State(state): State<AppState>) -> ApiResult<Json<ServerInfo
 
 async fn prelogin(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<PreloginRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     let response = state
         .db
@@ -320,10 +354,8 @@ async fn prelogin(
 
 async fn register(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<RegisterRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     let response = state
         .db
@@ -336,10 +368,8 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<LoginRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     let response = state
         .db
@@ -352,10 +382,8 @@ async fn login(
 
 async fn login_totp(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<LoginTotpRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     // A wrong code must still count its attempt: the failure is committed.
     let response = state
@@ -369,10 +397,8 @@ async fn login_totp(
 
 async fn refresh(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<RefreshRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     // A reuse revokes the family and still answers `401`: commit first.
     let tokens = state
         .db
@@ -385,10 +411,8 @@ async fn refresh(
 
 async fn revoke(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<RefreshRequest>,
 ) -> ApiResult<StatusCode> {
-    limit_auth(&state, ip)?;
     state
         .db
         .run(TxKind::Write, move |tx| {
@@ -400,10 +424,8 @@ async fn revoke(
 
 async fn recover_begin(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverBeginRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     let response = state
         .db
@@ -416,10 +438,8 @@ async fn recover_begin(
 
 async fn recover_complete(
     State(state): State<AppState>,
-    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverCompleteRequest>,
 ) -> ApiResult<Response> {
-    limit_auth(&state, ip)?;
     let shared = state.clone();
     let tokens = state
         .db
@@ -706,6 +726,26 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
+    }
+
+    /// An IPv4 client reaching a server bound to `[::]` arrives as
+    /// `::ffff:a.b.c.d`: it is the same client, inside IPv4 CIDRs of
+    /// trusted proxies and in one rate-limit bucket (review finding).
+    #[test]
+    fn ipv4_mapped_addresses_count_as_ipv4() {
+        assert_eq!(forwarded_ip("::ffff:192.0.2.1"), Some(ip("192.0.2.1")));
+        assert_eq!(
+            forwarded_ip("[::ffff:192.0.2.1]:4711"),
+            Some(ip("192.0.2.1"))
+        );
+        let proxy = Cidr::parse("10.0.0.0/8").unwrap();
+        let trusted = |ip: IpAddr| proxy.contains(ip);
+        let mapped_proxy = ip("::ffff:10.0.0.5").to_canonical();
+        assert!(trusted(mapped_proxy), "the mapped proxy is trusted");
+        assert_eq!(
+            client_ip(mapped_proxy, ["::ffff:192.0.2.9"].into_iter(), trusted),
+            ip("192.0.2.9")
+        );
     }
 
     #[test]

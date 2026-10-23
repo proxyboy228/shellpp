@@ -1637,3 +1637,16 @@ Status: run 7 decision, 2026-10-23 (plan, sections 3.2-3.4 and 5). Clarifies doc
 - **Rotations through the server** rewrap the `device` row when "remember on this device" is on (the keychain is read before, under the `remember` lock).
 
 **Spec impact:** docs/sync-protocol.md, sections 6.7 (a rule 0 before rule 1), 6.9 (step order, authenticated lists), 5.1 (sign-in to a rolled-back server), 5.3 (key shown after commit); docs/data-model.md, section 18.5 (near-duplicates).
+
+### 103. Server limits and a resync after the run 7 reviews (run 7)
+
+Status: run 7 decision, 2026-10-23 (plan, section 5: findings of the authentication review handed over first, fixed after the run's goal check). Clarifies docs/sync-protocol.md, sections 6.9, 10.1 and 10.2.
+
+**Decision:**
+
+- **Client IP.** An `X-Forwarded-For` element may carry a port (`ip:port`, `[ipv6]:port`, as some proxies write it); an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, an IPv4 client of a server bound to `[::]`) counts as the IPv4 address, for the trusted-proxy CIDRs and for the rate-limit key. Before, a proxy that added the port made the client's forged element the key.
+- **The auth limit before the body.** The per-IP limit of the unauthenticated auth endpoints runs before the body is read, and these endpoints take a body of at most 1 MiB (`limits::MAX_AUTH_BODY_BYTES`); before, a request over the limit still cost the parse of up to 16 MiB.
+- **Bogus bearer tokens.** A bearer token that does not authenticate counts a failure for the client IP; after 60 in 15 minutes (`SHELLPP_RATE_LIMIT_FAILED_TOKENS`) the next authenticated request from that IP is `429` without a database lookup, which is a write transaction (the global lock on SQLite). Clients behind one address share the window; a valid token is not refused before the limit.
+- **A full resync repairs a server rollback.** After a complete pull, a full resync marks the synced revisions as a restore does (section 6.9, step 2): a record the server holds at a revision below the one this device synced (a server restored from a backup while the device was signed out, when the rebind had no generation to compare) is pushed again, an edit or a deletion alike.
+
+**Spec impact:** docs/sync-protocol.md, sections 10.1 (client IP, the auth limit before the body, the bearer token row) and 10.2 (the auth body limit); section 6.9 is unchanged in substance (the mark of step 2 now also follows a full resync).
