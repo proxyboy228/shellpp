@@ -101,12 +101,12 @@ fn commands_in(config: &Config) -> usize {
         .count()
 }
 
-/// The `notes` of an imported host: what the import left out.
-fn host_notes(notes: &[String]) -> Option<String> {
+/// The `notes` of an imported host: `heading`, then what the import left out.
+pub(super) fn host_notes(heading: &str, notes: &[String]) -> Option<String> {
     if notes.is_empty() {
         return None;
     }
-    let mut text = String::from("Imported from an OpenSSH config.");
+    let mut text = String::from(heading);
     for note in notes {
         let line = format!("\n- {note}");
         if text.len() + line.len() > host::MAX_NOTES_BYTES {
@@ -165,7 +165,7 @@ struct HostPlan {
 /// `[address:]port` of a forwarding (`[::1]:8080`, `*:8080`, `8080`;
 /// OpenSSH also writes `address/port`). `*` and an empty address are all
 /// interfaces; none is loopback.
-fn bind_spec(raw: &str) -> Option<(String, u16)> {
+pub(super) fn bind_spec(raw: &str) -> Option<(String, u16)> {
     let (address, port) = if let Some(rest) = raw.strip_prefix('[') {
         let (address, rest) = rest.split_once(']')?;
         (address.to_owned(), rest.strip_prefix(':')?)
@@ -184,7 +184,7 @@ fn bind_spec(raw: &str) -> Option<(String, u16)> {
 }
 
 /// `host:port` of a forwarding destination (`[v6]:port` too).
-fn destination(raw: &str) -> Option<(String, u16)> {
+pub(super) fn destination(raw: &str) -> Option<(String, u16)> {
     let (host, port) = if let Some(rest) = raw.strip_prefix('[') {
         let (host, rest) = rest.split_once(']')?;
         (host, rest.strip_prefix(':')?)
@@ -428,7 +428,7 @@ fn problem_text(problem: &ssh_config::Problem) -> String {
 /// ([`ssh_config::is_network_path`]). The text goes into one buffer of the
 /// file's size and becomes a secret (a growing buffer would leave copies of
 /// the private key in freed memory; docs/security.md, section 9.5).
-fn read_key_file(path: &Path) -> Result<SecretString, KeyFileStatus> {
+pub(super) fn read_key_file(path: &Path) -> Result<SecretString, KeyFileStatus> {
     use std::io::Read as _;
     if ssh_config::is_network_path(path) {
         return Err(KeyFileStatus::Invalid(
@@ -458,7 +458,78 @@ fn read_key_file(path: &Path) -> Result<SecretString, KeyFileStatus> {
     Ok(SecretString::from(text.to_owned()))
 }
 
+/// The state of a key file in an import preview: missing, not a key, in the
+/// Keychain already (`known` fingerprints), encrypted, or new.
+pub(super) fn key_file_status(path: &Path, known: &HashSet<String>) -> KeyFileStatus {
+    let text = match read_key_file(path) {
+        Err(status) => return status,
+        Ok(text) => text,
+    };
+    match keys::inspect(text.expose_secret()) {
+        Err(problem) => KeyFileStatus::Invalid(problem.to_string()),
+        Ok((_, encrypted)) => {
+            let print = keys::prepare(text.expose_secret(), None)
+                .ok()
+                .and_then(|openssh| keys::parse(&openssh).ok())
+                .map(|parsed| parsed.fingerprint);
+            match print {
+                Some(print) if known.contains(&print) => KeyFileStatus::Exists,
+                _ if encrypted => KeyFileStatus::NeedsPassphrase,
+                _ => KeyFileStatus::New,
+            }
+        }
+    }
+}
+
 impl Core {
+    /// Imports the key files of an import into the Keychain, each path once
+    /// (each import takes the core mutex itself; encrypted keys are slow),
+    /// with the passphrases given by path as the preview showed it. Counts
+    /// them in `summary`; returns the key of each imported file.
+    pub(super) fn import_key_files<'a>(
+        &self,
+        vault_id: Uuid,
+        paths: impl Iterator<Item = &'a PathBuf>,
+        passphrases: &BTreeMap<String, SecretString>,
+        save_passphrases: bool,
+        summary: &mut SshConfigImportSummary,
+    ) -> HashMap<PathBuf, Uuid> {
+        let mut key_ids: HashMap<PathBuf, Uuid> = HashMap::new();
+        let mut tried: HashSet<PathBuf> = HashSet::new();
+        for path in paths {
+            if !tried.insert(path.clone()) {
+                continue;
+            }
+            let Ok(text) = read_key_file(path) else {
+                summary.keys_skipped += 1;
+                continue;
+            };
+            let shown = path.display().to_string();
+            let passphrase: Option<SecretString> = passphrases.get(&shown).cloned();
+            let label = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
+            match self.key_import(KeyImportInput {
+                vault_id,
+                label,
+                private_key: text,
+                passphrase,
+                save_passphrase: save_passphrases,
+            }) {
+                Ok(result) => {
+                    if result.created {
+                        summary.keys_added += 1;
+                    } else {
+                        summary.keys_existing += 1;
+                    }
+                    key_ids.insert(path.clone(), result.key.record_id);
+                }
+                Err(_) => summary.keys_skipped += 1,
+            }
+        }
+        key_ids
+    }
+
     /// The config and the plans of its hosts; the main file must exist.
     fn ssh_config_plans(source: &SshConfigSource) -> Result<(Config, Vec<HostPlan>), CoreError> {
         if !source.path.is_file() {
@@ -549,26 +620,9 @@ impl Core {
                 if !seen_keys.insert(path.clone()) {
                     continue;
                 }
-                let status = match read_key_file(path) {
-                    Err(status) => status,
-                    Ok(text) => match keys::inspect(text.expose_secret()) {
-                        Err(problem) => KeyFileStatus::Invalid(problem.to_string()),
-                        Ok((_, encrypted)) => {
-                            let print = keys::prepare(text.expose_secret(), None)
-                                .ok()
-                                .and_then(|openssh| keys::parse(&openssh).ok())
-                                .map(|parsed| parsed.fingerprint);
-                            match print {
-                                Some(print) if known.contains(&print) => KeyFileStatus::Exists,
-                                _ if encrypted => KeyFileStatus::NeedsPassphrase,
-                                _ => KeyFileStatus::New,
-                            }
-                        }
-                    },
-                };
                 keys.push(SshConfigKeyPreview {
                     path: path.display().to_string(),
-                    status,
+                    status: key_file_status(path, &known),
                 });
             }
             hosts.push(SshConfigHostPreview {
@@ -649,41 +703,13 @@ impl Core {
             selected.push(plan);
         }
 
-        // Keys first (each import takes the core mutex itself; encrypted
-        // keys are slow), by path.
-        let mut key_ids: HashMap<PathBuf, Uuid> = HashMap::new();
-        let mut tried: HashSet<PathBuf> = HashSet::new();
-        for path in selected.iter().flat_map(|plan| plan.key_files.iter()) {
-            if !tried.insert(path.clone()) {
-                continue;
-            }
-            let Ok(text) = read_key_file(path) else {
-                summary.keys_skipped += 1;
-                continue;
-            };
-            let shown = path.display().to_string();
-            let passphrase: Option<SecretString> = input.passphrases.get(&shown).cloned();
-            let label = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned());
-            match self.key_import(KeyImportInput {
-                vault_id,
-                label,
-                private_key: text,
-                passphrase,
-                save_passphrase: input.save_passphrases,
-            }) {
-                Ok(result) => {
-                    if result.created {
-                        summary.keys_added += 1;
-                    } else {
-                        summary.keys_existing += 1;
-                    }
-                    key_ids.insert(path.clone(), result.key.record_id);
-                }
-                Err(_) => summary.keys_skipped += 1,
-            }
-        }
+        let key_ids = self.import_key_files(
+            vault_id,
+            selected.iter().flat_map(|plan| plan.key_files.iter()),
+            &input.passphrases,
+            input.save_passphrases,
+            &mut summary,
+        );
 
         // Hosts: ids first, so that jump chains can point at each other.
         let now = self.now();
@@ -748,7 +774,7 @@ impl Core {
             data.insert("label".into(), json!(plan.alias));
             data.insert("address".into(), json!(plan.address));
             data.insert("ssh".into(), Value::Object(ssh));
-            if let Some(notes) = host_notes(&notes) {
+            if let Some(notes) = host_notes("Imported from an OpenSSH config.", &notes) {
                 data.insert("notes".into(), json!(notes));
             }
             match host::build(

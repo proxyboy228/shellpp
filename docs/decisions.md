@@ -1637,3 +1637,22 @@ Status: run 7 decision, 2026-10-23 (plan, sections 3.2-3.4 and 5). Clarifies doc
 - **Rotations through the server** rewrap the `device` row when "remember on this device" is on (the keychain is read before, under the `remember` lock).
 
 **Spec impact:** docs/sync-protocol.md, sections 6.7 (a rule 0 before rule 1), 6.9 (step order, authenticated lists), 5.1 (sign-in to a rolled-back server), 5.3 (key shown after commit); docs/data-model.md, section 18.5 (near-duplicates).
+
+## Run 8 of 2026-10-23, agent B
+
+The decisions below were taken by agent B of the owner's eighth run (import and new features; its plan, section "Agent B"), marked "run 8"; the disputable ones are listed for the owner in `docs/overnight/REPORT-B.md`.
+
+### 140. PuTTY sessions are imported through a session source (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B1). Settles the PuTTY fields of D21 and UI 2.5.
+
+**Context.** UI 2.5 lists PuTTY sessions as a source read from the Windows registry, and docs/architecture.md, section 3, has the desktop app read the registry and pass the values to the core. Which values are imported, what happens to settings the host model cannot hold, and how the registry is kept out of tests were not settled.
+
+**Decision:**
+
+- The core reads sessions through a `SessionSource` trait (`shellpp_core::import::putty`): a session is its registry key name (with PuTTY's `%XX` escapes) and its `REG_SZ` and `REG_DWORD` values. `shellpp-desktop` implements it over `HKCU\Software\SimonTatham\PuTTY\Sessions` on Windows; tests, the demo, a test run and other systems use a fixed list. A missing key is "no sessions"; a key that cannot be opened is listed as not read.
+- The preview and the summary are those of the `~/.ssh/config` import (a session is a host whose alias is its name, its `PublicKeyFile` a key file with the same passphrase field). `Default Settings` is a template and never a host. `import_key` is `putty:<session name>`, matched case-insensitively as registry key names are.
+- Mapping: `HostName` (a `user@` in it gives the user), `PortNumber`, `UserName`; `Protocol` `ssh` or `telnet` (a Telnet host with `telnet.port` and `telnet.username`); `PublicKeyFile` (imported into the Keychain and linked); `ProxyMethod` SOCKS 5 and HTTP (with `ProxyUsername` and `ProxyPassword`, the password stored as the host's secret; the `ProxyType` of PuTTY before 0.71 is read too); `PortForwardings` as forwarding rules that start on connect, except one that listens beyond loopback (PuTTY's "accept connections from other hosts" makes a bare port listen on all interfaces); `AgentFwd` as forwarding of the system agent (Pageant, D60); `PingIntervalSecs` as the keepalive when it is not 0 (0 leaves the app's default); `Environment`; `BackspaceIsDelete 0` as `^H`; `LineCodePage` as the WHATWG label of the same character set ("Use font encoding" and code pages without a label stay UTF-8, noted).
+- Not imported, with the reason: the `raw`, `rlogin`, `serial`, `supdup` and `bare` protocols, a session without a host name, and a SOCKS 4, Telnet or SSH proxy or a local proxy command (never run or stored, counted with the commands of the summary). Such a host is refused rather than imported without its proxy, so it never connects directly (the rule of D44 for jump hosts). X11 forwarding, a remote command, a detached certificate and a user name taken from the local user are listed in the host's notes.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 2.5 (PuTTY item, CSV alone stays disabled), and `docs/ru`.

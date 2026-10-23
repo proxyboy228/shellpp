@@ -5,7 +5,11 @@
 //!
 //! - Sources: the OpenSSH config (selected), a Shell++ export (goes on in
 //!   Import Data, D38), known_hosts (goes on in the Known Hosts import),
-//!   PuTTY sessions (Windows only) and CSV, shown disabled until they exist.
+//!   PuTTY sessions (Windows only; D140) and CSV, shown disabled until it
+//!   exists.
+//! - PuTTY sessions are read from the registry ([`putty_registry`]), so
+//!   their file step is skipped: Next goes from the sources to the same
+//!   preview (a session is a host, its `.ppk` a key file) and summary.
 //! - The suggested file is `~/.ssh/config`; tests and the demo set another
 //!   one with [`set_default_path`] (never the real file in a test run).
 //! - The preview comes from the core (`ssh_config_preview`), off the UI
@@ -17,6 +21,7 @@
 //!
 //! Nothing here logs paths, host names or passphrases.
 
+pub mod putty_registry;
 pub mod strings;
 
 #[cfg(test)]
@@ -39,8 +44,8 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::SecretString;
 use shellpp_core::service::dto::{
-    ImportStatus, KeyFileStatus, SshConfigImportInput, SshConfigImportSummary, SshConfigPreview,
-    SshConfigSource,
+    ImportStatus, KeyFileStatus, PuttyImportInput, SshConfigImportInput, SshConfigImportSummary,
+    SshConfigPreview, SshConfigSource,
 };
 
 use crate::hosts::controls::{ControlButton, ControlKind};
@@ -156,7 +161,7 @@ impl Source {
 
     /// Sources that come later are shown disabled (D30 rule).
     fn available(self) -> bool {
-        !matches!(self, Self::Putty | Self::Csv)
+        self != Self::Csv
     }
 }
 
@@ -187,6 +192,8 @@ pub struct ImportSourcesDialog {
     /// The preview scrolls (with a scrollbar) when it is taller than
     /// [`PREVIEW_HEIGHT`].
     preview_scroll: ScrollHandle,
+    /// Why the PuTTY sessions could not be read or imported.
+    putty_error: Option<&'static str>,
     task: Option<Task<()>>,
 }
 
@@ -215,6 +222,7 @@ impl ImportSourcesDialog {
             passphrases: Vec::new(),
             save_passphrases: false,
             preview_scroll: ScrollHandle::new(),
+            putty_error: None,
             task: None,
         }
     }
@@ -234,6 +242,7 @@ impl ImportSourcesDialog {
     pub fn select(&mut self, source: Source, cx: &mut Context<Self>) {
         if source.available() {
             self.source = source;
+            self.putty_error = None;
             cx.notify();
         }
     }
@@ -319,7 +328,8 @@ impl ImportSourcesDialog {
                     window.close_dialog(cx);
                     crate::known_hosts::open_import_dialog(state, window, cx);
                 }
-                Source::Putty | Source::Csv => {}
+                Source::Putty => self.read_putty_preview(window, cx),
+                Source::Csv => {}
             },
             Step::File { .. } => self.read_preview(window, cx),
             Step::Preview => self.import(window, cx),
@@ -327,15 +337,50 @@ impl ImportSourcesDialog {
         }
     }
 
-    /// "Back" from the file step to the sources.
+    /// "Back" from the file step to the sources, from the preview to the
+    /// file step (to the sources for PuTTY, which has none).
     pub fn back(&mut self, cx: &mut Context<Self>) {
         if matches!(self.step, Step::File { .. } | Step::Preview) {
             self.step = match self.step {
-                Step::Preview => Step::File { error: None },
+                Step::Preview if self.source != Source::Putty => Step::File { error: None },
                 _ => Step::Source,
             };
+            self.putty_error = None;
             cx.notify();
         }
+    }
+
+    /// The PuTTY error shown under the sources: the registry could not be
+    /// read, or the import failed.
+    pub fn putty_error(&self) -> Option<&'static str> {
+        self.putty_error
+    }
+
+    /// Reads the saved PuTTY sessions into the preview, off the UI thread.
+    fn read_putty_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let source = putty_registry::source(cx);
+        self.putty_error = None;
+        self.step = Step::Running;
+        cx.notify();
+        let work = cx.background_spawn(async move { core.putty_preview(&*source) });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                dialog.task = None;
+                match result {
+                    Ok(preview) => dialog.show_preview(preview, window, cx),
+                    Err(error) => {
+                        tracing::info!(code = error.code(), "putty sessions not read");
+                        dialog.putty_error = Some(strings::PUTTY_READ_FAILED);
+                        dialog.step = Step::Source;
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn read_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -420,6 +465,33 @@ impl ImportSourcesDialog {
                 (!value.is_empty()).then(|| (key.clone(), SecretString::from(value)))
             })
             .collect();
+        if self.source == Source::Putty {
+            let source = putty_registry::source(cx);
+            let input = PuttyImportInput {
+                sessions: Some(self.chosen.iter().cloned().collect()),
+                passphrases,
+                save_passphrases: self.save_passphrases,
+            };
+            self.step = Step::Running;
+            cx.notify();
+            let work = cx.background_spawn(async move { core.putty_import(&*source, input) });
+            self.task = Some(cx.spawn_in(window, async move |this, cx| {
+                let result = work.await;
+                let _ = this.update(cx, |dialog, cx| {
+                    dialog.task = None;
+                    dialog.step = match result {
+                        Ok(summary) => Step::Summary(summary),
+                        Err(error) => {
+                            tracing::warn!(code = error.code(), "putty sessions not imported");
+                            dialog.putty_error = Some(strings::IMPORT_FAILED);
+                            Step::Source
+                        }
+                    };
+                    cx.notify();
+                });
+            }));
+            return;
+        }
         let input = SshConfigImportInput {
             source: SshConfigSource {
                 home: home_for(&path),
@@ -472,7 +544,18 @@ impl ImportSourcesDialog {
                         .pl(metrics::rpx(24.))
                         .child(widgets::caption(path, cx))
                 }));
-            list = list.child(if source.available() {
+            let error = self.putty_error.filter(|_| source == Source::Putty);
+            list = list.child(if let Some(error) = error {
+                row.child(
+                    div()
+                        .id("import-putty-error")
+                        .test_support()
+                        .pl(metrics::rpx(24.))
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .text_color(cx.theme().danger)
+                        .child(error),
+                )
+            } else if source.available() {
                 row
             } else {
                 row.child(
@@ -531,7 +614,13 @@ impl ImportSourcesDialog {
             .count();
         let mut hosts = v_flex().gap(metrics::SPACE_2);
         if preview.hosts.is_empty() {
-            hosts = hosts.child(widgets::caption(strings::PREVIEW_EMPTY, cx));
+            hosts = hosts.child(widgets::caption(
+                match self.source {
+                    Source::Putty => strings::PREVIEW_EMPTY_PUTTY,
+                    _ => strings::PREVIEW_EMPTY,
+                },
+                cx,
+            ));
         }
         for host in &preview.hosts {
             let alias = host.alias.clone();

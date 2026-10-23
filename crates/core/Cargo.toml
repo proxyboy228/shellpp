@@ -41,6 +41,9 @@ time.workspace = true
 
 thiserror.workspace = true
 tracing.workspace = true
+# Character sets of imported PuTTY sessions and CSV files (run 8, D140,
+# D141); already in the tree through GPUI.
+encoding_rs.workspace = true
 
 # Stage 2: key import and fingerprints ("+ -> Key", docs/data-model.md, section
 # 9.1), hashed known_hosts matching (section 9.5) and the history secret

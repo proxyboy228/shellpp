@@ -460,7 +460,16 @@ On the right:
 - `~/.ssh/config`: keys referenced by `IdentityFile` are imported into the Keychain. An
   encrypted key asks for its passphrase (as in 7.3).
 - known_hosts: hashed entries and markers are handled as described in 10.1.
-- Until all sources exist (D39): PuTTY sessions and CSV are shown disabled; the native JSON
+- PuTTY sessions (D140): Next goes from the sources straight to the preview, which lists each
+  saved session but `Default Settings` as a host with its checkbox, status and the settings left
+  out, then its `.ppk` key file as for `~/.ssh/config`. SSH and Telnet sessions are imported
+  with the host name, port, user name, key, SOCKS 5 or HTTP proxy, tunnels (as forwarding
+  rules that start on connect, except one that listens beyond loopback), agent forwarding,
+  keepalive, environment, Backspace key and character set; other protocols and proxies
+  (SOCKS 4, Telnet, SSH, a local command) are "not imported" with the reason, so a host never
+  connects directly instead of through its proxy. A registry that cannot be read shows an
+  error under the source. [decision]
+- Until all sources exist (D39): CSV is shown disabled; the native JSON
   source goes on in Import Data (1.4, D38) and known_hosts in the import of the Known Hosts
   screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
   hosts are checked), its status, the reason when it is not imported (ProxyCommand) and the

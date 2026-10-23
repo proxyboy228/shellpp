@@ -1377,6 +1377,24 @@ pub struct SshConfigImportInput {
 
 redacted_debug!(SshConfigImportInput);
 
+/// Input of `putty_import` (run 8, D140). The preview and the summary of a
+/// PuTTY import are those of an `~/.ssh/config` import: a session is a
+/// host whose alias is the session name, its `PublicKeyFile` a key file.
+#[derive(Clone, Default, Deserialize)]
+pub struct PuttyImportInput {
+    /// The session names chosen in the preview; `None` = every new one.
+    #[serde(default)]
+    pub sessions: Option<Vec<String>>,
+    /// Passphrases of encrypted key files, by path as the preview shows it.
+    #[serde(default)]
+    pub passphrases: BTreeMap<String, SecretString>,
+    /// Store those passphrases in the vault.
+    #[serde(default)]
+    pub save_passphrases: bool,
+}
+
+redacted_debug!(PuttyImportInput);
+
 /// Result of `ssh_config_import`: "added N, skipped M, errors K" (UI 2.5).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SshConfigImportSummary {

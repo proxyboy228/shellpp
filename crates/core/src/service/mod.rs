@@ -33,6 +33,7 @@ mod known_hosts_io;
 pub mod last_session;
 mod lock_ops;
 pub mod merge;
+pub mod putty_io;
 mod recordings;
 mod records;
 pub(crate) mod session;
@@ -750,6 +751,30 @@ impl Core {
         input: SshConfigImportInput,
     ) -> Result<SshConfigImportSummary, CoreError> {
         self.ssh_config_import_impl(input)
+    }
+
+    /// The preview of a PuTTY sessions import (UI 2.5 step 3; D140): each
+    /// saved session but `Default Settings` as a host with its status and
+    /// the settings left out, its `.ppk` key file with its status, the
+    /// sessions that could not be read. `Unavailable` when `source` cannot
+    /// be read. Reads the registry and the key files: call it off the UI
+    /// thread.
+    pub fn putty_preview(
+        &self,
+        source: &dyn crate::import::putty::SessionSource,
+    ) -> Result<SshConfigPreview, CoreError> {
+        self.putty_preview_impl(source)
+    }
+
+    /// Imports the chosen PuTTY sessions and their key files (D140);
+    /// idempotent by `putty:<session name>`, existing hosts are never
+    /// overwritten. Slow for encrypted keys: call it off the UI thread.
+    pub fn putty_import(
+        &self,
+        source: &dyn crate::import::putty::SessionSource,
+        input: dto::PuttyImportInput,
+    ) -> Result<SshConfigImportSummary, CoreError> {
+        self.putty_import_impl(source, input)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The
