@@ -1674,3 +1674,17 @@ Status: run 8 decision, 2026-10-23 (plan, item B2). Extends the CSV columns of D
 - The file's bytes and records are wiped from memory when dropped (they may hold passwords); nothing logs the file's content.
 
 **Spec impact:** docs/ui-behavior-spec.md, section 2.5 (CSV columns and steps), docs/data-model.md, section 18.4 (CSV `notes` and `password`), and `docs/ru`.
+### 142. Autocomplete from the host's history (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B4). Settles UI 4.2 and 12.4 "Autocomplete (beta)" and the `terminal.autocomplete` setting (data-model 16.1).
+
+**Context.** UI 4.2 has "Autocomplete: a dropdown of modes, off by default", built from the local history of this host, hidden until its stage (section 0, D28). The run plan asks for it as a beta: Tab or → accepts; it never suggests what the history filter takes for a secret; it does not work in the alternate screen or at a password prompt. How a suggestion is shown, which line it reads and how it is kept away from passwords were not settled.
+
+**Decision:**
+
+- `terminal.autocomplete` takes `off` (default) or `history`. Settings > Terminal (first row of the Terminal block) and the terminal sidebar's Tools tab show the same dropdown, "Off" or "This host's history".
+- A suggestion is the rest of the newest command of the host's local history that starts with the typed text and is longer; it is drawn after the cursor in the theme's foreground at 45 % opacity, cut at the end of the row, never over IME composition text. Tab or → (without modifiers) types the rest as typed input (the line is recorded as any typed line); without a suggestion both keys go to the shell as before.
+- The typed text is what the history capture reads (security.md 10.1): the text on screen from the line's boundary to the cursor, so a key the server does not echo never counts. A suggestion needs a session to a saved host (only they keep history and have a capture), a line the capture would record (known boundary, not pasted, not pending, started outside the alternate screen, printable keys typed), the cursor at the end of the line's text and not in the last column, the normal screen, and neither the text before the cursor nor the line looking like a password prompt.
+- Suggestions come from `history_list` of the host (at most 5,000 entries, newest first), read once when the first suggestion is wanted, and grow with the commands the session records. A command that starts with a space, spans lines or that the secret detector (security.md 10.2) flags is left out, also when it is in the history (an older entry, an import). The list is wiped from memory when the terminal goes.
+
+**Spec impact:** docs/ui-behavior-spec.md, sections 0, 4.2 and 12.4; docs/data-model.md, section 16.1; `docs/ru`.

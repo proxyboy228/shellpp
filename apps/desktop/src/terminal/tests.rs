@@ -1481,3 +1481,148 @@ fn a_selection_on_the_screen_follows_its_text(cx: &mut TestAppContext) {
     fixture.feed(cx, b"\x1b[?1049l");
     assert_eq!(fixture.selected(cx), None, "the other screen");
 }
+
+/// A saved host's history for autocomplete (D142).
+struct FixedHistory(Vec<&'static str>);
+
+impl super::HistorySource for FixedHistory {
+    fn commands(&self) -> Vec<String> {
+        self.0.iter().map(|command| (*command).to_owned()).collect()
+    }
+}
+
+/// History capture of the fixture's terminal: needed for autocomplete,
+/// which reads the line the capture follows.
+struct NoHistory;
+
+impl super::HistorySink for NoHistory {
+    fn record(&self, _candidate: shellpp_core::service::dto::HistoryCandidate) {}
+}
+
+impl Fixture {
+    /// The user types `text` and the server echoes it.
+    fn type_echoed(&self, cx: &mut TestAppContext, text: &str) {
+        for c in text.chars() {
+            self.with_window(cx, |_, window, cx| window.input(&c.to_string(), cx));
+            self.feed(cx, c.to_string().as_bytes());
+        }
+    }
+
+    fn suggestion(&self, cx: &mut TestAppContext) -> Option<String> {
+        let terminal = self.terminal.clone();
+        cx.update(|cx| terminal.update(cx, |terminal, cx| terminal.suggestion(cx)))
+    }
+}
+
+/// UI 4.2 and 12.4 (D142): with autocomplete on, the newest command of the
+/// host's history that starts with the typed text is suggested; Tab and →
+/// type the rest; nothing is suggested when the setting is off, in the
+/// alternate screen, at a password prompt or for a secret.
+#[gpui_kit::test]
+fn autocomplete_suggests_from_the_hosts_history(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    let secret = "export API_TOKEN=ghp_0123456789abcdefABCDEF0123456789abcd";
+    fixture.handle.set_history_sink(Some(Arc::new(NoHistory)));
+    fixture
+        .handle
+        .set_history_source(Some(Arc::new(FixedHistory(vec![
+            "git status",
+            "git stash pop",
+            secret,
+            "export PATH=$PATH:/opt/bin",
+        ]))));
+    fixture.feed(cx, b"alice@web:~$ ");
+    fixture.type_echoed(cx, "git st");
+    fixture.sink.take();
+    // Off by default: no suggestion, Tab goes to the shell.
+    assert_eq!(fixture.suggestion(cx), None);
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.sink.take(), b"\t");
+
+    cx.update(|cx| {
+        cx.set_global(TerminalPrefs {
+            autocomplete: true,
+            ..TerminalPrefs::default()
+        })
+    });
+    // The first wish reads the history; then the suggestion is there.
+    let _ = fixture.suggestion(cx);
+    cx.run_until_parked();
+    assert_eq!(fixture.suggestion(cx).as_deref(), Some("atus"));
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.sink.take(), b"atus");
+    fixture.feed(cx, b"atus");
+    // A complete command has nothing left to suggest: Tab is the shell's.
+    assert_eq!(fixture.suggestion(cx), None);
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.sink.take(), b"\t");
+
+    // A new line: → takes the suggestion too.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.sink.take();
+    fixture.type_echoed(cx, "git sta");
+    fixture.sink.take();
+    assert_eq!(fixture.suggestion(cx).as_deref(), Some("tus"));
+    fixture.press(cx, "right");
+    assert_eq!(fixture.sink.take(), b"tus");
+    fixture.feed(cx, b"tus");
+
+    // The secret in the history is never suggested.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.type_echoed(cx, "export ");
+    assert_eq!(
+        fixture.suggestion(cx).as_deref(),
+        Some("PATH=$PATH:/opt/bin")
+    );
+    fixture.type_echoed(cx, "A");
+    assert_eq!(fixture.suggestion(cx), None);
+
+    // With the cursor moved back into the line, nothing is suggested.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.type_echoed(cx, "git");
+    fixture.feed(cx, b"\x1b[D");
+    assert_eq!(fixture.suggestion(cx), None);
+    fixture.sink.take();
+    fixture.press(cx, "right");
+    assert_eq!(fixture.sink.take(), b"\x1b[C");
+}
+
+#[gpui_kit::test]
+fn autocomplete_stays_out_of_full_screen_programs_and_password_prompts(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    cx.update(|cx| {
+        cx.set_global(TerminalPrefs {
+            autocomplete: true,
+            ..TerminalPrefs::default()
+        })
+    });
+    fixture.handle.set_history_sink(Some(Arc::new(NoHistory)));
+    fixture
+        .handle
+        .set_history_source(Some(Arc::new(FixedHistory(vec![
+            "secretive-cmd",
+            "vim notes",
+        ]))));
+    let _ = fixture.suggestion(cx);
+    cx.run_until_parked();
+    // A password prompt that echoes what is typed.
+    fixture.feed(cx, b"Password: ");
+    fixture.type_echoed(cx, "secr");
+    assert_eq!(fixture.suggestion(cx), None);
+    fixture.sink.take();
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.sink.take(), b"\t");
+    // The alternate screen.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\n\x1b[?1049h");
+    fixture.type_echoed(cx, "vi");
+    assert_eq!(fixture.suggestion(cx), None);
+    // Without a history capture (a quick connect, a local terminal).
+    fixture.feed(cx, b"\x1b[?1049l\r\n$ ");
+    fixture.handle.set_history_sink(None);
+    fixture.type_echoed(cx, "vi");
+    assert_eq!(fixture.suggestion(cx), None);
+}

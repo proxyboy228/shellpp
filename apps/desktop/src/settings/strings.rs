@@ -127,6 +127,10 @@ pub const MIN_CONTRAST_PALETTE_HINT: &str =
     "Theme colors only; exact colors set by programs stay as they are";
 pub const MIN_CONTRAST_ALWAYS: &str = "Always";
 pub const MIN_CONTRAST_ALWAYS_HINT: &str = "Also exact colors set by programs";
+pub const AUTOCOMPLETE: &str = "Autocomplete (beta)";
+pub const AUTOCOMPLETE_HINT: &str = "Suggests the rest of a command from this host's history while you type; Tab or → accepts it. Never at a password prompt or in full-screen programs.";
+pub const AUTOCOMPLETE_OFF: &str = "Off";
+pub const AUTOCOMPLETE_HISTORY: &str = "This host's history";
 pub const TERM: &str = "Terminal emulation type";
 pub const TERM_HINT: &str = "The TERM value sent to the server when a session starts.";
 pub const DEFAULT_CHOICE: &str = "Default";

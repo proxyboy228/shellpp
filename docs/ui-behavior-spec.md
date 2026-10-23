@@ -32,8 +32,8 @@
   button, Ctrl+K search, several windows and the Known Hosts screen (D31). Items of later
   stages inside them follow the D30 rule and are shown disabled: the "Save" button of the
   history hint (4.2, stage 5); Broadcast input and Create a workspace work since run 4 (D81). The Snippets tab of the terminal sidebar shows an empty state until
-  stage 5. Start multiplayer (4.4) and Autocomplete (4.2) are not shown at all, as the
-  owner asked. [decision]
+  stage 5. Start multiplayer (4.4) is not shown at all, as the owner asked; Autocomplete
+  (4.2) is shown since run 8 (D142). [decision]
 - The interface is in English. Interface strings in this document define the meaning; the final
   texts live in the i18n catalog (`en`). UI tests find elements by element id, not by
   text. [decision]
@@ -672,10 +672,14 @@ The same form is used for creating and editing; it opens in the details panel.
     search runs again at once and then at most every 250 ms while the size keeps
     changing, the current match keeps its number, and until that search the highlights
     are hidden rather than shown on the moved text. [decision]
-- Autocomplete: a dropdown of modes, off by default.
-  Command suggestions are built from the local history of this host. **Later stage**,
-  marked as beta in the UI. Until that stage it is not shown (section 0). [decision on
-  the suggestion source]
+- Autocomplete (beta): a dropdown of modes, Off (default) or "This host's history"; the same
+  setting as 12.4. Command suggestions are built from the local history of this host.
+  [decision on the suggestion source] (D142): while a command line is typed, the rest of
+  the newest command of the host's history that starts with the typed text is drawn after
+  the cursor in a muted color; Tab or → types it, otherwise both keys go to the shell. Only
+  in sessions to saved hosts (they keep history), with the cursor at the end of the line;
+  never in the alternate screen, at a password prompt, on a line the history capture would
+  not record, or for a command the history filter takes for a secret. [decision]
 
 **Snippets tab** [decision]:
 
@@ -1695,7 +1699,7 @@ Also:
 
 **"Terminal" block:**
 
-- Autocomplete (beta): dropdown, off by default. Later stage.
+- Autocomplete (beta): dropdown, Off (default) or "This host's history" (see 4.2, D142).
 - Autoreconnect: toggle, on by default (see 4.6).
 - Record command history: toggle, on by default. A host can override it (see 3.1). [decision]
   History is kept only for saved hosts (4.2). [decision]

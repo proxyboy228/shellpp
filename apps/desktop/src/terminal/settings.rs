@@ -61,6 +61,8 @@ pub struct TerminalSettings {
     pub default_theme: TerminalTheme,
     /// `terminal.highlighting_enabled`: keyword highlighting (UI 12.4).
     pub highlighting: bool,
+    /// `terminal.autocomplete` = `history` (beta, D142).
+    pub autocomplete: bool,
 }
 
 impl Default for TerminalSettings {
@@ -77,6 +79,7 @@ impl Default for TerminalSettings {
             min_contrast: MinContrast::default(),
             default_theme: builtin()[0].clone(),
             highlighting: true,
+            autocomplete: false,
         }
     }
 }
@@ -107,6 +110,7 @@ impl TerminalSettings {
             bold_is_bright: prefs.bold_is_bright,
             bell_sound: prefs.bell_sound,
             highlighting: prefs.highlighting,
+            autocomplete: prefs.autocomplete,
             default_theme: prefs
                 .default_theme
                 .theme()

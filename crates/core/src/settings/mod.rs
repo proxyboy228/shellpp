@@ -104,7 +104,12 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     add("appearance.ui_zoom", Kind::Number(0.8, 2.0), json!(1.0));
     // Never by default (decision D29).
     add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
-    add("terminal.autocomplete", Kind::Enum(&["off"]), json!("off"));
+    // Autocomplete (beta; UI 4.2 and 12.4; run 8, D142).
+    add(
+        "terminal.autocomplete",
+        Kind::Enum(&["off", "history"]),
+        json!("off"),
+    );
     add("terminal.autoreconnect", Kind::Bool, json!(true));
     add("terminal.record_history", Kind::Bool, json!(true));
     add("terminal.import_shell_history", Kind::Bool, json!(false));

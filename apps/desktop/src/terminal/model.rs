@@ -252,6 +252,8 @@ pub(super) struct Outbox {
     selection_moved: std::sync::atomic::AtomicBool,
     /// Command history capture (docs/security.md, section 10.1).
     pub(super) capture: super::history_capture::Capture,
+    /// Autocomplete's history source and list (D142).
+    pub(super) autocomplete: Arc<super::autocomplete::Slot>,
 }
 
 impl Outbox {
@@ -436,6 +438,7 @@ impl TerminalHandle {
             journal: Arc::new(Mutex::new(Journal::default())),
             selection_moved: Default::default(),
             capture: Default::default(),
+            autocomplete: Default::default(),
         });
         let config = term_config(options.scrollback, options.cursor_shape);
         let dims = GridDims::from(options.size);

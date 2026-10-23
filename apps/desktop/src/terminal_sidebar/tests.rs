@@ -201,9 +201,19 @@ fn tabs_and_the_snippets_placeholder(cx: &mut TestAppContext) {
         cx.update(|cx| sidebar.read(cx).tab()),
         SidebarTab::Appearance
     );
-    // No autocomplete in Tools (later stage).
+    // Tools holds autocomplete's mode (beta, D142), off by default; it
+    // writes the same setting as Settings > Terminal.
     ui.click("terminal-sidebar-tab-tools", cx);
-    assert!(!ui.visible("terminal-autocomplete", cx));
+    assert!(ui.visible("terminal-autocomplete", cx));
+    assert!(!cx.update(|cx| TerminalPrefs::current(cx).autocomplete));
+    let tools = cx.update(|cx| sidebar.read(cx).tools().clone());
+    cx.update(|cx| tools.update(cx, |tools, cx| tools.set_autocomplete(true, cx)));
+    assert!(cx.update(|cx| TerminalPrefs::current(cx).autocomplete));
+    let core = cx.update(|cx| ui.state.read(cx).core().cloned().unwrap());
+    assert_eq!(
+        core.settings_get().unwrap()["terminal.autocomplete"],
+        serde_json::json!("history")
+    );
     ui.finish(cx);
 }
 

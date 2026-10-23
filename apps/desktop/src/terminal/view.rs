@@ -453,7 +453,7 @@ impl TerminalView {
 
     /// Typed bytes that are the same in every terminal (text, Tab,
     /// Shift+Tab), mirrored to the broadcast targets.
-    fn type_bytes(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+    pub(super) fn type_bytes(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
         let targets = self.broadcast_targets(&bytes);
         for target in targets {
             target.update(cx, |target, cx| target.mirrored_bytes(bytes.clone(), cx));
@@ -828,6 +828,13 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // → takes a shown suggestion (autocomplete, D142).
+        let keystroke = &event.keystroke;
+        if keystroke.key == "right" && !keystroke.modifiers.modified() && self.accept_suggestion(cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         let page = self.layout.borrow().rows.max(2) as i32 - 1;
         match input::map_key(&event.keystroke, self.mode(), self.backspace) {
             KeyAction::Send(bytes) => {
@@ -1198,6 +1205,7 @@ impl TerminalView {
             bold_is_bright: self.settings.bold_is_bright,
             focused: self.focus.is_focused(window),
             marked_text: self.marked_text.clone(),
+            ghost_text: None,
             min_contrast: self.settings.min_contrast,
             cursor_hidden: self.dimmed,
             search: self.search.clone(),
@@ -1238,7 +1246,8 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let style = self.frame_style(window);
+        let mut style = self.frame_style(window);
+        style.ghost_text = self.suggestion(cx);
         let background = rgb_token(self.palette.background()).hsla();
         let handle = self.handle.clone();
         let layout = self.layout.clone();
@@ -1294,7 +1303,12 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &edit::SelectAll, window, cx| {
                 this.select_all(&SelectAll, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &SendTab, _, cx| this.type_bytes(b"\t".to_vec(), cx)))
+            .on_action(cx.listener(|this, _: &SendTab, _, cx| {
+                // Tab takes a shown suggestion (autocomplete, D142).
+                if !this.accept_suggestion(cx) {
+                    this.type_bytes(b"\t".to_vec(), cx)
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &SendBackTab, _, cx| this.type_bytes(b"\x1b[Z".to_vec(), cx)),
             )

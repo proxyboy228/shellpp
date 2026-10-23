@@ -22,15 +22,15 @@ use futures::StreamExt as _;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{App, Context, Entity, Global, Subscription, Task};
 use shellpp_core::service::dto::{HistoryCandidate, LockState, RecordRef};
-use shellpp_core::service::host_api::HistoryRecordInput;
+use shellpp_core::service::host_api::{HistoryDecision, HistoryRecordInput};
 use uuid::Uuid;
 
 use super::{
-    BoxFuture, ManagerOptions, SessionEvent, SessionHandle, SessionKind, SessionManager,
-    SessionTerminal, SessionView, TerminalClosed,
+    BoxFuture, ManagerOptions, SessionCore, SessionEvent, SessionHandle, SessionKind,
+    SessionManager, SessionTerminal, SessionView, TerminalClosed,
 };
 use crate::state::{AppState, AppStateEvent};
-use crate::terminal::{HistorySink, TerminalHandle, TerminalSink, TerminalSize};
+use crate::terminal::{HistorySink, HistorySource, TerminalHandle, TerminalSink, TerminalSize};
 
 /// The app's session layer.
 pub struct Sessions {
@@ -162,14 +162,35 @@ impl SessionTerminal for TerminalHandle {
         // History is recorded for sessions to saved hosts only (stage 2b
         // lead decision 7): not for quick connects or local terminals.
         let view = session.view();
-        let history = match (view.kind, view.host) {
-            (SessionKind::Ssh, Some(host)) => {
-                Some(HistoryRecorder::start(session.clone(), host) as Arc<dyn HistorySink>)
-            }
-            _ => None,
+        let (history, source) = match (view.kind, view.host) {
+            (SessionKind::Ssh, Some(host)) => (
+                Some(
+                    HistoryRecorder::start(session.clone(), host, self.autocomplete())
+                        as Arc<dyn HistorySink>,
+                ),
+                // Autocomplete (D142) suggests from the same host's history.
+                Some(Arc::new(HostHistory {
+                    core: session.shared.core.clone(),
+                    host,
+                }) as Arc<dyn HistorySource>),
+            ),
+            _ => (None, None),
         };
         self.set_history_sink(history);
+        self.set_history_source(source);
         self.set_sink(Some(Arc::new(session)));
+    }
+}
+
+/// The local history of a session's saved host, for autocomplete (D142).
+struct HostHistory {
+    core: Arc<dyn SessionCore>,
+    host: RecordRef,
+}
+
+impl HistorySource for HostHistory {
+    fn commands(&self) -> Vec<String> {
+        self.core.history_commands(self.host)
     }
 }
 
@@ -205,18 +226,25 @@ struct HistoryRecorder {
     record: AtomicBool,
     /// The newest refresh; an older one that ends later is ignored.
     refreshes: AtomicU64,
+    /// The terminal's autocomplete list: a recorded command joins it.
+    suggestions: Arc<crate::terminal::autocomplete::Slot>,
 }
 
 impl HistoryRecorder {
     /// The recorder of a new session, registered for refreshes; its flag
     /// is read at once (the core checks it again for every line meanwhile).
-    fn start(session: SessionHandle, host: RecordRef) -> Arc<Self> {
+    fn start(
+        session: SessionHandle,
+        host: RecordRef,
+        suggestions: Arc<crate::terminal::autocomplete::Slot>,
+    ) -> Arc<Self> {
         let recorder = Arc::new(Self {
             session,
             host,
             id: Uuid::now_v7(),
             record: AtomicBool::new(true),
             refreshes: AtomicU64::new(0),
+            suggestions,
         });
         {
             let mut list = RECORDERS.lock().unwrap_or_else(PoisonError::into_inner);
@@ -270,12 +298,19 @@ impl HistorySink for HistoryRecorder {
             record_history: true,
         };
         let session = self.session.id();
-        self.session
-            .shared
-            .background(move |core| match core.history_record(input) {
-                Ok(decision) => tracing::debug!(session, ?decision, "history candidate"),
+        let suggestions = self.suggestions.clone();
+        self.session.shared.background(move |core| {
+            let command = zeroize::Zeroizing::new(input.candidate.command.clone());
+            match core.history_record(input) {
+                Ok(decision) => {
+                    if decision == HistoryDecision::Recorded {
+                        suggestions.remember(&command);
+                    }
+                    tracing::debug!(session, ?decision, "history candidate")
+                }
                 Err(error) => tracing::debug!(session, code = error.code(), "history not written"),
-            });
+            }
+        });
     }
 }
 
