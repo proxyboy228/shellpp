@@ -465,8 +465,10 @@ remove its Known Hosts entry first if section 4 already connected.
       narrows (`size` reports fewer columns) instead of being covered.
 - [ ] Tabs: Tools, History, Appearance. Not rendered: Snippets tab.
 - [ ] Tools: after `lines 200`, searching `line 150` highlights the matches
-      and shows their count; next and previous move between them. Not
-      rendered: Autocomplete.
+      and shows their count; next and previous move between them. Under the
+      search, Autocomplete (beta): Off by default; with "This host's
+      history", typing the start of an earlier command shows the rest muted
+      after the cursor, and Tab or → types it (D142).
 - [ ] History: after `echo one` and `echo two`, both are listed newest first.
       A click inserts the command into the terminal without running it.
 - [ ] Not recorded: the secret typed after `read-secret`, a line typed while
