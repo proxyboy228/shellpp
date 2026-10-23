@@ -218,6 +218,56 @@ fn expired_and_wrong_name_certificates_are_refused_even_when_pinned() {
 }
 
 #[test]
+fn a_not_yet_valid_certificate_is_refused_even_when_pinned() {
+    let future = leaf(&["localhost"], None, (1, 30));
+    let server = serve(&future);
+    match problem(check(&server, TrustMode::Pinned(sha256(&future.der)))) {
+        Some(TlsProblem::Expired(info)) => assert_eq!(info.sha256, sha256(&future.der)),
+        other => panic!("expected expired, got {other:?}"),
+    }
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+}
+
+/// A pin one bit off is another certificate: `certificate_changed` before
+/// any request, naming the pin and the presented certificate.
+#[test]
+fn a_pin_one_bit_off_is_a_changed_pin() {
+    let cert = leaf(&["localhost"], None, (-1, 30));
+    let server = serve(&cert);
+    let right = sha256(&cert.der);
+    for (i, bit) in [(0, 0x01), (31, 0x80)] {
+        let mut pin = right;
+        pin[i] ^= bit;
+        match problem(check(&server, TrustMode::Pinned(pin))) {
+            Some(TlsProblem::PinChanged {
+                pinned,
+                new,
+                system_trusts,
+            }) => {
+                assert_eq!(pinned, pin);
+                assert_eq!(new.sha256, right);
+                assert!(!system_trusts);
+            }
+            other => panic!("expected certificate_changed, got {other:?}"),
+        }
+    }
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    check(&server, TrustMode::Pinned(right)).expect("the exact pin");
+    assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+}
+
+/// A pin is the SHA-256 of the DER (FIPS 180-2 vector of "abc"), shown as
+/// `openssl x509 -fingerprint -sha256` shows it.
+#[test]
+fn pins_are_sha256_shown_as_openssl_shows_them() {
+    let digest = sha256(b"abc");
+    assert_eq!(
+        shellpp_core::sync::tls::fingerprint_text(&digest),
+        "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD"
+    );
+}
+
+#[test]
 fn plain_http_is_refused_for_any_host_but_loopback() {
     for origin in [
         "http://sync.example.com",
