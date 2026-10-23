@@ -553,8 +553,9 @@ pub fn apply_page(
             continue; // An echo, a duplicate or a server rollback of this record.
         }
         // D93: a version below the key epoch this device synced is refused.
+        // Records pushed back by a resync or a restore (synced revision 0)
+        // keep their synced envelope as the base, so the check covers them.
         if let Some(epoch) = synced_epoch(&local)
-            && local.synced_revision > 0
             && row.key_epoch < epoch
         {
             result.effects.integrity_warnings += 1;
@@ -778,11 +779,17 @@ pub fn apply_push_results(
                             }
                         }
                     }
-                    _ => None,
+                    Some(None) => None,
+                    // A `conflict` without `current` is not what section 6.5
+                    // defines: nothing is assumed about the server's copy.
+                    None => {
+                        effects.integrity_warnings += 1;
+                        effects.failed.push((local.record_id, "integrity".into()));
+                        continue;
+                    }
                 };
                 // D93: a `current` below the epoch this device synced loses.
                 if let (Some(current), Some(epoch)) = (&current, synced_epoch(&local))
-                    && local.synced_revision > 0
                     && current.key_epoch < epoch
                 {
                     effects.integrity_warnings += 1;
@@ -902,11 +909,12 @@ pub fn restore_mark(
     store: &mut Store,
     session: &mut Session,
     server: &HashMap<Uuid, u64>,
+    classes: &[u8],
 ) -> Result<HashMap<Uuid, u64>, CoreError> {
     let vault_id = session.ring.vault_id();
     let mut held = HashMap::new();
     let mut rows = Vec::new();
-    for row in store.records(&vault_id, None)? {
+    for row in store.records(&vault_id, Some(classes))? {
         let server_revision = server.get(&row.record_id).copied().unwrap_or(0);
         if row.synced_revision == server_revision {
             continue;

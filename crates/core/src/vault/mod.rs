@@ -327,15 +327,20 @@ pub fn seal_row(
     let (revision, synced_revision, server_seq, base_envelope) = match previous {
         None => (1, 0, None, None),
         Some(previous) => {
+            // A record pushed back by a resync keeps its synced envelope as
+            // the base until the server holds a version again.
             let base = if previous.synced_revision == 0 {
-                None
+                previous.base_envelope.clone()
             } else if previous.revision == previous.synced_revision {
                 Some(previous.envelope.clone())
             } else {
                 previous.base_envelope.clone()
             };
             (
-                previous.revision + 1,
+                previous
+                    .revision
+                    .checked_add(1)
+                    .ok_or(CoreError::Internal("revision overflow"))?,
                 previous.synced_revision,
                 previous.server_seq,
                 base,

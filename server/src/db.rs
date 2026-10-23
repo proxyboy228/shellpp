@@ -176,6 +176,12 @@ pub trait Tx {
     /// Locks a vault row until the end of the transaction (PostgreSQL); a
     /// no-op in SQLite, whose write transactions hold the database lock.
     fn lock_vault(&mut self, vault_id: Uuid) -> Result<(), DbError>;
+    /// ` FOR UPDATE` in a PostgreSQL write transaction, else empty: the
+    /// row locks that serialize check-then-write steps (SQLite serializes
+    /// every write transaction already).
+    fn for_update(&self) -> &'static str {
+        ""
+    }
     /// The backend, for the few statements that differ.
     fn backend(&self) -> Backend;
 
@@ -293,7 +299,10 @@ impl Db {
                 let mut tx = SqliteTx { conn: &mut conn };
                 match f(&mut tx) {
                     Ok(value) => {
-                        conn.execute_batch("COMMIT").map_err(sqlite_error)?;
+                        if let Err(error) = conn.execute_batch("COMMIT") {
+                            let _ = conn.execute_batch("ROLLBACK");
+                            return Err(E::from(sqlite_error(error)));
+                        }
                         Ok(value)
                     }
                     Err(error) => {
@@ -314,6 +323,7 @@ impl Db {
                     let transaction = builder.start().map_err(pg_error)?;
                     let mut tx = PgTx {
                         tx: Some(transaction),
+                        write: kind == TxKind::Write,
                     };
                     match f(&mut tx) {
                         Ok(value) => {
@@ -500,6 +510,7 @@ impl Tx for SqliteTx<'_> {
 
 struct PgTx<'a> {
     tx: Option<postgres::Transaction<'a>>,
+    write: bool,
 }
 
 /// Numbers the `?` placeholders of a statement for PostgreSQL.
@@ -674,6 +685,10 @@ impl Tx for PgTx<'_> {
 
     fn backend(&self) -> Backend {
         Backend::Postgres
+    }
+
+    fn for_update(&self) -> &'static str {
+        if self.write { " FOR UPDATE" } else { "" }
     }
 }
 

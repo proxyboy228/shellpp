@@ -177,6 +177,17 @@ fn wait_seconds(not_until: governor::NotUntil<governor::clock::QuantaInstant>) -
 }
 
 impl Limiters {
+    /// Drops the state of keys idle long enough to be full again (IPs and
+    /// devices seen once would otherwise stay forever); run periodically.
+    pub fn prune(&self) {
+        self.auth_ip.retain_recent();
+        self.api_device.retain_recent();
+        self.push_device.retain_recent();
+        self.auth_ip.shrink_to_fit();
+        self.api_device.shrink_to_fit();
+        self.push_device.shrink_to_fit();
+    }
+
     pub fn new(limits: RateLimits) -> Self {
         Self {
             limits,

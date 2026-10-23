@@ -40,9 +40,10 @@ use crate::model::time::{format_timestamp, unix_ms};
 use crate::model::types::RecordKind;
 use crate::service::dto::{CoreEventKind, LockState};
 use crate::store::{
-    DeletedOrigin, KeyWrapRow, LocalAuthRow, META_ACCOUNT_SERVER_URL, META_ACCOUNT_USER_ID,
-    META_CREATED_AT, META_DB_ID, META_DEVICE_ID, RecentlyDeletedRow, RecordRow, ServerAccountRow,
-    Store, SyncStateRow, TlsTrustKind, TlsTrustRow, VaultRow, WrapKind,
+    DeletedOrigin, DuplicatePairRow, KeyWrapRow, LocalAuthRow, META_ACCOUNT_SERVER_URL,
+    META_ACCOUNT_USER_ID, META_CREATED_AT, META_DB_ID, META_DEVICE_ID, RecentlyDeletedRow,
+    RecordRow, ServerAccountRow, Store, SyncStateRow, TlsTrustKind, TlsTrustRow, VaultRow,
+    WrapKind,
 };
 use crate::sync::engine::{self, Selection};
 use crate::sync::{HttpApi, HttpError, TlsProblem, TrustMode, natural, normalize_origin, trash};
@@ -1130,7 +1131,11 @@ impl Core {
         drop(guard);
         // The first pull brings `recovery_key`; then the recovery row, the
         // check of the server's recovery wrap, and this device's record.
-        self.cycle(true)?;
+        if let Err(error) = self.cycle(true) {
+            // The device is bound and unlocked: later cycles finish the pull
+            // and build the recovery row (`ensure_recovery_row`).
+            tracing::warn!(code = error.code(), "first pull deferred");
+        }
         self.after_first_pull(account)?;
         let _ = self.cycle(false);
         Ok(())
@@ -1332,9 +1337,13 @@ impl Core {
             })?;
             Ok((db_id, device_id, old_vault))
         })?;
-        // Step 2: pull the account vault into a session of its own.
-        let mut new_session =
-            Session::new(ring, db_id, device_id, HlcClock::start(None, unix_ms(now)));
+        // Step 2: pull the account vault into a session of its own. Rows
+        // left by an interrupted earlier attempt are loaded first, so the
+        // natural-key dedupe below sees them.
+        let mut new_session = {
+            let guard = self.inner();
+            Session::load(&guard.store, ring, db_id, device_id, now)?
+        };
         let all = Selection::all();
         let mut cursor = 0;
         for _ in 0..MAX_PULL_PAGES {
@@ -1372,7 +1381,7 @@ impl Core {
         }
         let mut old_session = inner.session.take().ok_or(CoreError::Locked)?;
         let outcome = self.merge_records(inner, &mut old_session, &mut new_session, now);
-        let (rows, trash_rows) = match outcome {
+        let (rows, trash_rows, pairs) = match outcome {
             Ok(done) => done,
             Err(error) => {
                 inner.session = Some(old_session);
@@ -1416,6 +1425,9 @@ impl Core {
             for row in &trash_rows {
                 tx.recently_deleted_put(row)?;
             }
+            for pair in &pairs {
+                tx.duplicate_pair_put(pair)?;
+            }
             tx.vault_binding_set(
                 &account_vault,
                 Some(&account.user_id),
@@ -1458,7 +1470,7 @@ impl Core {
         old: &mut Session,
         new: &mut Session,
         now: SystemTime,
-    ) -> Result<(Vec<RecordRow>, Vec<RecentlyDeletedRow>), CoreError> {
+    ) -> Result<MergedRows, CoreError> {
         let now_text = format_timestamp(now);
         let old_vault = old.ring.vault_id();
         let new_vault = new.ring.vault_id();
@@ -1480,6 +1492,7 @@ impl Core {
         }
         let mut map: HashMap<String, String> = HashMap::new();
         let mut items = Vec::new();
+        let mut pairs = Vec::new();
         for row in inner.store.records(&old_vault, None)? {
             if row.tombstone {
                 continue;
@@ -1493,15 +1506,36 @@ impl Core {
             let Some(data) = payload.data.clone() else {
                 continue;
             };
+            let mut twin = None;
             if let Some(kind) = RecordKind::from_name(&payload.type_name)
                 && let Some(key) = natural::key(kind, &data)
                 && let Some(existing) = account_keys.get(&(kind, key))
             {
-                map.insert(row.record_id.to_string(), existing.to_string());
-                continue;
+                // Dropped only when nothing but references differs; a record
+                // that only shares the natural key (another group, other
+                // settings) is kept beside it as a duplicate pair (UI 13.7):
+                // principle 3 before tidiness.
+                let same = new
+                    .index
+                    .get(existing)
+                    .is_some_and(|record| same_but_ids(record.data(), &data));
+                if same {
+                    map.insert(row.record_id.to_string(), existing.to_string());
+                    continue;
+                }
+                twin = Some(*existing);
             }
             let new_id = inner.ids.next(now);
             map.insert(row.record_id.to_string(), new_id.to_string());
+            if let Some(existing) = twin {
+                pairs.push(DuplicatePairRow {
+                    vault_id: new_vault,
+                    record_id: existing,
+                    other_record_id: new_id,
+                    found_at: now_text.clone(),
+                    kept: false,
+                });
+            }
             items.push(Item {
                 new_id,
                 class: row.class,
@@ -1561,7 +1595,7 @@ impl Core {
                 envelope: row.envelope,
             });
         }
-        Ok((rows, trash_rows))
+        Ok((rows, trash_rows, pairs))
     }
 
     /// After the first pull of a personal vault (section 4.4): the local
@@ -1667,11 +1701,22 @@ impl Core {
     /// A new access token with the stored refresh token; the rotated
     /// refresh token is stored. A refused refresh signs this device out.
     fn refresh(&self, link: &Link) -> Result<Zeroizing<String>, CoreError> {
-        let token = {
+        // The wrapping key of the successor is taken now: a lock during the
+        // request must not lose the rotated token (the old one stops working
+        // 60 s later, D93).
+        let (token, secrets_key, secrets_epoch) = {
             let guard = self.inner();
             let session = Self::require_session(&guard)?;
             let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
-            open_refresh(&session.ring, &link.device_id, &account).ok_or(refused("signed_out"))?
+            let token = open_refresh(&session.ring, &link.device_id, &account)
+                .ok_or(refused("signed_out"))?;
+            let epoch = session.ring.current_epoch();
+            let key = crypto::derive_local_secrets_key(
+                session.ring.current_key(),
+                &link.device_id,
+                epoch,
+            );
+            (token, key, epoch)
         };
         // One retry of a lost answer within the server's 60 s window.
         let result = match link.api.refresh(&token) {
@@ -1681,18 +1726,21 @@ impl Core {
         match result {
             Ok(tokens) => {
                 let access = Zeroizing::new(tokens.access_token.0.clone());
-                self.with_session(|inner| {
-                    let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
-                    let (blob, epoch) =
-                        wrap_refresh(&session.ring, &link.device_id, &tokens.refresh_token.0)?;
-                    if let Some(mut row) = inner.store.server_account()? {
-                        row.refresh_token = Some(blob);
-                        row.secrets_epoch = epoch;
-                        inner.store.write(|tx| tx.server_account_put(&row))?;
-                    }
-                    inner.sync.access = Some(access.clone());
-                    Ok(())
-                })?;
+                let blob = crypto::wrap_seal(
+                    &secrets_key,
+                    &crypto::refresh_token_aad(&link.device_id),
+                    tokens.refresh_token.0.as_bytes(),
+                )?;
+                let mut guard = self.inner();
+                if let Some(mut row) = guard.store.server_account()? {
+                    row.refresh_token = Some(blob);
+                    row.secrets_epoch = secrets_epoch;
+                    guard.store.write(|tx| tx.server_account_put(&row))?;
+                }
+                if Self::require_session(&guard).is_err() {
+                    return Err(CoreError::Locked);
+                }
+                guard.sync.access = Some(access.clone());
                 Ok(access)
             }
             Err(error) => {
@@ -1780,9 +1828,22 @@ impl Core {
     // The sync cycle (section 6.11)
     // -----------------------------------------------------------------
 
-    /// One sync cycle of the personal vault: pull, then push. A no-op
-    /// without a bound, signed-in account.
+    /// "Sync now" (the user's action): items the server refused earlier
+    /// (`quota_exceeded` and the like) are tried again (section 6.5), then
+    /// one cycle runs. A no-op without a bound, signed-in account.
     pub fn sync_now(&self) -> Result<SyncReport, CoreError> {
+        let _sync = self.sync_lock();
+        self.inner().sync.failed.clear();
+        self.inner().sync.backoff_until = None;
+        self.cycle(false)
+    }
+
+    /// The automatic cycle (after unlock, after a change, every 60 s):
+    /// refused items stay parked; nothing runs during the retry pause.
+    pub fn sync_auto(&self) -> Result<SyncReport, CoreError> {
+        if !self.sync_due() {
+            return Ok(SyncReport::default());
+        }
         let _sync = self.sync_lock();
         self.cycle(false)
     }
@@ -2049,6 +2110,11 @@ impl Core {
                 }
             }
         }
+        // The local `recovery` row follows the synced `recovery_key` record
+        // (section 4.4): built when missing, rebuilt on a new revision.
+        if let Err(error) = self.ensure_recovery_row(&changed) {
+            tracing::warn!(code = error.code(), "recovery row not rebuilt");
+        }
         if !changed.is_empty() {
             changed.sort_unstable();
             changed.dedup();
@@ -2065,6 +2131,39 @@ impl Core {
             );
         }
         Ok(report)
+    }
+
+    fn ensure_recovery_row(&self, changed: &[Uuid]) -> Result<(), CoreError> {
+        self.with_session(|inner| {
+            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+            let Some(record_id) = session
+                .index
+                .singleton(RecordKind::RecoveryKey)
+                .map(|record| record.record_id)
+            else {
+                return Ok(());
+            };
+            let vault_id = session.ring.vault_id();
+            let epoch = session.ring.current_epoch();
+            let missing = inner
+                .store
+                .key_wrap(&vault_id, epoch, WrapKind::Recovery)?
+                .is_none();
+            if !missing && !changed.contains(&record_id) {
+                return Ok(());
+            }
+            let recovery_key = lock_ops::recovery_key_of(session)?;
+            let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
+            let row = vault::wrap_row(
+                WrapKind::Recovery,
+                vault_id,
+                epoch,
+                &recovery_kek,
+                session.ring.current_key(),
+            )?;
+            inner.store.write(|tx| tx.key_wrap_put(&row))?;
+            Ok(())
+        })
     }
 
     fn set_cursor(&self, vault_id: Uuid, cursor: u64) -> Result<(), CoreError> {
@@ -2096,12 +2195,13 @@ impl Core {
         report: &mut SyncReport,
         changed: &mut Vec<Uuid>,
     ) -> Result<(), CoreError> {
+        let selection = selection(&self.inner().store);
         let mut pages = Vec::new();
         let mut server: HashMap<Uuid, u64> = HashMap::new();
         let mut cursor = 0;
         for _ in 0..MAX_PULL_PAGES {
             let page = self.authed(link, |api, token| {
-                api.pull(token, link.vault_id, cursor, None, None)
+                api.pull(token, link.vault_id, cursor, None, Some(&selection.classes))
             })?;
             for record in &page.records {
                 if let Ok(parts) = envelope::split(record.envelope.as_bytes()) {
@@ -2117,7 +2217,6 @@ impl Core {
                 break;
             }
         }
-        let selection = Selection::all();
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             // A backup from before a rotation: the epochs come first (the
@@ -2128,7 +2227,15 @@ impl Core {
             {
                 return Err(refused("rolled_back"));
             }
-            let held = engine::restore_mark(&mut inner.store, session, &server)?;
+            // Step 1 first: the snapshot is applied against the synced
+            // revisions held now (pending edits meet the server's versions
+            // through the conflict rules); step 3 uses the same revisions.
+            let held: HashMap<Uuid, u64> = inner
+                .store
+                .records(&link.vault_id, Some(&selection.classes))?
+                .into_iter()
+                .map(|row| (row.record_id, row.synced_revision))
+                .collect();
             let mut state = inner.store.sync_state(&link.vault_id)?;
             state.vault_id = link.vault_id;
             state.cursor = 0;
@@ -2143,11 +2250,19 @@ impl Core {
                     &held,
                     self.now(),
                 )?;
-                state.cursor = page.next_cursor;
                 report.integrity_warnings += result.effects.integrity_warnings;
                 report.conflicts += result.effects.conflicts;
                 changed.extend(result.effects.changed.iter().copied());
+                if result.stopped {
+                    // A newer epoch: the device signs in again first; the
+                    // cursor stays before the record.
+                    report.newer_epoch = true;
+                    return Err(refused("newer_epoch"));
+                }
+                state.cursor = page.next_cursor;
             }
+            // Step 2: the synced revisions become the server's (or 0).
+            engine::restore_mark(&mut inner.store, session, &server, &selection.classes)?;
             Ok(())
         })?;
         report.restored = true;
@@ -2298,6 +2413,8 @@ impl Core {
 
     /// The account's devices (UI 12.2).
     pub fn sync_devices(&self) -> Result<Vec<DeviceItem>, CoreError> {
+        // One refresh at a time (a parallel refresh would look like reuse).
+        let _sync = self.sync_lock();
         let link = self.link()?;
         let list = self.authed(&link, |api, token| api.devices(token))?;
         Ok(list
@@ -2315,12 +2432,14 @@ impl Core {
 
     /// "Sign out this device" / "Lost or stolen" (section 4.7).
     pub fn sync_device_revoke(&self, device_id: Uuid) -> Result<(), CoreError> {
+        let _sync = self.sync_lock();
         let link = self.link()?;
         self.authed(&link, |api, token| api.device_revoke(token, device_id))
     }
 
     /// TOTP setup (section 5.5): the secret and the `otpauth://` text.
     pub fn sync_totp_setup(&self, password: SecretString) -> Result<TotpSetup, CoreError> {
+        let _sync = self.sync_lock();
         let (link, keys) = self.current_keys(&password)?;
         let auth_key = keys.auth_key;
         drop(password);
@@ -2335,6 +2454,7 @@ impl Core {
     }
 
     pub fn sync_totp_enable(&self, code_text: &str) -> Result<(), CoreError> {
+        let _sync = self.sync_lock();
         let link = self.link()?;
         let request = wire::TotpCode {
             code: secret(code_text.trim()),
@@ -2347,6 +2467,7 @@ impl Core {
         password: SecretString,
         code_text: &str,
     ) -> Result<(), CoreError> {
+        let _sync = self.sync_lock();
         let (link, keys) = self.current_keys(&password)?;
         let auth_key = keys.auth_key;
         drop(password);
@@ -2898,7 +3019,7 @@ impl Core {
     ) -> Result<(), CoreError> {
         let now = self.now();
         let now_text = format_timestamp(now);
-        self.with_session(|inner| {
+        let removed = self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
             let row = inner
@@ -2929,12 +3050,11 @@ impl Core {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if losing_deleted {
-                    if let Some(previous) = inner.store.record(&vault_id, &original)?
-                        && !previous.tombstone
-                    {
-                        rows.push(session.prepare_tombstone(kind, &previous, now)?);
+                    // Deleted below as the user's own deletion (Recently deleted).
+                    if session.index.get(&original).is_some() {
                         removed.push(original);
                     }
+                    let _ = kind;
                 } else {
                     let losing = data
                         .get("losing_data")
@@ -2966,15 +3086,13 @@ impl Core {
                 }
                 for write in &writes {
                     tx.record_put(&write.row)?;
+                    // The record is live again: no stale Recently deleted entry.
+                    tx.recently_deleted_delete(&vault_id, &write.record_id)?;
                 }
                 Ok(())
             })?;
             let mut changed: Vec<Uuid> = writes.iter().map(|write| write.record_id).collect();
-            changed.extend(removed.iter().copied());
             changed.push(conflict_id);
-            for id in &removed {
-                session.index.remove(id);
-            }
             session.commit(writes);
             self.emit(
                 inner,
@@ -2984,8 +3102,16 @@ impl Core {
                     classes: vec![row.class],
                 },
             );
-            Ok(())
-        })
+            Ok((vault_id, removed))
+        })?;
+        let (vault_id, removed) = removed;
+        if !removed.is_empty() {
+            self.record_delete(super::dto::RecordsRef {
+                vault_id,
+                record_ids: removed,
+            })?;
+        }
+        Ok(())
     }
 
     pub fn sync_duplicates(&self) -> Result<Vec<DuplicateItem>, CoreError> {
@@ -3128,6 +3254,34 @@ impl Core {
         })?;
         self.sync_brought_back_keep(record_ids)
     }
+}
+
+/// Rows the merge at sign-in writes: records, Recently deleted entries and
+/// the duplicate pairs it raised.
+type MergedRows = (
+    Vec<RecordRow>,
+    Vec<RecentlyDeletedRow>,
+    Vec<DuplicatePairRow>,
+);
+
+/// `true` when two `data` objects differ only in record ids (the references
+/// a merge rewrites) and `null` members.
+fn same_but_ids(a: &Map<String, Value>, b: &Map<String, Value>) -> bool {
+    fn strip(value: &Value) -> Value {
+        match value {
+            Value::String(text) if Uuid::parse_str(text).is_ok() => Value::Null,
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .filter(|(_, v)| !v.is_null())
+                    .map(|(k, v)| (k.clone(), strip(v)))
+                    .filter(|(_, v)| !v.is_null())
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.iter().map(strip).collect()),
+            other => other.clone(),
+        }
+    }
+    strip(&Value::Object(a.clone())) == strip(&Value::Object(b.clone()))
 }
 
 /// Live conflict copies of the vault with their payloads.

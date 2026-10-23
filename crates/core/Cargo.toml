@@ -75,6 +75,8 @@ p256 = { workspace = true, features = ["pkcs8", "alloc"] }
 p384 = { workspace = true, features = ["pkcs8", "alloc"] }
 p521 = { workspace = true, features = ["pkcs8", "alloc"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "alloc"] }
+# Test certificates for the sync TLS tests (docs/sync-protocol.md, section 2.1).
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
 
 [lints]
 workspace = true

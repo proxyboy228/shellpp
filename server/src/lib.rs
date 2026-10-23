@@ -81,11 +81,20 @@ pub async fn serve_on(
             }
         }
     });
+    let prune_state = shared.clone();
+    let prune = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
+        loop {
+            interval.tick().await;
+            prune_state.limiters.prune();
+        }
+    });
     let app = api::router(shared).into_make_service_with_connect_info::<SocketAddr>();
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await;
     purge.abort();
+    prune.abort();
     result
 }
 

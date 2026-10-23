@@ -66,7 +66,13 @@ fn check_login(shared: &Shared, user: Option<&User>, email: &str, key: &[u8]) ->
         .signin_allowed(email)
         .map_err(rate_limited)?;
     let ok = match user {
-        Some(user) => key.len() == 32 && secrets::check_verifier(&user.auth_verifier, key),
+        Some(user) if key.len() == 32 => secrets::check_verifier(&user.auth_verifier, key),
+        // A wrong length runs the dummy verification too: the timing must
+        // not tell a known email from an unknown one (section 4.4).
+        Some(_) => {
+            let _ = secrets::check_verifier(&shared.dummy_verifier, key);
+            false
+        }
         None => {
             let _ = secrets::check_verifier(&shared.dummy_verifier, key);
             false
@@ -134,11 +140,11 @@ pub fn register(
         };
         let code = request.registration_code.as_ref().ok_or_else(closed)?;
         let hash = secrets::hash_token(&secrets::canonical_code(&code.0));
-        let row = tx.query_one(
-            "SELECT uses_left, expires_at FROM registration_codes WHERE code_hash = ?",
-            &[hash.clone().into()],
-            &[Ty::Int, Ty::Time],
-        )?;
+        let sql = format!(
+            "SELECT uses_left, expires_at FROM registration_codes WHERE code_hash = ?{}",
+            tx.for_update()
+        );
+        let row = tx.query_one(&sql, &[hash.clone().into()], &[Ty::Int, Ty::Time])?;
         match row {
             Some(row)
                 if row[0].int().unwrap_or(0) > 0 && row[1].time().is_some_and(|t| t > now) => {}
@@ -181,6 +187,11 @@ pub fn register(
     }
     if model::vault_epoch(tx, vault.vault_id)?.is_some() {
         return Err(ApiError::validation("personal_vault.vault_id"));
+    }
+    // The length first: `epoch` comes from the request (no allocation
+    // follows its value).
+    if vault.epoch_chain.len() as u64 != u64::from(vault.epoch) - 1 {
+        return Err(ApiError::validation("personal_vault.epoch_chain"));
     }
     let mut chain: Vec<u32> = vault.epoch_chain.iter().map(|link| link.epoch).collect();
     chain.sort_unstable();
@@ -333,10 +344,14 @@ fn ticket(
     now: OffsetDateTime,
 ) -> ApiResult<(Vec<u8>, Uuid, Uuid, i64)> {
     let hash = secrets::hash_token(token);
+    let sql = format!(
+        "SELECT user_id, device_id, attempts, expires_at FROM auth_tickets \
+         WHERE ticket_hash = ? AND kind = ?{}",
+        tx.for_update()
+    );
     let row = tx
         .query_one(
-            "SELECT user_id, device_id, attempts, expires_at FROM auth_tickets \
-             WHERE ticket_hash = ? AND kind = ?",
+            &sql,
             &[hash.clone().into(), kind.into()],
             &[Ty::Uuid, Ty::Uuid, Ty::Int, Ty::Time],
         )?
@@ -410,7 +425,22 @@ pub fn login_totp(
     now: OffsetDateTime,
 ) -> ApiResult<LoginResponse> {
     let (hash, user_id, device_id, attempts) = ticket(tx, &request.login_ticket.0, "login", now)?;
-    let user = user_by_id(tx, user_id)?.ok_or_else(ticket_expired)?;
+    let user = model::user_by_id_locked(tx, user_id)?.ok_or_else(ticket_expired)?;
+    // The account may have changed during the ticket's 5 minutes.
+    if user.disabled {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            code::ACCOUNT_DISABLED,
+            "account disabled",
+        ));
+    }
+    if user.totp_secret_enc.is_none() {
+        tx.exec(
+            "DELETE FROM auth_tickets WHERE ticket_hash = ?",
+            &[hash.into()],
+        )?;
+        return Err(ticket_expired());
+    }
     let step = check_ticket_totp(tx, shared, &user, &hash, attempts, &request.code.0, now)?;
     tx.exec(
         "UPDATE users SET totp_last_step = ? WHERE user_id = ?",
@@ -434,9 +464,24 @@ fn refresh_reused() -> ApiError {
 /// `POST /v1/auth/token/refresh` (section 4.6, with the retry of D93).
 pub fn refresh(tx: &mut dyn Tx, token: &Secret, now: OffsetDateTime) -> ApiResult<Tokens> {
     let hash = secrets::hash_token(&token.0);
-    let row = tx.query_one(
+    // The user row, then the token row, are locked (PostgreSQL): two
+    // refreshes with one token, or a refresh racing a password change or a
+    // revocation (which lock the user row first too), take turns.
+    let owner = tx.query_one(
+        "SELECT user_id FROM refresh_tokens WHERE token_hash = ?",
+        &[hash.clone().into()],
+        &[Ty::Uuid],
+    )?;
+    if let Some(user_id) = owner.and_then(|row| row[0].uuid()) {
+        model::user_by_id_locked(tx, user_id)?;
+    }
+    let sql = format!(
         "SELECT family_id, device_id, user_id, expires_at, used_at, revoked_at, \
-         successor_hash, retried_at FROM refresh_tokens WHERE token_hash = ?",
+         successor_hash, retried_at FROM refresh_tokens WHERE token_hash = ?{}",
+        tx.for_update()
+    );
+    let row = tx.query_one(
+        &sql,
         &[hash.clone().into()],
         &[
             Ty::Uuid,
@@ -591,7 +636,7 @@ pub fn authenticate(tx: &mut dyn Tx, token: &str, now: OffsetDateTime) -> ApiRes
 
 /// The signed-in user (or `401` when it is gone).
 pub fn me(tx: &mut dyn Tx, principal: &Principal) -> ApiResult<User> {
-    user_by_id(tx, principal.user_id)?.ok_or_else(ApiError::unauthenticated)
+    model::user_by_id_locked(tx, principal.user_id)?.ok_or_else(ApiError::unauthenticated)
 }
 
 /// `GET /v1/account`.
@@ -707,14 +752,11 @@ pub fn recover_begin(
         .map_err(rate_limited)?;
     let user = user_by_email(tx, &email)?;
     let ok = match &user {
-        Some(user) => {
-            request.recovery_auth_key.as_bytes().len() == 32
-                && secrets::check_verifier(
-                    &user.recovery_verifier,
-                    request.recovery_auth_key.as_bytes(),
-                )
-        }
-        None => {
+        Some(user) if request.recovery_auth_key.as_bytes().len() == 32 => secrets::check_verifier(
+            &user.recovery_verifier,
+            request.recovery_auth_key.as_bytes(),
+        ),
+        Some(_) | None => {
             let _ = secrets::check_verifier(
                 &shared.dummy_verifier,
                 request.recovery_auth_key.as_bytes(),
@@ -1156,6 +1198,8 @@ pub fn device_revoke(
     device_id: Uuid,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
+    // The user row first, as a refresh does (no lost revocation).
+    me(tx, principal)?;
     let changed = tx.exec(
         "UPDATE devices SET revoked_at = ? WHERE device_id = ? AND user_id = ?",
         &[now.into(), device_id.into(), principal.user_id.into()],

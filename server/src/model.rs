@@ -143,6 +143,18 @@ pub fn user_by_email(tx: &mut dyn Tx, email: &str) -> Result<Option<User>, DbErr
     .transpose()
 }
 
+/// [`user_by_id`] with the row locked in a PostgreSQL write transaction:
+/// the account operations and token issuance of one user take turns.
+pub fn user_by_id_locked(tx: &mut dyn Tx, user_id: Uuid) -> Result<Option<User>, DbError> {
+    let sql = format!(
+        "SELECT {USER_COLS} FROM users WHERE user_id = ?{}",
+        tx.for_update()
+    );
+    tx.query_one(&sql, &[user_id.into()], &USER_TYPES)?
+        .map(|row| User::from_row(&row))
+        .transpose()
+}
+
 pub fn user_by_id(tx: &mut dyn Tx, user_id: Uuid) -> Result<Option<User>, DbError> {
     tx.query_one(
         &format!("SELECT {USER_COLS} FROM users WHERE user_id = ?"),
