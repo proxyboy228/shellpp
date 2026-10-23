@@ -424,33 +424,37 @@ impl TrashScreen {
         self.after_change(cx);
     }
 
-    /// Empty trash: asks first, naming the count of every entry.
+    /// Empty trash: asks first, naming the count of every entry listed.
+    /// It removes exactly those (UI 14): an entry that arrives through sync
+    /// while the confirmation is open, or one this list does not show, stays.
     pub fn confirm_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.items.len();
-        if count == 0 {
+        let ids: Vec<Uuid> = self.items.iter().map(|item| item.record_id).collect();
+        if ids.is_empty() {
             return;
         }
         let screen = cx.entity().downgrade();
         open_confirmation(
             "trash-empty",
             strings::EMPTY_TITLE,
-            strings::empty_body(count),
+            strings::empty_body(ids.len()),
             strings::EMPTY_TRASH,
             window,
             cx,
             move |window, cx| {
-                let _ = screen.update(cx, |screen, cx| screen.empty(window, cx));
+                let ids = ids.clone();
+                let _ = screen.update(cx, |screen, cx| screen.empty(ids, window, cx));
             },
         );
     }
 
-    /// Removes every entry from this device now (after the confirmation).
-    pub fn empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Removes the listed entries from this device now (after the
+    /// confirmation).
+    pub fn empty(&mut self, ids: Vec<Uuid>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
-        match core.recently_deleted_empty() {
-            Ok(count) => crate::shell::show_toast(strings::deleted_forever(count), window, cx),
+        match core.recently_deleted_delete(&ids) {
+            Ok(()) => crate::shell::show_toast(strings::deleted_forever(ids.len()), window, cx),
             Err(error) => {
                 tracing::warn!(code = error.code(), "recently deleted not emptied");
                 crate::shell::show_toast(strings::ACTION_FAILED, window, cx);
@@ -461,6 +465,10 @@ impl TrashScreen {
 
     fn after_change(&mut self, cx: &mut Context<Self>) {
         self.selection.clear();
+        // A load that started before the change would show the old rows
+        // again: it is dropped and the list read anew.
+        self.loading = None;
+        self.stale = false;
         self.reload(cx);
         self.state.update(cx, |state, cx| {
             state.refresh_sync_status(cx);
@@ -600,6 +608,7 @@ impl TrashScreen {
                 this.confirm_delete(ids, window, cx)
             }));
         let empty = ControlButton::new("trash-empty", ControlKind::Danger)
+            .icon(Lucide::BrushCleaning)
             .label(strings::EMPTY_TRASH)
             .disabled(self.items.is_empty())
             .on_click(
@@ -856,8 +865,11 @@ fn where_label(item: &DeletedItem) -> &'static str {
     }
 }
 
+/// A menu item; a danger one takes `--danger-hover` on hover, as on the
+/// other screens (design-system 6).
 fn menu_item(id: SharedString, label: SharedString, danger: bool, cx: &App) -> AnyElement {
     let theme = cx.theme();
+    let hover = theme.danger_hover;
     div()
         .id(id)
         .test_support()
@@ -866,6 +878,13 @@ fn menu_item(id: SharedString, label: SharedString, danger: bool, cx: &App) -> A
             theme.danger
         } else {
             theme.foreground
+        })
+        .when(danger, |this| {
+            this.mx(-metrics::SPACE_2)
+                .px(metrics::SPACE_2)
+                .my(-metrics::SPACE_1)
+                .py(metrics::SPACE_1)
+                .hover(move |style| style.text_color(hover))
         })
         .child(label)
         .into_any_element()

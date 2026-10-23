@@ -497,3 +497,43 @@ fn a_lock_clears_the_list(cx: &mut TestAppContext) {
     assert!(!ui.visible(cx, "trash-panel"));
     ui.finish(cx);
 }
+
+/// Review finding: Empty trash removes the entries its confirmation
+/// counted; one that arrives while the confirmation is open stays.
+#[gpui_kit::test]
+fn empty_trash_removes_only_what_it_counted(cx: &mut TestAppContext) {
+    let ui = Screen::open(cx);
+    let first = ui.save(
+        cx,
+        RecordType::Host,
+        json!({"label": "a", "address": "a.example.com"}),
+        None,
+    );
+    let later = ui.save(
+        cx,
+        RecordType::Host,
+        json!({"label": "b", "address": "b.example.com"}),
+        None,
+    );
+    ui.delete(cx, &[first]);
+    ui.click(cx, "trash-empty");
+    assert!(ui.visible(cx, "trash-empty-dialog"));
+    // Deleted while the confirmation is open (as a sync would bring it).
+    let vault_id = ui.vault(cx);
+    ui.core(cx)
+        .record_delete(RecordsRef {
+            vault_id,
+            record_ids: vec![later],
+        })
+        .unwrap();
+    ui.click(cx, "trash-empty-confirm");
+    let left: Vec<Uuid> = ui
+        .core(cx)
+        .recently_deleted_list()
+        .unwrap()
+        .into_iter()
+        .map(|item| item.record_id)
+        .collect();
+    assert_eq!(left, [later], "only the counted entry went");
+    ui.finish(cx);
+}

@@ -210,8 +210,9 @@ pub struct SyncReport {
     pub restored: bool,
 }
 
-/// A Recently deleted entry (UI 14).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A Recently deleted entry (UI 14). `Debug` shows no title or data: they
+/// carry addresses and user names (security 9.1).
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeletedItem {
     pub record_id: Uuid,
     pub vault_id: Uuid,
@@ -222,6 +223,17 @@ pub struct DeletedItem {
     /// The last live version's data for the read-only details panel,
     /// secrets masked.
     pub data: Option<Map<String, Value>>,
+}
+
+impl std::fmt::Debug for DeletedItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeletedItem")
+            .field("record_id", &self.record_id)
+            .field("type_name", &self.type_name)
+            .field("deleted_at", &self.deleted_at)
+            .field("from_sync", &self.from_sync)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A conflict copy (data-model 15; UI 13.6).

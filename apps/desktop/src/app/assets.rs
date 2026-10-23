@@ -34,6 +34,7 @@ gpui_kit::assets::icon_assets!(pub AppIcons, [
     Bookmark,
     BookmarkCheck,
     Braces,
+    BrushCleaning,
     CornerLeftUp,
     Download,
     FileSymlink,

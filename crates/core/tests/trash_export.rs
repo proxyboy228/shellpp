@@ -116,3 +116,25 @@ fn recently_deleted_lists_masked_data_and_purges_after_90_days() {
         "the purged entry is gone"
     );
 }
+
+/// security 9.1: a trash entry's `Debug` shows no address or data.
+#[test]
+fn a_recently_deleted_entry_debug_shows_no_host_data() {
+    let unlocked = first_run();
+    let host = unlocked.host(json!({"address": "secret-host.example.com", "label": "Prod DB"}));
+    unlocked
+        .core
+        .record_delete(RecordsRef {
+            vault_id: unlocked.vault_id,
+            record_ids: vec![host.record_id],
+        })
+        .expect("deleted");
+    let item = unlocked
+        .core
+        .recently_deleted_list()
+        .expect("trash")
+        .remove(0);
+    let shown = format!("{item:?}");
+    assert!(!shown.contains("secret-host"), "{shown}");
+    assert!(!shown.contains("Prod DB"), "{shown}");
+}
