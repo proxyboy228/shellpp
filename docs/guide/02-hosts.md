@@ -95,7 +95,9 @@ Tags label hosts across groups, for example `prod` or `db`.
 
 ![The host menu](images/context-menu.png)
 
-**Remove** asks first; a toast then offers **Undo** for a few seconds.
+**Remove** asks first; a toast then offers **Undo** for a few seconds, and
+removed hosts and groups stay in **Recently deleted** for 90 days
+([Sync](06-sync.md#recently-deleted)).
 
 ## Importing from an OpenSSH config
 

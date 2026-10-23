@@ -107,7 +107,7 @@ Click a key to open its panel ("Key details"):
 The **…** menu has **Copy public key** and **Remove**. Removing a key asks
 first and lists the hosts, groups and identities that use it; they then
 connect with their other sign-in methods. A toast offers **Undo** for a few
-seconds. (**Duplicate** and **Export to file…** are not available yet: to
+seconds, and the key stays in **Recently deleted** for 90 days. (**Duplicate** and **Export to file…** are not available yet: to
 save key files, use Export Data > OpenSSH files, see
 [Export and migration](07-export-and-migration.md).)
 

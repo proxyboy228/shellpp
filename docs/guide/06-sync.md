@@ -197,8 +197,14 @@ local database (`backups\` in the data folder), then merges the local data
 into the account; from then on the device opens with the account password.
 Items that exist on both sides with identical content are merged; items
 that only look alike (for example the same host in another group) are kept
-side by side and listed under **Review…** > **Possible duplicates**, with
-**Merge** or **Keep both** for each pair.
+side by side. The screens that show them say so ("2 hosts may be
+duplicates", with **Review**), and they are listed under **Review…** >
+**Possible duplicates**: **Compare…** shows the two side by side, with the
+fields that differ marked; **Keep left** or **Keep right** keeps one (the
+links move to it, the other goes to Recently deleted), **Keep both** keeps
+both and does not ask again.
+
+![Possible duplicates side by side](images/sync-duplicates.png)
 
 A device that was connected to one account cannot be connected to another
 account in this version.
@@ -219,17 +225,17 @@ with **Sync now**.
   themes and highlighting rules sync by default; command history and the
   connection log do not. Turning a type off stops syncing it and deletes
   nothing.
-- **Review…** (with a count when there is something to look at):
-  - **Conflicts**: two devices changed the same item. The newer change is
-    in place; the other version is kept here, with the fields that differ.
-    **Keep current** drops it; **Use other version** puts it in place.
-  - **Possible duplicates**: see above.
-  - **Brought back**: items deleted elsewhere long ago but still here, now
-    restored to the server: **Keep** or **Delete again**.
-- **Recently deleted…** keeps deleted items for 90 days, encrypted, on this
-  device. **Restore** brings an item back (and syncs it), **Delete
-  forever** removes it, **Export…** saves the listed items to a file, and
-  **Empty** removes them all at once (without asking).
+- **Conflicts**: when two devices changed the same item, the newer change
+  is in place and the other version is kept. Account & Sync then shows
+  "Conflicts: N", and the host's card a **Conflict** badge; both open
+  **Compare versions**, the current version and the other one side by side
+  with the device and time of each and the differing fields marked.
+  **Keep this** or **Keep other** decides; **Close** leaves it for later.
+- **Review…** (with a count when there is something to look at) lists the
+  conflicts, the possible duplicates (above) and the items **Brought
+  back**: deleted elsewhere long ago but still here, now restored to the
+  server (**Keep** or **Delete again**).
+- **Recently deleted…** opens the Recently deleted screen (below).
 - **Devices…** lists the account's devices. **Sign out** next to another
   device asks whether it was lost or stolen. **Lost or stolen** also leads
   you to change the master password with **My old password may be
@@ -241,7 +247,25 @@ with **Sync now**.
   and enter its code. It cannot be turned off from the app in this
   version; the server owner can reset it (`admin user reset-totp`).
 
-![Recently deleted](images/sync-trash.png)
+![Comparing two versions](images/sync-conflict.png)
+
+## Recently deleted
+
+Deleted hosts, groups, keys, snippets and other items go to the
+**Recently deleted** screen (in the sidebar, below the separator), with or
+without a sync server. They stay there for 90 days, on this device only.
+
+![Recently deleted](images/recently-deleted.png)
+
+- **Search by name** and **Filter by type** narrow the list; the table
+  shows each item's name, type, vault, when it was deleted and where (this
+  device or another one).
+- Select items (click, Ctrl+click, Shift+click, Ctrl+A), then **Restore**
+  (it comes back where it was, and syncs), **Export…** (saves them to a
+  file with Export Data) or **Delete forever**. **Empty trash** deletes
+  everything. Both ask first. The same actions are in a row's right-click
+  menu.
+- Click one item to see its details, read-only, with secrets masked.
 
 ## Signing out and deleting the account
 
