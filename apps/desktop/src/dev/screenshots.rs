@@ -1725,7 +1725,29 @@ pub async fn reach_state(
             }
             Ok(())
         }
-        ShotState::HostPanel => click_first_card(cx, handle, shot_state, ClickKind::Left),
+        ShotState::HostPanel => {
+            match click_first_card(cx, handle, shot_state, ClickKind::Left) {
+                Ok(()) => Ok(()),
+                // At 175-200 % in a small window the groups fill the screen
+                // and no host card is on it: open the first host's panel the
+                // way its card would (D100, item 2: the panel then opens
+                // over the main area).
+                Err(ScreenshotError::State(_)) => {
+                    let first = cx.update(|cx| state.read(cx).hosts().first().map(|h| h.record_id));
+                    let Some(record_id) = first else {
+                        return Err(not_reached("no hosts"));
+                    };
+                    let shell = shell_of(cx, root, shot_state)?;
+                    cx.update_window(handle, |_, window, cx| {
+                        shell.update(cx, |shell, cx| {
+                            shell.open_host_panel(Some(record_id), window, cx)
+                        });
+                    })
+                    .map_err(|_| ScreenshotError::WindowClosed)
+                }
+                Err(other) => Err(other),
+            }
+        }
         ShotState::ContextMenu => click_first_card(cx, handle, shot_state, ClickKind::Right),
         ShotState::SearchAddress => type_into(cx, handle, SEARCH, QUICK_CONNECT_TEXT),
         ShotState::SearchResults => type_into(cx, handle, SEARCH, SEARCH_WITH_RESULTS),
