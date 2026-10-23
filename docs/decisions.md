@@ -1603,3 +1603,21 @@ Status: accepted, 2026-10-23 (owner's choice; the six questions in section 3 of 
 6. The soak test on OpenSSH (`scripts\soak.ps1 -Minutes 120`, with SFTP and `htop`) runs at the end of run 7 if Docker works and more than 2.5 hours remain before the deadline; otherwise it goes into the report.
 
 **Spec impact:** none now. With the implementation (run 7): `docs/ui-behavior-spec.md` 1.1 (item 4), 1.2 and 1.3 (item 2) and 12.4 (item 5), and `docs/ru`; `THIRD_PARTY_NOTICES.md`, `CLAUDE.md` and `docs/upstream/russh-channel-leak.md` (item 3).
+
+## Run 7 of 2026-10-23
+
+The decisions below were taken during the owner's seventh long run (its plan, section 1), marked "run 7"; the disputable ones are listed for the owner in the run report.
+
+### 101. The server's databases without sqlx (run 7)
+
+Status: run 7 decision, 2026-10-23 (plan, section 3.1). Amends the stage 0 choice of `sqlx` in docs/sync-protocol.md, section 14, and docs/architecture.md, section 8.2.
+
+**Context.** The sync end-to-end tests run two clients of `shellpp-core` against the server in one process (plan, section 4; docs/architecture.md, section 9.1), so the server's test build links the client's `rusqlite` 0.40, which links `libsqlite3-sys` 0.38. `sqlx-sqlite` needs `libsqlite3-sys` below 0.38 (0.8 and 0.9 alike), and Cargo allows one crate linking `sqlite3` per build.
+
+**Decision:**
+
+- SQLite through `rusqlite` 0.40 (bundled, the client's version) and PostgreSQL through the synchronous `postgres` client 0.19 (MIT OR Apache-2.0), behind one SQL layer (`server/src/db.rs`): statements written once with `?` placeholders (numbered for PostgreSQL), every value typed by the query, each store operation a closure over one transaction on a blocking thread. Write transactions take the database lock in SQLite (`BEGIN IMMEDIATE`) and the vault row in PostgreSQL (`SELECT … FOR UPDATE`); reads are one snapshot (`REPEATABLE READ`).
+- In SQLite, UUIDs are 16-byte blobs, times RFC 3339 UTC text with milliseconds (which sorts in time order), booleans 0 or 1 and JSON text; the two migrations (`server/migrations/{postgres,sqlite}`) hold the same schema.
+- `shellpp-server migrate` applies them in order (one transaction per step, a `schema_migrations` row each); the first creates the server generation. `serve` refuses another schema version.
+
+**Spec impact:** docs/sync-protocol.md, section 14 (crates), docs/architecture.md, section 8.2 (server row).

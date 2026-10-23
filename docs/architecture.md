@@ -632,7 +632,7 @@ Licenses below are the expected SPDX values; cargo-deny and the npm license chec
 | Runtime, logs | `tokio`, `tracing` | MIT | all crates |
 | Keychain | `keyring` (features in section 5.2) | MIT OR Apache-2.0 | `shellpp-desktop` |
 | Local terminal | `portable-pty`, `serialport` | MIT; MPL-2.0 | `shellpp-term-local` |
-| Server | `axum`, `sqlx`, `argon2`, `totp-rs`, `governor`, optional `lettre` | MIT; MIT OR Apache-2.0; MIT OR Apache-2.0; MIT; MIT; MIT | `shellpp-server` |
+| Server | `axum`, `rusqlite` and `postgres` (D101), `argon2`, `totp-rs`, `governor`, optional `lettre` | MIT; MIT, MIT OR Apache-2.0; MIT OR Apache-2.0; MIT; MIT; MIT | `shellpp-server` |
 | Frontend | `react`, `react-dom`, `@xterm/xterm` and addons, `@tauri-apps/api`, `lucide-react` | MIT; MIT; MIT; MIT OR Apache-2.0; ISC | `@shellpp/desktop` |
 | Fonts | Inter, JetBrains Mono | OFL-1.1 | `@shellpp/desktop` |
 | Dev tools | Vite, Vitest, Testing Library, jsdom, TypeScript, eslint, WebdriverIO, tauri-driver | MIT, Apache-2.0, BlueOak-1.0.0 (dev list) | not shipped |

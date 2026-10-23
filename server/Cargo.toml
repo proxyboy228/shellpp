@@ -1,0 +1,92 @@
+# The sync server (docs/architecture.md, sections 2.2, 2.3, 10.2), AGPL-3.0-only,
+# in a Cargo workspace of its own: the client workspace never depends on it.
+[workspace]
+resolver = "3"
+members = ["."]
+
+[package]
+name = "shellpp-server"
+description = "Shell++ sync server: accounts, encrypted record envelopes and key wraps; never sees plaintext."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "AGPL-3.0-only"
+repository = "https://github.com/proxyboy228/shellpp"
+authors = ["Shell++ contributors"]
+publish = false
+
+[lib]
+name = "shellpp_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shellpp-server"
+path = "src/main.rs"
+
+[dependencies]
+shellpp-sync-api = { path = "../crates/sync-api" }
+
+# HTTP.
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+
+# Storage (D101): SQLite through rusqlite (the same libsqlite3-sys as the
+# client, which the end-to-end tests link), PostgreSQL through the
+# synchronous postgres client; both behind one SQL layer (src/db.rs), run on
+# blocking threads.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+postgres = { version = "0.19.14", features = ["with-uuid-1", "with-time-0_3", "with-serde_json-1"] }
+
+# Cryptography of the server (docs/security.md, sections 5.1, 5.5): verifiers,
+# token and code hashes, server-only keys, the TOTP secret at rest, TOTP.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash", "zeroize"] }
+sha2 = "0.11.1"
+hmac = "0.13.0"
+hkdf = "0.13.0"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+totp-rs = { version = "6.0.0", default-features = false }
+subtle = "2.6.1"
+zeroize = "1.9.1"
+getrandom = "0.4.3"
+
+# Rate limiting (docs/sync-protocol.md, section 10.1).
+governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap", "jitter", "quanta"] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+uuid = { version = "1.28.0", features = ["v7", "serde"] }
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+data-encoding = "2.11.1"
+unicode-normalization = "0.1.26"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "env-filter", "ansi"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+
+[dev-dependencies]
+# The end-to-end tests: two clients of the real sync client against this
+# server in the same process (docs/architecture.md, section 9.1).
+shellpp-core = { path = "../crates/core" }
+tempfile = "3.27.0"
+secrecy = { version = "0.10.3", features = ["serde"] }
+
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.chacha20]
+opt-level = 3
+
+[profile.dev.package.poly1305]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

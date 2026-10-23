@@ -7735,6 +7735,12 @@ dependencies = [
 [[package]]
 name = "shellpp-sync-api"
 version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "serde",
+ "serde_json",
+ "uuid",
+]
 
 [[package]]
 name = "shellpp-term-local"

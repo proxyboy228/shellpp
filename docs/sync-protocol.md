@@ -1511,7 +1511,7 @@ Irreversible events are logged with ids only, at `info`: account deleted (`user_
 
 ## 14. Server schema
 
-PostgreSQL types are shown; the SQLite backend uses equivalent types. Crate `sqlx`. Opaque secrets (tokens, tickets, invitation tokens, registration codes, email codes) are stored only as SHA-256 hashes. The server never stores IP addresses. (stage 0 decision)
+PostgreSQL types are shown; the SQLite backend uses equivalent types (D101: `rusqlite` and the `postgres` client behind one SQL layer, not `sqlx`). Opaque secrets (tokens, tickets, invitation tokens, registration codes, email codes) are stored only as SHA-256 hashes. The server never stores IP addresses. (stage 0 decision)
 
 ```sql
 CREATE TABLE users (

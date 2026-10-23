@@ -1,0 +1,140 @@
+# cargo-deny policy of the server workspace (docs/architecture.md, section 8.3): the
+# client rules, plus the AGPL license of the server crate itself.
+# cargo-deny policy of the client Cargo workspace.
+#
+# Rules: docs/architecture.md, section 8.3 (with the license lists of section
+# 8.1 and decision 4 in docs/decisions.md). The server workspace has its own
+# server/deny.toml with the same rules except where section 8.3 says otherwise.
+#
+# Run from the repository root:
+#   cargo install cargo-deny --locked
+#   cargo deny check
+#
+# CI runs the same command in the `licenses` job of .github/workflows/ci.yml.
+
+[graph]
+# Every target the client crates are built or checked for: the desktop
+# platforms of shellpp-desktop (GPUI Kit) and the mobile targets that CI checks for
+# shellpp-core (docs/architecture.md, section 2.3). A crate that is used only
+# on one of these targets is still checked.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-linux-android",
+    "aarch64-apple-ios",
+]
+# Optional features such as `dev-tools` are part of the graph as well.
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Known vulnerabilities always fail the check.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin attack, timing side channel): signing happens locally; risk is low; upstream is tracked (docs/decisions.md, decision 4)" },
+]
+# Since stage 2 the rsa crate is in the graph: russh (feature `rsa`) and
+# ssh-key (feature `rsa`) use it for RSA user keys, host keys and agent
+# identities in shellpp-ssh and shellpp-core. There is no fixed release yet, so
+# the exception above stays. An advisory exception that no longer matches
+# (after an rsa release with the fix) is allowed by policy rather than
+# reported, so removing it is a deliberate review step.
+unused-ignored-advisory = "allow"
+# Unmaintained and unsound notices fail for crates that the workspace depends
+# on directly. Transitive notices come from GPUI (gpui-kit) and keyring and
+# cannot be fixed here; with the GPUI UI they are RUSTSEC-2024-0384 (instant),
+# RUSTSEC-2024-0436 (paste), RUSTSEC-2026-0206 (rustybuzz) and
+# RUSTSEC-2026-0192 (ttf-parser), all unmaintained, under GPUI's text stack,
+# and RUSTSEC-2026-0370, -0371, -0372 (zvariant, zbus_names, zvariant_derive:
+# merged into zbus) under the Linux keychain and GPUI's Linux platform. No
+# unsound notice remains (the GTK 3 bindings left with Tauri). Review them
+# with `unmaintained = "all"` and `unsound = "all"`.
+unmaintained = "workspace"
+unsound = "workspace"
+# A yanked crate version in Cargo.lock fails the check.
+yanked = "deny"
+
+[licenses]
+# The shipped list of docs/architecture.md, section 8.1 (SPDX identifiers).
+# SQLite, bundled by libsqlite3-sys (declared MIT), is public domain and is
+# listed separately in THIRD_PARTY_NOTICES.md. OFL-1.1 is allowed for fonts
+# only, and fonts are not Rust crates, so it is not in this list.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+    "0BSD",
+    "CDLA-Permissive-2.0",
+]
+# The allow list is the policy, not a list of what is used today.
+unused-allowed-license = "allow"
+confidence-threshold = 0.93
+# Development and build dependencies are checked against the same list. A
+# dev-only or build-only crate that needs a license of the development list
+# (BlueOak-1.0.0, CC-BY-4.0) gets a per-crate exception with a reason.
+include-dev = true
+include-build = true
+# No per-crate exceptions are needed with the GPUI UI (the Tauri build needed
+# one for target-lexicon, a Linux build-only crate of the GTK bindings).
+exceptions = [
+    # The server itself is AGPL-3.0-only (docs/architecture.md, section 8.3).
+    { allow = ["AGPL-3.0-only"], crate = "shellpp-server" },
+]
+
+[licenses.private]
+# Workspace crates are checked too (all are Apache-2.0).
+ignore = false
+
+[bans]
+# Duplicate versions are common under GPUI (and were under Tauri) and are not
+# a policy item; `cargo deny check bans` with `multiple-versions = "warn"` lists them.
+multiple-versions = "allow"
+wildcards = "deny"
+# Path dependencies between the unpublished workspace crates are not wildcards.
+allow-wildcard-paths = true
+deny = [
+    { crate = "aws-lc-fips-sys", reason = "no FIPS builds (docs/decisions.md, decision 4)" },
+    { crate = "ring@<0.17.10", reason = "ring older than 0.17.10 is not allowed (docs/decisions.md, decision 4)" },
+    { crate = "aws-lc-sys@<0.39", reason = "aws-lc-sys older than 0.39 is not allowed (docs/decisions.md, decision 4)" },
+    { crate = "libdbus-sys", reason = "libdbus is AFL-2.1 OR GPL-2.0-or-later; the Secret Service is reached through zbus (docs/decisions.md, decision 4)" },
+    { crate = "dbus", reason = "binds libdbus, see libdbus-sys (docs/decisions.md, decision 4)" },
+    { crate = "openssl-sys", reason = "TLS is rustls and cryptography comes only from the crates of docs/architecture.md, section 8.2" },
+    { crate = "openssl", reason = "TLS is rustls and cryptography comes only from the crates of docs/architecture.md, section 8.2" },
+
+]
+
+[[bans.features]]
+crate = "keyring"
+deny = ["sync-secret-service", "vendored"]
+reason = "both use libdbus; the Linux keychain uses async-secret-service with crypto-rust (docs/architecture.md, section 5.2)"
+
+[[bans.features]]
+crate = "aws-lc-rs"
+deny = ["fips"]
+reason = "no FIPS builds (docs/decisions.md, decision 4)"
+
+[[bans.features]]
+crate = "rustls"
+deny = ["fips"]
+reason = "no FIPS builds (docs/decisions.md, decision 4)"
+
+[sources]
+# crates.io only. A git dependency needs an `allow-git` entry with a comment
+# that gives the reason (docs/architecture.md, section 8.3).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
