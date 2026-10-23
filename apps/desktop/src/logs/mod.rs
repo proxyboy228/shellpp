@@ -515,7 +515,7 @@ impl LogsScreen {
             .into_any_element()
     }
 
-    fn render_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_panel(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let entry = self.selected_entry()?.clone();
         let theme = cx.theme();
         let screen = cx.entity().downgrade();
@@ -611,11 +611,20 @@ impl LogsScreen {
         } else {
             widgets::caption(strings::NOT_RECORDED, cx).into_any_element()
         };
+        // Too narrow for the panel beside the log (175 and 200 %, D100): it
+        // covers the log's right, with a shadow.
+        let frame = if crate::shell::details::overlays_in(window) {
+            let room = window.viewport_size().width / metrics::zoom_of(window)
+                - crate::shell::sidebar::WIDTH_COLLAPSED;
+            crate::shell::details::over_area(div().id("log-panel"), cx).w(metrics::rems_of(
+                crate::shell::details::overlay_width(metrics::at_100(metrics::WIDTH_DETAILS), room),
+            ))
+        } else {
+            div().id("log-panel").w(metrics::WIDTH_DETAILS)
+        };
         Some(
-            div()
-                .id("log-panel")
+            frame
                 .test_support()
-                .w(metrics::WIDTH_DETAILS)
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -641,7 +650,7 @@ impl LogsScreen {
 }
 
 impl Render for LogsScreen {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown: Vec<ConnectionLogView> = self.shown().into_iter().cloned().collect();
         let rows: Vec<AnyElement> = shown
             .iter()
@@ -696,10 +705,23 @@ impl Render for LogsScreen {
         h_flex()
             .id("logs-screen")
             .test_support()
+            .relative()
             .size_full()
+            // A panel over the log (D100) closes with Esc.
+            .when(
+                self.selected_entry().is_some() && crate::shell::details::overlays_in(window),
+                |screen| {
+                    screen.on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" {
+                            cx.stop_propagation();
+                            this.select(None, cx);
+                        }
+                    }))
+                },
+            )
             .bg(cx.theme().colors.list)
             .text_color(cx.theme().foreground)
             .child(main)
-            .children(self.render_panel(cx))
+            .children(self.render_panel(window, cx))
     }
 }

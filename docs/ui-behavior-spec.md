@@ -123,7 +123,11 @@
 - A slide-out panel on the right. Opens when an object is selected or when a new one is created.
 - In the header: a title ("host details" / "new host"), a "…" menu with additional
   actions (the set depends on the object; for a host see 3.3), a button to collapse the panel.
-- The main area narrows; the panel does not overlap it. [decision]
+- The main area narrows; the panel does not overlap it. [decision] Exception (D100): when
+  the interface zoom (1.4) leaves no room for the panel beside the main area (the strip of
+  icons, the narrowest panel and a 264 px main area at 100 % do not fit: 175 and 200 % in a
+  narrow window), the panel opens over the right of the main area, with the overlay shadow,
+  as the sidebar collapses in a narrow window; Esc closes it.
 - Saving rule for every object panel (hosts, groups, keys, identities, forwarding rules,
   snippets) [decision]:
   - a new object is created once all its required fields are filled in with valid values.

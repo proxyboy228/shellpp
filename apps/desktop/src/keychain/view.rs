@@ -475,7 +475,8 @@ impl KeychainScreen {
     /// The width of the grid area (the screen without its panel).
     fn grid_width(&self, window: &Window) -> f32 {
         let total = self.total_width(window);
-        let panel = if self.has_panel() {
+        // A panel over the grid (D100) leaves it the whole width.
+        let panel = if self.has_panel() && !details::overlays_in(window) {
             self.fitted_panel_width(total).as_f32()
         } else {
             0.
@@ -986,7 +987,12 @@ impl KeychainScreen {
 
     /// The details panel frame: the panel's own view, the left border and
     /// the resize handle.
-    fn render_panel_frame(&self, total: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_panel_frame(
+        &self,
+        total: f32,
+        over: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let content = match self.panel.as_ref()? {
             PanelContent::Key(panel) => panel.clone().into_any_element(),
             PanelContent::Generate(form) => form.clone().into_any_element(),
@@ -994,12 +1000,23 @@ impl KeychainScreen {
         };
         let theme = cx.theme();
         let handle_hover = theme.drag_border;
+        // Too narrow for the panel beside the grid (175 and 200 %, D100): it
+        // covers the grid's right, with a shadow.
+        let (frame, width) = if over {
+            (
+                details::over_area(div().id("kc-panel"), cx),
+                details::overlay_width(self.panel_width, px(total)),
+            )
+        } else {
+            (
+                div().id("kc-panel").relative(),
+                self.fitted_panel_width(total),
+            )
+        };
         Some(
-            div()
-                .id("kc-panel")
+            frame
                 .test_support()
-                .relative()
-                .w(metrics::rems_of(self.fitted_panel_width(total)))
+                .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
                 .border_l_1()
@@ -1120,7 +1137,7 @@ impl Render for KeychainScreen {
                     )
                     .child(rows),
             );
-        let panel = self.render_panel_frame(total, cx);
+        let panel = self.render_panel_frame(total, details::overlays_in(window), cx);
         h_flex()
             .id("keychain-screen")
             .test_support()

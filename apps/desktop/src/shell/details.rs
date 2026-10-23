@@ -52,6 +52,45 @@ pub fn fitted_width(width: Pixels, window: Pixels, sidebar: Pixels) -> Pixels {
     clamp_width(width).min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)))
 }
 
+/// The narrowest main area beside an open details panel: what the 960 px
+/// window leaves at 150 % (640 design units less the 56 px strip of icons
+/// and the 320 px panel), the narrowest layout the zoom tests check (D96).
+pub const MAIN_AREA_BESIDE_PANEL: Pixels = gpui::px(264.);
+
+/// Whether a details panel opens over the main area instead of beside it
+/// (D100, item 2): in a window `window` design units wide (px at 100 %),
+/// the strip of icons and the narrowest panel would leave the main area less
+/// than [`MAIN_AREA_BESIDE_PANEL`]. That happens at 175 and 200 % in narrow
+/// windows (the minimum window is 548 and 480 design units wide there).
+/// The panel then covers the right of the main area, with the overlay
+/// shadow, and Esc closes it.
+pub fn overlays(window: Pixels) -> bool {
+    window - super::sidebar::WIDTH_COLLAPSED - metrics::at_100(metrics::WIDTH_DETAILS_MIN)
+        < MAIN_AREA_BESIDE_PANEL
+}
+
+/// [`overlays`] for the window's own width.
+pub fn overlays_in(window: &gpui::Window) -> bool {
+    overlays(window.viewport_size().width / metrics::zoom_of(window))
+}
+
+/// The width of a panel over an area `room` design units wide: the chosen
+/// width, clamped to 320-560, but never wider than the area.
+pub fn overlay_width(width: Pixels, room: Pixels) -> Pixels {
+    clamp_width(width).min(room)
+}
+
+/// Places a panel container over the right of its area (the area is
+/// `relative`): full height, the overlay shadow (D100, item 2).
+pub fn over_area<E: Styled>(panel: E, cx: &App) -> E {
+    panel
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .shadow(crate::theme::shadow_overlay(cx))
+}
+
 /// The value dragged by the resize handle.
 #[derive(Clone, Copy, Debug)]
 pub struct ResizeDetails;

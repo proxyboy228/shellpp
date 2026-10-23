@@ -2056,16 +2056,23 @@ impl Shell {
         } else {
             px(0.)
         };
-        let width = details::fitted_width(
-            self.details_width,
-            metrics::unscaled(window.viewport_size().width, cx),
-            sidebar,
-        );
+        let viewport = metrics::unscaled(window.viewport_size().width, cx);
+        // Too narrow for the panel beside the main area (175 and 200 %, D100):
+        // it covers the main area's right, with a shadow.
+        let over = details::overlays(viewport);
+        let width = if over {
+            details::overlay_width(self.details_width, viewport - sidebar)
+        } else {
+            details::fitted_width(self.details_width, viewport, sidebar)
+        };
+        let container = div().id("right-panel").test_support().relative();
+        let container = if over {
+            details::over_area(container, cx)
+        } else {
+            container
+        };
         Some(
-            div()
-                .id("right-panel")
-                .test_support()
-                .relative()
+            container
                 .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
@@ -3039,9 +3046,22 @@ impl Render for Shell {
                 });
             });
         }
+        // A panel over the main area (175 and 200 % in a narrow window, D100)
+        // closes with Esc, unless something inside took the key first.
+        let panel_over = self.panel.is_some()
+            && details::overlays(metrics::unscaled(window.viewport_size().width, cx));
         let body = match self.top_tab {
             TopTab::Vaults => h_flex()
+                .relative()
                 .size_full()
+                .when(panel_over, |body| {
+                    body.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" && this.panel.is_some() {
+                            cx.stop_propagation();
+                            this.close_panel(cx);
+                        }
+                    }))
+                })
                 .when(self.sidebar_visible, |body| {
                     body.child(sidebar::sidebar(
                         self.section,

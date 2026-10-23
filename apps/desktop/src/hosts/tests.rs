@@ -1257,19 +1257,70 @@ fn min_window_at_150_percent_has_nothing_clipped_or_overlapping(cx: &mut TestApp
 
 /// D96: at 175 % and 200 % the minimum window (548 and 480 px wide at
 /// 100 %) still has the bars of the Hosts screen whole and apart without
-/// the details panel (the panel needs a wider window there, D96).
+/// the details panel. D100: with the panel open it covers the right of the
+/// main area (the bars stay whole under it), with the overlay shadow, and
+/// Esc closes it.
 #[gpui_kit::test]
 fn min_window_at_200_percent_keeps_the_bars_whole(cx: &mut TestAppContext) {
-    let (state, handle, _root, _ids) = open_app(cx, 960., 600.);
-    for zoom in [1.75, 2.] {
-        cx.update(|cx| crate::theme::zoom::set(zoom, cx));
+    // The minimum width; taller, so the host cards stay on screen at 200 %.
+    let (state, handle, _root, ids) = open_app(cx, 960., 1000.);
+    let settle = |cx: &mut TestAppContext| {
         for _ in 0..3 {
             cx.update_window(handle, |_, window, cx| window.render_frame(cx))
                 .unwrap();
             cx.run_until_parked();
         }
+    };
+    for (round, zoom) in [1.75, 2.].into_iter().enumerate() {
+        cx.update(|cx| crate::theme::zoom::set(zoom, cx));
+        settle(cx);
         check_bars_fit(cx, handle, &[], false);
+        let bar_before = cx
+            .update_window(handle, |_, window, _| window.find("action-bar").bounds())
+            .unwrap();
+
+        // Another host each round: a click on the selected one keeps it.
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(host_card_id(ids[round]), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(300));
+        settle(cx);
+        let (main, panel) = cx
+            .update_window(handle, |_, window, _| {
+                (
+                    window.find("main-area").bounds(),
+                    window.find("right-panel").bounds(),
+                )
+            })
+            .unwrap();
+        // Over the main area, at its right edge, inside the window.
+        assert!(panel.left() < main.right(), "{zoom}: {panel:?} {main:?}");
+        assert!((panel.right() - main.right()).abs() < px(1.), "{zoom}");
+        assert!(panel.left() >= main.left(), "{zoom}");
+        // The main area keeps the window's width: the bars are laid out as
+        // without the panel (under it at the right).
+        let bar_now = cx
+            .update_window(handle, |_, window, _| window.find("action-bar").bounds())
+            .unwrap();
+        assert_eq!(bar_now, bar_before, "{zoom}");
+        // Esc closes it, wherever the focus is.
+        cx.update_window(handle, |_, window, cx| window.press("escape", cx))
+            .unwrap();
+        settle(cx);
+        let open = cx
+            .update_window(handle, |_, window, _| {
+                window.try_find("right-panel").is_some()
+            })
+            .unwrap();
+        assert!(!open, "{zoom}: Esc closes the panel");
     }
+    // At 150 % the panel still fits beside the main area.
+    assert!(!crate::shell::details::overlays(px(640.)));
+    assert!(crate::shell::details::overlays(px(639.)));
+    assert!(crate::shell::details::overlays(px(548.)));
     cx.update(|cx| crate::theme::zoom::set(1., cx));
     let _ = cx.update_window(handle, |_, window, _| window.remove_window());
     cx.run_until_parked();

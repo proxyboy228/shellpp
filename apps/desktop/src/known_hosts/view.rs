@@ -370,7 +370,8 @@ impl KnownHostsScreen {
                 - metrics::at_100(metrics::WIDTH_SIDEBAR))
             .as_f32()
         });
-        let panel = if self.has_panel() {
+        // A panel over the grid (D100) leaves it the whole width.
+        let panel = if self.has_panel() && !details::overlays_in(window) {
             self.fitted_panel_width(total).as_f32()
         } else {
             0.
@@ -675,7 +676,13 @@ impl KnownHostsScreen {
 
     // -- Details panel -------------------------------------------------------------
 
-    fn render_panel(&self, view: &KnownHostView, total: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn render_panel(
+        &self,
+        view: &KnownHostView,
+        total: f32,
+        over: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let id = view.record_id;
         let screen = cx.entity().downgrade();
@@ -871,12 +878,22 @@ impl KnownHostsScreen {
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.confirm_remove(id, window, cx)
             }));
-        let width = self.fitted_panel_width(total);
         let handle_hover = theme.drag_border;
-        div()
-            .id("kh-panel")
+        // Too narrow for the panel beside the grid (175 and 200 %, D100): it
+        // covers the grid's right, with a shadow.
+        let (frame, width) = if over {
+            (
+                details::over_area(div().id("kh-panel"), cx),
+                details::overlay_width(self.panel_width, px(total)),
+            )
+        } else {
+            (
+                div().id("kh-panel").relative(),
+                self.fitted_panel_width(total),
+            )
+        };
+        frame
             .test_support()
-            .relative()
             .w(metrics::rems_of(width))
             .flex_none()
             .h_full()
@@ -1026,7 +1043,7 @@ impl Render for KnownHostsScreen {
         let panel = self
             .selected_view()
             .cloned()
-            .map(|view| self.render_panel(&view, total, cx));
+            .map(|view| self.render_panel(&view, total, details::overlays_in(window), cx));
         h_flex()
             .id("known-hosts-screen")
             .test_support()

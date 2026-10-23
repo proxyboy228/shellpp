@@ -885,7 +885,7 @@ impl SnippetsScreen {
 
     // -- Panel ---------------------------------------------------------------------
 
-    fn render_panel(&self, total: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_panel(&self, total: f32, over: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let form = self.form.clone()?;
         let theme = cx.theme();
         let mode = form.read(cx).mode();
@@ -968,14 +968,24 @@ impl SnippetsScreen {
                 cx.listener(|this, _: &ClickEvent, window, cx| this.run_from_panel(window, cx)),
             );
         let room = px(total) - details::MAIN_AREA_MIN;
-        let width = details::clamp_width(self.panel_width)
-            .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN)));
         let handle_hover = theme.drag_border;
+        // Too narrow for the panel beside the list (175 and 200 %, D100): it
+        // covers the list's right, with a shadow.
+        let (frame, width) = if over {
+            (
+                details::over_area(div().id("snippet-panel"), cx),
+                details::overlay_width(self.panel_width, px(total)),
+            )
+        } else {
+            (
+                div().id("snippet-panel").relative(),
+                details::clamp_width(self.panel_width)
+                    .min(room.max(metrics::at_100(metrics::WIDTH_DETAILS_MIN))),
+            )
+        };
         Some(
-            div()
-                .id("snippet-panel")
+            frame
                 .test_support()
-                .relative()
                 .w(metrics::rems_of(width))
                 .flex_none()
                 .h_full()
@@ -1177,7 +1187,7 @@ impl Render for SnippetsScreen {
                         .child(content),
                 )
             });
-        let panel = self.render_panel(total, cx);
+        let panel = self.render_panel(total, details::overlays_in(window), cx);
         h_flex()
             .id("snippets-screen")
             .test_support()
