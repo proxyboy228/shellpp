@@ -9,7 +9,8 @@ devices runs through a server you host yourself, if you want it at all.
 1. [First run and the master password](01-first-run.md): creating the
    vault, unlocking and locking, a forgotten password.
 2. [Hosts, groups and tags](02-hosts.md): adding hosts, groups and tags,
-   quick connect, importing from `~/.ssh/config`, known hosts.
+   quick connect, importing from `~/.ssh/config`, PuTTY and CSV, known
+   hosts.
 3. [Keys, the Keychain and Export to host](03-keys.md): generating and
    importing keys, putting a key on servers, agent forwarding.
 4. [The terminal](04-terminal.md): tabs, splits, workspaces, broadcast

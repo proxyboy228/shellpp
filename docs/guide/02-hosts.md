@@ -145,6 +145,45 @@ What is not:
 - hosts imported before are recognized and never overwritten, so you can
   import the same file again after you add hosts to it.
 
+## Importing PuTTY sessions (Windows)
+
+The arrow next to **New host** > **Import** > **PuTTY sessions** reads the
+sessions PuTTY saved in the registry and shows the same preview as the
+OpenSSH config import.
+
+- The session name is the label; its host name, port and user name, its
+  key file (`PublicKeyFile`, imported into the Keychain), its port
+  forwardings, agent forwarding (Pageant), keepalive, environment, SOCKS 5
+  or HTTP proxy, backspace key and character set come along.
+- Telnet sessions become hosts with a Telnet block.
+- Not imported, with the reason in the preview: raw, rlogin and serial
+  sessions, sessions without a host name, SOCKS 4, Telnet or SSH proxies
+  and local proxy commands (never run). `Default Settings` is a template,
+  not a host.
+- Sessions imported before are recognized and never overwritten.
+
+## Importing a CSV file
+
+**Import** > **CSV** takes a table of hosts, for example from a
+spreadsheet or another manager. **Save template…** writes an example file
+with the columns `label,address,port,username,group,tags,notes`.
+
+1. Choose the file. Files over 16 MB or 100,000 rows are refused.
+2. Check the mapping: the **Character set** and the **Delimiter** are
+   detected (change them if the preview looks wrong), **First row is a
+   header**, and for each column what it holds (label, address, port,
+   username, group, tags, notes, password, or not imported). An address
+   column is required.
+3. Check the preview ("N new, M already exist, K not imported") and click
+   **Import**.
+
+- `group` can be a path such as `prod / web`: missing groups are created.
+  Tags are separated by `,` or `;`.
+- A row is "already exists" when a host has the same address, port and
+  user name; existing hosts are never overwritten.
+- A password column is stored encrypted in the vault, but the CSV file
+  still holds the passwords in clear text: delete it after the import.
+
 ## Known hosts
 
 The **Known Hosts** screen (in the sidebar) lists the server keys you have

@@ -167,7 +167,14 @@ The **Terminal sidebar** button in the top bar (on session tabs) opens a
 panel next to the terminal with four pages:
 
 - **Tools**: search in the output and the scrollback (Ctrl+Shift+F opens
-  it). Enter and Shift+Enter go to the next and previous match.
+  it). Enter and Shift+Enter go to the next and previous match. Here, and
+  in Settings > **Terminal**, **Autocomplete (beta)** can be set to
+  **This host's history**: while you type, the rest of a command you ran
+  on this host before appears dimmed after the cursor, and Tab or →
+  accepts it. It works in shells that mark their prompt (bash 5.1 and
+  later, zsh, fish) on saved hosts, never at a password prompt or in
+  full-screen programs, and never suggests commands that look like
+  secrets.
 - **Snippets**: click a snippet to insert it without running it, or use
   its run button to insert it and press Enter. Variables such as
   `{{name}}` are asked first ([Snippets](05-sftp-forwarding-snippets.md#snippets)).

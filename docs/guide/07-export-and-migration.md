@@ -116,9 +116,11 @@ OpenSSH config, `known_hosts` and key files.
    config have to be added by hand ([SFTP, port forwarding and
    snippets](05-sftp-forwarding-snippets.md)).
 
-PuTTY sessions and CSV files are listed in the import dialog but are not
-available in this version ("Arrives in a later version"). For PuTTY, export
-your keys as `.ppk` files and import them in the Keychain.
+From PuTTY on Windows, **Import** > **PuTTY sessions** takes the saved
+sessions with their keys and tunnels
+([Hosts](02-hosts.md#importing-putty-sessions-windows)). From a client that
+exports a table, **Import** > **CSV** takes it with a column mapping
+([Hosts](02-hosts.md#importing-a-csv-file)).
 
 ## Leaving Shell++
 
