@@ -252,9 +252,15 @@ pub struct ConflictItem {
     pub differences: Vec<FieldDifference>,
     /// The current version is a deletion.
     pub current_deleted: bool,
+    /// The original is not here (data-model 15: shown as "missing"): no
+    /// row (purged) or one this device cannot open (its epoch key is
+    /// missing). "Keep other" recreates it.
+    pub current_missing: bool,
     /// The current version's data with secret members masked (`None` when
-    /// it is deleted).
+    /// it is deleted or missing).
     pub current_data: Option<Map<String, Value>>,
+    /// What "Keep other" does (the type rules of sync-protocol 6.7 hold).
+    pub keep_other: KeepOther,
     pub current_device_id: Option<String>,
     /// The devices' names (their `device_info` records) when known.
     pub current_device_name: Option<String>,
@@ -274,6 +280,33 @@ pub struct FieldDifference {
     pub path: String,
     pub current: String,
     pub other: String,
+}
+
+/// What "Keep other" does with a conflict (UI 13.6). The type rules of
+/// sync-protocol 6.7 hold for it as for the merge: a revoked known host key
+/// stays revoked. Refused choices keep the conflict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepOther {
+    /// The other version replaces the current one.
+    Replaces,
+    /// The current version is a revoked known host key and the other is
+    /// not (or holds another key): the revoked key stays (`marker`,
+    /// `key_type`, `public_key`), the other version's remaining fields
+    /// replace the current ones.
+    KeepsRevocation,
+    /// Refused: the other version deletes a revoked known host key.
+    RevokedStays,
+    /// Refused: this app cannot write the object's type (one from a newer
+    /// client, or one it never writes, as `member_pin`).
+    Unsupported,
+}
+
+impl KeepOther {
+    /// "Keep other" can be chosen.
+    pub fn allowed(self) -> bool {
+        matches!(self, Self::Replaces | Self::KeepsRevocation)
+    }
 }
 
 /// Which version a conflict keeps.
@@ -3332,6 +3365,19 @@ impl Core {
             let rows = conflict_rows(&inner.store, session)?;
             let this_device = session.device_id.to_string();
             let device_names = device_names(session);
+            // Records deleted here whose rows went at once (a vault not
+            // bound yet): deleted, not missing.
+            let trashed: HashSet<Uuid> = if rows.is_empty() {
+                HashSet::new()
+            } else {
+                inner
+                    .store
+                    .recently_deleted()?
+                    .into_iter()
+                    .filter(|entry| entry.vault_id == vault_id)
+                    .map(|entry| entry.record_id)
+                    .collect()
+            };
             let mut items = Vec::with_capacity(rows.len());
             for (row, payload) in rows {
                 let data = payload.data.clone().unwrap_or_default();
@@ -3343,19 +3389,25 @@ impl Core {
                 let losing_data = data.get("losing_data").and_then(Value::as_object).cloned();
                 // The current version as stored: its device and time, and the
                 // data of a lazy class the index has not opened yet.
-                let stored = inner
-                    .store
-                    .record(&vault_id, &original_record_id)?
-                    .and_then(|row| open_payload(&mut session.ring, &row));
+                let stored_row = inner.store.record(&vault_id, &original_record_id)?;
+                let stored = stored_row
+                    .as_ref()
+                    .and_then(|row| open_payload(&mut session.ring, row));
                 let indexed = session
                     .index
                     .get(&original_record_id)
                     .map(|record| record.data().clone());
-                let current_deleted = match &stored {
-                    Some(stored) => stored.deleted,
-                    None => indexed.is_none(),
+                // Missing (data-model 15): no row and no deletion here (a
+                // purged tombstone), or a live row this device cannot open.
+                let (current_deleted, current_missing) = match (&stored_row, &stored) {
+                    (Some(_), Some(stored)) => (stored.deleted, false),
+                    (Some(row), None) => (row.tombstone, !row.tombstone),
+                    (None, _) => {
+                        let deleted = trashed.contains(&original_record_id);
+                        (deleted, !deleted)
+                    }
                 };
-                let current_data = if current_deleted {
+                let current_data = if current_deleted || current_missing {
                     None
                 } else {
                     indexed.or_else(|| stored.as_ref().and_then(|stored| stored.data.clone()))
@@ -3368,6 +3420,12 @@ impl Core {
                     .get("losing_deleted")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                let keep_other = keep_other_of(
+                    &original_type,
+                    current_data.as_ref(),
+                    losing_deleted,
+                    losing_data.as_ref(),
+                );
                 items.push(ConflictItem {
                     conflict_id: row.record_id,
                     original_record_id,
@@ -3380,7 +3438,9 @@ impl Core {
                     differences: differences(current_data.as_ref(), losing_data.as_ref()),
                     losing_data: losing_data.as_ref().map(masked),
                     current_deleted,
+                    current_missing,
                     current_data: current_data.as_ref().map(masked),
+                    keep_other,
                     current_device_name: name_of(&current_device_id),
                     losing_device_name: name_of(&losing_device_id),
                     current_this_device: current_device_id.as_deref() == Some(this_device.as_str()),
@@ -3451,107 +3511,166 @@ impl Core {
     }
 
     /// Resolves a conflict (UI 13.6): the copy is deleted; with
-    /// [`ConflictChoice::Copy`] its version becomes the record's next one.
+    /// [`ConflictChoice::Copy`] its version becomes the record's next one
+    /// (a deletion tombstones the original). "Keep other" follows the type
+    /// rules ([`KeepOther`]); refused, it keeps the conflict, as it does
+    /// whenever the other version cannot be written.
     pub fn sync_conflict_resolve(
         &self,
         conflict_id: Uuid,
         choice: ConflictChoice,
     ) -> Result<(), CoreError> {
+        // A deletion of a kind the user deletes runs first as the user's own
+        // (Recently deleted, a group's children move up); the copy goes
+        // after it, so a failed deletion keeps the conflict.
+        for _ in 0..2 {
+            match self
+                .with_session(|inner| self.conflict_resolve_pass(inner, conflict_id, choice))?
+            {
+                None => return Ok(()),
+                Some(delete) => {
+                    self.record_delete(delete)?;
+                }
+            }
+        }
+        Err(CoreError::Internal("conflict deletion repeated"))
+    }
+
+    /// One pass of [`Core::sync_conflict_resolve`]: everything in one
+    /// transaction, or the deletion to run first.
+    fn conflict_resolve_pass(
+        &self,
+        inner: &mut Inner,
+        conflict_id: Uuid,
+        choice: ConflictChoice,
+    ) -> Result<Option<super::dto::RecordsRef>, CoreError> {
         let now = self.now();
         let now_text = format_timestamp(now);
-        let removed = self.with_session(|inner| {
-            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
-            let vault_id = session.ring.vault_id();
-            let row = inner
-                .store
-                .record(&vault_id, &conflict_id)?
-                .ok_or(CoreError::NotFound)?;
-            let payload = open_payload(&mut session.ring, &row).ok_or(CoreError::NotFound)?;
-            if payload.type_name != "conflict" || payload.deleted {
-                return Err(CoreError::NotFound);
-            }
-            let data = payload.data.clone().unwrap_or_default();
-            let mut rows = Vec::new();
-            let mut writes = Vec::new();
-            let mut removed = Vec::new();
-            if choice == ConflictChoice::Copy {
-                let original = data
-                    .get("original_record_id")
-                    .and_then(Value::as_str)
-                    .and_then(|id| Uuid::parse_str(id).ok())
-                    .ok_or(CoreError::NotFound)?;
-                let kind = data
-                    .get("original_type")
-                    .and_then(Value::as_str)
-                    .and_then(RecordKind::from_name)
-                    .ok_or(CoreError::NotFound)?;
-                let losing_deleted = data
-                    .get("losing_deleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if losing_deleted {
-                    // Deleted below as the user's own deletion (Recently deleted).
-                    if session.index.get(&original).is_some() {
-                        removed.push(original);
-                    }
-                    let _ = kind;
-                } else {
-                    let losing = data
-                        .get("losing_data")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .ok_or(CoreError::NotFound)?;
-                    writes.push(session.prepare_write(
-                        &inner.store,
-                        kind,
-                        original,
-                        losing,
-                        now,
-                    )?);
-                }
-            }
-            let hlc = session.hlc.tick(unix_ms(now));
-            let tombstone = Payload::tombstone("conflict", payload.v, hlc, session.device_id);
-            rows.push(vault::seal_row(
-                &mut session.ring,
-                row.class,
-                row.record_id,
-                &tombstone,
-                Some(&row),
-                &now_text,
-            )?);
-            inner.store.write(|tx| {
-                for row in &rows {
-                    tx.record_put(row)?;
-                }
-                for write in &writes {
-                    tx.record_put(&write.row)?;
-                    // The record is live again: no stale Recently deleted entry.
-                    tx.recently_deleted_delete(&vault_id, &write.record_id)?;
-                }
-                Ok(())
-            })?;
-            let mut changed: Vec<Uuid> = writes.iter().map(|write| write.record_id).collect();
-            changed.push(conflict_id);
-            session.commit(writes);
-            self.emit(
-                inner,
-                CoreEventKind::RecordsChanged {
-                    vault_id,
-                    record_ids: changed,
-                    classes: vec![row.class],
-                },
-            );
-            Ok((vault_id, removed))
-        })?;
-        let (vault_id, removed) = removed;
-        if !removed.is_empty() {
-            self.record_delete(super::dto::RecordsRef {
-                vault_id,
-                record_ids: removed,
-            })?;
+        let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+        let vault_id = session.ring.vault_id();
+        let row = inner
+            .store
+            .record(&vault_id, &conflict_id)?
+            .ok_or(CoreError::NotFound)?;
+        let payload = open_payload(&mut session.ring, &row).ok_or(CoreError::NotFound)?;
+        if payload.type_name != "conflict" || payload.deleted {
+            return Err(CoreError::NotFound);
         }
-        Ok(())
+        let data = payload.data.clone().unwrap_or_default();
+        let mut rows = Vec::new();
+        let mut writes = Vec::new();
+        let mut trashed = Vec::new();
+        let mut hidden = Vec::new();
+        if choice == ConflictChoice::Copy {
+            let original = data
+                .get("original_record_id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(CoreError::NotFound)?;
+            let type_name = data
+                .get("original_type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            // A type this app cannot write keeps its conflict (UI 13.6).
+            let kind = RecordKind::from_name(type_name).ok_or(CoreError::ReadOnly)?;
+            // A history or log entry may not be loaded yet (D10).
+            session.ensure_class(&inner.store, kind.class())?;
+            let losing_deleted = data
+                .get("losing_deleted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let losing = data.get("losing_data").and_then(Value::as_object).cloned();
+            let previous = inner
+                .store
+                .record(&vault_id, &original)?
+                .filter(|previous| !previous.tombstone);
+            let current = previous
+                .as_ref()
+                .and_then(|previous| open_payload(&mut session.ring, previous))
+                .filter(|current| !current.deleted);
+            let current_data = current.as_ref().and_then(|current| current.data.as_ref());
+            let keep = keep_other_of(type_name, current_data, losing_deleted, losing.as_ref());
+            if !keep.allowed() {
+                return Err(CoreError::ReadOnly);
+            }
+            if losing_deleted {
+                if let Some(previous) = previous {
+                    if session.index.get(&original).is_none() {
+                        // Live here but not readable (a newer payload
+                        // version, damaged): never dropped for a copy.
+                        return Err(CoreError::ReadOnly);
+                    }
+                    if super::records::deletable(kind) {
+                        return Ok(Some(super::dto::RecordsRef {
+                            vault_id,
+                            record_ids: vec![original],
+                        }));
+                    }
+                    // Known hosts, identities, history and log entries and the
+                    // bookkeeping types: tombstoned with the copy.
+                    if trash::kept(kind) {
+                        trashed.push(RecentlyDeletedRow {
+                            vault_id,
+                            record_id: original,
+                            class: previous.class,
+                            deleted_at: now_text.clone(),
+                            origin: DeletedOrigin::Local,
+                            envelope: previous.envelope.clone(),
+                        });
+                    }
+                    rows.push(session.prepare_tombstone(kind, &previous, now)?);
+                    hidden.push(original);
+                }
+            } else {
+                let mut losing = losing.ok_or(CoreError::NotFound)?;
+                if keep == KeepOther::KeepsRevocation
+                    && let Some(current) = current_data
+                {
+                    keep_revocation(current, &mut losing);
+                }
+                writes.push(session.prepare_write(&inner.store, kind, original, losing, now)?);
+            }
+        }
+        let hlc = session.hlc.tick(unix_ms(now));
+        let tombstone = Payload::tombstone("conflict", payload.v, hlc, session.device_id);
+        rows.push(vault::seal_row(
+            &mut session.ring,
+            row.class,
+            row.record_id,
+            &tombstone,
+            Some(&row),
+            &now_text,
+        )?);
+        inner.store.write(|tx| {
+            for entry in &trashed {
+                tx.recently_deleted_put(entry)?;
+            }
+            for row in &rows {
+                tx.record_put(row)?;
+            }
+            for write in &writes {
+                tx.record_put(&write.row)?;
+                // The record is live again: no stale Recently deleted entry.
+                tx.recently_deleted_delete(&vault_id, &write.record_id)?;
+            }
+            Ok(())
+        })?;
+        let mut changed: Vec<Uuid> = writes.iter().map(|write| write.record_id).collect();
+        for id in &hidden {
+            session.index.remove(id);
+            changed.push(*id);
+        }
+        changed.push(conflict_id);
+        session.commit(writes);
+        self.emit(
+            inner,
+            CoreEventKind::RecordsChanged {
+                vault_id,
+                record_ids: changed,
+                classes: vec![row.class],
+            },
+        );
+        Ok(None)
     }
 
     pub fn sync_duplicates(&self) -> Result<Vec<DuplicateItem>, CoreError> {
@@ -3963,8 +4082,81 @@ fn shown(value: Option<&Value>) -> String {
     }
 }
 
+/// The members of a known host that make its key revoked (data-model 9.5).
+const REVOCATION: [&str; 3] = ["marker", "key_type", "public_key"];
+
+fn revoked(data: &Map<String, Value>) -> bool {
+    data.get("marker").and_then(Value::as_str) == Some("revoked")
+}
+
+/// What "Keep other" does with a conflict (UI 13.6): the type rules of
+/// sync-protocol 6.7 hold, so a revoked known host key stays revoked.
+/// `current` is `None` when the current version is deleted or missing.
+fn keep_other_of(
+    type_name: &str,
+    current: Option<&Map<String, Value>>,
+    losing_deleted: bool,
+    losing: Option<&Map<String, Value>>,
+) -> KeepOther {
+    // `member_pin`, `roster_entry`, `credential_binding` and types of a
+    // newer client: this app never writes them.
+    if RecordKind::from_name(type_name).is_none() {
+        return KeepOther::Unsupported;
+    }
+    if type_name == RecordKind::KnownHost.name()
+        && let Some(current) = current.filter(|current| revoked(current))
+    {
+        if losing_deleted {
+            return KeepOther::RevokedStays;
+        }
+        if losing.is_some_and(|losing| {
+            REVOCATION
+                .iter()
+                .any(|name| losing.get(*name) != current.get(*name))
+        }) {
+            return KeepOther::KeepsRevocation;
+        }
+    }
+    KeepOther::Replaces
+}
+
+/// The other version of a known host with the current one's revoked key
+/// ([`KeepOther::KeepsRevocation`]).
+fn keep_revocation(current: &Map<String, Value>, losing: &mut Map<String, Value>) {
+    for name in REVOCATION {
+        match current.get(name) {
+            Some(value) => {
+                losing.insert(name.to_owned(), value.clone());
+            }
+            None => {
+                losing.remove(name);
+            }
+        }
+    }
+}
+
+/// A value as the comparison sees it: `null`, `""`, `[]` and objects of
+/// such members are absent, as the dialog shows none of them (UI 13.6).
+fn present(value: Option<&Value>) -> Option<Value> {
+    match value? {
+        Value::Null => None,
+        Value::String(text) if text.is_empty() => None,
+        Value::Array(items) if items.is_empty() => None,
+        Value::Object(map) => {
+            let kept: Map<String, Value> = map
+                .iter()
+                .filter_map(|(name, value)| present(Some(value)).map(|value| (name.clone(), value)))
+                .collect();
+            (!kept.is_empty()).then_some(Value::Object(kept))
+        }
+        other => Some(other.clone()),
+    }
+}
+
 /// The differing fields of two versions, one level of nesting flattened
-/// (`ssh.port`), secrets masked.
+/// (`ssh.port`), secrets masked. The list order (`order_key`) and empty
+/// values against absent ones are no difference: the dialog shows
+/// neither.
 fn differences(
     current: Option<&Map<String, Value>>,
     other: Option<&Map<String, Value>>,
@@ -3974,7 +4166,11 @@ fn differences(
     let current = current.unwrap_or(&empty);
     let other = other.unwrap_or(&empty);
     let mut paths: Vec<(String, Option<Value>, Option<Value>)> = Vec::new();
-    let mut names: Vec<&String> = current.keys().chain(other.keys()).collect();
+    let mut names: Vec<&String> = current
+        .keys()
+        .chain(other.keys())
+        .filter(|name| !UNCOMPARED.contains(&name.as_str()))
+        .collect();
     names.sort();
     names.dedup();
     for name in names {
@@ -3996,11 +4192,8 @@ fn differences(
     }
     paths
         .into_iter()
-        .filter(|(_, a, b)| {
-            let a = a.as_ref().filter(|value| !value.is_null());
-            let b = b.as_ref().filter(|value| !value.is_null());
-            a != b
-        })
+        .map(|(path, a, b)| (path, present(a.as_ref()), present(b.as_ref())))
+        .filter(|(_, a, b)| a != b)
         .map(|(path, a, b)| {
             let name = path.rsplit('.').next().unwrap_or(&path).to_owned();
             let mask = |value: Option<Value>| value.map(|value| masked_value(&name, &value));
@@ -4509,6 +4702,349 @@ mod tests {
         assert!(item.current_data.is_none());
         assert_eq!(item.title, "db", "named after the other version");
         assert!(item.losing_data.is_some());
+    }
+
+    /// A core with a vault and its master password (generated here).
+    fn core_with_password() -> (tempfile::TempDir, Core, SecretString) {
+        use crate::platform::OsKind;
+        use crate::platform::memory::MemoryPlatform;
+        let dir = tempfile::tempdir().unwrap();
+        let core = Core::open(
+            super::super::CoreConfig {
+                data_dir: dir.path().join("data"),
+                app_version: "0.1.0".into(),
+            },
+            MemoryPlatform::new().platform(OsKind::Linux, "TEST"),
+        )
+        .unwrap();
+        let password = SecretString::from(format!("Pw-{}", random_text()));
+        core.first_run_setup(password.clone()).unwrap();
+        (dir, core, password)
+    }
+
+    fn item_of(core: &Core, conflict: Uuid) -> ConflictItem {
+        core.sync_conflicts()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.conflict_id == conflict)
+            .expect("the conflict is listed")
+    }
+
+    /// A random Ed25519 host key: base64 of its SSH wire form.
+    fn host_key_blob() -> String {
+        let mut blob = Vec::new();
+        let key = crypto::random_array::<32>().unwrap();
+        for part in [b"ssh-ed25519".as_slice(), key.as_slice()] {
+            blob.extend_from_slice(&(part.len() as u32).to_be_bytes());
+            blob.extend_from_slice(part);
+        }
+        data_encoding::BASE64.encode(&blob)
+    }
+
+    fn add_known_host(core: &Core, revoked: bool) -> Uuid {
+        core.known_host_add(crate::service::dto::KnownHostAddInput {
+            host: "192.0.2.20".into(),
+            port: Some(22),
+            key_type: "ssh-ed25519".into(),
+            public_key: host_key_blob(),
+            revoked,
+            comment: None,
+        })
+        .unwrap()
+        .record_id
+    }
+
+    fn row_of(core: &Core, id: Uuid) -> Option<RecordRow> {
+        let guard = core.inner();
+        let vault_id = guard.session.as_ref().unwrap().ring.vault_id();
+        guard.store.record(&vault_id, &id).unwrap()
+    }
+
+    /// Sync-protocol 6.7 and UI 13.6: a revoked known host key stays
+    /// revoked through "Keep other" too. An edit made elsewhere before the
+    /// revocation replaces the rest of the entry and keeps the revoked key
+    /// (also when it holds another key); a deletion of the revoked entry is
+    /// refused and the conflict stays.
+    #[test]
+    fn keep_other_leaves_a_revoked_known_host_key_revoked() {
+        let (_dir, core) = unlocked_core();
+        let known = add_known_host(&core, true);
+        let revoked = stored_data(&core, known);
+        assert_eq!(revoked["marker"], json!("revoked"));
+        let device = Uuid::now_v7();
+
+        let mut edited = revoked.clone();
+        edited.remove("marker");
+        edited.insert("comment".into(), json!("edited elsewhere"));
+        let conflict = core
+            .sync_conflict_insert_for_test(known, Some(edited), device, SystemTime::now())
+            .unwrap();
+        assert_eq!(
+            item_of(&core, conflict).keep_other,
+            KeepOther::KeepsRevocation
+        );
+        core.sync_conflict_resolve(conflict, ConflictChoice::Copy)
+            .unwrap();
+        let now = stored_data(&core, known);
+        assert_eq!(now["marker"], json!("revoked"), "the key stays revoked");
+        assert_eq!(now["public_key"], revoked["public_key"]);
+        assert_eq!(now["comment"], json!("edited elsewhere"));
+
+        let mut replaced = revoked.clone();
+        replaced.remove("marker");
+        replaced.insert("public_key".into(), json!(host_key_blob()));
+        let conflict = core
+            .sync_conflict_insert_for_test(known, Some(replaced), device, SystemTime::now())
+            .unwrap();
+        assert_eq!(
+            item_of(&core, conflict).keep_other,
+            KeepOther::KeepsRevocation
+        );
+        core.sync_conflict_resolve(conflict, ConflictChoice::Copy)
+            .unwrap();
+        let now = stored_data(&core, known);
+        assert_eq!(now["marker"], json!("revoked"));
+        assert_eq!(now["public_key"], revoked["public_key"], "the revoked key");
+
+        let deletion = core
+            .sync_conflict_insert_for_test(known, None, device, SystemTime::now())
+            .unwrap();
+        assert_eq!(item_of(&core, deletion).keep_other, KeepOther::RevokedStays);
+        assert!(matches!(
+            core.sync_conflict_resolve(deletion, ConflictChoice::Copy),
+            Err(CoreError::ReadOnly)
+        ));
+        assert!(
+            item_of(&core, deletion).losing_deleted,
+            "the conflict stays"
+        );
+        assert_eq!(stored_data(&core, known)["marker"], json!("revoked"));
+        core.sync_conflict_resolve(deletion, ConflictChoice::Current)
+            .unwrap();
+        assert!(core.sync_conflicts().unwrap().is_empty());
+
+        // Not revoked: the other version replaces it whole.
+        let plain = add_known_host(&core, false);
+        let mut other = stored_data(&core, plain);
+        other.insert("marker".into(), json!("revoked"));
+        let conflict = core
+            .sync_conflict_insert_for_test(plain, Some(other), device, SystemTime::now())
+            .unwrap();
+        assert_eq!(item_of(&core, conflict).keep_other, KeepOther::Replaces);
+    }
+
+    /// A record of a type this app does not write (a newer client's
+    /// `terminal_theme`, a `member_pin` confirmed by a fingerprint
+    /// comparison): compared, but "Keep other" is refused and the conflict
+    /// stays; "Keep this" resolves it.
+    #[test]
+    fn keep_other_is_refused_for_types_this_app_does_not_write() {
+        let (_dir, core) = unlocked_core();
+        for (type_name, class) in [
+            ("terminal_theme", classes::APPEARANCE),
+            ("member_pin", classes::VAULT),
+        ] {
+            let id = Uuid::now_v7();
+            {
+                let mut guard = core.inner();
+                let inner = &mut *guard;
+                let session = inner.session.as_mut().unwrap();
+                let hlc = session.hlc.tick(unix_ms(SystemTime::now()));
+                let payload = Payload::live(
+                    type_name,
+                    1,
+                    hlc,
+                    session.device_id,
+                    json!({"name": "ours", "verified": true})
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                );
+                let row = vault::seal_row(
+                    &mut session.ring,
+                    class,
+                    id,
+                    &payload,
+                    None,
+                    &format_timestamp(SystemTime::now()),
+                )
+                .unwrap();
+                inner.store.write(|tx| tx.record_put(&row)).unwrap();
+            }
+            let other = json!({"name": "theirs", "verified": false});
+            let conflict = core
+                .sync_conflict_insert_for_test(
+                    id,
+                    other.as_object().cloned(),
+                    Uuid::now_v7(),
+                    SystemTime::now(),
+                )
+                .unwrap();
+            let item = item_of(&core, conflict);
+            assert_eq!(item.keep_other, KeepOther::Unsupported, "{type_name}");
+            assert_eq!(item.current_data.as_ref().unwrap()["name"], json!("ours"));
+            assert!(matches!(
+                core.sync_conflict_resolve(conflict, ConflictChoice::Copy),
+                Err(CoreError::ReadOnly)
+            ));
+            assert_eq!(item_of(&core, conflict).keep_other, KeepOther::Unsupported);
+            let row = row_of(&core, id).unwrap();
+            assert_eq!(row.revision, 1, "{type_name} is not rewritten");
+            core.sync_conflict_resolve(conflict, ConflictChoice::Current)
+                .unwrap();
+            assert!(core.sync_conflicts().unwrap().is_empty());
+        }
+    }
+
+    /// "Keep other" with a deletion deletes a kind `record_delete` does not
+    /// take (a known host) and a connection log entry whose lazy class was
+    /// not loaded since the unlock (D10): the copy never goes alone.
+    #[test]
+    fn keep_other_deletes_known_hosts_and_entries_not_loaded_yet() {
+        let (_dir, core, password) = core_with_password();
+        let known = add_known_host(&core, false);
+        let entry = core
+            .connection_log_start(crate::service::host_api::ConnectionLogStart {
+                host: None,
+                host_label: None,
+                address: "192.0.2.80".into(),
+                port: 22,
+                username: None,
+                os: None,
+            })
+            .unwrap();
+        core.lock().unwrap();
+        core.unlock(password).unwrap();
+        let loaded = core
+            .inner()
+            .session
+            .as_ref()
+            .unwrap()
+            .lazy_loaded
+            .contains(&classes::CONNECTION_LOG);
+        assert!(!loaded, "the log is not loaded yet");
+        let device = Uuid::now_v7();
+        let known_gone = core
+            .sync_conflict_insert_for_test(known, None, device, SystemTime::now())
+            .unwrap();
+        let entry_gone = core
+            .sync_conflict_insert_for_test(entry, None, device, SystemTime::now())
+            .unwrap();
+        let item = item_of(&core, entry_gone);
+        assert!(!item.current_deleted && !item.current_missing);
+        assert!(item.current_data.is_some(), "read from its row");
+
+        core.sync_conflict_resolve(entry_gone, ConflictChoice::Copy)
+            .unwrap();
+        core.sync_conflict_resolve(known_gone, ConflictChoice::Copy)
+            .unwrap();
+        assert!(core.sync_conflicts().unwrap().is_empty());
+        for id in [known, entry] {
+            assert!(row_of(&core, id).unwrap().tombstone, "deleted");
+        }
+        let log = core.connection_log_list().unwrap();
+        assert!(log.iter().all(|view| view.record_id != entry));
+        let known_hosts = core.known_hosts_list().unwrap();
+        assert!(known_hosts.iter().all(|view| view.record_id != known));
+        let trash = core.recently_deleted_list().unwrap();
+        for id in [known, entry] {
+            assert!(
+                trash.iter().any(|item| item.record_id == id),
+                "in the trash"
+            );
+        }
+    }
+
+    /// Data-model 15: an original no longer here (its row purged) is
+    /// "missing", not "Deleted"; "Keep other" recreates it under its id.
+    #[test]
+    fn a_purged_original_is_missing_and_keep_other_recreates_it() {
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "db", &random_text());
+        let mut other = stored_data(&core, host);
+        other.insert("label".into(), json!("db-2"));
+        let conflict = core
+            .sync_conflict_insert_for_test(host, Some(other), Uuid::now_v7(), SystemTime::now())
+            .unwrap();
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        // Not bound: the row goes at once; emptied from the trash, nothing
+        // of it is left here.
+        core.record_delete(crate::service::dto::RecordsRef {
+            vault_id,
+            record_ids: vec![host],
+        })
+        .unwrap();
+        core.recently_deleted_delete(&[host]).unwrap();
+        assert!(row_of(&core, host).is_none());
+
+        let item = item_of(&core, conflict);
+        assert!(item.current_missing, "missing");
+        assert!(!item.current_deleted, "not a deletion");
+        assert!(item.current_data.is_none());
+        assert_eq!(item.title, "db-2", "named after the other version");
+        assert_eq!(item.keep_other, KeepOther::Replaces);
+        core.sync_conflict_resolve(conflict, ConflictChoice::Copy)
+            .unwrap();
+        assert_eq!(stored_data(&core, host)["label"], json!("db-2"));
+    }
+
+    /// The comparison's differences are what the dialog can show: the list
+    /// order and empty values against absent ones are none (UI 13.6).
+    #[test]
+    fn differences_leave_out_the_order_and_empty_values() {
+        let current = json!({"address": "h", "order_key": "a0", "tags": [], "notes": "",
+            "ssh": {"port": 22, "user": ""}, "proxy": {}});
+        let other = json!({"address": "h", "order_key": "b0", "ssh": {"port": 22},
+            "env": {"A": null}});
+        assert_eq!(
+            differences(current.as_object(), other.as_object()),
+            Vec::new()
+        );
+        let other = json!({"address": "h", "tags": ["x"], "ssh": {"port": 22, "user": "u"}});
+        let found = differences(current.as_object(), other.as_object());
+        let rows: Vec<(&str, &str, &str)> = found
+            .iter()
+            .map(|d| (d.path.as_str(), d.current.as_str(), d.other.as_str()))
+            .collect();
+        assert_eq!(rows, [("ssh.user", "—", "u"), ("tags", "—", "[\"x\"]")]);
+    }
+
+    /// The devices of a conflict's versions are named by their
+    /// `device_info` records (UI 13.6).
+    #[test]
+    fn conflicts_name_the_devices_from_device_info() {
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "web", &random_text());
+        let other_device = Uuid::now_v7();
+        {
+            let mut guard = core.inner();
+            let inner = &mut *guard;
+            let session = inner.session.as_mut().unwrap();
+            let data = json!({"device_id": other_device.to_string(), "name": "Office laptop",
+                "platform": "linux", "app_version": "0.1.0"});
+            let write = session
+                .prepare_write(
+                    &inner.store,
+                    RecordKind::DeviceInfo,
+                    Uuid::now_v7(),
+                    data.as_object().cloned().unwrap(),
+                    SystemTime::now(),
+                )
+                .unwrap();
+            inner.store.write(|tx| tx.record_put(&write.row)).unwrap();
+            session.commit(vec![write]);
+        }
+        let other = stored_data(&core, host);
+        let conflict = core
+            .sync_conflict_insert_for_test(host, Some(other), other_device, SystemTime::now())
+            .unwrap();
+        let item = item_of(&core, conflict);
+        assert_eq!(item.losing_device_name.as_deref(), Some("Office laptop"));
+        assert_eq!(item.losing_device_id, Some(other_device.to_string()));
+        assert!(!item.losing_this_device);
+        // This device's own record names the current version.
+        assert_eq!(item.current_device_name.as_deref(), Some("TEST"));
+        assert!(item.current_this_device);
     }
 
     #[test]
