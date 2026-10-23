@@ -21,19 +21,27 @@
 //!   itself and never what it points to.
 //! - A name that is not UTF-8 on the server is shown with U+FFFD (russh-sftp
 //!   decodes names lossily); such a file is listed but cannot be opened.
+//! - [`Sftp::is_closed`]: the connection is gone, or the session's channel
+//!   ended alone (the server's SFTP process exited); requests then fail
+//!   with [`SftpError::ConnectionLost`].
 //!
 //! Nothing here logs paths or file content.
 
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, UNIX_EPOCH};
 
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as LibError;
 use russh_sftp::client::fs::File as RemoteFile;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncSeekExt as _, AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{
+    AsyncRead, AsyncReadExt as _, AsyncSeekExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf,
+};
 
 use crate::client::ConnCore;
 
@@ -271,12 +279,79 @@ where
     file.read_exact(buffer).await.map(|_| ())
 }
 
+/// The channel of a session, watched for its end: the server's side ends
+/// (its `sftp-server` exited, the channel was closed) while the connection
+/// stays, and russh-sftp then fails every request at once without saying
+/// so anywhere else.
+struct Watched<S> {
+    inner: S,
+    ended: Arc<AtomicBool>,
+}
+
+impl<S> Watched<S> {
+    fn mark<T>(&self, poll: &Poll<std::io::Result<T>>) {
+        if matches!(poll, Poll::Ready(Err(_))) {
+            self.ended.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Watched<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
+        // Nothing read into room for something: the end of the stream.
+        if matches!(poll, Poll::Ready(Ok(())))
+            && buf.filled().len() == before
+            && buf.remaining() > 0
+        {
+            this.ended.store(true, Ordering::SeqCst);
+        }
+        this.mark(&poll);
+        poll
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Watched<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_write(cx, buf);
+        this.mark(&poll);
+        poll
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_flush(cx);
+        this.mark(&poll);
+        poll
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let poll = Pin::new(&mut this.inner).poll_shutdown(cx);
+        this.mark(&poll);
+        poll
+    }
+}
+
 /// An SFTP session on one channel of a [`crate::Connection`].
 pub struct Sftp {
     session: SftpSession,
     /// The connection: kept alive while the session is open, and asked
     /// whether it is gone when a request fails.
     link: Arc<ConnCore>,
+    /// Set once the session's channel has ended ([`Watched`]).
+    ended: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Sftp {
@@ -290,14 +365,23 @@ impl Sftp {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        let ended = Arc::new(AtomicBool::new(false));
+        let stream = Watched {
+            inner: stream,
+            ended: Arc::clone(&ended),
+        };
         let session = SftpSession::new_with_config(stream, session_config()).await?;
-        Ok(Self { session, link })
+        Ok(Self {
+            session,
+            link,
+            ended,
+        })
     }
 
     /// The error of a failed request: `ConnectionLost` once the connection
-    /// is gone, whatever the library says.
+    /// or the session's channel is gone, whatever the library says.
     fn fail(&self, error: LibError) -> SftpError {
-        if self.link.is_closed() {
+        if self.is_closed() {
             SftpError::ConnectionLost
         } else {
             error.into()
@@ -305,7 +389,7 @@ impl Sftp {
     }
 
     fn fail_io(&self, error: std::io::Error) -> SftpError {
-        if self.link.is_closed() {
+        if self.is_closed() {
             SftpError::ConnectionLost
         } else {
             remote_io(error)
@@ -882,10 +966,11 @@ impl Sftp {
         self.fail_io(error)
     }
 
-    /// Whether the connection under this session is gone (a request would
-    /// fail with `ConnectionLost`).
+    /// Whether the connection under this session, or the session's own
+    /// channel, is gone (a request would fail with `ConnectionLost`). The
+    /// channel ends alone when the server's SFTP process exits.
     pub fn is_closed(&self) -> bool {
-        self.link.is_closed()
+        self.ended.load(Ordering::SeqCst) || self.link.is_closed()
     }
 
     /// Ends the session (the channel closes; the connection stays).
@@ -908,6 +993,37 @@ mod tests {
         assert_eq!(trimmed("link//"), "link");
         assert_eq!(trimmed("/"), "/");
         assert_eq!(trimmed("//"), "/");
+    }
+
+    /// The channel of a session ends alone (the server's SFTP process
+    /// exited): the end of its stream, or an error, marks the session
+    /// closed.
+    #[tokio::test]
+    async fn the_end_of_the_channel_is_seen() {
+        let (near, mut far) = tokio::io::duplex(64);
+        let ended = Arc::new(AtomicBool::new(false));
+        let mut watched = Watched {
+            inner: near,
+            ended: Arc::clone(&ended),
+        };
+        far.write_all(b"abc").await.unwrap();
+        let mut buf = [0u8; 3];
+        watched.read_exact(&mut buf).await.unwrap();
+        watched.write_all(b"xyz").await.unwrap();
+        assert!(!ended.load(Ordering::SeqCst), "data is not an end");
+        drop(far);
+        assert_eq!(watched.read(&mut buf).await.unwrap(), 0);
+        assert!(ended.load(Ordering::SeqCst), "the end of the stream");
+
+        let (near, far) = tokio::io::duplex(64);
+        let ended = Arc::new(AtomicBool::new(false));
+        let mut watched = Watched {
+            inner: near,
+            ended: Arc::clone(&ended),
+        };
+        drop(far);
+        assert!(watched.write_all(b"xyz").await.is_err());
+        assert!(ended.load(Ordering::SeqCst), "a write error");
     }
 
     #[test]

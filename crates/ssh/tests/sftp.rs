@@ -639,6 +639,54 @@ async fn sftp_against_openssh() {
     drop(server);
 }
 
+/// The server's SFTP process exits while the connection stays (the
+/// subsystem ends alone): the session reports itself closed, so the
+/// session layer ends the SFTP tab with Reconnect instead of showing it
+/// connected while every request fails at once; requests fail with
+/// `ConnectionLost`, and the connection still opens a new session.
+#[allow(clippy::print_stderr)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_whose_sftp_server_exits_is_closed() {
+    if provider() != Provider::OpenSsh {
+        eprintln!("skipped: SFTP runs against OpenSSH (SHELLPP_TEST_SSHD=openssh)");
+        return;
+    }
+    let Some(server) = OpenSshServer::start() else {
+        return;
+    };
+    let connection = key_connection(&server).await;
+    let sftp = connection.open_sftp().await.expect("sftp");
+    sftp.canonicalize(".").await.expect("a first request");
+    assert!(!sftp.is_closed());
+    // The exec channel's shell and the SFTP process are children of the
+    // same connection process on the server: only this session's SFTP
+    // process ends (`[i]` keeps pkill from matching its own command line).
+    let killed = connection
+        .exec(
+            "pkill -P \"$PPID\" -f '[i]nternal-sftp|[s]ftp-server'",
+            std::time::Duration::from_secs(10),
+            4096,
+        )
+        .await
+        .expect("pkill runs");
+    assert_eq!(killed.exit_status, Some(0), "an SFTP process was there");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !sftp.is_closed() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session still looks open after its SFTP process ended"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!connection.is_closed(), "the connection stays");
+    assert_eq!(sftp.canonicalize(".").await, Err(SftpError::ConnectionLost));
+    let again = connection.open_sftp().await.expect("a new session");
+    again.canonicalize(".").await.expect("works");
+    again.close().await;
+    connection.disconnect().await;
+    drop(server);
+}
+
 /// The speed measurement of stage 4 (`SHELLPP_SFTP_BENCH=1`, against
 /// OpenSSH): 200 MB up and down, printed as MB/s, to compare with OpenSSH's
 /// `sftp` in the same conditions. Does nothing otherwise.
