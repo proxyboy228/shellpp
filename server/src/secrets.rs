@@ -60,7 +60,7 @@ impl ServerKeys {
     /// Encrypts a TOTP secret for `users.totp_secret_enc`: a wrap blob
     /// (`0x01` ‖ nonce ‖ ciphertext ‖ tag) bound to the user.
     pub fn seal_totp(&self, user_id: Uuid, secret: &[u8]) -> Vec<u8> {
-        let cipher = XChaCha20Poly1305::new(&Key::from(*self.totp_at_rest_key));
+        let cipher = self.totp_cipher();
         let nonce_bytes = random_bytes::<24>();
         let nonce = XNonce::from(nonce_bytes);
         let aad = totp_aad(user_id);
@@ -85,7 +85,7 @@ impl ServerKeys {
         if blob.len() < 1 + 24 + 16 || blob[0] != 0x01 {
             return None;
         }
-        let cipher = XChaCha20Poly1305::new(&Key::from(*self.totp_at_rest_key));
+        let cipher = self.totp_cipher();
         let nonce = XNonce::from(<[u8; 24]>::try_from(&blob[1..25]).ok()?);
         let aad = totp_aad(user_id);
         cipher
@@ -98,6 +98,12 @@ impl ServerKeys {
             )
             .ok()
             .map(Zeroizing::new)
+    }
+
+    /// The cipher of TOTP secrets at rest, keyed by reference: no copy of
+    /// the key is left behind (the cipher wipes its own on drop).
+    fn totp_cipher(&self) -> XChaCha20Poly1305 {
+        XChaCha20Poly1305::new(<&Key>::from(&*self.totp_at_rest_key))
     }
 }
 
@@ -247,14 +253,16 @@ pub fn check_totp(
     if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let secret: [u8; 20] = secret.try_into().ok()?;
+    // The copies of the secret are wiped on drop (here and, with its
+    // `zeroize` feature, inside totp-rs), and so are the expected codes.
+    let secret = Zeroizing::new(<[u8; 20]>::try_from(secret).ok()?);
     let totp = totp_rs::Builder::new()
-        .with_secret(secret)
+        .with_secret(*secret)
         .build_noncompliant();
     let current = unix_seconds / 30;
     let mut found = None;
     for step in [current.saturating_sub(1), current, current + 1] {
-        let expected = totp.generate(step * 30).to_string();
+        let expected = Zeroizing::new(totp.generate(step * 30).to_string());
         if ct_eq(expected.as_bytes(), code.as_bytes()) && found.is_none() {
             found = Some(step);
         }
@@ -356,6 +364,35 @@ mod tests {
         assert_eq!(check_totp(secret, "081804", now, Some(step)), None);
         assert_eq!(check_totp(secret, "08180", now, None), None);
         assert_eq!(check_totp(secret, "abcdef", now, None), None);
+    }
+
+    /// Every copy of a TOTP secret and of the at-rest key is wiped on drop,
+    /// and the server keys never show in `Debug`.
+    #[test]
+    fn key_material_is_wiped_and_never_shown() {
+        fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        // totp-rs holds the secret while a code is checked; the cipher holds
+        // the at-rest key.
+        wiped_on_drop::<totp_rs::Totp>();
+        wiped_on_drop::<XChaCha20Poly1305>();
+        wiped_on_drop::<Zeroizing<[u8; 32]>>();
+        let keys = ServerKeys::derive(&random_bytes::<32>());
+        let shown = format!("{keys:?}");
+        for key in [&*keys.prelogin_salt_key, &*keys.totp_at_rest_key] {
+            assert!(!shown.contains(&data_encoding::HEXLOWER.encode(key)));
+            assert!(!shown.contains(&format!("{:?}", &key[..4])));
+        }
+        // A generated secret still seals, opens and checks.
+        let user = Uuid::now_v7();
+        let secret = new_totp_secret();
+        let opened = keys
+            .open_totp(user, &keys.seal_totp(user, &secret))
+            .expect("opens");
+        assert_eq!(opened.as_slice(), secret.as_slice());
+        let now = 1_700_000_000;
+        let fixed: [u8; 20] = secret.as_slice().try_into().unwrap();
+        let code = totp_code(&fixed, now);
+        assert_eq!(check_totp(&opened, &code, now, None), Some(now / 30));
     }
 
     #[test]

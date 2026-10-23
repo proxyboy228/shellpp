@@ -200,7 +200,7 @@ impl Server {
             database_url: database_url.clone(),
             bind: addr,
             public_url: origin.clone(),
-            server_secret: secret,
+            server_secret: secret.into(),
             registration: options.registration,
             quota_max_records: options.quota_max_records,
             quota_max_bytes: None,

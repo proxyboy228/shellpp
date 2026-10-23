@@ -4,6 +4,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use shellpp_sync_api::api::Registration;
+use zeroize::Zeroizing;
 
 use crate::ratelimit::RateLimits;
 
@@ -55,8 +56,8 @@ pub struct Config {
     pub bind: SocketAddr,
     /// The https origin the clients use (normalized).
     pub public_url: String,
-    /// At least 32 bytes: the root of the server-only keys.
-    pub server_secret: Vec<u8>,
+    /// At least 32 bytes: the root of the server-only keys (wiped on drop).
+    pub server_secret: Zeroizing<Vec<u8>>,
     pub registration: Registration,
     pub quota_max_records: Option<u64>,
     pub quota_max_bytes: Option<u64>,
@@ -96,11 +97,9 @@ impl Config {
         };
         let public_url = normalize_origin(&required("SHELLPP_PUBLIC_URL")?)
             .ok_or_else(|| ConfigError("SHELLPP_PUBLIC_URL is not an http(s) origin".to_owned()))?;
-        let secret = required("SHELLPP_SERVER_SECRET")?;
-        let server_secret = data_encoding::BASE64
-            .decode(secret.trim().as_bytes())
-            .or_else(|_| data_encoding::BASE64_NOPAD.decode(secret.trim().as_bytes()))
-            .map_err(|_| ConfigError("SHELLPP_SERVER_SECRET is not base64".to_owned()))?;
+        let secret = Zeroizing::new(required("SHELLPP_SERVER_SECRET")?);
+        let server_secret = decode_secret(secret.trim())
+            .ok_or_else(|| ConfigError("SHELLPP_SERVER_SECRET is not base64".to_owned()))?;
         if server_secret.len() < 32 {
             return Err(ConfigError(
                 "SHELLPP_SERVER_SECRET must hold at least 32 bytes".to_owned(),
@@ -151,6 +150,22 @@ impl Config {
             rate_limits: RateLimits::from_env(&get)?,
         })
     }
+}
+
+/// The bytes of a base64 server secret (with or without padding), decoded
+/// into a buffer that is wiped on drop, on failure too.
+fn decode_secret(text: &str) -> Option<Zeroizing<Vec<u8>>> {
+    for encoding in [&data_encoding::BASE64, &data_encoding::BASE64_NOPAD] {
+        let Ok(len) = encoding.decode_len(text.len()) else {
+            continue;
+        };
+        let mut out = Zeroizing::new(vec![0u8; len]);
+        if let Ok(written) = encoding.decode_mut(text.as_bytes(), &mut out) {
+            out.truncate(written);
+            return Some(out);
+        }
+    }
+    None
 }
 
 /// Scheme and host in lowercase, the port only when not the default, no
@@ -259,5 +274,46 @@ mod tests {
         assert!(short.is_err());
         let missing = Config::from_env(env(&[("SHELLPP_DATABASE_URL", "sqlite::memory:")]));
         assert!(missing.unwrap_err().0.contains("SHELLPP_PUBLIC_URL"));
+    }
+
+    /// The server secret is decoded with and without padding into a buffer
+    /// that is wiped on drop, and neither it nor the database password
+    /// shows in `Debug` or in an error.
+    #[test]
+    fn the_server_secret_is_wiped_and_never_shown() {
+        fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>(_: &T) {}
+        let bytes = crate::secrets::random_bytes::<33>();
+        let password = data_encoding::HEXLOWER.encode(&crate::secrets::random_bytes::<12>());
+        let url = format!("postgres://shellpp:{password}@127.0.0.1:5432/shellpp");
+        for text in [
+            data_encoding::BASE64.encode(&bytes),
+            data_encoding::BASE64_NOPAD.encode(&bytes),
+        ] {
+            let get = |name: &str| match name {
+                "SHELLPP_DATABASE_URL" => Some(url.clone()),
+                "SHELLPP_PUBLIC_URL" => Some("https://sync.example.com".to_owned()),
+                "SHELLPP_SERVER_SECRET" => Some(text.clone()),
+                _ => None,
+            };
+            let config = Config::from_env(get).unwrap();
+            assert_eq!(config.server_secret.as_slice(), &bytes[..]);
+            wiped_on_drop(&config.server_secret);
+            let shown = format!("{config:?}");
+            assert!(!shown.contains(&text), "{shown}");
+            assert!(!shown.contains(&password), "{shown}");
+            assert!(!shown.contains(&format!("{:?}", &bytes[..4])), "{shown}");
+        }
+        // A broken secret: the error names the variable, never the value.
+        let broken = format!("{}!", data_encoding::BASE64_NOPAD.encode(&bytes));
+        let error = Config::from_env(|name: &str| match name {
+            "SHELLPP_DATABASE_URL" => Some(url.clone()),
+            "SHELLPP_PUBLIC_URL" => Some("https://sync.example.com".to_owned()),
+            "SHELLPP_SERVER_SECRET" => Some(broken.clone()),
+            _ => None,
+        })
+        .unwrap_err();
+        assert!(error.0.contains("SHELLPP_SERVER_SECRET"));
+        assert!(!error.0.contains(&broken[..8]), "{}", error.0);
+        assert!(!format!("{error:?}").contains(&broken[..8]));
     }
 }
