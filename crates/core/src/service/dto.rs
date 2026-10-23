@@ -1432,6 +1432,15 @@ pub struct CsvInspection {
 
 redacted_debug!(CsvInspection);
 
+/// The sample may hold a password column: wiped when dropped.
+impl Drop for CsvInspection {
+    fn drop(&mut self) {
+        for cell in self.sample.iter_mut().flatten() {
+            zeroize::Zeroize::zeroize(cell);
+        }
+    }
+}
+
 /// One row of a CSV preview.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CsvRowPreview {

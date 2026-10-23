@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::Core;
 use super::dto::{
@@ -40,6 +40,7 @@ use crate::model::group::{self, GroupRules};
 use crate::model::host::{self, HostRules};
 use crate::model::tree::Tree;
 use crate::model::types::RecordKind;
+use crate::model::wipe::WipeOnDrop;
 
 /// Rows of the mapping step's sample.
 const SAMPLE_ROWS: usize = 5;
@@ -47,17 +48,6 @@ const SAMPLE_ROWS: usize = 5;
 const GROUP_SEPARATOR: &str = " / ";
 /// Most levels of a group path (the tree allows 32).
 const MAX_GROUP_LEVELS: usize = 16;
-
-/// The records of a file; wiped when dropped (a password column).
-struct Table(Vec<Vec<String>>);
-
-impl Drop for Table {
-    fn drop(&mut self) {
-        for field in self.0.iter_mut().flatten() {
-            field.zeroize();
-        }
-    }
-}
 
 fn invalid(field: &str) -> CoreError {
     CoreError::Validation(vec![FieldError::new(field, ValidationReason::Invalid)])
@@ -70,7 +60,7 @@ struct Read {
     has_header: bool,
     roles: Vec<Role>,
     /// Every record (the header first when there is one).
-    table: Table,
+    table: csv::Records,
 }
 
 fn read(input: &CsvInput) -> Result<Read, CoreError> {
@@ -91,10 +81,18 @@ fn read(input: &CsvInput) -> Result<Read, CoreError> {
         Some(_) => return Err(invalid("delimiter")),
         None => csv::detect_delimiter(&text),
     };
-    let table = Table(csv::records(&text, delimiter));
-    let width = table.0.iter().map(Vec::len).max().unwrap_or(0);
+    let table = csv::records(&text, delimiter);
+    // A quote left open would put the rest of the file (other rows'
+    // passwords too) into one field; a cut file would lose rows silently.
+    if table.unterminated {
+        return Err(invalid("quote"));
+    }
+    if table.truncated {
+        return Err(CoreError::TooLarge);
+    }
+    let width = table.rows.iter().map(Vec::len).max().unwrap_or(0);
     let (guessed, header) = table
-        .0
+        .rows
         .first()
         .map(|first| csv::guess_roles(first))
         .unwrap_or_default();
@@ -247,17 +245,26 @@ impl Groups {
         Self { tree, by_name }
     }
 
-    /// The existing group at `path`, or `None` with the number of levels
-    /// that exist.
-    fn find(&self, path: &[String]) -> (Option<Uuid>, usize) {
+    /// The deepest existing group along `path` (`None`: the top level) and
+    /// the number of levels that exist.
+    fn deepest(&self, path: &[String]) -> (Option<Uuid>, usize) {
         let mut parent = None;
         for (depth, name) in path.iter().enumerate() {
             match self.by_name.get(&(parent, name.clone())) {
                 Some(id) => parent = Some(*id),
-                None => return (None, depth),
+                None => return (parent, depth),
             }
         }
         (parent, path.len())
+    }
+
+    /// The existing group at `path` (`None` when a level is missing or the
+    /// path is empty).
+    fn find(&self, path: &[String]) -> Option<Uuid> {
+        match self.deepest(path) {
+            (found, levels) if levels == path.len() => found,
+            _ => None,
+        }
     }
 }
 
@@ -321,54 +328,46 @@ fn plan_rows(read: &Read, index: &Index) -> Result<Planned, CoreError> {
     let mut rows = Vec::new();
     let mut passwords = 0;
     let skip = usize::from(read.has_header);
-    for (number, record) in read.table.0.iter().enumerate().skip(skip) {
+    for (number, record) in read.table.rows.iter().enumerate().skip(skip) {
         let mut row = plan_row(number + 1, record, &read.roles);
         if row.password.is_some() {
             passwords += 1;
         }
-        if row.error.is_none() {
-            // The host as it would be written (in an existing group, or
-            // with a placeholder for a new one), checked by the rules.
-            let (group_id, levels) = groups.find(&row.group);
-            let placeholder = (levels < row.group.len()).then(Uuid::nil);
-            let (data, secrets) = row_data(&row, group_id.or(placeholder));
+        let status = if row.error.is_some() {
+            ImportStatus::Error
+        } else {
+            // The host as the rules build it (the address normalized, as
+            // it is stored), under its group when the path exists, else
+            // under the deepest group that exists: new groups have no
+            // settings, so that is where its inherited values come from.
+            let (ancestor, levels) = groups.deepest(&row.group);
+            let (data, secrets) = row_data(&row, ancestor);
             let rules = HostRules {
                 record_id: None,
                 personal_vault: true,
             };
-            if let Err(errors) = host::build(&data, None, &secrets, &rules) {
-                let fields: Vec<String> = errors.into_iter().map(|error| error.field).collect();
-                row.error = Some(format!("invalid {}", fields.join(", ")));
-            }
-        }
-        let status = if row.error.is_some() {
-            ImportStatus::Error
-        } else {
-            let (group_id, _) = groups.find(&row.group);
-            let mut data = Map::new();
-            data.insert("address".into(), json!(row.address));
-            if let Some(group_id) = group_id {
-                data.insert("group_id".into(), json!(group_id.to_string()));
-            }
-            let mut ssh = Map::new();
-            if let Some(port) = row.port {
-                ssh.insert("port".into(), json!(port));
-            }
-            if let Some(user) = &row.username {
-                ssh.insert("username".into(), json!(user));
-            }
-            data.insert("ssh".into(), Value::Object(ssh));
-            let key = host_key(index, &groups.tree, &data);
-            if existing.contains(&key) || !seen.insert(key) {
-                ImportStatus::Exists
-            } else {
-                for depth in groups.find(&row.group).1..row.group.len() {
-                    let path = row.group[..=depth].to_vec();
-                    if !new_groups.contains(&path) {
-                        new_groups.push(path);
+            match host::build(&data, None, &secrets, &rules) {
+                Err(errors) => {
+                    let fields: Vec<String> = errors.into_iter().map(|error| error.field).collect();
+                    row.error = Some(format!("invalid {}", fields.join(", ")));
+                    ImportStatus::Error
+                }
+                Ok(built) => {
+                    // It holds the password in clear: wiped when dropped.
+                    let built = WipeOnDrop::new(built);
+                    let key = host_key(index, &groups.tree, &built);
+                    if existing.contains(&key) || !seen.insert(key) {
+                        ImportStatus::Exists
+                    } else {
+                        for depth in levels..row.group.len() {
+                            let path = row.group[..=depth].to_vec();
+                            if !new_groups.contains(&path) {
+                                new_groups.push(path);
+                            }
+                        }
+                        ImportStatus::New
                     }
                 }
-                ImportStatus::New
             }
         };
         rows.push((row, status));
@@ -387,7 +386,7 @@ impl Core {
         let columns: Vec<String> = (0..width)
             .map(|index| {
                 read.table
-                    .0
+                    .rows
                     .first()
                     .filter(|_| read.has_header)
                     .and_then(|header| header.get(index))
@@ -399,7 +398,7 @@ impl Core {
         let skip = usize::from(read.has_header);
         let sample = read
             .table
-            .0
+            .rows
             .iter()
             .skip(skip)
             .take(SAMPLE_ROWS)
@@ -412,7 +411,7 @@ impl Core {
             columns,
             roles: read.roles.clone(),
             sample,
-            rows: read.table.0.len().saturating_sub(skip),
+            rows: read.table.rows.len().saturating_sub(skip),
         })
     }
 
@@ -463,7 +462,7 @@ impl Core {
                     created
                         .get(parent_path)
                         .copied()
-                        .or_else(|| groups.find(parent_path).0)
+                        .or_else(|| groups.find(parent_path))
                 }
             };
             let id = parts.ids.next(now);
@@ -511,7 +510,7 @@ impl Core {
                 match created
                     .get(&row.group)
                     .copied()
-                    .or_else(|| groups.find(&row.group).0)
+                    .or_else(|| groups.find(&row.group))
                 {
                     Some(id) => Some(id),
                     None => {

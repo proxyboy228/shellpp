@@ -59,7 +59,9 @@ pub const CSV_FILE_HINT: &str = "Columns such as label, address, port, username,
 pub const CSV_TEMPLATE: &str = "Save template…";
 pub const CSV_TEMPLATE_SAVED: &str = "Template saved.";
 pub const CSV_TEMPLATE_FAILED: &str = "The template could not be saved.";
-pub const CSV_TOO_LARGE: &str = "The file is larger than 16 MB.";
+pub const CSV_TOO_LARGE: &str = "The file is larger than 16 MB or has more than 100,000 rows.";
+pub const CSV_OPEN_QUOTE: &str =
+    "A quote in the file is never closed, so its rows cannot be told apart.";
 pub const CSV_ENCODING: &str = "Character set";
 pub const CSV_DELIMITER: &str = "Delimiter";
 pub const CSV_TAB: &str = "Tab";

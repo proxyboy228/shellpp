@@ -26,6 +26,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex, v_flex};
+use shellpp_core::CoreError;
 use shellpp_core::import::csv::{self, Role};
 use shellpp_core::service::dto::{
     CsvImportSummary, CsvInput, CsvInspection, CsvPreview, ImportStatus,
@@ -146,7 +147,15 @@ impl ImportSourcesDialog {
                 Ok(inspection) => Ok((bytes, inspection)),
                 Err(error) => {
                     tracing::info!(code = error.code(), "csv not read");
-                    Err(strings::READ_FAILED)
+                    Err(match &error {
+                        CoreError::TooLarge => strings::CSV_TOO_LARGE,
+                        CoreError::Validation(fields)
+                            if fields.iter().any(|field| field.field == "quote") =>
+                        {
+                            strings::CSV_OPEN_QUOTE
+                        }
+                        _ => strings::READ_FAILED,
+                    })
                 }
             }
         });

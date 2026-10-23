@@ -77,7 +77,7 @@ fn rows_are_mapped_previewed_and_imported_once() {
     assert_eq!(
         found.roles,
         [
-            Role::Ignore,
+            Role::Label,
             Role::Address,
             Role::Port,
             Role::Username,
@@ -91,11 +91,9 @@ fn rows_are_mapped_previewed_and_imported_once() {
     assert_eq!(found.sample.len(), 5);
     assert_eq!(found.sample[0][0], "Веб");
 
-    // The first column is the label.
-    let mut roles = found.roles.clone();
-    roles[0] = Role::Label;
+    // The mapping as detected ("Имя" is the label).
     let mapped = CsvInput {
-        roles: Some(roles),
+        roles: Some(found.roles.clone()),
         ..input(bytes)
     };
     let preview = u.core.csv_preview(&mapped).expect("preview");
@@ -277,4 +275,47 @@ fn a_mapping_without_an_address_and_bad_settings_are_refused() {
     let found = u.core.csv_inspect(&input(utf16)).unwrap();
     assert_eq!(found.encoding, "utf-16le");
     assert_eq!(found.sample[0], ["web", "web.example.com"]);
+}
+
+/// Review of D141: a bracketed IPv6 address is matched as it is stored; a
+/// row under a partly new group path inherits from the deepest existing
+/// group; an unclosed quote refuses the file.
+#[test]
+fn stored_forms_and_partly_new_group_paths_are_matched() {
+    let u = first_run();
+    // Prod sets the user "deploy"; 10.0.0.5 in Prod has none of its own.
+    let prod = u.group(json!({"name": "Prod", "ssh": {"username": "deploy"}}));
+    u.host(json!({"address": "10.0.0.5", "group_id": prod.record_id.to_string()}));
+    let bytes = b"address,group\n[2001:db8::10],\n10.0.0.5,Prod / Web\n10.0.0.5,\n".to_vec();
+    let preview = u.core.csv_preview(&input(bytes.clone())).unwrap();
+    let statuses: Vec<ImportStatus> = preview.rows.iter().map(|row| row.status).collect();
+    assert_eq!(
+        statuses,
+        [
+            ImportStatus::New,
+            // Under Prod / Web it inherits "deploy" from Prod: the same host.
+            ImportStatus::Exists,
+            // At the top level it has no user: another host.
+            ImportStatus::New,
+        ]
+    );
+    assert_eq!(preview.groups_new, 0);
+    let summary = u.core.csv_import(&input(bytes.clone())).unwrap();
+    assert_eq!(summary.added, 2);
+    // The address is stored without brackets; a second import matches it.
+    let again = u.core.csv_import(&input(bytes)).unwrap();
+    assert_eq!(again.added, 0);
+    assert_eq!(again.skipped, 3);
+    assert!(
+        hosts(&u)
+            .iter()
+            .any(|host| host.data["address"] == "2001:db8::10")
+    );
+
+    // A quote never closed: the rest of the file would be one field.
+    let open = b"label,address,notes,password\nweb,web.example.com,\"see wiki,pw1\ndb,db.example.com,,pw2\n"
+        .to_vec();
+    assert!(u.core.csv_inspect(&input(open.clone())).is_err());
+    assert!(u.core.csv_import(&input(open)).is_err());
+    assert_eq!(hosts(&u).len(), 3);
 }

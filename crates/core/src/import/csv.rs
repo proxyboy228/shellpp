@@ -4,23 +4,29 @@
 //!
 //! - The character set comes from a byte order mark (UTF-8, UTF-16 LE or
 //!   BE), else UTF-8 when the bytes are valid UTF-8, else Windows-1251 when
-//!   most bytes above ASCII are Cyrillic letters there, else Windows-1252
-//!   ([`detect_encoding`]). The user can choose another one.
+//!   the bytes above ASCII are mostly Cyrillic letters there and come in
+//!   runs (words), else Windows-1252, whose accented letters stand alone
+//!   between ASCII ones ([`detect_encoding`]). The user can choose another
+//!   one.
 //! - The delimiter is the one of `,`, `;`, tab and `|` that splits the
 //!   first records into the same number of fields, more than one
 //!   ([`detect_delimiter`]). The user can choose another one.
 //! - Fields may be quoted with `"`; a quote inside is doubled; a quoted
-//!   field may hold the delimiter and line breaks.
-//! - Columns are guessed from a header row ([`guess_roles`]); a file whose
-//!   first row names no known column has no header and its columns are
-//!   taken in the order of the SPEC (`label, address, port, username,
-//!   group, tags`).
+//!   field may hold the delimiter and line breaks. A text that ends inside
+//!   a quoted field is reported ([`Records::unterminated`]): its last
+//!   record would hold the rest of the file.
+//! - Columns are guessed from a header row ([`guess_roles`]: English and
+//!   Russian names); a first row that names no known column is a header of
+//!   columns that are not imported when it looks like one (no port number,
+//!   address or `@` in it), else data, and the columns take the order of
+//!   the SPEC (`label, address, port, username, group, tags`).
 //!
 //! Nothing here logs the file's content.
 
 use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize as _, Zeroizing};
 
 /// The largest file read.
 pub const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
@@ -111,14 +117,30 @@ impl Role {
             .filter(|c| c.is_alphanumeric())
             .collect();
         Some(match name.as_str() {
-            "label" | "name" | "title" | "alias" => Self::Label,
-            "address" | "host" | "hostname" | "ip" | "server" | "addr" => Self::Address,
-            "port" => Self::Port,
-            "username" | "user" | "login" => Self::Username,
-            "group" | "folder" | "path" | "groups" => Self::Group,
-            "tags" | "tag" => Self::Tags,
-            "notes" | "note" | "description" | "comment" | "comments" => Self::Notes,
-            "password" | "pass" | "pwd" | "passwd" => Self::Password,
+            "label" | "name" | "title" | "alias" | "имя" | "название" | "метка" => {
+                Self::Label
+            }
+            "address" | "host" | "hostname" | "ip" | "server" | "addr" | "адрес" | "хост"
+            | "сервер" | "имяхоста" => Self::Address,
+            "port" | "порт" => Self::Port,
+            "username" | "user" | "login" | "пользователь" | "логин" | "имяпользователя" => {
+                Self::Username
+            }
+            "group" | "folder" | "path" | "groups" | "группа" | "папка" | "путь" => {
+                Self::Group
+            }
+            "tags" | "tag" | "теги" | "тег" => Self::Tags,
+            "notes"
+            | "note"
+            | "description"
+            | "comment"
+            | "comments"
+            | "заметки"
+            | "заметка"
+            | "описание"
+            | "комментарий"
+            | "примечание" => Self::Notes,
+            "password" | "pass" | "pwd" | "passwd" | "пароль" => Self::Password,
             _ => return None,
         })
     }
@@ -148,23 +170,68 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static str {
     if std::str::from_utf8(bytes).is_ok() {
         return "utf-8";
     }
-    // Windows-1251 puts Cyrillic letters at 0xC0-0xFF; Windows-1252 text
-    // has fewer bytes there than elsewhere above ASCII (and Russian text
-    // in 1252 terms would be mostly accented capitals).
-    let high: Vec<u8> = bytes.iter().copied().filter(|b| *b >= 0x80).collect();
-    let letters = high.iter().filter(|b| **b >= 0xC0).count();
-    if !high.is_empty() && letters * 10 >= high.len() * 7 {
+    // Windows-1251 puts Cyrillic letters at 0xC0-0xFF, and Russian words
+    // are runs of them; Windows-1252 has its accented letters there too
+    // (é, ü, ß), but each stands alone between ASCII letters.
+    let high = |at: usize| bytes.get(at).is_some_and(|byte| *byte >= 0x80);
+    let mut total = 0usize;
+    let mut letters = 0usize;
+    let mut in_runs = 0usize;
+    for (at, byte) in bytes.iter().enumerate() {
+        if *byte < 0x80 {
+            continue;
+        }
+        total += 1;
+        if *byte >= 0xC0 {
+            letters += 1;
+        }
+        if (at > 0 && high(at - 1)) || high(at + 1) {
+            in_runs += 1;
+        }
+    }
+    if total > 0 && letters * 10 >= total * 7 && in_runs * 3 >= total * 2 {
         "windows-1251"
     } else {
         "windows-1252"
     }
 }
 
+/// The records of a CSV text, wiped when dropped (the file may hold
+/// passwords).
+#[derive(Default)]
+pub struct Records {
+    pub rows: Vec<Vec<String>>,
+    /// The text ended inside a quoted field: the last record holds the
+    /// rest of the file.
+    pub unterminated: bool,
+    /// The text has more than [`MAX_RECORDS`] records; the rest was not read.
+    pub truncated: bool,
+}
+
+impl Drop for Records {
+    fn drop(&mut self) {
+        for field in self.rows.iter_mut().flatten() {
+            field.zeroize();
+        }
+    }
+}
+
+impl std::fmt::Debug for Records {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Records")
+            .field("rows", &self.rows.len())
+            .field("unterminated", &self.unterminated)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
 /// Splits `text` into records of fields with `delimiter` (RFC 4180, with
 /// LF or CRLF line ends). Empty lines are skipped. Stops after
-/// [`MAX_RECORDS`]; fields past [`MAX_FIELDS`] are dropped.
-pub fn records(text: &str, delimiter: char) -> Vec<Vec<String>> {
-    let mut out: Vec<Vec<String>> = Vec::new();
+/// [`MAX_RECORDS`] ([`Records::truncated`]); fields past [`MAX_FIELDS`]
+/// are dropped.
+pub fn records(text: &str, delimiter: char) -> Records {
+    let mut out = Records::default();
     let mut record: Vec<String> = Vec::new();
     let mut field = String::new();
     let mut quoted = false;
@@ -206,8 +273,9 @@ pub fn records(text: &str, delimiter: char) -> Vec<Vec<String>> {
                 let empty = record.is_empty() && field.is_empty() && !was_quoted;
                 if !empty {
                     end_field(&mut record, &mut field);
-                    out.push(std::mem::take(&mut record));
-                    if out.len() >= MAX_RECORDS {
+                    out.rows.push(std::mem::take(&mut record));
+                    if out.rows.len() >= MAX_RECORDS {
+                        out.truncated = chars.any(|c| !c.is_whitespace());
                         return out;
                     }
                 }
@@ -216,10 +284,12 @@ pub fn records(text: &str, delimiter: char) -> Vec<Vec<String>> {
             c => field.push(c),
         }
     }
+    out.unterminated = quoted;
     if !record.is_empty() || !field.is_empty() || was_quoted {
         end_field(&mut record, &mut field);
-        out.push(record);
+        out.rows.push(record);
     }
+    field.zeroize();
     out
 }
 
@@ -228,10 +298,11 @@ pub fn records(text: &str, delimiter: char) -> Vec<Vec<String>> {
 /// fields winning a tie; `,` when none does.
 pub fn detect_delimiter(text: &str) -> char {
     // The first lines are enough (a quoted line break only shortens them).
-    let head: String = text.lines().take(20).collect::<Vec<_>>().join("\n");
+    let head = Zeroizing::new(text.lines().take(20).collect::<Vec<_>>().join("\n"));
     let mut best: Option<(char, usize)> = None;
     for delimiter in DELIMITERS {
         let found = records(&head, delimiter);
+        let found = &found.rows;
         let Some(first) = found.first() else { continue };
         let fields = first.len();
         if fields < 2 {
@@ -249,12 +320,26 @@ pub fn detect_delimiter(text: &str) -> char {
     best.map_or(',', |(delimiter, _)| delimiter)
 }
 
+/// Whether a cell looks like data rather than a column name: a port
+/// number, an IP address, or text with a `.` or `@` (a host name, a user).
+fn data_like(cell: &str) -> bool {
+    let cell = cell.trim();
+    cell.parse::<u16>().is_ok_and(|port| port > 0)
+        || cell.parse::<std::net::IpAddr>().is_ok()
+        || cell.contains(['.', '@'])
+}
+
 /// The roles of the columns of `first` (the first record), and whether it
-/// is a header: a header names at least one known column. Without a header
-/// the columns take [`Role::ORDER`].
+/// is a header: a header names at least one known column, or names none
+/// but looks like one (no cell looks like data), and then no column is
+/// imported until the user maps it. Otherwise the columns take
+/// [`Role::ORDER`].
 pub fn guess_roles(first: &[String]) -> (Vec<Role>, bool) {
     let named: Vec<Option<Role>> = first.iter().map(|cell| Role::from_header(cell)).collect();
     let header = named.iter().any(Option::is_some);
+    if !header && !first.iter().any(|cell| data_like(cell)) {
+        return (vec![Role::Ignore; first.len()], true);
+    }
     if header {
         // Each role once: a second column with the same name is ignored.
         let mut seen = Vec::new();
@@ -288,22 +373,38 @@ mod tests {
 
     #[test]
     fn quoted_fields_line_ends_and_empty_lines() {
+        let found = records(
+            "a,\"b,c\",\"d \"\"e\"\"\"\r\n\r\nf,,\"\"\n\"line\nbreak\",x",
+            ',',
+        );
         assert_eq!(
-            records(
-                "a,\"b,c\",\"d \"\"e\"\"\"\r\n\r\nf,,\"\"\n\"line\nbreak\",x",
-                ','
-            ),
+            found.rows,
             owned(&[
                 &["a", "b,c", "d \"e\""],
                 &["f", "", ""],
                 &["line\nbreak", "x"]
             ])
         );
-        assert_eq!(records("one", ','), owned(&[&["one"]]));
-        assert!(records("", ',').is_empty());
-        assert!(records("\n\r\n", ',').is_empty());
+        assert!(!found.unterminated && !found.truncated);
+        assert_eq!(records("one", ',').rows, owned(&[&["one"]]));
+        assert!(records("", ',').rows.is_empty());
+        assert!(records("\n\r\n", ',').rows.is_empty());
         // A quote inside an unquoted field is kept as it is.
-        assert_eq!(records("ab\"c,d", ','), owned(&[&["ab\"c", "d"]]));
+        assert_eq!(records("ab\"c,d", ',').rows, owned(&[&["ab\"c", "d"]]));
+    }
+
+    #[test]
+    fn an_open_quote_and_too_many_records_are_reported() {
+        let found = records("a,\"see wiki,pw1\nb,c,pw2\n", ',');
+        assert!(found.unterminated);
+        assert_eq!(found.rows.len(), 1);
+        let many = "x\n".repeat(MAX_RECORDS + 1);
+        let found = records(&many, ',');
+        assert!(found.truncated);
+        assert_eq!(found.rows.len(), MAX_RECORDS);
+        // Exactly the limit, with a trailing line end, is complete.
+        let found = records(&"x\n".repeat(MAX_RECORDS), ',');
+        assert!(!found.truncated);
     }
 
     #[test]
@@ -328,6 +429,15 @@ mod tests {
         assert_eq!(detect_encoding(cyrillic), "windows-1251");
         assert_eq!(decode(cyrillic, "windows-1251").unwrap(), "Сервер,host");
         assert_eq!(detect_encoding(b"Caf\xE9 \x80 \x93x\x94"), "windows-1252");
+        // German names: accented letters alone between ASCII ones.
+        assert_eq!(
+            detect_encoding(b"M\xFCller,host\nG\xF6\xDFe,x\nJ\xE4ger,y"),
+            "windows-1252"
+        );
+        assert_eq!(
+            detect_encoding(b"\xCC\xEE\xF1\xEA\xE2\xE0,\xEF\xF0\xEE\xE4"),
+            "windows-1251"
+        );
         assert_eq!(decode(b"\xEF\xBB\xBFa", "utf-8").unwrap(), "a");
         assert!(decode(b"a", "no-such-charset").is_none());
     }
@@ -355,9 +465,37 @@ mod tests {
         assert!(!has_header);
         assert_eq!(roles, [Role::Label, Role::Address, Role::Port]);
         // The template's own header maps every column.
-        let first = records(TEMPLATE, ',').remove(0);
+        let first = records(TEMPLATE, ',').rows[0].clone();
         let (roles, has_header) = guess_roles(&first);
         assert!(has_header);
         assert!(!roles.contains(&Role::Ignore));
+        // Russian names.
+        let header: Vec<String> = ["Имя", "Адрес", "Порт", "Пользователь", "Пароль"]
+            .map(str::to_owned)
+            .to_vec();
+        let (roles, has_header) = guess_roles(&header);
+        assert!(has_header);
+        assert_eq!(
+            roles,
+            [
+                Role::Label,
+                Role::Address,
+                Role::Port,
+                Role::Username,
+                Role::Password
+            ]
+        );
+        // Names this app does not know: a header whose columns are not
+        // imported (never a password taken for a group by position).
+        let unknown: Vec<String> = ["Nom", "Hôte", "Mot de passe"].map(str::to_owned).to_vec();
+        assert_eq!(guess_roles(&unknown), (vec![Role::Ignore; 3], true));
+        let words: Vec<String> = ["db", "db1"].map(str::to_owned).to_vec();
+        assert_eq!(guess_roles(&words), (vec![Role::Ignore; 2], true));
+        // A first row of data: a host name or a port.
+        let data: Vec<String> = ["db", "db.lan"].map(str::to_owned).to_vec();
+        assert_eq!(
+            guess_roles(&data),
+            (vec![Role::Label, Role::Address], false)
+        );
     }
 }
