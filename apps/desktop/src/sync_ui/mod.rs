@@ -8,14 +8,18 @@
 //!   Devices, Review, Recently deleted, Sign out, Delete account and the
 //!   re-post of "server state rolled back";
 //! - Review (conflicts with "Keep current" / "Use other version", possible
-//!   duplicates with Merge / Keep both, the records a resync brought back
-//!   with Keep / Delete again) and Recently deleted (Restore, Delete
-//!   forever, Empty).
+//!   duplicates, each opening the side-by-side comparison of
+//!   [`duplicates`], the records a resync brought back with Keep / Delete
+//!   again) and Recently deleted (Restore, Delete forever, Empty);
+//! - the duplicates hint of a screen ([`duplicates::DuplicatesHint`]).
 //!
 //! Every network call runs off the UI thread; nothing here logs addresses,
 //! emails, passwords, codes or tokens.
 
+pub mod duplicates;
 pub mod strings;
+#[cfg(test)]
+mod tests;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
@@ -1076,33 +1080,34 @@ impl Render for ReviewDialog {
                 .child(label(strings::DUPLICATES, cx))
                 .child(widgets::caption(strings::DUPLICATES_HINT, cx));
             for (index, item) in self.duplicates.clone().into_iter().enumerate() {
-                let (a, b) = (item.record_id, item.other_record_id);
+                let of = duplicates::DuplicatesOf::Pair(item.record_id, item.other_record_id);
                 body = body.child(
                     h_flex()
                         .id(("sync-duplicate", index))
                         .test_support()
                         .gap(metrics::SPACE_2)
-                        .child(row_text(item.title.clone(), None, cx))
+                        .child(row_text(
+                            item.title.clone(),
+                            Some(strings::type_label(&item.type_name)),
+                            cx,
+                        ))
                         .child(
-                            ControlButton::new(("sync-merge", index), ControlKind::Neutral)
-                                .label(strings::MERGE)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    let core = this.state.read(cx).core().cloned();
-                                    if let Some(core) = core {
-                                        let result = core.sync_duplicates_merge(a, b);
-                                        this.act(result, cx);
-                                    }
-                                })),
-                        )
-                        .child(
-                            ControlButton::new(("sync-keep-both", index), ControlKind::Neutral)
-                                .label(strings::KEEP_BOTH)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    let core = this.state.read(cx).core().cloned();
-                                    if let Some(core) = core {
-                                        let result = core.sync_duplicates_keep(a, b);
-                                        this.act(result, cx);
-                                    }
+                            ControlButton::new(("sync-compare", index), ControlKind::Neutral)
+                                .label(strings::COMPARE)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    // The comparison opens over Review, which
+                                    // reads the pairs again after a choice.
+                                    let review = cx.entity().downgrade();
+                                    duplicates::open_duplicates_then(
+                                        this.state.clone(),
+                                        of,
+                                        move |cx| {
+                                            let _ =
+                                                review.update(cx, |review, cx| review.reload(cx));
+                                        },
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         ),
                 );

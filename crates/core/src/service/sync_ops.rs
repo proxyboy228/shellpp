@@ -33,10 +33,11 @@ use super::session::Session;
 use super::{Core, Inner, recordings};
 use crate::crypto::{self, KdfParams, Key32, WrapPurpose};
 use crate::error::CoreError;
+use crate::index::IndexedRecord;
 use crate::lock::PasswordMaterial;
 use crate::model::hlc::HlcClock;
 use crate::model::payload::Payload;
-use crate::model::time::{format_timestamp, unix_ms};
+use crate::model::time::{format_timestamp, format_unix_ms, unix_ms, uuid_v7_timestamp};
 use crate::model::types::RecordKind;
 use crate::service::dto::{CoreEventKind, LockState};
 use crate::store::{
@@ -264,6 +265,34 @@ pub struct DuplicateItem {
     pub other_record_id: Uuid,
     pub type_name: String,
     pub title: String,
+    /// The two records side by side (UI 13.7): on the left the older one
+    /// (the smaller `record_id`, data-model 18.3), on the right the newer.
+    pub left: DuplicateSide,
+    pub right: DuplicateSide,
+    /// The fields of either record, secrets masked.
+    pub fields: Vec<PairField>,
+}
+
+/// One record of a duplicate pair.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DuplicateSide {
+    pub record_id: Uuid,
+    pub title: String,
+    pub created_at: String,
+    pub modified_at: String,
+}
+
+/// One field of a duplicate pair's comparison: its value on each side
+/// ("—" where a side lacks it), secrets masked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PairField {
+    /// Dotted path, for example `ssh.port`.
+    pub path: String,
+    pub left: String,
+    pub right: String,
+    /// The values differ (compared before masking: a different secret is
+    /// a difference).
+    pub differs: bool,
 }
 
 /// A record a resync brought back (section 6.9, step 5).
@@ -3380,14 +3409,81 @@ impl Core {
                 .into_iter()
                 .filter_map(|(a, b)| {
                     let record = session.index.get(&a)?;
+                    let other = session.index.get(&b)?;
+                    // UUIDv7 ids sort by creation time: the smaller is older.
+                    let (left, right) = if b < a {
+                        (other, record)
+                    } else {
+                        (record, other)
+                    };
                     Some(DuplicateItem {
                         record_id: a,
                         other_record_id: b,
                         type_name: record.kind.name().to_owned(),
                         title: title_of(record.kind.name(), Some(record.data())),
+                        fields: pair_fields(left.data(), right.data()),
+                        left: duplicate_side(left),
+                        right: duplicate_side(right),
                     })
                 })
                 .collect())
+        })
+    }
+
+    /// Lists every two live records of the vault that share a natural key
+    /// (data-model 18.6) as a duplicate pair, as a pull that brought one of
+    /// them would; pairs already listed or kept stay as they are. For tests
+    /// and the screenshot run only: on a device the pairs come from sync.
+    #[doc(hidden)]
+    pub fn sync_duplicates_scan(&self) -> Result<usize, CoreError> {
+        let now_text = format_timestamp(self.now());
+        self.with_session(|inner| {
+            let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
+            let vault_id = session.ring.vault_id();
+            let known: HashSet<(Uuid, Uuid)> = inner
+                .store
+                .duplicate_pairs()?
+                .into_iter()
+                .filter(|pair| pair.vault_id == vault_id)
+                .flat_map(|pair| {
+                    [
+                        (pair.record_id, pair.other_record_id),
+                        (pair.other_record_id, pair.record_id),
+                    ]
+                })
+                .collect();
+            let mut by_key: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
+            for record in session.index.iter() {
+                if let Some(key) = natural::key(record.kind, record.data()) {
+                    by_key
+                        .entry((record.kind, key))
+                        .or_default()
+                        .push(record.record_id);
+                }
+            }
+            let mut pairs = Vec::new();
+            for ids in by_key.values_mut() {
+                ids.sort();
+                for other in &ids[1..] {
+                    if !known.contains(&(ids[0], *other)) {
+                        pairs.push(DuplicatePairRow {
+                            vault_id,
+                            record_id: ids[0],
+                            other_record_id: *other,
+                            found_at: now_text.clone(),
+                            kept: false,
+                        });
+                    }
+                }
+            }
+            inner.store.write(|tx| {
+                for pair in &pairs {
+                    tx.duplicate_pair_put(pair)?;
+                }
+                Ok(())
+            })?;
+            self.emit_sync(inner);
+            Ok(pairs.len())
         })
     }
 
@@ -3570,6 +3666,9 @@ fn masked_value(name: &str, value: &Value) -> Value {
     }
     match value {
         Value::Object(map) => Value::Object(masked(map)),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| masked_value(name, item)).collect())
+        }
         other => other.clone(),
     }
 }
@@ -3633,6 +3732,69 @@ fn differences(
                 current: shown(mask(a).as_ref()),
                 other: shown(mask(b).as_ref()),
                 path,
+            }
+        })
+        .collect()
+}
+
+fn duplicate_side(record: &IndexedRecord) -> DuplicateSide {
+    DuplicateSide {
+        record_id: record.record_id,
+        title: title_of(record.kind.name(), Some(record.data())),
+        created_at: uuid_v7_timestamp(&record.record_id),
+        modified_at: format_unix_ms(record.hlc().ms()),
+    }
+}
+
+/// Members of a record's data the comparison leaves out: list order only.
+const UNCOMPARED: [&str; 1] = ["order_key"];
+
+/// Every field of two records, one level of nesting flattened (`ssh.port`)
+/// as in [`differences`], in path order, secrets masked.
+fn pair_fields(left: &Map<String, Value>, right: &Map<String, Value>) -> Vec<PairField> {
+    fn flatten(map: &Map<String, Value>) -> Vec<(String, &Value)> {
+        let mut list = Vec::new();
+        for (name, value) in map {
+            if UNCOMPARED.contains(&name.as_str()) || value.is_null() {
+                continue;
+            }
+            match value {
+                Value::Object(inner) if !SECRET_MEMBERS.contains(&name.as_str()) => {
+                    for (key, value) in inner {
+                        if !value.is_null() {
+                            list.push((format!("{name}.{key}"), value));
+                        }
+                    }
+                }
+                _ => list.push((name.clone(), value)),
+            }
+        }
+        list
+    }
+    let left: HashMap<String, &Value> = flatten(left).into_iter().collect();
+    let right: HashMap<String, &Value> = flatten(right).into_iter().collect();
+    let mut paths: Vec<&String> = left.keys().chain(right.keys()).collect();
+    paths.sort();
+    paths.dedup();
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path.rsplit('.').next().unwrap_or(path);
+            let show = |value: Option<&&Value>| match value.map(|value| masked_value(name, value)) {
+                // A list of words (tags) as words.
+                Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                other => shown(other.as_ref()),
+            };
+            let (a, b) = (left.get(path), right.get(path));
+            PairField {
+                path: path.clone(),
+                left: show(a),
+                right: show(b),
+                differs: a != b,
             }
         })
         .collect()
@@ -3744,6 +3906,39 @@ mod tests {
         let masked_other = masked(other.as_object().unwrap());
         assert_eq!(masked_other["ssh"]["password"], json!("••••••"));
         assert!(!serde_json::to_string(&found).unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn pair_fields_list_both_sides_and_mask_secrets() {
+        let left = json!({"address": "h", "order_key": "a0", "ssh": {"port": 22, "password": "left-secret"},
+            "proxy": [{"password": "list-secret"}], "tags": ["a", "b"]});
+        let right = json!({"address": "h", "order_key": "b0", "ssh": {"port": 2222, "password": "left-secret"},
+            "notes": "n", "tags": ["a", "b"]});
+        let fields = pair_fields(left.as_object().unwrap(), right.as_object().unwrap());
+        let rows: Vec<(&str, &str, &str, bool)> = fields
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str(),
+                    f.left.as_str(),
+                    f.right.as_str(),
+                    f.differs,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("address", "h", "h", false),
+                ("notes", "—", "n", true),
+                ("proxy", r#"[{"password":"••••••"}]"#, "—", true),
+                ("ssh.password", "••••••", "••••••", false),
+                ("ssh.port", "22", "2222", true),
+                ("tags", "a, b", "a, b", false),
+            ],
+            "order_key is left out"
+        );
+        assert!(!serde_json::to_string(&fields).unwrap().contains("secret"));
     }
 
     #[test]

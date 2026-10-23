@@ -370,6 +370,10 @@ pub enum ShotState {
     RecentlyDeleted,
     /// Review with nothing to review.
     SyncReview,
+    /// The Hosts screen's hint of a duplicate pair (UI 13.7).
+    HostsDuplicates,
+    /// The pair side by side, opened from the hint.
+    SyncDuplicates,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -508,7 +512,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 100] = [
+    pub const ALL: [Self; 102] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -576,6 +580,8 @@ impl ShotState {
         Self::SyncAccount,
         Self::RecentlyDeleted,
         Self::SyncReview,
+        Self::HostsDuplicates,
+        Self::SyncDuplicates,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -746,6 +752,8 @@ impl ShotState {
             Self::SyncAccount => "sync-account",
             Self::RecentlyDeleted => "recently-deleted",
             Self::SyncReview => "sync-review",
+            Self::HostsDuplicates => "hosts-duplicates",
+            Self::SyncDuplicates => "sync-duplicates",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1633,6 +1641,7 @@ pub async fn reset_demo(
         run6_shot::remove_workspace(state, cx);
         run6_shot::forget_serial(state, cx);
         run7_shot::reset(cx);
+        run7_shot::remove_duplicate(state, cx);
     });
     // The search bar is on screen again (Vaults tab): clear it like a user.
     let has_text = cx.update(|cx| !screen.read(cx).filter().text().is_empty());
@@ -1888,7 +1897,9 @@ pub async fn reach_state(
         | ShotState::SyncTrust
         | ShotState::SyncAccount
         | ShotState::RecentlyDeleted
-        | ShotState::SyncReview => run7_shot::reach(cx, handle, root, state, shot_state).await,
+        | ShotState::SyncReview
+        | ShotState::HostsDuplicates
+        | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2140,7 +2151,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SyncTrust
             | ShotState::SyncAccount
             | ShotState::RecentlyDeleted
-            | ShotState::SyncReview => Err("checked with the run 7 screens"),
+            | ShotState::SyncReview
+            | ShotState::HostsDuplicates
+            | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor

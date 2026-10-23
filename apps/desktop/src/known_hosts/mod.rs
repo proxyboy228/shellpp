@@ -52,6 +52,7 @@ use uuid::Uuid;
 
 use crate::shell::Toast;
 use crate::state::{AppState, AppStateEvent};
+use crate::sync_ui::duplicates::DuplicatesHint;
 use crate::theme::metrics;
 
 pub use import::{ImportDialog, ImportStep};
@@ -278,6 +279,8 @@ pub struct KnownHostsScreen {
     /// Loads started so far (tests).
     #[cfg(test)]
     reloads: usize,
+    /// "2 known hosts may be duplicates" with Review (UI 13.7).
+    duplicates_hint: Entity<DuplicatesHint>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -332,6 +335,15 @@ impl KnownHostsScreen {
                 | AppStateEvent::AutoLockDue => {}
             });
         let layout = KnownHostsLayout::saved(state.read(cx));
+        let duplicates_hint = cx.new(|cx| {
+            DuplicatesHint::new(
+                state.clone(),
+                "kh-duplicates",
+                crate::sync_ui::duplicates::KNOWN_HOSTS,
+                view::CONTENT_PADDING,
+                cx,
+            )
+        });
         Self {
             state,
             search,
@@ -357,6 +369,7 @@ impl KnownHostsScreen {
             loading: None,
             #[cfg(test)]
             reloads: 0,
+            duplicates_hint,
             _subscriptions: vec![search_subscription, state_subscription],
         }
     }

@@ -31,7 +31,7 @@ use crate::shell::details::{self, DetailsHeader, ResizeDetails, ResizePreview};
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics};
 
-const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+pub(super) const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(160.);
 const SEARCH_MAX_WIDTH: gpui::Rems = metrics::rpx(320.);
 const DIALOG_WIDTH: gpui::Rems = metrics::rpx(420.);
@@ -1159,6 +1159,9 @@ impl Render for SnippetsScreen {
                     .child(self.render_action_bar(window, cx)),
             )
             .children(self.render_breadcrumb(cx))
+            .when(history.is_none(), |this| {
+                this.child(self.duplicates_hint.clone())
+            })
             // Shell History has its own fields: the grid's focus handling
             // (which takes the focus on a click) is not around it.
             .when_some(history.clone(), |this, history| {

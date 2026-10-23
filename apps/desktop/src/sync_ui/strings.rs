@@ -72,8 +72,41 @@ pub const KEEP_OTHER: &str = "Use other version";
 pub const OTHER_DELETED: &str = "The other version deleted it.";
 pub const DUPLICATES: &str = "Possible duplicates";
 pub const DUPLICATES_HINT: &str = "Items created on two devices that look the same.";
-pub const MERGE: &str = "Merge";
 pub const KEEP_BOTH: &str = "Keep both";
+pub const COMPARE: &str = "Compare…";
+pub const DUPLICATES_COMPARE_HINT: &str = "Keep the one on the left or on the right: its links move to it and the other goes to Recently deleted. Or keep both.";
+pub const KEEP_LEFT: &str = "Keep left";
+pub const KEEP_RIGHT: &str = "Keep right";
+pub const CREATED: &str = "Created";
+pub const CHANGED: &str = "Changed";
+pub const HINT_REVIEW: &str = "Review";
+
+/// A record type as a list names it: `known_host` is "Known host".
+pub fn type_label(type_name: &str) -> String {
+    let text = type_name.replace('_', " ");
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// The hint of a screen (UI 13.7): "2 hosts may be duplicates", or
+/// "2 hosts and 2 groups may be duplicates", from the records in pairs
+/// per type.
+pub fn may_be_duplicates(counts: &[(&str, usize)]) -> String {
+    let parts: Vec<String> = counts
+        .iter()
+        .map(|(type_name, count)| {
+            let noun = type_name.replace('_', " ");
+            if *count == 1 {
+                format!("{count} {noun}")
+            } else {
+                format!("{count} {noun}s")
+            }
+        })
+        .collect();
+    format!("{} may be duplicates", parts.join(" and "))
+}
 pub const BROUGHT_BACK: &str = "Brought back";
 pub const BROUGHT_BACK_HINT: &str =
     "Deleted elsewhere long ago, but still here: they were restored to the server.";

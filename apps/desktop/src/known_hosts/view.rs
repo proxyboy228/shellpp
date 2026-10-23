@@ -35,7 +35,7 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+pub(super) const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// The tile of a list row (the 36 px card tile does not fit a 44 px row).
 const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// The search field of the action bar: it takes the room left, between
@@ -1018,6 +1018,7 @@ impl Render for KnownHostsScreen {
                     .pb(metrics::SPACE_3)
                     .child(self.render_action_bar(window, cx)),
             )
+            .child(self.duplicates_hint.clone())
             .child(
                 div()
                     .id("kh-content")

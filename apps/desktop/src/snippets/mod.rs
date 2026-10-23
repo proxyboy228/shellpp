@@ -45,6 +45,7 @@ pub use run::{RunResults, RunRow, RunState, ask_script_values, ask_values};
 
 use crate::shell::Toast;
 use crate::state::{AppState, AppStateEvent};
+use crate::sync_ui::duplicates::DuplicatesHint;
 use crate::theme::metrics;
 
 /// Stable element id of a snippet card.
@@ -113,6 +114,8 @@ pub struct SnippetsScreen {
     results: Option<Entity<RunResults>>,
     /// Shell History, while it is shown instead of the snippets.
     history: Option<Entity<ShellHistory>>,
+    /// "2 snippets may be duplicates" with Review (UI 13.7).
+    duplicates_hint: Entity<DuplicatesHint>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -160,6 +163,15 @@ impl SnippetsScreen {
                 | AppStateEvent::LocationChanged(_)
                 | AppStateEvent::AutoLockDue => {}
             });
+        let duplicates_hint = cx.new(|cx| {
+            DuplicatesHint::new(
+                state.clone(),
+                "snippet-duplicates",
+                crate::sync_ui::duplicates::SNIPPETS,
+                view::CONTENT_PADDING,
+                cx,
+            )
+        });
         let mut screen = Self {
             state,
             search,
@@ -179,6 +191,7 @@ impl SnippetsScreen {
             undo: None,
             results: None,
             history: None,
+            duplicates_hint,
             _subscriptions: vec![search_subscription, state_subscription],
         };
         screen.reload(cx);

@@ -8,9 +8,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, Div, ElementId, FontWeight, Hsla, InteractiveElement, Interactivity,
-    IntoElement, MouseButton, ParentElement, Rems, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement, StyleRefinement, Styled, TextRun, Window, div,
+    App, ClickEvent, Div, ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    Interactivity, IntoElement, MouseButton, ParentElement, Rems, RenderOnce, SharedString,
+    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, TextRun, Window, div,
     prelude::FluentBuilder,
 };
 use gpui_kit::TestSupportExt as _;
@@ -164,6 +164,8 @@ pub struct ControlButton {
     height: Rems,
     rounded: (bool, bool),
     on_click: Option<ClickHandler>,
+    /// A focus handle the owner keeps (a dialog's default button).
+    focus_handle: Option<FocusHandle>,
 }
 
 /// A click handler of a control.
@@ -196,6 +198,7 @@ impl ControlButton {
             height: metrics::HEIGHT_CONTROL,
             rounded: (true, true),
             on_click: None,
+            focus_handle: None,
         }
     }
 
@@ -251,6 +254,14 @@ impl ControlButton {
         self.on_click = Some(Rc::new(handler));
         self
     }
+
+    /// The focus handle of the owner, which can give this button the
+    /// focus (the default choice of a dialog); otherwise the button keeps
+    /// one of its own.
+    pub fn focus_handle(mut self, handle: FocusHandle) -> Self {
+        self.focus_handle = Some(handle);
+        self
+    }
 }
 
 impl Disableable for ControlButton {
@@ -291,12 +302,14 @@ impl RenderOnce for ControlButton {
         let radius = metrics::RADIUS_CONTROL;
         let (round_left, round_right) = self.rounded;
         let icon_only = self.label.is_none();
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| {
-                cx.focus_handle().tab_stop(true)
-            })
-            .read(cx)
-            .clone();
+        let focus_handle = self.focus_handle.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| {
+                    cx.focus_handle().tab_stop(true)
+                })
+                .read(cx)
+                .clone()
+        });
         let focused = !self.disabled && focus_handle.is_focused(window);
         let fg = colors.fg;
         let label_color = if self.kind == ControlKind::Ghost && self.label.is_some() {

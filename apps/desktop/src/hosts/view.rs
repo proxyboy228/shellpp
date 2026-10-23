@@ -50,7 +50,7 @@ use crate::theme::{self, metrics, palette};
 /// Height of a section heading row ("Groups", "Hosts").
 const HEADING_HEIGHT: f32 = 40.;
 /// Horizontal padding of the content (`--space-5`).
-const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+pub(super) const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// Tile of a list row (the 36 px card tile does not fit a 44 px row).
 const LIST_TILE_SIZE: gpui::Rems = metrics::rpx(28.);
 /// Height of the Connect button inside the 36 px search field.
@@ -1442,6 +1442,7 @@ impl Render for HostsScreen {
                     .child(action_bar),
             )
             .children(self.render_breadcrumbs(cx))
+            .child(self.duplicates_hint.clone())
             .child(
                 div()
                     .id("hosts-content")

@@ -62,6 +62,7 @@ use crate::state::hosts_view::{
     self, HostsFilter, HostsLayout, HostsListing, HostsSort, TagCount, group_tree, subtree_of,
 };
 use crate::state::{AppState, AppStateEvent, GroupItem, HostItem, SelectMode};
+use crate::sync_ui::duplicates::DuplicatesHint;
 use columns::{Column, ListColumns};
 use layout::BarPlan;
 use tag_filter::{TagFilterEvent, TagFilterMenu};
@@ -261,6 +262,8 @@ pub struct HostsScreen {
     last_click: Option<Uuid>,
     /// A card to scroll into view once its row exists (the next layout).
     reveal: Option<Uuid>,
+    /// "2 hosts may be duplicates" with Review (UI 13.7).
+    duplicates_hint: Entity<DuplicatesHint>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -327,6 +330,15 @@ impl HostsScreen {
                 state.hosts_list_columns(),
             )
         };
+        let duplicates_hint = cx.new(|cx| {
+            DuplicatesHint::new(
+                state.clone(),
+                "hosts-duplicates",
+                crate::sync_ui::duplicates::HOSTS,
+                view::CONTENT_PADDING,
+                cx,
+            )
+        });
         let mut this = Self {
             state,
             search,
@@ -357,6 +369,7 @@ impl HostsScreen {
             focus: cx.focus_handle().tab_stop(true),
             last_click: None,
             reveal: None,
+            duplicates_hint,
             _subscriptions: vec![search_subscription, state_subscription, tag_subscription],
         };
         this.refresh(cx);
@@ -368,6 +381,11 @@ impl HostsScreen {
     /// The search input (tests type into it through its element id `search`).
     pub fn search(&self) -> &Entity<InputState> {
         &self.search
+    }
+
+    /// The duplicates hint above the cards (UI 13.7).
+    pub fn duplicates_hint(&self) -> &Entity<DuplicatesHint> {
+        &self.duplicates_hint
     }
 
     /// Whether the search field has the keyboard focus (its one focus ring).
