@@ -339,3 +339,14 @@ mod ds_tables;
 mod literals;
 #[cfg(test)]
 mod tests;
+
+/// The modules of a QR code (the TOTP setup, UI 13.5): black on white in
+/// both themes, as scanners expect; not a design token.
+pub fn qr_dark() -> gpui::Rgba {
+    gpui::rgb(0x000000)
+}
+
+/// The background and quiet zone of a QR code.
+pub fn qr_light() -> gpui::Rgba {
+    gpui::rgb(0xffffff)
+}

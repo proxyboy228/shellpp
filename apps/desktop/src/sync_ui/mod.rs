@@ -2401,8 +2401,8 @@ fn qr_code(text: &str) -> Option<AnyElement> {
     let colors = code.to_colors();
     let module = metrics::rpx(4.);
     let quiet = 4;
-    let white = gpui::rgb(0xffffff);
-    let black = gpui::rgb(0x000000);
+    let white = crate::theme::qr_light();
+    let black = crate::theme::qr_dark();
     let mut rows = v_flex()
         .id("sync-totp-qr")
         .test_support()
