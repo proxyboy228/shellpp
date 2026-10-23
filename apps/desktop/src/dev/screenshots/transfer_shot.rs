@@ -83,6 +83,9 @@ pub async fn reach(
         ShotState::ExportOpenSsh => export_openssh(cx, handle, state).await,
         ShotState::ImportData => import_summary(cx, handle, state).await,
         ShotState::ImportSshConfig => config_preview(cx, handle, state).await,
+        ShotState::ImportPutty => putty_preview(cx, handle, state).await,
+        ShotState::ImportCsvMapping => csv_step(cx, handle, state, shot_state).await,
+        ShotState::ImportCsvPreview => csv_step(cx, handle, state, shot_state).await,
         _ => Err(ScreenshotError::state(
             shot_state,
             "not a data transfer state",
@@ -244,6 +247,159 @@ async fn config_preview(
         return Err(not_reached("the preview lists fewer hosts than the sample"));
     }
     Ok(())
+}
+
+/// The PuTTY sessions of [`ShotState::ImportPutty`]: documentation
+/// addresses, a Telnet router, a SOCKS 5 proxy, a serial session (not
+/// imported) and `Default Settings` (a template, not listed).
+pub fn sample_sessions() -> shellpp_core::import::putty::Sessions {
+    use shellpp_core::import::putty::{Session, Sessions, Value};
+    let session = |key: &str, values: &[(&str, Value)]| Session {
+        key: key.to_owned(),
+        values: values
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone()))
+            .collect(),
+    };
+    let text = |value: &str| Value::Text(value.to_owned());
+    Sessions {
+        sessions: vec![
+            session("Default%20Settings", &[("Protocol", text("ssh"))]),
+            session(
+                "web%20prod",
+                &[
+                    ("HostName", text("deploy@203.0.113.20")),
+                    ("PortNumber", Value::Number(22)),
+                    ("Protocol", text("ssh")),
+                    ("PortForwardings", text("L8080=localhost:80,D1080=")),
+                    ("LineCodePage", text("UTF-8")),
+                ],
+            ),
+            session(
+                "db%20via%20proxy",
+                &[
+                    ("HostName", text("db.internal.example.com")),
+                    ("Protocol", text("ssh")),
+                    ("ProxyMethod", Value::Number(2)),
+                    ("ProxyHost", text("198.51.100.3")),
+                    ("ProxyPort", Value::Number(1080)),
+                    ("X11Forward", Value::Number(1)),
+                ],
+            ),
+            session(
+                "router",
+                &[
+                    ("HostName", text("192.0.2.1")),
+                    ("PortNumber", Value::Number(23)),
+                    ("Protocol", text("telnet")),
+                ],
+            ),
+            session(
+                "console",
+                &[("Protocol", text("serial")), ("SerialLine", text("COM3"))],
+            ),
+        ],
+        unreadable: Vec::new(),
+        code_page: None,
+    }
+}
+
+/// The CSV file of the CSV states: semicolons, a password column, a row
+/// whose port is not a number, a duplicate.
+pub fn sample_csv() -> String {
+    [
+        "Name;Host;Port;User;Group;Tags;Password",
+        "Web 1;web1.example.com;22;deploy;Production / Web;prod;shots-password-1",
+        "Web 2;web2.example.com;22;deploy;Production / Web;prod;",
+        "Mail;198.51.100.25;2222;admin;Production;mail;",
+        "Web 1 again;web1.example.com;22;deploy;;;",
+        "Broken;bad.example.com;port;;;;",
+        "",
+    ]
+    .join("\r\n")
+}
+
+/// The import dialog on [`sample_sessions`], up to its preview.
+async fn putty_preview(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    state: &Entity<AppState>,
+) -> Result<(), ScreenshotError> {
+    let shot = ShotState::ImportPutty;
+    cx.update(|cx| {
+        import_sources::putty_registry::set_source(
+            std::sync::Arc::new(shellpp_core::import::putty::FixedSessions(sample_sessions())),
+            cx,
+        )
+    });
+    let dialog = cx
+        .update_window(handle, |_, window, cx| {
+            import_sources::open(state.clone(), window, cx)
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+    settle(cx, handle).await?;
+    cx.update(|cx| {
+        dialog.update(cx, |dialog, cx| {
+            dialog.select(import_sources::Source::Putty, cx)
+        })
+    });
+    click(cx, handle, IMPORT_NEXT)?;
+    wait_for(cx, handle, shot, "the preview", |cx| {
+        *dialog.read(cx).step() == Step::Preview
+    })
+    .await
+}
+
+/// The import dialog on [`sample_csv`]: up to the column mapping, or one
+/// step further to the preview.
+async fn csv_step(
+    cx: &mut AsyncApp,
+    handle: AnyWindowHandle,
+    state: &Entity<AppState>,
+    shot: ShotState,
+) -> Result<(), ScreenshotError> {
+    let not_reached = |reason: &str| ScreenshotError::state(shot, reason);
+    let folder = TempProfile::create("shellpp-shots-csv")
+        .map_err(|error| not_reached(&format!("temporary folder: {error}")))?;
+    let file = folder.path().join("hosts.csv");
+    std::fs::write(&file, sample_csv())
+        .map_err(|error| not_reached(&format!("sample file: {error}")))?;
+    let dialog = cx
+        .update_window(handle, |_, window, cx| {
+            import_sources::open(state.clone(), window, cx)
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+    let reached = async {
+        settle(cx, handle).await?;
+        cx.update(|cx| {
+            dialog.update(cx, |dialog, cx| {
+                dialog.select(import_sources::Source::Csv, cx)
+            })
+        });
+        click(cx, handle, IMPORT_NEXT)?;
+        settle(cx, handle).await?;
+        cx.update_window(handle, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_path(&file, window, cx));
+        })
+        .map_err(|_| ScreenshotError::WindowClosed)?;
+        click(cx, handle, IMPORT_NEXT)?;
+        wait_for(cx, handle, shot, "the mapping", |cx| {
+            *dialog.read(cx).step() == Step::Mapping
+        })
+        .await?;
+        if shot == ShotState::ImportCsvPreview {
+            click(cx, handle, IMPORT_NEXT)?;
+            wait_for(cx, handle, shot, "the preview", |cx| {
+                *dialog.read(cx).step() == Step::Preview
+            })
+            .await?;
+        }
+        Ok(())
+    }
+    .await;
+    // The file holds a password in clear text: gone right away.
+    drop(folder);
+    reached
 }
 
 /// Polls `condition` after a fresh frame until it holds.

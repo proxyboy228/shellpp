@@ -385,6 +385,14 @@ pub enum ShotState {
     /// The import dialog's preview of an OpenSSH config (UI 2.5): new
     /// hosts, a key file with a passphrase, a missing one, an error.
     ImportSshConfig,
+    /// The preview of PuTTY sessions (D140) from a fixed session list: SSH
+    /// and Telnet sessions, a proxy, a refused protocol.
+    ImportPutty,
+    /// The column mapping of a CSV file (D141): detected delimiter and
+    /// character set, the columns with their roles, a password warning.
+    ImportCsvMapping,
+    /// The preview of that CSV file: new rows, a duplicate, an error.
+    ImportCsvPreview,
     /// A quick connect from the search bar to the SSH test server: once the
     /// session runs, the offer to save the host ("Save host?", UI 2.1).
     QuickConnectToast,
@@ -517,7 +525,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 104] = [
+    pub const ALL: [Self; 107] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -542,6 +550,9 @@ impl ShotState {
         Self::ExportOpenSsh,
         Self::ImportData,
         Self::ImportSshConfig,
+        Self::ImportPutty,
+        Self::ImportCsvMapping,
+        Self::ImportCsvPreview,
         Self::ForwardingEmpty,
         Self::ForwardingCards,
         Self::ForwardingForm,
@@ -766,6 +777,9 @@ impl ShotState {
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
+            Self::ImportPutty => "import-putty",
+            Self::ImportCsvMapping => "import-csv-mapping",
+            Self::ImportCsvPreview => "import-csv-preview",
             Self::QuickConnectToast => "quick-connect-toast",
             Self::TagFilter => "tag-filter",
             Self::TagChips => "tag-chips",
@@ -1797,7 +1811,10 @@ pub async fn reach_state(
         | ShotState::ExportDataPlain
         | ShotState::ExportOpenSsh
         | ShotState::ImportData
-        | ShotState::ImportSshConfig => transfer_shot::reach(cx, handle, state, shot_state).await,
+        | ShotState::ImportSshConfig
+        | ShotState::ImportPutty
+        | ShotState::ImportCsvMapping
+        | ShotState::ImportCsvPreview => transfer_shot::reach(cx, handle, state, shot_state).await,
         ShotState::TagFilter => {
             // The dropdown open with two tags checked (they also show as
             // chips next to the button); both are on the first demo host.
@@ -2079,6 +2096,12 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             }
             ShotState::ImportData => need(visible("data-import-summary"), "no import summary"),
             ShotState::ImportSshConfig => need(visible("import-preview"), "no import preview"),
+            ShotState::ImportPutty => need(visible("import-preview"), "no PuTTY preview"),
+            ShotState::ImportCsvMapping => {
+                need(visible("import-csv-mapping"), "no column mapping")?;
+                need(visible("import-csv-passwords"), "no password warning")
+            }
+            ShotState::ImportCsvPreview => need(visible("import-preview"), "no CSV preview"),
             ShotState::TagFilter => {
                 need(visible(TAG_FILTER_MENU), "no tag filter dropdown")?;
                 need(
