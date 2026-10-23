@@ -76,6 +76,15 @@ impl Ui {
         .unwrap()
     }
 
+    fn width(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> gpui::Pixels {
+        let id = id.into();
+        cx.update_window(self.handle, move |_, window, cx| {
+            window.render_frame(cx);
+            window.find(id.clone()).bounds().size.width
+        })
+        .unwrap()
+    }
+
     fn click(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
         let id = id.into();
         cx.update_window(self.handle, move |_, window, cx| {
@@ -199,6 +208,86 @@ fn the_hint_opens_the_pair_and_keep_left_merges_into_the_older(cx: &mut TestAppC
     assert_eq!(ui.deleted(cx), vec![newer]);
     assert_eq!(ui.hint_count(cx), 0);
     assert!(!ui.visible("hosts-duplicates", cx));
+    ui.finish(cx);
+}
+
+/// The three buttons of a pair are one group, each as wide as the widest
+/// (design-system 6); each side names the device of its last change (as
+/// in 13.6), here this device.
+#[gpui::test]
+fn the_buttons_are_equally_wide_and_each_side_names_its_device(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let _ = with_a_pair(&ui, cx);
+    ui.click("hosts-duplicates-review", cx);
+    let widths: Vec<gpui::Pixels> = ["dup-keep-left", "dup-keep-right", "dup-keep-both"]
+        .into_iter()
+        .map(|id| ui.width((id, 0usize), cx))
+        .collect();
+    assert!(widths.iter().all(|width| *width == widths[0]), "{widths:?}");
+    for side in ["left", "right"] {
+        let id = format!("dup-0-{side}-device");
+        assert!(ui.visible(gpui::SharedString::from(id.clone()), cx), "{id}");
+    }
+    let state = ui.state.clone();
+    let items = cx.update(|cx| {
+        state
+            .read(cx)
+            .core()
+            .and_then(|core| core.sync_duplicates().ok())
+            .unwrap_or_default()
+    });
+    assert!(items[0].left.this_device && items[0].right.this_device);
+    ui.finish(cx);
+}
+
+/// Two copies of one key (UI 13.7: the hint and the merge of 7.2) have one
+/// Merge, with the focus, instead of Keep left / Keep right: the older key
+/// stays and the newer goes to Recently deleted.
+#[gpui::test]
+fn two_copies_of_a_key_have_one_merge(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let core = ui.core(cx);
+    let vault_id = ui.state.read_with(cx, |state, _| state.vault_id().unwrap());
+    let older = core
+        .key_generate(shellpp_core::service::dto::KeyGenerateInput {
+            vault_id,
+            label: "deploy".into(),
+            kind: shellpp_core::keys::generate::KeyKind::Ed25519,
+            passphrase: None,
+            save_passphrase: false,
+        })
+        .expect("key")
+        .key
+        .record_id;
+    let newer = core.sync_duplicate_copy_for_test(older).expect("copy");
+    assert_eq!(core.sync_duplicates_scan().expect("scan"), 1);
+    ui.settle(cx);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        duplicates::open_duplicates(state, DuplicatesOf::Types(&["key"]), window, cx)
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert!(ui.visible(("dup-merge", 0usize), cx));
+    assert!(!ui.visible(("dup-keep-left", 0usize), cx));
+    assert!(!ui.visible(("dup-keep-right", 0usize), cx));
+    assert!(ui.visible(("dup-keep-both", 0usize), cx));
+    assert_eq!(ui.focused(("dup-merge", 0usize), cx), Some(true));
+    assert_eq!(
+        ui.width(("dup-merge", 0usize), cx),
+        ui.width(("dup-keep-both", 0usize), cx)
+    );
+
+    ui.click(("dup-merge", 0usize), cx);
+    assert!(!ui.visible("sync-duplicates", cx));
+    let keys: Vec<Uuid> = core
+        .keys_list()
+        .expect("keys")
+        .into_iter()
+        .map(|key| key.record_id)
+        .collect();
+    assert_eq!(keys, vec![older], "the older key stays");
+    assert_eq!(ui.deleted(cx), vec![newer]);
     ui.finish(cx);
 }
 

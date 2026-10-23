@@ -5,9 +5,13 @@
 //!   user may change the vault; in this app that is always the personal
 //!   vault, so it shows whenever there are pairs;
 //! - the dialog with each pair side by side as in 13.6: both records as
-//!   lists of their fields, the fields that differ highlighted, secrets
-//!   masked by the core, and Keep left / Keep right (a merge into that one;
-//!   the older one, on the left, has the focus) and Keep both.
+//!   lists of their fields with the device and the time of their last
+//!   change, the fields that differ highlighted, secrets masked by the
+//!   core, and Keep left / Keep right (a merge into that one; the older
+//!   one, on the left, has the focus) and Keep both, one group as wide as
+//!   the widest (design-system 6). Two copies of a key have the one Merge
+//!   of 7.2 instead of Keep left / Keep right: the key rule decides which
+//!   one stays (data-model 18.3).
 
 use std::rc::Rc;
 
@@ -25,7 +29,7 @@ use shellpp_core::service::{DuplicateItem, DuplicateSide};
 use uuid::Uuid;
 
 use super::{close_footer, error_line, error_text, label, strings, title, when};
-use crate::hosts::controls::{ControlButton, ControlKind};
+use crate::hosts::controls::{self, ControlButton, ControlKind};
 use crate::panels::widgets;
 use crate::state::{AppState, AppStateEvent};
 use crate::theme::{self, metrics};
@@ -232,7 +236,8 @@ pub struct DuplicatesDialog {
     state: Entity<AppState>,
     of: DuplicatesOf,
     pub items: Vec<DuplicateItem>,
-    /// The first pair's Keep left: the older record has the focus.
+    /// The first pair's Keep left (Merge for two copies of a key): the
+    /// older record has the focus.
     focus: FocusHandle,
     /// Runs after each choice (Review reads its lists again).
     on_change: Option<OnChange>,
@@ -406,10 +411,22 @@ impl DuplicatesDialog {
                         format!("{} {}", strings::CREATED, when(&record.created_at)),
                         cx,
                     ))
-                    .child(widgets::caption(
-                        format!("{} {}", strings::CHANGED, when(&record.modified_at)),
-                        cx,
-                    )),
+                    .child(
+                        widgets::caption(
+                            format!(
+                                "{} {} · {}",
+                                strings::CHANGED,
+                                when(&record.modified_at),
+                                device_text(record)
+                            ),
+                            cx,
+                        )
+                        .id(SharedString::from(format!(
+                            "dup-{index}-{}-device",
+                            side.name()
+                        )))
+                        .test_support(),
+                    ),
             )
             .children(rows)
     }
@@ -418,10 +435,51 @@ impl DuplicatesDialog {
         &self,
         index: usize,
         item: &DuplicateItem,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let (left, right) = (item.left.record_id, item.right.record_id);
         let pair = item.clone();
+        // Two copies of a key: the one Merge of 7.2 (the core keeps the
+        // older whichever is named).
+        let key = item.type_name == "key";
+        let labels: &[&str] = if key {
+            &[strings::MERGE_KEYS, strings::KEEP_BOTH]
+        } else {
+            &[strings::KEEP_LEFT, strings::KEEP_RIGHT, strings::KEEP_BOTH]
+        };
+        // One group: every button as wide as the widest (design-system 6).
+        let width = controls::text_group_width(window, labels);
+        let first = |id: &'static str, label: &'static str| {
+            ControlButton::new((id, index), ControlKind::Neutral)
+                .label(label)
+                .min_w(width)
+                .when(index == 0, |button| button.focus_handle(self.focus.clone()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.merge(left, right, window, cx)
+                }))
+        };
+        let buttons = h_flex()
+            .w_full()
+            .justify_end()
+            .gap(metrics::SPACE_2)
+            // Room for the focus ring inside the scrolling body.
+            .pr(metrics::SPACE_1)
+            .pb(metrics::SPACE_1);
+        let buttons = if key {
+            buttons.child(first("dup-merge", strings::MERGE_KEYS))
+        } else {
+            buttons
+                .child(first("dup-keep-left", strings::KEEP_LEFT))
+                .child(
+                    ControlButton::new(("dup-keep-right", index), ControlKind::Neutral)
+                        .label(strings::KEEP_RIGHT)
+                        .min_w(width)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.merge(right, left, window, cx)
+                        })),
+                )
+        };
         v_flex()
             .id(("dup-pair", index))
             .test_support()
@@ -431,6 +489,9 @@ impl DuplicatesDialog {
                 format!("{} · {}", item.title, strings::type_label(&item.type_name)),
                 cx,
             ))
+            .when(key, |this| {
+                this.child(widgets::caption(strings::KEYS_MERGE_NOTE, cx))
+            })
             .child(
                 h_flex()
                     .w_full()
@@ -440,41 +501,36 @@ impl DuplicatesDialog {
                     .child(self.render_side(index, Side::Right, item, cx)),
             )
             .child(
-                h_flex()
-                    .w_full()
-                    .justify_end()
-                    .gap(metrics::SPACE_2)
-                    // Room for the focus ring inside the scrolling body.
-                    .pr(metrics::SPACE_1)
-                    .pb(metrics::SPACE_1)
-                    .child(
-                        ControlButton::new(("dup-keep-left", index), ControlKind::Neutral)
-                            .label(strings::KEEP_LEFT)
-                            .when(index == 0, |button| button.focus_handle(self.focus.clone()))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.merge(left, right, window, cx)
-                            })),
-                    )
-                    .child(
-                        ControlButton::new(("dup-keep-right", index), ControlKind::Neutral)
-                            .label(strings::KEEP_RIGHT)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.merge(right, left, window, cx)
-                            })),
-                    )
-                    .child(
-                        ControlButton::new(("dup-keep-both", index), ControlKind::Neutral)
-                            .label(strings::KEEP_BOTH)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.keep_both(&pair, window, cx)
-                            })),
-                    ),
+                buttons.child(
+                    ControlButton::new(("dup-keep-both", index), ControlKind::Neutral)
+                        .label(strings::KEEP_BOTH)
+                        .min_w(width)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.keep_both(&pair, window, cx)
+                        })),
+                ),
             )
     }
 }
 
+/// The device of a side's last change: this device, its name, or the
+/// start of its id (as the conflict comparison names a version's, UI 13.6).
+fn device_text(side: &DuplicateSide) -> String {
+    if side.this_device {
+        return strings::VERSION_THIS_DEVICE.to_owned();
+    }
+    match &side.device_name {
+        Some(name) => name.clone(),
+        None => format!(
+            "{} {}",
+            strings::DEVICE,
+            side.device_id.chars().take(8).collect::<String>()
+        ),
+    }
+}
+
 impl Render for DuplicatesDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut body = v_flex()
             .id("sync-duplicates")
             .test_support()
@@ -488,7 +544,7 @@ impl Render for DuplicatesDialog {
             if index > 0 {
                 body = body.child(widgets::divider(cx));
             }
-            body = body.child(self.render_pair(index, item, cx));
+            body = body.child(self.render_pair(index, item, window, cx));
         }
         body.children(error_line(self.error, cx))
     }

@@ -90,6 +90,9 @@ pub const COMPARE: &str = "Compare…";
 pub const DUPLICATES_COMPARE_HINT: &str = "Keep the one on the left or on the right: its links move to it and the other goes to Recently deleted. Or keep both.";
 pub const KEEP_LEFT: &str = "Keep left";
 pub const KEEP_RIGHT: &str = "Keep right";
+/// The one merge of two copies of a key (UI 13.7 and 7.2).
+pub const MERGE_KEYS: &str = "Merge";
+pub const KEYS_MERGE_NOTE: &str = "Merge keeps the older key, with the other's certificate and passphrase where it has none. Its links move to it.";
 pub const CREATED: &str = "Created";
 pub const CHANGED: &str = "Changed";
 pub const HINT_REVIEW: &str = "Review";

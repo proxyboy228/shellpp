@@ -53,11 +53,20 @@ pub fn text_width(window: &Window, text: &str, size: Rems, weight: FontWeight) -
 /// with an icon and one of `labels` (design-system 6 [decision]): as wide
 /// as the widest of them. Give it to each button as its minimum width.
 pub fn group_width(window: &Window, labels: &[&str]) -> Rems {
-    let widest = labels
+    metrics::rpx(widest_label(window, labels) + LABEL_BUTTON_EXTRA)
+}
+
+/// [`group_width`] for buttons with a label and no icon: the widest label
+/// and the 12 px padding on both sides.
+pub fn text_group_width(window: &Window, labels: &[&str]) -> Rems {
+    metrics::rpx(widest_label(window, labels) + 2. * 12.)
+}
+
+fn widest_label(window: &Window, labels: &[&str]) -> f32 {
+    labels
         .iter()
         .map(|label| text_width(window, label, metrics::FONT_SIZE_BODY, FontWeight::MEDIUM))
-        .fold(0., f32::max);
-    metrics::rpx(widest + LABEL_BUTTON_EXTRA)
+        .fold(0., f32::max)
 }
 
 /// How a control is painted.

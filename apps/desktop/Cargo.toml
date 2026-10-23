@@ -29,7 +29,8 @@ dev-tools = []
 # PNGs. A separate feature, so `--demo` builds (memory measurement) stay
 # without test-support.
 # The stage 4 states sign a demo certificate (ssh-key).
-# The sync conflict state writes a conflict copy (shellpp-core's test-hooks).
+# The sync conflict state writes a conflict copy and the duplicates states
+# list pairs (shellpp-core's test-hooks).
 screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key", "shellpp-core/test-hooks"]
 
 [dependencies]
