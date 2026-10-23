@@ -36,8 +36,8 @@ previous launch (once per launch).
 
 ### Local terminal, Telnet and serial
 
-- **Local terminal**: the **Terminal** button on the Hosts screen, app menu
-  > **New Local Terminal**, or Ctrl+L (outside a terminal). It opens your
+- **Local terminal**: the **Terminal** button on the Hosts screen, the app
+  menu's **New Local Terminal**, or Ctrl+L (outside a terminal). It opens your
   default shell: PowerShell 7 if it is installed, otherwise Windows
   PowerShell. This version has no setting to choose another shell.
 - **Telnet**: add a Telnet block to a host (host panel > **Add Telnet**),

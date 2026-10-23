@@ -8,8 +8,8 @@ without a sync server, in open formats.
 ## Export Data
 
 Open the app menu (the button with three bars, left in the top bar) >
-**Export Data…**, or Settings (Ctrl+,) > **Account & Sync** > **Your data**
-> **Export Data...**. Choose one of two formats.
+**Export Data…**, or Settings (Ctrl+,) > **Account & Sync** >
+**Your data** > **Export Data...**. Choose one of two formats.
 
 ![Export Data](images/export-data.png)
 
@@ -84,7 +84,9 @@ Importing never overwrites anything:
 - commands from the history that look like secrets are left out;
 - forwarding rules from the file never start by themselves when Shell++
   starts, and rules that listen beyond this computer do not start when you
-  connect either (except in a full restore, below).
+  connect either (except in a full restore, below);
+- hosts from the file come with Agent Forwarding turned off (except in a
+  full restore): only you decide which hosts may use your keys.
 
 **Apply the settings in the file** (on) applies the appearance and behaviour
 settings. Settings that make Shell++ run programs or scripts, and the

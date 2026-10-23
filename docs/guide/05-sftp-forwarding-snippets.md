@@ -56,7 +56,9 @@ When a file with the same name exists, Shell++ asks: **Skip**, **Keep both**
 the rest of the transfer. Settings > **SFTP** can make it always replace,
 skip or rename instead. Only the item you copy is checked: copying a folder
 onto a folder of the same name with **Replace** merges them, and files
-inside that have the same names are replaced without asking.
+inside that have the same names are replaced without asking. While
+Shell++ is locked, transfers go on, and such a question waits until you
+unlock.
 
 ### Other file actions
 
@@ -76,7 +78,8 @@ deleted when its SFTP session ends (if nothing is waiting to be uploaded),
 and the whole `tmp` folder is emptied when Shell++ starts or exits, without
 asking: save and close the file in its program before you quit Shell++.
 **Open** on a program file (`.exe`, `.ps1`, `.sh` and so on) asks first,
-because it would run on your computer.
+because it would run on your computer; so does a link on the server that
+points to one, whatever its own name.
 
 > File names on a server that are not valid UTF-8 are shown with `�` and
 > cannot be opened, renamed or downloaded.
