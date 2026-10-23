@@ -12,7 +12,8 @@
 //! - `cmd`: Command Prompt, `%ComSpec%`;
 //! - `wsl:<distribution>`: every WSL distribution from
 //!   `wsl.exe --list --quiet` (empty and `docker-desktop*` entries skipped),
-//!   started with `wsl.exe -d <distribution>`; the listing has a 3 s timeout;
+//!   started with `wsl.exe -d <distribution>`; the listing runs in a job
+//!   object with a 3 s timeout, which ends its whole process tree (D100);
 //! - `git-bash`: Git Bash, `%ProgramFiles%\Git\bin\bash.exe --login -i`
 //!   (or the per-user install under `%LocalAppData%\Programs\Git`).
 //!
@@ -280,65 +281,15 @@ mod windows {
     }
 
     /// The installed WSL distributions; empty on any failure or timeout.
+    /// The listing runs in a job object: a timeout ends `wsl.exe` and the
+    /// second `wsl.exe` it starts (D100, item 5).
     #[cfg(windows)]
     fn wsl_distributions(wsl: &Path) -> Vec<String> {
-        use std::io::Read;
-        use std::os::windows::process::CommandExt;
-        use std::process::{Command, Stdio};
-        use std::sync::mpsc;
-        use std::time::Instant;
-
-        /// No console window for the listing (the app is a GUI process).
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-        let deadline = Instant::now() + WSL_TIMEOUT;
-        let mut child = match Command::new(wsl)
-            .args(["--list", "--quiet"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(_) => return Vec::new(),
-        };
-        let Some(mut stdout) = child.stdout.take() else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Vec::new();
-        };
-        let (tx, rx) = mpsc::channel();
-        let reader = std::thread::Builder::new()
-            .name("shellpp-wsl-list".to_owned())
-            .spawn(move || {
-                let mut output = Vec::new();
-                let _ = stdout.read_to_end(&mut output);
-                let _ = tx.send(output);
-            });
-        if reader.is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Vec::new();
-        }
-
-        let output = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
-        let success = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status.success(),
-                Ok(None) if output.is_ok() && Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break false;
-                }
-            }
-        };
-        match output {
-            Ok(output) if success => parse_wsl_list(&output),
-            _ => Vec::new(),
+        let mut command = std::process::Command::new(wsl);
+        command.args(["--list", "--quiet"]);
+        match crate::windows::run_in_job(command, WSL_TIMEOUT) {
+            Ok(output) if output.success => parse_wsl_list(&output.stdout),
+            Ok(_) | Err(_) => Vec::new(),
         }
     }
 

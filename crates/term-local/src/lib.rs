@@ -20,11 +20,15 @@
 //! Owner: S3. The public API is the S3/S5 contract written by the lead
 //! (stage 2 plan, section 4.3).
 
-#![forbid(unsafe_code)]
+// `unsafe` only in the Windows platform module (the job object of the WSL
+// listing, CONTRIBUTING "Unsafe code"); the workspace denies it elsewhere.
+#![cfg_attr(not(windows), forbid(unsafe_code))]
 
 pub mod pty;
 pub mod serial;
 pub mod shells;
+#[cfg(windows)]
+mod windows;
 
 pub use pty::{ExitInfo, LocalSession, PtyConfig, PtyWriter, spawn};
 pub use shells::{ShellInfo, ShellSpec, default_shell_id, detect_shells, resolve_shell};

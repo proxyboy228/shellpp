@@ -1750,6 +1750,10 @@ shells plus a custom path.
 
 - Windows: PowerShell, PowerShell 7, cmd, WSL distributions, Git Bash.
 - macOS and Linux: shells from `/etc/shells`.
+- Shells are detected the first time they are needed in a run (a local terminal, or this
+  block), not at every start, and the list is kept until the next start: listing the WSL
+  distributions is slow. The listing waits at most 3 seconds and then ends `wsl.exe` with
+  every process it started. [decision] (D100)
 - Until a shell is chosen here, Windows uses PowerShell 7 (`pwsh`) when it is installed,
   and Windows PowerShell otherwise. A local terminal tab is titled with the shell's
   display name, for example "PowerShell 7" (1.1). [decision]

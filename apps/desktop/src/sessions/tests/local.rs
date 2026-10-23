@@ -87,3 +87,58 @@ async fn input_and_resize_reach_the_shell() {
     session.type_line("exit");
     session.state(SessionState::Closed).await;
 }
+
+/// Counts shell detections; starts nothing.
+#[derive(Default)]
+struct CountingLocal {
+    detections: AtomicUsize,
+}
+
+impl LocalBackend for CountingLocal {
+    fn shells(&self, _refresh: bool) -> Vec<shellpp_term_local::ShellInfo> {
+        self.detections.fetch_add(1, Ordering::SeqCst);
+        Vec::new()
+    }
+    fn default_id(&self, _shells: &[shellpp_term_local::ShellInfo]) -> Option<String> {
+        None
+    }
+    fn resolve(
+        &self,
+        _requested: Option<&str>,
+        _setting: Option<&str>,
+        _shells: &[shellpp_term_local::ShellInfo],
+    ) -> Result<shellpp_term_local::ShellSpec, shellpp_term_local::LocalError> {
+        Err(shellpp_term_local::LocalError::NoShell)
+    }
+    fn spawn(
+        &self,
+        _spec: &shellpp_term_local::ShellSpec,
+        _cols: u16,
+        _rows: u16,
+        _term: &str,
+    ) -> Result<crate::sessions::transport::TermParts, shellpp_term_local::LocalError> {
+        Err(shellpp_term_local::LocalError::NoShell)
+    }
+}
+
+/// D100, item 5: the app start detects no shells (WSL is slow and can hang);
+/// the first local terminal of the run does, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shells_are_detected_only_when_a_local_terminal_opens() {
+    let local = Arc::new(CountingLocal::default());
+    let harness = Harness::with(|options| options.local = local.clone());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        local.detections.load(Ordering::SeqCst),
+        0,
+        "detected at start"
+    );
+    let mut session = harness
+        .open_with(
+            OpenRequest::Local { shell_id: None },
+            Arc::new(TestTerminal::default()),
+        )
+        .expect("opens");
+    session.state(SessionState::Failed).await;
+    assert_eq!(local.detections.load(Ordering::SeqCst), 1);
+}

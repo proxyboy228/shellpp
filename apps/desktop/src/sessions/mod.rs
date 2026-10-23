@@ -816,11 +816,9 @@ impl SessionManager {
             forwarding: background::ForwardingService::default(),
             launch_autostart_done: AtomicBool::new(false),
         });
-        // Shell detection can be slow (WSL): warm the cache early.
-        let local = shared.local.clone();
-        drop(shared.rt.spawn_blocking(move || {
-            let _ = local.shells(false);
-        }));
+        // Shells are detected lazily, at the first local terminal of the run,
+        // and kept until the next start (D100, item 5): WSL detection is slow
+        // and must not run at every app start.
         // Already unlocked at start ("remember on this device"): the rules
         // that start on launch start now.
         shared.autostart_on_launch();
