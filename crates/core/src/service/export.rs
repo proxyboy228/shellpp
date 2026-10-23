@@ -189,6 +189,8 @@ fn label_member(kind: RecordKind) -> Option<&'static str> {
 
 /// The autostart flags of a forwarding rule.
 const AUTOSTART: [&str; 2] = ["autostart_on_connect", "autostart_on_launch"];
+/// The Agent Forwarding flags of a host, inside its `ssh` member (D172).
+const AGENT_FLAGS: [&str; 2] = ["ssh.agent_forwarding", "ssh.agent_forward_system"];
 
 /// A forwarding rule from a file starts on its own only when the user
 /// connects to its host, and only when it listens on loopback (D63, as the
@@ -221,9 +223,10 @@ fn as_imported_rule(data: &mut Map<String, Value>) -> bool {
 /// Turns off Agent Forwarding of a host taken from a file (D172): while it
 /// is on, the host can sign with the user's keys elsewhere (security.md,
 /// RR19), so it is the user's own choice, never a file's, unless they
-/// restore a backup of their own. Returns whether it was on. Applied after
-/// the comparison with the records here, so a host that is the same here
-/// stays "already here".
+/// restore a backup of their own. Returns whether it was on; such a host
+/// is compared without these flags ([`Incoming::ignored`]), so a host that
+/// is the same here stays "already here" with the user's own setting, and
+/// the next import of the same file finds its copy again.
 fn as_imported_host(data: &mut Map<String, Value>) -> bool {
     let Some(Value::Object(ssh)) = data.get_mut("ssh") else {
         return false;
@@ -231,7 +234,13 @@ fn as_imported_host(data: &mut Map<String, Value>) -> bool {
     if ssh.get("agent_forwarding") != Some(&Value::Bool(true)) {
         return false;
     }
-    ssh.insert("agent_forwarding".into(), Value::Bool(false));
+    // "Also offer the system agent's keys" goes too: turning forwarding on
+    // later starts from the safe choice.
+    for flag in ["agent_forwarding", "agent_forward_system"] {
+        if ssh.contains_key(flag) {
+            ssh.insert(flag.into(), Value::Bool(false));
+        }
+    }
     true
 }
 
@@ -246,12 +255,26 @@ fn same_content_except(
 ) -> bool {
     let kept = |name: &str| name != "order_key" && !ignored.contains(&name);
     let members = |data: &Map<String, Value>| data.keys().filter(|name| kept(name)).count();
+    // A dotted entry (`ssh.agent_forwarding`) leaves out a member of an
+    // object member.
+    let inner = |name: &str| -> Vec<&str> {
+        ignored
+            .iter()
+            .filter_map(|path| path.strip_prefix(name)?.strip_prefix('.'))
+            .collect()
+    };
     members(local) == members(incoming)
         && incoming.iter().all(|(name, value)| {
             !kept(name)
-                || local
-                    .get(name)
-                    .is_some_and(|here| same_value(here, value, map))
+                || local.get(name).is_some_and(|here| {
+                    let skipped = inner(name);
+                    match (here, value) {
+                        (Value::Object(here), Value::Object(value)) if !skipped.is_empty() => {
+                            same_content_except(here, value, map, &skipped)
+                        }
+                        _ => same_value(here, value, map),
+                    }
+                })
         })
 }
 
@@ -343,16 +366,22 @@ struct Incoming {
     kind: RecordKind,
     record_id: Uuid,
     data: WipeOnDrop,
-    /// A forwarding rule whose autostart this import turned off (D63).
+    /// A forwarding rule whose autostart this import turned off (D63), or
+    /// a host whose Agent Forwarding it turned off (D172).
     quieted: bool,
 }
 
 impl Incoming {
     /// The members left out when this record is compared with one here: the
-    /// autostart flags of a quieted rule (the local rule keeps the user's own
-    /// choice; an import never overwrites it).
+    /// flags of a quieted rule or host (the local record keeps the user's
+    /// own choice; an import never overwrites it), so that the next import of
+    /// the same file finds the record, or its copy, again.
     fn ignored(&self) -> &'static [&'static str] {
-        if self.quieted { &AUTOSTART } else { &[] }
+        match (self.quieted, self.kind) {
+            (false, _) => &[],
+            (true, RecordKind::Host) => &AGENT_FLAGS,
+            (true, _) => &AUTOSTART,
+        }
     }
 }
 
@@ -1050,9 +1079,14 @@ impl Core {
                             if kind == RecordKind::ConnectionLogEntry {
                                 as_imported_log_entry(&mut data);
                             }
-                            let quieted = kind == RecordKind::ForwardingRule
-                                && !input.full_restore
-                                && as_imported_rule(&mut data);
+                            // A rule from a file never starts by itself
+                            // (D63), a host never forwards the agent (D172).
+                            let quieted = !input.full_restore
+                                && match kind {
+                                    RecordKind::ForwardingRule => as_imported_rule(&mut data),
+                                    RecordKind::Host => as_imported_host(&mut data),
+                                    _ => false,
+                                };
                             incoming.push(Incoming {
                                 kind,
                                 record_id,
@@ -1292,14 +1326,6 @@ impl Core {
                     });
                     continue;
                 }
-                // A host from a file never forwards the agent by itself
-                // (D172), as a rule from a file never starts by itself (D63).
-                if record.kind == RecordKind::Host
-                    && !input.full_restore
-                    && as_imported_host(&mut data)
-                {
-                    summary.hosts_agent_forwarding_off += 1;
-                }
                 if copy.is_some() {
                     if let Some(member) = label_member(record.kind)
                         && let Some(label) = data.get(member).and_then(Value::as_str)
@@ -1319,7 +1345,11 @@ impl Core {
                     summary.added += 1;
                 }
                 if record.quieted {
-                    summary.rules_autostart_off += 1;
+                    if record.kind == RecordKind::Host {
+                        summary.hosts_agent_forwarding_off += 1;
+                    } else {
+                        summary.rules_autostart_off += 1;
+                    }
                 }
                 writes.push((record.kind, target, data));
             }

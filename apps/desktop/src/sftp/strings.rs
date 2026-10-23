@@ -87,6 +87,8 @@ pub fn delete_text(folders: usize) -> String {
 
 /// A failed file operation, with the reason.
 pub fn failed(what: &str, reason: &str) -> String {
+    // A reason may be the server's own text (run 8, C5): shown safely.
+    let reason = super::display_name(reason);
     format!("{what} failed: {reason}")
 }
 

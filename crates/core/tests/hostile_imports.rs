@@ -102,6 +102,22 @@ fn a_host_from_a_file_does_not_forward_the_agent() {
     assert_eq!(summary.hosts_agent_forwarding_off, 1);
     assert_eq!(forwarding(&target.core), Some(json!(false)));
 
+    // The same file into the other profile again: the host is found again,
+    // nothing is added (no copy for the flag this import turned off).
+    let again = target
+        .core
+        .data_import(DataImportInput::new(plain.text.clone(), None))
+        .unwrap();
+    assert_eq!(
+        (
+            again.added,
+            again.conflicts,
+            again.hosts_agent_forwarding_off
+        ),
+        (0, 0, 0),
+        "{again:?}"
+    );
+
     // The same file back into the profile it came from: the host is the
     // same here and stays as the user set it.
     let again = source
@@ -189,20 +205,41 @@ fn a_file_included_under_another_name_is_read_once() {
 }
 
 #[test]
-fn a_config_of_too_many_hosts_is_cut_to_the_budget() {
+fn a_generated_config_keeps_its_hosts_up_to_the_block_limit() {
     let u = first_run();
-    let text: String = (0..20_000)
+    let text: String = (0..12_000)
         .map(|n| format!("Host h{n}\n  HostName 192.0.2.{}\n", n % 250 + 1))
         .collect();
     let (_home, source) = config(&[("config", &text)]);
     let started = Instant::now();
     let preview = u.core.ssh_config_preview(source).unwrap();
-    // Generous: without the limits this takes hours.
+    // Generous: a host costs only its own block.
     assert!(started.elapsed() < Duration::from_secs(60));
-    // The blocks stop at their limit; the hosts at the matching budget.
-    assert_eq!(
-        preview.hosts.len(),
-        ssh_config::MAX_MATCH_WORK / ssh_config::MAX_BLOCKS
+    assert_eq!(preview.hosts.len(), ssh_config::MAX_BLOCKS);
+    assert!(
+        preview
+            .problems
+            .iter()
+            .any(|problem| problem.contains("too large"))
+    );
+}
+
+#[test]
+fn hosts_past_the_matching_budget_are_left_out_and_reported() {
+    let u = first_run();
+    // Every host is matched against every pattern block.
+    let patterns: String = (0..4_000)
+        .map(|n| format!("Host *.zone-{n:04}.example\n  User u{n}\n"))
+        .collect();
+    let hosts: String = (0..5_000).map(|n| format!("Host h{n}\n")).collect();
+    let (_home, source) = config(&[("config", &format!("{hosts}{patterns}"))]);
+    let started = Instant::now();
+    let preview = u.core.ssh_config_preview(source).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(60));
+    assert!(
+        !preview.hosts.is_empty() && preview.hosts.len() < 5_000,
+        "{}",
+        preview.hosts.len()
     );
     assert!(
         preview
@@ -210,6 +247,25 @@ fn a_config_of_too_many_hosts_is_cut_to_the_budget() {
             .iter()
             .any(|problem| problem.contains("too large"))
     );
+}
+
+#[test]
+fn a_file_included_from_two_host_blocks_applies_to_both() {
+    let u = first_run();
+    let (_home, source) = config(&[
+        (
+            "config",
+            "Host web1\n  Include common\nHost web2\n  Include common\n",
+        ),
+        ("common", "  User deploy\n  Port 2222\n"),
+    ]);
+    let preview = u.core.ssh_config_preview(source).unwrap();
+    assert!(preview.problems.is_empty(), "{:?}", preview.problems);
+    assert_eq!(preview.hosts.len(), 2);
+    for host in &preview.hosts {
+        assert_eq!(host.username.as_deref(), Some("deploy"), "{host:?}");
+        assert_eq!(host.port, Some(2222), "{host:?}");
+    }
 }
 
 #[test]

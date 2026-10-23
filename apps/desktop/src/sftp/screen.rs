@@ -273,6 +273,11 @@ impl SftpScreen {
                             .await
                         }));
                     }
+                    // Locked while it downloaded: nothing runs or asks over
+                    // the lock screen; Open again opens the copy.
+                    if !this.state.read(cx).is_unlocked() {
+                        return;
+                    }
                     let open = move |window: &mut Window, cx: &mut App| {
                         super::open::launch(&path, program.as_deref(), window, cx);
                         crate::shell::show_toast(super::strings::OPEN_NOT_ENCRYPTED, window, cx);

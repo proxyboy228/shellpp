@@ -264,7 +264,10 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         error = Some("ProxyCommand is not supported".to_owned());
     }
     let address = match first(options, "hostname") {
-        Some(name) => name.replace("%h", alias).replace("%%", "%"),
+        Some(name) => ssh_config::expand_host_name(name, alias).unwrap_or_else(|| {
+            error = Some("HostName is too long".to_owned());
+            String::new()
+        }),
         None => alias.to_owned(),
     };
     if address.contains('%') && error.is_none() {
@@ -542,25 +545,23 @@ impl Core {
             )]));
         }
         let mut config = ssh_config::read(&source.path, &source.home);
-        // Each host is matched against every block: past the budget, the
-        // remaining hosts are left out and reported (D171).
-        let mut hosts = config.hosts();
-        let budget = ssh_config::MAX_MATCH_WORK / config.blocks.len().max(1);
-        if hosts.len() > budget {
-            let (_, line) = hosts[budget].clone();
-            hosts.truncate(budget);
-            config.problems.push(ssh_config::Problem {
-                line,
-                kind: ssh_config::ProblemKind::TooLarge,
-            });
+        // Each host costs the blocks that can apply to it: past the budget,
+        // the remaining hosts are left out and reported (D171).
+        let index = config.index();
+        let mut work = 0usize;
+        let mut plans = Vec::new();
+        for (alias, line) in config.hosts() {
+            if work > ssh_config::MAX_MATCH_WORK {
+                config.problems.push(ssh_config::Problem {
+                    line,
+                    kind: ssh_config::ProblemKind::TooLarge,
+                });
+                break;
+            }
+            let (options, cost) = config.options_with(&alias, &index);
+            work += cost;
+            plans.push(plan_host(&alias, &options, &source.home));
         }
-        let plans = hosts
-            .into_iter()
-            .map(|(alias, _)| {
-                let options = config.options_for(&alias);
-                plan_host(&alias, &options, &source.home)
-            })
-            .collect();
         Ok((config, plans))
     }
 

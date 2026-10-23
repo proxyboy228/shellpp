@@ -36,9 +36,13 @@ pub struct Opened {
     /// new channel is used.
     handle: SessionHandle,
     name: String,
-    /// The file on the server changed: uploads wait for the user's answer
+    /// The user kept the server's file: this copy is not uploaded any more
     /// (shared by the copies of this handle).
     blocked: Arc<std::sync::atomic::AtomicBool>,
+    /// "The file changed on the server" is shown: uploads wait for the
+    /// answer. A question closed without one (a lock closes every dialog)
+    /// is asked again (run 8, C5).
+    asking: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for Opened {
@@ -216,11 +220,15 @@ fn ask_overwrite(open: Opened, window: &mut Window, cx: &mut App) {
     let open = Arc::new(open);
     window.open_dialog(cx, move |dialog, _, cx| {
         let open = open.clone();
+        let keep = open.clone();
         dialog
             .w(metrics::scaled(420., cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
+            // Only an answer closes it.
+            .keyboard(false)
+            .overlay_closable(false)
             .title(
                 gpui::div()
                     .text_size(metrics::FONT_SIZE_TITLE)
@@ -247,6 +255,10 @@ fn ask_overwrite(open: Opened, window: &mut Window, cx: &mut App) {
                                 move |_, window, cx| {
                                     window.close_dialog(cx);
                                     // Its saves are not uploaded from now on.
+                                    keep.blocked
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    keep.asking
+                                        .store(false, std::sync::atomic::Ordering::Relaxed);
                                     crate::shell::show_toast(
                                         strings::kept_server_file(&name),
                                         window,
@@ -265,11 +277,10 @@ fn ask_overwrite(open: Opened, window: &mut Window, cx: &mut App) {
                                 window
                                     .spawn(cx, async move |cx| {
                                         let outcome = open.upload(true).await;
-                                        if outcome.is_ok() {
-                                            // Later saves upload again.
-                                            open.blocked
-                                                .store(false, std::sync::atomic::Ordering::Relaxed);
-                                        }
+                                        // Later saves upload again; a failed
+                                        // overwrite is found and asked again.
+                                        open.asking
+                                            .store(false, std::sync::atomic::Ordering::Relaxed);
                                         let _ = cx.update(|window, cx| match outcome {
                                             Ok(_) => crate::shell::show_toast(
                                                 strings::uploaded_back(&name),
@@ -302,6 +313,7 @@ impl Opened {
             handle: self.handle.clone(),
             name: self.name.clone(),
             blocked: self.blocked.clone(),
+            asking: self.asking.clone(),
         }
     }
 
@@ -312,11 +324,16 @@ impl Opened {
             handle,
             name,
             blocked: Arc::default(),
+            asking: Arc::default(),
         }
     }
 
     fn is_blocked(&self) -> bool {
         self.blocked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn is_asking(&self) -> bool {
+        self.asking.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Its session ended (the panel went to another host or closed): it can
@@ -367,14 +384,18 @@ pub fn watch<T: 'static>(
     opened: impl Fn(&mut T) -> &mut Vec<Opened> + 'static,
     cx: &mut AsyncWindowContext,
 ) -> impl std::future::Future<Output = ()> + 'static {
+    use gpui_kit::component::WindowExt as _;
+
     let mut cx = cx.clone();
     async move {
         loop {
             cx.background_executor().timer(WATCH).await;
-            if !cx
-                .update(|_, cx| state.read(cx).is_unlocked())
-                .unwrap_or(false)
-            {
+            let Ok((unlocked, dialog)) = cx
+                .update(|window, cx| (state.read(cx).is_unlocked(), window.has_active_dialog(cx)))
+            else {
+                return;
+            };
+            if !unlocked {
                 continue;
             }
             // The copies to check now (not blocked by a question); those of
@@ -382,9 +403,16 @@ pub fn watch<T: 'static>(
             // grew, and they were checked every 2 s for ever).
             let Ok(copies) = screen.update(&mut cx, |screen, _| {
                 prune(opened(screen), Opened::session_ended, Opened::discard);
+                // No dialog on screen: a question was closed unanswered.
+                if !dialog {
+                    for open in opened(screen).iter() {
+                        open.asking
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 opened(screen)
                     .iter()
-                    .filter(|open| !open.is_blocked())
+                    .filter(|open| !open.is_blocked() && !open.is_asking())
                     .map(Opened::clone_parts)
                     .collect::<Vec<_>>()
             }) else {
@@ -393,27 +421,32 @@ pub fn watch<T: 'static>(
             for probe in copies {
                 let name = probe.name.clone();
                 let outcome = probe.upload(false).await;
-                let _ = cx.update(|window, cx| match &outcome {
-                    Ok(UploadOutcome::Uploaded) => {
-                        crate::shell::show_toast(strings::uploaded_back(&name), window, cx);
+                let _ = cx.update(|window, cx| {
+                    // Locked during the upload: nothing shows; a change on
+                    // the server is found again after the unlock.
+                    if !state.read(cx).is_unlocked() {
+                        return;
                     }
-                    Ok(UploadOutcome::Unchanged) => {}
-                    Ok(UploadOutcome::RemoteChanged) => {
-                        ask_overwrite(probe.clone_parts(), window, cx);
-                    }
-                    Err(reason) => {
-                        crate::shell::show_toast(
-                            strings::failed(strings::UPLOAD_BACK_FAILED, reason),
-                            window,
-                            cx,
-                        );
+                    match &outcome {
+                        Ok(UploadOutcome::Uploaded) => {
+                            crate::shell::show_toast(strings::uploaded_back(&name), window, cx);
+                        }
+                        Ok(UploadOutcome::Unchanged) => {}
+                        Ok(UploadOutcome::RemoteChanged) => {
+                            probe
+                                .asking
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            ask_overwrite(probe.clone_parts(), window, cx);
+                        }
+                        Err(reason) => {
+                            crate::shell::show_toast(
+                                strings::failed(strings::UPLOAD_BACK_FAILED, reason),
+                                window,
+                                cx,
+                            );
+                        }
                     }
                 });
-                if matches!(outcome, Ok(UploadOutcome::RemoteChanged)) {
-                    probe
-                        .blocked
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                }
             }
         }
     }

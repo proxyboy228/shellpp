@@ -7,8 +7,8 @@
 //!   values with double quotes, `#` comments.
 //! - `Include` (files and `*`/`?` patterns in the file name, relative paths
 //!   from the folder of the main file, `~` for the home folder) is expanded in
-//!   place, at most 16 levels deep; each file is read once, however it is
-//!   spelled (D171).
+//!   place, at most 16 levels deep and never twice in one chain, however
+//!   the file is spelled (D171).
 //! - `Host` patterns (`*`, `?`, `!` negation, case-insensitive) and a basic
 //!   `Match`: `all`, `host`, `originalhost` and `user` with their patterns and
 //!   `!`; a `Match` with another criterion (`exec`, `localuser`, `canonical`,
@@ -22,7 +22,7 @@
 //!
 //! Nothing here logs paths or values.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Most `Include` levels.
@@ -31,18 +31,31 @@ pub const MAX_INCLUDE_DEPTH: usize = 16;
 pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Most lines over all files.
 pub const MAX_LINES: usize = 200_000;
-/// Most files read, includes and all (D171).
+/// Most file reads, includes and all (a file included from two blocks is
+/// read twice) (D171).
 pub const MAX_FILES: usize = 1_000;
+/// Most bytes read over all files (D171).
+pub const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 /// Most `Include` arguments over all files (D171): each one is a lookup.
 pub const MAX_INCLUDE_ARGUMENTS: usize = 256;
+/// Most folder entries an `Include` pattern looks at, over all files (D171).
+pub const MAX_GLOB_ENTRIES: usize = 10_000;
 /// Most `Host` and `Match` blocks (D171).
 pub const MAX_BLOCKS: usize = 10_000;
 /// Most problems kept (D171): the rest of a broken file adds none.
 pub const MAX_PROBLEMS: usize = 1_000;
-/// Most host-and-block pairs evaluated for one import (D171): each host is
-/// matched against every block, so the hosts past this budget are left out
-/// of the import and reported.
-pub const MAX_MATCH_WORK: usize = 5_000_000;
+/// The longest word of a line (D171): `ssh` reads host names of at most
+/// 1,025 bytes; paths and patterns get room beyond that.
+pub const MAX_WORD: usize = 4_096;
+/// The longest host name or alias (`NI_MAXHOST`), also after `%h`.
+pub const MAX_HOST_NAME: usize = 1_025;
+/// Most values of a keyword that adds up, per host (`ssh` reads at most
+/// 100 identity files) (D171).
+pub const MAX_CUMULATIVE: usize = 100;
+/// The work budget of one import (D171): each block evaluated for a host
+/// costs its patterns' length and its options. The hosts past it are left
+/// out and reported.
+pub const MAX_MATCH_WORK: usize = 50_000_000;
 
 /// Keywords whose values add up instead of the first one winning.
 const CUMULATIVE: &[&str] = &[
@@ -307,8 +320,10 @@ fn parse_match(args: &[String]) -> Result<Vec<MatchCriterion>, String> {
 }
 
 /// Lists the files of an `Include` argument: a plain path, or a `*`/`?`
-/// pattern in the file name (sorted, as `glob(3)` returns them).
-fn include_files(argument: &str, base: &Path, home: &Path) -> Vec<PathBuf> {
+/// pattern in the file name (sorted, as `glob(3)` returns them). A pattern
+/// looks at no more than [`MAX_GLOB_ENTRIES`] entries over all of them
+/// (`globbed`), and asks the file system only about the names it matches.
+fn include_files(argument: &str, base: &Path, home: &Path, globbed: &mut usize) -> Vec<PathBuf> {
     let path = expand_home(argument, home);
     let path = if path.is_absolute() {
         path
@@ -332,15 +347,19 @@ fn include_files(argument: &str, base: &Path, home: &Path) -> Vec<PathBuf> {
         return Vec::new();
     };
     let mut files: Vec<PathBuf> = entries
+        .take_while(|_| {
+            *globbed += 1;
+            *globbed <= MAX_GLOB_ENTRIES
+        })
         .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|candidate| candidate.is_file())
-        .filter(|candidate| {
-            candidate
+        .filter(|entry| {
+            entry
                 .file_name()
-                .and_then(|file| file.to_str())
+                .to_str()
                 .is_some_and(|file| wildcard(name, file))
         })
+        .map(|entry| entry.path())
+        .filter(|candidate| candidate.is_file())
         .collect();
     files.sort();
     files
@@ -351,9 +370,11 @@ struct Reader<'a> {
     home: &'a Path,
     config: Config,
     lines: usize,
-    /// The files read so far, by their canonical path (D171).
-    seen: HashSet<PathBuf>,
+    /// File reads and their bytes so far (D171).
+    reads: usize,
+    bytes: u64,
     includes: usize,
+    globbed: usize,
     /// A limit was reached: nothing more is read.
     full: bool,
 }
@@ -366,11 +387,12 @@ impl Reader<'_> {
         }
     }
 
-    /// Stops the reading at a limit, with one "too large" problem.
+    /// Stops the reading at a limit, with one "too large" problem (kept
+    /// even past [`MAX_PROBLEMS`]: the hosts after it are missing).
     fn stop(&mut self, problem: Problem) {
         if !self.full {
             self.full = true;
-            self.report(problem);
+            self.config.problems.push(problem);
         }
     }
 
@@ -401,18 +423,20 @@ impl Reader<'_> {
             return;
         }
         // The same file by another spelling (`../.ssh/config`, `CONFIG` or
-        // `config.` on Windows) is the same file: it is read once.
+        // `config.` on Windows) is the same file of the chain.
         let identity = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-        if chain.len() >= MAX_INCLUDE_DEPTH || self.seen.contains(&identity) {
+        if chain.len() >= MAX_INCLUDE_DEPTH || chain.contains(&identity) {
             self.report(problem(ProblemKind::IncludeLoop, at));
             return;
         }
-        if self.seen.len() >= MAX_FILES {
+        let size = std::fs::metadata(file).map_or(0, |meta| meta.len());
+        self.reads += 1;
+        self.bytes = self.bytes.saturating_add(size.min(MAX_FILE_BYTES));
+        if self.reads > MAX_FILES || self.bytes > MAX_TOTAL_BYTES {
             self.stop(problem(ProblemKind::TooLarge, at));
             return;
         }
-        self.seen.insert(identity.clone());
-        let too_large = std::fs::metadata(file).is_ok_and(|meta| meta.len() > MAX_FILE_BYTES);
+        let too_large = size > MAX_FILE_BYTES;
         let text = match (too_large, std::fs::read(file)) {
             (false, Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
             (true, _) => {
@@ -439,7 +463,9 @@ impl Reader<'_> {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some(mut parts) = words(line) else {
+            let Some(mut parts) =
+                words(line).filter(|parts| parts.iter().all(|word| word.len() <= MAX_WORD))
+            else {
                 self.report(problem(ProblemKind::Malformed, Some(location(number))));
                 continue;
             };
@@ -456,6 +482,10 @@ impl Reader<'_> {
             {
                 self.stop(problem(ProblemKind::TooLarge, Some(location(number))));
                 break;
+            }
+            if keyword == "host" && parts.iter().any(|pattern| pattern.len() > MAX_HOST_NAME) {
+                self.report(problem(ProblemKind::Malformed, Some(location(number))));
+                continue;
             }
             match keyword.as_str() {
                 "host" => self.config.blocks.push(Block {
@@ -494,7 +524,12 @@ impl Reader<'_> {
                             ));
                             continue;
                         }
-                        let files = include_files(argument, &self.base, self.home);
+                        let files =
+                            include_files(argument, &self.base, self.home, &mut self.globbed);
+                        if self.globbed > MAX_GLOB_ENTRIES {
+                            self.stop(problem(ProblemKind::TooLarge, Some(location(number))));
+                            break;
+                        }
                         if files.is_empty() && !argument.contains(['*', '?']) {
                             self.report(problem(
                                 ProblemKind::IncludeMissing,
@@ -532,8 +567,10 @@ pub fn read(path: &Path, home: &Path) -> Config {
         home,
         config: Config::default(),
         lines: 0,
-        seen: HashSet::new(),
+        reads: 0,
+        bytes: 0,
         includes: 0,
+        globbed: 0,
         full: false,
     };
     let mut chain = Vec::new();
@@ -565,24 +602,89 @@ impl Config {
 
     /// The options that apply to `alias`, as `ssh alias` would use them.
     pub fn options_for(&self, alias: &str) -> Options {
+        self.options_with(alias, &self.index()).0
+    }
+
+    /// Which blocks can apply to which host (D171): a `Host` block whose
+    /// patterns all name hosts applies only to those names; every other
+    /// block is looked at for every host.
+    pub fn index(&self) -> BlockIndex {
+        let mut index = BlockIndex::default();
+        for (at, block) in self.blocks.iter().enumerate() {
+            match &block.condition {
+                Condition::Host(patterns)
+                    if patterns.iter().all(|pattern| is_concrete(pattern)) =>
+                {
+                    let names: HashSet<String> = patterns
+                        .iter()
+                        .map(|pattern| pattern.to_lowercase())
+                        .collect();
+                    for name in names {
+                        index.by_name.entry(name).or_default().push(at);
+                    }
+                }
+                _ => index.general.push(at),
+            }
+        }
+        index
+    }
+
+    /// [`Self::options_for`] with the blocks of `index`, and the work it
+    /// took: the length of the patterns matched and the options applied
+    /// (the budget of D171).
+    pub fn options_with(&self, alias: &str, index: &BlockIndex) -> (Options, usize) {
+        let named = index
+            .by_name
+            .get(&alias.to_lowercase())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        // Both lists are in file order: merged, the blocks apply in it.
+        let (mut general, mut named) = (index.general.iter().peekable(), named.iter().peekable());
         let mut options: Options = BTreeMap::new();
-        for block in &self.blocks {
+        let mut work = 0usize;
+        loop {
+            let at = match (general.peek(), named.peek()) {
+                (Some(&&g), Some(&&n)) if g < n => general.next(),
+                (Some(_), Some(_)) | (None, Some(_)) => named.next(),
+                (Some(_), None) => general.next(),
+                (None, None) => break,
+            };
+            let Some(&at) = at else { break };
+            work += self.apply(&self.blocks[at], alias, &mut options);
+        }
+        (options, work)
+    }
+
+    /// Applies `block` to the options of `alias` when it matches; returns
+    /// its work (see [`Self::options_with`]).
+    fn apply(&self, block: &Block, alias: &str, options: &mut Options) -> usize {
+        let patterns_len = |patterns: &[String]| patterns.iter().map(String::len).sum::<usize>();
+        let mut work = 1;
+        {
             let applies = match &block.condition {
                 Condition::Global => true,
-                Condition::Host(patterns) => pattern_list_matches(patterns, alias),
+                Condition::Host(patterns) => {
+                    work += patterns_len(patterns);
+                    pattern_list_matches(patterns, alias)
+                }
                 Condition::Match(None) => false,
                 Condition::Match(Some(criteria)) => criteria.iter().all(|criterion| {
+                    work += patterns_len(&criterion.patterns);
                     let hit = match criterion.kind {
                         MatchKind::All => true,
                         MatchKind::OriginalHost => pattern_list_matches(&criterion.patterns, alias),
                         MatchKind::Host => {
-                            let host = options
+                            let host = match options
                                 .get("hostname")
                                 .and_then(|values| values.first())
                                 .and_then(|args| args.first())
-                                .map(|name| name.replace("%h", alias))
-                                .unwrap_or_else(|| alias.to_owned());
-                            pattern_list_matches(&criterion.patterns, &host)
+                            {
+                                Some(name) => expand_host_name(name, alias),
+                                None => Some(alias.to_owned()),
+                            };
+                            host.is_some_and(|host| {
+                                pattern_list_matches(&criterion.patterns, &host)
+                            })
                         }
                         MatchKind::User => options
                             .get("user")
@@ -594,18 +696,35 @@ impl Config {
                 }),
             };
             if !applies {
-                continue;
+                return work;
             }
             for option in &block.options {
+                work += 1;
                 let cumulative = CUMULATIVE.contains(&option.keyword.as_str());
                 let entry = options.entry(option.keyword.clone()).or_default();
-                if cumulative || entry.is_empty() {
+                if entry.is_empty() || (cumulative && entry.len() < MAX_CUMULATIVE) {
                     entry.push(option.args.clone());
                 }
             }
         }
-        options
+        work
     }
+}
+
+/// See [`Config::index`].
+#[derive(Debug, Default)]
+pub struct BlockIndex {
+    by_name: HashMap<String, Vec<usize>>,
+    general: Vec<usize>,
+}
+
+/// `HostName` with `%h` replaced by `alias` (and `%%` by `%`), `None` when
+/// the result would be longer than a host name can be ([`MAX_HOST_NAME`]):
+/// the length is known before anything is copied.
+pub fn expand_host_name(name: &str, alias: &str) -> Option<String> {
+    let tokens = name.matches("%h").count();
+    let len = name.len() - 2 * tokens + tokens * alias.len();
+    (len <= MAX_HOST_NAME).then(|| name.replace("%h", alias).replace("%%", "%"))
 }
 
 #[cfg(test)]

@@ -596,6 +596,9 @@ fn names_are_shown_safely_and_programs_are_named() {
         "app.appref-ms",
         "help.chm",
         "x.settingcontent-ms",
+        "tool.py",
+        "dark.themepack",
+        "disk.vhdx",
     ] {
         assert!(runnable_extension(name).is_some(), "{name}");
     }
