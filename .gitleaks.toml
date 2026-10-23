@@ -63,3 +63,10 @@ regexes = [
   '''^sk_test_abcdefghijklmnop$''',
   '''^admin:admin@$''',
 ]
+
+# The published russh 0.64.1 source, kept under third_party/russh for its
+# one-line patch (D100): its own unit tests carry the upstream's sample keys,
+# which protect nothing. Only that directory.
+[[allowlists]]
+description = "upstream russh test keys in the patched copy"
+paths = ['''^third_party/russh/src/''']

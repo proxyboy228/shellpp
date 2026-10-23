@@ -78,6 +78,7 @@ means the crate is available under either license.
 | base16ct | 1.0.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | base62 | 2.2.6 | MIT | <https://github.com/fbernier/base62> |
 | base64 | 0.22.1 | MIT OR Apache-2.0 | <https://github.com/marshallpierce/rust-base64> |
+| base64 | 0.23.1 | MIT OR Apache-2.0 | <https://github.com/marshallpierce/rust-base64> |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | bcrypt-pbkdf | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/password-hashes> |
 | bit_field | 0.10.3 | Apache-2.0 OR MIT | <https://github.com/phil-opp/rust-bit-field> |
@@ -268,6 +269,7 @@ means the crate is available under either license.
 | html5ever | 0.27.0 | MIT OR Apache-2.0 | <https://github.com/servo/html5ever> |
 | http | 1.5.0 | MIT OR Apache-2.0 | <https://github.com/hyperium/http> |
 | http-body | 1.1.0 | MIT | <https://github.com/hyperium/http-body> |
+| httparse | 1.10.1 | MIT OR Apache-2.0 | <https://github.com/seanmonstar/httparse> |
 | hybrid-array | 0.4.15 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hybrid-array> |
 | iana-time-zone | 0.1.65 | MIT OR Apache-2.0 | <https://github.com/strawlab/iana-time-zone> |
 | icu_collections | 2.3.0 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
@@ -290,6 +292,7 @@ means the crate is available under either license.
 | inout | 0.2.4 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | instant | 0.1.13 | BSD-3-Clause | <https://github.com/sebcrozet/instant> |
 | inventory | 0.3.25 | MIT OR Apache-2.0 | <https://github.com/dtolnay/inventory> |
+| io-kit-sys | 0.4.1 | MIT OR Apache-2.0 | <https://github.com/jtakakura/io-kit-rs> |
 | is-docker | 0.2.0 | MIT | <https://github.com/TheLarkInn/is-docker> |
 | is-wsl | 0.4.0 | MIT | <https://github.com/TheLarkInn/is-wsl> |
 | itertools | 0.13.0 | MIT OR Apache-2.0 | <https://github.com/rust-itertools/itertools> |
@@ -320,6 +323,7 @@ means the crate is available under either license.
 | lyon_path | 1.0.19 | MIT OR Apache-2.0 | <https://github.com/nical/lyon> |
 | lyon_tessellation | 1.0.22 | MIT OR Apache-2.0 | <https://github.com/nical/lyon> |
 | mac | 0.1.1 | MIT OR Apache-2.0 | <https://github.com/reem/rust-mac.git> |
+| mach2 | 0.4.3 | BSD-2-Clause OR MIT OR Apache-2.0 | <https://github.com/JohnTitor/mach2> |
 | mach2 | 0.6.0 | BSD-2-Clause OR MIT OR Apache-2.0 | <https://github.com/JohnTitor/mach2> |
 | malloc_buf | 0.0.6 | MIT | <https://github.com/SSheldon/malloc_buf> |
 | markdown | 1.0.0 | MIT | <https://github.com/wooorm/markdown-rs> |
@@ -341,6 +345,7 @@ means the crate is available under either license.
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | <https://github.com/awxkee/moxcms.git> |
 | naga | 29.0.4 | MIT OR Apache-2.0 | <https://github.com/gfx-rs/wgpu> |
 | new_debug_unreachable | 1.0.6 | MIT | <https://github.com/mbrubeck/rust-debug-unreachable> |
+| nix | 0.26.4 | MIT | <https://github.com/nix-rust/nix> |
 | nix | 0.28.0 | MIT | <https://github.com/nix-rust/nix> |
 | nix | 0.29.0 | MIT | <https://github.com/nix-rust/nix> |
 | nix | 0.31.3 | MIT | <https://github.com/nix-rust/nix> |
@@ -476,6 +481,9 @@ means the crate is available under either license.
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | <https://github.com/rust-lang/rustc-hash> |
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/bytecodealliance/rustix> |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/sunfishcode/rustix-openpty> |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | <https://github.com/rustls/rustls> |
+| rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | <https://github.com/rustls/pki-types> |
+| rustls-webpki | 0.103.16 | ISC | <https://github.com/rustls/webpki> |
 | rustybuzz | 0.20.1 | MIT | <https://github.com/harfbuzz/rustybuzz> |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | <https://github.com/dtolnay/ryu> |
 | salsa20 | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/stream-ciphers> |
@@ -498,6 +506,7 @@ means the crate is available under either license.
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | <https://github.com/serde-rs/json> |
 | serde_urlencoded | 0.7.1 | MIT OR Apache-2.0 | <https://github.com/nox/serde_urlencoded> |
 | serial2 | 0.2.38 | BSD-2-Clause OR Apache-2.0 | <https://github.com/de-vri-es/serial2-rs> |
+| serialport | 4.10.1 | MPL-2.0 | <https://github.com/serialport/serialport-rs> |
 | sha1 | 0.10.7 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
 | sha1 | 0.11.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hashes> |
 | sha1_smol | 1.0.1 | BSD-3-Clause | <https://github.com/mitsuhiko/sha1-smol> |
@@ -565,6 +574,7 @@ means the crate is available under either license.
 | triomphe | 0.1.17 | MIT OR Apache-2.0 | <https://github.com/Manishearth/triomphe> |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 | <https://github.com/harfbuzz/ttf-parser> |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | <https://github.com/paholg/typenum> |
+| unescaper | 0.1.10 | MIT OR GPL-3.0-only | <https://github.com/hack-ink/unescaper> |
 | unicode-bidi | 0.3.18 | MIT OR Apache-2.0 | <https://github.com/servo/unicode-bidi> |
 | unicode-bidi-mirroring | 0.4.0 | MIT OR Apache-2.0 | <https://github.com/RazrFalcon/unicode-bidi-mirroring> |
 | unicode-ccc | 0.4.0 | MIT OR Apache-2.0 | <https://github.com/RazrFalcon/unicode-ccc> |
@@ -579,11 +589,14 @@ means the crate is available under either license.
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 | <https://github.com/unicode-rs/unicode-width> |
 | universal-hash | 0.6.1 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
 | untrusted | 0.9.0 | ISC | <https://github.com/briansmith/untrusted> |
+| ureq | 3.5.0 | MIT OR Apache-2.0 | <https://github.com/algesten/ureq> |
+| ureq-proto | 0.6.5 | MIT OR Apache-2.0 | <https://github.com/algesten/ureq-proto> |
 | url | 2.5.8 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
 | usvg | 0.45.1 | Apache-2.0 OR MIT | <https://github.com/linebender/resvg> |
 | usvg | 0.46.0 | Apache-2.0 OR MIT | <https://github.com/linebender/resvg> |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 | <https://github.com/SimonSapin/rust-utf8> |
 | utf8_iter | 1.0.4 | Apache-2.0 OR MIT | <https://github.com/hsivonen/utf8_iter> |
+| utf8-zero | 0.8.1 | MIT OR Apache-2.0 | <https://github.com/algesten/utf8-zero> |
 | uuid | 1.28.0 | Apache-2.0 OR MIT | <https://github.com/uuid-rs/uuid> |
 | vte | 0.15.0 | Apache-2.0 OR MIT | <https://github.com/alacritty/vte> |
 | waker-fn | 1.2.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/waker-fn> |
@@ -596,6 +609,7 @@ means the crate is available under either license.
 | wayland-protocols-wlr | 0.3.12 | MIT | <https://github.com/smithay/wayland-rs> |
 | wayland-sys | 0.31.11 | MIT | <https://github.com/smithay/wayland-rs> |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | <https://github.com/daxpedda/web-time> |
+| webpki-roots | 1.0.10 | CDLA-Permissive-2.0 | <https://github.com/rustls/webpki-roots> |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | <https://github.com/image-rs/weezl> |
 | wgpu | 29.0.4 | MIT OR Apache-2.0 | <https://github.com/gfx-rs/wgpu> |
 | wgpu-core | 29.0.4 | MIT OR Apache-2.0 | <https://github.com/gfx-rs/wgpu> |
@@ -674,6 +688,11 @@ means the crate is available under either license.
 | zxcvbn | 3.1.1 | MIT | <https://github.com/shssoichiro/zxcvbn-rs> |
 
 <!-- rust-crates:end -->
+
+Patched crates: `russh` 0.64.1 is built from `third_party/russh`, a copy of
+the published crate with one change (the channel leak of D98, D100), listed in
+`third_party/russh/PATCHES.md`. It keeps its Apache-2.0 license
+(`third_party/russh/LICENSE`).
 
 ## npm packages
 

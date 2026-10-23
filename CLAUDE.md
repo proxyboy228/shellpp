@@ -52,6 +52,13 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
 
 ## Подводные камни
 
+- russh собирается из `third_party/russh` (0.64.1 с однострочным патчем
+  утечки каналов, `third_party/russh/PATCHES.md`, D100) через
+  `[patch.crates-io]` в корневом `Cargo.toml`. Когда upstream выпустит
+  исправление, патч убрать: каталог `third_party/russh`, запись
+  `[patch.crates-io]`, исключение в `.gitleaks.toml` и абзац в
+  THIRD_PARTY_NOTICES; тесты `crates/ssh/tests/channel_close.rs` оставить.
+
 - Тесты сессий на общем контейнере OpenSSH — только с `--test-threads=1`:
   одни тесты роняют соединения и меняют ключ хоста, соседние от этого
   падают. В CI у каждого теста свой контейнер.

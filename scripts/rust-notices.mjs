@@ -82,9 +82,15 @@ function collectCrates() {
         continue;
       }
       const [pkg, license = '', repository = ''] = line.split('\t');
-      // Registry crates print "name vX.Y.Z"; path (workspace) crates add " (<path>)".
-      const match = /^(\S+) v(\S+)$/.exec(pkg.trim());
+      // Registry crates print "name vX.Y.Z"; path crates add " (<path>)". Path
+      // crates are the workspace's own, except the patched third-party crates
+      // under third_party/ (D100), which ship like registry crates.
+      const match = /^(\S+) v(\S+)(?: \((.+)\))?$/.exec(pkg.trim());
       if (match === null) {
+        continue;
+      }
+      const path = match[3];
+      if (path !== undefined && !/[\\/]third_party[\\/]/.test(path)) {
         continue;
       }
       const [, name, version] = match;
