@@ -52,17 +52,22 @@ fn sessions(key_file: &Path, proxy_password: &str) -> FixedSessions {
             session(
                 "web%20prod",
                 &[
-                    ("HostName", text("web.example.com")),
+                    // As in PuTTY, the user in the host name wins.
+                    ("HostName", text("deploy@web.example.com")),
                     ("PortNumber", Reg::Number(2222)),
                     ("Protocol", text("ssh")),
-                    ("UserName", text("deploy")),
+                    ("UserName", text("root")),
                     ("PublicKeyFile", text(&key_file.display().to_string())),
                     ("AgentFwd", Reg::Number(1)),
+                    // 90 s, as PuTTY writes it.
+                    ("PingInterval", Reg::Number(1)),
                     ("PingIntervalSecs", Reg::Number(30)),
                     ("Environment", text("LANG=C.UTF-8,TZ=UTC")),
                     (
                         "PortForwardings",
-                        text("L8080=localhost:80,R2222=10.0.0.5:22,D1080=,Q1=x"),
+                        text(
+                            "L8080=localhost:80,R2222=10.0.0.5:22,D1080=,Q1=x,Lmybox.lan:7000=db:1",
+                        ),
                     ),
                     ("LineCodePage", text("Win1251 (Cyrillic)")),
                     ("X11Forward", Reg::Number(1)),
@@ -114,12 +119,36 @@ fn sessions(key_file: &Path, proxy_password: &str) -> FixedSessions {
                 &[("Protocol", text("serial")), ("SerialLine", text("COM1"))],
             ),
             session("empty", &[("Protocol", text("ssh"))]),
+            // PuTTY never proxies a local address (ProxyLocalhost 0); the
+            // `:2222` after the name is dropped, as PuTTY drops it.
+            session(
+                "local-vm",
+                &[
+                    ("HostName", text("127.0.0.1:2222")),
+                    ("PortNumber", Reg::Number(2222)),
+                    ("ProxyMethod", Reg::Number(3)),
+                    ("ProxyHost", text("10.0.0.1")),
+                    ("ProxyPort", Reg::Number(3128)),
+                ],
+            ),
+            // Telnet hosts connect without a proxy here: refused.
+            session(
+                "telnet-proxy",
+                &[
+                    ("HostName", text("192.0.2.2")),
+                    ("Protocol", text("telnet")),
+                    ("ProxyMethod", Reg::Number(2)),
+                    ("ProxyHost", text("10.0.0.1")),
+                    ("ProxyPort", Reg::Number(1080)),
+                ],
+            ),
             session(
                 "bad%20address",
                 &[("HostName", text("two words")), ("Protocol", text("ssh"))],
             ),
         ],
         unreadable: vec!["broken%21".to_owned()],
+        code_page: None,
     })
 }
 
@@ -171,6 +200,8 @@ fn sessions_keys_proxies_and_tunnels_are_imported_once() {
             "cmd-proxy",
             "serial",
             "empty",
+            "local-vm",
+            "telnet-proxy",
             "bad address"
         ]
     );
@@ -189,6 +220,14 @@ fn sessions_keys_proxies_and_tunnels_are_imported_once() {
     let notes = host("web prod").notes.join("\n");
     assert!(notes.contains("X11 forwarding"), "{notes}");
     assert!(notes.contains("Q1=x"), "{notes}");
+    assert!(
+        notes.contains("Port forwarding Lmybox.lan:7000=db:1 is not imported"),
+        "{notes}"
+    );
+    assert_eq!(host("local-vm").address, "127.0.0.1");
+    assert_eq!(host("local-vm").status, ImportStatus::New);
+    let notes = host("local-vm").notes.join("\n");
+    assert!(notes.contains("without its proxy"), "{notes}");
     assert_eq!(host("router").address, "192.0.2.1");
     assert_eq!(host("router").username.as_deref(), Some("admin"));
     assert_eq!(host("open").address, "2001:db8::7");
@@ -205,6 +244,10 @@ fn sessions_keys_proxies_and_tunnels_are_imported_once() {
         ),
         ("serial", "the serial protocol is not supported"),
         ("empty", "the session has no host name"),
+        (
+            "telnet-proxy",
+            "a Telnet session through a proxy is not supported",
+        ),
         ("bad address", "invalid address"),
     ] {
         assert_eq!(host(name).status, ImportStatus::Error, "{name}");
@@ -248,7 +291,7 @@ fn sessions_keys_proxies_and_tunnels_are_imported_once() {
     assert_eq!(web["ssh"]["port"], 2222);
     assert_eq!(web["ssh"]["agent_forwarding"], true);
     assert_eq!(web["ssh"]["agent_forward_system"], true);
-    assert_eq!(web["ssh"]["keepalive_s"], 30);
+    assert_eq!(web["ssh"]["keepalive_s"], 90);
     assert_eq!(
         web["ssh"]["env"],
         json!([{"name": "LANG", "value": "C.UTF-8"}, {"name": "TZ", "value": "UTC"}])
@@ -356,6 +399,7 @@ fn sessions_keys_proxies_and_tunnels_are_imported_once() {
             &[("HostName", text("other.example.com"))],
         )],
         unreadable: Vec::new(),
+        code_page: None,
     });
     let preview = u.core.putty_preview(&renamed).unwrap();
     assert_eq!(preview.hosts[0].status, ImportStatus::Exists);

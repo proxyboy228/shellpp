@@ -48,6 +48,17 @@ fn system() -> Arc<dyn SessionSource> {
     Arc::new(FixedSessions::default())
 }
 
+/// The ANSI code page of Windows (what `GetACP` returns), from the
+/// registry, so that no unsafe call is needed.
+#[cfg(windows)]
+fn ansi_code_page() -> Option<u32> {
+    windows_registry::LOCAL_MACHINE
+        .open(r"SYSTEM\CurrentControlSet\Control\Nls\CodePage")
+        .and_then(|key| key.get_string("ACP"))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+}
+
 /// The saved sessions in the current user's registry.
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +81,10 @@ impl SessionSource for Registry {
                 };
             }
         };
-        let mut out = Sessions::default();
+        let mut out = Sessions {
+            code_page: ansi_code_page(),
+            ..Sessions::default()
+        };
         for name in root.keys()?.take(putty::MAX_SESSIONS) {
             let Ok(key) = root.open(&name) else {
                 out.unreadable.push(name);

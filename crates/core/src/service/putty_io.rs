@@ -139,10 +139,7 @@ type Proxy = (Map<String, Value>, Option<SecretString>);
 
 /// The `ssh.proxy` of a session, `Ok(None)` without one, or why it is not
 /// imported.
-fn proxy_of(
-    session: &Session,
-    plan_command: &mut bool,
-) -> Result<Option<Proxy>, String> {
+fn proxy_of(session: &Session, plan_command: &mut bool) -> Result<Option<Proxy>, String> {
     let kind = match proxy_method(session) {
         PROXY_NONE => return Ok(None),
         PROXY_SOCKS5 => "socks5",
@@ -228,12 +225,6 @@ fn forwards_of(session: &Session, notes: &mut Vec<String>) -> Vec<Map<String, Va
         // (security.md 11.3): an imported session does not open such a
         // port on its own.
         let wide = crate::model::snippet::is_wide_bind(&bind_address);
-        if wide {
-            notes.push(format!(
-                "Port forwarding {} listens on all interfaces: it is imported without autostart",
-                forward.raw
-            ));
-        }
         let mut rule = Map::new();
         rule.insert("type".into(), json!(kind));
         rule.insert("bind_address".into(), json!(bind_address));
@@ -243,6 +234,23 @@ fn forwards_of(session: &Session, notes: &mut Vec<String>) -> Vec<Map<String, Va
             rule.insert("dest_port".into(), json!(port));
         }
         rule.insert("autostart_on_connect".into(), json!(!wide));
+        // The rules' own checks (a listen address must be an IP literal or
+        // localhost): a rule they refuse is noted, never dropped silently.
+        let mut check = rule.clone();
+        check.insert("host_id".into(), json!(Uuid::nil().to_string()));
+        if crate::model::snippet::build_rule(&check, None).is_err() {
+            notes.push(format!(
+                "Port forwarding {} is not imported: this form is not supported",
+                forward.raw
+            ));
+            continue;
+        }
+        if wide {
+            notes.push(format!(
+                "Port forwarding {} listens on all interfaces: it is imported without autostart",
+                forward.raw
+            ));
+        }
         rules.push(rule);
     }
     rules
@@ -271,8 +279,8 @@ fn env_of(session: &Session, notes: &mut Vec<String>) -> Vec<Value> {
     env
 }
 
-fn plan_session(session: &Session) -> SessionPlan {
-    let name = session.name();
+fn plan_session(session: &Session, code_page: Option<u32>) -> SessionPlan {
+    let name = session.name(code_page);
     let mut notes = Vec::new();
     let mut error = None;
     let mut command = false;
@@ -292,25 +300,26 @@ fn plan_session(session: &Session) -> SessionPlan {
         }
     };
 
-    // `user@host` in the host name field, as PuTTY accepts it.
+    // `user@host` in the host name field: as in PuTTY, that user wins over
+    // UserName, and a single `:port` after the name is dropped (the port is
+    // PortNumber's).
     let raw_host = session.nonempty("HostName").unwrap_or_default();
     let (host_user, address) = match raw_host.rsplit_once('@') {
         Some((user, host)) => (Some(user.to_owned()), host),
         None => (None, raw_host),
     };
-    let address = address
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-        .unwrap_or(address)
-        .to_owned();
+    let address = match address.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(rest),
+        None if address.matches(':').count() == 1 => address.split(':').next().unwrap_or(address),
+        None => address,
+    }
+    .to_owned();
     if address.is_empty() && error.is_none() {
         error = Some("the session has no host name".into());
     }
-    let username = session
-        .nonempty("UserName")
-        .map(str::to_owned)
-        .or(host_user)
-        .filter(|user| !user.is_empty());
+    let username = host_user
+        .filter(|user| !user.is_empty())
+        .or_else(|| session.nonempty("UserName").map(str::to_owned));
     if username.is_none() && session.number("UserNameFromEnvironment") == Some(1) {
         notes.push("The user name comes from the local user in PuTTY and is not imported".into());
     }
@@ -341,19 +350,35 @@ fn plan_session(session: &Session) -> SessionPlan {
     }
 
     let mut proxy_password = None;
-    match proxy_of(session, &mut command) {
-        Ok(Some((proxy, password))) => {
-            ssh.insert("proxy".into(), Value::Object(proxy));
-            proxy_password = password;
-            if session.nonempty("ProxyExcludeList").is_some() {
-                notes.push(
-                    "ProxyExcludeList is not imported: the proxy is used for this host".into(),
-                );
+    let bypassed = putty::proxy_bypassed(
+        &address,
+        session.text("ProxyExcludeList").unwrap_or_default(),
+        session.number("ProxyLocalhost") == Some(1),
+    );
+    if proxy_method(session) != PROXY_NONE && bypassed {
+        // PuTTY itself connects to this host directly.
+        notes.push(
+            "PuTTY reaches this host without its proxy (a local address or ProxyExcludeList), \
+             so the proxy is not imported"
+                .into(),
+        );
+    } else {
+        match proxy_of(session, &mut command) {
+            // Telnet connections never go through a proxy in this app: the
+            // host would connect directly.
+            Ok(Some(_)) if telnet => {
+                error.get_or_insert_with(|| {
+                    "a Telnet session through a proxy is not supported".into()
+                });
             }
-        }
-        Ok(None) => {}
-        Err(reason) => {
-            error.get_or_insert(reason);
+            Ok(Some((proxy, password))) => {
+                ssh.insert("proxy".into(), Value::Object(proxy));
+                proxy_password = password;
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                error.get_or_insert(reason);
+            }
         }
     }
 
@@ -368,14 +393,12 @@ fn plan_session(session: &Session) -> SessionPlan {
             // PuTTY forwards Pageant: the system agent (D60).
             ssh.insert("agent_forward_system".into(), json!(true));
         }
+        // PuTTY writes the interval as minutes and the seconds left over.
         let keepalive = session
-            .number("PingIntervalSecs")
-            .or_else(|| {
-                session
-                    .number("PingInterval")
-                    .map(|min| min.saturating_mul(60))
-            })
-            .unwrap_or(0);
+            .number("PingInterval")
+            .unwrap_or(0)
+            .saturating_mul(60)
+            .saturating_add(session.number("PingIntervalSecs").unwrap_or(0));
         if keepalive > 0 {
             if keepalive > MAX_KEEPALIVE_S {
                 notes.push("A keepalive over 3600 s is imported as 3600".into());
@@ -436,15 +459,15 @@ fn plan_session(session: &Session) -> SessionPlan {
 
 /// Plans every session but the template, in the source's order, each name
 /// once (case-insensitively).
-fn plan_all(sessions: &[Session]) -> Vec<SessionPlan> {
+fn plan_all(sessions: &putty::Sessions) -> Vec<SessionPlan> {
     let mut seen = HashSet::new();
     let mut plans = Vec::new();
-    for session in sessions {
-        let name = session.name();
+    for session in &sessions.sessions {
+        let name = session.name(sessions.code_page);
         if name == putty::DEFAULT_SETTINGS || !seen.insert(name.to_lowercase()) {
             continue;
         }
-        let mut plan = plan_session(session);
+        let mut plan = plan_session(session, sessions.code_page);
         // A host the rules refuse (an invalid address, a label too long)
         // is shown as not imported in the preview already.
         if plan.error.is_none() {
@@ -502,7 +525,7 @@ impl Core {
             Self::require_session(&inner)?;
         }
         let sessions = Self::putty_sessions(source)?;
-        let plans = plan_all(&sessions.sessions);
+        let plans = plan_all(&sessions);
         let imported = self.imported_sessions()?;
         let known: HashSet<String> = self
             .keys_list()?
@@ -553,7 +576,7 @@ impl Core {
                 .map(|key| {
                     format!(
                         "{}: the session could not be read",
-                        putty::session_name(key)
+                        putty::session_name(key, sessions.code_page)
                     )
                 })
                 .collect(),
@@ -571,7 +594,7 @@ impl Core {
             Self::require_session(&inner)?.ring.vault_id()
         };
         let sessions = Self::putty_sessions(source)?;
-        let plans = plan_all(&sessions.sessions);
+        let plans = plan_all(&sessions);
         let imported = self.imported_sessions()?;
         let chosen: Option<HashSet<String>> = input
             .sessions
