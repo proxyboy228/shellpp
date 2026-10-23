@@ -1416,7 +1416,7 @@ In-memory token buckets (crate `governor`), keyed by client IP (from the socket,
 | Scope | Key | Default limit |
 |---|---|---|
 | prelogin, register, login, login/totp, recover/*, token/refresh, invitations/lookup | IP | 20 per minute, burst 10; checked before the request body is read [decision] (D103) |
-| bearer tokens that do not authenticate | IP | 60 per 15 minutes, then `429` before the database is asked, until the window ends [decision] (D103) |
+| bearer tokens the server never issued (an expired token or one of a revoked device does not count) | IP, the /64 of an IPv6 address | 60 per 15 minutes, then `429` before the database is asked, until the window ends [decision] (D103) |
 | failed sign-ins, failed `current_auth_key` checks and recovery attempts | normalized email, known or not | 10 per 15 minutes, then `429` until the window ends |
 | TOTP attempts | ticket and account | 5 per ticket; 10 failures per 15 minutes per account |
 | authenticated API | device | 300 per minute, burst 60 |

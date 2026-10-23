@@ -601,3 +601,40 @@ fn bogus_bearer_tokens_are_limited_per_ip() {
     );
     assert_eq!(get(&bogus, "192.0.2.2").status, 401, "another client");
 }
+
+/// Review finding: an expired access token is the ordinary `401` every
+/// client meets; it never counts against the client IP, so many devices
+/// behind one address are not locked out by their own token turnover.
+#[test]
+fn expired_access_tokens_do_not_count_against_the_ip() {
+    let server = Server::with(Options {
+        rate_limits: RateLimits {
+            token_failures_per_window: 2,
+            ..RateLimits::generous()
+        },
+        ..Options::default()
+    });
+    let account = register(&api(&server), 3);
+    let token = account.tokens.access_token.0.clone();
+    server
+        .db
+        .batch("UPDATE access_tokens SET expires_at = '2000-01-01T00:00:00.000Z'")
+        .expect("expired");
+    let get = |token: &str| {
+        let bearer = format!("Bearer {token}");
+        raw_http(
+            &server,
+            "GET",
+            "/v1/devices",
+            &[("authorization", bearer.as_str())],
+            b"",
+        )
+    };
+    for _ in 0..5 {
+        assert_eq!(get(&token).status, 401, "expired: a plain 401");
+    }
+    let bogus = format!("{}{}", wire::token_prefix::ACCESS, Uuid::now_v7().simple());
+    assert_eq!(get(&bogus).status, 401);
+    assert_eq!(get(&bogus).status, 401);
+    assert_eq!(get(&bogus).status, 429, "unknown tokens count");
+}

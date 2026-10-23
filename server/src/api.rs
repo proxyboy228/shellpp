@@ -132,17 +132,24 @@ impl FromRequestParts<AppState> for Auth {
             state.limiters.token_failed(ip);
             return Err(ApiError::unauthenticated());
         };
-        let principal = state
+        // Only a token the server never issued counts: an expired one, or
+        // one of a revoked device, is the ordinary 401 every client meets
+        // when its access token runs out (review finding: counting those
+        // locked out many devices behind one address).
+        let principal = match state
             .db
             .run(TxKind::Write, move |tx| {
-                accounts::authenticate(tx, &token, model::now())
+                accounts::authenticate_token(tx, &token, model::now())
             })
-            .await
-            .inspect_err(|error| {
-                if error.code == code::UNAUTHENTICATED {
-                    state.limiters.token_failed(ip);
-                }
-            })?;
+            .await?
+        {
+            Ok(principal) => principal,
+            Err(accounts::TokenRefusal::Unknown) => {
+                state.limiters.token_failed(ip);
+                return Err(ApiError::unauthenticated());
+            }
+            Err(accounts::TokenRefusal::Refused) => return Err(ApiError::unauthenticated()),
+        };
         state
             .limiters
             .api(principal.device_id)

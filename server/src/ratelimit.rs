@@ -158,6 +158,20 @@ impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
     }
 }
 
+/// The key of the bearer-token window: an IPv4 address, or the /64 of an
+/// IPv6 one (one host usually holds a whole /64, so rotating addresses
+/// inside it must not reset the window; review finding).
+fn network_of(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut segments = v6.segments();
+            segments[4..].fill(0);
+            IpAddr::from(segments)
+        }
+    }
+}
+
 /// Every limiter of the server.
 pub struct Limiters {
     pub limits: RateLimits,
@@ -267,12 +281,16 @@ impl Limiters {
 
     /// Before a bearer token is looked up for a request from `ip`.
     pub fn token_allowed(&self, ip: IpAddr) -> Result<(), u64> {
-        self.token_failures
-            .check(&ip, self.limits.token_failures_per_window, Instant::now())
+        self.token_failures.check(
+            &network_of(ip),
+            self.limits.token_failures_per_window,
+            Instant::now(),
+        )
     }
 
+    /// A bearer token the server never issued, from `ip`.
     pub fn token_failed(&self, ip: IpAddr) {
-        self.token_failures.fail(&ip, Instant::now());
+        self.token_failures.fail(&network_of(ip), Instant::now());
     }
 }
 
@@ -316,6 +334,23 @@ mod tests {
         }
         assert!(limiters.token_allowed(ip).unwrap_err() >= 1);
         assert!(limiters.token_allowed("192.0.2.2".parse().unwrap()).is_ok());
+
+        // IPv6: one /64 is one window, another /64 has its own.
+        let first: IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        for _ in 0..3 {
+            limiters.token_failed(first);
+        }
+        assert!(
+            limiters
+                .token_allowed("2001:db8:0:1:ffff::2".parse().unwrap())
+                .is_err(),
+            "another address in the same /64"
+        );
+        assert!(
+            limiters
+                .token_allowed("2001:db8:0:2::1".parse().unwrap())
+                .is_ok()
+        );
     }
 
     #[test]

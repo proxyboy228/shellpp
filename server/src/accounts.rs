@@ -593,30 +593,50 @@ pub fn revoke(tx: &mut dyn Tx, token: &Secret, now: OffsetDateTime) -> ApiResult
 }
 
 /// Resolves a bearer access token (section 4.6).
+/// Why a bearer token did not authenticate: one the server never issued
+/// (counted against the client IP, section 10.1), or one it knows that is
+/// expired, of a revoked device or of a disabled account (an ordinary `401`
+/// that every client meets when its access token runs out).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenRefusal {
+    Unknown,
+    Refused,
+}
+
 pub fn authenticate(tx: &mut dyn Tx, token: &str, now: OffsetDateTime) -> ApiResult<Principal> {
+    authenticate_token(tx, token, now)?.map_err(|_| ApiError::unauthenticated())
+}
+
+/// [`authenticate`], telling an unknown token from a refused one.
+pub fn authenticate_token(
+    tx: &mut dyn Tx,
+    token: &str,
+    now: OffsetDateTime,
+) -> ApiResult<Result<Principal, TokenRefusal>> {
     if !token.starts_with(token_prefix::ACCESS) {
-        return Err(ApiError::unauthenticated());
+        return Ok(Err(TokenRefusal::Unknown));
     }
-    let row = tx
-        .query_one(
-            "SELECT a.user_id, a.device_id, a.family_id, a.expires_at, d.revoked_at, \
+    let row = tx.query_one(
+        "SELECT a.user_id, a.device_id, a.family_id, a.expires_at, d.revoked_at, \
              u.disabled, d.last_seen_at FROM access_tokens a \
              JOIN devices d ON d.device_id = a.device_id \
              JOIN users u ON u.user_id = a.user_id WHERE a.token_hash = ?",
-            &[secrets::hash_token(token).into()],
-            &[
-                Ty::Uuid,
-                Ty::Uuid,
-                Ty::Uuid,
-                Ty::Time,
-                Ty::Time,
-                Ty::Bool,
-                Ty::Time,
-            ],
-        )?
-        .ok_or_else(ApiError::unauthenticated)?;
+        &[secrets::hash_token(token).into()],
+        &[
+            Ty::Uuid,
+            Ty::Uuid,
+            Ty::Uuid,
+            Ty::Time,
+            Ty::Time,
+            Ty::Bool,
+            Ty::Time,
+        ],
+    )?;
+    let Some(row) = row else {
+        return Ok(Err(TokenRefusal::Unknown));
+    };
     if row[3].time().is_none_or(|t| t <= now) || !row[4].is_null() || row[5].bool() != Some(false) {
-        return Err(ApiError::unauthenticated());
+        return Ok(Err(TokenRefusal::Refused));
     }
     let principal = Principal {
         user_id: row[0].uuid().ok_or_else(ApiError::internal)?,
@@ -631,7 +651,7 @@ pub fn authenticate(tx: &mut dyn Tx, token: &str, now: OffsetDateTime) -> ApiRes
             &[today.into(), principal.device_id.into()],
         )?;
     }
-    Ok(principal)
+    Ok(Ok(principal))
 }
 
 /// The signed-in user (or `401` when it is gone).

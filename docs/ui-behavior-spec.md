@@ -2079,7 +2079,8 @@ Settings → Security (see 12.1):
 ### 13.6 Sync conflicts [decision]
 
 - When sync keeps a losing version of an object, the object's card shows a conflict badge
-  in every list (hosts, groups, keys, identities, forwarding rules, snippets, known hosts),
+  in every list (hosts, groups, keys, identities, forwarding rules, snippets, snippet
+  packages, known hosts),
   and Account & Sync (12.2) shows "Conflicts: N".
 - A click on the badge, or on a conflict in the list opened from "Conflicts: N", opens the
   comparison dialog:
@@ -2093,7 +2094,7 @@ Settings → Security (see 12.1):
 - Closing the dialog without a choice leaves the conflict unresolved. After a choice, the
   other version is deleted, and the badge disappears on all devices after the next sync.
 - Every kind of object can have a conflict. Objects without a card of their own (for
-  example workspaces, snippet packages, terminal themes, highlighting rules, history and
+  example workspaces, terminal themes, highlighting rules, history and
   log entries, credential bindings, device names, a vault's name) open a generic
   comparison: both versions as lists of their fields, side by side, with the differing
   fields highlighted and secrets masked, and the same two buttons. The list opened from

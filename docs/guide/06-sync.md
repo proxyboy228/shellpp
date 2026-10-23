@@ -202,7 +202,9 @@ duplicates", with **Review**), and they are listed under **Review…** >
 **Possible duplicates**: **Compare…** shows the two side by side, with the
 fields that differ marked; **Keep left** or **Keep right** keeps one (the
 links move to it, the other goes to Recently deleted), **Keep both** keeps
-both and does not ask again.
+both and does not ask again. Two copies of a key have one **Merge**
+instead: the older key stays and takes the certificate and passphrase of
+the other one, as when keys are merged in the Keychain.
 
 ![Possible duplicates side by side](images/sync-duplicates.png)
 
@@ -227,7 +229,8 @@ with **Sync now**.
   nothing.
 - **Conflicts**: when two devices changed the same item, the newer change
   is in place and the other version is kept. Account & Sync then shows
-  "Conflicts: N", and the host's card a **Conflict** badge; both open
+  "Conflicts: N", and the item's card a **Conflict** badge (on every list:
+  hosts, groups, keys, identities, rules, snippets, known hosts); both open
   **Compare versions**, the current version and the other one side by side
   with the device and time of each and the differing fields marked.
   **Keep this** or **Keep other** decides; **Close** leaves it for later.
