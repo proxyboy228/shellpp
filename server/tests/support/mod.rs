@@ -25,7 +25,7 @@ use shellpp_core::service::dto::{
 };
 use shellpp_core::service::{SignInInput, SignInOutcome, SyncStatus};
 use shellpp_core::{Core, CoreConfig};
-use shellpp_server::config::Config;
+use shellpp_server::config::{Cidr, Config};
 use shellpp_server::db::Db;
 use shellpp_server::ratelimit::RateLimits;
 use shellpp_server::state::Shared;
@@ -157,6 +157,9 @@ pub struct Options {
     pub registration: Registration,
     pub quota_max_records: Option<u64>,
     pub tombstone_retention_days: u64,
+    /// `SHELLPP_TRUSTED_PROXIES` (the tests connect from 127.0.0.1).
+    pub trusted_proxies: Vec<Cidr>,
+    pub rate_limits: RateLimits,
 }
 
 impl Default for Options {
@@ -165,6 +168,8 @@ impl Default for Options {
             registration: Registration::Open,
             quota_max_records: None,
             tombstone_retention_days: 90,
+            trusted_proxies: Vec::new(),
+            rate_limits: RateLimits::generous(),
         }
     }
 }
@@ -199,9 +204,9 @@ impl Server {
             registration: options.registration,
             quota_max_records: options.quota_max_records,
             quota_max_bytes: None,
-            trusted_proxies: Vec::new(),
+            trusted_proxies: options.trusted_proxies,
             tombstone_retention_days: options.tombstone_retention_days,
-            rate_limits: RateLimits::generous(),
+            rate_limits: options.rate_limits,
         };
         let mut server = Server {
             origin,
@@ -434,4 +439,62 @@ impl Client {
 
 pub fn expose(secret: &SecretString) -> &str {
     secret.expose_secret()
+}
+
+// ---------------------------------------------------------------------------
+// Raw HTTP
+// ---------------------------------------------------------------------------
+
+/// The answer of [`raw_http`]: the status and the body (`Value::Null`
+/// when it is not JSON).
+pub struct RawAnswer {
+    pub status: u16,
+    pub body: Value,
+}
+
+impl RawAnswer {
+    /// `error.code` of a protocol error body (docs/sync-protocol.md, section 8).
+    pub fn code(&self) -> Option<&str> {
+        self.body["error"]["code"].as_str()
+    }
+}
+
+/// One HTTP/1.1 exchange with the server, for requests the client's own
+/// HTTP layer never sends (malformed paths and bodies, extra headers).
+pub fn raw_http(
+    server: &Server,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> RawAnswer {
+    use std::io::{Read, Write};
+    let addr = server.origin.trim_start_matches("http://");
+    let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .expect("timeout");
+    let mut head = format!("{method} {path} HTTP/1.1\r\nhost: {addr}\r\n");
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str(&format!(
+        "content-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    ));
+    stream.write_all(head.as_bytes()).expect("write");
+    stream.write_all(body).expect("write");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).expect("read");
+    let text = String::from_utf8_lossy(&answer);
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .expect("a status line");
+    let body = text
+        .split_once("\r\n\r\n")
+        .and_then(|(_, body)| serde_json::from_str(body).ok())
+        .unwrap_or(Value::Null);
+    RawAnswer { status, body }
 }

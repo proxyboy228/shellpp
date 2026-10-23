@@ -3,7 +3,7 @@
 //! thin handlers over the operations in `accounts` and `records`. The team
 //! vault endpoints come with stage 8.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
@@ -118,25 +118,51 @@ impl FromRequestParts<AppState> for ClientIp {
                 .iter()
                 .any(|net| net.contains(ip))
         };
-        if !trusted(peer) {
-            return Ok(ClientIp(peer));
-        }
         let forwarded = parts
             .headers
             .get_all("x-forwarded-for")
             .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|value| value.split(','))
-            .filter_map(|part| part.trim().parse::<IpAddr>().ok())
-            .collect::<Vec<_>>();
-        let client = forwarded
-            .iter()
-            .rev()
-            .copied()
-            .find(|ip| !trusted(*ip))
-            .unwrap_or(peer);
-        Ok(ClientIp(client))
+            .filter_map(|value| value.to_str().ok());
+        Ok(ClientIp(client_ip(peer, forwarded, trusted)))
     }
+}
+
+/// The client of a request from `peer`: `peer` itself unless it is
+/// trusted; then the last address of the `X-Forwarded-For` values that is
+/// not a trusted proxy (`peer` when there is none).
+fn client_ip<'a>(
+    peer: IpAddr,
+    forwarded: impl Iterator<Item = &'a str>,
+    trusted: impl Fn(IpAddr) -> bool,
+) -> IpAddr {
+    if !trusted(peer) {
+        return peer;
+    }
+    let forwarded = forwarded
+        .flat_map(|value| value.split(','))
+        .filter_map(forwarded_ip)
+        .collect::<Vec<_>>();
+    forwarded
+        .iter()
+        .rev()
+        .copied()
+        .find(|ip| !trusted(*ip))
+        .unwrap_or(peer)
+}
+
+/// One element of `X-Forwarded-For`: `ip`, `ip:port`, `[ipv6]` or
+/// `[ipv6]:port` (some proxies add the client's port); `None` for anything
+/// else, which is skipped.
+fn forwarded_ip(element: &str) -> Option<IpAddr> {
+    let element = element.trim();
+    if let Ok(ip) = element.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    if let Ok(addr) = element.parse::<SocketAddr>() {
+        return Some(addr.ip());
+    }
+    let inner = element.strip_prefix('[')?.strip_suffix(']')?;
+    inner.parse::<Ipv6Addr>().ok().map(IpAddr::V6)
 }
 
 fn limit_auth(state: &Shared, ip: IpAddr) -> ApiResult<()> {
@@ -633,4 +659,77 @@ async fn push(
         })
         .await?;
     Ok(Json(response).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Cidr;
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn forwarded_elements_with_and_without_ports() {
+        assert_eq!(forwarded_ip("192.0.2.1"), Some(ip("192.0.2.1")));
+        assert_eq!(forwarded_ip(" 192.0.2.1:4711 "), Some(ip("192.0.2.1")));
+        assert_eq!(forwarded_ip("2001:db8::1"), Some(ip("2001:db8::1")));
+        assert_eq!(forwarded_ip("[2001:db8::1]"), Some(ip("2001:db8::1")));
+        assert_eq!(forwarded_ip("[2001:db8::1]:4711"), Some(ip("2001:db8::1")));
+        // Garbage stays skipped.
+        for garbage in [
+            "",
+            "unknown",
+            "_hidden",
+            "192.0.2.1:",
+            "192.0.2.1:99999",
+            "192.0.2.1:x",
+            "[192.0.2.1]",
+            "[192.0.2.1]:4711",
+            "[2001:db8::1",
+            "[2001:db8::1]:",
+            "[2001:db8::1]x",
+            "2001:db8::1]:4711",
+            "192.0.2.300",
+        ] {
+            assert_eq!(forwarded_ip(garbage), None, "{garbage:?}");
+        }
+    }
+
+    #[test]
+    fn the_client_is_the_last_untrusted_forwarded_address() {
+        let proxies = [Cidr::parse("10.0.0.0/8").unwrap()];
+        let trusted = |ip: IpAddr| proxies.iter().any(|net| net.contains(ip));
+        let peer = ip("10.0.0.2");
+        // A spoofed first element, then the client the proxy saw, with its port.
+        assert_eq!(
+            client_ip(peer, ["198.51.100.7, 192.0.2.1:4711"].into_iter(), trusted),
+            ip("192.0.2.1")
+        );
+        assert_eq!(
+            client_ip(
+                peer,
+                ["198.51.100.7", "[2001:db8::1]:4711, 10.0.0.3:80"].into_iter(),
+                trusted
+            ),
+            ip("2001:db8::1")
+        );
+        // Garbage is skipped; only trusted addresses: the peer.
+        assert_eq!(
+            client_ip(peer, ["192.0.2.1, junk"].into_iter(), trusted),
+            ip("192.0.2.1")
+        );
+        assert_eq!(
+            client_ip(peer, ["10.0.0.3:80, junk"].into_iter(), trusted),
+            peer
+        );
+        assert_eq!(client_ip(peer, std::iter::empty(), trusted), peer);
+        // An untrusted peer: the header is not read.
+        let outsider = ip("203.0.113.9");
+        assert_eq!(
+            client_ip(outsider, ["192.0.2.1:4711"].into_iter(), trusted),
+            outsider
+        );
+    }
 }

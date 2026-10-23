@@ -11,6 +11,8 @@ mod support;
 use std::sync::Arc;
 
 use shellpp_core::sync::{HttpApi, HttpError, TrustMode};
+use shellpp_server::config::Cidr;
+use shellpp_server::ratelimit::RateLimits;
 use shellpp_sync_api::api::{self as wire, B64, ItemStatus};
 use shellpp_sync_api::envelope::EnvelopeHeader;
 use support::*;
@@ -319,6 +321,49 @@ fn two_concurrent_recovery_key_reissues_commit_exactly_one() {
         .collect();
     let ok = results.iter().filter(|r| r.is_ok()).count();
     assert_eq!(ok, 1, "exactly one reissue commits: {results:?}");
+}
+
+/// Behind a trusted proxy, the auth rate limit is keyed by the client of
+/// `X-Forwarded-For`, also when the proxy writes it with a port
+/// (`ip:port`, `[ipv6]:port`); a spoofed element on its left changes
+/// nothing (docs/sync-protocol.md, section 10.1).
+#[test]
+fn the_rate_limit_keys_on_the_forwarded_client_with_a_port() {
+    let server = Server::with(Options {
+        trusted_proxies: vec![Cidr::parse("127.0.0.1").expect("cidr")],
+        rate_limits: RateLimits {
+            auth_per_minute: 1,
+            auth_burst: 2,
+            ..RateLimits::generous()
+        },
+        ..Options::default()
+    });
+    let prelogin = |forwarded: &str| {
+        raw_http(
+            &server,
+            "POST",
+            "/v1/auth/prelogin",
+            &[
+                ("content-type", "application/json"),
+                ("x-forwarded-for", forwarded),
+            ],
+            br#"{"email": "someone@example.com"}"#,
+        )
+    };
+    assert_eq!(prelogin("192.0.2.1:4711").status, 200);
+    assert_eq!(prelogin("192.0.2.1:4712").status, 200);
+    let limited = prelogin("192.0.2.1:4713");
+    assert_eq!(
+        (limited.status, limited.code()),
+        (429, Some("rate_limited"))
+    );
+    // The client's own address on the left is not where the limit looks.
+    assert_eq!(prelogin("198.51.100.7, 192.0.2.1:4714").status, 429);
+    // Another client has a bucket of its own.
+    assert_eq!(prelogin("[2001:db8::1]:4711").status, 200);
+    assert_eq!(prelogin("[2001:db8::1]:4712").status, 200);
+    assert_eq!(prelogin("[2001:db8::1]:4713").status, 429);
+    assert_eq!(prelogin("192.0.2.2").status, 200);
 }
 
 /// `recover/complete` for another email than the account's answers 422
