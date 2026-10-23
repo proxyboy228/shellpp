@@ -24,6 +24,7 @@
 //! `impl` block (bodies in `connect.rs`, stage 2 plan, section 4.4).
 
 mod connect;
+mod csv_io;
 pub mod dto;
 mod export;
 pub mod host_api;
@@ -775,6 +776,28 @@ impl Core {
         input: dto::PuttyImportInput,
     ) -> Result<SshConfigImportSummary, CoreError> {
         self.putty_import_impl(source, input)
+    }
+
+    /// The mapping step of a CSV import (UI 2.5; D141): the character set,
+    /// delimiter and header in effect (detected unless `input` gives them),
+    /// the columns with their roles and the first rows. Errors: `encoding`
+    /// or `delimiter` `invalid`, `TooLarge` over 16 MiB.
+    pub fn csv_inspect(&self, input: &dto::CsvInput) -> Result<dto::CsvInspection, CoreError> {
+        self.csv_inspect_impl(input)
+    }
+
+    /// The preview of a CSV import (D141): each row with its status, the
+    /// groups it creates and the rows with a password. Errors as
+    /// `csv_inspect`, and `roles` `required` without an address column.
+    pub fn csv_preview(&self, input: &dto::CsvInput) -> Result<dto::CsvPreview, CoreError> {
+        self.csv_preview_impl(input)
+    }
+
+    /// Imports the new rows of a CSV file (D141); idempotent by (address,
+    /// effective port, effective username), existing hosts are never
+    /// overwritten.
+    pub fn csv_import(&self, input: &dto::CsvInput) -> Result<dto::CsvImportSummary, CoreError> {
+        self.csv_import_impl(input)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The

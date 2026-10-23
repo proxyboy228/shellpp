@@ -1395,6 +1395,84 @@ pub struct PuttyImportInput {
 
 redacted_debug!(PuttyImportInput);
 
+/// A CSV file and how to read it (run 8, D141): the input of
+/// `csv_inspect`, `csv_preview` and `csv_import`. Each setting left out is
+/// detected (`csv_inspect` returns what was chosen). The bytes are wiped
+/// when dropped: the file may hold passwords.
+#[derive(Clone, Default)]
+pub struct CsvInput {
+    pub bytes: zeroize::Zeroizing<Vec<u8>>,
+    /// A WHATWG label (`crate::import::csv::ENCODINGS` are offered).
+    pub encoding: Option<String>,
+    pub delimiter: Option<char>,
+    /// The first row names the columns.
+    pub has_header: Option<bool>,
+    /// What each column holds; at most one column per role but
+    /// `ignore`. `address` is required.
+    pub roles: Option<Vec<crate::import::csv::Role>>,
+}
+
+redacted_debug!(CsvInput);
+
+/// What `csv_inspect` found: the settings in effect and the columns.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct CsvInspection {
+    pub encoding: String,
+    pub delimiter: char,
+    pub has_header: bool,
+    /// The header's names, or "Column N".
+    pub columns: Vec<String>,
+    pub roles: Vec<crate::import::csv::Role>,
+    /// The first data rows as they are (a password column too: the dialog
+    /// masks the cells of the column mapped to `password`).
+    pub sample: Vec<Vec<String>>,
+    /// Data rows in the file.
+    pub rows: usize,
+}
+
+redacted_debug!(CsvInspection);
+
+/// One row of a CSV preview.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct CsvRowPreview {
+    /// The record's number in the file (the header is 1).
+    pub line: usize,
+    pub label: Option<String>,
+    pub address: String,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    /// The group path, ` / ` between levels.
+    pub group: Option<String>,
+    pub status: ImportStatus,
+    /// Why it is not imported (`status = error`).
+    pub reason: Option<String>,
+}
+
+redacted_debug!(CsvRowPreview);
+
+/// The preview of a CSV import (UI 2.5 step 3; D141).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct CsvPreview {
+    pub rows: Vec<CsvRowPreview>,
+    /// Groups the import creates.
+    pub groups_new: usize,
+    /// Rows that carry a password (the dialog warns).
+    pub passwords: usize,
+}
+
+/// Result of `csv_import`: "added N, skipped M, errors K" (UI 2.5).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct CsvImportSummary {
+    pub added: usize,
+    /// Rows that match a host (or an earlier row).
+    pub skipped: usize,
+    /// Rows not imported: (record number, reason).
+    pub errors: Vec<(usize, String)>,
+    pub groups_added: usize,
+    /// Rows that carried a password.
+    pub passwords: usize,
+}
+
 /// Result of `ssh_config_import`: "added N, skipped M, errors K" (UI 2.5).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SshConfigImportSummary {

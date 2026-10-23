@@ -452,7 +452,12 @@ On the right:
   3. **Preview**: the records found, each with the status "new", "already exists" or
      "error" (with the reason). Only "new" records are imported.
   4. **Summary**: "added N, skipped M, errors K".
-- CSV columns: `label`, `address`, `port`, `username`, `group`, `tags`.
+- CSV columns: `label`, `address`, `port`, `username`, `group`, `tags`, and with the mapping of
+  D141 also `notes` and `password`. After the file step (with "Save template…") a mapping
+  step shows the detected character set and delimiter (each changeable), "First row is a
+  header" and each column with its role and first values; Next needs an address column. A
+  mapped password column, or rows with a password in the preview, show a warning that the
+  file holds passwords in clear text. [decision]
 - Import is idempotent. A record is matched by its source key: the source type plus the
   Host alias, the PuTTY session name, or the record's UUID. A record without a source key is
   matched by (address, port, username). Existing records are never overwritten, even if they
@@ -469,9 +474,8 @@ On the right:
   (SOCKS 4, Telnet, SSH, a local command) are "not imported" with the reason, so a host never
   connects directly instead of through its proxy. A registry that cannot be read shows an
   error under the source. [decision]
-- Until all sources exist (D39): CSV is shown disabled; the native JSON
-  source goes on in Import Data (1.4, D38) and known_hosts in the import of the Known Hosts
-  screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
+- The native JSON source goes on in Import Data (1.4, D38) and known_hosts in the import of
+  the Known Hosts screen (10.1). For `~/.ssh/config` the preview lists each host with its checkbox (new
   hosts are checked), its status, the reason when it is not imported (ProxyCommand) and the
   options that are not imported; then the key files with their status and, for an encrypted
   one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
