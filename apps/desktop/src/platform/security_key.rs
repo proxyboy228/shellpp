@@ -48,19 +48,41 @@ fn system() -> Option<Arc<dyn Authenticator>> {
     None
 }
 
+/// A failure `HRESULT` (winerror.h): the severity bit, the facility and
+/// the code.
+#[cfg(any(windows, test))]
+const fn failure(facility: u32, code: u32) -> u32 {
+    (1 << 31) | (facility << 16) | code
+}
+
+/// The facilities of the WebAuthn errors: Win32 errors and NTE_* (SSPI).
+#[cfg(any(windows, test))]
+const FACILITY_WIN32: u32 = 7;
+#[cfg(any(windows, test))]
+const FACILITY_SSPI: u32 = 9;
+#[cfg(any(windows, test))]
+const NTE_NOT_FOUND: u32 = failure(FACILITY_SSPI, 0x11);
+#[cfg(any(windows, test))]
+const NTE_DEVICE_NOT_FOUND: u32 = failure(FACILITY_SSPI, 0x35);
+#[cfg(any(windows, test))]
+const NTE_USER_CANCELLED: u32 = failure(FACILITY_SSPI, 0x36);
+/// HRESULT_FROM_WIN32(ERROR_CANCELLED).
+#[cfg(any(windows, test))]
+const CANCELLED: u32 = failure(FACILITY_WIN32, 1223);
+/// HRESULT_FROM_WIN32(ERROR_TIMEOUT).
+#[cfg(any(windows, test))]
+const TIMED_OUT: u32 = failure(FACILITY_WIN32, 1460);
+
 /// What an `HRESULT` of the WebAuthn API means for the sign-in.
 #[cfg(any(windows, test))]
 fn error_of(hresult: i32) -> shellpp_ssh::sk::SkError {
     use shellpp_ssh::sk::SkError;
     // The bit pattern of an HRESULT: compare as unsigned.
     match hresult as u32 {
-        // NTE_USER_CANCELLED; HRESULT_FROM_WIN32(ERROR_CANCELLED);
-        // HRESULT_FROM_WIN32(ERROR_TIMEOUT).
-        0x8009_0036 | 0x8007_04C7 | 0x8007_05B4 => SkError::Cancelled,
-        // NTE_NOT_FOUND: the key does not hold the credential.
-        0x8009_0011 => SkError::UnknownCredential,
-        // NTE_DEVICE_NOT_FOUND.
-        0x8009_0035 => SkError::NoAuthenticator,
+        NTE_USER_CANCELLED | CANCELLED | TIMED_OUT => SkError::Cancelled,
+        // The key does not hold the credential.
+        NTE_NOT_FOUND => SkError::UnknownCredential,
+        NTE_DEVICE_NOT_FOUND => SkError::NoAuthenticator,
         _ => SkError::Failed,
     }
 }
@@ -406,11 +428,23 @@ mod tests {
 
     #[test]
     fn webauthn_errors_are_mapped() {
-        assert_eq!(error_of(0x8009_0036_u32 as i32), SkError::Cancelled);
-        assert_eq!(error_of(0x8007_04C7_u32 as i32), SkError::Cancelled);
-        assert_eq!(error_of(0x8009_0011_u32 as i32), SkError::UnknownCredential);
-        assert_eq!(error_of(0x8009_0035_u32 as i32), SkError::NoAuthenticator);
-        assert_eq!(error_of(0x8007_0057_u32 as i32), SkError::Failed);
+        // The values winerror.h gives them.
+        assert_eq!(NTE_USER_CANCELLED, 2_148_073_526);
+        assert_eq!(CANCELLED, 2_147_943_623);
+        assert_eq!(NTE_NOT_FOUND, 2_148_073_489);
+        assert_eq!(error_of(NTE_USER_CANCELLED as i32), SkError::Cancelled);
+        assert_eq!(error_of(CANCELLED as i32), SkError::Cancelled);
+        assert_eq!(error_of(TIMED_OUT as i32), SkError::Cancelled);
+        assert_eq!(error_of(NTE_NOT_FOUND as i32), SkError::UnknownCredential);
+        assert_eq!(
+            error_of(NTE_DEVICE_NOT_FOUND as i32),
+            SkError::NoAuthenticator
+        );
+        // E_INVALIDARG.
+        assert_eq!(
+            error_of(failure(FACILITY_WIN32, 87) as i32),
+            SkError::Failed
+        );
     }
 
     #[test]
