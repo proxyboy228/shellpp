@@ -26,7 +26,8 @@ use uuid::Uuid;
 
 use super::{
     KnownHostsLayout, KnownHostsScreen, KnownHostsSort, card_id, card_subtitle, card_title,
-    date_text, hashed_title_id, panel_host_id, port_text, revoked_badge_id, strings,
+    conflict_badge_id, date_text, hashed_title_id, panel_host_id, port_text, revoked_badge_id,
+    strings,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
@@ -439,6 +440,19 @@ impl KnownHostsScreen {
             .into_any_element()
     }
 
+    /// The sync conflict badge of a card or row (UI 13.6), when sync kept
+    /// another version of the entry.
+    fn conflict_badge(&self, id: Uuid, cx: &App) -> Option<AnyElement> {
+        self.state
+            .read(cx)
+            .sync_conflicted()
+            .contains(&id)
+            .then(|| {
+                crate::sync_ui::compare::conflict_badge(conflict_badge_id(id), &self.state, id, cx)
+                    .into_any_element()
+            })
+    }
+
     fn render_list_cells(&self, view: &KnownHostView, cx: &App) -> Vec<AnyElement> {
         let theme = cx.theme();
         let id = view.record_id;
@@ -469,6 +483,9 @@ impl KnownHostsScreen {
                 .when(view.revoked, |this| {
                     this.child(revoked_badge(revoked_badge_id(id), cx))
                 })
+                // Sync kept another version (UI 13.6): after the name, as
+                // "Revoked", so the columns stay under their headings.
+                .children(self.conflict_badge(id, cx))
                 .into_any_element(),
             secondary(view.key_type.clone())
                 .flex_none()
@@ -529,7 +546,8 @@ impl KnownHostsScreen {
                     .child(self.render_texts(view, cx))
                     .when(view.revoked, |this| {
                         this.child(revoked_badge(revoked_badge_id(id), cx))
-                    }),
+                    })
+                    .children(self.conflict_badge(id, cx)),
                 metrics::RADIUS_CARD,
             ),
             KnownHostsLayout::List => (

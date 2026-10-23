@@ -18,6 +18,8 @@
 //! Every network call runs off the UI thread; nothing here logs addresses,
 //! emails, passwords, codes or tokens.
 
+#[cfg(test)]
+mod badge_tests;
 pub mod compare;
 pub mod duplicates;
 pub mod strings;

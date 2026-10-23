@@ -58,6 +58,16 @@ pub fn package_id(id: Uuid) -> SharedString {
     format!("snippet-package-{id}").into()
 }
 
+/// Stable element id of a snippet card's sync conflict badge (UI 13.6).
+pub fn conflict_badge_id(id: Uuid) -> SharedString {
+    format!("snippet-conflict-{id}").into()
+}
+
+/// Stable element id of a package card's sync conflict badge (UI 13.6).
+pub fn package_conflict_badge_id(id: Uuid) -> SharedString {
+    format!("package-conflict-{id}").into()
+}
+
 /// The title of a card: the label, else the first line of the script.
 pub fn card_title(snippet: &SnippetView) -> String {
     if let Some(label) = &snippet.label {

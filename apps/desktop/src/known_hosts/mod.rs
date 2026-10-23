@@ -161,6 +161,11 @@ pub fn revoked_badge_id(id: Uuid) -> SharedString {
     format!("known-host-revoked-{id}").into()
 }
 
+/// Stable element id of a card's sync conflict badge (UI 13.6).
+pub fn conflict_badge_id(id: Uuid) -> SharedString {
+    format!("known-host-conflict-{id}").into()
+}
+
 /// Stable element id of a saved host in the details panel.
 pub fn panel_host_id(id: Uuid) -> SharedString {
     format!("kh-panel-host-{id}").into()

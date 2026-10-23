@@ -23,7 +23,10 @@ use shellpp_core::service::dto::TagColor;
 use shellpp_core::service::snippets::{SnippetPackageView, SnippetView};
 use uuid::Uuid;
 
-use super::{FormMode, SnippetsScreen, card_id, card_title, package_id, strings};
+use super::{
+    FormMode, SnippetsScreen, card_id, card_title, conflict_badge_id, package_conflict_badge_id,
+    package_id, strings,
+};
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
 use crate::panels::widgets;
@@ -663,6 +666,18 @@ impl SnippetsScreen {
                 strings::snippet_count(self.package_size(id)),
                 cx,
             ))
+            // Sync kept another version of the package (UI 13.6).
+            .when(
+                self.state.read(cx).sync_conflicted().contains(&id),
+                |this| {
+                    this.child(crate::sync_ui::compare::conflict_badge(
+                        package_conflict_badge_id(id),
+                        &self.state,
+                        id,
+                        cx,
+                    ))
+                },
+            )
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.focus.focus(window, cx);
                 this.enter_package(Some(id), cx);
@@ -710,6 +725,18 @@ impl SnippetsScreen {
                 metrics::HOST_TILE_SIZE,
             ))
             .child(Self::texts(card_title(snippet), subtitle, cx))
+            // Sync kept another version of the snippet (UI 13.6).
+            .when(
+                self.state.read(cx).sync_conflicted().contains(&id),
+                |this| {
+                    this.child(crate::sync_ui::compare::conflict_badge(
+                        conflict_badge_id(id),
+                        &self.state,
+                        id,
+                        cx,
+                    ))
+                },
+            )
             .when(keyboard_cursor, |this| {
                 this.child(controls::focus_ring(
                     metrics::RADIUS_CARD,

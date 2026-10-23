@@ -198,6 +198,11 @@ pub fn group_card_id(id: Uuid) -> SharedString {
     format!("group-card-{id}").into()
 }
 
+/// Stable element id of a group card's sync conflict badge (UI 13.6).
+pub fn group_conflict_badge_id(id: Uuid) -> SharedString {
+    format!("group-conflict-{id}").into()
+}
+
 /// Stable element id of a cell of a list row: `column` is `name`,
 /// `address`, `user` or `tags`.
 pub fn list_cell_id(record: Uuid, column: &str) -> SharedString {

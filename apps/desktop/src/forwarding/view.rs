@@ -20,8 +20,8 @@ use shellpp_core::service::snippets::{ForwardType, ForwardingRuleView};
 use uuid::Uuid;
 
 use super::{
-    FormMode, ForwardingScreen, StatusTone, card_id, card_title, status_id, status_text, strings,
-    type_letter,
+    FormMode, ForwardingScreen, StatusTone, card_id, card_title, conflict_badge_id, status_id,
+    status_text, strings, type_letter,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
@@ -418,6 +418,18 @@ impl ForwardingScreen {
                             .child(rule.summary.clone()),
                     )
                     .child(status_line(status_id(id), tone, text, false, cx)),
+            )
+            // Sync kept another version of the rule (UI 13.6).
+            .when(
+                self.state.read(cx).sync_conflicted().contains(&id),
+                |this| {
+                    this.child(crate::sync_ui::compare::conflict_badge(
+                        conflict_badge_id(id),
+                        &self.state,
+                        id,
+                        cx,
+                    ))
+                },
             )
             .when(keyboard_cursor, |this| {
                 this.child(controls::focus_ring(

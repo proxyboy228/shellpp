@@ -27,8 +27,9 @@ use super::forms::{GenerateForm, ImportForm, Inspection, KeyFamily};
 use super::panel::KeyPanel;
 use super::{
     KeychainLayout, KeychainScreen, KeychainSort, PanelContent, Row, SshScan, identity_card_id,
-    identity_method, identity_subtitle_id, key_card_id, key_subtitle, key_subtitle_id, key_title,
-    key_type, key_type_text, key_unknown_id, ssh_file_id, strings,
+    identity_conflict_badge_id, identity_method, identity_subtitle_id, key_card_id,
+    key_conflict_badge_id, key_subtitle, key_subtitle_id, key_title, key_type, key_type_text,
+    key_unknown_id, ssh_file_id, strings,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
@@ -729,10 +730,25 @@ impl KeychainScreen {
                 this.open_key(id, window, cx);
             }));
         let frame = gpui_kit::TestSupportExt::test_support(frame);
+        // Sync kept another version of the key (UI 13.6).
+        let conflict = self
+            .state
+            .read(cx)
+            .sync_conflicted()
+            .contains(&id)
+            .then(|| {
+                crate::sync_ui::compare::conflict_badge(
+                    key_conflict_badge_id(id),
+                    &self.state,
+                    id,
+                    cx,
+                )
+            });
         match self.layout {
             KeychainLayout::Tiles => frame
                 .child(tile(Lucide::Key, metrics::HOST_TILE_SIZE))
                 .child(self.render_key_texts(view, cx))
+                .children(conflict)
                 .into_any_element(),
             KeychainLayout::List => frame
                 .child(
@@ -771,6 +787,7 @@ impl KeychainScreen {
                         .text_color(theme.muted_foreground)
                         .into_any_element(),
                 )
+                .children(conflict)
                 .into_any_element(),
         }
     }
@@ -800,6 +817,21 @@ impl KeychainScreen {
             .truncate()
             .text_color(theme.muted_foreground)
             .child(identity_method(view));
+        // Sync kept another version of the identity (UI 13.6). In the list
+        // it follows the name, so the columns stay under their headings.
+        let conflict = self
+            .state
+            .read(cx)
+            .sync_conflicted()
+            .contains(&id)
+            .then(|| {
+                crate::sync_ui::compare::conflict_badge(
+                    identity_conflict_badge_id(id),
+                    &self.state,
+                    id,
+                    cx,
+                )
+            });
         match self.layout {
             KeychainLayout::Tiles => frame
                 .child(tile(IconName::User, metrics::HOST_TILE_SIZE))
@@ -811,6 +843,7 @@ impl KeychainScreen {
                         .child(title.text_size(metrics::FONT_SIZE_BODY))
                         .child(method.text_size(metrics::FONT_SIZE_CAPTION)),
                 )
+                .children(conflict)
                 .into_any_element(),
             KeychainLayout::List => frame
                 .child(
@@ -820,7 +853,8 @@ impl KeychainScreen {
                         .gap(metrics::SPACE_3)
                         .items_center()
                         .child(tile(IconName::User, LIST_TILE_SIZE))
-                        .child(title),
+                        .child(title)
+                        .children(conflict),
                 )
                 .child(
                     div()

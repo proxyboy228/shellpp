@@ -1087,7 +1087,7 @@ impl HostsScreen {
         let id = group.record_id;
         let group_tile = tile(group.color, Lucide::Folder, self.tile_size()).into_any_element();
         let count = strings::host_count(group.host_count as usize);
-        let body = match self.layout {
+        let mut body = match self.layout {
             HostsLayout::Tiles => {
                 vec![group_tile, self.render_texts(group.name.clone(), count, cx)]
             }
@@ -1103,6 +1103,18 @@ impl HostsScreen {
                 cx,
             ),
         };
+        // Sync kept another version of the group (UI 13.6).
+        if self.state.read(cx).sync_conflicted().contains(&id) {
+            body.push(
+                crate::sync_ui::compare::conflict_badge(
+                    super::group_conflict_badge_id(id),
+                    &self.state,
+                    id,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
         let screen = cx.entity().downgrade();
         let drop_screen = cx.entity().downgrade();
         let drag = self.drag_value(id, cx);

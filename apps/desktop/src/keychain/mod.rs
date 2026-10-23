@@ -253,6 +253,16 @@ pub fn identity_card_id(id: Uuid) -> SharedString {
     format!("identity-card-{id}").into()
 }
 
+/// Stable element id of a key card's sync conflict badge (UI 13.6).
+pub fn key_conflict_badge_id(id: Uuid) -> SharedString {
+    format!("key-conflict-{id}").into()
+}
+
+/// Stable element id of an identity card's sync conflict badge (UI 13.6).
+pub fn identity_conflict_badge_id(id: Uuid) -> SharedString {
+    format!("identity-conflict-{id}").into()
+}
+
 /// Stable element id of an identity card's subtitle (the method).
 pub fn identity_subtitle_id(id: Uuid) -> SharedString {
     format!("identity-subtitle-{id}").into()

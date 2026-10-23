@@ -55,6 +55,11 @@ pub fn card_id(id: Uuid) -> SharedString {
     format!("fwd-card-{id}").into()
 }
 
+/// Stable element id of a rule card's sync conflict badge (UI 13.6).
+pub fn conflict_badge_id(id: Uuid) -> SharedString {
+    format!("fwd-conflict-{id}").into()
+}
+
 /// Stable element id of a card's status line.
 pub fn status_id(id: Uuid) -> SharedString {
     format!("fwd-status-{id}").into()
