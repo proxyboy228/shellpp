@@ -18,7 +18,8 @@ use russh::keys::ssh_key::{Algorithm, EcdsaCurve, LineEnding, PrivateKey};
 use sha2::{Digest as _, Sha256};
 use shellpp_ssh::client::{AuthMethod, AuthPlan, KeyCredential, connect};
 use shellpp_ssh::sk::{
-    Assertion, Authenticator, SignRequest, SkError, USER_PRESENCE_REQUIRED, sign_blocking,
+    Assertion, Attested, Authenticator, CreateRequest, SignRequest, SkError,
+    USER_PRESENCE_REQUIRED, USER_VERIFICATION_REQUIRED, key_file, sign_blocking,
 };
 use support::{TestInteraction, key_user, secret, spec, start_server};
 
@@ -78,6 +79,40 @@ impl Authenticator for Fake {
             flags,
             counter,
             signature,
+        })
+    }
+
+    /// The credential this fake holds, as an authenticator reports a new
+    /// one: authenticator data with the AT flag, a zero AAGUID, the
+    /// credential id and the COSE key (CBOR).
+    fn create(&self, request: &CreateRequest) -> Result<Attested, SkError> {
+        let mut cose = Vec::new();
+        match self.inner.public_key().key_data() {
+            public_key::KeyData::Ed25519(public) => {
+                // {1: 1 (OKP), 3: -8 (EdDSA), -1: 6 (Ed25519), -2: x}
+                cose.extend([0xa4, 0x01, 0x01, 0x03, 0x27, 0x20, 0x06, 0x21, 0x58, 0x20]);
+                cose.extend_from_slice(public.as_ref());
+            }
+            public_key::KeyData::Ecdsa(EcdsaPublicKey::NistP256(point)) => {
+                // {1: 2 (EC2), 3: -7 (ES256), -1: 1 (P-256), -2: x, -3: y}
+                let bytes = point.as_bytes();
+                cose.extend([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]);
+                cose.extend_from_slice(&bytes[1..33]);
+                cose.extend([0x22, 0x58, 0x20]);
+                cose.extend_from_slice(&bytes[33..65]);
+            }
+            _ => unreachable!(),
+        }
+        let mut auth_data = Sha256::digest(request.application.as_bytes()).to_vec();
+        auth_data.push(0x41);
+        auth_data.extend_from_slice(&0u32.to_be_bytes());
+        auth_data.extend_from_slice(&[0; 16]);
+        auth_data.extend_from_slice(&(self.key_handle.len() as u16).to_be_bytes());
+        auth_data.extend_from_slice(&self.key_handle);
+        auth_data.extend(cose);
+        Ok(Attested {
+            key_handle: self.key_handle.clone(),
+            auth_data,
         })
     }
 }
@@ -219,5 +254,69 @@ async fn without_an_authenticator_or_a_touch_it_does_not_sign_in() {
         )
         .await
         .is_err()
+    );
+}
+
+/// A key made on the authenticator (D143): its file holds the credential's
+/// public key from the COSE key, the application, the flags and the key
+/// handle, and signs in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_made_on_the_authenticator_signs_in() {
+    for algorithm in [ED25519, P256] {
+        let (reference, fake) = security_key(algorithm, Behavior::Sign);
+        let request = CreateRequest {
+            application: "ssh:".to_owned(),
+            user_verification: false,
+        };
+        let attested = fake.create(&request).unwrap();
+        let made = key_file(&request, &attested, "made here").unwrap();
+        assert_eq!(
+            made.public_key().key_data(),
+            reference.public_key().key_data()
+        );
+        assert_eq!(made.comment().as_str_lossy(), "made here");
+        // The OpenSSH text round-trips and signs.
+        let text = made.to_openssh(LineEnding::LF).unwrap();
+        let reread = PrivateKey::from_openssh(text.as_str()).unwrap();
+        sign_blocking(fake.as_ref(), &reread, b"data").unwrap();
+        let server = start_server(vec![key_user(
+            "gina",
+            &made.public_key().to_openssh().unwrap(),
+        )])
+        .await;
+        let connection = connect(
+            spec(server.addr(), Some("gina"), plan(&made, Some(fake.clone()))),
+            TestInteraction::accepting().as_dyn(),
+        )
+        .await
+        .expect("sign-in with the made key");
+        connection.disconnect().await;
+    }
+    // A PIN key gets the user verification flag.
+    let (_, fake) = security_key(ED25519, Behavior::Sign);
+    let request = CreateRequest {
+        application: "ssh:".to_owned(),
+        user_verification: true,
+    };
+    let made = key_file(&request, &fake.create(&request).unwrap(), "pin").unwrap();
+    let KeypairData::SkEd25519(sk) = made.key_data() else {
+        panic!("not an sk key");
+    };
+    assert_eq!(
+        sk.flags(),
+        USER_PRESENCE_REQUIRED | USER_VERIFICATION_REQUIRED
+    );
+    // Authenticator data without the credential, or a broken COSE key.
+    let mut attested = fake.create(&request).unwrap();
+    attested.auth_data[32] = 0x01;
+    assert_eq!(
+        key_file(&request, &attested, "x").unwrap_err(),
+        SkError::Invalid
+    );
+    let mut attested = fake.create(&request).unwrap();
+    attested.auth_data.truncate(attested.auth_data.len() - 5);
+    assert_eq!(
+        key_file(&request, &attested, "x").unwrap_err(),
+        SkError::Invalid
     );
 }

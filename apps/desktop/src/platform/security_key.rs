@@ -28,6 +28,12 @@ pub fn authenticator() -> Option<Arc<dyn Authenticator>> {
     system()
 }
 
+/// Whether this system can make a new key on a security key (WebAuthn;
+/// the HID path signs only).
+pub fn can_create() -> bool {
+    cfg!(windows) && authenticator().is_some()
+}
+
 #[cfg(windows)]
 fn system() -> Option<Arc<dyn Authenticator>> {
     windows::available().then(|| Arc::new(windows::WebAuthn) as Arc<dyn Authenticator>)
@@ -65,7 +71,8 @@ mod windows {
     use std::ptr;
 
     use shellpp_ssh::sk::{
-        Assertion, Authenticator, SignRequest, SkError, USER_VERIFICATION_REQUIRED,
+        Assertion, Attested, Authenticator, CreateRequest, SignRequest, SkError,
+        USER_VERIFICATION_REQUIRED,
     };
     use windows_sys::Win32::Networking::WindowsWebServices::{
         WEBAUTHN_ASSERTION, WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
@@ -78,10 +85,40 @@ mod windows {
         WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED, WebAuthNAuthenticatorGetAssertion,
         WebAuthNFreeAssertion, WebAuthNGetApiVersionNumber,
     };
+    use windows_sys::Win32::Networking::WindowsWebServices::{
+        WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
+        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
+        WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_1,
+        WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
+        WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
+        WEBAUTHN_CREDENTIAL_ATTESTATION, WEBAUTHN_RP_ENTITY_INFORMATION,
+        WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
+        WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION, WebAuthNAuthenticatorMakeCredential,
+        WebAuthNFreeCredentialAttestation,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     /// How long the system dialog waits for the touch.
     const TIMEOUT_MS: u32 = 60_000;
+    /// COSE EdDSA (RFC 8152); windows-sys names only ES256.
+    const COSE_EDDSA: i32 = -8;
+
+    /// A NUL-terminated UTF-16 string.
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// A copy of `len` bytes at `data` (none for a null pointer).
+    ///
+    /// # Safety
+    /// `data` is null or points to `len` readable bytes.
+    unsafe fn copy(data: *const u8, len: u32) -> Vec<u8> {
+        if data.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: the caller's contract: `len` readable bytes at `data`.
+        unsafe { std::slice::from_raw_parts(data, len as usize).to_vec() }
+    }
 
     /// The version of the WebAuthn API (1 or more where it exists).
     pub(super) fn api_version() -> u32 {
@@ -109,11 +146,7 @@ mod windows {
 
     impl Authenticator for WebAuthn {
         fn sign(&self, request: &SignRequest) -> Result<Assertion, SkError> {
-            let rp_id: Vec<u16> = request
-                .application
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
+            let rp_id = wide(&request.application);
             // The API takes mutable pointers but only reads these buffers.
             let mut data = request.data.clone();
             let mut key_handle = request.key_handle.clone();
@@ -170,13 +203,6 @@ mod windows {
             // are copied before the assertion is freed, once.
             let (auth_data, signature) = unsafe {
                 let found = &*assertion;
-                let copy = |data: *const u8, len: u32| {
-                    if data.is_null() {
-                        Vec::new()
-                    } else {
-                        std::slice::from_raw_parts(data, len as usize).to_vec()
-                    }
-                };
                 let copied = (
                     copy(found.pbAuthenticatorData, found.cbAuthenticatorData),
                     copy(found.pbSignature, found.cbSignature),
@@ -185,6 +211,105 @@ mod windows {
                 copied
             };
             Assertion::from_authenticator_data(&auth_data, signature).ok_or(SkError::Invalid)
+        }
+
+        fn create(&self, request: &CreateRequest) -> Result<Attested, SkError> {
+            let rp_id = wide(&request.application);
+            let user_name = wide("openssh");
+            // A credential that is not discoverable: its user id is not
+            // used (OpenSSH writes zeros too).
+            let mut user_id = [0u8; 32];
+            // The challenge is not checked by anyone (no attestation is
+            // asked for), but each request gets its own.
+            let mut challenge: [u8; 32] =
+                shellpp_core::crypto::random_array().map_err(|_| SkError::Failed)?;
+            let rp = WEBAUTHN_RP_ENTITY_INFORMATION {
+                dwVersion: WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
+                pwszId: rp_id.as_ptr(),
+                pwszName: rp_id.as_ptr(),
+                pwszIcon: ptr::null(),
+            };
+            let user = WEBAUTHN_USER_ENTITY_INFORMATION {
+                dwVersion: WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+                cbId: user_id.len() as u32,
+                pbId: user_id.as_mut_ptr(),
+                pwszName: user_name.as_ptr(),
+                pwszIcon: ptr::null(),
+                pwszDisplayName: user_name.as_ptr(),
+            };
+            // Ed25519 first, ECDSA P-256 for keys without it.
+            let mut algorithms =
+                [COSE_EDDSA, WEBAUTHN_COSE_ALGORITHM_ECDSA_P256_WITH_SHA256].map(|algorithm| {
+                    WEBAUTHN_COSE_CREDENTIAL_PARAMETER {
+                        dwVersion: WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
+                        pwszCredentialType: WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY,
+                        lAlg: algorithm,
+                    }
+                });
+            let parameters = WEBAUTHN_COSE_CREDENTIAL_PARAMETERS {
+                cCredentialParameters: algorithms.len() as u32,
+                pCredentialParameters: algorithms.as_mut_ptr(),
+            };
+            let client_data = WEBAUTHN_CLIENT_DATA {
+                dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
+                cbClientDataJSON: challenge.len() as u32,
+                pbClientDataJSON: challenge.as_mut_ptr(),
+                pwszHashAlgId: WEBAUTHN_HASH_ALGORITHM_SHA_256,
+            };
+            let options = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
+                // Version 1: only the fields up to dwFlags are read.
+                dwVersion: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_1,
+                dwTimeoutMilliseconds: TIMEOUT_MS,
+                dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
+                bRequireResidentKey: 0,
+                dwUserVerificationRequirement: if request.user_verification {
+                    WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED
+                } else {
+                    WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED
+                },
+                dwAttestationConveyancePreference: WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
+                ..Default::default()
+            };
+            let mut attestation: *mut WEBAUTHN_CREDENTIAL_ATTESTATION = ptr::null_mut();
+            // SAFETY: every pointer points to a live local of this frame for
+            // the whole call: the NUL-terminated `rp_id` and `user_name`, the
+            // `user_id`, `algorithms` and `challenge` buffers with their exact
+            // lengths. The API writes one pointer into `attestation`, which it
+            // allocated and `WebAuthNFreeCredentialAttestation` frees below.
+            let result = unsafe {
+                WebAuthNAuthenticatorMakeCredential(
+                    owner_window(),
+                    &rp,
+                    &user,
+                    &parameters,
+                    &client_data,
+                    &options,
+                    &mut attestation,
+                )
+            };
+            if result < 0 || attestation.is_null() {
+                tracing::info!(code = result, "security key made no credential");
+                return Err(super::error_of(result));
+            }
+            // SAFETY: on success `attestation` points to the API's
+            // WEBAUTHN_CREDENTIAL_ATTESTATION whose buffers hold the stated
+            // number of bytes; they are copied before it is freed, once.
+            let (auth_data, key_handle) = unsafe {
+                let found = &*attestation;
+                let copied = (
+                    copy(found.pbAuthenticatorData, found.cbAuthenticatorData),
+                    copy(found.pbCredentialId, found.cbCredentialId),
+                );
+                WebAuthNFreeCredentialAttestation(attestation);
+                copied
+            };
+            if key_handle.is_empty() {
+                return Err(SkError::Invalid);
+            }
+            Ok(Attested {
+                key_handle,
+                auth_data,
+            })
         }
     }
 }

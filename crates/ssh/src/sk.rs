@@ -116,11 +116,192 @@ pub enum SkError {
     Failed,
 }
 
+/// A new credential to make (key generation).
+#[derive(Clone, Debug)]
+pub struct CreateRequest {
+    /// The relying party id of the new key (`ssh:`).
+    pub application: String,
+    /// The key asks for a PIN or a fingerprint at every signature.
+    pub user_verification: bool,
+}
+
+/// What the authenticator answered for a new credential.
+#[derive(Clone)]
+pub struct Attested {
+    /// The credential id.
+    pub key_handle: Vec<u8>,
+    /// Its authenticator data with the attested credential data (the
+    /// AAGUID, the credential id and the COSE public key).
+    pub auth_data: Vec<u8>,
+}
+
+impl std::fmt::Debug for Attested {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Attested").finish_non_exhaustive()
+    }
+}
+
 /// A FIDO2 authenticator: the system's WebAuthn API or CTAP2 over HID.
 pub trait Authenticator: Send + Sync + 'static {
     /// Asks for one signature. Blocks until the user touches the key (or
     /// enters its PIN) or it fails: call it on a blocking thread.
     fn sign(&self, request: &SignRequest) -> Result<Assertion, SkError>;
+
+    /// Makes a new credential, Ed25519 when the key can, else ECDSA P-256
+    /// (blocking, as [`Authenticator::sign`]). Not every authenticator can.
+    fn create(&self, request: &CreateRequest) -> Result<Attested, SkError> {
+        let _ = request;
+        Err(SkError::Failed)
+    }
+}
+
+/// One CBOR item of a COSE key: an integer or a byte string (the only
+/// kinds a COSE key of Ed25519 or P-256 holds).
+#[derive(Debug, PartialEq, Eq)]
+enum Cbor<'a> {
+    Int(i64),
+    Bytes(&'a [u8]),
+}
+
+/// The argument of a CBOR head (`major` type, value) and the rest.
+fn cbor_head(input: &[u8]) -> Option<(u8, u64, &[u8])> {
+    let (&first, rest) = input.split_first()?;
+    let major = first >> 5;
+    let (value, rest) = match first & 0x1f {
+        small @ 0..=23 => (u64::from(small), rest),
+        24 => (u64::from(*rest.first()?), &rest[1..]),
+        25 => (
+            u64::from(u16::from_be_bytes(rest.get(..2)?.try_into().ok()?)),
+            &rest[2..],
+        ),
+        26 => (
+            u64::from(u32::from_be_bytes(rest.get(..4)?.try_into().ok()?)),
+            &rest[4..],
+        ),
+        _ => return None,
+    };
+    Some((major, value, rest))
+}
+
+fn cbor_item(input: &[u8]) -> Option<(Cbor<'_>, &[u8])> {
+    let (major, value, rest) = cbor_head(input)?;
+    match major {
+        0 => Some((Cbor::Int(i64::try_from(value).ok()?), rest)),
+        1 => Some((Cbor::Int(-1 - i64::try_from(value).ok()?), rest)),
+        2 => {
+            let len = usize::try_from(value).ok()?;
+            Some((Cbor::Bytes(rest.get(..len)?), &rest[len..]))
+        }
+        _ => None,
+    }
+}
+
+/// The members of a COSE key (a CBOR map with integer labels) at the start
+/// of `input`.
+fn cose_key(input: &[u8]) -> Option<Vec<(i64, Cbor<'_>)>> {
+    let (major, count, mut rest) = cbor_head(input)?;
+    if major != 5 || count > 16 {
+        return None;
+    }
+    let mut members = Vec::new();
+    for _ in 0..count {
+        let (Cbor::Int(label), after) = cbor_item(rest)? else {
+            return None;
+        };
+        let (value, after) = cbor_item(after)?;
+        members.push((label, value));
+        rest = after;
+    }
+    Some(members)
+}
+
+/// The COSE public key of attested credential data: after the 37 bytes of
+/// authenticator data, the AAGUID (16), the credential id's length (2)
+/// and the credential id.
+fn attested_public_key(auth_data: &[u8]) -> Option<&[u8]> {
+    let flags = *auth_data.get(32)?;
+    // Bit 6 (AT): attested credential data is included.
+    if flags & 0x40 == 0 {
+        return None;
+    }
+    let id_len = usize::from(u16::from_be_bytes(auth_data.get(53..55)?.try_into().ok()?));
+    auth_data.get(55 + id_len..)
+}
+
+/// [`key_file`] as OpenSSH text.
+pub fn key_file_text(
+    request: &CreateRequest,
+    attested: &Attested,
+    comment: &str,
+) -> Result<zeroize::Zeroizing<String>, SkError> {
+    let text = key_file(request, attested, comment)?
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .map_err(|_| SkError::Invalid)?;
+    Ok(zeroize::Zeroizing::new(text.to_string()))
+}
+
+/// The OpenSSH private key file (it holds no secret: the application, the
+/// flags and the key handle) of a credential the authenticator made.
+pub fn key_file(
+    request: &CreateRequest,
+    attested: &Attested,
+    comment: &str,
+) -> Result<PrivateKey, SkError> {
+    use russh::keys::ssh_key::{private, public};
+    let members = attested_public_key(&attested.auth_data)
+        .and_then(cose_key)
+        .ok_or(SkError::Invalid)?;
+    let member = |label: i64| {
+        members
+            .iter()
+            .find(|(found, _)| *found == label)
+            .map(|(_, value)| value)
+    };
+    let bytes = |label: i64| match member(label) {
+        Some(Cbor::Bytes(bytes)) => Some(*bytes),
+        _ => None,
+    };
+    let mut flags = USER_PRESENCE_REQUIRED;
+    if request.user_verification {
+        flags |= USER_VERIFICATION_REQUIRED;
+    }
+    let application = request.application.clone();
+    let key_handle = attested.key_handle.clone();
+    // kty (1), alg (3), crv (-1), x (-2), y (-3).
+    let data = match (member(1), member(3), member(-1)) {
+        // OKP, EdDSA, Ed25519.
+        (Some(Cbor::Int(1)), Some(Cbor::Int(-8)), Some(Cbor::Int(6))) => {
+            let x: [u8; 32] = bytes(-2)
+                .and_then(|x| x.try_into().ok())
+                .ok_or(SkError::Invalid)?;
+            let public = public::SkEd25519::new(public::Ed25519PublicKey(x), application);
+            KeypairData::SkEd25519(
+                private::SkEd25519::new(public, flags, key_handle).map_err(|_| SkError::Invalid)?,
+            )
+        }
+        // EC2, ES256, P-256.
+        (Some(Cbor::Int(2)), Some(Cbor::Int(-7)), Some(Cbor::Int(1))) => {
+            let (x, y) = bytes(-2).zip(bytes(-3)).ok_or(SkError::Invalid)?;
+            if x.len() != 32 || y.len() != 32 {
+                return Err(SkError::Invalid);
+            }
+            let mut point = vec![0x04];
+            point.extend_from_slice(x);
+            point.extend_from_slice(y);
+            let public::EcdsaPublicKey::NistP256(point) =
+                public::EcdsaPublicKey::from_sec1_bytes(&point).map_err(|_| SkError::Invalid)?
+            else {
+                return Err(SkError::Invalid);
+            };
+            let public = public::SkEcdsaSha2NistP256::new(point, application);
+            KeypairData::SkEcdsaSha2NistP256(
+                private::SkEcdsaSha2NistP256::new(public, flags, key_handle)
+                    .map_err(|_| SkError::Invalid)?,
+            )
+        }
+        _ => return Err(SkError::Invalid),
+    };
+    PrivateKey::new(data, comment).map_err(|_| SkError::Invalid)
 }
 
 /// The sign request of a security key for `data`; `None` for another key.

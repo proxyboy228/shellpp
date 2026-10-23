@@ -1702,6 +1702,23 @@ Status: run 8 decision, 2026-10-23 (plan, item B4). Settles UI 4.2 and 12.4 "Aut
 
 **Spec impact:** docs/ui-behavior-spec.md, sections 0, 4.2 and 12.4; docs/data-model.md, section 16.1; `docs/ru`.
 
+
+### 143. FIDO2 security keys sign and are made through the system's authenticator (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B3). Implements item 8 of D50 and the signing left open in D37.
+
+**Context.** D37 imports `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` keys without signing; D50 chose the WebAuthn API on Windows and `ctap-hid-fido2` on macOS and Linux. No security key is at hand during the run: the work is checked at the level of formats, against a software authenticator and the test server, and with a key in the morning check list.
+
+**Decision:**
+
+- `shellpp-ssh` signs through an `Authenticator` trait (`sk.rs`): the request carries the key's application (relying party id, `ssh:`), key handle, flags and the data to sign; the authenticator signs its authenticator data and SHA-256 of the data (its client data hash), as OpenSSH's PROTOCOL.u2f describes. The SSH signature is the Ed25519 signature, or the ECDSA one converted from DER to `mpint r, mpint s`, followed by the flags and the counter; it is checked against the key's public key before it is sent. Without an authenticator a security key stays unusable and the next method runs, as before. A cancelled touch ends the attempt (`Cancelled`); another failure makes the key unusable. The default key files `~/.ssh/*_sk` stay out (each would ask for a touch at every connection).
+- Windows: the WebAuthn API of `webauthn.dll` (Windows 10 1903 and later; `windows-sys` bindings, `unsafe` only in `apps/desktop/src/platform/security_key.rs` with SAFETY comments). The data to sign is passed as the "client data", which the API hashes with SHA-256, the credential as the only allowed one, user verification as the key's flag asks; the system shows its own Windows Security dialog over the active window. The call that shows the dialog is tested only when `SHELLPP_TEST_WEBAUTHN=1` (a person with a key); the API version and the error mapping are tested always.
+- macOS and Linux: CTAP2 over USB HID through `ctap-hid-fido2` 3.6 (MIT, ring backend) behind the desktop's `fido2-hid` feature, **off by default**: it builds `hidapi`, which needs libudev on Linux (added to the CI packages for the `--all-features` steps), and nobody could check it with a key; a key that requires a PIN reports a failure (no PIN prompt yet). The owner turns it on for release builds after a check.
+- Key generation: "Create on the security key" in the FIDO2 form, where the system can make one (WebAuthn): MakeCredential with EdDSA first and ES256 second, a non-discoverable credential, user presence required; the COSE public key is read from the attested credential data and the OpenSSH key file (application, flags, key handle) fills the form, imported as any key file. Over HID there is no generation yet.
+- A test run never reaches an authenticator. Nothing logs key handles, data or signatures.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 7 (FIDO2, the tooltip), and `docs/ru`.
+
 ## Run 8 of 2026-10-23, agent C
 
 The decisions below were taken during the owner's eighth long run, by its agent C (numbers 170-199), marked "run 8"; the disputable ones are listed for the owner in the run report.

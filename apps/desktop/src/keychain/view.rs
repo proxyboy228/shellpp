@@ -2016,31 +2016,32 @@ impl Render for ImportForm {
                     .into_any_element(),
             ),
         };
-        let key_block =
-            widgets::block("kc-import-block-key", Some(strings::FIELD_PRIVATE_KEY), cx)
-                .child(widgets::caption(hint, cx))
-                .child(
+        let key_block = widgets::block("kc-import-block-key", Some(strings::FIELD_PRIVATE_KEY), cx)
+            .child(widgets::caption(hint, cx))
+            .child(
+                div()
+                    .id("kc-import-text")
+                    .test_support()
+                    .relative()
+                    .w_full()
+                    .child(theme::controls::muted_placeholder(&self.text, cx))
+                    .child(textarea),
+            )
+            .when_some(text_error, |this, error| {
+                this.child(widgets::error_text(error, cx))
+            })
+            .when_some(self.file_problem(), |this, problem| {
+                this.child(
                     div()
-                        .id("kc-import-text")
+                        .id("kc-import-file-error")
                         .test_support()
-                        .relative()
-                        .w_full()
-                        .child(theme::controls::muted_placeholder(&self.text, cx))
-                        .child(textarea),
+                        .child(widgets::error_text(problem.text(), cx)),
                 )
-                .when_some(text_error, |this, error| {
-                    this.child(widgets::error_text(error, cx))
-                })
-                .when_some(self.file_problem(), |this, problem| {
-                    this.child(
-                        div()
-                            .id("kc-import-file-error")
-                            .test_support()
-                            .child(widgets::error_text(problem.text(), cx)),
-                    )
-                })
-                .child(
-                    h_flex().child(
+            })
+            .child(
+                h_flex()
+                    .gap(metrics::SPACE_2)
+                    .child(
                         panel_button(
                             "kc-import-file",
                             Lucide::FolderOpen,
@@ -2051,9 +2052,43 @@ impl Render for ImportForm {
                         .on_click(cx.listener(
                             |this, _: &ClickEvent, window, cx| this.choose_file(window, cx),
                         )),
+                    )
+                    // FIDO2: a new key made on the security key (D143),
+                    // where the system can make one (WebAuthn).
+                    .when(
+                        self.is_security_key() && crate::platform::security_key::can_create(),
+                        |row| {
+                            let creating = self.is_creating();
+                            row.child(
+                                panel_button(
+                                    "kc-import-create-sk",
+                                    Lucide::Usb,
+                                    if creating {
+                                        strings::CREATING_ON_SECURITY_KEY
+                                    } else {
+                                        strings::CREATE_ON_SECURITY_KEY
+                                    },
+                                    !creating,
+                                    cx,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        this.create_on_security_key(window, cx)
+                                    },
+                                )),
+                            )
+                        },
                     ),
+            )
+            .when_some(self.create_error(), |this, error| {
+                this.child(
+                    div()
+                        .id("kc-import-create-error")
+                        .test_support()
+                        .child(widgets::error_text(error, cx)),
                 )
-                .children(inspection);
+            })
+            .children(inspection);
 
         let label_error = field_error(self.errors(), "label");
         let label_block = widgets::block("kc-import-block-label", None, cx).child(widgets::field(

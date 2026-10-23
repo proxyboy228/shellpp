@@ -884,6 +884,79 @@ fn fido2_opens_the_import_of_a_security_key(cx: &mut TestAppContext) {
         .expect("the import form");
     assert!(form.read_with(cx, |form, _| form.is_security_key()));
     assert!(ui.visible(cx, "kc-import"));
+    // A test run reaches no authenticator: the button is not offered.
+    assert!(!ui.visible(cx, "kc-import-create-sk"));
+    ui.finish(cx);
+}
+
+/// An authenticator that makes one Ed25519 credential, or is cancelled.
+struct MadeKey(bool);
+
+impl shellpp_ssh::sk::Authenticator for MadeKey {
+    fn sign(
+        &self,
+        _request: &shellpp_ssh::sk::SignRequest,
+    ) -> Result<shellpp_ssh::sk::Assertion, shellpp_ssh::sk::SkError> {
+        Err(shellpp_ssh::sk::SkError::Failed)
+    }
+
+    fn create(
+        &self,
+        _request: &shellpp_ssh::sk::CreateRequest,
+    ) -> Result<shellpp_ssh::sk::Attested, shellpp_ssh::sk::SkError> {
+        if !self.0 {
+            return Err(shellpp_ssh::sk::SkError::Cancelled);
+        }
+        let key_handle: [u8; 32] = shellpp_core::crypto::random_array().unwrap();
+        let x: [u8; 32] = shellpp_core::crypto::random_array().unwrap();
+        // Authenticator data with the AT flag, a zero AAGUID, the id and
+        // the COSE key {1: 1, 3: -8, -1: 6, -2: x}.
+        let mut auth_data = vec![0u8; 32];
+        auth_data.push(0x41);
+        auth_data.extend_from_slice(&[0; 4 + 16]);
+        auth_data.extend_from_slice(&32u16.to_be_bytes());
+        auth_data.extend_from_slice(&key_handle);
+        auth_data.extend([0xa4, 0x01, 0x01, 0x03, 0x27, 0x20, 0x06, 0x21, 0x58, 0x20]);
+        auth_data.extend_from_slice(&x);
+        Ok(shellpp_ssh::sk::Attested {
+            key_handle: key_handle.to_vec(),
+            auth_data,
+        })
+    }
+}
+
+/// FIDO2 "Create on the security key" (D143): the new key's file fills the
+/// form and imports as a security key; a cancelled touch says so.
+#[gpui_kit::test]
+fn a_key_made_on_the_security_key_is_imported(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, |_, _| {});
+    ui.click(cx, "kc-fido2");
+    let form = ui
+        .screen
+        .read_with(cx, |screen, _| screen.import_form().cloned())
+        .expect("the import form");
+    ui.frame(cx, |window, cx| {
+        form.update(cx, |form, cx| {
+            form.create_with(std::sync::Arc::new(MadeKey(false)), window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        form.read_with(cx, |form, _| form.create_error()),
+        Some(strings::CREATE_CANCELLED)
+    );
+    assert!(ui.visible(cx, "kc-import-create-error"));
+    ui.frame(cx, |window, cx| {
+        form.update(cx, |form, cx| {
+            form.create_with(std::sync::Arc::new(MadeKey(true)), window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(form.read_with(cx, |form, _| form.create_error()), None);
+    ui.click(cx, "kc-import-submit");
+    cx.run_until_parked();
+    let key = ui.key_by_label(cx, strings::SECURITY_KEY_COMMENT);
+    assert_eq!(key.algorithm, "sk-ssh-ed25519@openssh.com");
     ui.finish(cx);
 }
 
