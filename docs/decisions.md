@@ -1580,3 +1580,26 @@ Status: run 6 decision, 2026-10-22 (plan, section 9). Amends D85.
 - Fix: while output keeps coming, the grid gives its rows to the journal at most every 2 s (`COMPACT_INTERVAL`); it still does 100 ms after the output pauses. Measured on the head: 0.52 to 0.58 s, as before the journal. During a long run of output the grid holds up to the whole scrollback for 2 s at most, as it did for the whole flood before D85.
 
 **Spec impact:** none.
+
+## The owner's answers to run 6
+
+### 100. The owner's answers to the questions of run 6
+
+Status: accepted, 2026-10-23 (owner's choice; the six questions in section 3 of the run 6 report, recorded as section 2 of the plan of run 7). Amends D96 (its known limit at 175 and 200 %), D97 (the top bar's update button) and D98 (the russh patch left for the owner) where they differ; items 2 to 6 go into the plan of run 7.
+
+**Decision:**
+
+1. The names of hosts that are gone stay in a workspace as D94 has them: kept while the workspace links the host, and an export writes only the names of the hosts the file carries.
+2. Zoom of 175 to 200 % in a narrow window (D96): when the details panel does not fit beside the main area, it opens over the main area (as the sidebar collapses in a narrow window), with a shadow, and Esc closes it. A screenshot at 960 × 600 and 200 %.
+3. The channel leak of russh (D98):
+   - the workaround in forwarding stays;
+   - the one-line patch of russh goes into `third_party/russh`, used through `[patch.crates-io]` by path, with a leak test for exec channels and agent forwarding; the license is kept, and `THIRD_PARTY_NOTICES.md` notes the patch;
+   - the text of an issue and a pull request for upstream (description, reproduction, patch) goes into `docs/upstream/russh-channel-leak.md`; the owner sends them;
+   - once upstream releases a fix, the patch is removed (a note in `CLAUDE.md`).
+4. The update check (D97): an update button in the top bar (UI 1.1), shown only when a check found a newer version.
+5. WSL:
+   - `wsl.exe --list` runs in a job object, and the timeout kills its whole process tree;
+   - the shells are detected lazily, only when a local terminal or the shell settings are opened, not at every app start; the result is kept until the next start.
+6. The soak test on OpenSSH (`scripts\soak.ps1 -Minutes 120`, with SFTP and `htop`) runs at the end of run 7 if Docker works and more than 2.5 hours remain before the deadline; otherwise it goes into the report.
+
+**Spec impact:** none now. With the implementation (run 7): `docs/ui-behavior-spec.md` 1.1 (item 4), 1.2 and 1.3 (item 2) and 12.4 (item 5), and `docs/ru`; `THIRD_PARTY_NOTICES.md`, `CLAUDE.md` and `docs/upstream/russh-channel-leak.md` (item 3).
