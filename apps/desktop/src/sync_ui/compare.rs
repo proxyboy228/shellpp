@@ -31,7 +31,7 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use serde_json::{Map, Value};
 use shellpp_core::service::{ConflictChoice, ConflictItem, KeepOther};
@@ -679,6 +679,12 @@ pub fn conflicts_button(state: &Entity<AppState>, count: usize) -> ControlButton
 // The badge of a card
 // ---------------------------------------------------------------------------
 
+/// The height of a badge, and the side of its compact square form.
+pub const BADGE_SIZE: gpui::Rems = metrics::rpx(20.);
+/// The narrowest title a list row's name keeps before its badges take their
+/// compact form (design px): a few letters.
+pub const BADGE_TITLE_MIN: f32 = 56.;
+
 /// The conflict badge of a card (UI 13.6): `--warning` outline and text, in
 /// the shape of the known hosts' "Revoked" badge. A click opens the
 /// comparison and does not reach the card.
@@ -688,16 +694,43 @@ pub fn conflict_badge(
     record_id: Uuid,
     cx: &App,
 ) -> impl IntoElement {
+    conflict_chip(id, state, record_id, cx)
+        .px(metrics::SPACE_2)
+        .child(strings::CONFLICT_BADGE)
+        .test_support()
+}
+
+/// The conflict badge in a list cell too narrow for its label: the warning
+/// icon in a square of the same outline; the tooltip and the click are the
+/// full badge's.
+pub fn conflict_badge_compact(
+    id: impl Into<gpui::ElementId>,
+    state: &Entity<AppState>,
+    record_id: Uuid,
+    cx: &App,
+) -> impl IntoElement {
+    let warning = cx.theme().warning;
+    conflict_chip(id, state, record_id, cx)
+        .w(BADGE_SIZE)
+        .justify_center()
+        .child(Icon::new(Lucide::CircleAlert).xsmall().text_color(warning))
+        .test_support()
+}
+
+fn conflict_chip(
+    id: impl Into<gpui::ElementId>,
+    state: &Entity<AppState>,
+    record_id: Uuid,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
     let warning = cx.theme().warning;
     let state = state.clone();
     div()
         .id(id.into())
-        .test_support()
         .flex_none()
         .flex()
         .items_center()
-        .h(metrics::rpx(20.))
-        .px(metrics::SPACE_2)
+        .h(BADGE_SIZE)
         .rounded(metrics::RADIUS_CONTROL)
         .border_1()
         .border_color(warning)
@@ -713,7 +746,96 @@ pub fn conflict_badge(
             cx.stop_propagation();
             open_for_record(state.clone(), record_id, window, cx);
         })
-        .child(strings::CONFLICT_BADGE)
+}
+
+/// The width of a full badge with `label` (design px): the caption-size
+/// label, `--space-2` on each side and the border.
+pub fn badge_width(window: &Window, label: &str) -> f32 {
+    crate::hosts::controls::text_width(
+        window,
+        label,
+        metrics::FONT_SIZE_CAPTION,
+        FontWeight::NORMAL,
+    ) + metrics::design_px(metrics::SPACE_2) * 2.
+        + 2.
+}
+
+/// The width of the full conflict badge (design px).
+pub fn conflict_badge_width(window: &Window) -> f32 {
+    badge_width(window, strings::CONFLICT_BADGE)
+}
+
+/// Whether the badges of a list row's name take their compact form: `room`
+/// is the cell after its tile (design px), `full` the full badges' widths.
+/// The title gives way first, down to [`BADGE_TITLE_MIN`].
+pub fn compact_badges(room: f32, full: &[f32]) -> bool {
+    if full.is_empty() {
+        return false;
+    }
+    let badges =
+        full.iter().sum::<f32>() + metrics::design_px(metrics::SPACE_2) * (full.len() - 1) as f32;
+    room - metrics::design_px(metrics::SPACE_3) - badges < BADGE_TITLE_MIN
+}
+
+/// The heading over [`list_name_cell`]: the label over the title, past the
+/// `tile`. The padding stays inside a cell of no width of its own: a padded
+/// flex cell starts from its padding, so it would take that much more of
+/// the room it shares with another flexible column than the rows' cell.
+pub fn list_name_heading(
+    id: &'static str,
+    label: &'static str,
+    tile: gpui::Rems,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .pl(tile + metrics::SPACE_3)
+                .child(label),
+        )
+        .test_support()
+}
+
+/// The name cell of a list row (UI 13.6): the tile, then the title and its
+/// badges in the room after the tile. The title truncates first; the
+/// badges follow it inside the cell (compact ones when the row is narrow,
+/// [`compact_badges`]), and what still does not fit is cut at the cell's
+/// edge, so the columns stay under their headings and nothing is painted
+/// over the next one.
+pub fn list_name_cell(
+    tile: impl IntoElement,
+    title: impl IntoElement,
+    badges: Vec<AnyElement>,
+) -> gpui::Div {
+    h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(metrics::SPACE_3)
+        .items_center()
+        .child(tile)
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .gap(metrics::SPACE_3)
+                .items_center()
+                .child(title)
+                .when(!badges.is_empty(), |this| {
+                    this.child(
+                        h_flex()
+                            .flex_none()
+                            .gap(metrics::SPACE_2)
+                            .items_center()
+                            .children(badges),
+                    )
+                }),
+        )
 }
 
 #[cfg(test)]

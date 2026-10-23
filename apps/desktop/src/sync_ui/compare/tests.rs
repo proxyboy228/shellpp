@@ -619,3 +619,16 @@ fn the_badge_stays_off_the_card_and_goes_with_the_lock_and_keep_this(cx: &mut Te
     assert!(ui.visible("host-panel", cx));
     ui.finish(cx);
 }
+
+/// A list row's badges go compact once the full ones would leave the title
+/// less than `BADGE_TITLE_MIN`: 12 px after the title, 8 px between badges.
+#[test]
+fn badges_go_compact_before_the_title_gets_too_short() {
+    use super::{BADGE_TITLE_MIN, compact_badges};
+    assert!(!compact_badges(0., &[]));
+    let full = [60., 70.];
+    let fits = BADGE_TITLE_MIN + 12. + 60. + 8. + 70.;
+    assert!(!compact_badges(fits, &full));
+    assert!(compact_badges(fits - 1., &full));
+    assert!(!compact_badges(BADGE_TITLE_MIN + 12. + 70., &full[1..]));
+}

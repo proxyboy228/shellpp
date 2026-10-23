@@ -18,20 +18,21 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, WindowExt as _, h_flex,
-    v_flex, v_virtual_list,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    WindowExt as _, h_flex, v_flex, v_virtual_list,
 };
 use shellpp_core::service::dto::{KnownHostView, TagColor};
 use uuid::Uuid;
 
 use super::{
     KnownHostsLayout, KnownHostsScreen, KnownHostsSort, card_id, card_subtitle, card_title,
-    conflict_badge_id, date_text, hashed_title_id, panel_host_id, port_text, revoked_badge_id,
-    strings,
+    conflict_badge_id, date_text, hashed_title_id, key_type_cell_id, panel_host_id, port_text,
+    revoked_badge_id, strings,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
 use crate::shell::details::{self, DetailsHeader, ResizeDetails, ResizePreview};
+use crate::sync_ui::compare;
 use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
@@ -76,24 +77,33 @@ fn tile(tile_size: gpui::Rems) -> impl IntoElement {
 }
 
 /// The "revoked" badge: `--danger` text and border, no fill (as a chip,
-/// design-system 3.4, in the danger color of 2).
-fn revoked_badge(id: impl Into<gpui::ElementId>, cx: &App) -> impl IntoElement {
+/// design-system 3.4, in the danger color of 2). `compact`, for a list cell
+/// too narrow for the label: the icon in a square, the note in its tooltip.
+fn revoked_badge(id: impl Into<gpui::ElementId>, compact: bool, cx: &App) -> impl IntoElement {
     let danger = cx.theme().danger;
-    div()
+    let chip = div()
         .id(id.into())
-        .test_support()
         .flex_none()
         .flex()
         .items_center()
-        .h(metrics::rpx(20.))
-        .px(metrics::SPACE_2)
+        .h(compare::BADGE_SIZE)
         .rounded(metrics::RADIUS_CONTROL)
         .border_1()
         .border_color(danger)
         .text_color(danger)
         .text_size(metrics::FONT_SIZE_CAPTION)
-        .whitespace_nowrap()
-        .child(strings::REVOKED)
+        .whitespace_nowrap();
+    if compact {
+        chip.w(compare::BADGE_SIZE)
+            .justify_center()
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(strings::REVOKED_NOTE).build(window, cx)
+            })
+            .child(Icon::new(Lucide::Ban).xsmall().text_color(danger))
+    } else {
+        chip.px(metrics::SPACE_2).child(strings::REVOKED)
+    }
+    .test_support()
 }
 
 /// A plain menu item with a stable id; `danger` items use `--danger`
@@ -440,20 +450,64 @@ impl KnownHostsScreen {
             .into_any_element()
     }
 
-    /// The sync conflict badge of a card or row (UI 13.6), when sync kept
-    /// another version of the entry.
+    /// The sync conflict badge of a card (UI 13.6), when sync kept another
+    /// version of the entry; a row's is in [`Self::list_badges`].
     fn conflict_badge(&self, id: Uuid, cx: &App) -> Option<AnyElement> {
         self.state
             .read(cx)
             .sync_conflicted()
             .contains(&id)
             .then(|| {
-                crate::sync_ui::compare::conflict_badge(conflict_badge_id(id), &self.state, id, cx)
+                compare::conflict_badge(conflict_badge_id(id), &self.state, id, cx)
                     .into_any_element()
             })
     }
 
-    fn render_list_cells(&self, view: &KnownHostView, cx: &App) -> Vec<AnyElement> {
+    /// The width of the list's Address cell (design px): the row less its
+    /// padding, three gaps and the fixed columns, shared with Fingerprint.
+    fn address_width(&self) -> f32 {
+        let fixed = metrics::design_px(KEY_TYPE_COLUMN) + metrics::design_px(ADDED_COLUMN);
+        ((self.card_width - metrics::design_px(metrics::SPACE_3) * 5. - fixed) / 2.).max(0.)
+    }
+
+    /// The badges after a row's address: "revoked", then the conflict one
+    /// when sync kept another version (UI 13.6). Both compact when the full
+    /// ones would leave the address too little room.
+    fn list_badges(&self, view: &KnownHostView, window: &Window, cx: &App) -> Vec<AnyElement> {
+        let id = view.record_id;
+        let conflicted = self.state.read(cx).sync_conflicted().contains(&id);
+        let mut full = Vec::new();
+        if view.revoked {
+            full.push(compare::badge_width(window, strings::REVOKED));
+        }
+        if conflicted {
+            full.push(compare::conflict_badge_width(window));
+        }
+        let room = self.address_width()
+            - metrics::design_px(LIST_TILE_SIZE)
+            - metrics::design_px(metrics::SPACE_3);
+        let compact = compare::compact_badges(room, &full);
+        let mut badges = Vec::new();
+        if view.revoked {
+            badges.push(revoked_badge(revoked_badge_id(id), compact, cx).into_any_element());
+        }
+        if conflicted {
+            let badge = conflict_badge_id(id);
+            badges.push(if compact {
+                compare::conflict_badge_compact(badge, &self.state, id, cx).into_any_element()
+            } else {
+                compare::conflict_badge(badge, &self.state, id, cx).into_any_element()
+            });
+        }
+        badges
+    }
+
+    fn render_list_cells(
+        &self,
+        view: &KnownHostView,
+        window: &Window,
+        cx: &App,
+    ) -> Vec<AnyElement> {
         let theme = cx.theme();
         let id = view.record_id;
         let secondary = |text: String| {
@@ -464,30 +518,22 @@ impl KnownHostsScreen {
                 .child(text)
         };
         vec![
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap(metrics::SPACE_3)
-                .items_center()
-                .child(tile(LIST_TILE_SIZE))
-                .child(
-                    div()
-                        .id(title_id(view))
-                        .test_support()
-                        .min_w_0()
-                        .truncate()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground)
-                        .child(card_title(view)),
-                )
-                .when(view.revoked, |this| {
-                    this.child(revoked_badge(revoked_badge_id(id), cx))
-                })
-                // Sync kept another version (UI 13.6): after the name, as
-                // "Revoked", so the columns stay under their headings.
-                .children(self.conflict_badge(id, cx))
-                .into_any_element(),
+            compare::list_name_cell(
+                tile(LIST_TILE_SIZE),
+                div()
+                    .id(title_id(view))
+                    .test_support()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.foreground)
+                    .child(card_title(view)),
+                self.list_badges(view, window, cx),
+            )
+            .into_any_element(),
             secondary(view.key_type.clone())
+                .id(key_type_cell_id(id))
+                .test_support()
                 .flex_none()
                 .w(KEY_TYPE_COLUMN)
                 .into_any_element(),
@@ -545,7 +591,7 @@ impl KnownHostsScreen {
                     .child(tile(metrics::HOST_TILE_SIZE))
                     .child(self.render_texts(view, cx))
                     .when(view.revoked, |this| {
-                        this.child(revoked_badge(revoked_badge_id(id), cx))
+                        this.child(revoked_badge(revoked_badge_id(id), false, cx))
                     })
                     .children(self.conflict_badge(id, cx)),
                 metrics::RADIUS_CARD,
@@ -565,7 +611,7 @@ impl KnownHostsScreen {
                                 .active(move |style| style.bg(pressed))
                         }
                     })
-                    .children(self.render_list_cells(view, cx)),
+                    .children(self.render_list_cells(view, window, cx)),
                 gpui::Rems::ZERO,
             ),
         };
@@ -626,13 +672,15 @@ impl KnownHostsScreen {
             .text_size(metrics::FONT_SIZE_CAPTION)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.muted_foreground)
-            .child(
-                cell(strings::COLUMN_ADDRESS)
-                    .flex_1()
-                    .pl(LIST_TILE_SIZE + metrics::SPACE_3),
-            )
+            .child(crate::sync_ui::compare::list_name_heading(
+                "kh-list-header-address",
+                strings::COLUMN_ADDRESS,
+                LIST_TILE_SIZE,
+            ))
             .child(
                 cell(strings::COLUMN_KEY_TYPE)
+                    .id("kh-list-header-key-type")
+                    .test_support()
                     .flex_none()
                     .w(KEY_TYPE_COLUMN),
             )
@@ -756,7 +804,7 @@ impl KnownHostsScreen {
                             .child(card_title(view)),
                     )
                     .when(view.revoked, |this| {
-                        this.child(revoked_badge("kh-panel-revoked", cx))
+                        this.child(revoked_badge("kh-panel-revoked", false, cx))
                     }),
             )
             .when(view.hashed, |this| this.child(note(strings::HASHED_NOTE)))

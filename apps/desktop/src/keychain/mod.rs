@@ -248,6 +248,16 @@ pub fn key_unknown_id(id: Uuid) -> SharedString {
     format!("key-unknown-{id}").into()
 }
 
+/// Stable element id of a key row's Type cell (list).
+pub fn key_type_cell_id(id: Uuid) -> SharedString {
+    format!("key-type-cell-{id}").into()
+}
+
+/// Stable element id of a key row's Fingerprint cell (list).
+pub fn key_fingerprint_cell_id(id: Uuid) -> SharedString {
+    format!("key-fingerprint-cell-{id}").into()
+}
+
 /// Stable element id of an identity card (grid) or row (list).
 pub fn identity_card_id(id: Uuid) -> SharedString {
     format!("identity-card-{id}").into()

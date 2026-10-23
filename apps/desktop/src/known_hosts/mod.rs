@@ -166,6 +166,11 @@ pub fn conflict_badge_id(id: Uuid) -> SharedString {
     format!("known-host-conflict-{id}").into()
 }
 
+/// Stable element id of a list row's Key type cell.
+pub fn key_type_cell_id(id: Uuid) -> SharedString {
+    format!("known-host-key-type-{id}").into()
+}
+
 /// Stable element id of a saved host in the details panel.
 pub fn panel_host_id(id: Uuid) -> SharedString {
     format!("kh-panel-host-{id}").into()

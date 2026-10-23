@@ -32,6 +32,11 @@ fn map(value: Value) -> Map<String, Value> {
 
 impl Ui {
     fn open(cx: &mut TestAppContext) -> Self {
+        Self::open_at(cx, 1280.)
+    }
+
+    /// The whole app in a `width` x 800 window.
+    fn open_at(cx: &mut TestAppContext, width: f32) -> Self {
         cx.update(|cx| {
             crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
@@ -43,7 +48,7 @@ impl Ui {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 Default::default(),
-                size(px(1280.), px(800.)),
+                size(px(width), px(800.)),
             ))),
             ..Default::default()
         };
@@ -72,6 +77,20 @@ impl Ui {
         cx.update_window(self.handle, move |_, window, cx| {
             window.render_frame(cx);
             window.try_find(id.clone()).is_some_and(|el| el.visible())
+        })
+        .unwrap()
+    }
+
+    /// The bounds of a visible element.
+    fn bounds(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> Bounds<gpui::Pixels> {
+        let id = id.into();
+        cx.update_window(self.handle, move |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find(id.clone())
+                .filter(|el| el.visible())
+                .map(|el| el.bounds())
+                .unwrap_or_else(|| panic!("{id:?} is shown"))
         })
         .unwrap()
     }
@@ -109,6 +128,43 @@ impl Ui {
             .sync_conflict_insert_for_test(record, losing.map(map), Uuid::now_v7(), at)
             .unwrap();
         self.settle(cx);
+    }
+
+    /// A new Ed25519 key labelled `label`.
+    fn key(&self, label: &str, cx: &mut TestAppContext) -> Uuid {
+        let vault_id = self.vault(cx);
+        self.core(cx)
+            .key_generate(shellpp_core::service::dto::KeyGenerateInput {
+                vault_id,
+                label: label.into(),
+                kind: crate::state::records_edit::KeyKind::Ed25519,
+                passphrase: None,
+                save_passphrase: false,
+            })
+            .unwrap()
+            .key
+            .record_id
+    }
+
+    /// A new known host entry of `host` with a fresh Ed25519 key.
+    fn known_host(&self, host: &str, revoked: bool, cx: &mut TestAppContext) -> Uuid {
+        let key: [u8; 32] = shellpp_core::crypto::random_array().unwrap();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&11u32.to_be_bytes());
+        blob.extend_from_slice(b"ssh-ed25519");
+        blob.extend_from_slice(&32u32.to_be_bytes());
+        blob.extend_from_slice(&key);
+        self.core(cx)
+            .known_host_add(shellpp_core::service::dto::KnownHostAddInput {
+                host: host.into(),
+                port: None,
+                key_type: "ssh-ed25519".into(),
+                public_key: shellpp_core::known_hosts::encode_blob(&blob),
+                revoked,
+                comment: None,
+            })
+            .unwrap()
+            .record_id
     }
 
     fn conflicts(&self, cx: &mut TestAppContext) -> usize {
@@ -398,4 +454,134 @@ fn known_host_cards_show_the_badge(cx: &mut TestAppContext) {
     ui.badge_opens_the_comparison(badge.clone(), &untouched, cx);
     ui.keep_this(badge, cx);
     ui.finish(cx);
+}
+
+/// The Keychain list in a `width` px window (with the details panel of
+/// another key open when `panel`): the badge of a conflicted key follows
+/// its name, so its Type and Fingerprint cells start where an unconflicted
+/// row's do, under their headings, and the badge ends before Type.
+fn a_conflicted_key_row_keeps_its_columns(width: f32, panel: bool, cx: &mut TestAppContext) {
+    use crate::keychain::{
+        key_card_id, key_conflict_badge_id, key_fingerprint_cell_id, key_type_cell_id,
+    };
+
+    let ui = Ui::open_at(cx, width);
+    let deploy = ui.key("deploy", cx);
+    let backup = ui.key("backup", cx);
+    ui.click("nav-keychain", cx);
+    ui.conflict(deploy, Some(json!({"label": "deploy-2"})), cx);
+    let screen = ui
+        .shell(cx)
+        .read_with(cx, |shell, _| shell.keychain_screen().clone());
+    screen.update(cx, |screen, cx| {
+        screen.set_layout(crate::keychain::KeychainLayout::List, cx)
+    });
+    ui.settle(cx);
+    if panel {
+        ui.click(key_card_id(backup), cx);
+        assert!(screen.read_with(cx, |screen, _| screen.has_panel()));
+    }
+    let type_heading = ui.bounds("kc-keys-column-type", cx);
+    let fingerprint_heading = ui.bounds("kc-keys-column-fingerprint", cx);
+    for key in [deploy, backup] {
+        let key_type = ui.bounds(key_type_cell_id(key), cx);
+        let fingerprint = ui.bounds(key_fingerprint_cell_id(key), cx);
+        assert_eq!(
+            key_type.left(),
+            type_heading.left(),
+            "{width} px: Type of {key} under its heading"
+        );
+        assert_eq!(
+            fingerprint.left(),
+            fingerprint_heading.left(),
+            "{width} px: Fingerprint of {key} under its heading"
+        );
+    }
+    // Inside the Name cell: before the gap that precedes Type; compact when
+    // the panel leaves the cell too narrow for the label.
+    use crate::theme::metrics;
+    let badge = ui.bounds(key_conflict_badge_id(deploy), cx);
+    let gap = metrics::at_100(metrics::SPACE_3);
+    assert!(
+        badge.right() <= type_heading.left() - gap,
+        "{width} px: the badge {badge:?} ends before Type {type_heading:?}"
+    );
+    let compact = metrics::at_100(crate::sync_ui::compare::BADGE_SIZE);
+    assert_eq!(badge.size.width == compact, panel, "{width} px: {badge:?}");
+    ui.finish(cx);
+}
+
+#[gpui::test]
+fn a_conflicted_key_row_keeps_its_columns_at_1280(cx: &mut TestAppContext) {
+    a_conflicted_key_row_keeps_its_columns(1280., false, cx);
+}
+
+#[gpui::test]
+fn a_conflicted_key_row_keeps_its_columns_at_960_with_the_panel(cx: &mut TestAppContext) {
+    a_conflicted_key_row_keeps_its_columns(960., true, cx);
+}
+
+/// The Known Hosts list in a `width` px window (with the details panel of
+/// another entry open when `panel`): a revoked entry with a conflict keeps
+/// both badges inside its Address cell, before the Key type column. The
+/// cell is too narrow for the full badges here, so the address is cut and
+/// the badges take their compact form.
+fn revoked_and_conflict_badges_stay_in_the_address(
+    width: f32,
+    panel: bool,
+    cx: &mut TestAppContext,
+) {
+    use crate::known_hosts::{card_id, conflict_badge_id, key_type_cell_id, revoked_badge_id};
+
+    let ui = Ui::open_at(cx, width);
+    let old = ui.known_host("old.example.net", true, cx);
+    let web = ui.known_host("web.example.com", false, cx);
+    ui.click("nav-known-hosts", cx);
+    ui.conflict(old, None, cx);
+    let screen = ui
+        .shell(cx)
+        .read_with(cx, |shell, _| shell.known_hosts_screen().clone());
+    screen.update(cx, |screen, cx| {
+        screen.set_layout(crate::known_hosts::KnownHostsLayout::List, cx)
+    });
+    ui.settle(cx);
+    if panel {
+        ui.click(card_id(web), cx);
+        assert!(screen.read_with(cx, |screen, _| screen.has_panel()));
+    }
+    let heading = ui.bounds("kh-list-header-key-type", cx);
+    for entry in [old, web] {
+        assert_eq!(
+            ui.bounds(key_type_cell_id(entry), cx).left(),
+            heading.left(),
+            "{width} px: Key type of {entry} under its heading"
+        );
+    }
+    use crate::theme::metrics;
+    let gap = metrics::at_100(metrics::SPACE_3);
+    let compact = metrics::at_100(crate::sync_ui::compare::BADGE_SIZE);
+    let title = ui.bounds(SharedString::from(format!("known-host-title-{old}")), cx);
+    let revoked = ui.bounds(revoked_badge_id(old), cx);
+    let conflict = ui.bounds(conflict_badge_id(old), cx);
+    assert!(title.size.width > px(0.), "{width} px: some of the address");
+    assert!(title.right() <= revoked.left(), "{width} px: {title:?}");
+    assert!(revoked.right() < conflict.left(), "{width} px: {revoked:?}");
+    for (badge, bounds) in [("revoked", revoked), ("conflict", conflict)] {
+        assert_eq!(bounds.size.width, compact, "{width} px: {badge} {bounds:?}");
+        assert!(
+            bounds.right() <= heading.left() - gap,
+            "{width} px: {badge} {bounds:?} ends before Key type {heading:?}"
+        );
+    }
+    ui.finish(cx);
+}
+
+#[gpui::test]
+fn revoked_and_conflict_badges_stay_in_the_address_at_960(cx: &mut TestAppContext) {
+    revoked_and_conflict_badges_stay_in_the_address(960., false, cx);
+}
+
+#[gpui::test]
+fn revoked_and_conflict_badges_stay_in_the_address_at_1280_with_the_panel(cx: &mut TestAppContext) {
+    revoked_and_conflict_badges_stay_in_the_address(1280., true, cx);
 }

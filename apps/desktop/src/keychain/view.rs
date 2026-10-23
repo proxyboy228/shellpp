@@ -28,8 +28,8 @@ use super::panel::KeyPanel;
 use super::{
     KeychainLayout, KeychainScreen, KeychainSort, PanelContent, Row, SshScan, identity_card_id,
     identity_conflict_badge_id, identity_method, identity_subtitle_id, key_card_id,
-    key_conflict_badge_id, key_subtitle, key_subtitle_id, key_title, key_type, key_type_text,
-    key_unknown_id, ssh_file_id, strings,
+    key_conflict_badge_id, key_fingerprint_cell_id, key_subtitle, key_subtitle_id, key_title,
+    key_type, key_type_cell_id, key_type_text, key_unknown_id, ssh_file_id, strings,
 };
 use crate::hosts::controls::{self, ControlButton, ControlKind, ICON_SIZE};
 use crate::hosts::layout as grid;
@@ -575,20 +575,33 @@ impl KeychainScreen {
     /// The list layout's column names of a section, aligned with its rows.
     fn render_columns(&self, keys: bool, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let cell = |label: &'static str| div().min_w_0().truncate().child(label);
-        let (id, second, third) = if keys {
+        let cell = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .test_support()
+                .min_w_0()
+                .truncate()
+                .child(label)
+        };
+        let (id, name_id, second, third) = if keys {
             (
                 "kc-keys-columns",
-                cell(strings::COLUMN_TYPE).flex_none().w(TYPE_COLUMN),
-                cell(strings::COLUMN_FINGERPRINT).flex_1(),
+                "kc-keys-column-name",
+                cell("kc-keys-column-type", strings::COLUMN_TYPE)
+                    .flex_none()
+                    .w(TYPE_COLUMN),
+                cell("kc-keys-column-fingerprint", strings::COLUMN_FINGERPRINT).flex_1(),
             )
         } else {
             (
                 "kc-identities-columns",
-                cell(strings::COLUMN_USERNAME)
+                "kc-identities-column-name",
+                cell("kc-identities-column-username", strings::COLUMN_USERNAME)
                     .flex_none()
                     .w(USERNAME_COLUMN),
-                cell(strings::COLUMN_METHOD).flex_none().w(METHOD_COLUMN),
+                cell("kc-identities-column-method", strings::COLUMN_METHOD)
+                    .flex_none()
+                    .w(METHOD_COLUMN),
             )
         };
         h_flex()
@@ -604,11 +617,11 @@ impl KeychainScreen {
             .text_size(metrics::FONT_SIZE_CAPTION)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.muted_foreground)
-            .child(
-                cell(strings::COLUMN_NAME)
-                    .flex_1()
-                    .pl(LIST_TILE_SIZE + metrics::SPACE_3),
-            )
+            .child(crate::sync_ui::compare::list_name_heading(
+                name_id,
+                strings::COLUMN_NAME,
+                LIST_TILE_SIZE,
+            ))
             .child(second)
             .child(third)
             .into_any_element()
@@ -717,6 +730,51 @@ impl KeychainScreen {
         })
     }
 
+    /// The width of a list row's Name cell (design px): the row less its
+    /// padding, gaps and fixed columns; a key's Name shares it with
+    /// Fingerprint.
+    fn name_width(&self, keys: bool) -> f32 {
+        let space = metrics::design_px(metrics::SPACE_3);
+        let width = if keys {
+            (self.card_width - space * 4. - metrics::design_px(TYPE_COLUMN)) / 2.
+        } else {
+            self.card_width
+                - space * 4.
+                - metrics::design_px(USERNAME_COLUMN)
+                - metrics::design_px(METHOD_COLUMN)
+        };
+        width.max(0.)
+    }
+
+    /// The badge of a key (`keys`) or an identity when sync kept another
+    /// version of it (UI 13.6). In the list it follows the name inside its
+    /// cell, so the columns stay under their headings, and takes its compact
+    /// form when the full one would leave the name too little room.
+    fn conflict_badge(
+        &self,
+        badge: SharedString,
+        id: uuid::Uuid,
+        keys: bool,
+        window: &Window,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        use crate::sync_ui::compare;
+        if !self.state.read(cx).sync_conflicted().contains(&id) {
+            return None;
+        }
+        let compact = self.layout == KeychainLayout::List && {
+            let room = self.name_width(keys)
+                - metrics::design_px(LIST_TILE_SIZE)
+                - metrics::design_px(metrics::SPACE_3);
+            compare::compact_badges(room, &[compare::conflict_badge_width(window)])
+        };
+        Some(if compact {
+            compare::conflict_badge_compact(badge, &self.state, id, cx).into_any_element()
+        } else {
+            compare::conflict_badge(badge, &self.state, id, cx).into_any_element()
+        })
+    }
+
     fn render_key(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let view = &self.keys[index];
         let id = view.record_id;
@@ -730,20 +788,7 @@ impl KeychainScreen {
                 this.open_key(id, window, cx);
             }));
         let frame = gpui_kit::TestSupportExt::test_support(frame);
-        // Sync kept another version of the key (UI 13.6).
-        let conflict = self
-            .state
-            .read(cx)
-            .sync_conflicted()
-            .contains(&id)
-            .then(|| {
-                crate::sync_ui::compare::conflict_badge(
-                    key_conflict_badge_id(id),
-                    &self.state,
-                    id,
-                    cx,
-                )
-            });
+        let conflict = self.conflict_badge(key_conflict_badge_id(id), id, true, window, cx);
         match self.layout {
             KeychainLayout::Tiles => frame
                 .child(tile(Lucide::Key, metrics::HOST_TILE_SIZE))
@@ -751,24 +796,20 @@ impl KeychainScreen {
                 .children(conflict)
                 .into_any_element(),
             KeychainLayout::List => frame
-                .child(
-                    h_flex()
-                        .flex_1()
+                .child(crate::sync_ui::compare::list_name_cell(
+                    tile(Lucide::Key, LIST_TILE_SIZE),
+                    div()
                         .min_w_0()
-                        .gap(metrics::SPACE_3)
-                        .items_center()
-                        .child(tile(Lucide::Key, LIST_TILE_SIZE))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground)
-                                .child(key_title(view)),
-                        ),
-                )
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.foreground)
+                        .child(key_title(view)),
+                    conflict.into_iter().collect(),
+                ))
                 .child(
                     type_line(view, key_unknown_id(id), cx)
+                        .id(key_type_cell_id(id))
+                        .test_support()
                         .flex_none()
                         .w(TYPE_COLUMN)
                         .child(
@@ -783,11 +824,12 @@ impl KeychainScreen {
                 )
                 .child(
                     widgets::fingerprint_line(view.fingerprint.clone().unwrap_or_default())
+                        .id(key_fingerprint_cell_id(id))
+                        .test_support()
                         .flex_1()
                         .text_color(theme.muted_foreground)
                         .into_any_element(),
                 )
-                .children(conflict)
                 .into_any_element(),
         }
     }
@@ -817,21 +859,7 @@ impl KeychainScreen {
             .truncate()
             .text_color(theme.muted_foreground)
             .child(identity_method(view));
-        // Sync kept another version of the identity (UI 13.6). In the list
-        // it follows the name, so the columns stay under their headings.
-        let conflict = self
-            .state
-            .read(cx)
-            .sync_conflicted()
-            .contains(&id)
-            .then(|| {
-                crate::sync_ui::compare::conflict_badge(
-                    identity_conflict_badge_id(id),
-                    &self.state,
-                    id,
-                    cx,
-                )
-            });
+        let conflict = self.conflict_badge(identity_conflict_badge_id(id), id, false, window, cx);
         match self.layout {
             KeychainLayout::Tiles => frame
                 .child(tile(IconName::User, metrics::HOST_TILE_SIZE))
@@ -846,16 +874,11 @@ impl KeychainScreen {
                 .children(conflict)
                 .into_any_element(),
             KeychainLayout::List => frame
-                .child(
-                    h_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(metrics::SPACE_3)
-                        .items_center()
-                        .child(tile(IconName::User, LIST_TILE_SIZE))
-                        .child(title)
-                        .children(conflict),
-                )
+                .child(crate::sync_ui::compare::list_name_cell(
+                    tile(IconName::User, LIST_TILE_SIZE),
+                    title,
+                    conflict.into_iter().collect(),
+                ))
                 .child(
                     div()
                         .flex_none()
