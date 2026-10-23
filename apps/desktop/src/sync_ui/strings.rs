@@ -153,3 +153,13 @@ pub const REVOKE_ONLY: &str = "Revoke only";
 pub const LOST_OR_STOLEN: &str = "Lost or stolen";
 pub const LOST_TEXT: &str = "The device is signed out. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too. A new master password and a new vault key stop the old ones from opening your data.";
 pub const EXPORT_TRASH: &str = "Export…";
+
+pub const RECOVERY_TEXT: &str = "Enter your account's recovery key and a new master password. The new password also becomes the account password; your other devices sign in again with it.";
+pub const RECOVERY_KEY: &str = "Recovery key";
+pub const RECOVERY_TOTP: &str = "Two-step sign-in code (only if it is on)";
+pub const RECOVERY_RUN: &str = "Restore";
+pub const RECOVERY_KEY_WRONG: &str = "This recovery key does not open this device's data.";
+pub const RECOVERY_REFUSED: &str = "The server did not accept the recovery: the email may have changed on another device, or the key may be wrong.";
+pub const RECOVER_LOCAL: &str = "Recover only this device";
+pub const RECOVER_LOCAL_HINT: &str = "You can recover the data on this device only: the new password then opens the local copy, and this device is signed out of the account until you sign in with the account password or recover through the server.";
+pub const RESTORE_FROM_SYNC_BOUND_HINT: &str = "With the recovery key of your account.";

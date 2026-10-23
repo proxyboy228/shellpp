@@ -692,3 +692,36 @@ fn a_type_turned_on_again_gets_what_it_missed() {
         "the resync brought it"
     );
 }
+
+/// "Forgot password? → Restore from sync" (UI 13.2; section 5.2): the
+/// recovery key resets the account password through the server with a new
+/// personal epoch; the device unlocks, the other one is signed out and
+/// signs in with the new password.
+#[test]
+fn recovery_through_the_server_resets_the_account_password() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::empty("A");
+    let key = a.core.first_run_setup(password.clone()).expect("first run").recovery_key;
+    a.host("rec.example.com");
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+
+    a.core.lock().expect("locked");
+    let new = new_password();
+    let status = a
+        .core
+        .recovery_unlock_server(key, new.clone(), &email, None)
+        .expect("recovered through the server");
+    assert_eq!(status.state, shellpp_core::service::dto::LockState::Unlocked);
+    a.host("after-recovery.example.com");
+    a.sync();
+    assert!(b.core.sync_now().is_err(), "B was signed out");
+    done(b.sign_in(&server, &email, &new));
+    assert_eq!(b.addresses(), vec!["after-recovery.example.com", "rec.example.com"]);
+    let a = a.reopen("A");
+    assert!(a.core.unlock(password).is_err(), "the old password is gone");
+    a.core.unlock(new).expect("the new one opens the local copy");
+}

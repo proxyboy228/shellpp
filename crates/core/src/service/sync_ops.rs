@@ -2924,6 +2924,156 @@ impl Core {
         Ok(report)
     }
 
+    // -----------------------------------------------------------------
+    // Recovery through the server (section 5.2; UI 13.2 "Restore from sync")
+    // -----------------------------------------------------------------
+
+    /// "Forgot password? → Restore from sync" on a bound, locked device:
+    /// the recovery key opens the local `recovery` row, the server checks
+    /// it (`recover/begin`), the new password and a new personal epoch go to
+    /// the server (`recover/complete`), then the device unlocks with them.
+    /// Other devices are signed out. A server that cannot be reached or
+    /// refuses leaves everything as it was: the interface then offers the
+    /// local recovery (`recovery_unlock`).
+    pub fn recovery_unlock_server(
+        &self,
+        recovery_key: SecretString,
+        new_password: SecretString,
+        email: &str,
+        totp_code: Option<String>,
+    ) -> Result<crate::service::dto::LockStatus, CoreError> {
+        let _sync = self.sync_lock();
+        let available = self.remember_available();
+        let _remember = self.remember_lock();
+        if !crypto::password_length_ok(&new_password) {
+            return Err(CoreError::Validation(vec![crate::error::FieldError::new(
+                "new_password",
+                crate::error::ValidationReason::TooShort,
+            )]));
+        }
+        let decoded = crypto::decode_recovery_key(recovery_key.expose_secret())
+            .map_err(|_| CoreError::InvalidRecoveryKey)?;
+        drop(recovery_key);
+        let (context, account, api) = {
+            let guard = self.inner();
+            if guard.state != LockState::Locked {
+                return Err(CoreError::WrongState);
+            }
+            let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
+            let api = self.api(&guard.store, &account.server_url)?;
+            (lock_ops::key_context(&guard.store)?, account, api)
+        };
+        let recovery_kek = crypto::derive_recovery_kek(&decoded);
+        let recovery_row = context
+            .recovery_row
+            .as_ref()
+            .ok_or(CoreError::InvalidRecoveryKey)?;
+        let vault_key = vault::open_wrap(recovery_row, &recovery_kek)
+            .map_err(|_| CoreError::InvalidRecoveryKey)?;
+        let origin = account.server_url.clone();
+        let email = crypto::normalize_email(email);
+        let begun = api.recover_begin(&wire::RecoverBeginRequest {
+            email: email.clone(),
+            recovery_auth_key: key_b64(&crypto::derive_recovery_auth_key(&decoded, &origin)),
+            device_id: context.device_id,
+        })?;
+        if crypto::normalize_email(&begun.email) != email {
+            return Err(refused("email_mismatch"));
+        }
+        // A rolled-back or foreign server state changes nothing (section
+        // 5.1): the same epoch and the same key, or no server recovery.
+        let epoch = context.vault.current_epoch;
+        if begun.personal_vault_id != context.vault.vault_id || begun.epoch != epoch {
+            return Err(refused("rolled_back"));
+        }
+        let held = open_account_wrap(
+            context.vault.vault_id,
+            epoch,
+            begun.recovery_wrap.as_bytes(),
+            &recovery_kek,
+            WrapKind::Recovery,
+        );
+        if !held.is_some_and(|key| key.ct_eq(&vault_key)) {
+            return Err(refused("rolled_back"));
+        }
+        let class = self.platform.class;
+        let material = PasswordMaterial::fresh(class, Some(email.clone()))?;
+        let derived = derive(
+            &material.kdf,
+            &material.kdf_salt,
+            &email,
+            &new_password,
+            &origin,
+            class,
+        )?;
+        drop(new_password);
+        let mut ring = KeyRing::new(context.vault.vault_id, epoch, vault_key);
+        {
+            let guard = self.inner();
+            ring.open_chain(&guard.store)?;
+        }
+        let device_wrap_key = self.rotation_device_key(&context);
+        let rotation = Rotation::prepare(
+            &ring,
+            &context.vault,
+            &derived.kek,
+            &recovery_kek,
+            device_wrap_key.as_ref(),
+        )?;
+        let tokens = api.recover_complete(&wire::RecoverCompleteRequest {
+            recovery_ticket: begun.recovery_ticket,
+            totp_code: totp_code.as_deref().map(|code| secret(code.trim())),
+            email: email.clone(),
+            kdf: wire_kdf(&material.kdf),
+            kdf_salt: B64(material.kdf_salt.to_vec()),
+            auth_key: key_b64(&derived.auth_key),
+            kek_wrap: B64(rotation
+                .row(WrapKind::Kek)
+                .ok_or(CoreError::Internal("rotation"))?
+                .wrap
+                .clone()),
+            rotation: wire_rotation(&rotation)?,
+            device_id: context.device_id,
+        })?;
+        // Committed on the server: the local rows follow in one transaction.
+        let now = self.now();
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        if inner.state != LockState::Locked
+            || !lock_ops::key_rows_unchanged(&inner.store, &context)?
+        {
+            return Err(CoreError::WrongState);
+        }
+        ring.push_epoch(rotation.new_epoch, rotation.new_key());
+        let (blob, secrets_epoch) =
+            wrap_refresh(&ring, &context.device_id, &tokens.refresh_token.0)?;
+        let mut account_row = account;
+        account_row.email = email;
+        account_row.refresh_token = Some(blob);
+        account_row.secrets_epoch = secrets_epoch;
+        let local_auth = material.to_row(context.vault.vault_id, format_timestamp(now));
+        inner.store.write(|tx| {
+            rotation.write(tx)?;
+            tx.local_auth_put(&local_auth)?;
+            tx.server_account_put(&account_row)
+        })?;
+        inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        tracing::info!(
+            epoch = rotation.new_epoch,
+            "recovered through the server; vault rotated"
+        );
+        drop(ring);
+        let started = match lock_ops::key_context(&inner.store) {
+            Ok(new_context) => self.start_session(inner, &new_context, rotation.new_key(), now),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = started {
+            tracing::warn!(code = error.code(), "unlock after recovery failed");
+        }
+        super::checkpoint(&inner.store);
+        Ok(self.status(inner, available))
+    }
+
     /// `true` while the personal vault is bound to an account.
     pub(super) fn bound(&self) -> Result<bool, CoreError> {
         Ok(self.inner().store.server_account()?.is_some())

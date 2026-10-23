@@ -271,7 +271,7 @@ impl Core {
     /// Re-sealing older records and the `app_version` rewrite are upkeep:
     /// every record stays readable through the chain, so their failures are
     /// logged and retried at the next unlock instead of failing the unlock.
-    fn start_session(
+    pub(super) fn start_session(
         &self,
         inner: &mut Inner,
         context: &KeyContext,

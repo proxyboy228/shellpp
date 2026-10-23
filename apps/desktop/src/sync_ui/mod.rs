@@ -2173,3 +2173,221 @@ pub fn open_password_change(
     });
     dialog
 }
+
+// ---------------------------------------------------------------------------
+// Forgot password? → Restore from sync (UI 13.2; SP 5.2)
+// ---------------------------------------------------------------------------
+
+pub struct RecoveryDialog {
+    state: Entity<AppState>,
+    key: Entity<InputState>,
+    email: Entity<InputState>,
+    new: Entity<InputState>,
+    repeat: Entity<InputState>,
+    totp: Entity<InputState>,
+    busy: bool,
+    /// The server could not be reached or refused: the local recovery is
+    /// offered.
+    pub offer_local: bool,
+    error: Option<&'static str>,
+    task: Option<Task<()>>,
+}
+
+impl RecoveryDialog {
+    fn checked(&mut self, cx: &mut Context<Self>) -> Option<(SecretString, SecretString)> {
+        let new = input_text(&self.new, cx);
+        if new != input_text(&self.repeat, cx) {
+            self.error = Some(strings::PASSWORDS_DIFFER);
+            cx.notify();
+            return None;
+        }
+        if new.chars().count() < 8 {
+            self.error = Some(strings::PASSWORD_SHORT);
+            cx.notify();
+            return None;
+        }
+        Some((secret(&self.key, cx), SecretString::from(new)))
+    }
+
+    /// Through the server: the account password changes too.
+    fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let Some((key, new)) = self.checked(cx) else {
+            return;
+        };
+        let email = input_text(&self.email, cx);
+        let code = input_text(&self.totp, cx);
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        let done = cx.background_spawn(async move {
+            core.recovery_unlock_server(key, new, &email, (!code.trim().is_empty()).then_some(code))
+        });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = done.await;
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                dialog.busy = false;
+                match result {
+                    Ok(_) => window.close_dialog(cx),
+                    Err(error) => {
+                        dialog.error = Some(match &error {
+                            CoreError::InvalidRecoveryKey => strings::RECOVERY_KEY_WRONG,
+                            CoreError::Sync(HttpError::Api { status: 401, .. }) => {
+                                strings::RECOVERY_REFUSED
+                            }
+                            other => error_text(other),
+                        });
+                        // Anything but a wrong key or a TOTP step offers the
+                        // local recovery (UI 13.2).
+                        dialog.offer_local = !matches!(error, CoreError::InvalidRecoveryKey)
+                            && error_text(&error) != strings::ERROR_TOTP;
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// This device only: the new password opens the local copy; the
+    /// device is signed out of the account.
+    fn run_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let Some((key, new)) = self.checked(cx) else {
+            return;
+        };
+        self.busy = true;
+        cx.notify();
+        let done = cx.background_spawn(async move { core.recovery_unlock(key, new) });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = done.await;
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                dialog.busy = false;
+                match result {
+                    Ok(_) => window.close_dialog(cx),
+                    Err(error) => dialog.error = Some(error_text(&error)),
+                }
+                cx.notify();
+            });
+        }));
+    }
+}
+
+impl Render for RecoveryDialog {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("sync-recovery")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_3)
+            .child(widgets::caption(strings::RECOVERY_TEXT, cx))
+            .child(widgets::field(
+                strings::RECOVERY_KEY,
+                widgets::text_input(&self.key, "sync-recovery-key", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::EMAIL,
+                widgets::text_input(&self.email, "sync-recovery-email", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::NEW_PASSWORD,
+                widgets::text_input(&self.new, "sync-recovery-new", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::REPEAT_PASSWORD,
+                widgets::text_input(&self.repeat, "sync-recovery-repeat", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::RECOVERY_TOTP,
+                widgets::text_input(&self.totp, "sync-recovery-totp", false, window, cx),
+                None,
+                cx,
+            ))
+            .children(error_line(self.error, cx))
+            .when(self.offer_local, |this| {
+                this.child(widgets::caption(strings::RECOVER_LOCAL_HINT, cx))
+            })
+    }
+}
+
+debug_opaque!(RecoveryDialog);
+
+/// Opens "Restore from sync" of the unlock screen (bound devices).
+pub fn open_recovery(
+    state: Entity<AppState>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<RecoveryDialog> {
+    let email = state
+        .read(cx)
+        .core()
+        .and_then(|core| core.sync_status().ok())
+        .and_then(|status| status.email)
+        .unwrap_or_default();
+    let dialog = cx.new(|cx| RecoveryDialog {
+        state,
+        key: cx.new(|cx| InputState::new(window, cx)),
+        email: cx.new(|cx| InputState::new(window, cx).default_value(email)),
+        new: cx.new(|cx| InputState::new(window, cx).masked(true)),
+        repeat: cx.new(|cx| InputState::new(window, cx).masked(true)),
+        totp: cx.new(|cx| InputState::new(window, cx)),
+        busy: false,
+        offer_local: false,
+        error: None,
+        task: None,
+    });
+    let shown = dialog.clone();
+    window.open_dialog(cx, move |modal, _, cx| {
+        let run = shown.downgrade();
+        let local = shown.downgrade();
+        let busy = shown.read(cx).busy;
+        let offer_local = shown.read(cx).offer_local;
+        let row = h_flex()
+            .w_full()
+            .justify_end()
+            .gap(metrics::SPACE_2)
+            .child(
+                ControlButton::new("sync-recovery-cancel", ControlKind::Neutral)
+                    .label(strings::CANCEL)
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+            .when(offer_local, |row| {
+                row.child(
+                    ControlButton::new("sync-recovery-local", ControlKind::Neutral)
+                        .label(strings::RECOVER_LOCAL)
+                        .disabled(busy)
+                        .on_click(move |_, window, cx| {
+                            let _ = local.update(cx, |dialog, cx| dialog.run_local(window, cx));
+                        }),
+                )
+            })
+            .child(
+                ControlButton::new("sync-recovery-run", ControlKind::Accent)
+                    .label(strings::RECOVERY_RUN)
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
+                    }),
+            );
+        modal
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(title(strings::RESTORE_FROM_SYNC))
+            .child(shown.clone())
+            .footer(row)
+    });
+    dialog
+}

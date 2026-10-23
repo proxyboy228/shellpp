@@ -146,10 +146,33 @@ impl ForgotDialog {
         let danger = theme.danger;
         let danger_hover = tokens.danger_hover.hsla();
         let remembered = self.state.read(cx).remember_enabled();
-        // Inactive until sync exists: the whole control at 0.45, no hover.
+        // Stage 7: active on a device bound to an account (the recovery key
+        // through the server, UI 13.2); otherwise inactive: the whole
+        // control at 0.45, no hover.
+        let bound = self
+            .state
+            .read(cx)
+            .core()
+            .and_then(|core| core.sync_status().ok())
+            .is_some_and(|status| status.bound);
         let sync = option_button("forgot-restore-sync", strings::RESTORE_FROM_SYNC, cx)
-            .text_color(theme.popover_foreground)
-            .opacity(metrics::OPACITY_DISABLED);
+            .text_color(theme.popover_foreground);
+        let sync = if bound {
+            let state = self.state.clone();
+            sync.cursor_pointer()
+                .hover(move |style| style.bg(overlay_hover))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.close(cx);
+                    crate::sync_ui::open_recovery(state.clone(), window, cx);
+                }))
+        } else {
+            sync.opacity(metrics::OPACITY_DISABLED)
+        };
+        let sync_hint = if bound {
+            crate::sync_ui::strings::RESTORE_FROM_SYNC_BOUND_HINT
+        } else {
+            strings::RESTORE_FROM_SYNC_HINT
+        };
         // Leads to the confirmation; a dangerous action is shown in
         // `--danger` (hovered: `--danger-hover` on `--bg-overlay-hover`).
         let new_vault = option_button("forgot-new-vault", strings::START_NEW_VAULT, cx)
@@ -171,7 +194,7 @@ impl ForgotDialog {
             })
             .child(v_flex().gap(metrics::SPACE_1).child(sync).child(hint_line(
                 "forgot-restore-sync-hint",
-                strings::RESTORE_FROM_SYNC_HINT,
+                sync_hint,
                 cx,
             )))
             .child(
