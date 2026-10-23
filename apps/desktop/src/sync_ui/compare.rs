@@ -115,10 +115,14 @@ fn value_text(value: &Value) -> Option<String> {
 }
 
 /// The fields of a version, one level of nesting flattened (`ssh.port`) as
-/// the core compares them.
+/// the core compares them; the sort key is bookkeeping and stays out, as in
+/// the duplicates' comparison.
 fn flatten(data: Option<&Map<String, Value>>) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     for (name, value) in data.into_iter().flatten() {
+        if name == "order_key" {
+            continue;
+        }
         match value {
             Value::Object(inner) => {
                 for (key, value) in inner {
