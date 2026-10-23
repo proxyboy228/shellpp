@@ -363,7 +363,7 @@ fn trust_of(store: &Store, origin: &str) -> Result<TrustMode, CoreError> {
 }
 
 /// The selection of the personal vault from `sync.toggles` (data-model 17).
-fn selection(store: &Store) -> Selection {
+pub(super) fn selection(store: &Store) -> Selection {
     let toggles: Map<String, Value> = store
         .setting("sync.toggles")
         .ok()
@@ -3327,6 +3327,46 @@ type MergedRows = (
     Vec<RecentlyDeletedRow>,
     Vec<DuplicatePairRow>,
 );
+
+/// After `sync.toggles` changed (section 6.10): classes now pulled that
+/// were not, or `appearance` when one of its two types came back, get a
+/// class-limited resync, so records the cursor passed while they were off
+/// arrive. Only while bound.
+pub(super) fn toggles_changed(store: &mut Store, before: &Selection) -> Result<(), CoreError> {
+    let Some(vault_id) = store.local_auth()?.map(|row| row.personal_vault_id) else {
+        return Ok(());
+    };
+    if store.server_account()?.is_none() {
+        return Ok(());
+    }
+    let after = selection(store);
+    let mut added: Vec<u8> = after
+        .classes
+        .iter()
+        .copied()
+        .filter(|class| !before.classes.contains(class))
+        .collect();
+    if before
+        .skip_types
+        .iter()
+        .any(|name| !after.skip_types.contains(name))
+        && !added.contains(&classes::APPEARANCE)
+    {
+        added.push(classes::APPEARANCE);
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
+    let mut state = store.sync_state(&vault_id)?;
+    state.vault_id = vault_id;
+    for class in added {
+        if !state.resync_classes.contains(&class) {
+            state.resync_classes.push(class);
+        }
+    }
+    store.write(|tx| tx.sync_state_put(&state))?;
+    Ok(())
+}
 
 /// Live conflict copies of the vault with their payloads.
 fn conflict_rows(

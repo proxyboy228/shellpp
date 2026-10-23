@@ -652,3 +652,41 @@ fn rolled_back_server_epochs_are_reposted_on_request() {
     done(b.sign_in(&server, &email, &password));
     assert_eq!(b.addresses(), vec!["e1.example.com", "e2.example.com"]);
 }
+
+/// Selective sync (section 6.10): a type turned off neither pulls nor
+/// pushes; turned on again, a class-limited resync brings what the cursor
+/// passed meanwhile.
+#[test]
+fn a_type_turned_on_again_gets_what_it_missed() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    let toggles = |client: &Client, on: bool| {
+        client
+            .core
+            .settings_set(shellpp_core::service::dto::SettingsSetInput {
+                values: std::collections::BTreeMap::from([(
+                    "sync.toggles".to_owned(),
+                    json!({"hosts": on}),
+                )]),
+                reset: Vec::new(),
+            })
+            .expect("toggles");
+    };
+    toggles(&b, false);
+    a.host("while-off.example.com");
+    a.sync();
+    b.sync();
+    assert!(b.addresses().is_empty(), "hosts are off on B");
+    toggles(&b, true);
+    b.sync();
+    assert_eq!(
+        b.addresses(),
+        vec!["while-off.example.com"],
+        "the resync brought it"
+    );
+}

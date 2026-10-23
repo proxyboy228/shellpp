@@ -66,6 +66,16 @@ pub fn error_text(error: &CoreError) -> &'static str {
     }
 }
 
+/// The fingerprint in two lines of 16 pairs each.
+fn fingerprint_lines(sha256: &[u8; 32]) -> Vec<gpui::Div> {
+    let text = fingerprint_text(sha256);
+    let pairs: Vec<&str> = text.split(':').collect();
+    pairs
+        .chunks(16)
+        .map(|line| div().child(line.join(":")))
+        .collect()
+}
+
 /// A stored RFC 3339 time as the app shows dates.
 fn when(text: &str) -> String {
     crate::dates::parse(text).map_or_else(|| text.to_owned(), crate::dates::date_time)
@@ -329,7 +339,7 @@ impl ConnectDialog {
                 .child(row(strings::TRUST_ISSUER, info.issuer.clone(), cx))
                 .child(row(
                     strings::TRUST_VALID,
-                    format!("{} – {}", info.not_before, info.not_after),
+                    format!("{} – {}", when(&info.not_before), when(&info.not_after)),
                     cx,
                 ))
                 .child(
@@ -343,7 +353,8 @@ impl ConnectDialog {
                                 .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                                 .text_size(metrics::FONT_SIZE_CAPTION)
                                 .text_color(cx.theme().popover_foreground)
-                                .child(fingerprint_text(&info.sha256)),
+                                // Two lines of 16 pairs: a pair never breaks.
+                                .children(fingerprint_lines(&info.sha256)),
                         ),
                 );
         }

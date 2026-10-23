@@ -384,6 +384,10 @@ impl Core {
         let mut guard = self.inner();
         Self::require_session(&guard)?;
         let update = guard.settings.prepare(&input)?;
+        let toggles_before = input
+            .values
+            .contains_key("sync.toggles")
+            .then(|| sync_ops::selection(&guard.store));
         let rows = update.put_rows();
         guard.store.write(|tx| {
             for (key, json) in &rows {
@@ -394,6 +398,9 @@ impl Core {
             }
             Ok(())
         })?;
+        if let Some(before) = &toggles_before {
+            sync_ops::toggles_changed(&mut guard.store, before)?;
+        }
         let changed = guard.settings.apply(&update);
         if !changed.is_empty() {
             self.emit(&mut guard, CoreEventKind::SettingsChanged { keys: changed });
