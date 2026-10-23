@@ -120,6 +120,9 @@ pub struct ExportDialog {
     repeat_error: Option<&'static str>,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    /// Stage 7 (UI 14): entries of Recently deleted to export instead of
+    /// the vault; empty for an ordinary export.
+    pub recently_deleted: Vec<uuid::Uuid>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -170,6 +173,7 @@ impl ExportDialog {
             repeat_error: None,
             error: None,
             task: None,
+            recently_deleted: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -302,6 +306,7 @@ impl ExportDialog {
             password,
             include_history: self.include_history,
             include_connection_log: self.include_connection_log,
+            recently_deleted: self.recently_deleted.clone(),
         };
         let built = cx.background_spawn(async move { core.data_export(input) });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {

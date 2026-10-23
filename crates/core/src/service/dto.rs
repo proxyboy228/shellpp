@@ -1193,6 +1193,11 @@ pub struct DataExportInput {
     /// Write the connection log too; off by default (D50).
     #[serde(default)]
     pub include_connection_log: bool,
+    /// Stage 7 (UI 14, "Export…"): when not empty, the file holds only
+    /// these entries of Recently deleted (their last live versions) and no
+    /// settings; the two options above do not apply.
+    #[serde(default)]
+    pub recently_deleted: Vec<Uuid>,
 }
 
 redacted_debug!(DataExportInput);

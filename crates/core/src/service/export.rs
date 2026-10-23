@@ -751,7 +751,7 @@ impl Core {
         }
         let now = self.now();
         let exported_at = format_timestamp(now);
-        let (document, counts) = {
+        let (document, counts) = 'build: {
             let mut guard = self.inner();
             let settings = guard.settings.values();
             let mut parts = parts(&mut guard)?;
@@ -764,6 +764,32 @@ impl Core {
                 }
             }
             let vault = vault_view(parts.session);
+            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+            if !input.recently_deleted.is_empty() {
+                // Entries of Recently deleted (UI 14): their last live
+                // versions, in the format of an ordinary export.
+                let list = super::sync_ops::recently_deleted_export_list(
+                    parts.store,
+                    parts.session,
+                    &input.recently_deleted,
+                    &mut counts,
+                )?;
+                let mut document = Map::new();
+                document.insert("format".into(), json!(EXPORT_FORMAT_V1));
+                document.insert("exported_at".into(), json!(exported_at));
+                document.insert("app_version".into(), json!(self.config.app_version));
+                document.insert(
+                    "vaults".into(),
+                    json!([{
+                        "vault_id": vault.vault_id.to_string(),
+                        "kind": "personal",
+                        "name": vault.name,
+                        "records": list,
+                    }]),
+                );
+                document.insert("settings".into(), Value::Object(Map::new()));
+                break 'build (WipeOnDrop::new(document), counts);
+            }
             let mut records: Vec<_> = parts
                 .session
                 .index
@@ -771,7 +797,6 @@ impl Core {
                 .filter(|record| exported(record.kind, &input))
                 .collect();
             records.sort_by_key(|record| record.record_id);
-            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
             let mut list = Vec::with_capacity(records.len());
             for record in records {
                 *counts.entry(record.kind.name().to_owned()).or_default() += 1;

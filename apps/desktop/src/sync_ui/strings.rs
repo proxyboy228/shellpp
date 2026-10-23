@@ -152,3 +152,4 @@ pub const LOST_QUESTION: &str = "Was this device lost or stolen?";
 pub const REVOKE_ONLY: &str = "Revoke only";
 pub const LOST_OR_STOLEN: &str = "Lost or stolen";
 pub const LOST_TEXT: &str = "The device is signed out. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too. A new master password and a new vault key stop the old ones from opening your data.";
+pub const EXPORT_TRASH: &str = "Export…";

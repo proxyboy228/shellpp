@@ -1285,18 +1285,35 @@ impl Render for TrashDialog {
             );
         }
         if !self.items.is_empty() {
+            let ids: Vec<uuid::Uuid> = self.items.iter().map(|item| item.record_id).collect();
+            let state = self.state.clone();
             body = body.child(
-                h_flex().child(
-                    ControlButton::new("sync-empty-trash", ControlKind::Danger)
-                        .label(strings::EMPTY_TRASH)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            let core = this.state.read(cx).core().cloned();
-                            if let Some(core) = core {
-                                let result = core.recently_deleted_empty().map(|_| ());
-                                this.act(result, cx);
-                            }
-                        })),
-                ),
+                h_flex()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        // UI 14 "Export…": the Export Data dialog for these
+                        // entries only.
+                        ControlButton::new("sync-export-trash", ControlKind::Neutral)
+                            .label(strings::EXPORT_TRASH)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let dialog =
+                                    crate::data_transfer::open_export(state.clone(), window, cx);
+                                let ids = ids.clone();
+                                dialog.update(cx, |dialog, _| dialog.recently_deleted = ids);
+                            }),
+                    )
+                    .child(
+                        ControlButton::new("sync-empty-trash", ControlKind::Danger)
+                            .label(strings::EMPTY_TRASH)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                let core = this.state.read(cx).core().cloned();
+                                if let Some(core) = core {
+                                    let result = core.recently_deleted_empty().map(|_| ());
+                                    this.act(result, cx);
+                                }
+                            })),
+                    ),
             );
         }
         body.children(error_line(self.error, cx))

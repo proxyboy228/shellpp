@@ -3337,6 +3337,43 @@ impl Core {
     }
 }
 
+/// The export records of chosen Recently deleted entries (UI 14,
+/// "Export…"): their last live versions, as `data_export` writes records.
+pub(super) fn recently_deleted_export_list(
+    store: &Store,
+    session: &mut Session,
+    record_ids: &[Uuid],
+    counts: &mut std::collections::BTreeMap<String, usize>,
+) -> Result<Vec<Value>, CoreError> {
+    let vault_id = session.ring.vault_id();
+    let mut list = Vec::new();
+    for entry in store.recently_deleted()? {
+        if entry.vault_id != vault_id || !record_ids.contains(&entry.record_id) {
+            continue;
+        }
+        let Some(payload) = open_envelope_payload(&mut session.ring, &entry.envelope) else {
+            continue;
+        };
+        let Some(data) = payload.data.clone() else {
+            continue;
+        };
+        *counts.entry(payload.type_name.clone()).or_default() += 1;
+        let revision = envelope::split(&entry.envelope)
+            .map(|parts| parts.header.revision)
+            .unwrap_or(1);
+        list.push(serde_json::json!({
+            "record_id": entry.record_id.to_string(),
+            "revision": revision,
+            "v": payload.v,
+            "type": payload.type_name,
+            "hlc": payload.hlc.to_text(),
+            "device_id": payload.device_id.to_string(),
+            "data": Value::Object(data),
+        }));
+    }
+    Ok(list)
+}
+
 /// Members holding secrets (passwords, passphrases, private keys): masked
 /// wherever a conflict is shown.
 const SECRET_MEMBERS: [&str; 6] = [
