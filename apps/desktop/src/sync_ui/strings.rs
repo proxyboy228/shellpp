@@ -134,3 +134,21 @@ pub const TOTP_INTRO: &str =
     "Every new sign-in to the account will also ask for a code from an authenticator app.";
 pub const TOTP_SECRET_HINT: &str = "Add this key to your authenticator app (or open the link below on your phone), then enter the code it shows.";
 pub const TOTP_ON: &str = "Two-step sign-in is on.";
+
+pub const CHANGE_PASSWORD: &str = "Change master password…";
+pub const CHANGE_PASSWORD_TITLE: &str = "Change master password";
+pub const CHANGE_PASSWORD_RUN: &str = "Change password";
+pub const CURRENT_PASSWORD: &str = "Current master password";
+pub const NEW_PASSWORD: &str = "New master password";
+pub const REPEAT_PASSWORD: &str = "Repeat the new password";
+pub const COMPROMISED: &str = "My old password may be compromised";
+pub const COMPROMISED_HINT: &str = "Also gives your personal vault a new key, so the old password stops opening current data on the server and in its backups.";
+pub const PASSWORDS_DIFFER: &str = "The new passwords do not match.";
+pub const PASSWORD_SHORT: &str = "Use at least 8 characters.";
+pub const PASSWORD_CHANGED: &str =
+    "The master password is changed. Other devices sign in again with it.";
+pub const PASSWORD_CHANGED_ROTATED: &str = "The master password is changed and your personal vault has a new key. Other devices sign in again with the new password.";
+pub const LOST_QUESTION: &str = "Was this device lost or stolen?";
+pub const REVOKE_ONLY: &str = "Revoke only";
+pub const LOST_OR_STOLEN: &str = "Lost or stolen";
+pub const LOST_TEXT: &str = "The device is signed out. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too. A new master password and a new vault key stop the old ones from opening your data.";

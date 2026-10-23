@@ -479,6 +479,25 @@ impl SettingsView {
             .when_some(remember, |this, remember| {
                 this.child(widgets::divider(cx)).child(remember)
             })
+            // Stage 7 (UI 13.4): the master password, with "My old password
+            // may be compromised" (through the server when bound).
+            .child(widgets::divider(cx))
+            .child(
+                h_flex().child(
+                    crate::hosts::controls::ControlButton::new(
+                        "settings-change-password",
+                        crate::hosts::controls::ControlKind::Neutral,
+                    )
+                    .label(crate::sync_ui::strings::CHANGE_PASSWORD)
+                    .on_click({
+                        let state = self.state.clone();
+                        move |_, window, cx| {
+                            window.close_dialog(cx);
+                            crate::sync_ui::open_password_change(state.clone(), false, window, cx);
+                        }
+                    }),
+                ),
+            )
             .children(self.error.clone().map(|error| {
                 div()
                     .id("settings-error")

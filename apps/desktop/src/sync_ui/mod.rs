@@ -1310,6 +1310,8 @@ pub fn open_trash(
 pub struct DevicesDialog {
     state: Entity<AppState>,
     pub devices: Vec<DeviceItem>,
+    /// The device whose revoke asks "Was this device lost or stolen?".
+    pub asking: Option<uuid::Uuid>,
     loading: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -1320,6 +1322,7 @@ impl DevicesDialog {
         let mut dialog = Self {
             state,
             devices: Vec::new(),
+            asking: None,
             loading: true,
             error: None,
             task: None,
@@ -1347,16 +1350,31 @@ impl DevicesDialog {
         }));
     }
 
-    fn revoke(&mut self, device_id: uuid::Uuid, window: &mut Window, cx: &mut Context<Self>) {
+    /// Revokes; with `lost`, then opens the password change with the
+    /// rotation fixed on (UI 12.2, "Lost or stolen").
+    fn revoke(
+        &mut self,
+        device_id: uuid::Uuid,
+        lost: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
+        self.asking = None;
         let revoked = cx.background_spawn(async move { core.sync_device_revoke(device_id) });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = revoked.await;
             let _ = this.update_in(cx, |dialog, window, cx| {
-                if let Err(error) = result {
-                    dialog.error = Some(error_text(&error));
+                match result {
+                    Ok(()) if lost => {
+                        window.close_dialog(cx);
+                        open_password_change(dialog.state.clone(), true, window, cx);
+                        return;
+                    }
+                    Ok(()) => {}
+                    Err(error) => dialog.error = Some(error_text(&error)),
                 }
                 dialog.reload(window, cx);
             });
@@ -1383,22 +1401,55 @@ impl Render for DevicesDialog {
             if device.revoked {
                 detail = format!("{detail} · {}", strings::REVOKED);
             }
+            let asking = self.asking == Some(id);
             body = body.child(
                 h_flex()
                     .id(("sync-device", index))
                     .test_support()
                     .gap(metrics::SPACE_2)
                     .child(row_text(device.device_id.to_string(), Some(detail), cx))
-                    .when(!device.current && !device.revoked, |row| {
+                    .when(!device.current && !device.revoked && !asking, |row| {
                         row.child(
                             ControlButton::new(("sync-revoke", index), ControlKind::Danger)
                                 .label(strings::REVOKE)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                    this.revoke(id, window, cx)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.asking = Some(id);
+                                    cx.notify();
                                 })),
                         )
                     }),
             );
+            if asking {
+                body = body.child(
+                    v_flex()
+                        .id("sync-lost-question")
+                        .test_support()
+                        .gap(metrics::SPACE_2)
+                        .child(label(strings::LOST_QUESTION, cx))
+                        .child(
+                            h_flex()
+                                .gap(metrics::SPACE_2)
+                                .child(
+                                    ControlButton::new("sync-revoke-only", ControlKind::Neutral)
+                                        .label(strings::REVOKE_ONLY)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, window, cx| {
+                                                this.revoke(id, false, window, cx)
+                                            },
+                                        )),
+                                )
+                                .child(
+                                    ControlButton::new("sync-lost", ControlKind::Danger)
+                                        .label(strings::LOST_OR_STOLEN)
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, window, cx| {
+                                                this.revoke(id, true, window, cx)
+                                            },
+                                        )),
+                                ),
+                        ),
+                );
+            }
         }
         body.children(error_line(self.error, cx))
     }
@@ -1897,6 +1948,193 @@ pub fn open_totp(state: Entity<AppState>, window: &mut Window, cx: &mut App) -> 
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
             .title(title(strings::TOTP_TITLE))
+            .child(shown.clone())
+            .footer(row)
+    });
+    dialog
+}
+
+// ---------------------------------------------------------------------------
+// Change master password (UI 13.4), with "My old password may be
+// compromised" (a personal vault rotation, SP 5.1); fixed on after a
+// "Lost or stolen" revoke (UI 12.2, Devices)
+// ---------------------------------------------------------------------------
+
+pub struct PasswordChangeDialog {
+    state: Entity<AppState>,
+    current: Entity<InputState>,
+    new: Entity<InputState>,
+    repeat: Entity<InputState>,
+    /// "My old password may be compromised".
+    pub compromised: bool,
+    /// After "Lost or stolen": the option is on and cannot be turned off.
+    pub fixed: bool,
+    busy: bool,
+    done: bool,
+    error: Option<&'static str>,
+    task: Option<Task<()>>,
+}
+
+impl PasswordChangeDialog {
+    fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        let new = input_text(&self.new, cx);
+        if new != input_text(&self.repeat, cx) {
+            self.error = Some(strings::PASSWORDS_DIFFER);
+            cx.notify();
+            return;
+        }
+        if new.chars().count() < 8 {
+            self.error = Some(strings::PASSWORD_SHORT);
+            cx.notify();
+            return;
+        }
+        let current = secret(&self.current, cx);
+        let new = SecretString::from(new);
+        let rotate = self.compromised || self.fixed;
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        let done = cx.background_spawn(async move {
+            if rotate {
+                core.password_change_rotating(current, new)
+            } else {
+                core.password_change(current, new)
+            }
+        });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = done.await;
+            let _ = this.update(cx, |dialog, cx| {
+                dialog.busy = false;
+                match result {
+                    Ok(()) => {
+                        dialog.done = true;
+                        dialog
+                            .state
+                            .update(cx, |state, cx| state.refresh_sync_status(cx));
+                    }
+                    Err(error) => dialog.error = Some(error_text(&error)),
+                }
+                cx.notify();
+            });
+        }));
+    }
+}
+
+impl Render for PasswordChangeDialog {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.done {
+            return v_flex()
+                .id("sync-password-change")
+                .test_support()
+                .w_full()
+                .child(widgets::caption(
+                    if self.compromised || self.fixed {
+                        strings::PASSWORD_CHANGED_ROTATED
+                    } else {
+                        strings::PASSWORD_CHANGED
+                    },
+                    cx,
+                ));
+        }
+        let fixed = self.fixed;
+        v_flex()
+            .id("sync-password-change")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_3)
+            .when(fixed, |this| {
+                this.child(widgets::caption(strings::LOST_TEXT, cx))
+            })
+            .child(widgets::field(
+                strings::CURRENT_PASSWORD,
+                widgets::text_input(&self.current, "sync-current-password", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::NEW_PASSWORD,
+                widgets::text_input(&self.new, "sync-new-password", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(widgets::field(
+                strings::REPEAT_PASSWORD,
+                widgets::text_input(&self.repeat, "sync-repeat-password", false, window, cx),
+                None,
+                cx,
+            ))
+            .child(
+                Checkbox::new("sync-compromised")
+                    .label(strings::COMPROMISED)
+                    .checked(self.compromised || fixed)
+                    .disabled(fixed)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.compromised = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(widgets::caption(strings::COMPROMISED_HINT, cx))
+            .children(error_line(self.error, cx))
+    }
+}
+
+debug_opaque!(PasswordChangeDialog);
+
+/// Opens the password change; `lost`: after a "Lost or stolen" revoke.
+pub fn open_password_change(
+    state: Entity<AppState>,
+    lost: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<PasswordChangeDialog> {
+    let dialog = cx.new(|cx| PasswordChangeDialog {
+        state,
+        current: cx.new(|cx| InputState::new(window, cx).masked(true)),
+        new: cx.new(|cx| InputState::new(window, cx).masked(true)),
+        repeat: cx.new(|cx| InputState::new(window, cx).masked(true)),
+        compromised: lost,
+        fixed: lost,
+        busy: false,
+        done: false,
+        error: None,
+        task: None,
+    });
+    let shown = dialog.clone();
+    window.open_dialog(cx, move |modal, _, cx| {
+        let run = shown.downgrade();
+        let busy = shown.read(cx).busy;
+        let done = shown.read(cx).done;
+        let row = h_flex().w_full().justify_end().gap(metrics::SPACE_2);
+        let row = if done {
+            row.child(
+                ControlButton::new("sync-password-close", ControlKind::Accent)
+                    .label(strings::CLOSE)
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+        } else {
+            row.child(
+                ControlButton::new("sync-password-cancel", ControlKind::Neutral)
+                    .label(strings::CANCEL)
+                    .on_click(|_, window, cx| window.close_dialog(cx)),
+            )
+            .child(
+                ControlButton::new("sync-password-run", ControlKind::Accent)
+                    .label(strings::CHANGE_PASSWORD_RUN)
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
+                    }),
+            )
+        };
+        modal
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(title(strings::CHANGE_PASSWORD_TITLE))
             .child(shown.clone())
             .footer(row)
     });

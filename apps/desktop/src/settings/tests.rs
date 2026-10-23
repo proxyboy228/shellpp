@@ -736,3 +736,50 @@ fn bound_account_shows_status_and_writes_toggles(cx: &mut TestAppContext) {
         "history turned on, the rest keep their defaults"
     );
 }
+
+/// UI 13.4 (stage 7): Change master password with "My old password may be
+/// compromised" changes the password and gives the vault a new key; the
+/// new password unlocks, the old one does not.
+#[gpui::test]
+fn change_password_with_rotation_from_security(cx: &mut TestAppContext) {
+    use secrecy::ExposeSecret as _;
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let old = profile.password().expose_secret().to_owned();
+    let ui = Ui::open(cx, opened);
+    ui.press("ctrl-,", cx);
+    assert!(reveal(&ui, "settings-change-password", cx));
+    ui.click("settings-change-password", cx);
+    assert!(ui.visible("sync-password-change", cx));
+    let new = format!("{old}-new");
+    // The fields of the dialog (the Settings window closed: no section to
+    // scroll).
+    let type_text = |id: &str, text: &str, cx: &mut TestAppContext| {
+        ui.click(id, cx);
+        let text = text.to_owned();
+        cx.update_window(ui.handle, move |_, window, cx| window.input(&text, cx))
+            .unwrap();
+        ui.settle(cx);
+    };
+    type_text("sync-current-password", &old, cx);
+    type_text("sync-new-password", &new, cx);
+    type_text("sync-repeat-password", &new, cx);
+    ui.click("sync-compromised", cx);
+    ui.click("sync-password-run", cx);
+    for _ in 0..50 {
+        if ui.visible("sync-password-close", cx) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        ui.settle(cx);
+    }
+    assert!(ui.visible("sync-password-close", cx), "the change finished");
+    let core = ui.core(cx);
+    core.lock().unwrap();
+    assert!(
+        core.unlock(secrecy::SecretString::from(old)).is_err(),
+        "the old password no longer opens"
+    );
+    core.unlock(secrecy::SecretString::from(new))
+        .expect("the new password opens");
+}
