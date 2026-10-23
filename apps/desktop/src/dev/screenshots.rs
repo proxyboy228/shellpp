@@ -374,6 +374,8 @@ pub enum ShotState {
     HostsDuplicates,
     /// The pair side by side, opened from the hint.
     SyncDuplicates,
+    /// The comparison of a sync conflict over the host card's badge.
+    SyncConflict,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -512,7 +514,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 102] = [
+    pub const ALL: [Self; 103] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -582,6 +584,7 @@ impl ShotState {
         Self::SyncReview,
         Self::HostsDuplicates,
         Self::SyncDuplicates,
+        Self::SyncConflict,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -754,6 +757,7 @@ impl ShotState {
             Self::SyncReview => "sync-review",
             Self::HostsDuplicates => "hosts-duplicates",
             Self::SyncDuplicates => "sync-duplicates",
+            Self::SyncConflict => "sync-conflict",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1642,6 +1646,7 @@ pub async fn reset_demo(
         run6_shot::forget_serial(state, cx);
         run7_shot::reset(cx);
         run7_shot::remove_duplicate(state, cx);
+        run7_shot::drop_conflicts(state, cx);
     });
     // The search bar is on screen again (Vaults tab): clear it like a user.
     let has_text = cx.update(|cx| !screen.read(cx).filter().text().is_empty());
@@ -1899,6 +1904,7 @@ pub async fn reach_state(
         | ShotState::RecentlyDeleted
         | ShotState::SyncReview
         | ShotState::HostsDuplicates
+        | ShotState::SyncConflict
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
@@ -2153,6 +2159,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::RecentlyDeleted
             | ShotState::SyncReview
             | ShotState::HostsDuplicates
+            | ShotState::SyncConflict
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu

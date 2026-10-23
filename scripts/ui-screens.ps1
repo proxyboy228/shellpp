@@ -209,7 +209,7 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'host-panel-telnet', 'serial-dialog', 'telnet-tab', 'serial-tab', 'new-tab-workspaces-missing',
     'serial-dialog-manual-port', 'settings-updates', 'top-bar-update',
     'sync-connect', 'sync-trust', 'sync-account', 'recently-deleted', 'sync-review', 'hosts-duplicates',
-    'sync-duplicates')
+    'sync-duplicates', 'sync-conflict')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the two
 # imports, captured after new-host).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config')

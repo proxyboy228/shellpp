@@ -29,7 +29,8 @@ dev-tools = []
 # PNGs. A separate feature, so `--demo` builds (memory measurement) stay
 # without test-support.
 # The stage 4 states sign a demo certificate (ssh-key).
-screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key"]
+# The sync conflict state writes a conflict copy (shellpp-core's test-hooks).
+screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key", "shellpp-core/test-hooks"]
 
 [dependencies]
 regex.workspace = true
@@ -108,6 +109,8 @@ libc.workspace = true
 embed-resource = "3.0"
 
 [dev-dependencies]
+# The sync conflict tests write a conflict copy without a server (UI 13.6).
+shellpp-core = { workspace = true, features = ["test-hooks"] }
 # Headless UI tests (`#[gpui_kit::test]`, `gpui_kit::test::TestWindowExt`):
 # the same version as the normal dependency, plus `test-support`.
 gpui-kit = { workspace = true, features = ["test-support"] }

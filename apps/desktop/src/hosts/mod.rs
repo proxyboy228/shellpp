@@ -188,6 +188,11 @@ pub fn host_card_id(id: Uuid) -> SharedString {
     format!("host-card-{id}").into()
 }
 
+/// Stable element id of a host card's sync conflict badge (UI 13.6).
+pub fn host_conflict_badge_id(id: Uuid) -> SharedString {
+    format!("host-conflict-{id}").into()
+}
+
 /// Stable element id of a group card (grid and list layouts).
 pub fn group_card_id(id: Uuid) -> SharedString {
     format!("group-card-{id}").into()

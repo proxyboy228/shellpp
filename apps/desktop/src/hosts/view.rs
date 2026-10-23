@@ -1006,7 +1006,7 @@ impl HostsScreen {
             self.tile_size(),
         )
         .into_any_element();
-        let body = match self.layout {
+        let mut body = match self.layout {
             HostsLayout::Tiles => vec![
                 host_tile,
                 self.render_texts(title, layout::subtitle(host, group_name.as_deref()), cx),
@@ -1021,6 +1021,18 @@ impl HostsScreen {
                 cx,
             ),
         };
+        // Sync kept another version of the host (UI 13.6).
+        if self.state.read(cx).sync_conflicted().contains(&id) {
+            body.push(
+                crate::sync_ui::compare::conflict_badge(
+                    super::host_conflict_badge_id(id),
+                    &self.state,
+                    id,
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
         let screen = cx.entity().downgrade();
         let drag = self.drag_value(id, cx);
         let drop_bg = cx.theme().drop_target;

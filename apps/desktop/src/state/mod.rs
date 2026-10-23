@@ -144,6 +144,9 @@ pub struct AppState {
     /// Stage 7: the last sync status read from the core (UI 12.2), the
     /// 60 s cycle while unlocked and the cycle 2 s after a change.
     sync_status: Option<shellpp_core::service::SyncStatus>,
+    /// The records with a sync conflict (UI 13.6): their cards show a
+    /// badge. Read with the status.
+    sync_conflicted: Rc<std::collections::HashSet<Uuid>>,
     sync_task: Option<Task<()>>,
     sync_kick: Option<Task<()>>,
 }
@@ -226,6 +229,7 @@ impl AppState {
             retention_task: None,
             retention_runs: 0,
             sync_status: None,
+            sync_conflicted: Rc::default(),
             sync_task: None,
             sync_kick: None,
             temp_profile,
@@ -260,6 +264,7 @@ impl AppState {
             retention_task: None,
             retention_runs: 0,
             sync_status: None,
+            sync_conflicted: Rc::default(),
             sync_task: None,
             sync_kick: None,
             temp_profile: None,
@@ -363,9 +368,23 @@ impl AppState {
         if let Some(core) = &self.core
             && let Ok(status) = core.sync_status()
         {
+            self.sync_conflicted = Rc::new(if status.conflicts > 0 {
+                core.sync_conflicts()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|item| item.original_record_id)
+                    .collect()
+            } else {
+                Default::default()
+            });
             self.sync_status = Some(status);
             cx.notify();
         }
+    }
+
+    /// The records with a sync conflict (UI 13.6).
+    pub fn sync_conflicted(&self) -> &std::collections::HashSet<Uuid> {
+        &self.sync_conflicted
     }
 
     /// The automatic cycle: after unlock, then every 60 s while unlocked
@@ -375,6 +394,7 @@ impl AppState {
         self.sync_kick = None;
         if self.lock != LockState::Unlocked {
             self.sync_status = None;
+            self.sync_conflicted = Rc::default();
             return;
         }
         self.refresh_sync_status(cx);

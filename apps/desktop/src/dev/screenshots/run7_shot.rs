@@ -3,15 +3,18 @@
 //! sync interface of stage 7: the connect wizard, the certificate trust
 //! dialog (a made-up certificate: no server is asked), Settings ▸ Account &
 //! Sync of a bound account (the status set by hand), the Recently deleted
-//! screen (UI 14) after two hosts of the demo were deleted, Review, and the
+//! screen (UI 14) after two hosts of the demo were deleted, Review, the
 //! duplicates of UI 13.7: a copy of a demo host as another device would
 //! have imported it, listed as a pair as a pull would list it
 //! (`Core::sync_duplicates_scan`), with the Hosts screen's hint and the
-//! pair side by side.
+//! pair side by side, and the comparison of a sync conflict (UI 13.6) over
+//! the host card's badge.
 //!
 //! The update state sets the update found of the run by hand (no update
 //! source is asked); the reset clears it ([`reset`]), so the other states
-//! keep a top bar without the button.
+//! keep a top bar without the button. The conflict state writes a conflict
+//! copy through the core's test hook (no server); the reset keeps the
+//! current version ([`drop_conflicts`]), so no other state shows a badge.
 
 use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, Entity};
 use gpui_kit::test::TestWindowExt as _;
@@ -21,7 +24,7 @@ use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 8] = [
+pub const STATES: [ShotState; 9] = [
     ShotState::TopBarUpdate,
     ShotState::SyncConnect,
     ShotState::SyncTrust,
@@ -30,6 +33,7 @@ pub const STATES: [ShotState; 8] = [
     ShotState::SyncReview,
     ShotState::HostsDuplicates,
     ShotState::SyncDuplicates,
+    ShotState::SyncConflict,
 ];
 
 /// The version the update state shows.
@@ -124,6 +128,95 @@ fn add_duplicate(state: &Entity<AppState>, cx: &mut gpui::App) {
     });
     let _ = core.sync_duplicates_scan();
     state.update(cx, |state, cx| state.refresh_sync_status(cx));
+}
+
+/// Resolves the conflicts of the conflict state ("Keep this"): the demo
+/// is as before and no card shows a badge.
+pub fn drop_conflicts(state: &Entity<AppState>, cx: &mut gpui::App) {
+    let Some(core) = state.read(cx).core().cloned() else {
+        return;
+    };
+    let conflicts = core.sync_conflicts().unwrap_or_default();
+    if conflicts.is_empty() {
+        return;
+    }
+    for item in conflicts {
+        let _ = core.sync_conflict_resolve(
+            item.conflict_id,
+            shellpp_core::service::ConflictChoice::Current,
+        );
+    }
+    state.update(cx, |state, cx| state.refresh_sync_status(cx));
+}
+
+/// The host of the conflict state: the last card of the grid's first row,
+/// so its badge stays in view beside the dialog.
+fn shown_host(shell: &Entity<crate::shell::Shell>, cx: &gpui::App) -> Option<uuid::Uuid> {
+    let screen = shell.read(cx).hosts_screen().read(cx);
+    let ids = screen.visible_host_ids();
+    let last_of_row = screen.columns().clamp(1, ids.len().max(1)) - 1;
+    ids.get(last_of_row).or(ids.first()).copied()
+}
+
+/// The stored host `id` (its data without secrets).
+fn host_view(
+    core: &shellpp_core::Core,
+    id: uuid::Uuid,
+) -> Option<shellpp_core::service::dto::HostView> {
+    use shellpp_core::service::dto::{QueryScope, RecordType, RecordView, RecordsQuery, SortMode};
+    core.records_query(RecordsQuery {
+        vault_id: None,
+        types: vec![RecordType::Host],
+        scope: QueryScope::All,
+        text: None,
+        tags: Vec::new(),
+        sort: SortMode::Manual,
+    })
+    .ok()?
+    .into_iter()
+    .find_map(|view| match view {
+        RecordView::Host(host) if host.record_id == id => Some(host),
+        _ => None,
+    })
+}
+
+/// Sync kept another device's version of host `id`: renamed, on another
+/// port, with a password of its own (shown masked).
+fn write_conflict(state: &Entity<AppState>, id: uuid::Uuid, cx: &mut gpui::App) {
+    let Some(core) = state.read(cx).core().cloned() else {
+        return;
+    };
+    let Some(host) = host_view(&core, id) else {
+        return;
+    };
+    let mut data = host.data.as_object().cloned().unwrap_or_default();
+    let name = ["label", "address"]
+        .iter()
+        .find_map(|member| {
+            data.get(*member)
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+        })
+        .unwrap_or("host")
+        .to_owned();
+    data.insert("label".into(), format!("{name} (laptop)").into());
+    let ssh = data
+        .entry("ssh")
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    if let Some(ssh) = ssh.as_object_mut() {
+        ssh.insert("port".into(), 2222.into());
+        // A made-up password: the comparison shows it masked.
+        ssh.insert("password".into(), uuid::Uuid::now_v7().to_string().into());
+    }
+    let changed = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600);
+    if let Err(error) = core.sync_conflict_insert_for_test(
+        host.record_id,
+        Some(data),
+        uuid::Uuid::now_v7(),
+        changed,
+    ) {
+        tracing::warn!(code = error.code(), "demo conflict not written");
+    }
 }
 
 /// The bound account the Account & Sync state shows.
@@ -264,6 +357,22 @@ pub async fn reach(
             }
             Ok(())
         }
+        ShotState::SyncConflict => {
+            let shell = shell_of(cx, root, shot)?;
+            let host = cx
+                .update(|cx| shown_host(&shell, cx))
+                .ok_or_else(|| failed(shot, "no host on the demo's grid"))?;
+            let state = _state.clone();
+            cx.update(|cx| write_conflict(&state, host, cx));
+            // The badge comes with the status the core's event refreshes.
+            settle(cx, handle).await?;
+            let state = _state.clone();
+            cx.update_window(handle, move |_, window, cx| {
+                crate::sync_ui::compare::open_for_record(state, host, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
         _ => Err(failed(shot, "not a run 7 state")),
     }
 }
@@ -291,6 +400,7 @@ pub fn check(
         ShotState::SyncAccount if shown(cx, "sync-account-email")? => Ok(()),
         ShotState::RecentlyDeleted if shown(cx, "trash-panel")? => Ok(()),
         ShotState::SyncReview if shown(cx, "sync-review")? => Ok(()),
+        ShotState::SyncConflict if shown(cx, "sync-compare")? => Ok(()),
         ShotState::HostsDuplicates if shown(cx, "hosts-duplicates")? => Ok(()),
         ShotState::SyncDuplicates if shown(cx, "sync-duplicates")? => Ok(()),
         ShotState::SyncConnect
@@ -299,6 +409,7 @@ pub fn check(
         | ShotState::RecentlyDeleted
         | ShotState::SyncReview
         | ShotState::HostsDuplicates
+        | ShotState::SyncConflict
         | ShotState::SyncDuplicates => Err(failed(shot, "the sync state is not shown")),
         _ => Err(failed(shot, "not a run 7 state")),
     }

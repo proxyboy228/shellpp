@@ -7,15 +7,18 @@
 //! - the Account & Sync block of Settings: status, Sync now, the toggles,
 //!   Devices, Review, Recently deleted, Sign out, Delete account and the
 //!   re-post of "server state rolled back";
-//! - Review (conflicts with "Keep current" / "Use other version", possible
+//! - Review (conflicts, each opening the comparison of [`compare`], possible
 //!   duplicates, each opening the side-by-side comparison of
 //!   [`duplicates`], the records a resync brought back with Keep / Delete
-//!   again) and Recently deleted (Restore, Delete forever, Empty);
+//!   again); Recently deleted is a screen of its own (`crate::trash`);
+//! - the comparison of a conflict, the list "Conflicts: N" opens and the
+//!   conflict badge of a card ([`compare`]);
 //! - the duplicates hint of a screen ([`duplicates::DuplicatesHint`]).
 //!
 //! Every network call runs off the UI thread; nothing here logs addresses,
 //! emails, passwords, codes or tokens.
 
+pub mod compare;
 pub mod duplicates;
 pub mod strings;
 #[cfg(test)]
@@ -35,8 +38,8 @@ use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::CoreError;
 use shellpp_core::service::{
-    BroughtBackItem, ConflictChoice, ConflictItem, DeviceItem, DuplicateItem, ServerCheck,
-    SignInInput, SignInOutcome, SyncStatus, TrustChoice,
+    BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, ServerCheck, SignInInput,
+    SignInOutcome, SyncStatus, TrustChoice,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
 
@@ -683,6 +686,10 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                         }),
                 ),
             )
+            // Conflicts kept from an account signed out of (UI 13.6).
+            .when(status.conflicts > 0, |this| {
+                this.child(h_flex().child(compare::conflicts_button(state, status.conflicts)))
+            })
             .into_any_element();
     }
     let theme = cx.theme();
@@ -795,6 +802,10 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                     open_password_action(repost.clone(), PasswordAction::Repost, window, cx);
                 }),
         );
+    }
+    // "Conflicts: N" opens their list (UI 13.6).
+    if status.conflicts > 0 {
+        buttons = buttons.child(compare::conflicts_button(state, status.conflicts));
     }
     let review_count = status.conflicts + status.duplicates + status.brought_back;
     buttons = buttons
@@ -1010,69 +1021,23 @@ impl Render for ReviewDialog {
             body = body
                 .child(label(strings::CONFLICTS, cx))
                 .child(widgets::caption(strings::CONFLICTS_HINT, cx));
-            for (index, item) in self.conflicts.clone().into_iter().enumerate() {
-                let other = if item.losing_deleted {
-                    strings::OTHER_DELETED.to_owned()
-                } else {
-                    item.losing_data
-                        .as_ref()
-                        .and_then(|data| {
-                            data.get("label")
-                                .or_else(|| data.get("name"))
-                                .or_else(|| data.get("address"))
-                        })
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_default()
-                };
-                let (keep, use_other) = (item.conflict_id, item.conflict_id);
-                body = body.child(
-                    h_flex()
-                        .id(("sync-conflict", index))
-                        .test_support()
-                        .gap(metrics::SPACE_2)
-                        .child(row_text(item.title.clone(), Some(other), cx))
-                        .child(
-                            ControlButton::new(("sync-keep-current", index), ControlKind::Neutral)
-                                .label(strings::KEEP_CURRENT)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    let core = this.state.read(cx).core().cloned();
-                                    if let Some(core) = core {
-                                        let result = core
-                                            .sync_conflict_resolve(keep, ConflictChoice::Current);
-                                        this.act(result, cx);
-                                    }
-                                })),
-                        )
-                        .child(
-                            ControlButton::new(("sync-use-other", index), ControlKind::Neutral)
-                                .label(strings::KEEP_OTHER)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    let core = this.state.read(cx).core().cloned();
-                                    if let Some(core) = core {
-                                        let result = core
-                                            .sync_conflict_resolve(use_other, ConflictChoice::Copy);
-                                        this.act(result, cx);
-                                    }
-                                })),
-                        ),
-                );
-                // The comparison (UI 13.6): the fields that differ, secrets
-                // masked by the core.
-                for (line, difference) in item.differences.iter().take(8).enumerate() {
-                    body = body.child(
-                        div()
-                            .id(("sync-difference", index * 100 + line))
-                            .test_support()
-                            .child(widgets::caption(
-                                format!(
-                                    "{}: {} → {}",
-                                    difference.path, difference.current, difference.other
-                                ),
-                                cx,
-                            )),
-                    );
-                }
+            // A click opens the comparison (UI 13.6); the choice is made
+            // there and the list reloads after it.
+            for (index, item) in self.conflicts.iter().enumerate() {
+                let opened = item.clone();
+                let click = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    let review = cx.entity().downgrade();
+                    let reload: compare::Resolved = std::rc::Rc::new(move |_, cx| {
+                        let _ = review.update(cx, |review, cx| review.reload(cx));
+                    });
+                    compare::open(this.state.clone(), opened.clone(), Some(reload), window, cx);
+                });
+                body = body.child(compare::conflict_row(
+                    ("sync-conflict", index),
+                    item,
+                    click,
+                    cx,
+                ));
             }
         }
         if !self.duplicates.is_empty() {

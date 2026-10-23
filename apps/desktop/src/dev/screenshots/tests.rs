@@ -126,6 +126,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "sync-review",
         "hosts-duplicates",
         "sync-duplicates",
+        "sync-conflict",
         "sidebar-snippets",
         "sidebar-history",
         "sidebar-appearance",
@@ -192,7 +193,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 102);
+    assert_eq!(ShotState::ALL.len(), 103);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 22);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");

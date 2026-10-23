@@ -67,9 +67,22 @@ pub const REVIEW_TITLE: &str = "Review sync";
 pub const CONFLICTS: &str = "Conflicts";
 pub const CONFLICTS_HINT: &str =
     "Two devices changed the same item. The newer change is in place; the other one is kept here.";
-pub const KEEP_CURRENT: &str = "Keep current";
-pub const KEEP_OTHER: &str = "Use other version";
-pub const OTHER_DELETED: &str = "The other version deleted it.";
+// The comparison of a conflict (UI 13.6).
+pub const CONFLICTS_TITLE: &str = "Sync conflicts";
+pub const NO_CONFLICTS: &str = "No conflicts.";
+pub const COMPARE_TITLE: &str = "Compare versions";
+pub const COMPARE_HINT: &str =
+    "Two devices changed this item at the same time. Keep one version; the other one is deleted.";
+pub const CURRENT_VERSION: &str = "Current version";
+pub const OTHER_VERSION: &str = "Other version";
+pub const DELETED: &str = "Deleted";
+pub const VERSION_THIS_DEVICE: &str = "This device";
+pub const DEVICE: &str = "Device";
+pub const UNKNOWN_DEVICE: &str = "Unknown device";
+pub const KEEP_THIS: &str = "Keep this";
+pub const KEEP_OTHER: &str = "Keep other";
+pub const CONFLICT_BADGE: &str = "Conflict";
+pub const CONFLICT_TOOLTIP: &str = "Sync kept another version of this item. Click to compare.";
 pub const DUPLICATES: &str = "Possible duplicates";
 pub const DUPLICATES_HINT: &str = "Items created on two devices that look the same.";
 pub const KEEP_BOTH: &str = "Keep both";
