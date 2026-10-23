@@ -57,6 +57,12 @@ md5.workspace = true
 aes.workspace = true
 cbc.workspace = true
 
+reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+x509-cert.workspace = true
+webpki.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 # Canary test: captured log output must not contain secrets (docs/security.md, section 7).

@@ -128,6 +128,15 @@ futures = { version = "0.3.34", default-features = false, features = ["std", "as
 # The update check (D97): one HTTPS GET of the manifest; rustls with
 # webpki-roots, no compression.
 ureq = { version = "3.5.0", default-features = false, features = ["rustls"] }
+# The sync client (docs/sync-protocol.md, section 2; D93): blocking reqwest
+# over rustls with the ring provider; the OS verifier for system trust, our
+# own verifier for a pinned certificate or a CA added for one origin
+# (section 2.1); x509-cert reads the certificate the trust dialog shows.
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.7.1"
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+webpki = { package = "rustls-webpki", version = "0.103.16", default-features = false, features = ["std"] }
 semver = "1.0.28"
 keyring = { version = "3.6.3", default-features = false }
 dirs = "7.0.0"

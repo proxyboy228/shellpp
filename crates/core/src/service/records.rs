@@ -252,10 +252,58 @@ impl Core {
         deletions: Vec<(Uuid, u8)>,
         tombstones: Vec<RecordRow>,
     ) -> Result<(), CoreError> {
+        self.commit_records_with(parts, writes, deletions, tombstones, true)
+    }
+
+    /// [`Core::commit_records`]; `trash` keeps the last live envelope of each
+    /// removed record of a kept type in Recently deleted, in the same
+    /// transaction (data-model 16.6; D93). Log retention passes `false`:
+    /// expiry is no deletion.
+    pub(super) fn commit_records_with(
+        &self,
+        parts: &mut Parts<'_>,
+        writes: Vec<PendingWrite>,
+        deletions: Vec<(Uuid, u8)>,
+        tombstones: Vec<RecordRow>,
+        trash: bool,
+    ) -> Result<(), CoreError> {
         let vault_id = parts.session.ring.vault_id();
+        let kept: HashSet<Uuid> = if trash {
+            deletions
+                .iter()
+                .map(|(id, _)| *id)
+                .chain(tombstones.iter().map(|row| row.record_id))
+                .filter(|id| {
+                    parts
+                        .session
+                        .index
+                        .get(id)
+                        .is_some_and(|record| crate::sync::trash::kept(record.kind))
+                })
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        let deleted_at = crate::model::time::format_timestamp(self.now());
         parts.store.write(|tx| {
             for write in &writes {
                 tx.record_put(&write.row)?;
+                // A record that is live again leaves the trash.
+                tx.recently_deleted_delete(&vault_id, &write.record_id)?;
+            }
+            for id in &kept {
+                if let Some(previous) = tx.record(&vault_id, id)?
+                    && !previous.tombstone
+                {
+                    tx.recently_deleted_put(&crate::store::RecentlyDeletedRow {
+                        vault_id,
+                        record_id: *id,
+                        class: previous.class,
+                        deleted_at: deleted_at.clone(),
+                        origin: crate::store::DeletedOrigin::Local,
+                        envelope: previous.envelope,
+                    })?;
+                }
             }
             for (id, _) in &deletions {
                 tx.record_delete(&vault_id, id)?;

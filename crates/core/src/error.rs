@@ -154,6 +154,10 @@ pub enum CoreError {
     /// (docs/data-model.md, section 9.5; UI 10.2). Never continues.
     #[error("host key revoked")]
     HostKeyRevoked,
+    /// A sync request failed (stage 7): no answer, a refused certificate
+    /// (`details` names the problem), or the server's error code.
+    #[error("sync error: {0}")]
+    Sync(crate::sync::HttpError),
     #[error(transparent)]
     Crypto(#[from] CryptoError),
     #[error(transparent)]
@@ -187,6 +191,7 @@ impl CoreError {
             Self::Cancelled => "cancelled",
             Self::Ssh(_) => "ssh_error",
             Self::HostKeyRevoked => "host_key_revoked",
+            Self::Sync(_) => "sync_error",
             Self::Crypto(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Internal(_) => "internal",
@@ -205,6 +210,7 @@ impl CoreError {
             Self::TooManyAttempts { retry_after_secs } => {
                 json!({ "retry_after_secs": retry_after_secs })
             }
+            Self::Sync(error) => json!({ "reason": error.code() }),
             _ => json!({}),
         }
     }

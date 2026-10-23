@@ -106,7 +106,7 @@ impl KeyRing {
         self.current_epoch = epoch;
     }
 
-    fn record_key(&mut self, epoch: u32) -> Option<&Key32> {
+    pub(crate) fn record_key(&mut self, epoch: u32) -> Option<&Key32> {
         if !self.record_keys.contains_key(&epoch) {
             let vault_key = self.keys.get(&epoch)?;
             let record_key = crypto::derive_record_key(vault_key, &self.vault_id, epoch);

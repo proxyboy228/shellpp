@@ -35,7 +35,7 @@ mod lock_ops;
 pub mod merge;
 mod recordings;
 mod records;
-mod session;
+pub(crate) mod session;
 pub mod snippets;
 mod ssh_config_io;
 pub mod ssh_export;

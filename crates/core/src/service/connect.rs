@@ -711,6 +711,18 @@ impl Core {
         ids: &[(Uuid, RecordKind)],
         now: SystemTime,
     ) -> Result<(), CoreError> {
+        self.remove_rows_with(parts, ids, now, true)
+    }
+
+    /// [`Core::remove_rows`]; `trash: false` for log retention (expiry, not
+    /// a deletion: nothing goes to Recently deleted, data-model 13.3).
+    fn remove_rows_with(
+        &self,
+        parts: &mut Parts<'_>,
+        ids: &[(Uuid, RecordKind)],
+        now: SystemTime,
+        trash: bool,
+    ) -> Result<(), CoreError> {
         let vault_id = parts.session.ring.vault_id();
         let bound = parts.store.vault(&vault_id)?.is_some_and(|row| row.bound);
         let mut deletions = Vec::new();
@@ -726,7 +738,7 @@ impl Core {
                 tombstones.push(parts.session.prepare_tombstone(*kind, &previous, now)?);
             }
         }
-        self.commit_records(parts, Vec::new(), deletions, tombstones)
+        self.commit_records_with(parts, Vec::new(), deletions, tombstones, trash)
     }
 
     /// Writes one record version with the given data.
@@ -1912,7 +1924,7 @@ impl Core {
             count = expired.len(),
             "expired connection log entries removed"
         );
-        self.remove_rows(parts, &expired, now)?;
+        self.remove_rows_with(parts, &expired, now, false)?;
         // The entries first, their recordings second (storage-format 8.4).
         let files: Vec<Uuid> = files.into_iter().flatten().collect();
         super::recordings::delete_files(parts.store, &files);
