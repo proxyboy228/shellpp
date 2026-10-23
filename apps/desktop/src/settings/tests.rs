@@ -806,3 +806,54 @@ fn totp_setup_shows_a_qr_code(cx: &mut TestAppContext) {
     assert!(ui.visible("sync-totp-qr", cx));
     assert!(ui.visible("sync-totp-secret", cx));
 }
+
+/// UI 9.5 (D144): script generation is off by default; turned on, its
+/// address and model are saved as typed, an address that is not https://
+/// (or http:// on this computer) is refused, and the API key never becomes
+/// a setting (a test run has no credential store).
+#[gpui::test]
+fn script_generation_settings_are_written(cx: &mut TestAppContext) {
+    use serde_json::json;
+
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    click(&ui, "settings-nav-terminal", cx);
+    assert!(reveal(&ui, "settings-generation-on", cx));
+    assert_eq!(stored(&ui, "snippets.generation", cx), json!("off"));
+    assert!(!ui.visible("settings-generation-url", cx));
+    click(&ui, "settings-generation-on", cx);
+    assert_eq!(stored(&ui, "snippets.generation", cx), json!("on"));
+    assert!(reveal(&ui, "settings-generation-url", cx));
+    type_into(
+        &ui,
+        "settings-generation-url",
+        "http://api.example.com/v1",
+        cx,
+    );
+    assert_eq!(stored(&ui, "snippets.generation_url", cx), json!(null));
+    type_into(
+        &ui,
+        "settings-generation-url",
+        "http://localhost:11434/v1",
+        cx,
+    );
+    assert_eq!(
+        stored(&ui, "snippets.generation_url", cx),
+        json!("http://localhost:11434/v1")
+    );
+    type_into(&ui, "settings-generation-model", "llama3.1", cx);
+    assert_eq!(
+        stored(&ui, "snippets.generation_model", cx),
+        json!("llama3.1")
+    );
+    type_into(&ui, "settings-generation-key", "not-a-real-key", cx);
+    click(&ui, "settings-generation-key-save", cx);
+    let all = cx.update(|cx| ui.state.read(cx).core().unwrap().settings_get().unwrap());
+    assert!(
+        !serde_json::to_string(&all)
+            .unwrap()
+            .contains("not-a-real-key"),
+        "the key is never a setting"
+    );
+    ui.finish(cx);
+}

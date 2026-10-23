@@ -1719,6 +1719,24 @@ Status: run 8 decision, 2026-10-23 (plan, item B3). Implements item 8 of D50 and
 
 **Spec impact:** docs/ui-behavior-spec.md, section 7 (FIDO2, the tooltip), and `docs/ru`.
 
+
+### 144. Script generation through an OpenAI-compatible API (run 8)
+
+Status: run 8 decision, 2026-10-23 (plan, item B5). Settles UI 9.5.
+
+**Context.** UI 9.5 asks for script generation off by default, with the user's own API key or a local model, the description sent only on the button, the destination shown, and the result only inserted into the Script field. The run plan adds: the provider is configurable (an API key, the address of an OpenAI-compatible API, or a local model), tests on a fake provider, no real requests. Settings are plaintext and must not hold secrets (data-model 16.1).
+
+**Decision:**
+
+- One provider kind: the OpenAI-compatible `POST <address>/chat/completions` (OpenAI and most hosted services, Ollama, llama.cpp and LM Studio locally). The settings are `snippets.generation` (`off` by default), `snippets.generation_url` (empty: `https://api.openai.com/v1`) and `snippets.generation_model`. The address must be `https://`, or plain `http://` to this computer's loopback (a local model, never through a proxy), with no user part; no redirects are followed.
+- The API key is kept in the OS credential store (Windows Credential Manager, the macOS keychain, the Secret Service), never in a setting, the vault or an export; it is sent only as the `Authorization: Bearer` header to that address. A test run never reads or writes the store.
+- The generation settings are not imported from export files (D41): a file never chooses where descriptions go.
+- The request holds a fixed system instruction (a shell script only, `{{name}}` for values to fill, never passwords or keys) and the description (at most 2,000 characters), temperature 0.2; the answer's first choice is the script, a Markdown fence around it removed. Answers over 256 KiB are refused; the timeout is 120 s (local models are slow).
+- The form shows the row only while generation is on with a model; the caption names the host the description goes to. Generate runs off the UI thread; the script goes after what the Script field holds and is never run or saved by itself.
+- Tests use a fake provider through an override; no test sends a request.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 9.5; docs/data-model.md, section 16.1; `docs/ru`.
+
 ## Run 8 of 2026-10-23, agent C
 
 The decisions below were taken during the owner's eighth long run, by its agent C (numbers 170-199), marked "run 8"; the disputable ones are listed for the owner in the run report.

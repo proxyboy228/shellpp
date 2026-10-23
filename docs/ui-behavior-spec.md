@@ -1400,7 +1400,7 @@ Blocks from top to bottom:
   [decision] (D68)
 - Before running on 2+ hosts, a confirmation with the list of hosts is shown.
 
-### 9.5 Script generation from a description [decision, later stage]
+### 9.5 Script generation from a description [decision] (D144)
 
 - Off by default. Enabled in settings by specifying a provider:
   your own API key for an LLM or a local model.
@@ -1408,6 +1408,13 @@ Blocks from top to bottom:
   generate button. The user is explicitly shown where the text will go.
 - The generated script is only inserted into the Script field. It is never
   executed automatically.
+- Settings > Terminal, "Script generation (beta)": the switch, the address of an
+  OpenAI-compatible API (`https://`, or `http://` on this computer for a local model; empty:
+  the OpenAI API), the model and the API key ("Save key" puts it into the system's
+  credential store; empty removes it). With generation on and a model set, the snippet form
+  shows "Generate from a description (beta)" under Script: a description field, Generate,
+  and a caption naming the host the description goes to. The script goes after what the
+  field holds; an error says why nothing came back. [decision]
 
 ---
 

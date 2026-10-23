@@ -22,6 +22,7 @@
 //! here logs scripts, their output or host names.
 
 mod form;
+pub mod generate;
 pub mod history;
 mod run;
 pub mod shell_highlight;

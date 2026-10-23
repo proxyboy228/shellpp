@@ -445,6 +445,8 @@ pub struct TerminalSection {
     error: Option<SharedString>,
     /// The keyword highlighting rules (D77).
     highlight_rules: Entity<super::highlight_rules::HighlightRulesBlock>,
+    /// Script generation (beta, UI 9.5, D144).
+    generation: Entity<super::generation::GenerationBlock>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -531,6 +533,9 @@ impl TerminalSection {
         let rules_state = state.clone();
         let highlight_rules =
             cx.new(|cx| super::highlight_rules::HighlightRulesBlock::new(rules_state, window, cx));
+        let generation_state = state.clone();
+        let generation =
+            cx.new(|cx| super::generation::GenerationBlock::new(generation_state, window, cx));
         Self {
             state,
             prefs,
@@ -546,8 +551,14 @@ impl TerminalSection {
             fonts_task: None,
             error: None,
             highlight_rules,
+            generation,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The script generation block (tests).
+    pub fn generation(&self) -> &Entity<super::generation::GenerationBlock> {
+        &self.generation
     }
 
     /// The keyword highlighting rules block (tests).
@@ -1448,6 +1459,8 @@ impl Render for TerminalSection {
             .child(self.render_theme_block(cx))
             .child(widgets::divider(cx))
             .child(self.render_keepalive_block(window, cx))
+            .child(widgets::divider(cx))
+            .child(self.generation.clone())
     }
 }
 

@@ -104,6 +104,25 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     add("appearance.ui_zoom", Kind::Number(0.8, 2.0), json!(1.0));
     // Never by default (decision D29).
     add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
+    // Script generation from a description (UI 9.5; run 8, D144): off by
+    // default; the provider's address (an OpenAI-compatible API) and model.
+    // The API key is never a setting (the OS keychain holds it). Not
+    // imported from files: a file never chooses where descriptions go.
+    add(
+        "snippets.generation",
+        Kind::Enum(&["off", "on"]),
+        json!("off"),
+    );
+    add(
+        "snippets.generation_url",
+        Kind::NullableText(2048),
+        Value::Null,
+    );
+    add(
+        "snippets.generation_model",
+        Kind::NullableText(256),
+        Value::Null,
+    );
     // Autocomplete (beta; UI 4.2 and 12.4; run 8, D142).
     add(
         "terminal.autocomplete",
