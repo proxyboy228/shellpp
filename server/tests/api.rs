@@ -366,6 +366,85 @@ fn the_rate_limit_keys_on_the_forwarded_client_with_a_port() {
     assert_eq!(prelogin("192.0.2.2").status, 200);
 }
 
+/// A malformed path parameter, query string or JSON body answers
+/// `400 bad_request` with the error body of section 8, never axum's own
+/// plain-text rejection.
+#[test]
+fn malformed_paths_queries_and_bodies_answer_the_protocol_error() {
+    let server = Server::start();
+    let account = register(&api(&server), 2);
+    let bearer = format!("Bearer {}", account.tokens.access_token.0);
+    let auth = [
+        ("authorization", bearer.as_str()),
+        ("content-type", "application/json"),
+    ];
+    let vault = account.vault_id;
+    let cases: Vec<(&str, String, &[u8])> = vec![
+        ("DELETE", "/v1/devices/not-a-uuid".into(), b""),
+        ("GET", "/v1/vaults/not-a-uuid/keys".into(), b""),
+        ("GET", "/v1/vaults/1234/changes".into(), b""),
+        ("POST", "/v1/vaults/%FF%FE/key-epochs".into(), b"{}"),
+        (
+            "POST",
+            format!("/v1/vaults/{vault}x/changes"),
+            br#"{"items": []}"#,
+        ),
+        ("GET", format!("/v1/vaults/{vault}/changes?since=soon"), b""),
+        ("GET", format!("/v1/vaults/{vault}/changes?limit=-1"), b""),
+        (
+            "POST",
+            format!("/v1/vaults/{vault}/changes"),
+            b"{\"items\": [",
+        ),
+        ("POST", format!("/v1/vaults/{vault}/changes"), b"not json"),
+        (
+            "POST",
+            format!("/v1/vaults/{vault}/changes"),
+            br#"{"items": 5}"#,
+        ),
+    ];
+    for (method, path, body) in &cases {
+        let answer = raw_http(&server, method, path, &auth, body);
+        assert_eq!(
+            (answer.status, answer.code()),
+            (400, Some("bad_request")),
+            "{method} {path}: {}",
+            answer.body
+        );
+        assert!(answer.body["error"]["message"].is_string(), "{path}");
+    }
+    // Unauthenticated bodies too, with or without the JSON content type.
+    for (headers, body) in [
+        (
+            &[("content-type", "application/json")][..],
+            &b"{\"refresh_token\":"[..],
+        ),
+        (
+            &[("content-type", "application/json")][..],
+            &br#"{"refresh_token": 5}"#[..],
+        ),
+        (&[][..], &br#"{"refresh_token": "shellpp_rt_x"}"#[..]),
+    ] {
+        let answer = raw_http(&server, "POST", "/v1/auth/token/refresh", headers, body);
+        assert_eq!(
+            (answer.status, answer.code()),
+            (400, Some("bad_request")),
+            "{}",
+            answer.body
+        );
+    }
+    // A well-formed id of nothing is still a 403 or 404, not a 400.
+    let unknown = raw_http(
+        &server,
+        "GET",
+        &format!("/v1/vaults/{}/keys", Uuid::now_v7()),
+        &auth,
+        b"",
+    );
+    assert_ne!(unknown.status, 400, "{}", unknown.body);
+    assert!(unknown.code().is_some(), "{}", unknown.body);
+}
+
 /// `recover/complete` for another email than the account's answers 422
 /// with `details.field = "email"` (section 5.2).
 #[test]

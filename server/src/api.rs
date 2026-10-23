@@ -1,5 +1,6 @@
 //! The HTTP API v1 (docs/sync-protocol.md, section 3): routes, extractors
-//! (JSON bodies with section 8 errors, the bearer token, the client IP) and
+//! (JSON bodies, path parameters and query strings with section 8 errors,
+//! the bearer token, the client IP) and
 //! thin handlers over the operations in `accounts` and `records`. The team
 //! vault endpoints come with stage 8.
 
@@ -58,6 +59,44 @@ where
                 ))
             }
             Err(_) => Err(ApiError::bad_request("malformed JSON body")),
+        }
+    }
+}
+
+/// Path parameters (the ids in `/v1/devices/{device_id}` and
+/// `/v1/vaults/{vault_id}/...`); a malformed one is `400 bad_request`
+/// with the error body of section 8, not axum's own plain text.
+pub struct PathParam<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for PathParam<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Path::<T>::from_request_parts(parts, state).await {
+            Ok(Path(value)) => Ok(PathParam(value)),
+            Err(_) => Err(ApiError::bad_request("malformed path parameter")),
+        }
+    }
+}
+
+/// A query string; a malformed one is `400 bad_request` (section 8).
+pub struct QueryParams<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for QueryParams<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Query::<T>::from_request_parts(parts, state).await {
+            Ok(Query(value)) => Ok(QueryParams(value)),
+            Err(_) => Err(ApiError::bad_request("malformed query")),
         }
     }
 }
@@ -560,7 +599,7 @@ async fn devices(State(state): State<AppState>, Auth(principal): Auth) -> ApiRes
 async fn device_revoke(
     State(state): State<AppState>,
     Auth(principal): Auth,
-    Path(device_id): Path<Uuid>,
+    PathParam(device_id): PathParam<Uuid>,
 ) -> ApiResult<StatusCode> {
     state
         .db
@@ -582,7 +621,7 @@ async fn vaults(State(state): State<AppState>, Auth(principal): Auth) -> ApiResu
 async fn vault_keys(
     State(state): State<AppState>,
     Auth(principal): Auth,
-    Path(vault_id): Path<Uuid>,
+    PathParam(vault_id): PathParam<Uuid>,
 ) -> ApiResult<Response> {
     let response = state
         .db
@@ -596,7 +635,7 @@ async fn vault_keys(
 async fn key_epochs(
     State(state): State<AppState>,
     Auth(principal): Auth,
-    Path(vault_id): Path<Uuid>,
+    PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PersonalKeyEpochRequest>,
 ) -> ApiResult<Response> {
     let shared = state.clone();
@@ -619,10 +658,9 @@ struct PullQuery {
 async fn pull(
     State(state): State<AppState>,
     Auth(principal): Auth,
-    Path(vault_id): Path<Uuid>,
-    query: Result<Query<PullQuery>, axum::extract::rejection::QueryRejection>,
+    PathParam(vault_id): PathParam<Uuid>,
+    QueryParams(query): QueryParams<PullQuery>,
 ) -> ApiResult<Response> {
-    let Query(query) = query.map_err(|_| ApiError::bad_request("malformed query"))?;
     let filter = records::parse_classes(query.classes.as_deref())?;
     let since = query.since.unwrap_or(0);
     let response = state
@@ -637,7 +675,7 @@ async fn pull(
 async fn push(
     State(state): State<AppState>,
     Auth(principal): Auth,
-    Path(vault_id): Path<Uuid>,
+    PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PushRequest>,
 ) -> ApiResult<Response> {
     state
