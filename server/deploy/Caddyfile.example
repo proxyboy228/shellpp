@@ -1,0 +1,6 @@
+# Access 1: your own domain, Caddy and Let's Encrypt (server/README.md).
+# DNS of sync.example.com points to this machine; ports 80 and 443 are open.
+sync.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

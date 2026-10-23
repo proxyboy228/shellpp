@@ -120,6 +120,14 @@ fn serve(cert: &Cert) -> TlsServer {
     TlsServer { port, requests }
 }
 
+/// The TLS problem of a failed check, unboxed for matching.
+fn problem(result: Result<(), HttpError>) -> Option<TlsProblem> {
+    match result {
+        Err(HttpError::Tls(problem)) => Some(*problem),
+        _ => None,
+    }
+}
+
 fn check(server: &TlsServer, trust: TrustMode) -> Result<(), HttpError> {
     let api = HttpApi::new(
         &format!("https://localhost:{}", server.port),
@@ -133,8 +141,8 @@ fn check(server: &TlsServer, trust: TrustMode) -> Result<(), HttpError> {
 fn an_unknown_issuer_is_refused_by_the_system_and_accepted_when_pinned() {
     let cert = leaf(&["localhost"], None, (-1, 30));
     let server = serve(&cert);
-    match check(&server, TrustMode::System) {
-        Err(HttpError::Tls(TlsProblem::UnknownIssuer(info))) => {
+    match problem(check(&server, TrustMode::System)) {
+        Some(TlsProblem::UnknownIssuer(info)) => {
             assert_eq!(
                 info.sha256,
                 sha256(&cert.der),
@@ -157,12 +165,12 @@ fn a_swapped_certificate_stops_a_pinned_origin_before_the_request() {
     let pinned = leaf(&["localhost"], None, (-1, 30));
     let swapped = leaf(&["localhost"], None, (-1, 30));
     let server = serve(&swapped);
-    match check(&server, TrustMode::Pinned(sha256(&pinned.der))) {
-        Err(HttpError::Tls(TlsProblem::PinChanged {
+    match problem(check(&server, TrustMode::Pinned(sha256(&pinned.der)))) {
+        Some(TlsProblem::PinChanged {
             pinned: old,
             new,
             system_trusts,
-        })) => {
+        }) => {
             assert_eq!(old, sha256(&pinned.der));
             assert_eq!(new.sha256, sha256(&swapped.der));
             assert!(!system_trusts);
@@ -196,14 +204,14 @@ fn a_ca_added_for_the_origin_is_trusted() {
 fn expired_and_wrong_name_certificates_are_refused_even_when_pinned() {
     let expired = leaf(&["localhost"], None, (-30, -1));
     let server = serve(&expired);
-    match check(&server, TrustMode::Pinned(sha256(&expired.der))) {
-        Err(HttpError::Tls(TlsProblem::Expired(_))) => {}
+    match problem(check(&server, TrustMode::Pinned(sha256(&expired.der)))) {
+        Some(TlsProblem::Expired(_)) => {}
         other => panic!("expected expired, got {other:?}"),
     }
     let wrong = leaf(&["sync.example.com"], None, (-1, 30));
     let server = serve(&wrong);
-    match check(&server, TrustMode::Pinned(sha256(&wrong.der))) {
-        Err(HttpError::Tls(TlsProblem::WrongName(_))) => {}
+    match problem(check(&server, TrustMode::Pinned(sha256(&wrong.der)))) {
+        Some(TlsProblem::WrongName(_)) => {}
         other => panic!("expected wrong name, got {other:?}"),
     }
     assert_eq!(server.requests.load(Ordering::SeqCst), 0);

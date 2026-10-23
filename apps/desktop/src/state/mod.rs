@@ -141,7 +141,17 @@ pub struct AppState {
     /// How many times retention ran (the tests read it).
     retention_runs: u64,
     temp_profile: Option<TempProfile>,
+    /// Stage 7: the last sync status read from the core (UI 12.2), the
+    /// 60 s cycle while unlocked and the cycle 2 s after a change.
+    sync_status: Option<shellpp_core::service::SyncStatus>,
+    sync_task: Option<Task<()>>,
+    sync_kick: Option<Task<()>>,
 }
+
+/// The automatic sync cycle while unlocked (docs/sync-protocol.md, 6.11).
+pub const SYNC_INTERVAL: Duration = Duration::from_secs(60);
+/// The cycle after a local change.
+pub const SYNC_AFTER_CHANGE: Duration = Duration::from_secs(2);
 
 /// How often retention of the connection log runs while the app is
 /// unlocked (D68; it also runs when the data becomes available).
@@ -215,6 +225,9 @@ impl AppState {
             retention_on: false,
             retention_task: None,
             retention_runs: 0,
+            sync_status: None,
+            sync_task: None,
+            sync_kick: None,
             temp_profile,
         };
         if state.lock == LockState::Unlocked {
@@ -246,6 +259,9 @@ impl AppState {
             retention_on: false,
             retention_task: None,
             retention_runs: 0,
+            sync_status: None,
+            sync_task: None,
+            sync_kick: None,
             temp_profile: None,
         }
     }
@@ -318,6 +334,104 @@ impl AppState {
                 }
                 cx.background_executor().timer(RETENTION_INTERVAL).await;
             }
+        }));
+    }
+
+    // -- Sync (stage 7) ------------------------------------------------------
+
+    /// The cached sync status (`None` before the first read or locked).
+    pub fn sync_status(&self) -> Option<&shellpp_core::service::SyncStatus> {
+        self.sync_status.as_ref()
+    }
+
+    /// Sets the cached status (the screenshot harness shows a bound account
+    /// without a server).
+    pub fn set_sync_status(
+        &mut self,
+        status: shellpp_core::service::SyncStatus,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_status = Some(status);
+        cx.notify();
+    }
+
+    /// Re-reads the status from the core.
+    pub fn refresh_sync_status(&mut self, cx: &mut Context<Self>) {
+        if self.lock != LockState::Unlocked {
+            return;
+        }
+        if let Some(core) = &self.core
+            && let Ok(status) = core.sync_status()
+        {
+            self.sync_status = Some(status);
+            cx.notify();
+        }
+    }
+
+    /// The automatic cycle: after unlock, then every 60 s while unlocked
+    /// (a no-op without a bound account; the core keeps the retry pause).
+    fn restart_sync(&mut self, cx: &mut Context<Self>) {
+        self.sync_task = None;
+        self.sync_kick = None;
+        if self.lock != LockState::Unlocked {
+            self.sync_status = None;
+            return;
+        }
+        self.refresh_sync_status(cx);
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        self.sync_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let syncing = core.clone();
+                let result = cx
+                    .background_spawn(async move { syncing.sync_auto() })
+                    .await;
+                if let Err(error) = result {
+                    tracing::info!(code = error.code(), "sync cycle failed");
+                }
+                if this
+                    .update(cx, |state, cx| state.refresh_sync_status(cx))
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor().timer(SYNC_INTERVAL).await;
+            }
+        }));
+    }
+
+    /// One cycle 2 s after the last local change, while bound.
+    pub fn kick_sync(&mut self, cx: &mut Context<Self>) {
+        if self.lock != LockState::Unlocked
+            || !self
+                .sync_status
+                .as_ref()
+                .is_some_and(|status| status.bound && status.signed_in)
+        {
+            return;
+        }
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        self.sync_kick = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SYNC_AFTER_CHANGE).await;
+            let _ = cx.background_spawn(async move { core.sync_auto() }).await;
+            let _ = this.update(cx, |state, cx| state.refresh_sync_status(cx));
+        }));
+    }
+
+    /// "Sync now" (UI 12.2): refused items are tried again.
+    pub fn sync_now(&mut self, cx: &mut Context<Self>) {
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        self.sync_kick = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { core.sync_now() }).await;
+            if let Err(error) = result {
+                tracing::info!(code = error.code(), "sync now failed");
+            }
+            let _ = this.update(cx, |state, cx| state.refresh_sync_status(cx));
         }));
     }
 
@@ -729,6 +843,8 @@ impl AppState {
         match &event.kind {
             CoreEventKind::LockChanged { .. } => self.refresh_lock(cx),
             CoreEventKind::RecordsChanged { classes, .. } => {
+                // A local change goes up 2 s later (section 6.11).
+                self.kick_sync(cx);
                 if !only_log_classes(classes) {
                     self.records_generation += 1;
                 }
@@ -754,6 +870,7 @@ impl AppState {
             // TODO(shell): feed NotificationsChanged into the notification
             // center and toasts (UI 1.5).
             CoreEventKind::NotificationsChanged { .. } => {}
+            CoreEventKind::SyncChanged {} => self.refresh_sync_status(cx),
         }
     }
 
@@ -786,6 +903,7 @@ impl AppState {
         }
         tracing::info!(state = ?state, "lock state changed");
         self.restart_retention(cx);
+        self.restart_sync(cx);
         self.records_generation += 1;
         cx.emit(AppStateEvent::LockChanged(state));
         cx.emit(AppStateEvent::RecordsChanged);

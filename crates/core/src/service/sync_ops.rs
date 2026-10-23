@@ -54,6 +54,9 @@ use crate::vault::{self, KeyRing, Rotation};
 const MAX_PULL_PAGES: usize = 10_000;
 /// Push rounds of one cycle (section 6.11).
 const MAX_PUSH_ROUNDS: usize = 3;
+/// Push batches of one cycle (500 items each): a first sync of a large
+/// vault goes up in one cycle.
+const MAX_PUSH_BATCHES: usize = 1_000;
 /// The longest automatic retry pause.
 const MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
 
@@ -613,7 +616,10 @@ impl Core {
                     server_generation: info.server_generation.map(|generation| generation.0),
                 })
             }
-            Err(HttpError::Tls(problem)) => Ok(ServerCheck::Certificate { origin, problem }),
+            Err(HttpError::Tls(problem)) => Ok(ServerCheck::Certificate {
+                origin,
+                problem: *problem,
+            }),
             Err(error) => Err(error.into()),
         }
     }
@@ -1615,7 +1621,7 @@ impl Core {
     fn after_first_pull(&self, account: &wire::AccountBundle) -> Result<(), CoreError> {
         let now = self.now();
         let mut written = Vec::new();
-        let result = self.with_session(|inner| {
+        self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
             let epoch = session.ring.current_epoch();
@@ -1690,8 +1696,7 @@ impl Core {
                 );
             }
             Ok(())
-        });
-        result
+        })
     }
 
     // -----------------------------------------------------------------
@@ -2079,7 +2084,10 @@ impl Core {
         }
         // Push.
         if !report.newer_epoch {
-            for _ in 0..MAX_PUSH_ROUNDS {
+            // Batches continue while records wait; rounds that only re-push
+            // after conflicts are capped (section 6.11).
+            let mut repush_rounds = 0;
+            for _ in 0..MAX_PUSH_BATCHES {
                 let skip = self.inner().sync.failed.clone();
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
@@ -2121,7 +2129,13 @@ impl Core {
                         .failed
                         .extend(effects.failed.iter().map(|(id, _)| *id));
                 }
-                if !(effects.repush || batch.more) || effects.newer_epoch {
+                if effects.repush && !batch.more {
+                    repush_rounds += 1;
+                }
+                if !(effects.repush || batch.more)
+                    || effects.newer_epoch
+                    || repush_rounds >= MAX_PUSH_ROUNDS
+                {
                     break;
                 }
             }
@@ -3226,7 +3240,7 @@ impl Core {
                 .filter(|record| record.record_id != drop_id)
                 .filter_map(|record| {
                     let data = remap_data(record.data(), &map);
-                    (data != *record.data()).then(|| (record.record_id, record.kind, data))
+                    (data != *record.data()).then_some((record.record_id, record.kind, data))
                 })
                 .collect();
             let mut writes = Vec::new();

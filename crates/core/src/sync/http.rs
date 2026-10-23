@@ -96,7 +96,7 @@ pub enum HttpError {
     Timeout,
     /// The certificate was refused (section 2.1).
     #[error("the server certificate was refused")]
-    Tls(TlsProblem),
+    Tls(Box<TlsProblem>),
     /// The server answered with an error body of section 8.
     #[error("the server answered {status} {code}")]
     Api {
@@ -145,7 +145,9 @@ impl HttpError {
             Self::Origin(_) => "invalid_origin".to_owned(),
             Self::Network => "network".to_owned(),
             Self::Timeout => "timeout".to_owned(),
-            Self::Tls(TlsProblem::PinChanged { .. }) => "certificate_changed".to_owned(),
+            Self::Tls(problem) if matches!(**problem, TlsProblem::PinChanged { .. }) => {
+                "certificate_changed".to_owned()
+            }
             Self::Tls(_) => "certificate_refused".to_owned(),
             Self::Api { code, .. } => code.clone(),
             Self::Malformed => "malformed_answer".to_owned(),
@@ -176,7 +178,7 @@ impl HttpApi {
         let origin = normalize_origin(origin)?;
         let observed: Observation = Arc::new(Mutex::new(None));
         let config = tls::client_config(trust, observed.clone())
-            .map_err(|error| HttpError::Tls(TlsProblem::Other(error.to_string())))?;
+            .map_err(|error| HttpError::Tls(Box::new(TlsProblem::Other(error.to_string()))))?;
         let client = Client::builder()
             .use_preconfigured_tls(config)
             .connect_timeout(CONNECT_TIMEOUT)
@@ -228,7 +230,7 @@ impl HttpApi {
             Ok(response) => response,
             Err(error) => {
                 if let Some(problem) = self.take_problem() {
-                    return Err(HttpError::Tls(problem));
+                    return Err(HttpError::Tls(Box::new(problem)));
                 }
                 return Err(if error.is_timeout() {
                     HttpError::Timeout

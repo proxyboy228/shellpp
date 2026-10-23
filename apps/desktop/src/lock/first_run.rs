@@ -367,6 +367,17 @@ impl Render for FirstRunScreen {
             .focus_ring_visible(surface, cx)
             .disabled_as_designed(!enabled, Filled::Accent, cx)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.submit(window, cx)));
+        let restore = crate::hosts::controls::ControlButton::new(
+            "first-run-restore-sync",
+            crate::hosts::controls::ControlKind::Ghost,
+        )
+        .label(crate::sync_ui::strings::RESTORE_FROM_SYNC)
+        .on_click({
+            let state = self.state.clone();
+            move |_, window, cx| {
+                crate::sync_ui::open_connect(state.clone(), true, window, cx);
+            }
+        });
         let content = v_flex()
             .id("first-run-form")
             .w_full()
@@ -375,7 +386,23 @@ impl Render for FirstRunScreen {
             // A click outside the fields takes the focus from them, so their
             // messages appear (UI 13.1).
             .track_focus(&self.focus)
-            .child(heading(strings::FIRST_RUN_TAGLINE, cx))
+            // Stage 7 (UI 13.2): a new device can take its data from the
+            // account instead of creating a vault; beside the tagline, so
+            // the card keeps its height (960 x 600).
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(heading(strings::FIRST_RUN_TAGLINE, cx)),
+                    )
+                    .child(restore),
+            )
             .when_some(archived, |this, name| {
                 this.child(notice(
                     "first-run-archived",

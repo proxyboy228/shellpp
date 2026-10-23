@@ -144,6 +144,11 @@ fn server_account_of(raw: RawServerAccount) -> Result<ServerAccountRow, StoreErr
     })
 }
 
+type RawSyncState = (i64, Option<String>, Option<String>, Option<String>);
+type RawDeleted = (Vec<u8>, Vec<u8>, i64, String, String, Vec<u8>);
+type RawPair = (Vec<u8>, Vec<u8>, Vec<u8>, String, bool);
+type RawTls = (String, Vec<u8>, Option<Vec<u8>>, String);
+
 impl Store {
     /// The bound account, if any.
     pub fn server_account(&self) -> Result<Option<ServerAccountRow>, StoreError> {
@@ -171,7 +176,7 @@ impl Store {
 
     /// The sync state of a vault (a default row when there is none).
     pub fn sync_state(&self, vault_id: &Uuid) -> Result<SyncStateRow, StoreError> {
-        let raw: Option<(i64, Option<String>, Option<String>, Option<String>)> = self
+        let raw: Option<RawSyncState> = self
             .conn
             .query_row(
                 "SELECT cursor, last_sync_at, last_error, resync_classes FROM sync_state
@@ -244,7 +249,7 @@ impl Store {
             "SELECT vault_id, record_id, class, deleted_at, origin, envelope FROM recently_deleted
              ORDER BY deleted_at DESC, record_id",
         )?;
-        let raws: Vec<(Vec<u8>, Vec<u8>, i64, String, String, Vec<u8>)> = stmt
+        let raws: Vec<RawDeleted> = stmt
             .query_map([], |r| {
                 Ok((
                     r.get(0)?,
@@ -293,7 +298,7 @@ impl Store {
             "SELECT vault_id, record_id, other_record_id, found_at, kept FROM duplicate_pairs
              ORDER BY found_at",
         )?;
-        let raws: Vec<(Vec<u8>, Vec<u8>, Vec<u8>, String, bool)> = stmt
+        let raws: Vec<RawPair> = stmt
             .query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
@@ -313,7 +318,7 @@ impl Store {
 
     /// The trust choice for a server origin.
     pub fn server_tls(&self, server_url: &str) -> Result<Option<TlsTrustRow>, StoreError> {
-        let raw: Option<(String, Vec<u8>, Option<Vec<u8>>, String)> = self
+        let raw: Option<RawTls> = self
             .conn
             .query_row(
                 "SELECT kind, cert_sha256, ca_der, created_at FROM server_tls WHERE server_url = ?1",

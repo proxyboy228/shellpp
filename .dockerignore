@@ -1,0 +1,7 @@
+# The server image needs only crates/sync-api and server/ (server/Dockerfile).
+*
+!crates/sync-api/**
+!server/**
+!Cargo.toml
+server/target
+crates/sync-api/target

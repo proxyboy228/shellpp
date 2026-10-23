@@ -680,3 +680,59 @@ fn the_set_of_keys_and_the_terminal_keys(cx: &mut TestAppContext) {
     );
     ui.finish(cx);
 }
+
+/// Stage 7 (UI 12.2, 13.5): without an account the section offers the
+/// connect wizard; it opens on the server step.
+#[gpui::test]
+fn account_section_opens_the_connect_wizard(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-account", cx);
+    assert!(ui.visible("settings-connect-sync", cx));
+    ui.click("settings-connect-sync", cx);
+    assert!(ui.visible("sync-connect", cx), "the wizard opened");
+    assert!(ui.visible("sync-server", cx), "on the server step");
+    assert!(ui.visible("sync-check", cx));
+    // An empty address is refused before any request.
+    ui.click("sync-check", cx);
+    assert!(ui.visible("sync-error", cx));
+}
+
+/// A bound account (status as the core reports it): email, status, Sync
+/// now, the toggles; a toggle writes `sync.toggles` at once.
+#[gpui::test]
+fn bound_account_shows_status_and_writes_toggles(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    cx.update(|cx| {
+        ui.state.update(cx, |state, cx| {
+            state.set_sync_status(
+                shellpp_core::service::SyncStatus {
+                    bound: true,
+                    signed_in: true,
+                    server_url: Some("https://sync.example.com".into()),
+                    email: Some("user@example.com".into()),
+                    pending: 2,
+                    ..Default::default()
+                },
+                cx,
+            )
+        })
+    });
+    ui.press("ctrl-,", cx);
+    ui.click("settings-nav-account", cx);
+    assert!(ui.visible("sync-block", cx));
+    assert!(ui.visible("sync-account-email", cx));
+    assert!(ui.visible("sync-now", cx));
+    assert!(!ui.visible("settings-connect-sync", cx));
+    assert!(reveal(&ui, "sync-toggle-history", cx));
+    ui.click("sync-toggle-history", cx);
+    assert_eq!(
+        stored(&ui, "sync.toggles", cx),
+        serde_json::json!({"history": true}),
+        "history turned on, the rest keep their defaults"
+    );
+}

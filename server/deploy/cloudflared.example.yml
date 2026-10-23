@@ -1,0 +1,9 @@
+# Access 2: a Cloudflare Tunnel (server/README.md). Create the tunnel with
+# `cloudflared tunnel create shellpp`, route sync.example.com to it, then
+# run `cloudflared tunnel --config this-file run`.
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-000000000000.json
+ingress:
+  - hostname: sync.example.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404

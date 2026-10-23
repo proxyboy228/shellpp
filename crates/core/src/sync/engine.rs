@@ -507,6 +507,7 @@ pub fn apply_page(
     let vault_id = session.ring.vault_id();
     let now_text = format_timestamp(now);
     let mut result = PageResult::default();
+    let mut keys = KeyCache::new();
     for record in records {
         let bytes = record.envelope.as_bytes();
         // Step 1: the vault, and an id that belongs to no other vault here.
@@ -560,6 +561,7 @@ pub fn apply_page(
             {
                 duplicates(
                     session,
+                    &mut keys,
                     &mut result.effects,
                     *kind,
                     payload,
@@ -639,8 +641,13 @@ pub fn apply_page(
 
 /// Raises a duplicate pair when a pulled insert has the natural key of a
 /// live record of the same type (data-model 18.3; not history or logs).
+/// Natural keys of the index's live records per kind, built once per page
+/// (a first pull of thousands of records stays linear).
+type KeyCache = HashMap<RecordKind, HashMap<String, Vec<Uuid>>>;
+
 fn duplicates(
     session: &Session,
+    keys: &mut KeyCache,
     effects: &mut Effects,
     kind: RecordKind,
     payload: &Payload,
@@ -653,13 +660,20 @@ fn duplicates(
     let Some(key) = natural::key(kind, data) else {
         return;
     };
-    for other in session.index.of_kind(kind) {
-        if other.record_id != row.record_id
-            && natural::key(kind, other.data()).as_ref() == Some(&key)
-        {
+    let by_key = keys.entry(kind).or_insert_with(|| {
+        let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
+        for other in session.index.of_kind(kind) {
+            if let Some(key) = natural::key(kind, other.data()) {
+                map.entry(key).or_default().push(other.record_id);
+            }
+        }
+        map
+    });
+    for other in by_key.get(&key).into_iter().flatten() {
+        if *other != row.record_id {
             effects.duplicates.push(DuplicatePairRow {
                 vault_id: row.vault_id,
-                record_id: other.record_id,
+                record_id: *other,
                 other_record_id: row.record_id,
                 found_at: now_text.to_owned(),
                 kept: false,

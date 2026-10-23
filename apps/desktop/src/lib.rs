@@ -68,6 +68,7 @@ pub mod sftp;
 pub mod shell;
 pub mod snippets;
 pub mod state;
+pub mod sync_ui;
 pub mod terminal;
 pub mod terminal_sidebar;
 pub mod testing;

@@ -55,6 +55,9 @@ enum Kind {
     ShortcutOverrides,
     /// List of hint ids.
     HintList,
+    /// Object: one of the listed toggles -> bool (`sync.toggles`,
+    /// data-model 17); a missing toggle keeps its default.
+    Toggles(&'static [&'static str]),
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +143,22 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     );
     add("terminal.highlighting_enabled", Kind::Bool, json!(true));
     add("terminal.os_detection_enabled", Kind::Bool, json!(true));
+    add(
+        "sync.toggles",
+        Kind::Toggles(&[
+            "hosts",
+            "keys",
+            "snippets",
+            "forwarding",
+            "known_hosts",
+            "workspaces",
+            "terminal_themes",
+            "highlight_rules",
+            "history",
+            "connection_log",
+        ]),
+        json!({}),
+    );
     add(
         "terminal.os_detection_script",
         Kind::NullableText(65_536),
@@ -322,6 +341,15 @@ fn check(kind: &Kind, value: &Value) -> Result<Value, ValidationReason> {
                 match item.as_str() {
                     Some(id) if !id.is_empty() && id.len() <= 128 && !has_control(id) => {}
                     _ => return Err(Invalid),
+                }
+            }
+            Ok(value.clone())
+        }
+        Kind::Toggles(names) => {
+            let object = value.as_object().ok_or(Invalid)?;
+            for (name, on) in object {
+                if !names.contains(&name.as_str()) || !on.is_boolean() {
+                    return Err(Invalid);
                 }
             }
             Ok(value.clone())

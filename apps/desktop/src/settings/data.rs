@@ -271,19 +271,8 @@ impl SettingsView {
             .test_support()
             .gap(metrics::SPACE_4)
             .child(heading(strings::ACCOUNT_SYNC, cx))
-            .child(
-                v_flex()
-                    .gap(metrics::SPACE_2)
-                    .child(label(strings::SYNC_SERVER, cx))
-                    .child(widgets::caption(strings::SYNC_SERVER_HINT, cx))
-                    .child(
-                        h_flex().child(
-                            ControlButton::new("settings-connect-sync", ControlKind::Neutral)
-                                .label(strings::CONNECT_SYNC)
-                                .disabled(true),
-                        ),
-                    ),
-            )
+            // Stage 7: the connect wizard or the bound account (UI 12.2).
+            .child(crate::sync_ui::account_block(&self.state, cx))
             .child(widgets::divider(cx))
             .child(
                 v_flex()
