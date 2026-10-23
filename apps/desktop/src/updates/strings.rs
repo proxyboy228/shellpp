@@ -32,6 +32,8 @@ pub fn failed(error: CheckError) -> String {
         CheckError::NotHttps => "the update source is not an https:// address",
         CheckError::Unreachable => "the update source did not answer",
         CheckError::BadManifest => "the update source did not send an update manifest",
+        CheckError::NoKey => "this build has no key to check updates with",
+        CheckError::BadSignature => "the update is not signed with the Shell++ release key",
     };
     format!("The update check failed: {reason}")
 }

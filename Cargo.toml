@@ -70,6 +70,11 @@ p256 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 p384 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 p521 = { version = "0.14.0", default-features = false, features = ["pkcs8"] }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8"] }
+# The minisign signature of the update manifest (D170): BLAKE2b-512 of the
+# file and Base64 of the key and signature lines; both already in the tree
+# through argon2.
+blake2 = { version = "0.11.0", default-features = false }
+base64ct = "1.8.3"
 # The X25519 keypair of an account (D13; docs/security.md, section 5.1).
 x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize", "precomputed-tables"] }
 md5 = "0.8.1"

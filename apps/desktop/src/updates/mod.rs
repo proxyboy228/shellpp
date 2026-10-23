@@ -9,6 +9,10 @@
 //! Manual "Check now" works always; the check at launch only when
 //! `updates.auto_check` is on (off by default, principle 2), at most once a
 //! day (`updates.last_check`).
+//!
+//! A manifest counts only with its minisign signature (`<manifest>.minisig`)
+//! made with the release key built into the app (D170, [`signature`]); a
+//! build without that key asks nothing and reports that it cannot check.
 
 use std::io::Read as _;
 use std::time::Duration;
@@ -16,6 +20,7 @@ use std::time::Duration;
 use gpui::{App, Global};
 use serde_json::Value;
 
+pub mod signature;
 pub mod strings;
 #[cfg(test)]
 mod tests;
@@ -65,6 +70,14 @@ pub enum CheckError {
     /// An answer that is not a manifest with a semver `version`.
     #[error("the update source did not send an update manifest")]
     BadManifest,
+    /// This build has no release key (`release/minisign.pub`), so no
+    /// manifest could count: nothing was asked.
+    #[error("this build has no key to check updates with")]
+    NoKey,
+    /// The manifest has no signature of this build's release key: missing,
+    /// made with another key, or the manifest changed.
+    #[error("the update manifest is not signed with the release key")]
+    BadSignature,
 }
 
 /// The update found by the last check of this run (the Help menu's item).
@@ -145,7 +158,16 @@ pub fn at_launch(
     values: &serde_json::Map<String, Value>,
     now: u64,
 ) -> Option<Result<Outcome, CheckError>> {
-    due_at_launch(values, now).then(|| check(&manifest_url(values), current_version()))
+    at_launch_with(values, now, signature::PublicKey::release().as_ref())
+}
+
+/// [`at_launch`] with the release key `key`.
+fn at_launch_with(
+    values: &serde_json::Map<String, Value>,
+    now: u64,
+    key: Option<&signature::PublicKey>,
+) -> Option<Result<Outcome, CheckError>> {
+    due_at_launch(values, now).then(|| check_with(&manifest_url(values), current_version(), key))
 }
 
 /// Whether `url` may be asked: `Ok(true)` for `https://`, `Ok(false)` for
@@ -167,10 +189,21 @@ fn allowed(url: &str) -> Result<bool, CheckError> {
     }
 }
 
-/// Asks `url` for the manifest and compares its version with `current`
+/// Asks `url` for the manifest and its signature, checks the signature
+/// with the release key and compares the manifest's version with `current`
 /// (blocking: run it off the UI thread).
 pub fn check(url: &str, current: &str) -> Result<Outcome, CheckError> {
+    check_with(url, current, signature::PublicKey::release().as_ref())
+}
+
+/// [`check`] with the release key `key`; without one nothing is asked.
+fn check_with(
+    url: &str,
+    current: &str,
+    key: Option<&signature::PublicKey>,
+) -> Result<Outcome, CheckError> {
     let https = allowed(url)?;
+    let key = key.ok_or(CheckError::NoKey)?;
     let mut config = ureq::Agent::config_builder();
     if !https {
         // This machine: never through a proxy of the environment.
@@ -184,21 +217,54 @@ pub fn check(url: &str, current: &str) -> Result<Outcome, CheckError> {
         .user_agent(format!("shellpp/{current}"))
         .build()
         .into();
-    let mut response = agent
-        .get(url.trim())
-        .call()
-        .map_err(|_| CheckError::Unreachable)?;
+    let body = fetch(&agent, url.trim(), MAX_MANIFEST_BYTES).map_err(|error| match error {
+        Fetch::TooLarge => CheckError::BadManifest,
+        Fetch::Status | Fetch::Failed => CheckError::Unreachable,
+    })?;
+    // A missing signature (an HTTP error status) or one too large is not
+    // the release key's; no answer at all is still "did not answer".
+    let sig = fetch(
+        &agent,
+        &signature::signature_url(url),
+        signature::MAX_SIGNATURE_BYTES,
+    )
+    .map_err(|error| match error {
+        Fetch::Status | Fetch::TooLarge => CheckError::BadSignature,
+        Fetch::Failed => CheckError::Unreachable,
+    })?;
+    let sig = String::from_utf8(sig).map_err(|_| CheckError::BadSignature)?;
+    key.verify(&body, &sig)
+        .map_err(|_| CheckError::BadSignature)?;
+    compare(&body, current)
+}
+
+/// Why [`fetch`] got no body.
+enum Fetch {
+    /// An HTTP error status.
+    Status,
+    /// More than the limit.
+    TooLarge,
+    /// No answer: no network, a refused or timed-out connection.
+    Failed,
+}
+
+/// One GET of `url`: its body, at most `max` bytes.
+fn fetch(agent: &ureq::Agent, url: &str, max: u64) -> Result<Vec<u8>, Fetch> {
+    let mut response = agent.get(url).call().map_err(|error| match error {
+        ureq::Error::StatusCode(_) => Fetch::Status,
+        _ => Fetch::Failed,
+    })?;
     let mut body = Vec::new();
     response
         .body_mut()
         .as_reader()
-        .take(MAX_MANIFEST_BYTES + 1)
+        .take(max + 1)
         .read_to_end(&mut body)
-        .map_err(|_| CheckError::Unreachable)?;
-    if body.len() as u64 > MAX_MANIFEST_BYTES {
-        return Err(CheckError::BadManifest);
+        .map_err(|_| Fetch::Failed)?;
+    if body.len() as u64 > max {
+        return Err(Fetch::TooLarge);
     }
-    compare(&body, current)
+    Ok(body)
 }
 
 /// The manifest `body` against `current`: `version` (a leading `v` taken
