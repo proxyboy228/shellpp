@@ -1984,6 +1984,9 @@ impl Core {
         // Pull.
         let selection = selection(&self.inner().store);
         let mut received: HashSet<Uuid> = HashSet::new();
+        // The revision the server holds of each authenticated version, for
+        // the rollbacks a full resync repairs (below).
+        let mut held_by_server: HashMap<Uuid, u64> = HashMap::new();
         let mut resync = self
             .inner()
             .store
@@ -2073,6 +2076,10 @@ impl Core {
             changed.extend(result.effects.changed.iter().copied());
             changed_classes.extend(result.effects.classes.iter().copied());
             received.extend(result.received.iter().map(|(id, _)| *id));
+            for (id, revision) in &result.received {
+                let entry = held_by_server.entry(*id).or_insert(0);
+                *entry = (*entry).max(*revision);
+            }
             if !page.has_more && !result.stopped {
                 complete = true;
             }
@@ -2091,6 +2098,12 @@ impl Core {
                     true,
                     self.now(),
                 )?;
+                // A version older than the one this device synced (a server
+                // restored while the device was out of the account: the
+                // rebind has no generation to compare) is skipped by the
+                // pull; the restore's mark pushes the newer local version,
+                // an edit or a deletion, again (section 6.9, step 2).
+                engine::restore_mark(&mut inner.store, session, &held_by_server, &resync)?;
                 let mut state = inner.store.sync_state(&link.vault_id)?;
                 state.vault_id = link.vault_id;
                 state.resync_classes.clear();

@@ -517,6 +517,76 @@ fn server_restore_gets_lost_records_back() {
     );
 }
 
+/// Review finding (principle 3): a server restored while the device was
+/// signed out. The rebind stores no generation to compare, but it starts a
+/// full resync: what the backup lacks is pushed back, and a version older
+/// than the one this device synced (an edit, a deletion) loses to it, so
+/// nothing made before the sign-out is lost.
+#[test]
+fn server_restore_while_signed_out_is_caught_by_the_rebind() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("before.example.com");
+    let edited = a.host("edit.example.com");
+    let deleted = a.host("deleted.example.com");
+    a.register(&server, &email, &password);
+    let db_path = server.dir.path().join("server.db");
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    a.host("after.example.com");
+    a.save(
+        Some(edited),
+        RecordType::Host,
+        json!({"address": "edit.example.com", "label": "edited after the backup"}),
+    );
+    a.delete(deleted);
+    a.sync();
+    a.core.sync_sign_out(false).expect("signed out");
+    // The restore while A is out of the account.
+    server.stop();
+    server.db = shellpp_server::db::Db::open(&format!("sqlite:{}", backup.display())).expect("db");
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = db_path.clone().into_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+    }
+    std::fs::copy(&backup, &db_path).expect("restore");
+    server.resume();
+    shellpp_server::admin::restored(&server.db).expect("restored");
+    done(a.sign_in(&server, &email, &password));
+    a.sync();
+    assert_eq!(
+        a.addresses(),
+        vec![
+            "after.example.com",
+            "before.example.com",
+            "edit.example.com"
+        ],
+        "the device lost nothing"
+    );
+    assert_eq!(a.data(edited)["label"], "edited after the backup");
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    assert_eq!(
+        b.addresses(),
+        vec![
+            "after.example.com",
+            "before.example.com",
+            "edit.example.com"
+        ],
+        "the server has everything again, and the deletion"
+    );
+    assert_eq!(b.data(edited)["label"], "edited after the backup");
+}
+
 /// "My old password may be compromised": the change rotates the personal
 /// vault through the server; the other device signs in again, learns the
 /// new epoch through the chain and reads everything.
