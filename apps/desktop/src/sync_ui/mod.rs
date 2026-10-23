@@ -1053,6 +1053,22 @@ impl Render for ReviewDialog {
                                 })),
                         ),
                 );
+                // The comparison (UI 13.6): the fields that differ, secrets
+                // masked by the core.
+                for (line, difference) in item.differences.iter().take(8).enumerate() {
+                    body = body.child(
+                        div()
+                            .id(("sync-difference", index * 100 + line))
+                            .test_support()
+                            .child(widgets::caption(
+                                format!(
+                                    "{}: {} → {}",
+                                    difference.path, difference.current, difference.other
+                                ),
+                                cx,
+                            )),
+                    );
+                }
             }
         }
         if !self.duplicates.is_empty() {

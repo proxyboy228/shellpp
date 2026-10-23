@@ -77,7 +77,8 @@ use host_api::{
 use session::Session;
 pub use sync_ops::{
     BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
-    ServerCheck, SignInInput, SignInOutcome, SyncReport, SyncStatus, TotpSetup, TrustChoice,
+    FieldDifference, ServerCheck, SignInInput, SignInOutcome, SyncReport, SyncStatus, TotpSetup,
+    TrustChoice,
 };
 
 /// Startup configuration resolved by the host (the core never looks up OS directories).

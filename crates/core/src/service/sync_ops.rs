@@ -227,8 +227,21 @@ pub struct ConflictItem {
     pub original_type: String,
     pub title: String,
     pub losing_deleted: bool,
+    /// The losing version's data with secret members masked.
     pub losing_data: Option<Map<String, Value>>,
     pub losing_device_id: Option<String>,
+    /// The fields that differ between the current version and the copy
+    /// (UI 13.6), secrets masked.
+    pub differences: Vec<FieldDifference>,
+}
+
+/// One field of a conflict's comparison.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FieldDifference {
+    /// Dotted path, for example `ssh.port`.
+    pub path: String,
+    pub current: String,
+    pub other: String,
 }
 
 /// Which version a conflict keeps.
@@ -3066,7 +3079,11 @@ impl Core {
                             .get("losing_deleted")
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
-                        losing_data,
+                        differences: differences(
+                            current.map(|record| record.data()),
+                            losing_data.as_ref(),
+                        ),
+                        losing_data: losing_data.as_ref().map(masked),
                         losing_device_id: text("losing_device_id"),
                     }
                 })
@@ -3320,6 +3337,93 @@ impl Core {
     }
 }
 
+/// Members holding secrets (passwords, passphrases, private keys): masked
+/// wherever a conflict is shown.
+const SECRET_MEMBERS: [&str; 6] = [
+    "password",
+    "passphrase",
+    "private_key",
+    "secret",
+    "token",
+    "recovery_key",
+];
+
+const MASK: &str = "••••••";
+
+fn masked_value(name: &str, value: &Value) -> Value {
+    if SECRET_MEMBERS.contains(&name) && !value.is_null() {
+        return Value::String(MASK.to_owned());
+    }
+    match value {
+        Value::Object(map) => Value::Object(masked(map)),
+        other => other.clone(),
+    }
+}
+
+fn masked(map: &Map<String, Value>) -> Map<String, Value> {
+    map.iter()
+        .map(|(name, value)| (name.clone(), masked_value(name, value)))
+        .collect()
+}
+
+fn shown(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => "—".to_owned(),
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// The differing fields of two versions, one level of nesting flattened
+/// (`ssh.port`), secrets masked.
+fn differences(
+    current: Option<&Map<String, Value>>,
+    other: Option<&Map<String, Value>>,
+) -> Vec<FieldDifference> {
+    // Compared as they are (a changed secret is a difference), shown masked.
+    let empty = Map::new();
+    let current = current.unwrap_or(&empty);
+    let other = other.unwrap_or(&empty);
+    let mut paths: Vec<(String, Option<Value>, Option<Value>)> = Vec::new();
+    let mut names: Vec<&String> = current.keys().chain(other.keys()).collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        match (current.get(name), other.get(name)) {
+            (Some(Value::Object(a)), Some(Value::Object(b))) => {
+                let mut inner: Vec<&String> = a.keys().chain(b.keys()).collect();
+                inner.sort();
+                inner.dedup();
+                for key in inner {
+                    paths.push((
+                        format!("{name}.{key}"),
+                        a.get(key).cloned(),
+                        b.get(key).cloned(),
+                    ));
+                }
+            }
+            (a, b) => paths.push((name.clone(), a.cloned(), b.cloned())),
+        }
+    }
+    paths
+        .into_iter()
+        .filter(|(_, a, b)| {
+            let a = a.as_ref().filter(|value| !value.is_null());
+            let b = b.as_ref().filter(|value| !value.is_null());
+            a != b
+        })
+        .map(|(path, a, b)| {
+            let name = path.rsplit('.').next().unwrap_or(&path).to_owned();
+            let mask = |value: Option<Value>| value.map(|value| masked_value(&name, &value));
+            FieldDifference {
+                current: shown(mask(a).as_ref()),
+                other: shown(mask(b).as_ref()),
+                path,
+            }
+        })
+        .collect()
+}
+
 /// Rows the merge at sign-in writes: records, Recently deleted entries and
 /// the duplicate pairs it raised.
 type MergedRows = (
@@ -3410,6 +3514,23 @@ fn live_pairs(store: &Store, session: &Session) -> Result<Vec<(Uuid, Uuid)>, Cor
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn conflict_differences_mask_secrets() {
+        let current =
+            json!({"address": "h", "label": "A", "ssh": {"port": 22, "password": "old-secret"}});
+        let other =
+            json!({"address": "h", "label": "B", "ssh": {"port": 2222, "password": "new-secret"}});
+        let found = differences(current.as_object(), other.as_object());
+        let paths: Vec<&str> = found.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(paths, vec!["label", "ssh.password", "ssh.port"]);
+        let password = &found[1];
+        assert_eq!(password.current, "••••••");
+        assert_eq!(password.other, "••••••");
+        let masked_other = masked(other.as_object().unwrap());
+        assert_eq!(masked_other["ssh"]["password"], json!("••••••"));
+        assert!(!serde_json::to_string(&found).unwrap().contains("secret"));
+    }
 
     #[test]
     fn remap_rewrites_values_and_keys() {

@@ -132,6 +132,8 @@ fn concurrent_edits_make_one_conflict_copy_on_both_devices() {
     assert_eq!(a_conflicts.len(), 1);
     assert_eq!(b_conflicts.len(), 1);
     assert_eq!(a_conflicts[0].conflict_id, b_conflicts[0].conflict_id);
+    // The comparison names the field that differs (UI 13.6).
+    assert!(b_conflicts[0].differences.iter().any(|d| d.path == "label"));
     assert_eq!(
         a.data(host)["label"],
         b.data(host)["label"],
