@@ -10,7 +10,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --workspace
 cargo test -p shellpp-desktop --all-features
+cargo fmt --manifest-path server/Cargo.toml --all -- --check
+cargo clippy --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
+cargo clippy --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+$env:SHELLPP_TEST=1; cargo test --manifest-path server/Cargo.toml --workspace
+$env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --manifest-path server/Cargo.toml --workspace
 ```
+
+Сервер (`server/`) — отдельный workspace, корневые команды его не видят;
+последние пять строк — его критерий: тесты на SQLite и они же на
+PostgreSQL в Docker. Пока в `server/` нет `Cargo.toml` (до этапа 7),
+эти строки пропускаются.
 
 Отдельно:
 
@@ -58,6 +68,9 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
     `russh`, а не на общем контейнере с параллельными тестами;
   - `SHELLPP_TEST_PUTTYGEN=docker` — тесты форматов против настоящего
     puttygen;
+  - `SHELLPP_TEST_POSTGRES=docker` — тесты сервера на PostgreSQL: сами
+    поднимают контейнер `postgres:17-alpine` и удаляют его; без
+    переменной — на SQLite;
   - `SHELLPP_SFTP_BENCH=1` — замер SFTP (release-сборка).
 - Диск C почти заполнен: перед сборкой проверять свободное место; при
   нехватке — удалить `target\debug\incremental`, потом `cargo clean`.
