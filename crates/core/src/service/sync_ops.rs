@@ -286,7 +286,7 @@ pub enum ConflictChoice {
 }
 
 /// A duplicate pair from sync (data-model 18.3; UI 13.7).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DuplicateItem {
     pub record_id: Uuid,
     pub other_record_id: Uuid,
@@ -301,17 +301,24 @@ pub struct DuplicateItem {
 }
 
 /// One record of a duplicate pair.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DuplicateSide {
     pub record_id: Uuid,
     pub title: String,
     pub created_at: String,
     pub modified_at: String,
+    /// The device of the last change (its payload's `device_id`), as in
+    /// the conflict comparison (UI 13.6).
+    pub device_id: String,
+    /// That device's name (its `device_info` record) when known.
+    pub device_name: Option<String>,
+    /// The last change was made on this device.
+    pub this_device: bool,
 }
 
 /// One field of a duplicate pair's comparison: its value on each side
 /// ("—" where a side lacks it), secrets masked.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PairField {
     /// Dotted path, for example `ssh.port`.
     pub path: String,
@@ -320,6 +327,39 @@ pub struct PairField {
     /// The values differ (compared before masking: a different secret is
     /// a difference).
     pub differs: bool,
+}
+
+// Debug without host data: titles, addresses, usernames and field values
+// stay out of logs (docs/security.md, section 9.1).
+impl std::fmt::Debug for DuplicateItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuplicateItem")
+            .field("record_id", &self.record_id)
+            .field("other_record_id", &self.other_record_id)
+            .field("type_name", &self.type_name)
+            .field("left", &self.left)
+            .field("right", &self.right)
+            .field("fields", &self.fields)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for DuplicateSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DuplicateSide")
+            .field("record_id", &self.record_id)
+            .field("this_device", &self.this_device)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for PairField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairField")
+            .field("path", &self.path)
+            .field("differs", &self.differs)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A record a resync brought back (section 6.9, step 5).
@@ -3291,18 +3331,7 @@ impl Core {
             let vault_id = session.ring.vault_id();
             let rows = conflict_rows(&inner.store, session)?;
             let this_device = session.device_id.to_string();
-            // The names of the account's devices (UI 13.6: the device of each
-            // version).
-            let device_names: HashMap<String, String> = session
-                .index
-                .of_kind(RecordKind::DeviceInfo)
-                .filter_map(|record| {
-                    let data = record.data();
-                    let id = data.get("device_id").and_then(Value::as_str)?;
-                    let name = data.get("name").and_then(Value::as_str)?;
-                    Some((id.to_owned(), name.to_owned()))
-                })
-                .collect();
+            let device_names = device_names(session);
             let mut items = Vec::with_capacity(rows.len());
             for (row, payload) in rows {
                 let data = payload.data.clone().unwrap_or_default();
@@ -3529,6 +3558,9 @@ impl Core {
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let pairs = live_pairs(&inner.store, session)?;
+            let devices = device_names(session);
+            let this_device = session.device_id;
+            let side = |record: &IndexedRecord| duplicate_side(record, &devices, this_device);
             Ok(pairs
                 .into_iter()
                 .filter_map(|(a, b)| {
@@ -3546,8 +3578,8 @@ impl Core {
                         type_name: record.kind.name().to_owned(),
                         title: title_of(record.kind.name(), Some(record.data())),
                         fields: pair_fields(left.data(), right.data()),
-                        left: duplicate_side(left),
-                        right: duplicate_side(right),
+                        left: side(left),
+                        right: side(right),
                     })
                 })
                 .collect())
@@ -3556,9 +3588,10 @@ impl Core {
 
     /// Lists every two live records of the vault that share a natural key
     /// (data-model 18.6) as a duplicate pair, as a pull that brought one of
-    /// them would; pairs already listed or kept stay as they are. For tests
-    /// and the screenshot run only: on a device the pairs come from sync.
-    #[doc(hidden)]
+    /// them would; pairs already listed or kept stay as they are. Test
+    /// support (feature `test-hooks`): for tests and the screenshot run
+    /// only; on a device the pairs come from sync.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn sync_duplicates_scan(&self) -> Result<usize, CoreError> {
         let now_text = format_timestamp(self.now());
         self.with_session(|inner| {
@@ -3611,6 +3644,29 @@ impl Core {
         })
     }
 
+    /// Test support (feature `test-hooks`): writes a copy of a live
+    /// record's data under a new id, as the same object made on another
+    /// device arrives by sync (UI 13.7; copies of one key arrive only that
+    /// way, an import matches keys by fingerprint). Returns the new id.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn sync_duplicate_copy_for_test(&self, record_id: Uuid) -> Result<Uuid, CoreError> {
+        let now = self.now();
+        let mut guard = self.inner();
+        let mut parts = super::records::parts(&mut guard)?;
+        let (kind, data) = parts
+            .session
+            .index
+            .get(&record_id)
+            .map(|record| (record.kind, record.data().clone()))
+            .ok_or(CoreError::NotFound)?;
+        let id = parts.ids.next(now);
+        let mut plan = super::records::Plan::default();
+        plan.set(kind, id, data);
+        let writes = plan.prepare(&mut parts, now)?;
+        self.commit_records(&mut parts, writes, Vec::new(), Vec::new())?;
+        Ok(id)
+    }
+
     /// "Keep both": the pair is not offered again.
     pub fn sync_duplicates_keep(
         &self,
@@ -3638,20 +3694,90 @@ impl Core {
     }
 
     /// "Merge": references to `drop` move to `keep`, then `drop` is
-    /// deleted (to Recently deleted).
+    /// deleted (to Recently deleted). Two copies of one key follow the
+    /// rule of identical keys whichever side was chosen (UI 13.7 and 7.2;
+    /// data-model 18.3): the one with the smallest record id stays and
+    /// takes `certificate`, `passphrase` and `fido2` where it lacks them.
     pub fn sync_duplicates_merge(&self, keep: Uuid, drop_id: Uuid) -> Result<(), CoreError> {
+        let (kind, copies) = self.with_session(|inner| {
+            let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
+            let (Some(_), Some(other)) = (session.index.get(&keep), session.index.get(&drop_id))
+            else {
+                return Err(CoreError::NotFound);
+            };
+            let copies =
+                key_copies(session, keep, drop_id).map(|ids| (session.ring.vault_id(), ids));
+            Ok((other.kind, copies))
+        })?;
+        if let Some((vault_id, ids)) = copies {
+            let kept = self
+                .keys_merge(super::dto::RecordRef {
+                    vault_id,
+                    record_id: keep,
+                })?
+                .record_id;
+            // What the key rule does not rewrite (a credential binding's
+            // target) moves as in any merge.
+            let gone: Vec<Uuid> = ids.into_iter().filter(|id| *id != kept).collect();
+            self.duplicate_links_move(kept, &gone)?;
+            return Ok(());
+        }
+        let vault_id = self.duplicate_links_move(keep, &[drop_id])?;
+        if super::records::deletable(kind) {
+            self.record_delete(super::dto::RecordsRef {
+                vault_id,
+                record_ids: vec![drop_id],
+            })?;
+        } else {
+            self.duplicate_remove(drop_id)?;
+        }
+        Ok(())
+    }
+
+    /// Removes the merged record of a type [`Core::record_delete`] does not
+    /// take (identities, known hosts, terminal themes): removed at once in
+    /// local mode before its first sync, otherwise a tombstone; its last
+    /// version goes to Recently deleted.
+    fn duplicate_remove(&self, record_id: Uuid) -> Result<(), CoreError> {
         let now = self.now();
-        let vault_id = self.with_session(|inner| {
+        let mut guard = self.inner();
+        let mut parts = super::records::parts(&mut guard)?;
+        let kind = parts
+            .session
+            .index
+            .get(&record_id)
+            .map(|record| record.kind)
+            .ok_or(CoreError::NotFound)?;
+        let vault_id = parts.session.ring.vault_id();
+        let bound = parts.store.vault(&vault_id)?.is_some_and(|row| row.bound);
+        let previous = parts
+            .store
+            .record(&vault_id, &record_id)?
+            .ok_or(CoreError::NotFound)?;
+        let (deletions, tombstones) = if !bound && previous.synced_revision == 0 {
+            (vec![(record_id, previous.class)], Vec::new())
+        } else {
+            let tombstone = parts.session.prepare_tombstone(kind, &previous, now)?;
+            (Vec::new(), vec![tombstone])
+        };
+        self.commit_records(&mut parts, Vec::new(), deletions, tombstones)
+    }
+
+    /// Rewrites every reference to `gone` in the other live records to
+    /// `keep` and forgets the pairs of `gone`, in one transaction.
+    fn duplicate_links_move(&self, keep: Uuid, gone: &[Uuid]) -> Result<Uuid, CoreError> {
+        let now = self.now();
+        self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
-            if session.index.get(&keep).is_none() || session.index.get(&drop_id).is_none() {
-                return Err(CoreError::NotFound);
-            }
-            let map = HashMap::from([(drop_id.to_string(), keep.to_string())]);
+            let map: HashMap<String, String> = gone
+                .iter()
+                .map(|id| (id.to_string(), keep.to_string()))
+                .collect();
             let targets: Vec<(Uuid, RecordKind, Map<String, Value>)> = session
                 .index
                 .iter()
-                .filter(|record| record.record_id != drop_id)
+                .filter(|record| !gone.contains(&record.record_id))
                 .filter_map(|record| {
                     let data = remap_data(record.data(), &map);
                     (data != *record.data()).then_some((record.record_id, record.kind, data))
@@ -3665,16 +3791,14 @@ impl Core {
                 for write in &writes {
                     tx.record_put(&write.row)?;
                 }
-                tx.duplicate_pairs_forget(&vault_id, &drop_id)
+                for id in gone {
+                    tx.duplicate_pairs_forget(&vault_id, id)?;
+                }
+                Ok(())
             })?;
             session.commit(writes);
             Ok(vault_id)
-        })?;
-        self.record_delete(super::dto::RecordsRef {
-            vault_id,
-            record_ids: vec![drop_id],
-        })?;
-        Ok(())
+        })
     }
 
     pub fn sync_brought_back(&self) -> Result<Vec<BroughtBackItem>, CoreError> {
@@ -3784,9 +3908,18 @@ const SECRET_MEMBERS: [&str; 6] = [
 
 const MASK: &str = "••••••";
 
+/// Lists of `env_var` objects (`host.ssh.env`, data-model 7.3), whose
+/// `value` is a secret (data-model 3.5: `secret(1024)`).
+const ENV_LISTS: [&str; 1] = ["env"];
+
 fn masked_value(name: &str, value: &Value) -> Value {
     if SECRET_MEMBERS.contains(&name) && !value.is_null() {
         return Value::String(MASK.to_owned());
+    }
+    if ENV_LISTS.contains(&name)
+        && let Value::Array(items) = value
+    {
+        return Value::Array(items.iter().map(masked_env_var).collect());
     }
     match value {
         Value::Object(map) => Value::Object(masked(map)),
@@ -3794,6 +3927,25 @@ fn masked_value(name: &str, value: &Value) -> Value {
             Value::Array(items.iter().map(|item| masked_value(name, item)).collect())
         }
         other => other.clone(),
+    }
+}
+
+/// An `env_var` with its `value` masked; its `name` stays readable.
+fn masked_env_var(item: &Value) -> Value {
+    match item {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(name, value)| {
+                    let value = if name == "value" && !value.is_null() {
+                        Value::String(MASK.to_owned())
+                    } else {
+                        masked_value(name, value)
+                    };
+                    (name.clone(), value)
+                })
+                .collect(),
+        ),
+        other => masked_value("", other),
     }
 }
 
@@ -3861,12 +4013,36 @@ fn differences(
         .collect()
 }
 
-fn duplicate_side(record: &IndexedRecord) -> DuplicateSide {
+/// The names of the account's devices by device id, from their
+/// `device_info` records (UI 13.6 and 13.7: the device of each version).
+fn device_names(session: &Session) -> HashMap<String, String> {
+    session
+        .index
+        .of_kind(RecordKind::DeviceInfo)
+        .filter_map(|record| {
+            let data = record.data();
+            let id = data.get("device_id").and_then(Value::as_str)?;
+            let name = data.get("name").and_then(Value::as_str)?;
+            Some((id.to_owned(), name.to_owned()))
+        })
+        .collect()
+}
+
+fn duplicate_side(
+    record: &IndexedRecord,
+    devices: &HashMap<String, String>,
+    this_device: Uuid,
+) -> DuplicateSide {
+    let device_id = record.payload.device_id;
+    let device = device_id.to_string();
     DuplicateSide {
         record_id: record.record_id,
         title: title_of(record.kind.name(), Some(record.data())),
         created_at: uuid_v7_timestamp(&record.record_id),
         modified_at: format_unix_ms(record.hlc().ms()),
+        device_name: devices.get(&device).cloned(),
+        device_id: device,
+        this_device: device_id == this_device,
     }
 }
 
@@ -3992,6 +4168,28 @@ fn conflict_rows(
         }
     }
     Ok(rows)
+}
+
+/// When `a` and `b` are live keys with one fingerprint (the key's natural
+/// key, data-model 18.6): every live key with it, by record id.
+fn key_copies(session: &Session, a: Uuid, b: Uuid) -> Option<Vec<Uuid>> {
+    let print = |id: &Uuid| {
+        session
+            .index
+            .get_kind(id, RecordKind::Key)
+            .and_then(|record| crate::keys::record_fingerprint(record.data()))
+    };
+    let fingerprint = print(&a).filter(|print_a| print(&b).as_ref() == Some(print_a))?;
+    let mut ids: Vec<Uuid> = session
+        .index
+        .of_kind(RecordKind::Key)
+        .filter(|record| {
+            crate::keys::record_fingerprint(record.data()).as_ref() == Some(&fingerprint)
+        })
+        .map(|record| record.record_id)
+        .collect();
+    ids.sort();
+    Some(ids)
 }
 
 /// Duplicate pairs not kept whose two records are both live.

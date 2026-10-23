@@ -12,8 +12,12 @@ publish.workspace = true
 [features]
 default = []
 # `Core::sync_conflict_insert_for_test`: writes a sync conflict copy without
-# a server, for the desktop's UI tests and screenshot run (UI 13.6). Never in
-# a release build (only dev-dependencies and the `screenshots` feature).
+# a server (UI 13.6); `Core::sync_duplicates_scan` and
+# `Core::sync_duplicate_copy_for_test`: list duplicate pairs as a pull would
+# and write a record's copy as another device would (UI 13.7). For the tests
+# and the desktop's screenshot run.
+# Never in a release build (only dev-dependencies and the `screenshots`
+# feature).
 test-hooks = []
 
 # shellpp-core must stay mobile-ready (docs/architecture.md, section 1.2):
@@ -73,6 +77,8 @@ webpki.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The integration tests use the test hooks (`Core::sync_duplicates_scan`).
+shellpp-core = { path = ".", features = ["test-hooks"] }
 # Canary test: captured log output must not contain secrets (docs/security.md, section 7).
 tracing-subscriber.workspace = true
 # Key format tests (tests/key_formats.rs): keys generated at run time are

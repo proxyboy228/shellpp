@@ -15,6 +15,7 @@ use shellpp_core::service::{ConflictChoice, SignInInput, SignInOutcome};
 use shellpp_server::db::{DbError, TxKind, Ty, Val};
 use shellpp_sync_api::api::Registration;
 use support::*;
+use uuid::Uuid;
 
 fn done(outcome: SignInOutcome) {
     assert!(
@@ -430,29 +431,78 @@ fn duplicates_from_two_devices_merge() {
     a.register(&server, &email, &password);
     let b = Client::empty("B");
     done(b.sign_in(&server, &email, &password));
-    let on_a = a.host("dup.example.com");
+    // The same group and host made on both devices before they sync; A's
+    // host is in A's group.
+    let group_a = a.save(None, RecordType::Group, json!({"name": "G"}));
+    let on_a = a.save(
+        None,
+        RecordType::Host,
+        json!({"address": "dup.example.com", "group_id": group_a.to_string()}),
+    );
+    let group_b = b.save(None, RecordType::Group, json!({"name": "G"}));
     let on_b = b.host("dup.example.com");
-    let group = b.save(None, RecordType::Group, json!({"name": "G"}));
-    let _ = group;
     a.sync();
     b.sync();
     let pairs = b.core.sync_duplicates().expect("pairs");
     assert_eq!(
         pairs.len(),
-        1,
-        "B's index had its own host when A's arrived"
+        2,
+        "B's index had its own host and group when A's arrived"
     );
-    let pair = &pairs[0];
-    assert!(
-        (pair.record_id == on_a || pair.record_id == on_b)
-            && (pair.other_record_id == on_a || pair.other_record_id == on_b)
+    for (pair, ids) in [("host", [on_a, on_b]), ("group", [group_a, group_b])] {
+        let found = pairs
+            .iter()
+            .find(|item| item.type_name == pair)
+            .unwrap_or_else(|| panic!("a {pair} pair"));
+        assert!(ids.contains(&found.record_id) && ids.contains(&found.other_record_id));
+        // Each side names the device of its last change (UI 13.6, 13.7).
+        for side in [&found.left, &found.right] {
+            let from_a = ids[0] == side.record_id;
+            assert_eq!(side.this_device, !from_a);
+            if from_a {
+                assert_eq!(side.device_name.as_deref(), Some("A"));
+            }
+        }
+    }
+    // Made on B after the pull: a host in A's group that jumps through A's
+    // host.
+    let web = b.save(
+        None,
+        RecordType::Host,
+        json!({"address": "web.example.com", "group_id": group_a.to_string(),
+            "ssh": {"jump_chain": [on_a.to_string()]}}),
     );
-    b.core.sync_duplicates_merge(on_b, on_a).expect("merged");
+    b.core
+        .sync_duplicates_merge(group_b, group_a)
+        .expect("groups merged");
+    b.core
+        .sync_duplicates_merge(on_b, on_a)
+        .expect("hosts merged");
     b.sync();
     a.sync();
-    assert_eq!(a.addresses(), vec!["dup.example.com"]);
-    assert_eq!(b.addresses(), vec!["dup.example.com"]);
+    assert_eq!(a.addresses(), vec!["dup.example.com", "web.example.com"]);
+    assert_eq!(b.addresses(), vec!["dup.example.com", "web.example.com"]);
     assert!(b.core.sync_duplicates().expect("pairs").is_empty());
+    // The links moved to the kept records, on both devices.
+    for client in [&a, &b] {
+        let data = client.data(web);
+        assert_eq!(
+            data["group_id"],
+            json!(group_b.to_string()),
+            "the group's hosts"
+        );
+        assert_eq!(
+            data["ssh"]["jump_chain"],
+            json!([on_b.to_string()]),
+            "the jump host"
+        );
+        let groups: Vec<Uuid> = client
+            .views(&[RecordType::Group])
+            .iter()
+            .map(|view| view.record_id())
+            .collect();
+        assert_eq!(groups, vec![group_b], "the other group is gone");
+    }
 }
 
 /// A server quota: the push past it leaves the records pending, counted

@@ -96,22 +96,28 @@ fn distinct(ids: &[Uuid]) -> Vec<Uuid> {
     ids.iter().copied().filter(|id| seen.insert(*id)).collect()
 }
 
+/// The kinds [`Core::record_delete`] removes.
+pub(super) fn deletable(kind: RecordKind) -> bool {
+    matches!(
+        kind,
+        RecordKind::Host
+            | RecordKind::Group
+            | RecordKind::Key
+            | RecordKind::Snippet
+            | RecordKind::SnippetPackage
+            | RecordKind::ForwardingRule
+            | RecordKind::HighlightRule
+            | RecordKind::Workspace
+    )
+}
+
 /// The kind of every id (hosts, groups and keys: the records with Remove
 /// and Undo, D50), or `not_found`.
 fn kinds_of(session: &Session, ids: &[Uuid]) -> Result<HashMap<Uuid, RecordKind>, CoreError> {
     let mut kinds = HashMap::new();
     for id in ids {
         match session.index.get(id).map(|record| record.kind) {
-            Some(
-                kind @ (RecordKind::Host
-                | RecordKind::Group
-                | RecordKind::Key
-                | RecordKind::Snippet
-                | RecordKind::SnippetPackage
-                | RecordKind::ForwardingRule
-                | RecordKind::HighlightRule
-                | RecordKind::Workspace),
-            ) => {
+            Some(kind) if deletable(kind) => {
                 kinds.insert(*id, kind);
             }
             _ => return Err(CoreError::NotFound),

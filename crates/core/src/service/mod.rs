@@ -39,6 +39,8 @@ pub(crate) mod session;
 pub mod snippets;
 mod ssh_config_io;
 pub mod ssh_export;
+#[cfg(test)]
+mod sync_duplicates_tests;
 mod sync_ops;
 
 use std::fmt;

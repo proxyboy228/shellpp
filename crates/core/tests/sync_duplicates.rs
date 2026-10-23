@@ -75,6 +75,61 @@ fn a_pair_shows_both_sides_masked_and_merges_into_either() {
     assert!(!live.contains(&older.record_id));
 }
 
+/// An env var's value is a secret (data-model 3.5, `env_var`): the
+/// comparison, a conflict and Recently deleted show it masked and its name
+/// in the clear. Each side names the device of its last change (as in UI
+/// 13.6). Debug shows no host data (docs/security.md, section 9.1).
+#[test]
+fn env_values_are_masked_and_debug_shows_no_host_data() {
+    let unlocked = first_run();
+    let core = &unlocked.core;
+    let value = random_hex();
+    let host = json!({"address": "env.example.com",
+        "ssh": {"env": [{"name": "DEPLOY_TOKEN", "value": value}]}});
+    let first = unlocked.host(host.clone());
+    let _second = unlocked.host(host);
+    assert_eq!(core.sync_duplicates_scan().expect("scan"), 1);
+    let pairs = core.sync_duplicates().expect("pairs");
+    let text = serde_json::to_string(&pairs).expect("json");
+    assert!(!text.contains(&value), "the value is masked: {text}");
+    let env = pairs[0]
+        .fields
+        .iter()
+        .find(|field| field.path == "ssh.env")
+        .expect("the env field");
+    assert_eq!(env.left, r#"[{"name":"DEPLOY_TOKEN","value":"••••••"}]"#);
+    assert!(!env.differs);
+    for side in [&pairs[0].left, &pairs[0].right] {
+        assert!(side.this_device, "made here");
+        assert!(!side.device_id.is_empty());
+    }
+    let debug = format!("{pairs:?}");
+    for host_data in ["env.example.com", "DEPLOY_TOKEN", value.as_str()] {
+        assert!(!debug.contains(host_data), "{host_data} in {debug}");
+    }
+
+    // A conflict copy of the host and its entry in Recently deleted.
+    let data = first.data.as_object().cloned().expect("data");
+    core.sync_conflict_insert_for_test(
+        first.record_id,
+        Some(data),
+        uuid::Uuid::now_v7(),
+        std::time::SystemTime::now(),
+    )
+    .expect("conflict");
+    let conflicts = serde_json::to_string(&core.sync_conflicts().expect("conflicts")).unwrap();
+    assert!(conflicts.contains("DEPLOY_TOKEN"));
+    assert!(!conflicts.contains(&value), "masked in a conflict");
+    core.record_delete(shellpp_core::service::dto::RecordsRef {
+        vault_id: unlocked.vault_id,
+        record_ids: vec![first.record_id],
+    })
+    .expect("deleted");
+    let trash = serde_json::to_string(&core.recently_deleted_list().expect("trash")).unwrap();
+    assert!(trash.contains("DEPLOY_TOKEN"));
+    assert!(!trash.contains(&value), "masked in Recently deleted");
+}
+
 #[test]
 fn keep_both_is_not_offered_again() {
     let unlocked = first_run();

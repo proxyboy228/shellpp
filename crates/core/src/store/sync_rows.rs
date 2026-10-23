@@ -515,11 +515,29 @@ impl WriteTx<'_> {
         )?)
     }
 
+    /// Lists a pair, or marks a listed one kept. A pair that is kept stays
+    /// kept: a pull that raises it again, in either order, does not offer
+    /// it again (data-model 16.8, "Keep both").
     pub fn duplicate_pair_put(&mut self, row: &DuplicatePairRow) -> Result<(), StoreError> {
+        // Listed the other way round: that row is the pair.
+        let reversed = self.tx.execute(
+            "UPDATE duplicate_pairs SET kept = kept OR ?4
+             WHERE vault_id = ?1 AND record_id = ?2 AND other_record_id = ?3",
+            params![
+                &row.vault_id.as_bytes()[..],
+                &row.other_record_id.as_bytes()[..],
+                &row.record_id.as_bytes()[..],
+                row.kept,
+            ],
+        )?;
+        if reversed > 0 {
+            return Ok(());
+        }
         self.tx.execute(
             "INSERT INTO duplicate_pairs (vault_id, record_id, other_record_id, found_at, kept)
              VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT (vault_id, record_id, other_record_id) DO UPDATE SET kept = excluded.kept",
+             ON CONFLICT (vault_id, record_id, other_record_id)
+             DO UPDATE SET kept = duplicate_pairs.kept OR excluded.kept",
             params![
                 &row.vault_id.as_bytes()[..],
                 &row.record_id.as_bytes()[..],
