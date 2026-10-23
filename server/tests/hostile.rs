@@ -71,6 +71,9 @@ fn rewrite_push(mode: &Mode, body: &[u8]) -> Option<Vec<u8>> {
     let Mode::Purge { hide, stale, .. } = mode else {
         return None;
     };
+    if stale.is_empty() {
+        return None; // Only the forced resync.
+    }
     let mut answer: Value = serde_json::from_slice(body).ok()?;
     let hidden = uuid::Uuid::from_bytes(*hide).to_string();
     for result in answer.get_mut("results")?.as_array_mut()? {
@@ -479,4 +482,38 @@ fn a_stale_current_after_a_forced_resync_is_not_adopted() {
     );
     assert!(b.core.sync_conflicts().expect("conflicts").is_empty());
     assert_eq!(b.addresses(), vec!["one.example.com", "two.example.com"]);
+}
+
+/// A forced resync whose snapshot lacks a synced record pushes it back and
+/// lists it in "Brought back"; "Delete again" deletes it everywhere.
+#[test]
+fn a_forced_resync_lists_what_it_brought_back_and_delete_again_works() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    let id = a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id();
+    proxy.set(Mode::Purge {
+        hide: *id.as_bytes(),
+        stale: String::new(),
+        sent_410: false,
+    });
+    let _ = b.core.sync_now();
+    let back = b.core.sync_brought_back().expect("brought back");
+    assert_eq!(back.len(), 1, "the hidden record is listed");
+    assert_eq!(back[0].record_id, id);
+    proxy.set(Mode::Pass);
+    b.core
+        .sync_brought_back_delete(&[id])
+        .expect("delete again");
+    assert!(b.core.sync_brought_back().expect("list").is_empty());
+    b.sync();
+    a.sync();
+    assert_eq!(a.addresses().len(), 1, "deleted on A too");
+    assert!(
+        a.core
+            .recently_deleted_list()
+            .expect("trash")
+            .iter()
+            .any(|item| item.record_id == id),
+        "and kept in A's Recently deleted"
+    );
 }

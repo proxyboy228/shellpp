@@ -320,3 +320,50 @@ fn two_concurrent_recovery_key_reissues_commit_exactly_one() {
     let ok = results.iter().filter(|r| r.is_ok()).count();
     assert_eq!(ok, 1, "exactly one reissue commits: {results:?}");
 }
+
+/// `recover/complete` for another email than the account's answers 422
+/// with `details.field = "email"` (section 5.2).
+#[test]
+fn recover_complete_with_another_email_is_refused() {
+    let server = Server::start();
+    let api = api(&server);
+    let account = register(&api, 2);
+    let info = api
+        .account(&account.tokens.access_token.0)
+        .expect("account");
+    let device = Uuid::now_v7();
+    let begun = api
+        .recover_begin(&wire::RecoverBeginRequest {
+            email: info.email.clone(),
+            recovery_auth_key: key(3),
+            device_id: device,
+        })
+        .expect("begin");
+    let error = api
+        .recover_complete(&wire::RecoverCompleteRequest {
+            recovery_ticket: begun.recovery_ticket,
+            totp_code: None,
+            email: format!("other-{}", info.email),
+            kdf: wire::Kdf::desktop(),
+            kdf_salt: B64(vec![1; 16]),
+            auth_key: key(11),
+            kek_wrap: B64(vec![4; 73]),
+            rotation: wire::Rotation {
+                epoch: 2,
+                prev_key_wrap: B64(vec![9; 73]),
+                recovery_wrap: B64(vec![10; 73]),
+            },
+            device_id: device,
+        })
+        .unwrap_err();
+    match error {
+        HttpError::Api {
+            status: 422,
+            details,
+            ..
+        } => {
+            assert_eq!(details.get("field").and_then(|v| v.as_str()), Some("email"));
+        }
+        other => panic!("expected 422, got {other:?}"),
+    }
+}
