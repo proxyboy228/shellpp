@@ -28,6 +28,7 @@ struct Ui {
     state: Entity<AppState>,
     screen: Entity<SftpScreen>,
     handle: AnyWindowHandle,
+    password: secrecy::SecretString,
 }
 
 impl Ui {
@@ -35,7 +36,9 @@ impl Ui {
         cx.update(crate::testing::init_ui);
         // Local listings and copies run on real threads.
         cx.executor().allow_parking();
-        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        let profile = TestProfile::new();
+        let password = profile.password().clone();
+        let state = cx.new(|cx| AppState::new(profile.into_unlocked(), cx));
         state.update(cx, |state, cx| {
             for host in hosts {
                 let data: Map<String, Value> = host.as_object().cloned().unwrap();
@@ -64,6 +67,7 @@ impl Ui {
             state,
             screen: screen.unwrap(),
             handle,
+            password,
         };
         ui.settle(cx);
         ui
@@ -388,6 +392,58 @@ fn new_folder_rename_and_delete_in_a_local_panel(cx: &mut TestAppContext) {
     assert!(!dir.path().join("docs").exists());
 }
 
+/// Run 8, C5 (security.md 8): a name conflict of a transfer that runs while
+/// the app is locked asks only after the unlock; nothing opens over the
+/// lock screen.
+#[gpui_kit::test]
+fn a_name_conflict_waits_while_the_app_is_locked(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[]);
+    let source = folder();
+    let target = tempfile::tempdir().unwrap();
+    std::fs::write(target.path().join("b.txt"), b"older").unwrap();
+    ui.open_local(cx, Side::Left, source.path());
+    ui.open_local(cx, Side::Right, target.path());
+    let entries: Vec<_> = ui.panel(cx, Side::Left).read_with(cx, |panel, _| {
+        panel
+            .rows()
+            .iter()
+            .filter(|row| row.name == "b.txt")
+            .cloned()
+            .collect()
+    });
+    ui.state.update(cx, |state, cx| state.lock(cx)).unwrap();
+    ui.settle(cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        ui.screen.update(cx, |screen, cx| {
+            screen.copy(Side::Left, entries, window, cx)
+        })
+    })
+    .unwrap();
+    let transfers = ui.transfers(cx);
+    ui.until(cx, "the conflict", |cx| {
+        transfers.read_with(cx, |transfers, _| {
+            transfers
+                .transfers()
+                .iter()
+                .any(|transfer| transfer.state == shellpp_ssh::transfer_queue::State::Conflict)
+        })
+    });
+    ui.settle(cx);
+    assert!(!ui.visible(cx, "sftp-conflict"), "a dialog over the lock");
+
+    let password = ui.password.clone();
+    ui.state
+        .update(cx, |state, cx| state.unlock(password, cx))
+        .detach();
+    ui.until(cx, "the conflict dialog after the unlock", |cx| {
+        ui.visible(cx, "sftp-conflict")
+    });
+    ui.click(cx, "sftp-conflict-rename");
+    ui.until(cx, "the copy under a new name", |_| {
+        target.path().join("b (2).txt").is_file()
+    });
+}
+
 #[gpui_kit::test]
 fn copying_between_panels_goes_through_the_queue(cx: &mut TestAppContext) {
     let ui = Ui::open(cx, &[]);
@@ -526,7 +582,7 @@ fn copies_onto_themselves_and_renames_over_items_are_refused(cx: &mut TestAppCon
 
 #[test]
 fn names_are_shown_safely_and_programs_are_named() {
-    use super::{display_name, runnable_extension};
+    use super::{copy_needs_question, display_name, runnable_extension};
     assert_eq!(display_name("report.txt"), "report.txt");
     assert_eq!(display_name("photo\u{202e}gpj.exe"), "photo<U+202E>gpj.exe");
     assert_eq!(display_name("a\u{7}b"), "a<U+0007>b");
@@ -534,4 +590,37 @@ fn names_are_shown_safely_and_programs_are_named() {
     assert_eq!(runnable_extension("deploy.sh").as_deref(), Some("sh"));
     assert_eq!(runnable_extension("notes.txt"), None);
     assert_eq!(runnable_extension("Makefile"), None);
+    // Types Windows runs that the first list missed (run 8, C5).
+    for name in [
+        "console.msc",
+        "app.appref-ms",
+        "help.chm",
+        "x.settingcontent-ms",
+    ] {
+        assert!(runnable_extension(name).is_some(), "{name}");
+    }
+    // The copy of a link is named after its target: "notes.txt" pointing to
+    // "run.cmd" asks before it runs, unless the user already agreed to run
+    // a .cmd, or chose the program (Open with).
+    assert_eq!(
+        copy_needs_question("run.cmd", true, None).as_deref(),
+        Some("cmd")
+    );
+    assert_eq!(copy_needs_question("run.cmd", true, Some("cmd")), None);
+    assert_eq!(
+        copy_needs_question("run.cmd", true, Some("exe")).as_deref(),
+        Some("cmd")
+    );
+    assert_eq!(copy_needs_question("run.cmd", false, None), None);
+    assert_eq!(copy_needs_question("notes.txt", true, None), None);
+    // The messages of an opened copy show a remote name safely too.
+    let tricky = "x\u{202e}gpj.exe";
+    for text in [
+        super::strings::uploaded_back(tricky),
+        super::strings::changed_on_server(tricky),
+        super::strings::kept_server_file(tricky),
+    ] {
+        assert!(!text.contains('\u{202e}'), "{text}");
+        assert!(text.contains("<U+202E>"), "{text}");
+    }
 }

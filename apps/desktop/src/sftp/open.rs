@@ -358,9 +358,12 @@ impl Opened {
 }
 
 /// Watches the opened copies of `screen`: a saved copy is uploaded back
-/// with a notification; a file changed on the server asks first.
+/// with a notification; a file changed on the server asks first. While the
+/// app is locked nothing is checked: no name or question shows over the
+/// lock screen (security.md 8; run 8, C5).
 pub fn watch<T: 'static>(
     screen: WeakEntity<T>,
+    state: gpui::Entity<AppState>,
     opened: impl Fn(&mut T) -> &mut Vec<Opened> + 'static,
     cx: &mut AsyncWindowContext,
 ) -> impl std::future::Future<Output = ()> + 'static {
@@ -368,6 +371,12 @@ pub fn watch<T: 'static>(
     async move {
         loop {
             cx.background_executor().timer(WATCH).await;
+            if !cx
+                .update(|_, cx| state.read(cx).is_unlocked())
+                .unwrap_or(false)
+            {
+                continue;
+            }
             // The copies to check now (not blocked by a question); those of
             // ended sessions leave the list (section 12 review: it only
             // grew, and they were checked every 2 s for ever).

@@ -27,8 +27,8 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement, SharedString, Task,
-    Window, div,
+    App, ClickEvent, Context, Entity, EventEmitter, FontWeight, IntoElement, SharedString,
+    Subscription, Task, Window, div,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
@@ -47,7 +47,7 @@ use super::panel::{self, Side};
 use super::strings;
 use crate::hosts::controls::{ControlButton, ControlKind, ICON_SIZE};
 use crate::sessions::SessionHandle;
-use crate::state::AppState;
+use crate::state::{AppState, AppStateEvent};
 use crate::theme::metrics;
 
 /// How often running transfers report their progress to the panel.
@@ -164,6 +164,8 @@ pub struct Transfers {
     /// The conflict dialog is open for this transfer.
     asking: Option<TransferId>,
     ticker: Option<Task<()>>,
+    /// Asks the waiting conflict again after an unlock (run 8, C5).
+    unlock: Option<Subscription>,
 }
 
 impl EventEmitter<TransfersEvent> for Transfers {}
@@ -190,6 +192,7 @@ impl Transfers {
             collapsed: false,
             asking: None,
             ticker: None,
+            unlock: None,
         }
     }
 
@@ -442,7 +445,13 @@ impl Transfers {
                 job.choice = Some(choice);
             }
         }
-        // The next waiting conflict, if any.
+        self.ask_next_conflict(window, cx);
+        self.pump(window, cx);
+        cx.notify();
+    }
+
+    /// The conflict dialog of the next waiting transfer, if any.
+    fn ask_next_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(next) = self
             .queue
             .transfers()
@@ -452,8 +461,6 @@ impl Transfers {
         {
             self.ask_conflict(next, window, cx);
         }
-        self.pump(window, cx);
-        cx.notify();
     }
 
     /// Stops the work of a running transfer (its `.part` stays).
@@ -517,7 +524,24 @@ impl Transfers {
 
     /// The conflict dialog (UI 5.7) for `id`.
     fn ask_conflict(&mut self, id: TransferId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.asking.is_some() {
+        // Nothing opens over the lock screen (security.md 8; run 8, C5):
+        // the transfer waits, and the unlock asks again. A lock also closes
+        // a dialog that was open, so the unlock asks that one again too.
+        if self.unlock.is_none() {
+            self.unlock = Some(cx.subscribe_in(
+                &self.state,
+                window,
+                |this: &mut Self, state, event: &AppStateEvent, window, cx| {
+                    if matches!(event, AppStateEvent::LockChanged(_))
+                        && state.read(cx).is_unlocked()
+                    {
+                        this.asking = None;
+                        this.ask_next_conflict(window, cx);
+                    }
+                },
+            ));
+        }
+        if self.asking.is_some() || !self.state.read(cx).is_unlocked() {
             return;
         }
         let Some(job) = self.jobs.get(&id) else {
