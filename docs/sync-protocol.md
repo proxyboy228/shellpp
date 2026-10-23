@@ -846,6 +846,7 @@ Inputs: the local pending version L (revision `rL`, stamp `(hL, dL)`), the serve
 
 | # | Condition | Result | Conflict copy |
 |---|---|---|---|
+| 0 | S is stale: `rS` is below the revision this device synced, or below the revision of L's base envelope (a record pushed back by a resync or a restore) | L wins: re-sealed above `rS`, pushed again | no ([decision] (D102)) |
 | 1 | S is `null` (record absent on the server, for example a purged tombstone) | live L: push again with `base_revision = 0`. Tombstone L: mark synced, nothing to push. | no |
 | 2 | `deleted` and `data` of L and S are equal (deep JSON equality) | adopt S | no |
 | 3 | `(hS, dS) = B` (S only re-encrypted the base) | L wins | no (stage 0 decision) |

@@ -57,6 +57,22 @@ UUIDs are 16-byte `BLOB`s; timestamps are `TEXT` in RFC 3339 UTC with millisecon
 - In the clear: every other column, including the KDF parameters, the salt, the vault and record ids, record classes, revisions, key epochs, the `meta` values, the unlock attempt counter and `local_settings` (interface preferences such as theme, layout and auto-lock; never secrets or host data).
 - This reveals metadata: the number of records per class, how often a record was edited (revision), creation times (UUIDv7 ids) and padded sizes.
 
+
+### 2.3 Schema 2 (stage 7, sync)
+
+Migration 1 → 2 runs at the first start of a version with sync, after the backup of section 1 (`backups/shellpp-<time>.db`); it only adds, so a schema 1 file keeps every row (tested). `PRAGMA user_version` becomes `2`.
+
+| Change | Columns | Written |
+|---|---|---|
+| `vaults` | `account_user_id BLOB NULL`, `server_url TEXT NULL` | the account and server a vault was last bound to |
+| `server_account` | `server_generation BLOB NULL` | the server's generation seen at binding and after each restore |
+| `recently_deleted` | `vault_id`, `record_id`, `class`, `deleted_at`, `origin` (`local`, `sync`), `envelope` | the last live envelope of a deleted record, 90 days, this device only (encrypted like any record) |
+| `resync_returned` | `vault_id`, `record_id`, `returned_at` | records a full resync pushed back ("Brought back") |
+| `duplicate_pairs` | `vault_id`, `record_id`, `other_record_id`, `found_at`, `kept` | possible duplicates raised by sync or the merge at sign-in |
+| `server_tls` | `server_url`, `kind` (`pinned`, `ca`), `cert_sha256`, `ca_der`, `created_at` | the trust choice for a sync server (public data, readable while locked) |
+
+With a bound account: `server_account.refresh_token` is a wrap blob of the refresh token under `local_secrets_key` (HKDF of the vault key with the device id and `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`; `local_auth.kdf_email` holds the account email; synced records keep `synced_revision`, `server_seq` and, while a local change is pending, `base_envelope`; deletions write tombstones. The setting `sync.toggles` (object: toggle → bool) chooses what the personal vault syncs on this device.
+
 ## 3. Records
 
 ### 3.1 Rows

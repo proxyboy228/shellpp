@@ -1,5 +1,9 @@
-//! The run 7 states of the screenshot run (plan, section 2): the top bar
-//! with the update button of an update found (D100, item 4).
+//! The run 7 states of the screenshot run (plan, sections 2 and 3.5): the
+//! top bar with the update button of an update found (D100, item 4), and the
+//! sync interface of stage 7: the connect wizard, the certificate trust
+//! dialog (a made-up certificate: no server is asked), Settings ▸ Account &
+//! Sync of a bound account (the status set by hand), Recently deleted after
+//! a host of the demo was deleted, and Review.
 //!
 //! The update state sets the update found of the run by hand (no update
 //! source is asked); the reset clears it ([`reset`]), so the other states
@@ -13,7 +17,14 @@ use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 1] = [ShotState::TopBarUpdate];
+pub const STATES: [ShotState; 6] = [
+    ShotState::TopBarUpdate,
+    ShotState::SyncConnect,
+    ShotState::SyncTrust,
+    ShotState::SyncAccount,
+    ShotState::SyncTrash,
+    ShotState::SyncReview,
+];
 
 /// The version the update state shows.
 const VERSION: &str = "0.2.0";
@@ -25,6 +36,33 @@ fn failed(shot: ShotState, reason: &str) -> ScreenshotError {
 /// Clears what these states set (the reset of the demo window calls it).
 pub fn reset(cx: &mut gpui::App) {
     cx.set_global(crate::updates::Found(None));
+}
+
+/// The bound account the Account & Sync state shows.
+fn bound_status() -> shellpp_core::service::SyncStatus {
+    shellpp_core::service::SyncStatus {
+        bound: true,
+        signed_in: true,
+        server_url: Some("https://sync.example.com".into()),
+        email: Some("demo@example.com".into()),
+        last_sync_at: Some("2026-10-23T09:15:00Z".into()),
+        pending: 1,
+        conflicts: 1,
+        ..Default::default()
+    }
+}
+
+/// A made-up certificate for the trust dialog.
+fn certificate() -> shellpp_core::sync::TlsProblem {
+    let der = vec![0x30, 0x82, 0x01, 0x0a];
+    shellpp_core::sync::TlsProblem::UnknownIssuer(shellpp_core::sync::CertInfo {
+        subject: "CN=sync.home.arpa".into(),
+        issuer: "CN=Caddy Local Authority - ECC Intermediate".into(),
+        not_before: "2026-10-23T00:00:00Z".into(),
+        not_after: "2026-10-23T12:00:00Z".into(),
+        sha256: shellpp_core::sync::tls::sha256(&der),
+        der,
+    })
 }
 
 /// From the reset demo window: the state's own steps.
@@ -44,6 +82,74 @@ pub async fn reach(
                     format!("https://github.com/proxyboy228/shellpp/releases/tag/v{VERSION}"),
                 ))));
             });
+            settle(cx, handle).await
+        }
+        ShotState::SyncConnect | ShotState::SyncTrust => {
+            let state = _state.clone();
+            let trust = shot == ShotState::SyncTrust;
+            cx.update_window(handle, move |_, window, cx| {
+                let dialog = crate::sync_ui::open_connect(state, false, window, cx);
+                if trust {
+                    dialog.update(cx, |dialog, cx| {
+                        dialog.step = crate::sync_ui::ConnectStep::Trust(certificate());
+                        cx.notify();
+                    });
+                }
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
+        ShotState::SyncAccount => {
+            let state = _state.clone();
+            cx.update_window(handle, move |_, window, cx| {
+                state.update(cx, |state, cx| state.set_sync_status(bound_status(), cx));
+                crate::settings::open(state, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await?;
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.click(gpui::SharedString::from("settings-nav-account"), cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
+        ShotState::SyncTrash => {
+            let state = _state.clone();
+            cx.update_window(handle, move |_, window, cx| {
+                let core = state.read(cx).core().cloned();
+                if let Some(core) = core
+                    && let Some(vault) = core
+                        .vaults()
+                        .ok()
+                        .and_then(|v| v.first().map(|v| v.vault_id))
+                    && let Ok(hosts) =
+                        core.records_query(shellpp_core::service::dto::RecordsQuery {
+                            vault_id: None,
+                            types: vec![shellpp_core::service::dto::RecordType::Host],
+                            scope: shellpp_core::service::dto::QueryScope::All,
+                            text: None,
+                            tags: Vec::new(),
+                            sort: shellpp_core::service::dto::SortMode::Name,
+                        })
+                    && let Some(host) = hosts.first()
+                {
+                    let _ = core.record_delete(shellpp_core::service::dto::RecordsRef {
+                        vault_id: vault,
+                        record_ids: vec![host.record_id()],
+                    });
+                }
+                crate::sync_ui::open_trash(state, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
+        ShotState::SyncReview => {
+            let state = _state.clone();
+            cx.update_window(handle, move |_, window, cx| {
+                crate::sync_ui::open_review(state, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
         }
         _ => Err(failed(shot, "not a run 7 state")),
@@ -68,6 +174,16 @@ pub fn check(
     match shot {
         ShotState::TopBarUpdate if shown(cx, "top-bar-update")? => Ok(()),
         ShotState::TopBarUpdate => Err(failed(shot, "no update button in the top bar")),
+        ShotState::SyncConnect if shown(cx, "sync-server")? => Ok(()),
+        ShotState::SyncTrust if shown(cx, "sync-fingerprint")? => Ok(()),
+        ShotState::SyncAccount if shown(cx, "sync-account-email")? => Ok(()),
+        ShotState::SyncTrash if shown(cx, "sync-trash")? => Ok(()),
+        ShotState::SyncReview if shown(cx, "sync-review")? => Ok(()),
+        ShotState::SyncConnect
+        | ShotState::SyncTrust
+        | ShotState::SyncAccount
+        | ShotState::SyncTrash
+        | ShotState::SyncReview => Err(failed(shot, "the sync state is not shown")),
         _ => Err(failed(shot, "not a run 7 state")),
     }
 }

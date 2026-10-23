@@ -1621,3 +1621,19 @@ Status: run 7 decision, 2026-10-23 (plan, section 3.1). Amends the stage 0 choic
 - `shellpp-server migrate` applies them in order (one transaction per step, a `schema_migrations` row each); the first creates the server generation. `serve` refuses another schema version.
 
 **Spec impact:** docs/sync-protocol.md, section 14 (crates), docs/architecture.md, section 8.2 (server row).
+
+### 102. Sync client rules settled while building stage 7 (run 7)
+
+Status: run 7 decision, 2026-10-23 (plan, sections 3.2-3.4 and 5). Clarifies docs/sync-protocol.md, sections 4.4, 5.1, 6.5-6.9, and docs/data-model.md, section 18.5; found by the run's reviews.
+
+**Decision:**
+
+- **A stale server version never wins.** A server version (pulled, or `current` of a push conflict) whose revision is below the revision this device synced, or below the revision of the base envelope a pushed-back record keeps, is stale: the local version is re-sealed above it and pushed again, with no conflict copy, whatever rules 2-5 of section 6.7 would say. Otherwise a server that forces a resync could bring back an old version of a revoked `known_host` or a member pin through rule 4.
+- **Only authenticated versions count as received.** The list of received records of a full resync and the server revisions of a restore are built only from versions that opened; the restore applies the snapshot first, then marks the synced revisions (section 6.9, steps 1 then 2), and refuses a snapshot the page limit cut off. A `conflict` without `current` is refused as an integrity failure.
+- **The merge at sign-in keeps near-duplicates.** A local record is dropped in favour of an account record only when its data, with the references already mapped to account records, equals the account record's; a record that only shares the natural key (for example a host in another group) is kept with a new id and raised as a duplicate pair for "Merge / Keep both" (UI 13.7). The pre-merge backup of the database is written in `backups/`.
+- **Signing in to a rolled-back server.** When the account bundle reports a personal epoch below the local one and its `kek_wrap` opens to the key this device holds for that epoch, the device signs in (the account row and tokens are stored) but no key row changes, and it stops with "server state rolled back"; the re-post (section 5.1) is then possible without a second sign-in. A wrap that opens to another key changes nothing.
+- **Push batches.** A cycle pushes every waiting batch (500 items each); only the rounds that re-push after conflicts are capped at three.
+- **Recovery key reissue of a bound vault** shows the new key after the server committed it (the local flow of stage 1 did the same); the "I saved it" confirmation before sending (section 5.3, step 4) is left to the interface's next pass.
+- **Rotations through the server** rewrap the `device` row when "remember on this device" is on (the keychain is read before, under the `remember` lock).
+
+**Spec impact:** docs/sync-protocol.md, sections 6.7 (a rule 0 before rule 1), 6.9 (step order, authenticated lists), 5.1 (sign-in to a rolled-back server), 5.3 (key shown after commit); docs/data-model.md, section 18.5 (near-duplicates).

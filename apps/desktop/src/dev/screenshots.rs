@@ -358,6 +358,17 @@ pub enum ShotState {
     // Run 7, plan 2.4 (D100): `run7_shot`.
     /// The top bar with the update button of an update found.
     TopBarUpdate,
+    // Run 7, plan 3.5 (stage 7): `run7_shot`.
+    /// The connect wizard on its server step.
+    SyncConnect,
+    /// The certificate trust dialog of an unknown issuer.
+    SyncTrust,
+    /// Settings ▸ Account & Sync of a bound account.
+    SyncAccount,
+    /// Recently deleted with a deleted host.
+    SyncTrash,
+    /// Review with nothing to review.
+    SyncReview,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -496,7 +507,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 95] = [
+    pub const ALL: [Self; 100] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -559,6 +570,11 @@ impl ShotState {
         Self::SerialDialogManualPort,
         Self::SettingsUpdates,
         Self::TopBarUpdate,
+        Self::SyncConnect,
+        Self::SyncTrust,
+        Self::SyncAccount,
+        Self::SyncTrash,
+        Self::SyncReview,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -724,6 +740,11 @@ impl ShotState {
             Self::SerialDialogManualPort => "serial-dialog-manual-port",
             Self::SettingsUpdates => "settings-updates",
             Self::TopBarUpdate => "top-bar-update",
+            Self::SyncConnect => "sync-connect",
+            Self::SyncTrust => "sync-trust",
+            Self::SyncAccount => "sync-account",
+            Self::SyncTrash => "sync-trash",
+            Self::SyncReview => "sync-review",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1839,7 +1860,12 @@ pub async fn reach_state(
         ShotState::NewTabWorkspacesMissing
         | ShotState::SerialDialogManualPort
         | ShotState::SettingsUpdates => run6_shot::reach(cx, handle, root, state, shot_state).await,
-        ShotState::TopBarUpdate => run7_shot::reach(cx, handle, root, state, shot_state).await,
+        ShotState::TopBarUpdate
+        | ShotState::SyncConnect
+        | ShotState::SyncTrust
+        | ShotState::SyncAccount
+        | ShotState::SyncTrash
+        | ShotState::SyncReview => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2086,7 +2112,12 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             ShotState::NewTabWorkspacesMissing
             | ShotState::SerialDialogManualPort
             | ShotState::SettingsUpdates => Err("checked with the run 6 screens"),
-            ShotState::TopBarUpdate => Err("checked with the run 7 screens"),
+            ShotState::TopBarUpdate
+            | ShotState::SyncConnect
+            | ShotState::SyncTrust
+            | ShotState::SyncAccount
+            | ShotState::SyncTrash
+            | ShotState::SyncReview => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
