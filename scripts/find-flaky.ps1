@@ -27,7 +27,10 @@ param(
     [switch] $ClientOnly
 )
 
-$ErrorActionPreference = 'Stop'
+# 'Continue': in Windows PowerShell 5.1 a native command's stderr through
+# 2>&1 is an error record, and 'Stop' would end the run at cargo's first
+# progress line. Exit codes are checked instead.
+$ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $repo 'target\flaky' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
