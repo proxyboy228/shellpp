@@ -949,6 +949,11 @@ pub fn push_back_missing(
 /// revision becomes the server's (or 0 when it has none), so whatever is
 /// newer here, or missing there, is pushed again. Returns, per record, the
 /// synced revision held before, for step 3.
+///
+/// A synced revision is only ever lowered: a server revision above it is a
+/// version the pull received but did not apply (a type that is off, a
+/// refused key epoch, a payload that did not open), and marking it would
+/// take a pending local edit out of the push (review finding; section 6.10).
 pub fn restore_mark(
     store: &mut Store,
     session: &mut Session,
@@ -960,7 +965,7 @@ pub fn restore_mark(
     let mut rows = Vec::new();
     for row in store.records(&vault_id, Some(classes))? {
         let server_revision = server.get(&row.record_id).copied().unwrap_or(0);
-        if row.synced_revision == server_revision {
+        if row.synced_revision <= server_revision {
             continue;
         }
         held.insert(row.record_id, row.synced_revision);

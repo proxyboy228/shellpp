@@ -763,6 +763,111 @@ fn a_type_turned_on_again_gets_what_it_missed() {
     );
 }
 
+/// Review finding (resync and section 6.10): a full resync of a class
+/// while one of its types is off must leave that type's pending local edit
+/// pending. The pulled version of the skipped type is received but not
+/// applied; marking the synced revision from it would drop the local edit
+/// from the push, and the devices would never meet again.
+#[test]
+fn a_resync_keeps_a_pending_edit_of_a_type_that_is_off() {
+    use shellpp_core::service::snippets::RecordInput;
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    let rule = |client: &Client, record_id: Option<uuid::Uuid>, pattern: &str| {
+        client
+            .core
+            .highlight_rule_save(RecordInput {
+                vault_id: client.vault_id(),
+                record_id,
+                data: json!({"kind": "custom", "pattern": pattern, "color_dark": "#AA3311"})
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            })
+            .expect("rule saved")
+            .record
+            .record_id
+    };
+    let pattern = |client: &Client, id: uuid::Uuid| {
+        client
+            .core
+            .highlight_rules_list(client.vault_id())
+            .expect("rules")
+            .into_iter()
+            .find(|view| view.record.record_id == id)
+            .and_then(|view| view.pattern)
+    };
+    let toggles = |client: &Client, value: Value| {
+        client
+            .core
+            .settings_set(shellpp_core::service::dto::SettingsSetInput {
+                values: std::collections::BTreeMap::from([("sync.toggles".to_owned(), value)]),
+                reset: Vec::new(),
+            })
+            .expect("toggles");
+    };
+    let id = rule(&a, None, "first");
+    a.sync();
+    b.sync();
+    assert_eq!(pattern(&b, id).as_deref(), Some("first"));
+    // B stops syncing the appearance class, and both edit the rule.
+    toggles(
+        &b,
+        json!({"highlight_rules": false, "terminal_themes": false}),
+    );
+    rule(&a, Some(id), "from-a");
+    a.sync();
+    rule(&b, Some(id), "from-b");
+    // Themes back on, rules still off: a full resync of the class, which
+    // receives A's version of the rule and must not apply or mark it.
+    toggles(
+        &b,
+        json!({"highlight_rules": false, "terminal_themes": true}),
+    );
+    b.sync();
+    // Rules back on: the two versions meet (a conflict, rule 5 of 6.7).
+    toggles(
+        &b,
+        json!({"highlight_rules": true, "terminal_themes": true}),
+    );
+    b.sync();
+    a.sync();
+    b.sync();
+    let on_a = pattern(&a, id);
+    let on_b = pattern(&b, id);
+    assert_eq!(on_a, on_b, "the devices meet again");
+    let kept: Vec<String> = [on_a.clone()]
+        .into_iter()
+        .flatten()
+        .chain(
+            b.core
+                .sync_conflicts()
+                .expect("conflicts")
+                .into_iter()
+                .filter_map(|item| {
+                    item.losing_data.and_then(|data| {
+                        data.get("pattern")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                }),
+        )
+        .collect();
+    assert!(
+        kept.iter().any(|text| text == "from-b"),
+        "B's edit is kept, as the winner or as the conflict copy: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|text| text == "from-a"),
+        "A's edit is kept too: {kept:?}"
+    );
+}
+
 /// "Forgot password? → Restore from sync" (UI 13.2; section 5.2): the
 /// recovery key resets the account password through the server with a new
 /// personal epoch; the device unlocks, the other one is signed out and
