@@ -227,7 +227,8 @@ with **Sync now**.
   nothing.
 - **Conflicts**: when two devices changed the same item, the newer change
   is in place and the other version is kept. Account & Sync then shows
-  "Conflicts: N", and the host's card a **Conflict** badge; both open
+  "Conflicts: N", and the item's card (a host, key, snippet and so on) a
+  **Conflict** badge; both open
   **Compare versions**, the current version and the other one side by side
   with the device and time of each and the differing fields marked.
   **Keep this** or **Keep other** decides; **Close** leaves it for later.
