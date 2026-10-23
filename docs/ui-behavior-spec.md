@@ -2081,7 +2081,10 @@ Settings → Security (see 12.1):
 - When sync keeps a losing version of an object, the object's card shows a conflict badge
   in every list (hosts, groups, keys, identities, forwarding rules, snippets, snippet
   packages, known hosts),
-  and Account & Sync (12.2) shows "Conflicts: N".
+  and Account & Sync (12.2) shows "Conflicts: N". In a list row the badge sits in the name
+  cell after the title; where the title would be cut below 56 px it takes a compact form (a
+  20 px icon with the same tooltip and click), as the "revoked" badge of a known host does,
+  and the title truncates first, so no badge reaches the next column. [decision] (D103)
 - A click on the badge, or on a conflict in the list opened from "Conflicts: N", opens the
   comparison dialog:
   - the two versions side by side: on the left, the current version; on the right, the
