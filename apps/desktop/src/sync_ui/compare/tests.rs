@@ -329,6 +329,43 @@ fn every_type_gets_the_field_list() {
     );
 }
 
+/// An original still here that this device cannot read is shown as
+/// "Missing"; "Keep other" is refused with the reason (the core reports
+/// `KeepOther::Unreadable`).
+#[test]
+fn an_unreadable_current_version_explains_keep_other() {
+    let item = ConflictItem {
+        conflict_id: Uuid::now_v7(),
+        original_record_id: Uuid::now_v7(),
+        original_type: "known_host".into(),
+        title: "known_host".into(),
+        losing_deleted: false,
+        losing_data: Some(map(json!({"comment": "edited elsewhere"}))),
+        losing_device_id: Some(Uuid::now_v7().to_string()),
+        differences: Vec::new(),
+        current_deleted: false,
+        current_missing: true,
+        current_data: None,
+        keep_other: KeepOther::Unreadable,
+        current_device_id: None,
+        current_device_name: None,
+        losing_device_name: None,
+        current_this_device: false,
+        losing_this_device: false,
+        current_changed_at: None,
+        losing_changed_at: None,
+    };
+    assert!(!item.keep_other.allowed());
+    assert_eq!(
+        super::keep_other_note(&item),
+        Some(super::strings::CURRENT_UNREADABLE)
+    );
+    assert_eq!(
+        super::absent(&item, super::Side::Current),
+        Some(("missing", super::strings::MISSING))
+    );
+}
+
 impl Ui {
     /// Opens the comparison of `conflict` (as a row of the list does).
     fn open_compare(&self, conflict: Uuid, cx: &mut TestAppContext) -> ConflictItem {

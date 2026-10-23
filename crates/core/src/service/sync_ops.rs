@@ -267,7 +267,8 @@ pub struct ConflictItem {
     pub current_deleted: bool,
     /// The original is not here (data-model 15: shown as "missing"): no
     /// row (purged) or one this device cannot open (its epoch key is
-    /// missing). "Keep other" recreates it.
+    /// missing, damaged). "Keep other" recreates a purged one; one still
+    /// here but unreadable is never replaced ([`KeepOther::Unreadable`]).
     pub current_missing: bool,
     /// The current version's data with secret members masked (`None` when
     /// it is deleted or missing).
@@ -286,13 +287,22 @@ pub struct ConflictItem {
     pub losing_changed_at: Option<String>,
 }
 
-/// One field of a conflict's comparison.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// One field of a conflict's comparison. `Debug` shows the path only: the
+/// values carry addresses, user names and commands (security 9.1).
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct FieldDifference {
     /// Dotted path, for example `ssh.port`.
     pub path: String,
     pub current: String,
     pub other: String,
+}
+
+impl std::fmt::Debug for FieldDifference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FieldDifference")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What "Keep other" does with a conflict (UI 13.6). The type rules of
@@ -313,6 +323,11 @@ pub enum KeepOther {
     /// Refused: this app cannot write the object's type (one from a newer
     /// client, or one it never writes, as `member_pin`).
     Unsupported,
+    /// Refused: the current version is here but this device cannot read
+    /// it (damaged, its epoch key missing, a newer payload version), so
+    /// its type rules cannot be checked: it is never replaced or dropped
+    /// for a copy.
+    Unreadable,
 }
 
 impl KeepOther {
@@ -408,13 +423,24 @@ impl std::fmt::Debug for PairField {
     }
 }
 
-/// A record a resync brought back (section 6.9, step 5).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A record a resync brought back (section 6.9, step 5). `Debug` shows no
+/// title: it carries addresses and user names (security 9.1).
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct BroughtBackItem {
     pub record_id: Uuid,
     pub type_name: String,
     pub title: String,
     pub returned_at: String,
+}
+
+impl std::fmt::Debug for BroughtBackItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BroughtBackItem")
+            .field("record_id", &self.record_id)
+            .field("type_name", &self.type_name)
+            .field("returned_at", &self.returned_at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A device of the account (UI 12.2).
@@ -3435,6 +3461,7 @@ impl Core {
                     .unwrap_or(false);
                 let keep_other = keep_other_of(
                     &original_type,
+                    unreadable(&mut session.ring, stored_row.as_ref()),
                     current_data.as_ref(),
                     losing_deleted,
                     losing_data.as_ref(),
@@ -3602,7 +3629,13 @@ impl Core {
                 .and_then(|previous| open_payload(&mut session.ring, previous))
                 .filter(|current| !current.deleted);
             let current_data = current.as_ref().and_then(|current| current.data.as_ref());
-            let keep = keep_other_of(type_name, current_data, losing_deleted, losing.as_ref());
+            let keep = keep_other_of(
+                type_name,
+                unreadable(&mut session.ring, previous.as_ref()),
+                current_data,
+                losing_deleted,
+                losing.as_ref(),
+            );
             if !keep.allowed() {
                 return Err(CoreError::ReadOnly);
             }
@@ -3831,15 +3864,12 @@ impl Core {
     /// data-model 18.3): the one with the smallest record id stays and
     /// takes `certificate`, `passphrase` and `fido2` where it lacks them.
     pub fn sync_duplicates_merge(&self, keep: Uuid, drop_id: Uuid) -> Result<(), CoreError> {
-        let (kind, copies) = self.with_session(|inner| {
+        let copies = self.with_session(|inner| {
             let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
-            let (Some(_), Some(other)) = (session.index.get(&keep), session.index.get(&drop_id))
-            else {
+            if session.index.get(&keep).is_none() || session.index.get(&drop_id).is_none() {
                 return Err(CoreError::NotFound);
-            };
-            let copies =
-                key_copies(session, keep, drop_id).map(|ids| (session.ring.vault_id(), ids));
-            Ok((other.kind, copies))
+            }
+            Ok(key_copies(session, keep, drop_id).map(|ids| (session.ring.vault_id(), ids)))
         })?;
         if let Some((vault_id, ids)) = copies {
             let kept = self
@@ -3854,82 +3884,66 @@ impl Core {
             self.duplicate_links_move(kept, &gone)?;
             return Ok(());
         }
-        let vault_id = self.duplicate_links_move(keep, &[drop_id])?;
-        if super::records::deletable(kind) {
-            self.record_delete(super::dto::RecordsRef {
-                vault_id,
-                record_ids: vec![drop_id],
-            })?;
-        } else {
-            self.duplicate_remove(drop_id)?;
-        }
-        Ok(())
+        self.duplicate_merge_into(keep, drop_id)
     }
 
-    /// Removes the merged record of a type [`Core::record_delete`] does not
-    /// take (identities, known hosts, terminal themes): removed at once in
-    /// local mode before its first sync, otherwise a tombstone; its last
-    /// version goes to Recently deleted.
-    fn duplicate_remove(&self, record_id: Uuid) -> Result<(), CoreError> {
+    /// The merge of two records that are not copies of one key: the links
+    /// to `drop_id` move to `keep`, its pairs are forgotten and it is
+    /// removed, in one local transaction (data-model 18.3), so a failure
+    /// leaves both records, their links and the pair as they were. Removed
+    /// at once in local mode before its first sync, otherwise a tombstone;
+    /// its last version goes to Recently deleted. A kind
+    /// [`Core::record_delete`] takes gets its Undo as there; nothing else of
+    /// that removal applies, as nothing links `drop_id` any more (its
+    /// group's children, its package's snippets and the workspaces with it
+    /// now name `keep`).
+    fn duplicate_merge_into(&self, keep: Uuid, drop_id: Uuid) -> Result<(), CoreError> {
         let now = self.now();
         let mut guard = self.inner();
         let mut parts = super::records::parts(&mut guard)?;
-        let kind = parts
+        let writes = link_writes(parts.store, parts.session, keep, &[drop_id], now)?;
+        let record = parts
             .session
             .index
-            .get(&record_id)
-            .map(|record| record.kind)
+            .get(&drop_id)
             .ok_or(CoreError::NotFound)?;
+        let kind = record.kind;
+        let undo = super::records::deletable(kind).then(|| record.payload.clone());
         let vault_id = parts.session.ring.vault_id();
         let bound = parts.store.vault(&vault_id)?.is_some_and(|row| row.bound);
         let previous = parts
             .store
-            .record(&vault_id, &record_id)?
+            .record(&vault_id, &drop_id)?
             .ok_or(CoreError::NotFound)?;
         let (deletions, tombstones) = if !bound && previous.synced_revision == 0 {
-            (vec![(record_id, previous.class)], Vec::new())
+            (vec![(drop_id, previous.class)], Vec::new())
         } else {
             let tombstone = parts.session.prepare_tombstone(kind, &previous, now)?;
             (Vec::new(), vec![tombstone])
         };
-        self.commit_records(&mut parts, Vec::new(), deletions, tombstones)
+        self.commit_records_then(&mut parts, writes, deletions, tombstones, true, |tx| {
+            tx.duplicate_pairs_forget(&vault_id, &drop_id)
+        })?;
+        if let Some(payload) = undo {
+            parts.session.undo.put(drop_id, kind, payload, now);
+        }
+        tracing::info!("duplicate merged");
+        Ok(())
     }
 
     /// Rewrites every reference to `gone` in the other live records to
     /// `keep` and forgets the pairs of `gone`, in one transaction.
-    fn duplicate_links_move(&self, keep: Uuid, gone: &[Uuid]) -> Result<Uuid, CoreError> {
+    fn duplicate_links_move(&self, keep: Uuid, gone: &[Uuid]) -> Result<(), CoreError> {
         let now = self.now();
-        self.with_session(|inner| {
-            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
-            let vault_id = session.ring.vault_id();
-            let map: HashMap<String, String> = gone
-                .iter()
-                .map(|id| (id.to_string(), keep.to_string()))
-                .collect();
-            let targets: Vec<(Uuid, RecordKind, Map<String, Value>)> = session
-                .index
-                .iter()
-                .filter(|record| !gone.contains(&record.record_id))
-                .filter_map(|record| {
-                    let data = remap_data(record.data(), &map);
-                    (data != *record.data()).then_some((record.record_id, record.kind, data))
-                })
-                .collect();
-            let mut writes = Vec::new();
-            for (id, kind, data) in targets {
-                writes.push(session.prepare_write(&inner.store, kind, id, data, now)?);
+        let mut guard = self.inner();
+        let mut parts = super::records::parts(&mut guard)?;
+        let writes = link_writes(parts.store, parts.session, keep, gone, now)?;
+        let vault_id = parts.session.ring.vault_id();
+        self.commit_records_then(&mut parts, writes, Vec::new(), Vec::new(), true, |tx| {
+            for id in gone {
+                tx.duplicate_pairs_forget(&vault_id, id)?;
             }
-            inner.store.write(|tx| {
-                for write in &writes {
-                    tx.record_put(&write.row)?;
-                }
-                for id in gone {
-                    tx.duplicate_pairs_forget(&vault_id, id)?;
-                }
-                Ok(())
-            })?;
-            session.commit(writes);
-            Ok(vault_id)
+            Ok(())
         })
     }
 
@@ -4102,11 +4116,22 @@ fn revoked(data: &Map<String, Value>) -> bool {
     data.get("marker").and_then(Value::as_str) == Some("revoked")
 }
 
+/// The original's row is live but this device cannot read it (it is left
+/// out of the index: damaged, its epoch key missing, a newer payload
+/// version).
+fn unreadable(ring: &mut KeyRing, row: Option<&RecordRow>) -> bool {
+    row.is_some_and(|row| {
+        !row.tombstone && !matches!(vault::open_row(ring, row), vault::Opened::Live(..))
+    })
+}
+
 /// What "Keep other" does with a conflict (UI 13.6): the type rules of
 /// sync-protocol 6.7 hold, so a revoked known host key stays revoked.
-/// `current` is `None` when the current version is deleted or missing.
+/// `current` is `None` when the current version is deleted or missing;
+/// `current_unreadable` when it is live here but cannot be read.
 fn keep_other_of(
     type_name: &str,
+    current_unreadable: bool,
     current: Option<&Map<String, Value>>,
     losing_deleted: bool,
     losing: Option<&Map<String, Value>>,
@@ -4115,6 +4140,11 @@ fn keep_other_of(
     // newer client: this app never writes them.
     if RecordKind::from_name(type_name).is_none() {
         return KeepOther::Unsupported;
+    }
+    // Its rules (a revoked key stays revoked) cannot be checked against a
+    // version this device cannot read: the copy never replaces it.
+    if current_unreadable {
+        return KeepOther::Unreadable;
     }
     if type_name == RecordKind::KnownHost.name()
         && let Some(current) = current.filter(|current| revoked(current))
@@ -4398,17 +4428,63 @@ fn key_copies(session: &Session, a: Uuid, b: Uuid) -> Option<Vec<Uuid>> {
     Some(ids)
 }
 
-/// Duplicate pairs not kept whose two records are both live.
+/// The next versions of the live records (other than `gone`) that link one
+/// of `gone`, the links rewritten to `keep` (UI 13.7; data-model 18.3).
+/// History and log entries link hosts too (`history_entry`,
+/// `history_hint_state`, `connection_log_entry`): their lazy classes are
+/// loaded first (D10), as the conflict resolution does.
+fn link_writes(
+    store: &Store,
+    session: &mut Session,
+    keep: Uuid,
+    gone: &[Uuid],
+    now: SystemTime,
+) -> Result<Vec<super::session::PendingWrite>, CoreError> {
+    for class in crate::model::types::LAZY_CLASSES {
+        session.ensure_class(store, class)?;
+    }
+    let map: HashMap<String, String> = gone
+        .iter()
+        .map(|id| (id.to_string(), keep.to_string()))
+        .collect();
+    let targets: Vec<(Uuid, RecordKind, Map<String, Value>)> = session
+        .index
+        .iter()
+        .filter(|record| !gone.contains(&record.record_id))
+        .filter_map(|record| {
+            let data = remap_data(record.data(), &map);
+            (data != *record.data()).then_some((record.record_id, record.kind, data))
+        })
+        .collect();
+    let mut writes = Vec::with_capacity(targets.len());
+    for (id, kind, data) in targets {
+        writes.push(session.prepare_write(store, kind, id, data, now)?);
+    }
+    Ok(writes)
+}
+
+/// Duplicate pairs not kept whose two records are both live, each once. A
+/// database written before one pair had one row may hold it in both
+/// orders: kept in either, it is kept.
 fn live_pairs(store: &Store, session: &Session) -> Result<Vec<(Uuid, Uuid)>, CoreError> {
     let vault_id = session.ring.vault_id();
-    Ok(store
+    let rows: Vec<DuplicatePairRow> = store
         .duplicate_pairs()?
         .into_iter()
+        .filter(|pair| pair.vault_id == vault_id)
+        .collect();
+    let unordered = |a: Uuid, b: Uuid| if a < b { (a, b) } else { (b, a) };
+    let mut seen: HashSet<(Uuid, Uuid)> = rows
+        .iter()
+        .filter(|pair| pair.kept)
+        .map(|pair| unordered(pair.record_id, pair.other_record_id))
+        .collect();
+    Ok(rows
+        .into_iter()
         .filter(|pair| {
-            pair.vault_id == vault_id
-                && !pair.kept
-                && session.index.get(&pair.record_id).is_some()
+            session.index.get(&pair.record_id).is_some()
                 && session.index.get(&pair.other_record_id).is_some()
+                && seen.insert(unordered(pair.record_id, pair.other_record_id))
         })
         .map(|pair| (pair.record_id, pair.other_record_id))
         .collect())
@@ -4999,6 +5075,76 @@ mod tests {
         core.sync_conflict_resolve(conflict, ConflictChoice::Copy)
             .unwrap();
         assert_eq!(stored_data(&core, host)["label"], json!("db-2"));
+    }
+
+    /// Sync-protocol 6.7 and UI 13.6: an original still here that this
+    /// device cannot read (its row damaged) is shown as missing, and "Keep
+    /// other" is refused for it as for a deletion: its rules cannot be
+    /// checked, so a revoked known host key is never replaced by the copy.
+    /// The conflict stays; "Keep this" resolves it.
+    #[test]
+    fn keep_other_is_refused_when_the_current_version_cannot_be_read() {
+        let (_dir, core) = unlocked_core();
+        let known = add_known_host(&core, true);
+        let mut edited = stored_data(&core, known);
+        edited.remove("marker");
+        edited.insert("comment".into(), json!("edited elsewhere"));
+        let conflict = core
+            .sync_conflict_insert_for_test(known, Some(edited), Uuid::now_v7(), SystemTime::now())
+            .unwrap();
+        // The envelope no longer opens (its tag changed).
+        let mut damaged = row_of(&core, known).unwrap();
+        *damaged.envelope.last_mut().unwrap() ^= 0x01;
+        core.inner()
+            .store
+            .write(|tx| tx.record_put(&damaged))
+            .unwrap();
+
+        let item = item_of(&core, conflict);
+        assert!(item.current_missing, "shown as missing");
+        assert!(!item.current_deleted);
+        assert_eq!(item.keep_other, KeepOther::Unreadable);
+        assert!(!item.keep_other.allowed());
+        assert!(matches!(
+            core.sync_conflict_resolve(conflict, ConflictChoice::Copy),
+            Err(CoreError::ReadOnly)
+        ));
+        let row = row_of(&core, known).unwrap();
+        assert_eq!(row.revision, damaged.revision, "not rewritten");
+        assert_eq!(row.envelope, damaged.envelope);
+        assert_eq!(
+            item_of(&core, conflict).keep_other,
+            KeepOther::Unreadable,
+            "the conflict stays"
+        );
+        core.sync_conflict_resolve(conflict, ConflictChoice::Current)
+            .unwrap();
+        assert!(core.sync_conflicts().unwrap().is_empty());
+    }
+
+    /// Security 9.1: a comparison's field and a brought-back record show no
+    /// address, user name or command in `Debug`.
+    #[test]
+    fn debug_of_differences_and_brought_back_items_has_no_host_data() {
+        let difference = FieldDifference {
+            path: "address".into(),
+            current: "192.0.2.10".into(),
+            other: "deploy@198.51.100.7".into(),
+        };
+        let text = format!("{difference:?}");
+        assert!(text.contains("address"), "{text}");
+        for value in ["192.0.2.10", "198.51.100.7", "deploy"] {
+            assert!(!text.contains(value), "{text}");
+        }
+        let item = BroughtBackItem {
+            record_id: Uuid::now_v7(),
+            type_name: "host".into(),
+            title: "db.example.com".into(),
+            returned_at: "2026-10-23T10:00:00Z".into(),
+        };
+        let text = format!("{item:?}");
+        assert!(text.contains("host"), "{text}");
+        assert!(!text.contains("db.example.com"), "{text}");
     }
 
     /// The comparison's differences are what the dialog can show: the list

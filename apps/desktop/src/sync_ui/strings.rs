@@ -84,6 +84,8 @@ pub const KEEPS_REVOCATION: &str =
 pub const REVOKED_STAYS: &str =
     "A revoked key stays revoked: the other version's deletion is not applied.";
 pub const TYPE_NOT_WRITTEN: &str = "This version of Shell++ cannot write this kind of item.";
+pub const CURRENT_UNREADABLE: &str =
+    "This device cannot read the current version, so the other one does not replace it.";
 pub const ONLY_ORDER_DIFFERS: &str = "The versions differ only in their place in the list.";
 pub const SAME_VALUES: &str = "The versions hold the same values.";
 pub const VERSION_THIS_DEVICE: &str = "This device";

@@ -8,8 +8,9 @@
 //!   "Keep this" keeps the current version, "Keep other" replaces it with
 //!   the other one; closing leaves the conflict.
 //! - "Keep other" follows the core's type rules (`KeepOther`): a revoked
-//!   known host key stays revoked, and a type this app does not write
-//!   keeps its conflict. A note under the button says which.
+//!   known host key stays revoked, and a type this app does not write, or
+//!   a current version this device cannot read, keeps its conflict. A
+//!   note under the button says which.
 //! - When no field the dialog shows differs (only the place in the list),
 //!   one line says so instead of two equal sides without a mark.
 //! - The core masks passwords and hides private keys in a conflict
@@ -229,6 +230,7 @@ pub fn keep_other_note(item: &ConflictItem) -> Option<&'static str> {
         KeepOther::KeepsRevocation => Some(strings::KEEPS_REVOCATION),
         KeepOther::RevokedStays => Some(strings::REVOKED_STAYS),
         KeepOther::Unsupported => Some(strings::TYPE_NOT_WRITTEN),
+        KeepOther::Unreadable => Some(strings::CURRENT_UNREADABLE),
     }
 }
 

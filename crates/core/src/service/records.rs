@@ -273,6 +273,20 @@ impl Core {
         tombstones: Vec<RecordRow>,
         trash: bool,
     ) -> Result<(), CoreError> {
+        self.commit_records_then(parts, writes, deletions, tombstones, trash, |_| Ok(()))
+    }
+
+    /// [`Core::commit_records_with`]; `also` writes the command's other
+    /// rows in the same transaction (a merge forgets its duplicate pair).
+    pub(super) fn commit_records_then(
+        &self,
+        parts: &mut Parts<'_>,
+        writes: Vec<PendingWrite>,
+        deletions: Vec<(Uuid, u8)>,
+        tombstones: Vec<RecordRow>,
+        trash: bool,
+        also: impl FnOnce(&mut crate::store::WriteTx<'_>) -> Result<(), crate::store::StoreError>,
+    ) -> Result<(), CoreError> {
         let vault_id = parts.session.ring.vault_id();
         let kept: HashSet<Uuid> = if trash {
             deletions
@@ -317,7 +331,7 @@ impl Core {
             for row in &tombstones {
                 tx.record_put(row)?;
             }
-            Ok(())
+            also(tx)
         })?;
         let mut changed: Vec<Uuid> = writes.iter().map(|write| write.record_id).collect();
         let mut classes: Vec<u8> = writes.iter().map(|write| write.kind.class()).collect();

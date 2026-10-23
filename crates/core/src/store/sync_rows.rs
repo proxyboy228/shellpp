@@ -519,18 +519,21 @@ impl WriteTx<'_> {
     /// kept: a pull that raises it again, in either order, does not offer
     /// it again (data-model 16.8, "Keep both").
     pub fn duplicate_pair_put(&mut self, row: &DuplicatePairRow) -> Result<(), StoreError> {
-        // Listed the other way round: that row is the pair.
-        let reversed = self.tx.execute(
+        // Listed already, in either order: those rows are the pair. A
+        // database written before one pair had one row may hold both
+        // orders; "Keep both" marks each of them.
+        let listed = self.tx.execute(
             "UPDATE duplicate_pairs SET kept = kept OR ?4
-             WHERE vault_id = ?1 AND record_id = ?2 AND other_record_id = ?3",
+             WHERE vault_id = ?1 AND ((record_id = ?2 AND other_record_id = ?3)
+               OR (record_id = ?3 AND other_record_id = ?2))",
             params![
                 &row.vault_id.as_bytes()[..],
-                &row.other_record_id.as_bytes()[..],
                 &row.record_id.as_bytes()[..],
+                &row.other_record_id.as_bytes()[..],
                 row.kept,
             ],
         )?;
-        if reversed > 0 {
+        if listed > 0 {
             return Ok(());
         }
         self.tx.execute(
@@ -546,6 +549,14 @@ impl WriteTx<'_> {
                 row.kept,
             ],
         )?;
+        Ok(())
+    }
+
+    /// Test support: runs SQL as is in this transaction (rows an older
+    /// version wrote, a trigger that refuses a write).
+    #[cfg(test)]
+    pub(crate) fn execute_batch_for_test(&mut self, sql: &str) -> Result<(), StoreError> {
+        self.tx.execute_batch(sql)?;
         Ok(())
     }
 

@@ -29,6 +29,12 @@ fn random_text() -> String {
 }
 
 fn core() -> (tempfile::TempDir, Core) {
+    let (dir, core, _) = core_with_password();
+    (dir, core)
+}
+
+/// A core with a vault and its master password (generated here).
+fn core_with_password() -> (tempfile::TempDir, Core, SecretString) {
     let dir = tempfile::tempdir().unwrap();
     let mem = MemoryPlatform::new();
     let core = Core::open(
@@ -39,9 +45,28 @@ fn core() -> (tempfile::TempDir, Core) {
         mem.platform(OsKind::Linux, "TEST"),
     )
     .unwrap();
-    core.first_run_setup(SecretString::from(format!("Pw-{}", random_text())))
+    let password = SecretString::from(format!("Pw-{}", random_text()));
+    core.first_run_setup(password.clone()).unwrap();
+    (dir, core, password)
+}
+
+/// Runs SQL on the core's database as is.
+fn raw_sql(core: &Core, sql: &str) {
+    core.inner()
+        .store
+        .write(|tx| tx.execute_batch_for_test(sql))
         .unwrap();
-    (dir, core)
+}
+
+/// A record's data with the lazy classes loaded (D10).
+fn loaded_data(core: &Core, id: Uuid) -> Option<Map<String, Value>> {
+    let mut guard = core.inner();
+    let inner = &mut *guard;
+    let session = inner.session.as_mut().unwrap();
+    for class in crate::model::types::LAZY_CLASSES {
+        session.ensure_class(&inner.store, class).unwrap();
+    }
+    session.index.get(&id).map(|record| record.data().clone())
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -379,4 +404,172 @@ fn a_kept_pair_stays_kept_when_a_pull_raises_it_again() {
         "in either order"
     );
     assert_eq!(core.sync_status().unwrap().duplicates, 0);
+}
+
+/// A merge moves the dropped host's history, history hint and connection
+/// log to the kept one (UI 13.7, "history"; data-model 18.3), also when
+/// their lazy classes were not loaded since the unlock (D10).
+#[test]
+fn a_merge_moves_history_and_the_log_not_loaded_yet() {
+    let (_dir, core, password) = core_with_password();
+    let vault_id = core.vaults().unwrap()[0].vault_id;
+    let kept = put(
+        &core,
+        RecordKind::Host,
+        json!({"address": "dup.example.com"}),
+    );
+    let dropped = put(
+        &core,
+        RecordKind::Host,
+        json!({"address": "dup.example.com"}),
+    );
+    let link = json!({"vault_id": vault_id, "record_id": dropped});
+    let history = put(
+        &core,
+        RecordKind::HistoryEntry,
+        json!({"host": link, "command": "uptime", "executed_at": "2026-10-23T10:00:00Z",
+            "origin": "typed"}),
+    );
+    let hint = put(
+        &core,
+        RecordKind::HistoryHintState,
+        json!({"host": link, "dismissed": true}),
+    );
+    let log = core
+        .connection_log_start(super::host_api::ConnectionLogStart {
+            host: Some(super::dto::RecordRef {
+                vault_id,
+                record_id: dropped,
+            }),
+            host_label: None,
+            address: "dup.example.com".into(),
+            port: 22,
+            username: None,
+            os: None,
+        })
+        .unwrap();
+    assert_eq!(core.sync_duplicates_scan().unwrap(), 1);
+    core.lock().unwrap();
+    core.unlock(password).unwrap();
+    {
+        let guard = core.inner();
+        let session = guard.session.as_ref().unwrap();
+        assert!(session.lazy_loaded.is_empty(), "history and log not loaded");
+    }
+
+    core.sync_duplicates_merge(kept, dropped).unwrap();
+    for (id, what) in [(history, "history"), (hint, "hint"), (log, "log")] {
+        let data = loaded_data(&core, id).unwrap_or_else(|| panic!("{what} stays"));
+        assert_eq!(
+            data["host"]["record_id"],
+            json!(kept.to_string()),
+            "{what} names the kept host"
+        );
+    }
+    assert!(loaded_data(&core, dropped).is_none());
+    assert_eq!(deleted(&core), vec![dropped]);
+}
+
+/// "Keep both" on a pair that a database written earlier lists in both
+/// orders (a row each): every row of it is kept, and a pair kept in either
+/// order is not listed again (data-model 16.8); one not kept is listed once.
+#[test]
+fn keep_both_keeps_a_pair_listed_in_both_orders() {
+    let (_dir, core) = core();
+    let vault = core.vaults().unwrap()[0].vault_id.simple().to_string();
+    let a = put(
+        &core,
+        RecordKind::Host,
+        json!({"address": "same.example.com"}),
+    );
+    let b = put(
+        &core,
+        RecordKind::Host,
+        json!({"address": "same.example.com"}),
+    );
+    let rows = |rows: &[(Uuid, Uuid, bool)]| {
+        let mut sql = String::from("DELETE FROM duplicate_pairs;");
+        for (record, other, kept) in rows {
+            sql.push_str(&format!(
+                "INSERT INTO duplicate_pairs (vault_id, record_id, other_record_id, found_at, kept)
+                 VALUES (X'{vault}', X'{}', X'{}', '2026-10-23T10:00:00Z', {});",
+                record.simple(),
+                other.simple(),
+                u8::from(*kept),
+            ));
+        }
+        raw_sql(&core, &sql);
+    };
+    rows(&[(a, b, false), (b, a, false)]);
+    assert_eq!(core.sync_duplicates().unwrap().len(), 1, "listed once");
+    assert_eq!(core.sync_status().unwrap().duplicates, 1);
+    core.sync_duplicates_keep(a, b).unwrap();
+    assert!(core.sync_duplicates().unwrap().is_empty(), "kept");
+    let stored = core.inner().store.duplicate_pairs().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().all(|pair| pair.kept), "every order is kept");
+
+    // As "Keep both" left such a pair before: kept in one order only.
+    for kept in [(a, b), (b, a)] {
+        rows(&[(a, b, kept == (a, b)), (b, a, kept == (b, a))]);
+        assert!(core.sync_duplicates().unwrap().is_empty(), "{kept:?}");
+        assert_eq!(core.sync_status().unwrap().duplicates, 0);
+    }
+}
+
+/// A merge is one local transaction (data-model 18.3): when the removal of
+/// the other record fails, nothing of it is left. Both records stay, the
+/// links still name the other one, the pair is still listed and nothing
+/// is in Recently deleted; the merge can be chosen again.
+#[test]
+fn a_failed_merge_leaves_both_records_their_links_and_the_pair() {
+    let (_dir, core, password) = core_with_password();
+    let keep = put(&core, RecordKind::Group, json!({"name": "Ops"}));
+    let other = put(&core, RecordKind::Group, json!({"name": "Ops"}));
+    let host = put(
+        &core,
+        RecordKind::Host,
+        json!({"address": "web.example.com", "group_id": other.to_string()}),
+    );
+    assert_eq!(core.sync_duplicates_scan().unwrap(), 1);
+    // The database refuses to remove (or tombstone) the other group's row.
+    let id = other.simple();
+    raw_sql(
+        &core,
+        &format!(
+            "CREATE TEMP TRIGGER refuse_delete BEFORE DELETE ON records
+               WHEN old.record_id = X'{id}' BEGIN SELECT RAISE(ABORT, 'refused'); END;
+             CREATE TEMP TRIGGER refuse_update BEFORE UPDATE ON records
+               WHEN old.record_id = X'{id}' BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+        ),
+    );
+    assert!(core.sync_duplicates_merge(keep, other).is_err());
+    let unchanged = |core: &Core| {
+        assert_eq!(
+            loaded_data(core, host).unwrap()["group_id"],
+            json!(other.to_string()),
+            "the link stays"
+        );
+        assert!(loaded_data(core, other).is_some(), "the other group stays");
+        assert_eq!(core.sync_duplicates().unwrap().len(), 1, "the pair stays");
+        assert!(deleted(core).is_empty());
+    };
+    unchanged(&core);
+    // As stored, too.
+    core.lock().unwrap();
+    core.unlock(password).unwrap();
+    unchanged(&core);
+
+    raw_sql(
+        &core,
+        "DROP TRIGGER IF EXISTS refuse_delete; DROP TRIGGER IF EXISTS refuse_update;",
+    );
+    core.sync_duplicates_merge(keep, other).unwrap();
+    assert_eq!(
+        data(&core, host).unwrap()["group_id"],
+        json!(keep.to_string())
+    );
+    assert!(data(&core, other).is_none());
+    assert_eq!(deleted(&core), vec![other]);
+    assert!(core.sync_duplicates().unwrap().is_empty());
 }
