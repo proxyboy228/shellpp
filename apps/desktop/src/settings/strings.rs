@@ -137,8 +137,9 @@ pub const GENERATION_MODEL: &str = "Model";
 pub const GENERATION_MODEL_PLACEHOLDER: &str = "gpt-4o-mini, llama3.1 …";
 pub const GENERATION_KEY: &str = "API key";
 pub const GENERATION_KEY_SAVE: &str = "Save key";
-pub const GENERATION_KEY_HINT: &str =
-    "Kept in the system's credential store. Leave it empty for a local model.";
+pub const GENERATION_KEY_HINT: &str = "Kept in the system's credential store for this address's \
+     host, and sent only there. Leave it empty for a local model.";
+pub const GENERATION_KEY_ADDRESS: &str = "Fix the address first: the key is kept for its host.";
 pub const GENERATION_KEY_SAVED: &str = "The key is saved in the system's credential store.";
 pub const GENERATION_KEY_REMOVED: &str = "The saved key is removed.";
 pub const GENERATION_KEY_FAILED: &str = "The system's credential store did not take the key.";

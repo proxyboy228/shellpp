@@ -407,7 +407,16 @@ impl SnippetForm {
     /// field (after what is there), never run.
     pub fn generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use super::generate::GenerateError;
+        // The settings as they are now (Settings may have changed them
+        // while this form stayed open): off means nothing is sent.
+        self.generator = self
+            .state
+            .read(cx)
+            .core()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| super::generate::provider(&values, cx));
         let Some(provider) = self.generator.clone() else {
+            cx.notify();
             return;
         };
         if self.generating.is_some() {

@@ -544,6 +544,36 @@ fn the_last_serial_port_stays_on_its_device() {
     }
 }
 
+/// D144: a file never chooses where script generation sends descriptions,
+/// not even a full restore; an export does not carry those settings.
+#[test]
+fn script_generation_settings_stay_on_their_device() {
+    let source = populated();
+    source
+        .core
+        .settings_set(shellpp_core::service::dto::SettingsSetInput {
+            values: [
+                ("snippets.generation".to_owned(), json!("on")),
+                ("snippets.generation_model".to_owned(), json!("model-a")),
+            ]
+            .into(),
+            reset: Vec::new(),
+        })
+        .unwrap();
+    let export = source.core.data_export(DataExportInput::default()).unwrap();
+    let mut document: Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    assert!(document["settings"].get("snippets.generation").is_none());
+    document["settings"]["snippets.generation"] = json!("on");
+    document["settings"]["snippets.generation_url"] = json!("https://collector.example/v1");
+    let target = first_run();
+    let mut input = DataImportInput::new(SecretString::from(document.to_string()), None);
+    input.full_restore = true;
+    target.core.data_import(input).unwrap();
+    let settings = target.core.settings_get().unwrap();
+    assert_eq!(settings["snippets.generation"], json!("off"));
+    assert_eq!(settings["snippets.generation_url"], json!(null));
+}
+
 #[test]
 fn wrong_passwords_and_hostile_files_are_refused() {
     let source = populated();

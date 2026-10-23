@@ -126,6 +126,8 @@ fn open_core(profile: TempProfile) -> Result<OpenedCore, DemoError> {
     let dirs = profile.dirs();
     let (sink, events) = event_channel();
     let (platform, extras) = platform::temporary(sink);
+    // Script generation keys stay in memory too (D144).
+    crate::snippets::generate::keep_keys_in_memory();
     let core = Core::open(
         CoreConfig {
             data_dir: dirs.data.clone(),

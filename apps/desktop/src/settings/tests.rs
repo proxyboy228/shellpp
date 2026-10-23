@@ -848,6 +848,9 @@ fn script_generation_settings_are_written(cx: &mut TestAppContext) {
     );
     type_into(&ui, "settings-generation-key", "not-a-real-key", cx);
     click(&ui, "settings-generation-key-save", cx);
+    // A test run keeps the key in memory, for the address's host only.
+    assert!(crate::snippets::generate::api_key("localhost:11434").is_some());
+    assert!(crate::snippets::generate::api_key("api.openai.com").is_none());
     let all = cx.update(|cx| ui.state.read(cx).core().unwrap().settings_get().unwrap());
     assert!(
         !serde_json::to_string(&all)

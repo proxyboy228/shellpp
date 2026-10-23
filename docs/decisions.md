@@ -1729,13 +1729,14 @@ Status: run 8 decision, 2026-10-23 (plan, item B5). Settles UI 9.5.
 **Decision:**
 
 - One provider kind: the OpenAI-compatible `POST <address>/chat/completions` (OpenAI and most hosted services, Ollama, llama.cpp and LM Studio locally). The settings are `snippets.generation` (`off` by default), `snippets.generation_url` (empty: `https://api.openai.com/v1`) and `snippets.generation_model`. The address must be `https://`, or plain `http://` to this computer's loopback (a local model, never through a proxy), with no user part; no redirects are followed.
-- The API key is kept in the OS credential store (Windows Credential Manager, the macOS keychain, the Secret Service), never in a setting, the vault or an export; it is sent only as the `Authorization: Bearer` header to that address. A test run never reads or writes the store.
-- The generation settings are not imported from export files (D41): a file never chooses where descriptions go.
+- The API key is kept in the OS credential store (Windows Credential Manager, the macOS keychain, the Secret Service) under one entry per host (`api-key:<host>`), never in a setting, the vault or an export; it is sent only as the `Authorization: Bearer` header to that host, so a key saved for one service never goes to another after the address changes. It is read and written off the UI thread. A test run and `--demo` keep keys in memory; an unsigned macOS build has no store for them (D7).
+- The generation settings belong to the device: Import Data never applies them, not even a full restore (D41, D50): a file never chooses where descriptions go.
+- The snippet form reads the settings again when Generate is pressed: a row left open while Settings turned generation off sends nothing.
 - The request holds a fixed system instruction (a shell script only, `{{name}}` for values to fill, never passwords or keys) and the description (at most 2,000 characters), temperature 0.2; the answer's first choice is the script, a Markdown fence around it removed. Answers over 256 KiB are refused; the timeout is 120 s (local models are slow).
 - The form shows the row only while generation is on with a model; the caption names the host the description goes to. Generate runs off the UI thread; the script goes after what the Script field holds and is never run or saved by itself.
 - Tests use a fake provider through an override; no test sends a request.
 
-**Spec impact:** docs/ui-behavior-spec.md, section 9.5; docs/data-model.md, section 16.1; `docs/ru`.
+**Spec impact:** docs/ui-behavior-spec.md, section 9.5; docs/data-model.md, section 16.1; docs/security.md (A3, TB2); `docs/ru`.
 
 ## Run 8 of 2026-10-23, agent C
 

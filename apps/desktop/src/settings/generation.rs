@@ -148,23 +148,45 @@ impl GenerationBlock {
         cx.notify();
     }
 
-    /// Saves the typed API key in the system's credential store and empties
-    /// the field (an empty field removes the saved key).
+    /// Saves the typed API key for the address's host in the system's
+    /// credential store, off the UI thread, and empties the field (an empty
+    /// field removes the host's saved key).
     pub fn save_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let address = self.url.read(cx).value().trim().to_owned();
+        let address = if address.is_empty() {
+            DEFAULT_URL.to_owned()
+        } else {
+            address
+        };
+        let Ok((host, _)) = generate::destination_of(&address) else {
+            self.key_note = Some(strings::GENERATION_KEY_ADDRESS);
+            cx.notify();
+            return;
+        };
         let typed = self.key.read(cx).value().to_string();
         let key = (!typed.is_empty()).then(|| SecretString::from(typed));
-        self.key_note = Some(if generate::set_api_key(key.as_ref()) {
-            if key.is_some() {
-                strings::GENERATION_KEY_SAVED
-            } else {
-                strings::GENERATION_KEY_REMOVED
-            }
-        } else {
-            strings::GENERATION_KEY_FAILED
-        });
         self.key
             .update(cx, |input, cx| input.set_value(String::new(), window, cx));
+        let adding = key.is_some();
+        let work = cx.background_spawn(async move { generate::set_api_key(&host, key.as_ref()) });
+        cx.spawn(async move |this, cx| {
+            let saved = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.key_note = Some(match (saved, adding) {
+                    (true, true) => strings::GENERATION_KEY_SAVED,
+                    (true, false) => strings::GENERATION_KEY_REMOVED,
+                    (false, _) => strings::GENERATION_KEY_FAILED,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
+    }
+
+    /// What the last key save did (tests).
+    pub fn key_note(&self) -> Option<&'static str> {
+        self.key_note
     }
 
     fn field(
