@@ -583,7 +583,7 @@ pub fn prepaint(
             let text: String = text
                 .chars()
                 .take_while(|ch| {
-                    cells += if ch.is_ascii() { 1 } else { 2 };
+                    cells += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(1);
                     cells <= room
                 })
                 .collect();

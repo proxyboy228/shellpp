@@ -654,6 +654,14 @@ impl TerminalHandle {
         }
     }
 
+    /// Whether the view is scrolled up from the bottom (into the
+    /// scrollback or its journal).
+    pub(super) fn scrolled_back(&self) -> bool {
+        let term = self.term.lock();
+        let alt = term.mode().contains(TermMode::ALT_SCREEN);
+        term.grid().display_offset() != 0 || (!alt && self.outbox.journal().view() != 0)
+    }
+
     /// Rows the view is scrolled up from the bottom (tests).
     #[cfg(test)]
     pub(super) fn view_offset(&self) -> usize {
@@ -807,6 +815,8 @@ fn parse_loop(
                 processor.advance(&mut Capped(&mut *locked), &slice);
             }
             answer_color_requests(&locked, &outbox);
+            // The screen now shows what was typed before (its echo).
+            outbox.autocomplete.output();
             let columns = limits::take_column_change();
             publish(&outbox);
             drop(locked);

@@ -1531,13 +1531,14 @@ fn autocomplete_suggests_from_the_hosts_history(cx: &mut TestAppContext) {
             secret,
             "export PATH=$PATH:/opt/bin",
         ]))));
-    fixture.feed(cx, b"alice@web:~$ ");
+    fixture.feed(cx, b"\x1b[?2004halice@web:~$ ");
     fixture.type_echoed(cx, "git st");
     fixture.sink.take();
-    // Off by default: no suggestion, Tab goes to the shell.
+    // Off by default: no suggestion, Tab goes to the shell (which rings).
     assert_eq!(fixture.suggestion(cx), None);
     fixture.press(cx, "tab");
     assert_eq!(fixture.sink.take(), b"\t");
+    fixture.feed(cx, b"\x07");
 
     cx.update(|cx| {
         cx.set_global(TerminalPrefs {
@@ -1549,8 +1550,12 @@ fn autocomplete_suggests_from_the_hosts_history(cx: &mut TestAppContext) {
     let _ = fixture.suggestion(cx);
     cx.run_until_parked();
     assert_eq!(fixture.suggestion(cx).as_deref(), Some("atus"));
+    fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
     fixture.press(cx, "tab");
     assert_eq!(fixture.sink.take(), b"atus");
+    // Before the echo arrives a second Tab is the shell's: never typed twice.
+    fixture.press(cx, "tab");
+    assert_eq!(fixture.sink.take(), b"\t");
     fixture.feed(cx, b"atus");
     // A complete command has nothing left to suggest: Tab is the shell's.
     assert_eq!(fixture.suggestion(cx), None);
@@ -1559,18 +1564,27 @@ fn autocomplete_suggests_from_the_hosts_history(cx: &mut TestAppContext) {
 
     // A new line: → takes the suggestion too.
     fixture.press(cx, "enter");
-    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.feed(cx, b"\r\n\x1b[?2004halice@web:~$ ");
     fixture.sink.take();
     fixture.type_echoed(cx, "git sta");
     fixture.sink.take();
     assert_eq!(fixture.suggestion(cx).as_deref(), Some("tus"));
+    fixture.with_window(cx, |_, window, cx| window.render_frame(cx));
     fixture.press(cx, "right");
     assert_eq!(fixture.sink.take(), b"tus");
     fixture.feed(cx, b"tus");
 
+    // The list is dropped (the lock, a history change) and read again.
+    fixture.handle.autocomplete().invalidate();
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\n\x1b[?2004halice@web:~$ ");
+    fixture.type_echoed(cx, "git stas");
+    cx.run_until_parked();
+    assert_eq!(fixture.suggestion(cx).as_deref(), Some("h pop"));
+
     // The secret in the history is never suggested.
     fixture.press(cx, "enter");
-    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.feed(cx, b"\r\n\x1b[?2004halice@web:~$ ");
     fixture.type_echoed(cx, "export ");
     assert_eq!(
         fixture.suggestion(cx).as_deref(),
@@ -1581,7 +1595,7 @@ fn autocomplete_suggests_from_the_hosts_history(cx: &mut TestAppContext) {
 
     // With the cursor moved back into the line, nothing is suggested.
     fixture.press(cx, "enter");
-    fixture.feed(cx, b"\r\nalice@web:~$ ");
+    fixture.feed(cx, b"\r\n\x1b[?2004halice@web:~$ ");
     fixture.type_echoed(cx, "git");
     fixture.feed(cx, b"\x1b[D");
     assert_eq!(fixture.suggestion(cx), None);
@@ -1608,8 +1622,8 @@ fn autocomplete_stays_out_of_full_screen_programs_and_password_prompts(cx: &mut 
         ]))));
     let _ = fixture.suggestion(cx);
     cx.run_until_parked();
-    // A password prompt that echoes what is typed.
-    fixture.feed(cx, b"Password: ");
+    // A password prompt that echoes what is typed (a line editor too).
+    fixture.feed(cx, b"\x1b[?2004hPassword: ");
     fixture.type_echoed(cx, "secr");
     assert_eq!(fixture.suggestion(cx), None);
     fixture.sink.take();
@@ -1620,8 +1634,23 @@ fn autocomplete_stays_out_of_full_screen_programs_and_password_prompts(cx: &mut 
     fixture.feed(cx, b"\r\n\x1b[?1049h");
     fixture.type_echoed(cx, "vi");
     assert_eq!(fixture.suggestion(cx), None);
+    // A prompt on the line above that asks for a password.
+    fixture.feed(cx, b"\x1b[?1049l\r\nEnter vault password\r\n");
+    fixture.type_echoed(cx, "vi");
+    assert_eq!(fixture.suggestion(cx), None);
+    // A pager's search prompt: the shell's line editor is not active.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\n\x1b[?2004l/");
+    fixture.type_echoed(cx, "vi");
+    assert_eq!(fixture.suggestion(cx), None);
+    // At the shell's prompt it is suggested.
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\n\x1b[?2004h$ ");
+    fixture.type_echoed(cx, "vi");
+    assert_eq!(fixture.suggestion(cx).as_deref(), Some("m notes"));
     // Without a history capture (a quick connect, a local terminal).
-    fixture.feed(cx, b"\x1b[?1049l\r\n$ ");
+    fixture.press(cx, "enter");
+    fixture.feed(cx, b"\r\n$ ");
     fixture.handle.set_history_sink(None);
     fixture.type_echoed(cx, "vi");
     assert_eq!(fixture.suggestion(cx), None);

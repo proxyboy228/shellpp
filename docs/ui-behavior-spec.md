@@ -677,9 +677,11 @@ The same form is used for creating and editing; it opens in the details panel.
   [decision on the suggestion source] (D142): while a command line is typed, the rest of
   the newest command of the host's history that starts with the typed text is drawn after
   the cursor in a muted color; Tab or → types it, otherwise both keys go to the shell. Only
-  in sessions to saved hosts (they keep history), with the cursor at the end of the line;
-  never in the alternate screen, at a password prompt, on a line the history capture would
-  not record, or for a command the history filter takes for a secret. [decision]
+  in sessions to saved hosts (they keep history), at the shell's own prompt (its line
+  editor turned bracketed paste on), with the cursor at the end of the line; never in the
+  alternate screen, at a password prompt, on a line the history capture would not record,
+  before the echo of the last key, or for a command the history filter takes for a secret.
+  [decision]
 
 **Snippets tab** [decision]:
 

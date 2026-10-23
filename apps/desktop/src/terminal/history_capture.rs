@@ -460,9 +460,13 @@ impl TerminalHandle {
 
     /// Autocomplete (UI 4.2, D142): the text typed on the line the history
     /// capture follows, from its boundary to the cursor, when nothing
-    /// stands after the cursor. `None` without a saved host's capture, in
-    /// the alternate screen, at a password prompt, or on a line the
-    /// capture would not record (see [`Capture`]).
+    /// stands after the cursor. `None` without a saved host's capture,
+    /// while the shell's line editor is not active (it turns bracketed
+    /// paste on at its prompt: bash 5.1+, zsh, fish; a pager or a program
+    /// reading a line has it off), in the alternate screen, at a password
+    /// prompt (on the line or, with nothing before the boundary, on the
+    /// line above), or on a line the capture would not record (see
+    /// [`Capture`]).
     pub fn typed_line(&self) -> Option<Zeroizing<String>> {
         let capture = &self.outbox().capture;
         if !capture.enabled() {
@@ -470,7 +474,7 @@ impl TerminalHandle {
         }
         let boundary = capture.completable()?;
         let term = self.term().lock();
-        if alt_screen(&term) {
+        if alt_screen(&term) || !term.mode().contains(TermMode::BRACKETED_PASTE) {
             return None;
         }
         let cursor = &term.grid().cursor;
@@ -491,6 +495,12 @@ impl TerminalHandle {
             return None;
         }
         if self.term_at_password_prompt(&term) || cursor_line_is_password_prompt(&term) {
+            return None;
+        }
+        // The capture's prompt rule: the text before the boundary, or the
+        // last line above when there is none.
+        let snapshot = read_line(&term, boundary)?;
+        if prompt_looks_like_password(&snapshot.prompt_text) {
             return None;
         }
         let columns = term.grid().columns();
@@ -895,6 +905,7 @@ impl TerminalHandle {
     /// Typed input (keys, pastes, IME text) for the session: watched by the
     /// history capture, then sent.
     pub fn send_typed(&self, bytes: Vec<u8>) {
+        self.outbox().autocomplete.typed();
         self.watch_input(&bytes, InputOrigin::Typed);
         self.send_input(bytes);
     }
@@ -903,6 +914,7 @@ impl TerminalHandle {
     /// sent like typed input, and the line that holds it is never recorded
     /// (docs/security.md, section 10.1).
     pub fn inject_input(&self, bytes: Vec<u8>) {
+        self.outbox().autocomplete.typed();
         self.watch_input(&bytes, InputOrigin::Injected);
         self.send_input(bytes);
     }

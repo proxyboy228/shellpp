@@ -18,6 +18,9 @@
 //!
 //! Nothing here logs commands or typed text.
 
+use std::collections::HashSet;
+use std::hash::{Hash as _, Hasher as _};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use gpui::{AppContext as _, Context};
@@ -73,15 +76,25 @@ fn suggestible(command: &str) -> bool {
 
 impl Suggestions {
     /// The list of `commands` (newest first): unsuitable ones and repeats
-    /// left out, at most [`MAX_COMMANDS`].
+    /// left out, at most [`MAX_COMMANDS`]. Checks every command with the
+    /// secret detector: build it off the UI thread.
     pub fn new(commands: impl IntoIterator<Item = String>) -> Self {
         let mut list = Self::default();
+        let mut seen: HashSet<u64> = HashSet::new();
         for mut command in commands {
             if list.commands.len() >= MAX_COMMANDS {
                 command.zeroize();
-                break;
+                continue;
             }
-            if suggestible(&command) && !list.commands.contains(&command) {
+            // Repeats by hash first, then by text (a hash collision only
+            // costs a comparison).
+            let hash = {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                command.hash(&mut hasher);
+                hasher.finish()
+            };
+            let repeat = !seen.insert(hash) && list.commands.contains(&command);
+            if suggestible(&command) && !repeat {
                 list.commands.push(command);
             } else {
                 command.zeroize();
@@ -132,14 +145,35 @@ impl Suggestions {
 struct SlotState {
     source: Option<Arc<dyn HistorySource>>,
     list: Option<Suggestions>,
-    loading: bool,
+    /// Bumped whenever the list is dropped; a load that started under an
+    /// older generation is thrown away.
+    generation: u64,
+    /// The generation a load runs for, if one runs.
+    loading: Option<u64>,
+    /// Commands recorded while a load runs (added when it lands).
+    recorded: Vec<String>,
 }
 
-/// A terminal's history source and its list (shared by the view and the
-/// session layer).
+impl SlotState {
+    fn forget(&mut self) {
+        self.list = None;
+        self.loading = None;
+        for command in &mut self.recorded {
+            command.zeroize();
+        }
+        self.recorded.clear();
+        self.generation += 1;
+    }
+}
+
+/// A terminal's history source and its list (shared by the view, the
+/// parser thread and the session layer).
 #[derive(Default)]
 pub struct Slot {
     state: Mutex<SlotState>,
+    /// Keys were typed since the last output: the screen does not show
+    /// them yet (no echo), so no suggestion is drawn or accepted.
+    typed_ahead: AtomicBool,
 }
 
 impl std::fmt::Debug for Slot {
@@ -153,11 +187,31 @@ impl Slot {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A command the session recorded: added to a loaded list.
+    /// A command the session recorded: added to the list (or kept for it
+    /// while it loads).
     pub fn remember(&self, command: &str) {
-        if let Some(list) = self.lock().list.as_mut() {
+        let mut state = self.lock();
+        if let Some(list) = state.list.as_mut() {
             list.remember(command);
+        } else if state.loading.is_some() {
+            state.recorded.push(command.to_owned());
         }
+    }
+
+    /// Drops the list (the app locked, history changed): it is read again
+    /// when next needed (docs/security.md, section 8).
+    pub fn invalidate(&self) {
+        self.lock().forget();
+    }
+
+    /// Input went to the session.
+    pub(super) fn typed(&self) {
+        self.typed_ahead.store(true, Ordering::Release);
+    }
+
+    /// The parser took in output.
+    pub(super) fn output(&self) {
+        self.typed_ahead.store(false, Ordering::Release);
     }
 }
 
@@ -168,12 +222,12 @@ impl TerminalHandle {
     }
 
     /// Where suggestions come from; `None` for local terminals and quick
-    /// connects (no history). The list is read again when next needed.
+    /// connects (no history) and when the session lets go of the terminal.
+    /// The list is read again when next needed.
     pub fn set_history_source(&self, source: Option<Arc<dyn HistorySource>>) {
         let mut state = self.outbox().autocomplete.lock();
+        state.forget();
         state.source = source;
-        state.list = None;
-        state.loading = false;
     }
 }
 
@@ -186,22 +240,34 @@ impl TerminalView {
             return None;
         }
         let slot = self.handle().autocomplete();
+        if slot.typed_ahead.load(Ordering::Acquire) {
+            return None;
+        }
         {
             let mut state = slot.lock();
             if state.list.is_none() {
-                if !state.loading
+                if state.loading.is_none()
                     && let Some(source) = state.source.clone()
                 {
-                    state.loading = true;
-                    let load = cx.background_spawn(async move { source.commands() });
+                    let generation = state.generation;
+                    state.loading = Some(generation);
+                    // The list is built where it is read: the secret
+                    // detector runs over every command.
+                    let load =
+                        cx.background_spawn(async move { Suggestions::new(source.commands()) });
                     let slot = slot.clone();
                     cx.spawn(async move |view, cx| {
-                        let list = Suggestions::new(load.await);
+                        let mut list = load.await;
                         {
                             let mut state = slot.lock();
-                            if state.loading {
+                            if state.loading == Some(generation) {
+                                for command in std::mem::take(&mut state.recorded) {
+                                    list.remember(&command);
+                                    let mut command = command;
+                                    command.zeroize();
+                                }
                                 state.list = Some(list);
-                                state.loading = false;
+                                state.loading = None;
                             }
                         }
                         let _ = view.update(cx, |_, cx| cx.notify());
@@ -216,15 +282,33 @@ impl TerminalView {
         state.list.as_ref()?.complete(&typed)
     }
 
-    /// Tab or →: types the suggestion when one is shown; `false` (the key
-    /// goes to the shell) otherwise.
+    /// The suggestion the next frame draws: [`Self::suggestion`] while the
+    /// cursor can be seen (the view is at the bottom, the cursor is shown,
+    /// the session is live, no IME text is being composed).
+    pub(super) fn visible_suggestion(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        if self.dimmed()
+            || self.composing()
+            || self.handle().scrolled_back()
+            || !self.cursor_shown()
+        {
+            return None;
+        }
+        self.suggestion(cx)
+    }
+
+    /// Tab or →: types the suggestion when the last frame drew it and it
+    /// is still the one in effect; `false` (the key goes to the shell)
+    /// otherwise.
     pub fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(rest) = self.suggestion(cx) else {
+        let Some(shown) = self.take_shown_suggestion() else {
             return false;
         };
+        if self.visible_suggestion(cx).as_deref() != Some(shown.as_str()) {
+            return false;
+        }
         // Typed input: the user chose it, and the line is recorded as any
         // typed line is.
-        self.type_bytes(rest.into_bytes(), cx);
+        self.type_bytes(shown.into_bytes(), cx);
         true
     }
 }

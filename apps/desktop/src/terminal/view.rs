@@ -263,6 +263,9 @@ pub struct TerminalView {
     search_stale: bool,
     /// The pending search refresh after new output.
     search_refresh: Option<Task<()>>,
+    /// The autocomplete suggestion the last frame drew (D142): the only
+    /// one Tab or → may take.
+    shown_suggestion: Option<String>,
     _pump: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -359,6 +362,7 @@ impl TerminalView {
             search: None,
             search_stale: false,
             search_refresh: None,
+            shown_suggestion: None,
             _pump: pump,
             _subscriptions: subscriptions,
         }
@@ -449,6 +453,26 @@ impl TerminalView {
         self.handle.scroll_to_bottom();
         self.handle.inject_input(bytes);
         cx.notify();
+    }
+
+    /// A dropped session: dimmed, its cursor hidden.
+    pub(super) fn dimmed(&self) -> bool {
+        self.dimmed
+    }
+
+    /// IME composition text is drawn at the cursor.
+    pub(super) fn composing(&self) -> bool {
+        self.marked_text.is_some()
+    }
+
+    /// The program shows its cursor (DECTCEM).
+    pub(super) fn cursor_shown(&self) -> bool {
+        self.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
+    /// The suggestion the last frame drew, taken (one accept per frame).
+    pub(super) fn take_shown_suggestion(&mut self) -> Option<String> {
+        self.shown_suggestion.take()
     }
 
     /// Typed bytes that are the same in every terminal (text, Tab,
@@ -830,7 +854,10 @@ impl TerminalView {
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         // → takes a shown suggestion (autocomplete, D142).
         let keystroke = &event.keystroke;
-        if keystroke.key == "right" && !keystroke.modifiers.modified() && self.accept_suggestion(cx)
+        if keystroke.key == "right"
+            && !keystroke.modifiers.modified()
+            && !event.is_held
+            && self.accept_suggestion(cx)
         {
             cx.stop_propagation();
             return;
@@ -1247,7 +1274,8 @@ impl TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut style = self.frame_style(window);
-        style.ghost_text = self.suggestion(cx);
+        style.ghost_text = self.visible_suggestion(cx);
+        self.shown_suggestion = style.ghost_text.clone();
         let background = rgb_token(self.palette.background()).hsla();
         let handle = self.handle.clone();
         let layout = self.layout.clone();

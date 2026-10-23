@@ -81,8 +81,11 @@ pub fn install(state: &Entity<AppState>, options: ManagerOptions, cx: &mut App) 
                     .set_unlocked(*lock == LockState::Unlocked);
             }
             refresh_history_flags();
+            forget_suggestions();
         }
         AppStateEvent::RecordsChanged => {
+            // History may have been deleted or cleared (autocomplete, D142).
+            forget_suggestions();
             let generation = state.read(cx).records_generation();
             if generation != records {
                 records = generation;
@@ -176,6 +179,9 @@ impl SessionTerminal for TerminalHandle {
             ),
             _ => (None, None),
         };
+        if source.is_some() {
+            register_suggestions(&self.autocomplete());
+        }
         self.set_history_sink(history);
         self.set_history_source(source);
         self.set_sink(Some(Arc::new(session)));
@@ -191,6 +197,29 @@ struct HostHistory {
 impl HistorySource for HostHistory {
     fn commands(&self) -> Vec<String> {
         self.core.history_commands(self.host)
+    }
+}
+
+/// The autocomplete lists of running sessions' terminals (D142).
+static SUGGESTIONS: Mutex<Vec<Weak<crate::terminal::autocomplete::Slot>>> = Mutex::new(Vec::new());
+
+fn register_suggestions(slot: &Arc<crate::terminal::autocomplete::Slot>) {
+    let mut list = SUGGESTIONS.lock().unwrap_or_else(PoisonError::into_inner);
+    list.retain(|slot| slot.strong_count() > 0);
+    list.push(Arc::downgrade(slot));
+}
+
+/// Drops the autocomplete lists of every terminal (the lock changed, or
+/// records changed: history may have been deleted); each is read again
+/// when next needed (docs/security.md, section 8).
+pub fn forget_suggestions() {
+    let slots: Vec<Arc<crate::terminal::autocomplete::Slot>> = {
+        let mut list = SUGGESTIONS.lock().unwrap_or_else(PoisonError::into_inner);
+        list.retain(|slot| slot.strong_count() > 0);
+        list.iter().filter_map(Weak::upgrade).collect()
+    };
+    for slot in slots {
+        slot.invalidate();
     }
 }
 
