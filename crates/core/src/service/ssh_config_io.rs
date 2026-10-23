@@ -440,6 +440,9 @@ pub(super) fn read_key_file(path: &Path) -> Result<SecretString, KeyFileStatus> 
         Ok(meta) if meta.len() > MAX_KEY_FILE_BYTES => {
             return Err(KeyFileStatus::Invalid("the file is too large".to_owned()));
         }
+        // A FIFO or a device would block the read (a FIFO without a writer
+        // forever): only a regular file is a key file.
+        Ok(meta) if !meta.is_file() => return Err(unreadable()),
         Ok(meta) => meta.len(),
         Err(_) => return Err(KeyFileStatus::Missing),
     };
@@ -538,9 +541,20 @@ impl Core {
                 ValidationReason::Invalid,
             )]));
         }
-        let config = ssh_config::read(&source.path, &source.home);
-        let plans = config
-            .hosts()
+        let mut config = ssh_config::read(&source.path, &source.home);
+        // Each host is matched against every block: past the budget, the
+        // remaining hosts are left out and reported (D171).
+        let mut hosts = config.hosts();
+        let budget = ssh_config::MAX_MATCH_WORK / config.blocks.len().max(1);
+        if hosts.len() > budget {
+            let (_, line) = hosts[budget].clone();
+            hosts.truncate(budget);
+            config.problems.push(ssh_config::Problem {
+                line,
+                kind: ssh_config::ProblemKind::TooLarge,
+            });
+        }
+        let plans = hosts
             .into_iter()
             .map(|(alias, _)| {
                 let options = config.options_for(&alias);

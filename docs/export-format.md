@@ -135,7 +135,9 @@ merges them into the personal vault (D34):
   starts on app launch after an ordinary import, and one that listens
   beyond loopback does not start on connect either; a full restore keeps
   the file's flags. The summary counts the rules whose flags were turned
-  off (D63, security.md 11.3).
+  off (D63, security.md 11.3). Likewise a host the import adds comes with
+  Agent Forwarding off, unless it is a full restore; the summary counts
+  them (D172).
   The command history, the
   hosts' history hint states and the connection log are taken too when the
   file holds them, unless the user turns them off (both on, D51): each
@@ -185,7 +187,9 @@ merges them into the personal vault (D34):
   file may hold a script that then runs on the servers. The settings of the
   device (`serial.*`: the last serial port, D95; `updates.last_check`, D97)
   are never applied, not even by a full restore.
-- A file over 64 MiB or with more than 500,000 records is refused.
+- A file over 64 MiB, with more than 500,000 records (refused ones
+  included) or with more than 8,000,000 JSON values (counted before the
+  file is parsed) is refused (D171).
 
 The summary reads "added N, existing M, conflicts C, skipped S, errors K"
 (UI 2.5).

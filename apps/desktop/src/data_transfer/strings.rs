@@ -61,6 +61,8 @@ pub const SUMMARY_SKIPPED: &str = "Skipped (history and logs turned off, device 
 pub const SUMMARY_UNKNOWN_KEYS: &str = "Keys kept as unknown (this version cannot read them)";
 pub const SUMMARY_HISTORY_LEFT_OUT: &str = "Commands left out (they look like secrets)";
 pub const SUMMARY_RULES_AUTOSTART_OFF: &str = "Forwarding rules imported with autostart turned off";
+pub const SUMMARY_HOSTS_AGENT_FORWARDING_OFF: &str =
+    "Hosts imported with Agent Forwarding turned off";
 pub const SUMMARY_ERRORS: &str = "Errors";
 pub const SUMMARY_SETTINGS: &str = "Settings applied";
 pub const SUMMARY_SETTINGS_LEFT_OUT: &str =

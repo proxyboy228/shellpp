@@ -7,7 +7,8 @@
 //!   values with double quotes, `#` comments.
 //! - `Include` (files and `*`/`?` patterns in the file name, relative paths
 //!   from the folder of the main file, `~` for the home folder) is expanded in
-//!   place, at most 16 levels deep and never twice in one chain.
+//!   place, at most 16 levels deep; each file is read once, however it is
+//!   spelled (D171).
 //! - `Host` patterns (`*`, `?`, `!` negation, case-insensitive) and a basic
 //!   `Match`: `all`, `host`, `originalhost` and `user` with their patterns and
 //!   `!`; a `Match` with another criterion (`exec`, `localuser`, `canonical`,
@@ -30,6 +31,18 @@ pub const MAX_INCLUDE_DEPTH: usize = 16;
 pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 /// Most lines over all files.
 pub const MAX_LINES: usize = 200_000;
+/// Most files read, includes and all (D171).
+pub const MAX_FILES: usize = 1_000;
+/// Most `Include` arguments over all files (D171): each one is a lookup.
+pub const MAX_INCLUDE_ARGUMENTS: usize = 256;
+/// Most `Host` and `Match` blocks (D171).
+pub const MAX_BLOCKS: usize = 10_000;
+/// Most problems kept (D171): the rest of a broken file adds none.
+pub const MAX_PROBLEMS: usize = 1_000;
+/// Most host-and-block pairs evaluated for one import (D171): each host is
+/// matched against every block, so the hosts past this budget are left out
+/// of the import and reported.
+pub const MAX_MATCH_WORK: usize = 5_000_000;
 
 /// Keywords whose values add up instead of the first one winning.
 const CUMULATIVE: &[&str] = &[
@@ -195,6 +208,15 @@ pub fn expand_home(path: &str, home: &Path) -> PathBuf {
 
 /// OpenSSH wildcard matching (`*`, `?`), case-insensitive.
 pub fn wildcard(pattern: &str, text: &str) -> bool {
+    // A name without wildcards (most `Host` lines): a plain comparison,
+    // without the copies below.
+    if !pattern.contains(['*', '?']) {
+        return if pattern.is_ascii() && text.is_ascii() {
+            pattern.eq_ignore_ascii_case(text)
+        } else {
+            pattern.to_lowercase() == text.to_lowercase()
+        };
+    }
     let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
     let text: Vec<char> = text.to_lowercase().chars().collect();
     let (mut p, mut t) = (0usize, 0usize);
@@ -329,9 +351,29 @@ struct Reader<'a> {
     home: &'a Path,
     config: Config,
     lines: usize,
+    /// The files read so far, by their canonical path (D171).
+    seen: HashSet<PathBuf>,
+    includes: usize,
+    /// A limit was reached: nothing more is read.
+    full: bool,
 }
 
 impl Reader<'_> {
+    /// Keeps a problem, up to [`MAX_PROBLEMS`].
+    fn report(&mut self, problem: Problem) {
+        if self.config.problems.len() < MAX_PROBLEMS {
+            self.config.problems.push(problem);
+        }
+    }
+
+    /// Stops the reading at a limit, with one "too large" problem.
+    fn stop(&mut self, problem: Problem) {
+        if !self.full {
+            self.full = true;
+            self.report(problem);
+        }
+    }
+
     fn current(&mut self, file: &Path, line: usize) -> &mut Block {
         if self.config.blocks.is_empty() {
             self.config.blocks.push(Block {
@@ -355,36 +397,42 @@ impl Reader<'_> {
             line: line.unwrap_or_else(|| location(0)),
             kind,
         };
-        if chain.len() >= MAX_INCLUDE_DEPTH || chain.iter().any(|seen| seen == file) {
-            self.config
-                .problems
-                .push(problem(ProblemKind::IncludeLoop, at));
+        if self.full {
             return;
         }
+        // The same file by another spelling (`../.ssh/config`, `CONFIG` or
+        // `config.` on Windows) is the same file: it is read once.
+        let identity = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        if chain.len() >= MAX_INCLUDE_DEPTH || self.seen.contains(&identity) {
+            self.report(problem(ProblemKind::IncludeLoop, at));
+            return;
+        }
+        if self.seen.len() >= MAX_FILES {
+            self.stop(problem(ProblemKind::TooLarge, at));
+            return;
+        }
+        self.seen.insert(identity.clone());
         let too_large = std::fs::metadata(file).is_ok_and(|meta| meta.len() > MAX_FILE_BYTES);
         let text = match (too_large, std::fs::read(file)) {
             (false, Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
             (true, _) => {
-                self.config
-                    .problems
-                    .push(problem(ProblemKind::TooLarge, at));
+                self.report(problem(ProblemKind::TooLarge, at));
                 return;
             }
             (false, Err(_)) => {
-                self.config
-                    .problems
-                    .push(problem(ProblemKind::IncludeMissing, at));
+                self.report(problem(ProblemKind::IncludeMissing, at));
                 return;
             }
         };
-        chain.push(file.to_path_buf());
+        chain.push(identity);
         for (index, raw) in text.lines().enumerate() {
             let number = index + 1;
+            if self.full {
+                break;
+            }
             self.lines += 1;
             if self.lines > MAX_LINES {
-                self.config
-                    .problems
-                    .push(problem(ProblemKind::TooLarge, Some(location(number))));
+                self.stop(problem(ProblemKind::TooLarge, Some(location(number))));
                 break;
             }
             let line = raw.trim();
@@ -392,9 +440,7 @@ impl Reader<'_> {
                 continue;
             }
             let Some(mut parts) = words(line) else {
-                self.config
-                    .problems
-                    .push(problem(ProblemKind::Malformed, Some(location(number))));
+                self.report(problem(ProblemKind::Malformed, Some(location(number))));
                 continue;
             };
             if parts.is_empty() {
@@ -402,10 +448,14 @@ impl Reader<'_> {
             }
             let keyword = parts.remove(0).to_lowercase();
             if parts.is_empty() {
-                self.config
-                    .problems
-                    .push(problem(ProblemKind::Malformed, Some(location(number))));
+                self.report(problem(ProblemKind::Malformed, Some(location(number))));
                 continue;
+            }
+            if matches!(keyword.as_str(), "host" | "match")
+                && self.config.blocks.len() >= MAX_BLOCKS
+            {
+                self.stop(problem(ProblemKind::TooLarge, Some(location(number))));
+                break;
             }
             match keyword.as_str() {
                 "host" => self.config.blocks.push(Block {
@@ -417,7 +467,7 @@ impl Reader<'_> {
                     let criteria = match parse_match(&parts) {
                         Ok(criteria) => Some(criteria),
                         Err(name) => {
-                            self.config.problems.push(problem(
+                            self.report(problem(
                                 ProblemKind::MatchUnsupported(name),
                                 Some(location(number)),
                             ));
@@ -432,17 +482,24 @@ impl Reader<'_> {
                 }
                 "include" => {
                     for argument in &parts {
+                        self.includes += 1;
+                        if self.includes > MAX_INCLUDE_ARGUMENTS {
+                            self.stop(problem(ProblemKind::TooLarge, Some(location(number))));
+                            break;
+                        }
                         if is_network_path(&expand_home(argument, self.home)) {
-                            self.config
-                                .problems
-                                .push(problem(ProblemKind::IncludeNetwork, Some(location(number))));
+                            self.report(problem(
+                                ProblemKind::IncludeNetwork,
+                                Some(location(number)),
+                            ));
                             continue;
                         }
                         let files = include_files(argument, &self.base, self.home);
                         if files.is_empty() && !argument.contains(['*', '?']) {
-                            self.config
-                                .problems
-                                .push(problem(ProblemKind::IncludeMissing, Some(location(number))));
+                            self.report(problem(
+                                ProblemKind::IncludeMissing,
+                                Some(location(number)),
+                            ));
                         }
                         for included in files {
                             self.read(&included, chain, Some(location(number)));
@@ -475,6 +532,9 @@ pub fn read(path: &Path, home: &Path) -> Config {
         home,
         config: Config::default(),
         lines: 0,
+        seen: HashSet::new(),
+        includes: 0,
+        full: false,
     };
     let mut chain = Vec::new();
     reader.read(path, &mut chain, None);

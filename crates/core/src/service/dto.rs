@@ -1549,6 +1549,9 @@ pub struct DataImportSummary {
     /// Forwarding rules whose autostart the import turned off: on launch,
     /// and on connect beyond loopback (D63; not in a full restore).
     pub rules_autostart_off: usize,
+    /// Hosts whose Agent Forwarding the import turned off (D172; not in a
+    /// full restore).
+    pub hosts_agent_forwarding_off: usize,
 }
 
 /// Result of `key_import`.
