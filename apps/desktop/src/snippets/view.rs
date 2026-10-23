@@ -1192,6 +1192,19 @@ impl Render for SnippetsScreen {
             .id("snippets-screen")
             .test_support()
             .relative()
+            // A panel over the list (D100) closes with Esc wherever the focus is.
+            .when(
+                self.form.is_some() && details::overlays_in(window),
+                |screen| {
+                    screen.on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" && !event.keystroke.modifiers.modified()
+                        {
+                            cx.stop_propagation();
+                            this.leave_panel(window, cx);
+                        }
+                    }))
+                },
+            )
             .size_full()
             .bg(cx.theme().colors.list)
             .text_color(cx.theme().foreground)

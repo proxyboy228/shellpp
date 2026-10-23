@@ -81,9 +81,12 @@ pub fn overlay_width(width: Pixels, room: Pixels) -> Pixels {
 }
 
 /// Places a panel container over the right of its area (the area is
-/// `relative`): full height, the overlay shadow (D100, item 2).
-pub fn over_area<E: Styled>(panel: E, cx: &App) -> E {
+/// `relative`): full height, the overlay shadow (D100, item 2). It occludes
+/// what lies under it, so clicks, drags and the mouse-down of the grid
+/// beneath never see the pointer over the panel.
+pub fn over_area<E: Styled + gpui::InteractiveElement>(panel: E, cx: &App) -> E {
     panel
+        .occlude()
         .absolute()
         .top_0()
         .right_0()

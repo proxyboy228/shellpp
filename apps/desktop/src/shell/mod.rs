@@ -1587,6 +1587,15 @@ impl Shell {
     /// first while they still can be) and remembers the panel's record for
     /// [`Shell::resume_panel`]. Without an open panel it keeps what an
     /// earlier call remembered.
+    /// The host the details panel shows (tests).
+    #[cfg(test)]
+    pub fn panel_host(&self, cx: &App) -> Option<Uuid> {
+        match &self.panel {
+            Some(Panel::Host(panel)) => panel.read(cx).record_id(),
+            _ => None,
+        }
+    }
+
     pub fn suspend_panel(&mut self, cx: &mut Context<Self>) {
         self.close_search(cx);
         let target = match &self.panel {
@@ -3054,14 +3063,6 @@ impl Render for Shell {
             TopTab::Vaults => h_flex()
                 .relative()
                 .size_full()
-                .when(panel_over, |body| {
-                    body.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "escape" && this.panel.is_some() {
-                            cx.stop_propagation();
-                            this.close_panel(cx);
-                        }
-                    }))
-                })
                 .when(self.sidebar_visible, |body| {
                     body.child(sidebar::sidebar(
                         self.section,
@@ -3116,6 +3117,23 @@ impl Render for Shell {
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
+            // A panel over the main area (D100) closes with Esc wherever the
+            // focus is in the window (a top-bar tab too), unless a control
+            // inside took the key first.
+            .when(
+                panel_over && matches!(self.top_tab, TopTab::Vaults),
+                |shell| {
+                    shell.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape"
+                            && !event.keystroke.modifiers.modified()
+                            && this.panel.is_some()
+                        {
+                            cx.stop_propagation();
+                            this.close_panel(cx);
+                        }
+                    }))
+                },
+            )
             // A click in the shell while the focus is elsewhere (or nowhere)
             // brings it back, so the shell's shortcuts keep working; the
             // clicked control may then take the focus itself.

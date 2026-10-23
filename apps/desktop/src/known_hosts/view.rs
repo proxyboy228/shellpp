@@ -1048,6 +1048,15 @@ impl Render for KnownHostsScreen {
             .id("known-hosts-screen")
             .test_support()
             .relative()
+            // A panel over the grid (D100) closes with Esc wherever the focus is.
+            .when(self.has_panel() && details::overlays_in(window), |screen| {
+                screen.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" && !event.keystroke.modifiers.modified() {
+                        cx.stop_propagation();
+                        this.close_panel(cx);
+                    }
+                }))
+            })
             .size_full()
             .bg(cx.theme().colors.list)
             .text_color(cx.theme().foreground)

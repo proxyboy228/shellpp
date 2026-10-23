@@ -96,10 +96,13 @@ impl Job {
         Ok(())
     }
 
-    /// Ends every process in the job (the program and all it started).
-    fn terminate(&self) {
+    /// Ends every process in the job (the program and all it started);
+    /// when that fails, at least `child` itself, so waiting for it returns.
+    fn terminate(&self, child: &mut Child) {
         // SAFETY: the job handle is open and owned by `self`.
-        unsafe { TerminateJobObject(self.0.0, 1) };
+        if unsafe { TerminateJobObject(self.0.0, 1) } == 0 {
+            let _ = child.kill();
+        }
     }
 }
 
@@ -164,7 +167,7 @@ pub(crate) fn run_in_job(mut command: Command, timeout: Duration) -> Result<JobO
         return Err(JobError::Setup(err));
     }
     let Some(mut stdout) = child.stdout.take() else {
-        job.terminate();
+        job.terminate(&mut child);
         let _ = child.wait();
         return Err(JobError::Setup(io::Error::other("no standard output")));
     };
@@ -177,7 +180,7 @@ pub(crate) fn run_in_job(mut command: Command, timeout: Duration) -> Result<JobO
             let _ = tx.send(output);
         });
     if let Err(err) = reader {
-        job.terminate();
+        job.terminate(&mut child);
         let _ = child.wait();
         return Err(JobError::Setup(err));
     }
@@ -200,7 +203,7 @@ pub(crate) fn run_in_job(mut command: Command, timeout: Duration) -> Result<JobO
         _ => {
             // Ends the program and everything it started; the reader thread
             // then sees its pipe close and exits.
-            job.terminate();
+            job.terminate(&mut child);
             let _ = child.wait();
             Err(JobError::TimedOut)
         }

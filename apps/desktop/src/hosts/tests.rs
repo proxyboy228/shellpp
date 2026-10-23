@@ -1263,7 +1263,7 @@ fn min_window_at_150_percent_has_nothing_clipped_or_overlapping(cx: &mut TestApp
 #[gpui_kit::test]
 fn min_window_at_200_percent_keeps_the_bars_whole(cx: &mut TestAppContext) {
     // The minimum width; taller, so the host cards stay on screen at 200 %.
-    let (state, handle, _root, ids) = open_app(cx, 960., 1000.);
+    let (state, handle, root, ids) = open_app(cx, 960., 1000.);
     let settle = |cx: &mut TestAppContext| {
         for _ in 0..3 {
             cx.update_window(handle, |_, window, cx| window.render_frame(cx))
@@ -1306,6 +1306,41 @@ fn min_window_at_200_percent_keeps_the_bars_whole(cx: &mut TestAppContext) {
             .update_window(handle, |_, window, _| window.find("action-bar").bounds())
             .unwrap();
         assert_eq!(bar_now, bar_before, "{zoom}");
+        // The panel occludes the grid: a click in it, over another host's
+        // card, does not reach that card (D100 review).
+        let shell = cx.update(|cx| root.read(cx).shell().expect("unlocked").clone());
+        let covered = ids
+            .iter()
+            .copied()
+            .filter(|id| *id != ids[round])
+            .find_map(|id| {
+                let card = cx
+                    .update_window(handle, |_, window, _| {
+                        window.try_find(host_card_id(id)).map(|card| card.bounds())
+                    })
+                    .unwrap()?;
+                (card.right() > panel.left() + px(4.) && card.top() >= panel.top())
+                    .then_some((id, card))
+            });
+        let (id, card) = covered.expect("a host card lies under the panel");
+        {
+            let offset = gpui::point(
+                (panel.left() - card.left()).max(px(0.)) + px(4.),
+                card.size.height / 2.,
+            );
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.click_at(host_card_id(id), offset, cx);
+            })
+            .unwrap();
+            settle(cx);
+            let shown = cx.update(|cx| shell.read(cx).panel_host(cx));
+            assert_eq!(
+                shown,
+                Some(ids[round]),
+                "{zoom}: the click went through the panel"
+            );
+        }
         // Esc closes it, wherever the focus is.
         cx.update_window(handle, |_, window, cx| window.press("escape", cx))
             .unwrap();
