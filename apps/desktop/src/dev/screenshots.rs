@@ -493,6 +493,9 @@ pub enum ShotState {
     /// The import form with a text that is not a private key: the type
     /// "unknown" with its reason (UI 7.2).
     KeychainImportUnknown,
+    /// The sync conflict badges (UI 13.6) on the first key's and first
+    /// identity's cards.
+    KeychainConflict,
     /// The Keychain of an empty profile (UI 7.2, empty state).
     KeychainEmpty,
 }
@@ -514,7 +517,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 103] = [
+    pub const ALL: [Self; 104] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -568,6 +571,7 @@ impl ShotState {
         Self::KeychainPanel,
         Self::KeychainGenerate,
         Self::KeychainImportUnknown,
+        Self::KeychainConflict,
         Self::KeychainEmpty,
         Self::FirstRun,
         Self::Unlock,
@@ -675,11 +679,12 @@ impl ShotState {
         Self::SidebarFont,
     ];
     /// The Keychain states of stage 3 (night plan, items 1-4).
-    pub const STAGE_3: [Self; 5] = [
+    pub const STAGE_3: [Self; 6] = [
         Self::Keychain,
         Self::KeychainPanel,
         Self::KeychainGenerate,
         Self::KeychainImportUnknown,
+        Self::KeychainConflict,
         Self::KeychainEmpty,
     ];
     /// The states at the minimum window size: the Hosts screen without and
@@ -803,6 +808,7 @@ impl ShotState {
             Self::KeychainPanel => "keychain-key-panel",
             Self::KeychainGenerate => "keychain-generate",
             Self::KeychainImportUnknown => "keychain-import-unknown",
+            Self::KeychainConflict => "keychain-conflict",
             Self::KeychainEmpty => "keychain-empty",
         }
     }
@@ -1864,9 +1870,8 @@ pub async fn reach_state(
         ShotState::Keychain
         | ShotState::KeychainPanel
         | ShotState::KeychainGenerate
-        | ShotState::KeychainImportUnknown => {
-            keychain_shot::reach(cx, handle, root, shot_state).await
-        }
+        | ShotState::KeychainImportUnknown
+        | ShotState::KeychainConflict => keychain_shot::reach(cx, handle, root, shot_state).await,
         ShotState::ForwardingEmpty
         | ShotState::ForwardingCards
         | ShotState::ForwardingForm
@@ -2114,6 +2119,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::KeychainPanel
             | ShotState::KeychainGenerate
             | ShotState::KeychainImportUnknown
+            | ShotState::KeychainConflict
             | ShotState::KeychainEmpty => Err("checked with the Keychain screen"),
             // Checked by `sftp_shot::check`.
             ShotState::SftpLocal

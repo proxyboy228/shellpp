@@ -136,6 +136,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "keychain-key-panel",
         "keychain-generate",
         "keychain-import-unknown",
+        "keychain-conflict",
         "keychain-empty",
         // Export Data as it opens and with encryption off (run 3, D64).
         "export-data",
@@ -193,7 +194,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 103);
+    assert_eq!(ShotState::ALL.len(), 104);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 22);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");

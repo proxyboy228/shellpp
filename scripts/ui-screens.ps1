@@ -48,7 +48,7 @@
     and those of stage 9: telnet-tab, serial-tab (and, without a session,
     host-panel-telnet and serial-dialog);
     and those of stage 3: keychain, keychain-key-panel, keychain-generate,
-    keychain-import-unknown, keychain-empty;
+    keychain-import-unknown, keychain-conflict, keychain-empty;
   - 960x600 (the minimum window size): root, host-panel, first-run, and the
     other main screens (run 6, D96): sftp-local, keychain, forwarding-cards,
     snippets, known-hosts, logs, settings-shortcuts, new-tab;
@@ -96,6 +96,9 @@
   - keychain-generate: the Generate key form with a label typed;
   - keychain-import-unknown: the import form with a public key pasted: the
     type "unknown" with its reason;
+  - keychain-conflict: the sync conflict badges (UI 13.6) on the first
+    key's and the first identity's cards (conflict copies written through
+    the core's test hook, no server);
   - keychain-empty: the Keychain of an empty profile (Generate, Import,
     Import from ~/.ssh).
 
@@ -104,7 +107,7 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (214 files for the
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (236 files for the
   default sizes; -Zoom other than 100 puts the zoom in the names:
   <W>x<H>-<theme>-<zoom>-<state>.png). Exits with 1 when the build, the run or
   a file check fails.
@@ -202,7 +205,7 @@ function Test-DockerLinux {
 $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 'search-results',
     'search-no-results', 'three-selected', 'empty', 'list-view', 'new-host', 'tag-filter', 'tag-chips',
     'show-more', 'agent-forwarding', 'known-hosts', 'keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
-    'keychain-empty', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
+    'keychain-conflict', 'keychain-empty', 'first-run', 'unlock', 'terminal-tofu', 'terminal-ls-color', 'terminal-htop',
     'terminal-drop', 'terminal-local', 'terminal-tabs', 'terminal-connecting', 'terminal-splits',
     'split-picker', 'tab-menu', 'new-tab', 'new-tab-search', 'sidebar-tools', 'terminal-scrollback', 'broadcast-tabs', 'broadcast-marks', 'sidebar-snippets',
     'sidebar-history', 'sidebar-appearance', 'sidebar-font', 'quick-connect-toast', 'terminal-host-key-changed',
@@ -245,7 +248,7 @@ $stage2bStates = @('known-hosts', 'terminal-connecting', 'terminal-splits', 'spl
     'sidebar-font', 'terminal-htop', 'terminal-drop')
 # Stage 3, the Keychain (src/dev/screenshots.rs, ShotState::STAGE_3).
 $stage3States = @('keychain', 'keychain-key-panel', 'keychain-generate', 'keychain-import-unknown',
-    'keychain-empty')
+    'keychain-conflict', 'keychain-empty')
 function Get-SizeStates([string] $size) {
     if ($size -eq '1280x800') { return $allStates }
     if ($size -eq '960x600') {

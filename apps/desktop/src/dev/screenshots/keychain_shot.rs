@@ -1,8 +1,11 @@
 //! The Keychain states of the screenshot run (night plan of stage 3, items
 //! 1-4; UI 7.1-7.3): the screen with the demo keys and identities, the key
 //! panel of the first key, the Generate key form, the import form with a
-//! text that is not a private key (the type "unknown" with its reason), and
-//! the empty state on a fresh profile.
+//! text that is not a private key (the type "unknown" with its reason), the
+//! sync conflict badges (UI 13.6) on the first key's and first identity's
+//! cards (a conflict copy written through the core's test hook, no server;
+//! the reset keeps the current versions), and the empty state on a fresh
+//! profile.
 //!
 //! The keys are the demo profile's, generated when the demo is seeded
 //! ([`super::demo::seed`]); the "unknown" text is the public key line of the
@@ -62,6 +65,21 @@ async fn wait_for(
 /// The first key in the name order (the panel's key).
 fn first_key(screen: &KeychainScreen) -> Option<uuid::Uuid> {
     screen.shown_key_ids().first().copied()
+}
+
+/// The cards of the conflict state: the first key and the first identity,
+/// with their titles.
+fn conflict_records(screen: &KeychainScreen) -> Option<[(uuid::Uuid, String); 2]> {
+    let key = first_key(screen)?;
+    let identity = *screen.shown_identity_ids().first()?;
+    let key_title = keychain::key_title(screen.keys().iter().find(|view| view.record_id == key)?);
+    let identity_label = screen
+        .identities()
+        .iter()
+        .find(|view| view.record_id == identity)?
+        .label
+        .clone();
+    Some([(key, key_title), (identity, identity_label)])
 }
 
 /// From the reset demo window: Keychain in the sidebar, tiles by name, no
@@ -136,6 +154,38 @@ pub async fn reach(
             })
             .await
         }
+        // Sync kept another device's version of the first key and the first
+        // identity (UI 13.6): their cards show the badge.
+        ShotState::KeychainConflict => {
+            let records = cx
+                .update(|cx| conflict_records(screen.read(cx)))
+                .ok_or_else(|| not_reached(shot, "no key or no identity"))?;
+            let state = cx.update(|cx| root.read(cx).state().clone());
+            let core = cx
+                .update(|cx| state.read(cx).core().cloned())
+                .ok_or_else(|| not_reached(shot, "no core"))?;
+            let changed = std::time::SystemTime::now() - Duration::from_secs(3 * 3600);
+            for (record, title) in &records {
+                let mut losing = serde_json::Map::new();
+                losing.insert("label".into(), format!("{title} (laptop)").into());
+                core.sync_conflict_insert_for_test(
+                    *record,
+                    Some(losing),
+                    uuid::Uuid::now_v7(),
+                    changed,
+                )
+                .map_err(|_| not_reached(shot, "the conflict was not written"))?;
+            }
+            // The badges come with the status the core's event refreshes.
+            wait_for(cx, handle, shot, "the badges", |cx| {
+                let conflicted = state.read(cx).sync_conflicted();
+                records
+                    .iter()
+                    .all(|(record, _)| conflicted.contains(record))
+            })
+            .await?;
+            settle(cx, handle).await
+        }
         _ => Err(not_reached(shot, "not a Keychain state")),
     }
 }
@@ -200,6 +250,19 @@ pub fn check(
                     need(
                         visible(window, "kc-import-unknown") && visible(window, "kc-import-reason"),
                         "no unknown type with its reason",
+                    )
+                }
+                ShotState::KeychainConflict => {
+                    need(!screen.has_panel(), "a panel is open")?;
+                    let [(key, _), (identity, _)] =
+                        conflict_records(screen).ok_or("no key or no identity")?;
+                    need(
+                        visible(window, keychain::key_conflict_badge_id(key).as_ref())
+                            && visible(
+                                window,
+                                keychain::identity_conflict_badge_id(identity).as_ref(),
+                            ),
+                        "no conflict badges",
                     )
                 }
                 ShotState::KeychainEmpty => need(visible(window, "kc-empty"), "no empty state"),
