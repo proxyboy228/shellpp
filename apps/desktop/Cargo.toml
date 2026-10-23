@@ -32,11 +32,17 @@ dev-tools = []
 # The sync conflict state writes a conflict copy and the duplicates states
 # list pairs (shellpp-core's test-hooks).
 screenshots = ["dev-tools", "gpui-kit/test-support", "dep:ssh-key", "shellpp-core/test-hooks"]
+# FIDO2 security keys over USB HID where there is no WebAuthn API (macOS,
+# Linux; D143): ctap-hid-fido2 builds hidapi, which needs libudev on Linux.
+# Off until checked with a key; Windows signs through WebAuthn either way.
+fido2-hid = ["dep:ctap-hid-fido2"]
 
 [dependencies]
 regex.workspace = true
 # Only for the screenshot run's demo certificate (feature `screenshots`).
 ssh-key = { workspace = true, optional = true }
+# Security keys over USB HID (feature `fido2-hid`, D143), MIT.
+ctap-hid-fido2 = { workspace = true, optional = true }
 shellpp-core.workspace = true
 shellpp-private-file.workspace = true
 
@@ -92,8 +98,10 @@ keyring = { workspace = true, features = ["windows-native"] }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Networking_WindowsWebServices",
     "Win32_Storage_FileSystem",
     "Win32_System_Time",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # The registration of the app identity for the user (app/identity.rs, D83).
 windows-registry.workspace = true

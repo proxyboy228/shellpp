@@ -366,6 +366,8 @@ impl SshTask {
                 can_save_password: saves.can_save_password,
                 can_save_passphrase: saves.key.is_some_and(|(_, can_save)| can_save),
                 file_keys: Vec::new(),
+                // Security keys sign through the system (D143).
+                authenticator: crate::platform::security_key::authenticator(),
             },
             agent: None,
             keepalive: (config.keepalive_s > 0)
@@ -1544,6 +1546,8 @@ fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
             can_save_password: false,
             can_save_passphrase: false,
             file_keys: Vec::new(),
+            // Security keys sign through the system (D143).
+            authenticator: crate::platform::security_key::authenticator(),
         },
         agent: None,
         keepalive: (hop.keepalive_s > 0).then(|| Duration::from_secs(u64::from(hop.keepalive_s))),

@@ -169,8 +169,8 @@ pub const CERTIFICATE_REMOVE_FAILED: &str = "The certificate could not be remove
 pub const CERTIFICATE_NO_KEY: &str =
     "No key in the Keychain matches this certificate: import its private key first.";
 pub const CERTIFICATE_INVALID: &str = "This is not an OpenSSH user certificate.";
-pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Creating one here \
-     and signing in with it arrive in a later stage.";
+pub const FIDO2_TOOLTIP: &str = "Import a key made on a FIDO2 security key. Signing in with it \
+     asks you to touch the key (on Windows in the Windows Security dialog).";
 pub const IMPORT_TEXT_PLACEHOLDER: &str = "-----BEGIN OPENSSH PRIVATE KEY-----";
 pub const CHOOSE_FILE: &str = "Choose file…";
 pub const IMPORT_LABEL_PLACEHOLDER: &str = "From the key comment";

@@ -83,6 +83,9 @@ pub struct AuthPlan {
     /// and before a prompted password (a saved one comes before the agent,
     /// D36), in this order (see [`FileKey`]).
     pub file_keys: Vec<FileKey>,
+    /// Signs with a FIDO2 security key (D143); `None`: a security key is
+    /// unusable and the next method runs.
+    pub authenticator: Option<Arc<dyn crate::sk::Authenticator>>,
 }
 
 impl std::fmt::Debug for AuthPlan {
@@ -93,6 +96,7 @@ impl std::fmt::Debug for AuthPlan {
             .field("password", &self.password.is_some())
             .field("keyboard_interactive", &self.keyboard_interactive)
             .field("file_keys", &self.file_keys.len())
+            .field("authenticator", &self.authenticator.is_some())
             .finish_non_exhaustive()
     }
 }
