@@ -65,8 +65,10 @@ pub const TOGGLES_HINT: &str =
 
 pub const REVIEW_TITLE: &str = "Review sync";
 pub const CONFLICTS: &str = "Conflicts";
+// Not "the newer change": a revoked known host key wins whatever its age
+// (sync-protocol 6.7).
 pub const CONFLICTS_HINT: &str =
-    "Two devices changed the same item. The newer change is in place; the other one is kept here.";
+    "Two devices changed the same item. One change is in place; the other one is kept here.";
 // The comparison of a conflict (UI 13.6).
 pub const CONFLICTS_TITLE: &str = "Sync conflicts";
 pub const NO_CONFLICTS: &str = "No conflicts.";
@@ -76,6 +78,14 @@ pub const COMPARE_HINT: &str =
 pub const CURRENT_VERSION: &str = "Current version";
 pub const OTHER_VERSION: &str = "Other version";
 pub const DELETED: &str = "Deleted";
+pub const MISSING: &str = "Missing";
+pub const KEEPS_REVOCATION: &str =
+    "The revoked key stays revoked; the other fields come from the other version.";
+pub const REVOKED_STAYS: &str =
+    "A revoked key stays revoked: the other version's deletion is not applied.";
+pub const TYPE_NOT_WRITTEN: &str = "This version of Shell++ cannot write this kind of item.";
+pub const ONLY_ORDER_DIFFERS: &str = "The versions differ only in their place in the list.";
+pub const SAME_VALUES: &str = "The versions hold the same values.";
 pub const VERSION_THIS_DEVICE: &str = "This device";
 pub const DEVICE: &str = "Device";
 pub const UNKNOWN_DEVICE: &str = "Unknown device";

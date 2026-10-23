@@ -4,8 +4,14 @@
 //! - The comparison shows the current version on the left and the other
 //!   (losing) version on the right, each with the device and the time of
 //!   its change; the fields that differ are highlighted, a deletion says
-//!   "Deleted". "Keep this" keeps the current version, "Keep other"
-//!   replaces it with the other one; closing leaves the conflict.
+//!   "Deleted" and an original no longer here "Missing" (data-model 15).
+//!   "Keep this" keeps the current version, "Keep other" replaces it with
+//!   the other one; closing leaves the conflict.
+//! - "Keep other" follows the core's type rules (`KeepOther`): a revoked
+//!   known host key stays revoked, and a type this app does not write
+//!   keeps its conflict. A note under the button says which.
+//! - When no field the dialog shows differs (only the place in the list),
+//!   one line says so instead of two equal sides without a mark.
 //! - The core masks passwords and hides private keys in a conflict
 //!   (`ConflictItem`); nothing here unmasks them.
 //! - Every kind of object uses the same comparison: both versions as lists
@@ -23,9 +29,11 @@ use gpui::{
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, WindowExt as _, h_flex, v_flex,
+};
 use serde_json::{Map, Value};
-use shellpp_core::service::{ConflictChoice, ConflictItem};
+use shellpp_core::service::{ConflictChoice, ConflictItem, KeepOther};
 use uuid::Uuid;
 
 use super::{error_line, error_text, label, strings, title, when};
@@ -202,11 +210,43 @@ fn origin_text(item: &ConflictItem, side: Side) -> String {
     }
 }
 
-fn deleted(item: &ConflictItem, side: Side) -> bool {
+/// A side without fields: "Deleted", or "Missing" for an original no
+/// longer here (data-model 15). The id suffix and the text.
+fn absent(item: &ConflictItem, side: Side) -> Option<(&'static str, &'static str)> {
     match side {
-        Side::Current => item.current_deleted,
-        Side::Other => item.losing_deleted,
+        Side::Current if item.current_missing => Some(("missing", strings::MISSING)),
+        Side::Current if item.current_deleted => Some(("deleted", strings::DELETED)),
+        Side::Other if item.losing_deleted => Some(("deleted", strings::DELETED)),
+        _ => None,
     }
+}
+
+/// Why "Keep other" does not simply replace the current version (the
+/// core's type rules); `None` when it does.
+pub fn keep_other_note(item: &ConflictItem) -> Option<&'static str> {
+    match item.keep_other {
+        KeepOther::Replaces => None,
+        KeepOther::KeepsRevocation => Some(strings::KEEPS_REVOCATION),
+        KeepOther::RevokedStays => Some(strings::REVOKED_STAYS),
+        KeepOther::Unsupported => Some(strings::TYPE_NOT_WRITTEN),
+    }
+}
+
+/// The line shown when no field the dialog shows differs: both versions
+/// live and the core lists no difference. The sort key is not among the
+/// fields, so a conflict over the list order says so.
+pub fn same_fields_note(item: &ConflictItem) -> Option<&'static str> {
+    let (Some(current), Some(other)) = (&item.current_data, &item.losing_data) else {
+        return None;
+    };
+    if !item.differences.is_empty() {
+        return None;
+    }
+    Some(if current.get("order_key") != other.get("order_key") {
+        strings::ONLY_ORDER_DIFFERS
+    } else {
+        strings::SAME_VALUES
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -264,18 +304,18 @@ impl CompareDialog {
             .gap(metrics::SPACE_1)
             .child(label(heading, cx))
             .child(widgets::caption(origin_text(&self.item, side), cx).truncate())
-            .when(deleted(&self.item, side), |this| {
+            .when_some(absent(&self.item, side), |this, (key, text)| {
                 this.child(
                     div()
                         .id(SharedString::from(format!(
-                            "sync-compare-{}-deleted",
+                            "sync-compare-{}-{key}",
                             side.key()
                         )))
                         .test_support()
                         .text_size(metrics::FONT_SIZE_BODY)
                         .font_weight(metrics::FONT_WEIGHT_MEDIUM)
                         .text_color(cx.theme().danger)
-                        .child(strings::DELETED),
+                        .child(text),
                 )
             })
     }
@@ -283,13 +323,13 @@ impl CompareDialog {
     /// One side of a row: the field name and its value; a differing field
     /// on `--warning-subtle` with a `--warning` mark (text stays
     /// `--text-primary`, design-system 2.5), so the difference does not
-    /// rest on the tint alone. A deleted side stays empty.
+    /// rest on the tint alone. A deleted or missing side stays empty.
     fn cell(&self, row: &FieldRow, side: Side, cx: &App) -> AnyElement {
         let value = match side {
             Side::Current => &row.current,
             Side::Other => &row.other,
         };
-        if deleted(&self.item, side) {
+        if absent(&self.item, side).is_some() {
             return div().flex_1().min_w_0().into_any_element();
         }
         let theme = cx.theme();
@@ -373,6 +413,8 @@ impl Render for CompareDialog {
                     this.resolve(choice, window, cx)
                 }))
         };
+        let other_note = keep_other_note(item);
+        let same_note = same_fields_note(item);
         v_flex()
             .id("sync-compare")
             .test_support()
@@ -407,20 +449,38 @@ impl Render for CompareDialog {
             )
             .child(widgets::divider(cx))
             .child(fields)
+            .children(same_note.map(|note| {
+                div()
+                    .id("sync-compare-same-fields")
+                    .test_support()
+                    .child(widgets::caption(note, cx))
+            }))
             .child(
                 h_flex()
                     .w_full()
                     .gap(metrics::SPACE_3)
+                    .items_start()
                     .child(div().flex_1().min_w_0().child(keep(
                         "sync-keep-this",
                         strings::KEEP_THIS,
                         ConflictChoice::Current,
                     )))
-                    .child(div().flex_1().min_w_0().child(keep(
-                        "sync-keep-other",
-                        strings::KEEP_OTHER,
-                        ConflictChoice::Copy,
-                    ))),
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(metrics::SPACE_1)
+                            .child(
+                                keep("sync-keep-other", strings::KEEP_OTHER, ConflictChoice::Copy)
+                                    .disabled(!item.keep_other.allowed()),
+                            )
+                            .children(other_note.map(|note| {
+                                div()
+                                    .id("sync-keep-other-note")
+                                    .test_support()
+                                    .child(widgets::caption(note, cx))
+                            })),
+                    ),
             )
             .children(error_line(self.error, cx))
     }

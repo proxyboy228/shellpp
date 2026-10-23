@@ -11,6 +11,7 @@ use gpui::{
 use gpui_kit::test::TestWindowExt as _;
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
+use shellpp_core::service::{ConflictChoice, ConflictItem, KeepOther};
 use uuid::Uuid;
 
 use crate::app::{self, RootView};
@@ -21,6 +22,8 @@ struct Ui {
     state: Entity<AppState>,
     handle: AnyWindowHandle,
     _root: Entity<RootView>,
+    /// The profile's generated master password (unlock after a lock).
+    password: SecretString,
 }
 
 fn map(value: Value) -> Map<String, Value> {
@@ -45,7 +48,9 @@ impl Ui {
             crate::testing::init_ui(cx);
             app::root::bind_keys(cx);
         });
-        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        let profile = TestProfile::new();
+        let password = profile.password().clone();
+        let state = cx.new(|cx| AppState::new(profile.into_unlocked(), cx));
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 Default::default(),
@@ -60,6 +65,7 @@ impl Ui {
             state,
             handle,
             _root: root,
+            password,
         };
         ui.settle(cx);
         ui
@@ -286,7 +292,9 @@ fn every_type_gets_the_field_list() {
             other: "[\"a\",\"b\"]".into(),
         }],
         current_deleted: false,
+        current_missing: false,
         current_data: Some(map(json!({"name": "Deploy", "tabs": ["a"]}))),
+        keep_other: shellpp_core::service::KeepOther::Replaces,
         current_device_id: None,
         current_device_name: None,
         losing_device_name: Some("Laptop".into()),
@@ -319,4 +327,258 @@ fn every_type_gets_the_field_list() {
         super::origin_text(&item, super::Side::Current),
         super::strings::VERSION_THIS_DEVICE
     );
+}
+
+impl Ui {
+    /// Opens the comparison of `conflict` (as a row of the list does).
+    fn open_compare(&self, conflict: Uuid, cx: &mut TestAppContext) -> ConflictItem {
+        let item = self.item(conflict, cx);
+        let (state, opened) = (self.state.clone(), item.clone());
+        cx.update_window(self.handle, move |_, window, cx| {
+            super::open(state, opened, None, window, cx);
+        })
+        .unwrap();
+        self.settle(cx);
+        assert!(self.visible("sync-compare", cx));
+        item
+    }
+
+    fn item(&self, conflict: Uuid, cx: &mut TestAppContext) -> ConflictItem {
+        self.core(cx)
+            .sync_conflicts()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.conflict_id == conflict)
+            .expect("the conflict is listed")
+    }
+
+    /// The current version's data as the comparison gets it, through a
+    /// conflict copy resolved right away ("Keep this").
+    fn current_data(&self, record: Uuid, cx: &mut TestAppContext) -> Map<String, Value> {
+        let probe = self.conflict(record, None, cx);
+        let data = self.item(probe, cx).current_data.unwrap();
+        self.core(cx)
+            .sync_conflict_resolve(probe, ConflictChoice::Current)
+            .unwrap();
+        self.settle(cx);
+        data
+    }
+
+    fn known_host(&self, revoked: bool, cx: &mut TestAppContext) -> Uuid {
+        let key: [u8; 32] = shellpp_core::crypto::random_array().unwrap();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&11u32.to_be_bytes());
+        blob.extend_from_slice(b"ssh-ed25519");
+        blob.extend_from_slice(&32u32.to_be_bytes());
+        blob.extend_from_slice(&key);
+        let id = self
+            .core(cx)
+            .known_host_add(shellpp_core::service::dto::KnownHostAddInput {
+                host: "192.0.2.30".into(),
+                port: Some(22),
+                key_type: "ssh-ed25519".into(),
+                public_key: shellpp_core::known_hosts::encode_blob(&blob),
+                revoked,
+                comment: None,
+            })
+            .unwrap()
+            .record_id;
+        self.settle(cx);
+        id
+    }
+
+    fn revoked(&self, known: Uuid, cx: &mut TestAppContext) -> bool {
+        self.core(cx)
+            .known_hosts_list()
+            .unwrap()
+            .into_iter()
+            .find(|view| view.record_id == known)
+            .expect("still a known host")
+            .revoked
+    }
+
+    fn conflicts(&self, cx: &mut TestAppContext) -> usize {
+        self.core(cx).sync_conflicts().unwrap().len()
+    }
+}
+
+/// UI 13.6: a revoked known host key stays revoked. "Keep other" against
+/// an edit made elsewhere says so under the button and keeps the key
+/// revoked; against a deletion it is disabled with the reason, and a click
+/// changes nothing. The list's hint no longer claims the newer change won.
+#[gpui::test]
+fn keep_other_says_a_revoked_key_stays_revoked(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let known = ui.known_host(true, cx);
+    let mut edited = ui.current_data(known, cx);
+    assert_eq!(edited["marker"], json!("revoked"));
+    edited.remove("marker");
+    edited.insert("comment".into(), json!("edited elsewhere"));
+    let conflict = ui.conflict(known, Some(Value::Object(edited)), cx);
+    let item = ui.open_compare(conflict, cx);
+    assert_eq!(item.keep_other, KeepOther::KeepsRevocation);
+    assert_eq!(
+        super::keep_other_note(&item),
+        Some(super::strings::KEEPS_REVOCATION)
+    );
+    assert!(ui.visible("sync-keep-other-note", cx), "the note says why");
+    ui.click("sync-keep-other", cx);
+    assert!(!ui.visible("sync-compare", cx), "resolved");
+    assert_eq!(ui.conflicts(cx), 0);
+    assert!(ui.revoked(known, cx), "the key stays revoked");
+
+    let deletion = ui.conflict(known, None, cx);
+    let item = ui.open_compare(deletion, cx);
+    assert_eq!(item.keep_other, KeepOther::RevokedStays);
+    assert_eq!(
+        super::keep_other_note(&item),
+        Some(super::strings::REVOKED_STAYS)
+    );
+    assert!(ui.visible("sync-keep-other-note", cx));
+    ui.click("sync-keep-other", cx);
+    assert!(ui.visible("sync-compare", cx), "disabled: nothing happens");
+    assert_eq!(ui.conflicts(cx), 1, "the conflict stays");
+    assert!(ui.revoked(known, cx));
+    ui.click("sync-keep-this", cx);
+    assert_eq!(ui.conflicts(cx), 0);
+    assert!(!super::strings::CONFLICTS_HINT.contains("newer"));
+    ui.finish(cx);
+}
+
+/// A plain host conflict: "Keep other" has no note and fields differ.
+#[gpui::test]
+fn keep_other_has_no_note_when_it_replaces(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.host(&secret(), cx);
+    let conflict = ui.conflict(host, Some(json!({"address": "192.0.2.11"})), cx);
+    let item = ui.open_compare(conflict, cx);
+    assert_eq!(item.keep_other, KeepOther::Replaces);
+    assert!(!ui.visible("sync-keep-other-note", cx));
+    assert!(!ui.visible("sync-compare-same-fields", cx), "fields differ");
+    ui.finish(cx);
+}
+
+/// Data-model 15: an original no longer here is "Missing", not "Deleted";
+/// "Keep other" recreates it.
+#[gpui::test]
+fn a_missing_original_says_missing(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.host(&secret(), cx);
+    let conflict = ui.conflict(
+        host,
+        Some(json!({"address": "192.0.2.10", "label": "web-2"})),
+        cx,
+    );
+    let core = ui.core(cx);
+    let vault_id = core.vaults().unwrap()[0].vault_id;
+    // Not bound: the row goes at once; out of the trash, nothing is left.
+    core.record_delete(shellpp_core::service::dto::RecordsRef {
+        vault_id,
+        record_ids: vec![host],
+    })
+    .unwrap();
+    core.recently_deleted_delete(&[host]).unwrap();
+    ui.settle(cx);
+    ui.open_compare(conflict, cx);
+    assert!(ui.visible("sync-compare-current-missing", cx), "Missing");
+    assert!(
+        !ui.visible("sync-compare-current-deleted", cx),
+        "not Deleted"
+    );
+    assert!(!ui.visible("sync-compare-other-missing", cx));
+    ui.click("sync-keep-other", cx);
+    assert_eq!(ui.conflicts(cx), 0);
+    assert_eq!(ui.label_of(host, cx).as_deref(), Some("web-2"), "recreated");
+    ui.finish(cx);
+}
+
+/// UI 13.6: when the versions differ only where the dialog shows nothing
+/// (the place in the list, an empty list or text against none), one line
+/// says so and no field is marked.
+#[gpui::test]
+fn only_the_place_in_the_list_differs(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    // No secret: the data the comparison gets is the data itself.
+    let host = ui.state.update(cx, |state, cx| {
+        state
+            .save_host(
+                None,
+                map(json!({"address": "192.0.2.12", "label": "db"})),
+                cx,
+            )
+            .unwrap()
+            .record_id
+    });
+    ui.settle(cx);
+    let mut other = ui.current_data(host, cx);
+    other.insert("order_key".into(), json!("zz"));
+    other.insert("tags".into(), json!([]));
+    other.insert("notes".into(), json!(""));
+    let conflict = ui.conflict(host, Some(Value::Object(other)), cx);
+    let item = ui.open_compare(conflict, cx);
+    assert!(item.differences.is_empty(), "{:?}", item.differences);
+    assert_eq!(
+        super::same_fields_note(&item),
+        Some(super::strings::ONLY_ORDER_DIFFERS)
+    );
+    assert!(
+        ui.visible("sync-compare-same-fields", cx),
+        "the line says so"
+    );
+    assert!(
+        super::field_rows(&item).iter().all(|row| !row.differs),
+        "nothing marked"
+    );
+    ui.finish(cx);
+}
+
+/// The badge (UI 13.6): a click opens the comparison and not the host's
+/// panel; the badge goes with a lock and comes back at the unlock while the
+/// conflict stays, and goes for good after "Keep this".
+#[gpui::test]
+fn the_badge_stays_off_the_card_and_goes_with_the_lock_and_keep_this(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let host = ui.host(&secret(), cx);
+    ui.conflict(
+        host,
+        Some(json!({"address": "192.0.2.10", "label": "web-2"})),
+        cx,
+    );
+    assert!(ui.visible(&badge(host), cx));
+    assert!(!ui.visible("host-panel", cx));
+    ui.click(SharedString::from(badge(host)), cx);
+    assert!(ui.visible("sync-compare", cx), "the comparison opened");
+    assert!(!ui.visible("host-panel", cx), "the card's panel did not");
+    ui.click("sync-compare-close", cx);
+    assert!(!ui.visible("host-panel", cx));
+
+    // A lock drops the conflicted ids with the keys; the unlock reads them
+    // again.
+    ui.press("ctrl-shift-l", cx);
+    assert!(!ui.visible(&badge(host), cx), "locked: no badge");
+    assert!(
+        ui.state
+            .read_with(cx, |state, _| state.sync_conflicted().is_empty()),
+        "no conflicted id kept while locked"
+    );
+    let password = ui.password.clone();
+    ui.state
+        .update(cx, |state, cx| state.unlock(password, cx))
+        .detach();
+    ui.settle(cx);
+    assert!(ui.visible(&badge(host), cx), "unlocked: the conflict stays");
+
+    ui.click(SharedString::from(badge(host)), cx);
+    ui.click("sync-keep-this", cx);
+    assert!(!ui.visible("sync-compare", cx));
+    assert!(
+        !ui.visible(&badge(host), cx),
+        "Keep this: the badge is gone"
+    );
+    assert_eq!(ui.label_of(host, cx).as_deref(), Some("web"));
+
+    // The card itself opens its panel: the badge's click did not reach it.
+    ui.click(crate::hosts::host_card_id(host), cx);
+    assert!(ui.visible("host-panel", cx));
+    ui.finish(cx);
 }
