@@ -86,9 +86,12 @@ pub fn csv_rows(count: usize) -> String {
 
 /// The counts above the CSV preview.
 pub fn csv_counts(new: usize, existing: usize, errors: usize, groups: usize) -> String {
-    let mut text = format!("{new} new, {existing} already exist, {errors} not imported");
-    if groups > 0 {
-        text.push_str(&format!("; {groups} new groups"));
+    let exist = if existing == 1 { "exists" } else { "exist" };
+    let mut text = format!("{new} new, {existing} already {exist}, {errors} not imported");
+    match groups {
+        0 => {}
+        1 => text.push_str("; 1 new group"),
+        n => text.push_str(&format!("; {n} new groups")),
     }
     text
 }

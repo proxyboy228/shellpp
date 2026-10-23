@@ -657,11 +657,18 @@ impl ImportSourcesDialog {
             if let Some(port) = host.port.filter(|port| *port != 22) {
                 target = format!("{target}:{port}");
             }
+            // A session that is not imported may have no address (a PuTTY
+            // serial line): its name alone.
+            let title = if host.address.is_empty() {
+                alias.clone()
+            } else {
+                format!("{alias}  ·  {target}")
+            };
             let check =
                 Checkbox::new(ElementId::Name(
                     format!("import-host-{}", alias.to_lowercase()).into(),
                 ))
-                .label(SharedString::from(format!("{alias}  ·  {target}")))
+                .label(SharedString::from(title))
                 .checked(self.chosen.contains(&alias.to_lowercase()))
                 .disabled(host.status != ImportStatus::New)
                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
