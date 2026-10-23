@@ -783,3 +783,26 @@ fn change_password_with_rotation_from_security(cx: &mut TestAppContext) {
     core.unlock(secrecy::SecretString::from(new))
         .expect("the new password opens");
 }
+
+/// The TOTP setup shows the `otpauth://` text as a QR code (UI 13.5).
+#[gpui::test]
+fn totp_setup_shows_a_qr_code(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        let dialog = crate::sync_ui::open_totp(state, window, cx);
+        dialog.update(cx, |dialog, cx| {
+            dialog.step = crate::sync_ui::TotpStep::Code {
+                secret: "JBSWY3DPEHPK3PXP".into(),
+                uri: "otpauth://totp/Shell%2B%2B:user%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Shell%2B%2B".into(),
+            };
+            cx.notify();
+        });
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert!(ui.visible("sync-totp-qr", cx));
+    assert!(ui.visible("sync-totp-secret", cx));
+}

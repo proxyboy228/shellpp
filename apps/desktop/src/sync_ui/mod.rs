@@ -1901,6 +1901,7 @@ impl Render for TotpDialog {
             TotpStep::Code { secret, uri } => v_flex()
                 .gap(metrics::SPACE_2)
                 .child(widgets::caption(strings::TOTP_SECRET_HINT, cx))
+                .children(qr_code(&uri))
                 .child(
                     div()
                         .id("sync-totp-secret")
@@ -2390,4 +2391,34 @@ pub fn open_recovery(
             .footer(row)
     });
     dialog
+}
+
+/// The QR code of the `otpauth://` text (UI 13.5): dark modules on white
+/// whatever the theme, with the 4-module quiet zone scanners need.
+fn qr_code(text: &str) -> Option<AnyElement> {
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let module = metrics::rpx(4.);
+    let quiet = 4;
+    let white = gpui::rgb(0xffffff);
+    let black = gpui::rgb(0x000000);
+    let mut rows = v_flex()
+        .id("sync-totp-qr")
+        .test_support()
+        .bg(white)
+        .p(module * quiet as f32);
+    for row in colors.chunks(width) {
+        let mut line = h_flex();
+        for color in row {
+            let fill = if *color == qrcode::Color::Dark {
+                black
+            } else {
+                white
+            };
+            line = line.child(div().w(module).h(module).bg(fill));
+        }
+        rows = rows.child(line);
+    }
+    Some(h_flex().child(rows).into_any_element())
 }

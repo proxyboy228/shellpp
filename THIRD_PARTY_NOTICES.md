@@ -112,13 +112,14 @@ means the crate is available under either license.
 | chrono | 0.4.45 | MIT OR Apache-2.0 | <https://github.com/chronotope/chrono> |
 | cipher | 0.4.4 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
 | cipher | 0.5.2 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/traits> |
-| clipboard-win | 5.4.1 | BSL-1.0 | <https://github.com/DoumanAsh/clipboard-win> |
+| clipboard-win | 5.4.3 | BSL-1.0 | <https://github.com/DoumanAsh/clipboard-win> |
 | cmov | 0.5.4 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/utils> |
 | cocoa | 0.26.0 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
 | cocoa-foundation | 0.2.1 | MIT OR Apache-2.0 | <https://github.com/servo/core-foundation-rs> |
 | codespan-reporting | 0.13.1 | Apache-2.0 | <https://github.com/brendanzab/codespan> |
 | color_quant | 1.1.0 | MIT | <https://github.com/image-rs/color_quant.git> |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/concurrent-queue> |
+| const-oid | 0.9.6 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats/tree/master/const-oid> |
 | const-oid | 0.10.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | const-random | 0.1.18 | MIT OR Apache-2.0 | <https://github.com/tkaitchuck/constrandom> |
 | core_detect | 1.0.0 | MIT OR Apache-2.0 | <https://github.com/thomcc/core_detect> |
@@ -148,6 +149,7 @@ means the crate is available under either license.
 | dashmap | 6.2.1 | MIT | <https://github.com/xacrimon/dashmap> |
 | data-encoding | 2.11.1 | MIT | <https://github.com/ia0/data-encoding> |
 | data-url | 0.3.2 | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
+| der | 0.7.10 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats/tree/master/der> |
 | der | 0.8.2 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | deranged | 0.5.9 | MIT OR Apache-2.0 | <https://github.com/jhpratt/deranged> |
 | derive_more | 2.1.1 | MIT | <https://github.com/JelteF/derive_more> |
@@ -187,6 +189,7 @@ means the crate is available under either license.
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | <https://github.com/image-rs/fdeflate> |
 | ff | 0.14.0 | MIT OR Apache-2.0 | <https://github.com/zkcrypto/ff> |
 | filedescriptor | 0.8.3 | MIT | <https://github.com/wezterm/wezterm> |
+| flagset | 0.4.7 | Apache-2.0 | <https://github.com/enarx/flagset> |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | <https://github.com/rust-lang/flate2-rs> |
 | float_next_after | 1.0.0 | MIT | <https://gitlab.com/bronsonbdevost/next_afterf> |
 | float-cmp | 0.9.0 | MIT | <https://github.com/mikedilger/float-cmp> |
@@ -269,8 +272,12 @@ means the crate is available under either license.
 | html5ever | 0.27.0 | MIT OR Apache-2.0 | <https://github.com/servo/html5ever> |
 | http | 1.5.0 | MIT OR Apache-2.0 | <https://github.com/hyperium/http> |
 | http-body | 1.1.0 | MIT | <https://github.com/hyperium/http-body> |
+| http-body-util | 0.1.5 | MIT | <https://github.com/hyperium/http-body> |
 | httparse | 1.10.1 | MIT OR Apache-2.0 | <https://github.com/seanmonstar/httparse> |
 | hybrid-array | 0.4.15 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/hybrid-array> |
+| hyper | 1.12.0 | MIT | <https://github.com/hyperium/hyper> |
+| hyper-rustls | 0.27.10 | Apache-2.0 OR ISC OR MIT | <https://github.com/rustls/hyper-rustls> |
+| hyper-util | 0.1.21 | MIT | <https://github.com/hyperium/hyper-util> |
 | iana-time-zone | 0.1.65 | MIT OR Apache-2.0 | <https://github.com/strawlab/iana-time-zone> |
 | icu_collections | 2.3.0 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | icu_locale_core | 2.3.0 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
@@ -293,6 +300,7 @@ means the crate is available under either license.
 | instant | 0.1.13 | BSD-3-Clause | <https://github.com/sebcrozet/instant> |
 | inventory | 0.3.25 | MIT OR Apache-2.0 | <https://github.com/dtolnay/inventory> |
 | io-kit-sys | 0.4.1 | MIT OR Apache-2.0 | <https://github.com/jtakakura/io-kit-rs> |
+| ipnet | 2.12.2 | MIT OR Apache-2.0 | <https://github.com/krisprice/ipnet> |
 | is-docker | 0.2.0 | MIT | <https://github.com/TheLarkInn/is-docker> |
 | is-wsl | 0.4.0 | MIT | <https://github.com/TheLarkInn/is-wsl> |
 | itertools | 0.13.0 | MIT OR Apache-2.0 | <https://github.com/rust-itertools/itertools> |
@@ -387,6 +395,7 @@ means the crate is available under either license.
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | <https://github.com/matklad/once_cell> |
 | oo7 | 0.6.0 | MIT | <https://github.com/linux-credentials/oo7> |
 | open | 5.4.4 | MIT | <https://github.com/Byron/open-rs> |
+| openssl-probe | 0.2.1 | MIT OR Apache-2.0 | <https://github.com/rustls/openssl-probe> |
 | option-ext | 0.2.0 | MPL-2.0 | <https://github.com/soc/option-ext.git> |
 | ordered-float | 5.5.0 | MIT | <https://github.com/reem/rust-ordered-float> |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 | <https://github.com/danieldg/ordered-stream> |
@@ -435,6 +444,7 @@ means the crate is available under either license.
 | pulp-wasm-simd-flag | 0.1.1 | MIT | <https://github.com/sarah-quinones/pulp/> |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | <https://github.com/awxkee/pxfm> |
 | qoi | 0.4.1 | MIT OR Apache-2.0 | <https://github.com/aldanor/qoi-rust> |
+| qrcode | 0.14.1 | MIT OR Apache-2.0 | <https://github.com/kennytm/qrcode-rust> |
 | quick-error | 2.0.1 | MIT OR Apache-2.0 | <http://github.com/tailhook/quick-error> |
 | quote | 1.0.47 | MIT OR Apache-2.0 | <https://github.com/dtolnay/quote> |
 | rand | 0.8.8 | MIT OR Apache-2.0 | <https://github.com/rust-random/rand> |
@@ -458,6 +468,7 @@ means the crate is available under either license.
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
 | renderdoc-sys | 1.1.0 | MIT OR Apache-2.0 | <https://github.com/ebkalderon/renderdoc-rs> |
+| reqwest | 0.13.5 | MIT OR Apache-2.0 | <https://github.com/seanmonstar/reqwest> |
 | resvg | 0.45.1 | Apache-2.0 OR MIT | <https://github.com/linebender/resvg> |
 | resvg | 0.46.0 | Apache-2.0 OR MIT | <https://github.com/linebender/resvg> |
 | rfc6979 | 0.6.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/signatures> |
@@ -482,7 +493,9 @@ means the crate is available under either license.
 | rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/bytecodealliance/rustix> |
 | rustix-openpty | 0.2.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/sunfishcode/rustix-openpty> |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | <https://github.com/rustls/rustls> |
+| rustls-native-certs | 0.8.5 | Apache-2.0 OR ISC OR MIT | <https://github.com/rustls/rustls-native-certs> |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | <https://github.com/rustls/pki-types> |
+| rustls-platform-verifier | 0.7.1 | MIT OR Apache-2.0 | <https://github.com/rustls/rustls-platform-verifier> |
 | rustls-webpki | 0.103.16 | ISC | <https://github.com/rustls/webpki> |
 | rustybuzz | 0.20.1 | MIT | <https://github.com/harfbuzz/rustybuzz> |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | <https://github.com/dtolnay/ryu> |
@@ -536,6 +549,7 @@ means the crate is available under either license.
 | spin | 0.9.9 | MIT | <https://github.com/mvdnes/spin-rs.git> |
 | spin | 0.10.1 | MIT | <https://github.com/mvdnes/spin-rs.git> |
 | spirv | 0.4.0+sdk-1.4.341.0 | Apache-2.0 | <https://github.com/gfx-rs/rspirv> |
+| spki | 0.7.3 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats/tree/master/spki> |
 | spki | 0.8.1 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats> |
 | sponge-cursor | 0.1.0 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/utils> |
 | ssh-cipher | 0.3.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/SSH> |
@@ -553,6 +567,7 @@ means the crate is available under either license.
 | svgtypes | 0.16.1 | Apache-2.0 OR MIT | <https://github.com/linebender/svgtypes> |
 | swash | 0.2.10 | Apache-2.0 OR MIT | <https://github.com/dfrg/swash> |
 | syn | 3.0.9 | MIT OR Apache-2.0 | <https://github.com/dtolnay/syn> |
+| sync_wrapper | 1.0.2 | Apache-2.0 | <https://github.com/Actyx/sync_wrapper> |
 | sys-locale | 0.3.2 | MIT OR Apache-2.0 | <https://github.com/1Password/sys-locale> |
 | taffy | 0.13.0 | MIT | <https://github.com/DioxusLabs/taffy> |
 | tendril | 0.4.3 | MIT OR Apache-2.0 | <https://github.com/servo/tendril> |
@@ -567,11 +582,17 @@ means the crate is available under either license.
 | tinystr | 0.8.4 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | <https://github.com/Lokathor/tinyvec> |
 | tokio | 1.53.3 | MIT | <https://github.com/tokio-rs/tokio> |
+| tokio-rustls | 0.26.6 | MIT OR Apache-2.0 | <https://github.com/rustls/tokio-rustls> |
 | tokio-util | 0.7.20 | MIT | <https://github.com/tokio-rs/tokio> |
+| tower | 0.5.3 | MIT | <https://github.com/tower-rs/tower> |
+| tower-http | 0.6.11 | MIT | <https://github.com/tower-rs/tower-http> |
+| tower-layer | 0.3.3 | MIT | <https://github.com/tower-rs/tower> |
+| tower-service | 0.3.3 | MIT | <https://github.com/tower-rs/tower> |
 | tracing | 0.1.44 | MIT | <https://github.com/tokio-rs/tracing> |
 | tracing-core | 0.1.36 | MIT | <https://github.com/tokio-rs/tracing> |
 | tracing-subscriber | 0.3.23 | MIT | <https://github.com/tokio-rs/tracing> |
 | triomphe | 0.1.17 | MIT OR Apache-2.0 | <https://github.com/Manishearth/triomphe> |
+| try-lock | 0.2.5 | MIT | <https://github.com/seanmonstar/try-lock> |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 | <https://github.com/harfbuzz/ttf-parser> |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | <https://github.com/paholg/typenum> |
 | unescaper | 0.1.10 | MIT OR GPL-3.0-only | <https://github.com/hack-ink/unescaper> |
@@ -601,6 +622,7 @@ means the crate is available under either license.
 | vte | 0.15.0 | Apache-2.0 OR MIT | <https://github.com/alacritty/vte> |
 | waker-fn | 1.2.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/waker-fn> |
 | walkdir | 2.5.0 | Unlicense OR MIT | <https://github.com/BurntSushi/walkdir> |
+| want | 0.3.2 | MIT | <https://github.com/seanmonstar/want> |
 | wayland-backend | 0.3.17 | MIT | <https://github.com/smithay/wayland-rs> |
 | wayland-client | 0.31.15 | MIT | <https://github.com/smithay/wayland-rs> |
 | wayland-cursor | 0.31.14 | MIT | <https://github.com/smithay/wayland-rs> |
@@ -650,6 +672,8 @@ means the crate is available under either license.
 | writeable | 0.6.4 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | <https://github.com/psychon/x11rb> |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 | <https://github.com/psychon/x11rb> |
+| x25519-dalek | 3.0.0 | BSD-3-Clause | <https://github.com/dalek-cryptography/curve25519-dalek/tree/main/x25519-dalek> |
+| x509-cert | 0.2.5 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/formats/tree/master/x509-cert> |
 | xcursor | 0.3.11 | MIT | <https://github.com/esposm03/xcursor-rs> |
 | xdg-home | 1.3.0 | MIT | <https://github.com/zeenix/xdg-home> |
 | xim-ctext | 0.3.0 | MIT | <https://github.com/Riey/xim-rs> |

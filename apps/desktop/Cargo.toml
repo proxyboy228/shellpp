@@ -48,6 +48,8 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 secrecy.workspace = true
+# The TOTP setup QR code (UI 13.5): the encoder only, no image crates.
+qrcode = { version = "0.14.1", default-features = false }
 thiserror.workspace = true
 ureq.workspace = true
 semver.workspace = true
