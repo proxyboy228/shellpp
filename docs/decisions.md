@@ -1642,6 +1642,19 @@ Status: run 7 decision, 2026-10-23 (plan, sections 3.2-3.4 and 5). Clarifies doc
 
 The decisions below were taken by agent B of the owner's eighth run (import and new features; its plan, section "Agent B"), marked "run 8"; the disputable ones are listed for the owner in `docs/overnight/REPORT-B.md`.
 
+### 103. Server limits and a resync after the run 7 reviews (run 7)
+
+Status: run 7 decision, 2026-10-23 (plan, section 5: findings of the authentication review handed over first, fixed after the run's goal check). Clarifies docs/sync-protocol.md, sections 6.9, 10.1 and 10.2.
+
+**Decision:**
+
+- **Client IP.** An `X-Forwarded-For` element may carry a port (`ip:port`, `[ipv6]:port`, as some proxies write it); an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, an IPv4 client of a server bound to `[::]`) counts as the IPv4 address, for the trusted-proxy CIDRs and for the rate-limit key. Before, a proxy that added the port made the client's forged element the key. The walk from the right stops at the first element that is not a trusted proxy; one that does not parse (`unknown`, a zone id) ends it at the last trusted hop instead of reaching the elements the client wrote.
+- **The auth limit before the body.** The per-IP limit of the unauthenticated auth endpoints runs before the body is read, and these endpoints take a body of at most 1 MiB (`limits::MAX_AUTH_BODY_BYTES`); before, a request over the limit still cost the parse of up to 16 MiB.
+- **Bogus bearer tokens.** A bearer token that does not authenticate counts a failure for the client IP; after 60 in 15 minutes (`SHELLPP_RATE_LIMIT_FAILED_TOKENS`) the next authenticated request from that IP is `429` without a database lookup, which is a write transaction (the global lock on SQLite). Clients behind one address share the window; a valid token is not refused before the limit.
+- **A full resync repairs a server rollback.** After a complete pull, a full resync marks the synced revisions as a restore does (section 6.9, step 2): a record the server holds at a revision below the one this device synced (a server restored from a backup while the device was signed out, when the rebind had no generation to compare) is pushed again, an edit or a deletion alike. The mark (here and in a restore) only ever lowers a synced revision: a server revision above it is a version the pull received without applying it (a type that is off, a refused key epoch, a payload that did not open), and raising the mark would take a pending local edit out of the push for good (found by the review of this change).
+
+**Spec impact:** docs/sync-protocol.md, sections 10.1 (client IP, the auth limit before the body, the bearer token row) and 10.2 (the auth body limit); section 6.9 is unchanged in substance (the mark of step 2 now also follows a full resync).
+
 ### 140. PuTTY sessions are imported through a session source (run 8)
 
 Status: run 8 decision, 2026-10-23 (plan, item B1). Settles the PuTTY fields of D21 and UI 2.5.
@@ -1658,19 +1671,6 @@ Status: run 8 decision, 2026-10-23 (plan, item B1). Settles the PuTTY fields of 
 - Session names are UTF-8 in recent PuTTY versions; older ones escaped the bytes of the Windows ANSI code page, which the registry source reports (`HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage\ACP`), so such names are read in that code page.
 
 **Spec impact:** docs/ui-behavior-spec.md, section 2.5 (PuTTY item, CSV alone stays disabled), and `docs/ru`.
-### 103. Server limits and a resync after the run 7 reviews (run 7)
-
-Status: run 7 decision, 2026-10-23 (plan, section 5: findings of the authentication review handed over first, fixed after the run's goal check). Clarifies docs/sync-protocol.md, sections 6.9, 10.1 and 10.2.
-
-**Decision:**
-
-- **Client IP.** An `X-Forwarded-For` element may carry a port (`ip:port`, `[ipv6]:port`, as some proxies write it); an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, an IPv4 client of a server bound to `[::]`) counts as the IPv4 address, for the trusted-proxy CIDRs and for the rate-limit key. Before, a proxy that added the port made the client's forged element the key. The walk from the right stops at the first element that is not a trusted proxy; one that does not parse (`unknown`, a zone id) ends it at the last trusted hop instead of reaching the elements the client wrote.
-- **The auth limit before the body.** The per-IP limit of the unauthenticated auth endpoints runs before the body is read, and these endpoints take a body of at most 1 MiB (`limits::MAX_AUTH_BODY_BYTES`); before, a request over the limit still cost the parse of up to 16 MiB.
-- **Bogus bearer tokens.** A bearer token that does not authenticate counts a failure for the client IP; after 60 in 15 minutes (`SHELLPP_RATE_LIMIT_FAILED_TOKENS`) the next authenticated request from that IP is `429` without a database lookup, which is a write transaction (the global lock on SQLite). Clients behind one address share the window; a valid token is not refused before the limit.
-- **A full resync repairs a server rollback.** After a complete pull, a full resync marks the synced revisions as a restore does (section 6.9, step 2): a record the server holds at a revision below the one this device synced (a server restored from a backup while the device was signed out, when the rebind had no generation to compare) is pushed again, an edit or a deletion alike. The mark (here and in a restore) only ever lowers a synced revision: a server revision above it is a version the pull received without applying it (a type that is off, a refused key epoch, a payload that did not open), and raising the mark would take a pending local edit out of the push for good (found by the review of this change).
-
-**Spec impact:** docs/sync-protocol.md, sections 10.1 (client IP, the auth limit before the body, the bearer token row) and 10.2 (the auth body limit); section 6.9 is unchanged in substance (the mark of step 2 now also follows a full resync).
-
 ### 141. CSV import with a column mapping (run 8)
 
 Status: run 8 decision, 2026-10-23 (plan, item B2). Extends the CSV columns of D21 and UI 2.5.
