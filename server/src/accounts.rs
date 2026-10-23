@@ -768,6 +768,14 @@ pub fn recover_begin(
         shared.limiters.signin_failed(&email);
         return Err(ApiError::invalid_credentials());
     };
+    // As at login: `account_disabled` only after a correct key.
+    if user.disabled {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            code::ACCOUNT_DISABLED,
+            "account disabled",
+        ));
+    }
     model::device_free_for(tx, request.device_id, Some(user.user_id))?;
     let ticket = secrets::new_token(token_prefix::RECOVERY_TICKET);
     tx.exec(

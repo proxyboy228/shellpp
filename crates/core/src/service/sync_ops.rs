@@ -113,6 +113,8 @@ impl SyncRuntime {
 
 /// A sign-in waiting for its TOTP code.
 struct PendingSignIn {
+    /// The server's ticket lives 5 minutes; `kek` no longer than that.
+    started: SystemTime,
     origin: String,
     email: String,
     ticket: Zeroizing<String>,
@@ -903,6 +905,7 @@ impl Core {
         if response.status.as_deref() == Some("totp_required") {
             let ticket = response.login_ticket.ok_or(HttpError::Malformed)?;
             self.inner().sync.pending = Some(PendingSignIn {
+                started: self.now(),
                 origin,
                 email,
                 ticket: Zeroizing::new(ticket.0),
@@ -915,6 +918,7 @@ impl Core {
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
         let account = response.account.ok_or(HttpError::Malformed)?;
         let pending = PendingSignIn {
+            started: self.now(),
             origin,
             email,
             ticket: Zeroizing::new(String::new()),
@@ -927,12 +931,20 @@ impl Core {
         Ok(SignInOutcome::Done(self.sync_status()?))
     }
 
+    /// The wizard's Cancel at the TOTP step: the derived key goes.
+    pub fn sync_sign_in_cancel(&self) {
+        self.inner().sync.pending = None;
+    }
+
     /// The TOTP step of a sign-in.
     pub fn sync_sign_in_totp(&self, code: &str) -> Result<SignInOutcome, CoreError> {
         let _sync = self.sync_lock();
         let (pending, api, device_id) = {
             let mut guard = self.inner();
             let pending = guard.sync.pending.take().ok_or(CoreError::WrongState)?;
+            if self.now() > pending.started + Duration::from_secs(5 * 60) {
+                return Err(refused("ticket_expired"));
+            }
             let api = self.api(&guard.store, &pending.origin)?;
             let device_id = guard
                 .store
@@ -2491,6 +2503,13 @@ impl Core {
         rotate: bool,
     ) -> Result<(), CoreError> {
         let _sync = self.sync_lock();
+        // A rotation rewraps the `device` row too ("remember on this device").
+        let _remember = self.remember_lock();
+        let device_wrap_key = if rotate {
+            self.rotation_device_key(context)
+        } else {
+            None
+        };
         let class = self.platform.class;
         let (link, current_keys) = self.current_keys(&current)?;
         drop(current);
@@ -2520,7 +2539,7 @@ impl Core {
                     &context.vault,
                     &derived.kek,
                     &recovery_kek,
-                    None,
+                    device_wrap_key.as_ref(),
                 )?;
                 let kek_row = rotation
                     .row(WrapKind::Kek)
@@ -2584,6 +2603,8 @@ impl Core {
         if self.bound()? {
             return self.password_change_bound(&context, current, new, true);
         }
+        let _remember = self.remember_lock();
+        let device_wrap_key = self.rotation_device_key(&context);
         let class = self.platform.class;
         let old = PasswordMaterial::from_row(&context.local_auth)?;
         let old_kek = old.derive_kek(&current, class)?;
@@ -2601,8 +2622,13 @@ impl Core {
             let session = session.as_mut().ok_or(CoreError::Locked)?;
             let recovery_key = lock_ops::recovery_key_of(session)?;
             let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
-            let rotation =
-                Rotation::prepare(&session.ring, &context.vault, &new_kek, &recovery_kek, None)?;
+            let rotation = Rotation::prepare(
+                &session.ring,
+                &context.vault,
+                &new_kek,
+                &recovery_kek,
+                device_wrap_key.as_ref(),
+            )?;
             let vault_id = session.ring.vault_id();
             let local_auth = material.to_row(vault_id, format_timestamp(now));
             session
@@ -2624,6 +2650,14 @@ impl Core {
             self.records_rewritten(inner, ids);
             Ok(())
         })
+    }
+
+    /// The device wrap key for a rotation while "remember on this device" is
+    /// on (the keychain is read without the core mutex; `remember` is held).
+    fn rotation_device_key(&self, context: &KeyContext) -> Option<Key32> {
+        context.device_row.as_ref()?;
+        self.fetch_device_key(&context.db_id)
+            .map(|key| crypto::derive_device_wrap_key(&key, &context.db_id))
     }
 
     /// Writes the key rows of a server-accepted change in one transaction:
@@ -2717,11 +2751,13 @@ impl Core {
         password: SecretString,
     ) -> Result<crate::service::dto::RecoveryKeyResult, CoreError> {
         let _sync = self.sync_lock();
+        let _remember = self.remember_lock();
         let (link, keys) = self.current_keys(&password)?;
         drop(password);
         let context = lock_ops::key_context(&self.inner().store)?;
         let origin = link.api.origin().to_owned();
         let new_recovery_key = Key32::generate()?;
+        let device_wrap_key = self.rotation_device_key(&context);
         let recovery_kek = crypto::derive_recovery_kek(&new_recovery_key);
         let recovery_auth_key = crypto::derive_recovery_auth_key(&new_recovery_key, &origin);
         let now = self.now();
@@ -2740,7 +2776,7 @@ impl Core {
                 &context.vault,
                 &keys.kek,
                 &recovery_kek,
-                None,
+                device_wrap_key.as_ref(),
             )?;
             session
                 .ring

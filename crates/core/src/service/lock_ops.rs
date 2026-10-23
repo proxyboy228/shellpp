@@ -35,8 +35,8 @@ pub(super) struct KeyContext {
     pub db_id: Uuid,
     pub device_id: Uuid,
     pub kek_row: KeyWrapRow,
-    recovery_row: Option<KeyWrapRow>,
-    device_row: Option<KeyWrapRow>,
+    pub recovery_row: Option<KeyWrapRow>,
+    pub device_row: Option<KeyWrapRow>,
 }
 
 fn meta_uuid(store: &Store, key: &str) -> Result<Uuid, CoreError> {
@@ -205,7 +205,7 @@ impl Core {
     }
 
     /// Reads the device key from the OS keychain (call without the mutex).
-    fn fetch_device_key(&self, db_id: &Uuid) -> Option<Key32> {
+    pub(super) fn fetch_device_key(&self, db_id: &Uuid) -> Option<Key32> {
         if self.platform.secret_store.availability() != Availability::Available {
             return None;
         }

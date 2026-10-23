@@ -230,6 +230,10 @@ impl Server {
         self.task = Some(task);
     }
 
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
     /// Stops serving (the port stays reserved for [`Server::resume`]).
     pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown.take() {

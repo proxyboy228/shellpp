@@ -200,7 +200,7 @@ impl Core {
     }
 
     /// See [`Core::remember`]. Take it before [`Core::inner`].
-    fn remember_lock(&self) -> MutexGuard<'_, ()> {
+    pub(super) fn remember_lock(&self) -> MutexGuard<'_, ()> {
         self.remember
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

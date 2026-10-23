@@ -1,0 +1,374 @@
+//! A hostile server (plan run 7, section 4; docs/sync-protocol.md, sections
+//! 6.4 and 6.9; principle 3): a proxy between the client and the real
+//! server rewrites the pull answers. Whatever it sends, the client accepts
+//! nothing it cannot authenticate, loses no local record and reports the
+//! problem (integrity warnings, "server state rolled back").
+
+mod support;
+
+use std::sync::{Arc, Mutex};
+
+use data_encoding::BASE64URL_NOPAD;
+use serde_json::Value;
+use shellpp_core::CoreError;
+use shellpp_core::service::SignInOutcome;
+use support::*;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Clone, Debug, PartialEq)]
+enum Mode {
+    Pass,
+    /// The envelopes of the first two records trade places.
+    Swap,
+    /// One ciphertext byte of every envelope is flipped.
+    Tamper,
+    /// Every envelope seen so far is sent again (older revisions).
+    Replay,
+    /// No records, the cursor still advances.
+    Withhold,
+    /// An envelope of another account's vault is added.
+    Foreign(String),
+    /// `current_epoch` below the device's.
+    LowerEpoch,
+}
+
+struct Proxy {
+    origin: String,
+    mode: Arc<Mutex<Mode>>,
+    seen: Arc<Mutex<Vec<Value>>>,
+}
+
+impl Proxy {
+    fn set(&self, mode: Mode) {
+        *self.mode.lock().unwrap() = mode;
+    }
+
+    /// Envelopes (base64url) the proxy saw in pull answers.
+    fn seen(&self) -> Vec<Value> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>> {
+    let mut page: Value = serde_json::from_slice(body).ok()?;
+    let records = page.get_mut("records")?.as_array_mut()?;
+    seen.lock().unwrap().extend(records.iter().cloned());
+    match mode {
+        Mode::Pass => return None,
+        Mode::Swap => {
+            if records.len() >= 2 {
+                let first = records[0]["envelope"].clone();
+                records[0]["envelope"] = records[1]["envelope"].clone();
+                records[1]["envelope"] = first;
+            }
+        }
+        Mode::Tamper => {
+            for record in records.iter_mut() {
+                let text = record["envelope"].as_str()?.to_owned();
+                let mut bytes = BASE64URL_NOPAD.decode(text.as_bytes()).ok()?;
+                let last = bytes.len() - 1;
+                bytes[last] ^= 0x01;
+                record["envelope"] = Value::String(BASE64URL_NOPAD.encode(&bytes));
+            }
+        }
+        Mode::Replay => {
+            let old = seen.lock().unwrap().clone();
+            let next = page["next_cursor"].as_u64().unwrap_or(0);
+            let replayed: Vec<Value> = old
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut record)| {
+                    record["seq"] = Value::from(next + 1 + i as u64);
+                    record
+                })
+                .collect();
+            let count = replayed.len() as u64;
+            *page.get_mut("records")? = Value::Array(replayed);
+            page["next_cursor"] = Value::from(next + count);
+        }
+        Mode::Withhold => records.clear(),
+        Mode::Foreign(envelope) => {
+            let seq = page["next_cursor"].as_u64().unwrap_or(0) + 1;
+            page["records"]
+                .as_array_mut()?
+                .push(serde_json::json!({"seq": seq, "envelope": envelope}));
+            page["next_cursor"] = Value::from(seq);
+        }
+        Mode::LowerEpoch => page["current_epoch"] = Value::from(0),
+    }
+    serde_json::to_vec(&page).ok()
+}
+
+async fn read_message(stream: &mut tokio::net::TcpStream) -> Option<(String, Vec<u8>)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let head_end = loop {
+        if let Some(at) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
+        let n = stream.read(&mut chunk).await.ok()?;
+        if n == 0 {
+            return None;
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+    };
+    let head = String::from_utf8_lossy(&buffer[..head_end]).into_owned();
+    let length: usize = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buffer.len() < head_end + length {
+        let n = stream.read(&mut chunk).await.ok()?;
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+    }
+    Some((head, buffer[head_end..].to_vec()))
+}
+
+/// The head without `content-length` and `connection`, plus ours.
+fn with_length(head: &str, length: usize) -> String {
+    let mut lines: Vec<&str> = head
+        .trim_end_matches("\r\n\r\n")
+        .split("\r\n")
+        .filter(|line| {
+            let name = line
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            name != "content-length" && name != "connection"
+        })
+        .collect();
+    let length_line = format!("content-length: {length}");
+    lines.push(&length_line);
+    lines.push("connection: close");
+    format!("{}\r\n\r\n", lines.join("\r\n"))
+}
+
+fn proxy(server: &Server) -> Proxy {
+    let upstream = server.config.bind;
+    let mode = Arc::new(Mutex::new(Mode::Pass));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let listener = server
+        .runtime()
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (task_mode, task_seen) = (mode.clone(), seen.clone());
+    server.runtime().spawn(async move {
+        loop {
+            let Ok((mut client, _)) = listener.accept().await else {
+                return;
+            };
+            let (mode, seen) = (task_mode.clone(), task_seen.clone());
+            tokio::spawn(async move {
+                let Some((head, body)) = read_message(&mut client).await else {
+                    return;
+                };
+                let pull = head.starts_with("GET /v1/vaults/") && head.contains("/changes");
+                let Ok(mut up) = tokio::net::TcpStream::connect(upstream).await else {
+                    return;
+                };
+                let request = with_length(&head, body.len());
+                if up.write_all(request.as_bytes()).await.is_err()
+                    || up.write_all(&body).await.is_err()
+                {
+                    return;
+                }
+                let Some((response_head, mut response)) = read_message(&mut up).await else {
+                    return;
+                };
+                if pull && response_head.starts_with("HTTP/1.1 200") {
+                    let current = mode.lock().unwrap().clone();
+                    if let Some(changed) = rewrite(&current, &seen, &response) {
+                        response = changed;
+                    }
+                }
+                let head = with_length(&response_head, response.len());
+                let _ = client.write_all(head.as_bytes()).await;
+                let _ = client.write_all(&response).await;
+                let _ = client.shutdown().await;
+            });
+        }
+    });
+    Proxy {
+        origin: format!("http://127.0.0.1:{port}"),
+        mode,
+        seen,
+    }
+}
+
+/// A and B on one account through the proxy; A has two hosts.
+fn setup(server: &Server) -> (Proxy, Client, Client, String, secrecy::SecretString) {
+    let proxy = proxy(server);
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("one.example.com");
+    a.host("two.example.com");
+    a.core
+        .sync_register(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: email.clone(),
+            password: password.clone(),
+            registration_code: None,
+        })
+        .expect("registered");
+    let b = Client::empty("B");
+    let outcome = b
+        .core
+        .sync_sign_in(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: email.clone(),
+            password: password.clone(),
+            registration_code: None,
+        })
+        .expect("signed in");
+    assert!(matches!(outcome, SignInOutcome::Done(_)));
+    (proxy, a, b, email, password)
+}
+
+fn edit_both(a: &Client) {
+    let hosts = a.views(&[shellpp_core::service::dto::RecordType::Host]);
+    for view in hosts {
+        let id = view.record_id();
+        let mut data = a.data(id);
+        data["label"] = Value::String("edited on A".into());
+        a.save(Some(id), shellpp_core::service::dto::RecordType::Host, data);
+    }
+    a.sync();
+}
+
+fn labels(client: &Client) -> Vec<String> {
+    let mut list: Vec<String> = client
+        .views(&[shellpp_core::service::dto::RecordType::Host])
+        .iter()
+        .map(|view| {
+            client.data(view.record_id())["label"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        })
+        .collect();
+    list.sort();
+    list
+}
+
+#[test]
+fn swapped_envelopes_stay_with_their_records_and_tampered_ones_are_refused() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    // Swapped between two records: each envelope names its own record in
+    // the authenticated header, so the swap moves nothing.
+    edit_both(&a);
+    proxy.set(Mode::Swap);
+    let report = b.sync();
+    assert_eq!(report.integrity_warnings, 0);
+    assert_eq!(labels(&b), vec!["edited on A", "edited on A"]);
+    let addresses = b.addresses();
+    assert_eq!(addresses, vec!["one.example.com", "two.example.com"]);
+    // A flipped byte: refused, reported, nothing applied.
+    proxy.set(Mode::Pass);
+    let id = a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id();
+    let mut data = a.data(id);
+    data["label"] = Value::String("second edit".into());
+    a.save(Some(id), shellpp_core::service::dto::RecordType::Host, data);
+    a.sync();
+    proxy.set(Mode::Tamper);
+    let before = labels(&b);
+    let report = b.sync();
+    assert!(report.integrity_warnings >= 1, "reported");
+    assert_eq!(labels(&b), before, "nothing forged was applied");
+    assert!(b.status().integrity_warnings >= 1, "the status counts it");
+    assert_eq!(b.addresses(), vec!["one.example.com", "two.example.com"]);
+}
+
+#[test]
+fn replayed_older_versions_change_nothing() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    edit_both(&a);
+    b.sync();
+    assert_eq!(labels(&b), vec!["edited on A", "edited on A"]);
+    proxy.set(Mode::Replay);
+    b.sync();
+    assert_eq!(
+        labels(&b),
+        vec!["edited on A", "edited on A"],
+        "no rollback"
+    );
+    assert!(!proxy.seen().is_empty());
+}
+
+#[test]
+fn withheld_records_delete_nothing() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    let id = a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id();
+    a.delete(id);
+    a.sync();
+    proxy.set(Mode::Withhold);
+    b.sync();
+    assert_eq!(
+        b.addresses(),
+        vec!["one.example.com", "two.example.com"],
+        "absence never deletes"
+    );
+}
+
+#[test]
+fn an_envelope_of_another_vault_is_refused() {
+    let server = Server::start();
+    let (proxy, _a, b, _, _) = setup(&server);
+    // A second account on the same server: its envelopes are genuine, but
+    // of another vault.
+    let other_password = new_password();
+    let c = Client::local("C", &other_password);
+    c.host("intruder.example.com");
+    c.core
+        .sync_register(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: email(),
+            password: other_password,
+            registration_code: None,
+        })
+        .expect("registered");
+    // C's own pull goes through the proxy last: its envelopes are C's.
+    c.sync();
+    let foreign = proxy
+        .seen()
+        .last()
+        .and_then(|record| record["envelope"].as_str().map(str::to_owned))
+        .expect("an envelope of C's vault");
+    proxy.set(Mode::Foreign(foreign));
+    let report = b.sync();
+    assert!(report.integrity_warnings >= 1);
+    assert_eq!(b.addresses(), vec!["one.example.com", "two.example.com"]);
+}
+
+#[test]
+fn a_lower_epoch_stops_sync_without_changes() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    edit_both(&a);
+    let before = labels(&b);
+    proxy.set(Mode::LowerEpoch);
+    // Personal epoch 1 on the device; the proxy claims 0.
+    match b.core.sync_now() {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "rolled_back"),
+        other => panic!("expected rolled_back, got {other:?}"),
+    }
+    assert_eq!(labels(&b), before);
+    assert_eq!(b.status().last_error.as_deref(), Some("rolled_back"));
+    proxy.set(Mode::Pass);
+    b.sync();
+    assert_eq!(labels(&b), vec!["edited on A", "edited on A"]);
+}
