@@ -493,7 +493,20 @@ impl Core {
             let path = file_path(parts.store, file_id).ok_or(CoreError::NotFound)?;
             (file_id, path)
         };
-        let bytes = match std::fs::read(&path) {
+        // The re-encryption may rename the file and drop its `.rekey`
+        // between the read and the key lookup: read it once more then.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match self.recording_read_once(file_id, &path) {
+                Err(CoreError::Locked) if attempts < 2 && self.inner().session.is_some() => {}
+                result => return result.map(Some),
+            }
+        }
+    }
+
+    fn recording_read_once(&self, file_id: Uuid, path: &Path) -> Result<Recording, CoreError> {
+        let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(CoreError::NotFound);
@@ -517,8 +530,7 @@ impl Core {
                     .and_then(|rekey| rekey.open(ring))
             }
         };
-        let recording = recording::read(&bytes, |_| key).map_err(recording_error)?;
-        Ok(Some(recording))
+        recording::read(&bytes, |_| key).map_err(recording_error)
     }
 
     /// "Export to .txt" (UI 11.2): the recording of `log_id` as plain text
