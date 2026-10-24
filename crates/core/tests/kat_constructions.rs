@@ -152,7 +152,7 @@ fn wrap_and_record_aads() {
         text(a, "wrap_chain_e2")
     );
     assert_eq!(
-        hex(&refresh_token_aad(&uuid(i, "device_id"))),
+        hex(&refresh_token_aad(&uuid(i, "device_id"), text(i, "origin"))),
         text(a, "refresh_token")
     );
 

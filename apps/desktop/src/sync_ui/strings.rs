@@ -11,7 +11,38 @@ pub const CLOSE: &str = "Close";
 
 pub const TRUST_TITLE: &str = "Check the server's certificate";
 pub const TRUST_UNKNOWN: &str = "This certificate is not issued by an authority your system trusts. Trust it only if the fingerprint matches your server's certificate (server/README.md shows how to read it).";
-pub const TRUST_CHANGED: &str = "The server shows another certificate than the one you trusted. Sync is stopped until you confirm the new one. If you did not renew the certificate, do not continue.";
+pub const TRUST_CHANGED: &str = "The server shows another certificate than the one you trusted. Sync is stopped until you confirm the new one; nothing on this device is changed. An unannounced change can mean an attack: if you did not renew the certificate, do not continue.";
+pub const TRUST_CHANGED_TITLE: &str = "The server's certificate changed";
+pub const TRUST_REFUSED_OTHER: &str =
+    "The secure connection to the server failed. Shell++ does not connect to it.";
+pub const TRUST_SERVER: &str = "Server";
+pub const TRUST_PINNED: &str = "Trusted until now";
+pub const TRUST_NEW: &str = "Shown now";
+pub const TRUST_SYSTEM_TRUSTS: &str = "Your system trusts the new certificate.";
+pub const TRUST_SYSTEM_DISTRUSTS: &str = "Your system does not trust the new certificate.";
+pub const TRUST_OPENSSL: &str = "On the server, openssl x509 -noout -fingerprint -sha256 -in <certificate file> prints the fingerprint to compare.";
+pub const TRUST_PIN_NEW: &str = "Trust the new certificate";
+pub const TRUST_USE_SYSTEM: &str = "Use the system's trust";
+pub const TRUST_CA_BROWSE: &str = "Add a CA certificate…";
+pub const TRUST_CA_TITLE: &str = "Add this CA certificate?";
+pub const TRUST_CA_TEXT: &str = "Shell++ trusts it for this server only, never for other servers, SSH or your system. The server's certificate must be issued by it.";
+pub const TRUST_CA_ADD: &str = "Add this CA";
+pub const TRUST_CA_INVALID: &str =
+    "This file holds no certificate. Choose a CA certificate in PEM or DER form.";
+pub const TRUST_CA_NOT_ISSUER: &str =
+    "The server's certificate is not issued by this CA. Nothing was added.";
+pub const TRUST_NOT_KEPT: &str =
+    "The server shows another certificate now. Nothing was trusted: check it again.";
+pub const TRUST_ROW_SYSTEM: &str = "Trusted by the system";
+pub const TRUST_ROW_PINNED: &str = "Pinned certificate";
+pub const TRUST_ROW_CA: &str = "Your CA";
+pub const CERTIFICATE_CHANGED_ROW: &str =
+    "The server's certificate changed. Sync is stopped until you review it.";
+pub const CERTIFICATE_REVIEW: &str = "Review certificate…";
+pub const TRUST_WAS_TRUSTED: &str = "Until now this server's certificate was trusted. An unannounced change can mean an attack: if you did not change the certificate, do not continue.";
+pub const RECOVERY_CERTIFICATE: &str = "The server's certificate is not accepted. Check it and press Restore again, or recover only this device.";
+pub const CERTIFICATE_REFUSED_ROW: &str =
+    "The server's certificate is not trusted. Sync is stopped until you review it.";
 pub const TRUST_REFUSED_EXPIRED: &str = "The certificate has expired or is not valid yet. Shell++ does not connect to it, even when trusted.";
 pub const TRUST_REFUSED_NAME: &str = "The certificate is not issued for this address. Shell++ does not connect to it, even when trusted.";
 pub const TRUST_SUBJECT: &str = "Issued to";
@@ -152,6 +183,29 @@ pub const SIGN_OUT_TITLE: &str = "Sign out of the account";
 pub const SIGN_OUT_TEXT: &str =
     "Sync stops on this device. The local copy stays and opens with the same password.";
 pub const DELETE_LOCAL: &str = "Also delete the local copy on this device";
+pub const DELETE_LOCAL_HINT: &str = "Shell++ starts over with an empty vault. The data stays on the server; the old data file is set aside in the data folder and opens only with this master password (or the recovery key).";
+
+/// The warning of the sign-out dialog when not everything is on the server
+/// (D190); `None` when everything is.
+pub fn delete_local_unsynced(changes: usize, conflicts: usize) -> Option<String> {
+    let changes = match changes {
+        0 => None,
+        1 => Some("1 change is not on the server yet".to_owned()),
+        n => Some(format!("{n} changes are not on the server yet")),
+    };
+    let conflicts = match conflicts {
+        0 => None,
+        1 => Some("1 conflict is kept only here".to_owned()),
+        n => Some(format!("{n} conflicts are kept only here")),
+    };
+    let parts: Vec<String> = changes.into_iter().chain(conflicts).collect();
+    (!parts.is_empty()).then(|| {
+        format!(
+            "{}: they stay only in the set-aside file. Sync first to keep them in the account.",
+            parts.join(" and ")
+        )
+    })
+}
 pub const SIGN_OUT_RUN: &str = "Sign out";
 
 pub const DELETE_TITLE: &str = "Delete the account";
@@ -184,6 +238,15 @@ pub const ERROR_CLOSED: &str = "This server needs a valid invitation code.";
 pub const ERROR_TAKEN: &str = "An account with this email exists: sign in instead.";
 pub const ERROR_PASSWORD: &str = "This is not the master password of this device.";
 pub const ERROR_KDF: &str = "The server sent unsafe key derivation parameters.";
+pub const ERROR_WEAKER_KDF: &str =
+    "The server asked for weaker key derivation than this device uses. Nothing was sent.";
+pub const KDF_WEAKER_TITLE: &str = "Weaker key derivation";
+pub const KDF_WEAKER_HEADING: &str = "The server asks for weaker settings";
+pub const KDF_WEAKER_TEXT: &str = "To sign in, this device derives a key from your master password. The server asks it to use weaker settings than the ones it uses for this account now. Nothing was derived or sent yet.";
+pub const KDF_THIS_DEVICE: &str = "This device";
+pub const KDF_FROM_SERVER: &str = "The server asks for";
+pub const KDF_WEAKER_WARNING: &str = "This is expected after the password was changed on a device with weaker settings, such as a phone. Otherwise it can mean that someone poses as your server to make your password easier to guess: then cancel. If you go on, this device uses these settings for its local copy too.";
+pub const KDF_CONTINUE: &str = "Sign in with weaker settings";
 pub const ERROR_PREVIOUS: &str = "This device was bound to another account before; connecting it to a new one is not supported yet.";
 pub const ERROR_ROLLED_BACK: &str =
     "Server state rolled back: the server holds older keys than this device.";

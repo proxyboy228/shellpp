@@ -820,10 +820,10 @@ fn totp_setup_shows_a_qr_code(cx: &mut TestAppContext) {
         dialog.update(cx, |dialog, cx| {
             dialog.step = crate::sync_ui::TotpStep::Code {
                 secret: zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".to_owned()),
-                uri: zeroize::Zeroizing::new(
+                uri: Some(zeroize::Zeroizing::new(
                     "otpauth://totp/Shell%2B%2B:user%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Shell%2B%2B"
                         .to_owned(),
-                ),
+                )),
             };
             // D192: the step holds the secret in wiping buffers and never
             // shows it in `Debug`.
@@ -835,6 +835,30 @@ fn totp_setup_shows_a_qr_code(cx: &mut TestAppContext) {
     .unwrap();
     ui.settle(cx);
     assert!(ui.visible("sync-totp-qr", cx));
+    assert!(ui.visible("sync-totp-secret", cx));
+}
+
+/// A server URI that is not an `otpauth://totp/` URI of the secret (the
+/// core drops it, D188) gives no QR code: only the secret, typed by hand.
+#[gpui::test]
+fn totp_setup_without_a_usable_uri_shows_only_the_secret(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let ui = Ui::open(cx, opened);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        let dialog = crate::sync_ui::open_totp(state, window, cx);
+        dialog.update(cx, |dialog, cx| {
+            dialog.step = crate::sync_ui::TotpStep::Code {
+                secret: zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".to_owned()),
+                uri: None,
+            };
+            cx.notify();
+        });
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert!(!ui.visible("sync-totp-qr", cx));
     assert!(ui.visible("sync-totp-secret", cx));
 }
 

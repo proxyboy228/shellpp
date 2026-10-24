@@ -1,6 +1,7 @@
 # Access 3: only over your VPN, with Caddy's internal CA (server/README.md).
-# Every device adds Caddy's root certificate in the connect wizard ("Trust
-# this certificate" pins the server certificate; or add the root CA).
+# Every device adds Caddy's root certificate (pki/authorities/local/root.crt
+# in Caddy's data directory) with "Add a CA certificate..." when it first
+# connects; renewed certificates of that CA then need no question.
 sync.home.arpa {
 	tls internal
 	reverse_proxy 127.0.0.1:8080

@@ -25,7 +25,7 @@
 | `shellpp.db-wal`, `shellpp.db-shm` | журнал предзаписи SQLite и его индекс; часть базы |
 | `shellpp.lock` | пустой. Запущенное приложение держит на нём исключительную файловую блокировку ОС; второй процесс ждёт до 3 секунд и завершается с ошибкой хранилища |
 | `backups/shellpp-<UTC yyyymmddThhmmssZ>.db` | копия (`VACUUM INTO`) перед миграцией схемы, хранятся 3 последние. У схемы 1 миграций нет, поэтому копий пока не бывает |
-| `shellpp.db.<UTC yyyymmddThhmmssZ>.old` с `-wal` и `-shm` | база, отложенная в архив действием «Начать с новым хранилищем» (раздел 6) |
+| `shellpp.db.<UTC yyyymmddThhmmssZ>.old` с `-wal` и `-shm` | база, отложенная в архив действием «Начать с новым хранилищем» (раздел 6) или выходом из аккаунта с удалением локальной копии (D190) |
 | `shellpp.db.<UTC yyyymmddThhmmssZ>-failed.old` с `-wal` и `-shm` | новая база, отложенная в сторону, если «Начать с новым хранилищем» не смогло её создать (раздел 6); бывает редко |
 | `logs/shellpp.log`, `shellpp.log.1` … `.4` | диагностический лог с ротацией по 5 МиБ, если каталог логов внутри каталога данных (Windows, `SHELLPP_DATA_DIR`). Без секретов, адресов, имён пользователей и путей |
 | `tmp/` | временные файлы явных действий пользователя, очищается при запуске (пока туда никто не пишет) |
@@ -71,7 +71,7 @@ UUID — `BLOB` по 16 байт; метки времени — `TEXT` в RFC 33
 | `duplicate_pairs` | `vault_id`, `record_id`, `other_record_id`, `found_at`, `kept` | возможные дубликаты от синхронизации или слияния при входе |
 | `server_tls` | `server_url`, `kind` (`pinned`, `ca`), `cert_sha256`, `ca_der`, `created_at` | выбор доверия к серверу синхронизации (открытые данные, читаются и при блокировке) |
 
-С привязанным аккаунтом: `server_account.refresh_token` — обёртка refresh-токена под `local_secrets_key` (HKDF ключа vault с id устройства и `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`; `local_auth.kdf_email` хранит email аккаунта; синхронизированные записи хранят `synced_revision`, `server_seq` и, пока локальное изменение не отправлено, `base_envelope`; удаления пишут tombstone. Настройка `sync.toggles` (объект: переключатель → bool) выбирает, что личный vault синхронизирует на этом устройстве.
+С привязанным аккаунтом: `server_account.refresh_token` — обёртка refresh-токена под `local_secrets_key` (HKDF ключа vault с id устройства и `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(origin))` ‖ origin (сервер, который его выдал, D188); `local_auth.kdf_email` хранит email аккаунта; синхронизированные записи хранят `synced_revision`, `server_seq` и, пока локальное изменение не отправлено, `base_envelope`; удаления пишут tombstone. Настройка `sync.toggles` (объект: переключатель → bool) выбирает, что личный vault синхронизирует на этом устройстве.
 
 ## 3. Записи
 

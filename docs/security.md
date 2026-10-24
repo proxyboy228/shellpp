@@ -242,7 +242,7 @@ Layouts and exact AAD bytes are in [storage-format.md](storage-format.md); this 
 | Object | Key | Construction and binding |
 |---|---|---|
 | Record envelope | `record_key[v, e]` | XChaCha20-Poly1305; the AAD binds version, class, flags (tombstone), vault id, record id, revision and key epoch (D14); plaintext padded to a multiple of 256 bytes (D10) |
-| Wrap blob | `kek`, `recovery_kek`, `device_wrap_key`, `chain_key[v, e]`, `local_secrets_key`; a key derived from `recording_key[file]` of the new personal vault for the key of a recording waiting to be re-encrypted into it ([storage-format.md](storage-format.md), section 8.4; [decision] (D182)) | XChaCha20-Poly1305; the AAD names the purpose, the vault or device and the epoch (and the file for a recording), so a wrap cannot be moved to another slot |
+| Wrap blob | `kek`, `recovery_kek`, `device_wrap_key`, `chain_key[v, e]`, `local_secrets_key`; a key derived from `recording_key[file]` of the new personal vault for the key of a recording waiting to be re-encrypted into it ([storage-format.md](storage-format.md), section 8.4; [decision] (D182)) | XChaCha20-Poly1305; the AAD names the purpose, the vault or device and the epoch (and the file for a recording; the refresh token's also the server origin, D188), so a wrap cannot be moved to another slot |
 | Team vault key | HPKE | section 5.7 |
 | Encrypted export | `export_key` | single-shot XChaCha20-Poly1305; the AAD binds the format id, the salt and the KDF parameters |
 | Session recording | `recording_key[file]` | STREAM with 64 KiB chunks; the AAD of every chunk is the file header; the last-block flag detects truncation |
@@ -487,7 +487,7 @@ Rules:
 - SQLite runs with `secure_delete = ON`, which overwrites deleted content inside the database file. Files are deleted by unlinking; copies kept by the file system, SSD wear leveling, snapshots or OS backups are not erased (RR18).
 - Pre-migration copies in `backups/` are ciphertext but keep the wraps of their time (RR6).
 - "Start with a new vault" (section 8) renames the database files and never deletes them; the archive stays in the data directory until the user removes it.
-- "Delete local copy" at log out removes the whole data directory, `backups/` and `recordings/` included, the temporary directory and the keychain item ([storage-format.md](storage-format.md), "Backup and restore").
+- "Delete local copy" at log out sets the database aside as "Start with a new vault" does and deletes the keychain item first, so the set-aside file opens only with the master password; `backups/` and `recordings/` stay. Wiping a device means deleting the data directory by hand ([storage-format.md](storage-format.md), "Backup and restore"; [decision] (D190)).
 - Full-disk encryption and encrypted swap are recommended in the user documentation, because memory can reach swap and hibernation files (RR11).
 
 ### 9.4 Clipboard

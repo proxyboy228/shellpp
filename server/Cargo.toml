@@ -72,6 +72,10 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 # server in the same process (docs/architecture.md, section 9.1).
 shellpp-core = { path = "../crates/core", features = ["test-hooks"] }
 tempfile = "3.27.0"
+# The certificate trust tests (tests/tls_trust.rs): a TLS front of the test
+# server with certificates generated at run time (the client's versions).
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
 # Requests to the router in-process (`ServiceExt::oneshot`): the body limit
 # answers before a socket would have to carry the whole body.

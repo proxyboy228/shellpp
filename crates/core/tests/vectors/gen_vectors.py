@@ -201,7 +201,8 @@ def build() -> dict:
             "wrap_recovery_e1": hx(b"shellpp/v1/wrap/recovery" + v + be32(1)),
             "wrap_device_e1": hx(b"shellpp/v1/wrap/device" + v + be32(1)),
             "wrap_chain_e2": hx(b"shellpp/v1/wrap/epoch-chain" + v + be32(1)),
-            "refresh_token": hx(b"shellpp/v1/wrap/refresh-token" + DEVICE_ID.bytes),
+            "refresh_token": hx(b"shellpp/v1/wrap/refresh-token" + DEVICE_ID.bytes
+                                + origin_ctx(ORIGIN)),
             "record_header": hx(hdr),
             "record": hx(b"shellpp/v1/record" + hdr),
         },

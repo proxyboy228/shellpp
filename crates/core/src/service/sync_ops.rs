@@ -96,6 +96,9 @@ impl From<HttpError> for CoreError {
 #[derive(Default)]
 pub(super) struct SyncRuntime {
     access: Option<Zeroizing<String>>,
+    /// The origin that issued `access` (D188): the token is used only with
+    /// a client of that origin.
+    access_origin: Option<String>,
     pending: Option<PendingSignIn>,
     /// Items the server refused, with the status; not retried
     /// automatically (section 6.5): "Sync now" retries them all, a pushed
@@ -117,12 +120,21 @@ pub(super) struct SyncRuntime {
     /// Tests: the next merge at sign-in stops after its pull.
     #[cfg(any(test, feature = "test-hooks"))]
     fail_merge: bool,
+    /// The last sign-in refused weaker KDF parameters (D189).
+    pub(super) weaker_kdf: Option<super::sync_trust::WeakerKdf>,
 }
 
 impl SyncRuntime {
+    /// Keeps the access token `origin` issued.
+    fn hold_access(&mut self, token: Zeroizing<String>, origin: &str) {
+        self.access = Some(token);
+        self.access_origin = Some(origin.to_owned());
+    }
+
     /// Drops the access token and a half-finished sign-in (lock).
     pub(super) fn wipe(&mut self) {
         self.access = None;
+        self.access_origin = None;
         self.pending = None;
         self.recovery_checked = None;
     }
@@ -469,7 +481,10 @@ pub struct DeviceItem {
 /// TOTP setup (UI 13.5): the secret for manual entry and the QR text.
 pub struct TotpSetup {
     pub secret: SecretString,
-    pub otpauth_uri: SecretString,
+    /// The `otpauth://totp/` URI for the QR code, made by the client from
+    /// the secret and the account email (D188); `None` shows only the
+    /// secret.
+    pub otpauth_uri: Option<SecretString>,
 }
 
 impl std::fmt::Debug for TotpSetup {
@@ -549,7 +564,7 @@ fn secret(text: &str) -> Secret {
 }
 
 /// The trust mode stored for an origin.
-fn trust_of(store: &Store, origin: &str) -> Result<TrustMode, CoreError> {
+pub(super) fn trust_of(store: &Store, origin: &str) -> Result<TrustMode, CoreError> {
     Ok(match store.server_tls(origin)? {
         Some(row) if row.kind == TlsTrustKind::Pinned => TrustMode::Pinned(row.cert_sha256),
         Some(row) => match row.ca_der {
@@ -730,13 +745,14 @@ fn ring_from_chain(
 fn wrap_refresh(
     ring: &KeyRing,
     device_id: &Uuid,
+    origin: &str,
     token: &str,
 ) -> Result<(Vec<u8>, u32), CoreError> {
     let epoch = ring.current_epoch();
     let key = crypto::derive_local_secrets_key(ring.current_key(), device_id, epoch);
     let blob = crypto::wrap_seal(
         &key,
-        &crypto::refresh_token_aad(device_id),
+        &crypto::refresh_token_aad(device_id, origin),
         token.as_bytes(),
     )?;
     Ok((blob, epoch))
@@ -750,7 +766,10 @@ fn open_refresh(
     let blob = account.refresh_token.as_ref()?;
     let vault_key = ring.key(account.secrets_epoch)?;
     let key = crypto::derive_local_secrets_key(vault_key, device_id, account.secrets_epoch);
-    let plain = crypto::wrap_open(&key, &crypto::refresh_token_aad(device_id), blob).ok()?;
+    // Bound to the origin it was stored with (D188): another server_url
+    // never opens it.
+    let aad = crypto::refresh_token_aad(device_id, &account.server_url);
+    let plain = crypto::wrap_open(&key, &aad, blob).ok()?;
     std::str::from_utf8(&plain)
         .ok()
         .map(|text| Zeroizing::new(text.to_owned()))
@@ -770,10 +789,17 @@ impl Core {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn api(&self, store: &Store, origin: &str) -> Result<HttpApi, CoreError> {
-        Ok(HttpApi::new(
+    pub(super) fn api(&self, store: &Store, origin: &str) -> Result<HttpApi, CoreError> {
+        self.api_with(origin, trust_of(store, origin)?)
+    }
+
+    /// A client of `origin` with `trust` (the trust dialog checks a choice
+    /// with it before storing it, `sync_trust.rs`).
+    pub(super) fn api_with(&self, origin: &str, trust: TrustMode) -> Result<HttpApi, CoreError> {
+        Ok(HttpApi::with_roots(
             origin,
-            trust_of(store, origin)?,
+            trust,
+            &self.system_roots(),
             &self.config.app_version,
         )?)
     }
@@ -804,6 +830,14 @@ impl Core {
     pub fn sync_server_check(&self, origin: &str) -> Result<ServerCheck, CoreError> {
         let origin = normalize_origin(origin).map_err(HttpError::from)?;
         let api = self.api(&self.inner().store, &origin)?;
+        Self::server_check_with(&api, origin)
+    }
+
+    /// `GET /v1/server` through `api`: ready, or the certificate problem.
+    pub(super) fn server_check_with(
+        api: &HttpApi,
+        origin: String,
+    ) -> Result<ServerCheck, CoreError> {
         match api.server_info() {
             Ok(info) => {
                 if !info.api_versions.iter().any(|version| version == "v1") {
@@ -1008,8 +1042,12 @@ impl Core {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
             let device_id = session.device_id;
-            let (refresh, secrets_epoch) =
-                wrap_refresh(&session.ring, &device_id, &response.tokens.refresh_token.0)?;
+            let (refresh, secrets_epoch) = wrap_refresh(
+                &session.ring,
+                &device_id,
+                &origin,
+                &response.tokens.refresh_token.0,
+            )?;
             let mut local_auth = context.local_auth.clone();
             local_auth.kdf_email = Some(email.clone());
             local_auth.updated_at = now_text.clone();
@@ -1041,7 +1079,10 @@ impl Core {
                 }
                 Ok(())
             })?;
-            inner.sync.access = Some(Zeroizing::new(response.tokens.access_token.0.clone()));
+            inner.sync.hold_access(
+                Zeroizing::new(response.tokens.access_token.0.clone()),
+                &origin,
+            );
             tracing::info!("account registered");
             super::checkpoint(&inner.store);
             self.emit_sync(inner);
@@ -1064,23 +1105,59 @@ impl Core {
     /// (UI 13.2): the device gets the account's vault. With a local vault it
     /// is a rebind (the same personal vault) or the merge of data-model 18.5.
     pub fn sync_sign_in(&self, input: SignInInput) -> Result<SignInOutcome, CoreError> {
+        self.sign_in_with(input, None)
+    }
+
+    /// The sign-in of a bound, signed-out device after the user confirmed
+    /// the weaker KDF parameters of `sync_weaker_kdf` (D189): it goes on only
+    /// when the server sends exactly `accepted` again.
+    pub fn sync_sign_in_accepting_kdf(
+        &self,
+        input: SignInInput,
+        accepted: KdfParams,
+    ) -> Result<SignInOutcome, CoreError> {
+        self.sign_in_with(input, Some(&accepted))
+    }
+
+    fn sign_in_with(
+        &self,
+        input: SignInInput,
+        accepted: Option<&KdfParams>,
+    ) -> Result<SignInOutcome, CoreError> {
         let _sync = self.sync_lock();
         let origin = normalize_origin(&input.origin).map_err(HttpError::from)?;
         let email = crypto::normalize_email(&input.email);
         let class = self.platform.class;
-        let (api, device_id) = {
-            let guard = self.inner();
+        let (api, device_id, bound_kdf) = {
+            let mut guard = self.inner();
+            guard.sync.weaker_kdf = None;
+            let mut bound_kdf = None;
             match guard.state {
                 LockState::FirstRun => {}
                 LockState::Unlocked => {
                     // A bound device signed out (refused refresh, offline
                     // recovery) signs in again: the rebind below.
-                    if guard
-                        .store
-                        .server_account()?
+                    let account = guard.store.server_account()?;
+                    if account
+                        .as_ref()
                         .is_some_and(|row| row.refresh_token.is_some())
                     {
                         return Err(refused("already_bound"));
+                    }
+                    // A device bound now or before (an account row, or the
+                    // personal vault's binding, which neither Log out nor
+                    // an `account_deleted` answer clears) compares with its
+                    // own parameters, whatever the origin (D189): a server
+                    // must not turn the check off by unbinding the device.
+                    let vault_bound = match guard.personal_vault_id {
+                        Some(vault_id) => guard.store.vault_binding(&vault_id)?.0.is_some(),
+                        None => false,
+                    };
+                    if account.is_some() || vault_bound {
+                        let row = guard.store.local_auth()?.ok_or(CoreError::Damaged)?;
+                        bound_kdf = Some(
+                            KdfParams::from_json(&row.kdf_json).map_err(|_| CoreError::Damaged)?,
+                        );
                     }
                 }
                 _ => return Err(CoreError::Locked),
@@ -1089,7 +1166,7 @@ impl Core {
                 .store
                 .meta_get(META_DEVICE_ID)?
                 .and_then(|text| Uuid::parse_str(&text).ok());
-            (self.api(&guard.store, &origin)?, device_id)
+            (self.api(&guard.store, &origin)?, device_id, bound_kdf)
         };
         let device_id = match device_id {
             Some(id) => id,
@@ -1101,6 +1178,18 @@ impl Core {
             .kdf_salt
             .exact()
             .ok_or_else(|| refused("unsafe_kdf"))?;
+        kdf.check(class).map_err(|_| refused("unsafe_kdf"))?;
+        // Weaker than this device's own parameters: a possible downgrade
+        // attack (D189). Nothing is derived or sent until the user confirms
+        // these very parameters.
+        if let Some(local) = bound_kdf
+            && super::sync_trust::kdf_weaker(&kdf, &local)
+            && accepted != Some(&kdf)
+        {
+            self.inner().sync.weaker_kdf =
+                Some(super::sync_trust::WeakerKdf { local, server: kdf });
+            return Err(refused("weaker_kdf"));
+        }
         let derived = derive(&kdf, &kdf_salt, &email, &input.password, &origin, class)?;
         drop(input);
         let response = api.login(&wire::LoginRequest {
@@ -1301,7 +1390,8 @@ impl Core {
         generation: Option<Vec<u8>>,
         now_text: &str,
     ) -> Result<(ServerAccountRow, LocalAuthRow, KeyWrapRow), CoreError> {
-        let (refresh, secrets_epoch) = wrap_refresh(ring, device_id, &tokens.refresh_token.0)?;
+        let (refresh, secrets_epoch) =
+            wrap_refresh(ring, device_id, &pending.origin, &tokens.refresh_token.0)?;
         let vault_id = ring.vault_id();
         let account_row = ServerAccountRow {
             server_url: pending.origin.clone(),
@@ -1401,7 +1491,10 @@ impl Core {
         inner.personal_vault_id = Some(vault_id);
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
-        inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        inner.sync.hold_access(
+            Zeroizing::new(tokens.access_token.0.clone()),
+            &pending.origin,
+        );
         tracing::info!("signed in on an empty device");
         self.emit(
             inner,
@@ -1469,7 +1562,10 @@ impl Core {
                     tx.vault_binding_set(&vault_id, Some(&account.user_id), Some(&pending.origin))?;
                     tx.server_account_put(&account_row)
                 })?;
-                inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+                inner.sync.hold_access(
+                    Zeroizing::new(tokens.access_token.0.clone()),
+                    &pending.origin,
+                );
                 tracing::warn!("signed in to a server whose personal epoch is behind");
                 return Err(refused("rolled_back"));
             }
@@ -1534,7 +1630,10 @@ impl Core {
                 }
                 return Err(error.into());
             }
-            inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+            inner.sync.hold_access(
+                Zeroizing::new(tokens.access_token.0.clone()),
+                &pending.origin,
+            );
             super::checkpoint(&inner.store);
             tracing::info!(epoch, "personal vault bound again");
             Ok(())
@@ -1745,7 +1844,7 @@ impl Core {
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
         inner.personal_vault_id = Some(account_vault);
-        inner.sync.access = Some(access);
+        inner.sync.hold_access(access, &pending.origin);
         super::checkpoint(&inner.store);
         tracing::info!(merged = rows.len(), "local data merged into the account");
         self.emit(
@@ -2087,8 +2186,22 @@ impl Core {
             let guard = self.inner();
             let session = Self::require_session(&guard)?;
             let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
-            let token = open_refresh(&session.ring, &link.device_id, &account)
-                .ok_or(refused("signed_out"))?;
+            // The address changed after this client was made: nothing is
+            // sent; the next cycle uses the stored one (D188).
+            if account.server_url != link.api.origin() {
+                return Err(refused("signed_out"));
+            }
+            let Some(token) = open_refresh(&session.ring, &link.device_id, &account) else {
+                // A stored token that does not open for this origin (the
+                // server address changed, D188, or the blob is damaged) is
+                // never sent anywhere: the device signs in again.
+                let stored = account.refresh_token.is_some();
+                drop(guard);
+                if stored {
+                    self.signed_out_locally()?;
+                }
+                return Err(refused("signed_out"));
+            };
             let epoch = session.ring.current_epoch();
             let key = crypto::derive_local_secrets_key(
                 session.ring.current_key(),
@@ -2107,7 +2220,7 @@ impl Core {
                 let access = Zeroizing::new(tokens.access_token.0.clone());
                 let blob = crypto::wrap_seal(
                     &secrets_key,
-                    &crypto::refresh_token_aad(&link.device_id),
+                    &crypto::refresh_token_aad(&link.device_id, link.api.origin()),
                     tokens.refresh_token.0.as_bytes(),
                 )?;
                 let mut guard = self.inner();
@@ -2119,7 +2232,7 @@ impl Core {
                 if Self::require_session(&guard).is_err() {
                     return Err(CoreError::Locked);
                 }
-                guard.sync.access = Some(access.clone());
+                guard.sync.hold_access(access.clone(), link.api.origin());
                 Ok(access)
             }
             Err(error) => {
@@ -2143,7 +2256,15 @@ impl Core {
         link: &Link,
         call: impl Fn(&HttpApi, &str) -> Result<T, HttpError>,
     ) -> Result<T, CoreError> {
-        let held = self.inner().sync.access.clone();
+        // Only a token of this client's origin (D188).
+        let held = {
+            let inner = self.inner();
+            inner
+                .sync
+                .access
+                .clone()
+                .filter(|_| inner.sync.access_origin.as_deref() == Some(link.api.origin()))
+        };
         let token = match held {
             Some(token) => token,
             None => self.refresh(link)?,
@@ -2901,6 +3022,19 @@ impl Core {
     /// the first run (UI 12.2).
     pub fn sync_sign_out(&self, delete_local: bool) -> Result<(), CoreError> {
         let _sync = self.sync_lock();
+        if delete_local {
+            // Nothing may open the copy set aside below without the master
+            // password (D190): the device key and its `device` row go first,
+            // and when the OS keychain refuses, nothing has changed yet.
+            let remembered = {
+                let guard = self.inner();
+                Self::require_session(&guard)?;
+                super::device_row_exists(&guard)
+            };
+            if remembered {
+                self.remember_device_set_impl(false)?;
+            }
+        }
         if let Ok(link) = self.link() {
             let token = {
                 let guard = self.inner();
@@ -2935,7 +3069,10 @@ impl Core {
             self.emit_sync(inner);
         }
         if delete_local {
-            self.start_new_vault()?;
+            // The local copy is set aside as "Start with a new vault" does
+            // (D190): renamed next to the new store, never deleted. One step
+            // from Unlocked: a failure keeps the vault open, signed out.
+            self.set_aside_store(true)?;
         }
         Ok(())
     }
@@ -3016,9 +3153,23 @@ impl Core {
             current_auth_key: key_b64(&auth_key),
         };
         let response = self.authed(&link, |api, token| api.totp_setup(token, &request))?;
+        // The secret only when it is one; the QR code's URI is made here
+        // (D188): the server's `otpauth_uri` is never shown.
+        let Some(checked) = super::sync_trust::checked_totp_secret(&response.secret.0) else {
+            tracing::warn!("the server's TOTP secret is not base32");
+            return Err(refused("totp_secret"));
+        };
+        let email = self
+            .inner()
+            .store
+            .server_account()?
+            .map(|account| account.email)
+            .unwrap_or_default();
+        let uri = super::sync_trust::otpauth_uri(&checked, &email);
+        drop(response);
         Ok(TotpSetup {
-            secret: SecretString::from(response.secret.into_inner()),
-            otpauth_uri: SecretString::from(response.otpauth_uri.into_inner()),
+            secret: SecretString::from(checked),
+            otpauth_uri: Some(SecretString::from(uri)),
         })
     }
 
@@ -3243,8 +3394,13 @@ impl Core {
                 .ring
                 .push_epoch(rotation.new_epoch, rotation.new_key());
         }
-        let (blob, epoch) = wrap_refresh(&session.ring, device_id, &tokens.refresh_token.0)?;
         let account = store.server_account()?;
+        let origin = account
+            .as_ref()
+            .map(|row| row.server_url.clone())
+            .unwrap_or_default();
+        let (blob, epoch) =
+            wrap_refresh(&session.ring, device_id, &origin, &tokens.refresh_token.0)?;
         let written = store.write(|tx| {
             if let Some(rotation) = rotation {
                 rotation.write(tx)?;
@@ -3270,7 +3426,7 @@ impl Core {
             }
             return Err(error.into());
         }
-        sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        sync.hold_access(Zeroizing::new(tokens.access_token.0.clone()), &origin);
         let mut ids = Vec::new();
         if let Some(write) = record {
             ids.push(write.record_id);
@@ -3566,8 +3722,12 @@ impl Core {
             return Err(CoreError::WrongState);
         }
         ring.push_epoch(rotation.new_epoch, rotation.new_key());
-        let (blob, secrets_epoch) =
-            wrap_refresh(&ring, &context.device_id, &tokens.refresh_token.0)?;
+        let (blob, secrets_epoch) = wrap_refresh(
+            &ring,
+            &context.device_id,
+            &account.server_url,
+            &tokens.refresh_token.0,
+        )?;
         let mut account_row = account;
         account_row.email = email;
         account_row.refresh_token = Some(blob);
@@ -3578,7 +3738,10 @@ impl Core {
             tx.local_auth_put(&local_auth)?;
             tx.server_account_put(&account_row)
         })?;
-        inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        inner.sync.hold_access(
+            Zeroizing::new(tokens.access_token.0.clone()),
+            &account_row.server_url,
+        );
         tracing::info!(
             epoch = rotation.new_epoch,
             "recovered through the server; vault rotated"
@@ -4944,7 +5107,7 @@ mod tests {
         let vault_id = Uuid::now_v7();
         let device = Uuid::now_v7();
         let ring = KeyRing::new(vault_id, 1, Key32::generate().unwrap());
-        let (blob, epoch) = wrap_refresh(&ring, &device, "shellpp_rt_abc").unwrap();
+        let (blob, epoch) = wrap_refresh(&ring, &device, "https://x", "shellpp_rt_abc").unwrap();
         let mut account = ServerAccountRow {
             server_url: "https://x".into(),
             user_id: Uuid::now_v7(),
@@ -4962,6 +5125,11 @@ mod tests {
         );
         // Another device id (the AAD) or a flipped byte does not open.
         assert!(open_refresh(&ring, &Uuid::now_v7(), &account).is_none());
+        // Nor another server address (D188): the token goes only to the
+        // origin that issued it.
+        let mut moved = account.clone();
+        moved.server_url = "https://attacker.example".into();
+        assert!(open_refresh(&ring, &device, &moved).is_none());
         let mut tampered = blob;
         let last = tampered.len() - 1;
         tampered[last] ^= 1;
