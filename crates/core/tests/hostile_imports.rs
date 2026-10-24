@@ -149,6 +149,7 @@ fn config(files: &[(&str, &str)]) -> (tempfile::TempDir, SshConfigSource) {
     let source = SshConfigSource {
         path: home.path().join(".ssh").join("config"),
         home: home.path().to_path_buf(),
+        own: false,
     };
     (home, source)
 }

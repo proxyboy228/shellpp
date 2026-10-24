@@ -87,6 +87,7 @@ fn hosts_keys_and_links_are_imported_once() {
     let source = SshConfigSource {
         path: ssh.join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
 
     let u = first_run();
@@ -178,6 +179,10 @@ fn hosts_keys_and_links_are_imported_once() {
         "legacy's ProxyCommand and the Match exec, neither run nor stored"
     );
     assert_eq!(summary.jump_chains_left_out, 0);
+    assert_eq!(
+        summary.hosts_agent_forwarding_off, 0,
+        "the user's own config"
+    );
 
     let hosts: Vec<_> = u
         .core
@@ -270,6 +275,7 @@ fn a_missing_file_and_include_loops_are_reported() {
     let missing = SshConfigSource {
         path: home.path().join(".ssh").join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
     assert!(u.core.ssh_config_preview(missing).is_err());
     // A config that includes itself, and a chosen subset of hosts.
@@ -281,6 +287,7 @@ fn a_missing_file_and_include_loops_are_reported() {
     let source = SshConfigSource {
         path: ssh.join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
     let preview = u.core.ssh_config_preview(source.clone()).unwrap();
     assert!(
@@ -328,6 +335,7 @@ fn network_paths_are_never_opened() {
     let source = SshConfigSource {
         path: ssh.join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
     let preview = u.core.ssh_config_preview(source).unwrap();
     let network: Vec<&String> = preview
@@ -364,6 +372,7 @@ fn a_jump_host_that_is_not_imported_leaves_no_silent_direct_connection() {
     let source = SshConfigSource {
         path: ssh.join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
     // The preview names the refused hop.
     let preview = u.core.ssh_config_preview(source.clone()).unwrap();
@@ -469,6 +478,7 @@ fn no_jump_chain_points_at_a_host_that_was_refused() {
             source: SshConfigSource {
                 path: ssh.join("config"),
                 home: home.path().to_path_buf(),
+                own: true,
             },
             aliases: None,
             passphrases: BTreeMap::new(),
@@ -518,6 +528,7 @@ fn forwardings_become_rules_of_the_host() {
     let source = SshConfigSource {
         path: ssh.join("config"),
         home: home.path().to_path_buf(),
+        own: true,
     };
     let u = first_run();
     let summary = u
@@ -616,5 +627,80 @@ fn forwardings_become_rules_of_the_host() {
     assert!(
         notes.contains("LocalForward /tmp/sock /run/x.sock is not imported"),
         "{notes}"
+    );
+}
+
+/// D193: a config that is not the user's own `~/.ssh/config` (a file chosen
+/// elsewhere) cannot turn Agent Forwarding on: `ForwardAgent yes` is
+/// imported turned off, the host's notes and the preview say so, and the
+/// summary counts it. `ForwardAgent no` needs no note.
+#[test]
+fn forward_agent_from_another_file_is_imported_turned_off() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("Downloads").join("colleague-config");
+    write(
+        &path,
+        "Host jump\n  HostName jump.example.com\n  ForwardAgent yes\n\n\
+         Host quiet\n  HostName quiet.example.com\n  ForwardAgent no\n",
+    );
+    let source = SshConfigSource {
+        path,
+        home: home.path().to_path_buf(),
+        own: false,
+    };
+    let u = first_run();
+    let preview = u.core.ssh_config_preview(source.clone()).expect("preview");
+    let notes = |alias: &str| {
+        preview
+            .hosts
+            .iter()
+            .find(|host| host.alias == alias)
+            .unwrap()
+            .notes
+            .join("\n")
+    };
+    assert!(notes("jump").contains("ForwardAgent is imported turned off"));
+    assert!(
+        !notes("quiet").contains("ForwardAgent"),
+        "{}",
+        notes("quiet")
+    );
+
+    let summary = u
+        .core
+        .ssh_config_import(SshConfigImportInput {
+            source,
+            aliases: None,
+            passphrases: BTreeMap::new(),
+            save_passphrases: false,
+        })
+        .expect("import");
+    assert_eq!(summary.added, 2);
+    assert_eq!(summary.hosts_agent_forwarding_off, 1);
+    let hosts: Vec<_> = u
+        .core
+        .records_query(RecordsQuery {
+            vault_id: None,
+            types: vec![RecordType::Host],
+            scope: QueryScope::All,
+            text: None,
+            tags: Vec::new(),
+            sort: SortMode::Manual,
+        })
+        .unwrap()
+        .into_iter()
+        .map(as_host)
+        .collect();
+    let jump = &hosts
+        .iter()
+        .find(|host| host.data["label"] == "jump")
+        .unwrap()
+        .data;
+    assert_ne!(jump["ssh"]["agent_forwarding"], json!(true));
+    assert_ne!(jump["ssh"]["agent_forward_system"], json!(true));
+    let host_notes = jump["notes"].as_str().unwrap_or_default();
+    assert!(
+        host_notes.contains("ForwardAgent is imported turned off"),
+        "{host_notes}"
     );
 }

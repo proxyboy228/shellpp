@@ -28,8 +28,8 @@ mod tests;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task, Window,
-    div, prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Task, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -44,6 +44,7 @@ use shellpp_core::service::{
     SignInOutcome, SyncStatus, TrustChoice,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
+use zeroize::Zeroizing;
 
 use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
@@ -1639,15 +1640,27 @@ debug_opaque!(
 // ---------------------------------------------------------------------------
 
 /// Where the TOTP setup is.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TotpStep {
     Password,
-    /// The secret for the authenticator app and the code to confirm it.
+    /// The secret for the authenticator app and the code to confirm it,
+    /// wiped when the step is left (D192).
     Code {
-        secret: String,
-        uri: String,
+        secret: Zeroizing<String>,
+        uri: Zeroizing<String>,
     },
     Done,
+}
+
+impl std::fmt::Debug for TotpStep {
+    /// Never the secret or its `otpauth://` text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Password => "Password",
+            Self::Code { .. } => "Code(..)",
+            Self::Done => "Done",
+        })
+    }
 }
 
 pub struct TotpDialog {
@@ -1680,8 +1693,10 @@ impl TotpDialog {
                             Ok(setup) => {
                                 use secrecy::ExposeSecret as _;
                                 dialog.step = TotpStep::Code {
-                                    secret: setup.secret.expose_secret().to_owned(),
-                                    uri: setup.otpauth_uri.expose_secret().to_owned(),
+                                    secret: Zeroizing::new(setup.secret.expose_secret().to_owned()),
+                                    uri: Zeroizing::new(
+                                        setup.otpauth_uri.expose_secret().to_owned(),
+                                    ),
                                 };
                             }
                             Err(error) => dialog.error = Some(error_text(&error)),
@@ -1740,9 +1755,9 @@ impl Render for TotpDialog {
                         .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                         .text_size(metrics::FONT_SIZE_BODY)
                         .text_color(cx.theme().popover_foreground)
-                        .child(secret),
+                        .child(SharedString::new(secret.as_str())),
                 )
-                .child(widgets::caption(uri, cx))
+                .child(widgets::caption(SharedString::new(uri.as_str()), cx))
                 .child(widgets::field(
                     strings::TOTP_CODE,
                     widgets::text_input(

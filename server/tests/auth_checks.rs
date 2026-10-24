@@ -250,7 +250,7 @@ impl Fixture {
             .login(&account.email, &account.auth_key, account.device_id)
             .expect("signed in");
         assert_eq!(response.status.as_deref(), Some("totp_required"));
-        response.login_ticket.expect("a login ticket").0
+        response.login_ticket.expect("a login ticket").into_inner()
     }
 
     fn login_totp(
@@ -843,7 +843,7 @@ fn recovery_checks_the_key_the_ticket_and_its_device() {
     let ticket = begin(&a.email, &a.recovery_auth_key, t0)
         .expect("begun")
         .recovery_ticket
-        .0;
+        .into_inner();
     for wrong in tampered(&ticket, token_prefix::RECOVERY_TICKET) {
         refused(complete(&wrong, device, t0), 401, code::TICKET_EXPIRED);
     }
@@ -870,7 +870,7 @@ fn recovery_checks_the_key_the_ticket_and_its_device() {
     let ticket = begin(&a.email, &a.recovery_auth_key, t1)
         .expect("begun again")
         .recovery_ticket
-        .0;
+        .into_inner();
     refused(
         complete(&ticket, device, t1 + model::RECOVERY_TICKET_LIFETIME),
         401,
@@ -1174,7 +1174,7 @@ fn unknown_emails_get_the_fake_salt_of_their_normalized_email() {
         fx.write_with(shared, |tx, shared| accounts::prelogin(tx, shared, request))
             .expect("prelogin")
             .kdf_salt
-            .0
+            .into_inner()
     };
     let unknown = email();
     let salt = prelogin(&fx.shared, &unknown);

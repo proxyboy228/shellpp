@@ -63,12 +63,25 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
 
 ## Подводные камни
 
-- russh собирается из `third_party/russh` (0.64.1 с однострочным патчем
-  утечки каналов, `third_party/russh/PATCHES.md`, D100) через
-  `[patch.crates-io]` в корневом `Cargo.toml`. Когда upstream выпустит
-  исправление, патч убрать: каталог `third_party/russh`, запись
+- russh собирается из `third_party/russh` через `[patch.crates-io]`
+  в корневом `Cargo.toml`: 0.64.1 с двумя заплатками
+  (`third_party/russh/PATCHES.md`, в коде помечены «Shell++ patch»):
+  1. утечка каналов (D100) — `src/client/encrypted.rs`, тесты
+     `crates/ssh/tests/channel_close.rs`, текст для upstream
+     `docs/upstream/russh-channel-leak.md`;
+  2. пустой `CHANNEL_DATA` читается как конец потока (D191) —
+     `src/channels/io/rx.rs`, тесты `crates/ssh/tests/empty_channel_data.rs`,
+     текст для upstream `docs/upstream/russh-empty-data.md`.
+
+  Тесты обеих заплаток остаются всегда. Когда релиз upstream исправит
+  обе — перейти на него и убрать каталог `third_party/russh`, запись
   `[patch.crates-io]`, исключение в `.gitleaks.toml` и абзац в
-  THIRD_PARTY_NOTICES; тесты `crates/ssh/tests/channel_close.rs` оставить.
+  THIRD_PARTY_NOTICES. Когда только одну — каталог остаётся: заменить его
+  содержимое исходниками этого релиза, заново наложить оставшуюся
+  заплатку и правку `Cargo.toml` копии (п. 3 `PATCHES.md`), убрать
+  исправленную из `PATCHES.md`, поправить версию и число заплаток в этом
+  абзаце, `PATCHES.md`, корневом `Cargo.toml`, `.gitleaks.toml`
+  и THIRD_PARTY_NOTICES.
 
 - Тесты сессий на общем контейнере OpenSSH — только с `--test-threads=1`:
   одни тесты роняют соединения и меняют ключ хоста, соседние от этого

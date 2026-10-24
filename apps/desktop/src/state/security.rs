@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use shellpp_core::CoreError;
 use shellpp_core::lock::FirstRunOptions;
 use shellpp_core::service::dto::{LockStatus, SettingsSetInput};
-use shellpp_core::settings::AUTO_LOCK_KEY;
+use shellpp_core::settings::{AUTO_LOCK_KEY, SYSTEM_AGENT_WHILE_LOCKED_KEY};
 
 use super::AppState;
 
@@ -138,6 +138,37 @@ impl AppState {
             reset: Vec::new(),
         })?;
         tracing::info!(minutes = ?minutes, "auto-lock interval changed");
+        cx.notify();
+        Ok(())
+    }
+
+    /// Whether forwarded agents keep offering the system agent's keys while
+    /// the app is locked (D194); off by default.
+    pub fn system_agent_while_locked(&self) -> bool {
+        self.core
+            .as_ref()
+            .and_then(|core| core.settings_get().ok())
+            .and_then(|values| {
+                values
+                    .get(SYSTEM_AGENT_WHILE_LOCKED_KEY)
+                    .and_then(Value::as_bool)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Sets it (Settings > Security); the sessions read it at each lock.
+    pub fn set_system_agent_while_locked(
+        &mut self,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), CoreError> {
+        let mut values = std::collections::BTreeMap::new();
+        values.insert(SYSTEM_AGENT_WHILE_LOCKED_KEY.to_owned(), json!(on));
+        self.require_core()?.settings_set(SettingsSetInput {
+            values,
+            reset: Vec::new(),
+        })?;
+        tracing::info!(on, "system agent while locked changed");
         cx.notify();
         Ok(())
     }

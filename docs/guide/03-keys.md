@@ -199,5 +199,7 @@ Forwarding**.
   No answer within two minutes counts as **Deny**. When the window is in
   the background, a system notification names the host.
 - The server can only list keys and ask for signatures: it cannot add,
-  remove or read them. While Shell++ is locked, the Keychain keys are not
-  offered (the system agent's keys still are, if you turned them on).
+  remove or read them. While Shell++ is locked, no keys are offered: neither
+  the Keychain's nor the system agent's. To keep the system agent's keys
+  available while locked, turn on Settings > **Security** > **Forward the
+  system agent while locked**.
