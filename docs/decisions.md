@@ -2325,3 +2325,25 @@ Status: run 12 (plan, section 3.2; ROADMAP 2.4).
 
 **Spec impact:** none (test and measurement tools); ROADMAP 2.4.
 
+### 208. The red CI of runs 9–11: a dependency advisory, a shell lint, and tests that assumed the machine (run 12)
+
+Status: run 12 (plan, section 3.4). GitHub Actions are off (D204); the causes come from the logs of the last runs (`gh run view --log-failed`, nothing run on GitHub).
+
+**Context.** The workflow "CI" failed on every push since f92b48e (run 40093211710 on 560ea7b read):
+
+- Licenses and advisories: RUSTSEC-2026-0387 (`crypto-bigint` 0.7.5: branches in operations meant to be constant-time) and RUSTSEC-2026-0385 (`ctutils` 0.4.3: non-constant-time mask generation and `u128` comparisons). Both are in the path of RSA, ECDSA and the SSH keys (`rsa`, `elliptic-curve`, `russh`, `ssh-key`).
+- Lint: shellcheck SC2015 in `tests/openssh/lab.sh`.
+- macOS: `openssl rsa -traditional` does not exist in macOS's LibreSSL.
+- Windows: the runner has PowerShell 7, so the local tab is "PowerShell 7", and the test expected "PowerShell".
+- Linux: the PuTTY row and its error are shown on Windows only; dates are shown in UTC outside Windows (the local zone is read on Windows only, `crate::dates`); one session test got `Cancelled` instead of `Locked` when a lock met an open password prompt; its `select!` is biased toward the lock, it passed in every local run and on Linux in Docker (run 12), and it is left as a CI flake to watch.
+- SSH integration: the puttygen container writes its files as root with mode 0600; the test, as the runner's user, could not read them.
+
+**Decision:**
+
+- `crypto-bigint` 0.7.7 and `ctutils` 0.4.5 in both lock files (semver-compatible); `cargo deny check advisories` is clean in both workspaces.
+- The script, the tests and the puttygen image are fixed as listed: an `if` in `lab.sh`; the OpenSSL test runs with OpenSSL 3 or later only; the local tab test expects the name of the machine's default shell; the PuTTY error is visible on Windows only and the date says UTC outside Windows; `generate.sh` gives its files to the owner of the mounted folder.
+- `scripts\verify-linux.ps1` builds the client and runs the workspace's tests on Linux in Docker (`tests/linux/Dockerfile`, the CI's GPUI packages), outside the full criterion.
+- On Linux in Docker (run 12) the client builds (`cargo build -p shellpp-desktop`, 2 minutes) and the workspace's 1 666 tests pass (the desktop's 780, 2 ignored), with the fixes above.
+
+**Spec impact:** none; ROADMAP 3 and 6.
+

@@ -35,3 +35,8 @@ done
 puttygen -t ed25519 -C "" --new-passphrase "$empty" -o "$out/no-comment.v3.ppk" -q
 puttygen -t ed25519 -C "spaced  " --new-passphrase "$out/passphrase" -o "$out/spaced-comment.v3.enc.ppk" -q
 rm -f "$empty"
+# The container runs as root and the files are 0600: on Linux the test, which
+# runs as the owner of the mounted folder, could not read them (CI, run 12).
+# They go to that owner; where the mount does not keep owners (Docker
+# Desktop on Windows) this changes nothing.
+chown "$(stat -c '%u:%g' "$out")" "$out"/* 2>/dev/null || true

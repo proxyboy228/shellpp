@@ -59,7 +59,9 @@ workdir="$(cd "$2" && pwd)"
 down() {
     if [ -f "$workdir/containers" ]; then
         while read -r name; do
-            [ -n "$name" ] && docker rm -f "$name" >/dev/null 2>&1 || true
+            if [ -n "$name" ]; then
+                docker rm -f "$name" >/dev/null 2>&1 || true
+            fi
         done <"$workdir/containers"
         rm -f "$workdir/containers"
     fi

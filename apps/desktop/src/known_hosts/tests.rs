@@ -229,8 +229,9 @@ fn a_click_opens_the_details_panel(cx: &mut TestAppContext) {
     assert_eq!(web.host_ids.len(), 1);
     assert!(ui.visible(cx, panel_host_id(web.host_ids[0])));
     assert_eq!(port_text(&web), "22");
-    // Local time: the UTC time only in the tooltip (D68).
-    assert!(!date_text(&web.created_at).contains("UTC"));
+    // Local time: the UTC time only in the tooltip (D68). Outside Windows
+    // the zone is not read yet and the time says it is UTC (`crate::dates`).
+    assert_eq!(date_text(&web.created_at).contains("UTC"), !cfg!(windows));
     assert!(
         crate::dates::timestamp_tooltip(&web.created_at).is_some_and(|utc| utc.ends_with(" UTC"))
     );

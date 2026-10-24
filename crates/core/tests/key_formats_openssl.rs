@@ -35,19 +35,28 @@ fn openssl(dir: &Path, args: &[&str]) {
     assert!(status.success(), "openssl {}", args.join(" "));
 }
 
+/// OpenSSL 3 or later: `-traditional` (the PKCS#1 files) is there. macOS
+/// ships LibreSSL, which lacks it (CI's macOS job, run 12), and OpenSSL 1.1
+/// writes PKCS#1 without the flag; the test is skipped on both.
 fn available() -> bool {
     Command::new("openssl")
         .arg("version")
-        .stdout(Stdio::null())
+        .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .is_ok_and(|output| {
+            let version = String::from_utf8_lossy(&output.stdout);
+            output.status.success()
+                && version.starts_with("OpenSSL ")
+                && !version.starts_with("OpenSSL 0")
+                && !version.starts_with("OpenSSL 1")
+        })
 }
 
 #[test]
 fn pem_keys_from_openssl_are_imported() {
     if !available() {
-        eprintln!("key_formats_openssl: no openssl on the PATH");
+        eprintln!("key_formats_openssl: no OpenSSL 3 or later on the PATH");
         return;
     }
     let temp = tempfile::tempdir().expect("temp dir");

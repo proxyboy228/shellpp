@@ -1598,7 +1598,14 @@ fn real_local_terminal_runs_in_the_tab(cx: &mut TestAppContext) {
                 .title()
                 .clone()
         });
-        assert_eq!(title.as_ref(), "PowerShell");
+        // The default shell of this machine: PowerShell 7 where it is
+        // installed (CI's Windows runners), else Windows PowerShell.
+        let default = shellpp_term_local::default_shell_id(&shellpp_term_local::detect_shells());
+        let expected = match default.as_deref() {
+            Some("pwsh") => "PowerShell 7",
+            _ => "PowerShell",
+        };
+        assert_eq!(title.as_ref(), expected);
     }
 
     // The echo of the typed command never holds the marker in one piece.

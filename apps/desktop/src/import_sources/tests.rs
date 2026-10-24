@@ -345,7 +345,9 @@ fn an_unreadable_registry_is_reported(cx: &mut TestAppContext) {
         dialog.read_with(cx, |dialog, _| dialog.putty_error()),
         Some(strings::PUTTY_READ_FAILED)
     );
-    assert!(ui.visible(cx, "import-putty-error"));
+    // The PuTTY row, and its error with it, is shown on Windows only (UI
+    // 2.5; the Linux run of run 12).
+    assert_eq!(ui.visible(cx, "import-putty-error"), cfg!(windows));
 }
 
 #[gpui_kit::test]
