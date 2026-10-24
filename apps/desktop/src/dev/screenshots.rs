@@ -378,6 +378,9 @@ pub enum ShotState {
     SyncDuplicates,
     /// The comparison of a sync conflict over the host card's badge.
     SyncConflict,
+    /// The confirmation of "Reset sync state of this vault" after a forged
+    /// key epoch (run 9; D173, item 1.7).
+    SyncReset,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -527,7 +530,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 108] = [
+    pub const ALL: [Self; 109] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -603,6 +606,7 @@ impl ShotState {
         Self::HostsDuplicates,
         Self::SyncDuplicates,
         Self::SyncConflict,
+        Self::SyncReset,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -778,6 +782,7 @@ impl ShotState {
             Self::HostsDuplicates => "hosts-duplicates",
             Self::SyncDuplicates => "sync-duplicates",
             Self::SyncConflict => "sync-conflict",
+            Self::SyncReset => "sync-reset",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1932,6 +1937,7 @@ pub async fn reach_state(
         | ShotState::SyncReview
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
+        | ShotState::SyncReset
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
@@ -2195,6 +2201,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SyncReview
             | ShotState::HostsDuplicates
             | ShotState::SyncConflict
+            | ShotState::SyncReset
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu

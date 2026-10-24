@@ -746,7 +746,7 @@ Server algorithm, in one read snapshot (PostgreSQL `REPEATABLE READ`; SQLite rea
 For each record in `seq` order:
 
 1. Check that the header `vault_id` equals the vault being pulled, and that no local record with the same `record_id` belongs to another vault. A record id is unique on a device ([data-model.md](data-model.md), section 3.1), so a pulled record that reuses the id of a record in another vault is an attack or a fault, never a move. (stage 0 decision for the second check)
-2. If `key_epoch` is newer than the local current epoch, fetch `GET /v1/vaults/{vault_id}/keys` first and accept the epoch as in section 7.7. Older epochs come from the epoch chain.
+2. If `key_epoch` is newer than the local current epoch, fetch `GET /v1/vaults/{vault_id}/keys` first and accept the epoch as in section 7.7. Older epochs come from the epoch chain. A header epoch above the device's while the page's `current_epoch` is not above it names a key the server itself does not hold (forged or broken): it is never accepted, no key row changes, the rest of the page is not applied, and the vault's sync stops with the error `forged_epoch` in every cycle (UI 12.2) until the user confirms "Reset sync state of this vault": a full resync of section 6.9 from cursor 0 in which such a record is refused like a failure of steps 1-3 (step 4). Local data is not touched. [decision] (D173, item 1.7; D183)
 3. Open the envelope (AAD binds version, class, flags, vault, record, revision and epoch), unpad, parse the payload. The payload type's class must equal the envelope class, and `deleted` must match the tombstone flag.
 4. Failure in steps 1–3: the record is not applied, the local version stays, the cursor still advances, and sync status shows an integrity warning (a server or storage fault). (stage 0 decision)
 5. Merge the payload HLC into the local clock.
@@ -755,7 +755,7 @@ For each record in `seq` order:
 | Local state | Action |
 |---|---|
 | no local record | insert; `synced_revision = revision` |
-| received `revision ≤ synced_revision` | ignore: own write echoed back, duplicate, or a server rollback of this record |
+| received `revision ≤ synced_revision` | ignore: own write echoed back, duplicate, or a server rollback of this record. A version below the synced revision whose stamp is greater than that of the version this device synced, or another version at the synced revision, was written on a server restored from an older backup: it is kept as a conflict copy (section 6.7, rule 0), and another version at the synced revision also makes the local version win as under rule 0. [decision] (D173, item 1.11; D184) |
 | local record not pending | replace with the received version; `synced_revision = revision` |
 | local record pending | resolve the conflict with the received version as the server version (section 6.7) |
 
@@ -846,7 +846,7 @@ Inputs: the local pending version L (revision `rL`, stamp `(hL, dL)`), the serve
 
 | # | Condition | Result | Conflict copy |
 |---|---|---|---|
-| 0 | S is stale: `rS` is below the revision this device synced, or below the revision of L's base envelope (a record pushed back by a resync or a restore) | L wins: re-sealed above `rS`, pushed again | no ([decision] (D102)) |
+| 0 | S is stale: `rS` is below the revision this device synced, or below the revision of L's base envelope (a record pushed back by a resync or a restore) | L wins: re-sealed above `rS`, pushed again | no ([decision] (D102)), unless the stamp of S is greater than that of the version this device synced: S was then written after it, on a server restored from an older backup, and is kept as a conflict copy for S, so the version the device pushes over is never lost ([decision] (D173, item 1.11; D184)) |
 | 1 | S is `null` (record absent on the server, for example a purged tombstone) | live L: push again with `base_revision = 0`. Tombstone L: mark synced, nothing to push. | no |
 | 2 | `deleted` and `data` of L and S are equal (deep JSON equality) | adopt S | no |
 | 3 | `(hS, dS) = B` (S only re-encrypted the base) | L wins | no (stage 0 decision) |
@@ -884,7 +884,7 @@ Inputs: the local pending version L (revision `rL`, stamp `(hL, dL)`), the serve
 
 Only a received, authenticated tombstone (or the user's own action on this device) deletes a record. The absence of a record from a snapshot never does: the server decides when a cursor expires and which records a snapshot holds, so deleting by absence would let it strip member pins, roster entries, known hosts (revoked markers included), account keys, credential bindings and log entries from a device. For the types `member_pin`, `roster_entry`, `known_host`, `user_keypair`, `ssh_id`, `recovery_key` and `credential_binding` this is a hard rule that no later optimization may relax. (stage 0 decision)
 
-Full resync of a vault (on `410 cursor_expired` with `reason = "purged"`, and for a vault seen for the first time):
+Full resync of a vault (on `410 cursor_expired` with `reason = "purged"`, for a vault seen for the first time, and after the user's "Reset sync state of this vault", section 6.4, step 2):
 
 1. Pull from `since = 0` with the normal class filter until `has_more = false`, applying records as in section 6.4 and collecting the received record ids.
 2. Synced live local records of the covered classes that were not received are kept and set to `synced_revision = 0`, as in the server restore below: they become pending and are pushed again with `base_revision = 0`. Their `base_envelope` is set to the local synced envelope, so if the server does hold a version after all (the push gets `conflict`), rule 4 of section 6.7 lets the server version win without a conflict copy. Synced local tombstones that were not received stay as they are and are purged after 90 days as usual.
@@ -898,7 +898,7 @@ Server restore (`410 cursor_expired` with `reason = "ahead"`, or a new `server_g
 
 1. Pull a full snapshot from `since = 0`. Records with a revision higher than the local one are applied as usual.
 2. For every local record of the vault whose synced revision is above the revision the server returned, set `synced_revision` to that revision, or to `0` when the server has no such record; a synced revision is never raised here (a version above it that step 1 did not apply stays for its own rules). Every record newer than the server copy becomes pending, and the normal push restores it. Synced records missing from the snapshot are kept and pushed, as in a full resync.
-3. A conflict that still arises is decided by rule 5 of section 6.7 without a conflict copy only when the server copy's revision is below the synced revision this device held before step 2, because the server copy is then the stale one. Otherwise the normal rules of section 6.7 apply.
+3. A conflict that still arises is decided by rule 5 of section 6.7 without a conflict copy only when the server copy's revision is below the synced revision this device held before step 2, because the server copy is then the stale one. Otherwise the normal rules of section 6.7 apply. A server copy below (or another one at) the synced revision whose stamp is greater than that of the version this device synced was written after the restore and is kept as a conflict copy (section 6.4, step 6; rule 0 of section 6.7); the same holds in the full resync of a rebind. [decision] (D184)
 4. Sync status shows the "Server restored" row (UI 12.2) until the procedure has finished for every vault; "server state rolled back" (UI 12.2, 12.3) is shown only when step 5 applies. Records pushed back here are not added to the "Brought back" list: after a restore they are the writes the backup lost. [decision] (D93)
 5. When the server's epoch of the vault is below the device's, the push of step 2 waits: the device stops writing to the vault and, after the user's confirmation, first re-posts the newer epochs: section 5.1 for the personal vault, section 7.7 for a team vault, whose re-post also removes again the members the owner's roster marks `removed`. This replaces the stage 0 advice that owners repeat member removals made after the backup, which would have made a new key under an epoch number the members already hold with another key, and so a fork. [decision] (D93)
 

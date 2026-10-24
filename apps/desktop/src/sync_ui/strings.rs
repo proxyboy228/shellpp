@@ -163,6 +163,15 @@ pub const REPOST_TITLE: &str = "Bring the server up to date";
 pub const REPOST_TEXT: &str = "Sends the newer keys this device holds to the server, then the records the server lost. Do this only after restoring the server from a backup.";
 pub const REPOST_RUN: &str = "Bring up to date";
 
+// "Reset sync state of this vault" (UI 12.2; sync-protocol 6.9; D173 1.7).
+pub const FORGED_EPOCH: &str = "Sync stopped: the server sent a record sealed with a key this vault does not have. Shell++ does not accept such a key.";
+pub const RESET_SYNC: &str = "Reset sync state of this vault…";
+pub const RESET_TITLE: &str = "Reset sync state of this vault";
+pub const RESET_TEXT: &str = "Shell++ downloads the whole vault from the server again and compares it with this device. Nothing on this device is changed or deleted, and what the server lacks is sent back to it. Records sealed with a key the server does not hold are refused and counted as damaged.";
+pub const RESET_HINT: &str =
+    "If this happens again, the server may be faulty or in someone else's hands.";
+pub const RESET_RUN: &str = "Reset sync state";
+
 pub const RESTORE_FROM_SYNC: &str = "Restore from sync…";
 
 pub const ERROR_ADDRESS: &str = "Not a valid server address.";

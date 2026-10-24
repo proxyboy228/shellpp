@@ -111,6 +111,9 @@ pub(super) struct SyncRuntime {
     /// every cycle until then, and again when either changes (D173, 1.17).
     recovery_checked: Option<(Uuid, u64, u32)>,
     newer_epoch: bool,
+    /// The user confirmed "Reset sync state of this vault": the next cycle
+    /// refuses headers with an epoch the server does not hold.
+    reset_refuse_newer: bool,
     /// Tests: the next merge at sign-in stops after its pull.
     #[cfg(any(test, feature = "test-hooks"))]
     fail_merge: bool,
@@ -1639,6 +1642,7 @@ impl Core {
                 &state,
                 &all,
                 &HashMap::new(),
+                false,
                 now,
             )?;
             if result.stopped {
@@ -2207,6 +2211,42 @@ impl Core {
         self.cycle(false)
     }
 
+    /// "Reset sync state of this vault" (section 6.9; UI 12.2; D173, item
+    /// 1.7), after the user's confirmation: a full resync of the personal
+    /// vault from cursor 0, in which a record whose header names a key
+    /// epoch above this device's while the server reports none above it is
+    /// refused like a damaged one (not applied, the cursor goes on, the
+    /// integrity warning counts it). Such an epoch is never accepted: no
+    /// key row changes. Local data is not touched: records the snapshot
+    /// lacks are kept and pushed back, as in every full resync.
+    pub fn sync_reset_vault_state(&self) -> Result<SyncReport, CoreError> {
+        let _sync = self.sync_lock();
+        {
+            let mut guard = self.inner();
+            let inner = &mut *guard;
+            let session = Self::require_session(inner)?;
+            let vault_id = session.ring.vault_id();
+            match inner.store.server_account()? {
+                Some(row) if row.refresh_token.is_some() => {}
+                _ => return Err(CoreError::WrongState),
+            }
+            let classes = selection(&inner.store).classes;
+            let mut state = inner.store.sync_state(&vault_id)?;
+            state.vault_id = vault_id;
+            state.cursor = 0;
+            state.resync_classes = classes;
+            state.last_error = None;
+            inner.store.write(|tx| tx.sync_state_put(&state))?;
+            inner.sync.reset_refuse_newer = true;
+            inner.sync.failed.clear();
+            inner.sync.backoff_until = None;
+            tracing::info!("sync state reset by the user");
+        }
+        let result = self.cycle(false);
+        self.inner().sync.reset_refuse_newer = false;
+        result
+    }
+
     /// The automatic cycle (after unlock, after a change, every 60 s):
     /// refused items stay parked; nothing runs during the retry pause.
     pub fn sync_auto(&self) -> Result<SyncReport, CoreError> {
@@ -2286,6 +2326,8 @@ impl Core {
     }
 
     fn cycle_inner(&self, link: &Link, first: bool) -> Result<SyncReport, CoreError> {
+        // The confirmed "Reset sync state" runs this cycle only.
+        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer);
         let mut report = SyncReport::default();
         let mut changed: Vec<Uuid> = Vec::new();
         let mut changed_classes: Vec<u8> = Vec::new();
@@ -2402,9 +2444,17 @@ impl Core {
                     &state,
                     &selection,
                     &HashMap::new(),
+                    refuse_newer && page.current_epoch <= local_epoch,
                     self.now(),
                 )
             })?;
+            if result.stopped && page.current_epoch <= local_epoch {
+                // A header names an epoch the server itself does not hold:
+                // forged or broken. Never accepted; the vault's sync stops
+                // until the user resets its sync state (section 6.9; D173,
+                // item 1.7). What the page applied before it is kept.
+                return Err(refused("forged_epoch"));
+            }
             report.pulled += page.records.len();
             report.conflicts += result.effects.conflicts;
             report.integrity_warnings += result.effects.integrity_warnings;
@@ -2751,6 +2801,7 @@ impl Core {
                     &state,
                     &selection,
                     &held,
+                    false,
                     self.now(),
                 )?;
                 report.integrity_warnings += result.effects.integrity_warnings;

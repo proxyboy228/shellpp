@@ -338,6 +338,77 @@ fn adopt_version(
     }
 }
 
+/// The stamp of the version this device last synced for `local`: its own
+/// envelope when synced, its base envelope when pending (`None` when it was
+/// never synced or does not open).
+fn synced_stamp(
+    session: &mut Session,
+    local: &RecordRow,
+    now_text: &str,
+) -> Option<(Hlc, [u8; 16])> {
+    if local.revision == local.synced_revision {
+        return payload_of(session, local).map(|payload| stamp(&payload));
+    }
+    let base = local
+        .base_envelope
+        .as_ref()
+        .and_then(|bytes| row_from_envelope(local.vault_id, bytes, None, now_text))?;
+    payload_of(session, &base).map(|payload| stamp(&payload))
+}
+
+/// D184 (rule 0 of section 6.7; section 6.9): a server version below the
+/// revision this device synced but written after the version it synced
+/// (its stamp is greater) is an edit made on a server restored from an
+/// older backup, which this device's newer version goes over. It never
+/// wins, and it is never lost either: it is kept as a conflict copy, pushed
+/// and synced like every copy. A stale version whose stamp is not greater
+/// (a version this device superseded, a replay) adds nothing and gets no
+/// copy, nor does one equal to the local version or a conflict copy.
+#[allow(clippy::too_many_arguments)]
+fn keep_overwritten(
+    session: &mut Session,
+    effects: &mut Effects,
+    local: &RecordRow,
+    local_payload: &Payload,
+    synced: Option<(Hlc, [u8; 16])>,
+    server_row: &RecordRow,
+    server_payload: &Payload,
+    now: SystemTime,
+) -> Result<(), CoreError> {
+    if local_payload.type_name == "conflict" || server_payload.type_name == "conflict" {
+        return Ok(());
+    }
+    if local_payload.deleted == server_payload.deleted
+        && data_equal(local_payload.data.as_ref(), server_payload.data.as_ref())
+    {
+        return Ok(());
+    }
+    if synced.is_some_and(|synced| stamp(server_payload) <= synced) {
+        return Ok(());
+    }
+    let now_text = format_timestamp(now);
+    let hlc = session.hlc.tick(crate::model::time::unix_ms(now));
+    let payload = Payload::live(
+        "conflict",
+        1,
+        hlc,
+        session.device_id,
+        conflict_data(server_row, server_payload),
+    );
+    let row = vault::seal_row(
+        &mut session.ring,
+        local.class,
+        Uuid::now_v7(),
+        &payload,
+        None,
+        &now_text,
+    )?;
+    effects.put(row);
+    effects.conflicts += 1;
+    effects.repush = true;
+    Ok(())
+}
+
 /// Resolves a conflict between the local pending version and the server's
 /// (section 6.7). `server` is `None` when the record is absent there.
 /// `no_copy` suppresses the copy of rule 5 (a server restore's stale copy).
@@ -386,6 +457,7 @@ pub fn resolve(
     // it never replaces the local version, whatever rules 2-5 would say
     // (principle 3; section 6.9, step 3: no conflict copy for it).
     if server.revision < local.synced_revision.max(base_revision) {
+        keep_overwritten(session, effects, local, &l, base, server, &s, now)?;
         let previous = RecordRow {
             revision: local.revision.max(server.revision),
             synced_revision: server.revision,
@@ -508,6 +580,7 @@ pub fn apply_page(
     state: &SyncStateRow,
     selection: &Selection,
     no_copy_below: &HashMap<Uuid, u64>,
+    refuse_newer: bool,
     now: SystemTime,
 ) -> Result<PageResult, CoreError> {
     let vault_id = session.ring.vault_id();
@@ -528,8 +601,15 @@ pub fn apply_page(
             result.effects.integrity_warnings += 1;
             continue;
         }
-        // Step 2: an epoch this device does not hold yet.
+        // Step 2: an epoch this device does not hold yet. After the user's
+        // "Reset sync state" (section 6.9, a header epoch the server does
+        // not hold), it is refused like a failure of steps 1-3: never
+        // accepted, the cursor advances.
         if row.key_epoch > session.ring.current_epoch() {
+            if refuse_newer {
+                result.effects.integrity_warnings += 1;
+                continue;
+            }
             result.effects.newer_epoch = true;
             result.stopped = true;
             break;
@@ -583,7 +663,57 @@ pub fn apply_page(
             continue;
         };
         if row.revision <= local.synced_revision {
-            continue; // An echo, a duplicate or a server rollback of this record.
+            // An echo, a duplicate or a server rollback of this record. A
+            // version below the synced one written after it (an edit on a
+            // restored server) is kept as a conflict copy (D184): the
+            // restore's mark pushes the local version over it.
+            // Another version at the synced revision is a fork of the
+            // server's history (a restore): this device's version goes over
+            // it as over a stale one (rule 0), and it is kept as a copy.
+            let synced_envelope = if local.revision == local.synced_revision {
+                Some(&local.envelope)
+            } else {
+                local.base_envelope.as_ref()
+            };
+            let fork = row.revision == local.synced_revision
+                && synced_envelope.is_some_and(|envelope| *envelope != row.envelope);
+            if (row.revision < local.synced_revision || fork)
+                && let (Some(server_payload), Some(local_payload)) =
+                    (payload_of(session, &row), payload_of(session, &local))
+            {
+                let synced = synced_stamp(session, &local, &now_text);
+                keep_overwritten(
+                    session,
+                    &mut result.effects,
+                    &local,
+                    &local_payload,
+                    synced,
+                    &row,
+                    &server_payload,
+                    now,
+                )?;
+                if fork {
+                    let previous = RecordRow {
+                        revision: local.revision.max(row.revision),
+                        synced_revision: row.revision,
+                        server_seq: row.server_seq,
+                        envelope: row.envelope.clone(),
+                        base_envelope: Some(row.envelope.clone()),
+                        ..local.clone()
+                    };
+                    let resealed = vault::seal_row(
+                        &mut session.ring,
+                        local.class,
+                        local.record_id,
+                        &local_payload,
+                        Some(&previous),
+                        &now_text,
+                    )?;
+                    result.effects.put(resealed);
+                    result.effects.repush = true;
+                }
+            }
+            continue;
         }
         // D93: a version below the key epoch this device synced is refused.
         // Records pushed back by a resync or a restore (synced revision 0)

@@ -1843,3 +1843,23 @@ Status: run 9 decision, 2026-10-24 (plan, section 3.1; run 8 agent C, finding 5)
 **Decision:** Before the merge transaction, every recording sealed under the old vault gets a `<file_id>.<vault_id>.rekey` file with its key wrapped for the new vault (under a key derived from the file's key in that vault, AAD `"shellpp/v1/wrap/recording-rekey"` ‖ the file's head); a failure to write one stops the sign-in before anything changed. After the commit and at every unlock the client re-encrypts each such recording chunk by chunk with the same plaintext and the same chunk boundaries, syncs the new file, renames it over the old one and only then deletes the `.rekey` file; a file a session of this process is still writing is left for a later unlock; until then the recording opens through its `.rekey` file. One `.rekey` file per target vault, so a sign-in that does not commit never replaces the one an earlier merge left.
 
 **Spec impact:** docs/storage-format.md, sections 2.2 and 8.4; docs/security.md, section 5.6 (the wrap blob row).
+
+### 183. A forged key epoch stops sync until the user resets the vault's sync state (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.5; D173, item 1.7; run 7 report, section 10.1, finding 7). Clarifies docs/sync-protocol.md, sections 6.4 (step 2) and 6.9, and docs/ui-behavior-spec.md, section 12.2.
+
+**Context.** A pulled record whose header names a key epoch above the device's stopped the pull with "newer epoch" and left the cursor before it, so every cycle stopped at the same record: a server could stop sync for good with one forged header, and the status asked the user to sign in again, which cannot help.
+
+**Decision:** A header epoch above the device's while the page's `current_epoch` is not above it is a key the server itself does not hold: the cycle stops with `forged_epoch`, again in every cycle, and changes nothing (no key row, nothing after it in the page). Account & Sync shows the row of UI 12.2 with "Reset sync state of this vault…"; after the confirmation the client runs the full resync of section 6.9 from cursor 0 (`Core::sync_reset_vault_state`) in which such a record is refused like a failure of steps 1-3 (not applied, the cursor advances, an integrity warning). The epoch is never accepted; local records the snapshot lacks are kept and pushed back as in every full resync, so a refused record's genuine server version comes back through the conflict of its push-back. A page whose `current_epoch` is above the device's is the ordinary newer epoch (sign in again, section 5.1).
+
+**Spec impact:** docs/sync-protocol.md, sections 6.4 and 6.9; docs/ui-behavior-spec.md, section 12.2 (and `docs/ru`).
+
+### 184. The server version a device pushes over is kept as a conflict copy (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.5; D173, item 1.11; run 7 report, section 10.1, finding 11). Amends rule 0 of docs/sync-protocol.md, section 6.7 (D102), and sections 6.4 (step 6) and 6.9.
+
+**Context.** After a server is restored from an older backup, another device may edit a record there at a revision not above the one this device synced. Rule 0 (D102) lets the device's version win over such a "stale" server version, and a pulled version at or below the synced revision was ignored, so the device pushed its version over the other device's edit without a trace (at an equal revision the two even diverged silently).
+
+**Decision:** A server version below the synced revision, or another version (other bytes) at the synced revision, is compared by its stamp `(hlc, device_id)` with the version this device synced (its envelope when synced, its base envelope when pending). When its stamp is greater it was written after that version, on the restored server: the device's version still wins (rule 0; at an equal revision it is re-sealed above it and pushed, as rule 0 does), and the server version is kept as a conflict copy, which is pushed and reaches every device like any copy. A stale version whose stamp is not greater (a version this device superseded, or a replay by a hostile server) adds nothing and gets no copy, nor does one equal to the local version or a conflict copy. Residual, for the owner: an edit made on the restored server by a device whose clock is so far behind that its stamp is below the lost version's is still pushed over without a copy; stamps are the only order the client has.
+
+**Spec impact:** docs/sync-protocol.md, sections 6.4 (step 6), 6.7 (rule 0) and 6.9 (server restore, step 3).

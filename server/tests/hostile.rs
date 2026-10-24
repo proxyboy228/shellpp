@@ -30,6 +30,9 @@ enum Mode {
     Foreign(String),
     /// `current_epoch` below the device's.
     LowerEpoch,
+    /// The header of the first record names key epoch 7 (the server holds
+    /// epoch 1).
+    ForgeEpoch,
     /// Forces a full resync (`410 purged`), leaves `hide` out of the
     /// snapshot and answers its push-back with the older `stale` version.
     Purge {
@@ -130,6 +133,14 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
             page["next_cursor"] = Value::from(seq);
         }
         Mode::LowerEpoch => page["current_epoch"] = Value::from(0),
+        Mode::ForgeEpoch => {
+            if let Some(record) = records.first_mut() {
+                let text = record["envelope"].as_str()?.to_owned();
+                let mut bytes = BASE64URL_NOPAD.decode(text.as_bytes()).ok()?;
+                bytes[44..48].copy_from_slice(&7u32.to_be_bytes());
+                record["envelope"] = Value::String(BASE64URL_NOPAD.encode(&bytes));
+            }
+        }
         Mode::Purge { hide, .. } => {
             records.retain(|record| record_id(record) != Some(*hide));
         }
@@ -516,4 +527,54 @@ fn a_forced_resync_lists_what_it_brought_back_and_delete_again_works() {
             .any(|item| item.record_id == id),
         "and kept in A's Recently deleted"
     );
+}
+
+/// Run 7 finding 7 (sections 6.4 and 6.9; D173, item 1.7): a header that
+/// names a key epoch the server does not hold stops the vault's sync with
+/// `forged_epoch`, again in every cycle, and changes nothing; the user's
+/// "Reset sync state of this vault" resyncs in full, refuses that record
+/// (never its epoch), keeps every local record and lets sync go on.
+#[test]
+fn a_forged_key_epoch_stops_sync_until_the_user_resets_it() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    edit_both(&a);
+    let before = labels(&b);
+    proxy.set(Mode::ForgeEpoch);
+    for _ in 0..2 {
+        match b.core.sync_now() {
+            Err(CoreError::Sync(error)) => assert_eq!(error.code(), "forged_epoch"),
+            other => panic!("expected forged_epoch, got {other:?}"),
+        }
+        assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
+        assert!(!b.status().newer_epoch, "not a newer epoch to sign in for");
+    }
+    assert_eq!(labels(&b), before, "nothing applied from the forged page");
+
+    let report = b.core.sync_reset_vault_state().expect("reset");
+    assert!(
+        report.integrity_warnings >= 1,
+        "the forged record is refused"
+    );
+    let status = b.status();
+    assert_eq!(status.last_error, None);
+    assert_eq!(b.addresses(), vec!["one.example.com", "two.example.com"]);
+    // The epoch was never taken: the next cycles run, and once the server
+    // answers honestly both devices agree again.
+    proxy.set(Mode::Pass);
+    b.sync();
+    b.sync();
+    assert_eq!(b.status().last_error, None);
+    assert_eq!(labels(&b), vec!["edited on A", "edited on A"]);
+    let mut edited =
+        a.data(a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id());
+    edited["label"] = Value::String("after the reset".into());
+    a.save(
+        Some(a.views(&[shellpp_core::service::dto::RecordType::Host])[0].record_id()),
+        shellpp_core::service::dto::RecordType::Host,
+        edited,
+    );
+    a.sync();
+    b.sync();
+    assert!(labels(&b).contains(&"after the reset".to_owned()));
 }

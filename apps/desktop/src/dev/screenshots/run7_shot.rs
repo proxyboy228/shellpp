@@ -24,7 +24,7 @@ use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 9] = [
+pub const STATES: [ShotState; 10] = [
     ShotState::TopBarUpdate,
     ShotState::SyncConnect,
     ShotState::SyncTrust,
@@ -34,6 +34,7 @@ pub const STATES: [ShotState; 9] = [
     ShotState::HostsDuplicates,
     ShotState::SyncDuplicates,
     ShotState::SyncConflict,
+    ShotState::SyncReset,
 ];
 
 /// The version the update state shows.
@@ -295,6 +296,22 @@ pub async fn reach(
             .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
         }
+        ShotState::SyncReset => {
+            // A header with an epoch the server does not hold stopped sync
+            // (the status set by hand, no server); the row's action opens
+            // the confirmation.
+            let state = _state.clone();
+            cx.update_window(handle, move |_, window, cx| {
+                let status = shellpp_core::service::SyncStatus {
+                    last_error: Some("forged_epoch".into()),
+                    ..bound_status()
+                };
+                state.update(cx, |state, cx| state.set_sync_status(status, cx));
+                crate::sync_ui::open_reset(state, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
         ShotState::RecentlyDeleted => {
             // Two hosts of the demo deleted, the screen opened from the
             // sidebar, the newest one selected: its read-only panel.
@@ -403,6 +420,7 @@ pub fn check(
         ShotState::SyncConflict if shown(cx, "sync-compare")? => Ok(()),
         ShotState::HostsDuplicates if shown(cx, "hosts-duplicates")? => Ok(()),
         ShotState::SyncDuplicates if shown(cx, "sync-duplicates")? => Ok(()),
+        ShotState::SyncReset if shown(cx, "sync-reset-dialog")? => Ok(()),
         ShotState::SyncConnect
         | ShotState::SyncTrust
         | ShotState::SyncAccount
@@ -410,6 +428,7 @@ pub fn check(
         | ShotState::SyncReview
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
+        | ShotState::SyncReset
         | ShotState::SyncDuplicates => Err(failed(shot, "the sync state is not shown")),
         _ => Err(failed(shot, "not a run 7 state")),
     }

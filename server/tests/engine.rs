@@ -127,3 +127,110 @@ fn quota_refusals_go_again_after_a_pushed_deletion() {
     let status = a.status();
     assert_eq!((status.pending, status.failed), (0, 0));
 }
+
+/// Replaces the server's database by `backup` (an SQLite file copy) and
+/// marks the restore as the operator documentation says.
+fn restore(server: &mut Server, backup: &std::path::Path) {
+    let db_path = server.dir.path().join("server.db");
+    server.stop();
+    server.db = shellpp_server::db::Db::open(&format!("sqlite:{}", backup.display())).expect("db");
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = db_path.clone().into_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+    }
+    std::fs::copy(backup, &db_path).expect("restore");
+    server.resume();
+    shellpp_server::admin::restored(&server.db).expect("restored");
+}
+
+fn label_of(client: &Client, id: uuid::Uuid) -> String {
+    client.data(id)["label"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn losing_labels(client: &Client) -> Vec<String> {
+    let mut labels: Vec<String> = client
+        .core
+        .sync_conflicts()
+        .expect("conflicts")
+        .iter()
+        .filter_map(|conflict| {
+            conflict
+                .losing_data
+                .as_ref()
+                .and_then(|data| data.get("label"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+/// Run 7 finding 11 (D173, item 1.11; sections 6.7 and 6.9): a device back
+/// after the server was restored from an older backup pushes its newer
+/// versions over the edits another device made on the restored server at
+/// a revision not above its own. Those edits are never lost: each is kept
+/// as a conflict copy, on both devices.
+#[test]
+fn edits_on_a_restored_server_are_kept_as_conflicts() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    let once = a.save(
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        serde_json::json!({"address": "once.example.com", "label": "first"}),
+    );
+    let twice = a.save(
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        serde_json::json!({"address": "twice.example.com", "label": "first"}),
+    );
+    a.register(&server, &email, &password);
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    // A's edits after the backup: one on `once`, two on `twice`.
+    let edit = |client: &Client, id: uuid::Uuid, label: &str| {
+        let mut data = client.data(id);
+        data["label"] = serde_json::Value::String(label.into());
+        client.save(Some(id), shellpp_core::service::dto::RecordType::Host, data);
+    };
+    edit(&a, once, "A after the backup");
+    edit(&a, twice, "A once");
+    edit(&a, twice, "A after the backup");
+    a.sync();
+    a.core.sync_sign_out(false).expect("signed out");
+    restore(&mut server, &backup);
+
+    // B works on the restored server: its edits get revisions A has
+    // already synced (equal for `once`, below for `twice`).
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    edit(&b, once, "B on the restored server");
+    edit(&b, twice, "B on the restored server");
+    b.sync();
+
+    done(a.sign_in(&server, &email, &password));
+    a.sync();
+    assert_eq!(label_of(&a, once), "A after the backup");
+    assert_eq!(label_of(&a, twice), "A after the backup");
+    assert_eq!(losing_labels(&a), vec!["B on the restored server"]);
+    assert_eq!(a.core.sync_conflicts().expect("conflicts").len(), 2);
+
+    b.sync();
+    assert_eq!(label_of(&b, once), "A after the backup");
+    assert_eq!(label_of(&b, twice), "A after the backup");
+    assert_eq!(losing_labels(&b), vec!["B on the restored server"]);
+}

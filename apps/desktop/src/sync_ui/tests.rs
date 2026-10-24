@@ -427,3 +427,34 @@ fn snippets_show_their_own_hint(cx: &mut TestAppContext) {
     assert!(!ui.visible("snippet-duplicates", cx));
     ui.finish(cx);
 }
+
+/// UI 12.2 (D173, item 1.7): a forged key epoch shows its row in Account &
+/// Sync with "Reset sync state of this vault…", which asks first; Cancel
+/// changes nothing.
+#[gpui::test]
+fn a_forged_epoch_offers_the_reset_after_a_confirmation(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        let status = shellpp_core::service::SyncStatus {
+            bound: true,
+            signed_in: true,
+            server_url: Some("https://sync.example.com".into()),
+            email: Some("demo@example.com".into()),
+            last_error: Some("forged_epoch".into()),
+            ..Default::default()
+        };
+        state.update(cx, |state, cx| state.set_sync_status(status, cx));
+        crate::settings::open(state, window, cx);
+    })
+    .unwrap();
+    ui.settle(cx);
+    ui.click("settings-nav-account", cx);
+    assert!(ui.visible("sync-forged-epoch", cx));
+    ui.click("sync-reset", cx);
+    assert!(ui.visible("sync-reset-dialog", cx));
+    assert!(ui.visible("sync-reset-run", cx));
+    ui.click("sync-reset-cancel", cx);
+    assert!(!ui.visible("sync-reset-dialog", cx));
+    ui.finish(cx);
+}
