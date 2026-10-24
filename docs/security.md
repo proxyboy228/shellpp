@@ -163,7 +163,7 @@ personal vault records hold: user X25519 keypair, SSH ID private key, recovery k
 | `local_secrets_key` | 32 B | HKDF from current personal vault key | memory only; encrypts the refresh token at rest | wiped on lock | stage 0 decision |
 | `recording_key[file]` | 32 B | HKDF from personal vault key | memory only | wiped when the file is closed (an open recording keeps its key while locked, section 8) | D16; derivation: stage 0 decision |
 | `export_key` | 32 B | Argon2id(export password) then HKDF | memory only | wiped after the export or import | stage 0 decision |
-| `server_secret` | ≥ 32 B | operator, env `SHELLPP_SERVER_SECRET` | server env only; never leaves the server | keep stable (section 14.4) | stage 0 decision |
+| `server_secret` | ≥ 32 B | operator, a file named by `SHELLPP_SERVER_SECRET_FILE` (a Docker secret); env `SHELLPP_SERVER_SECRET` still works, with a warning ([decision] (D177)) | server only; never leaves the server | keep stable (section 14.4) | stage 0 decision |
 
 Other secrets:
 
@@ -825,7 +825,8 @@ The complete list (D10). Everything not listed is never sent to the server.
 
 (stage 0 decision; for the server documentation)
 
-- Keep `SHELLPP_SERVER_SECRET` secret and stable. Changing it invalidates the encrypted TOTP secrets and changes the fake pre-login salts, which lets anyone who compared answers before and after tell unregistered emails apart.
+- Keep the server secret secret and stable. Changing it invalidates the encrypted TOTP secrets and changes the fake pre-login salts, which lets anyone who compared answers before and after tell unregistered emails apart.
+- Give the server secret in a file (`SHELLPP_SERVER_SECRET_FILE`; the compose file uses a Docker secret). In `SHELLPP_SERVER_SECRET` it works, with a warning in the log, but stays in the process environment for the life of the process (removing it from a running multi-threaded process is not safe) and shows in `docker inspect`; both at once are refused. The server reads the file into a buffer wiped on drop. Known limitation: `totp-rs` copies the TOTP secret by value inside its `Builder` and `Totp` while it checks a code, out of the code's reach; those copies stay in freed memory until it is reused (section 9.5) ([decision] (D177)).
 - Keep the public origin (`SHELLPP_PUBLIC_URL`) stable and serve the API under that one origin. Clients bind `auth_key` and `recovery_auth_key` to the origin they connect to (section 5.5), so an account cannot sign in or recover under another host name or port; moving a server to another origin is not supported in the MVP. Local data is never affected.
 - A database backup holds verifiers, wraps, salts and all metadata; whoever gets it is a passive server (A5) and can guess passwords offline. Encrypt backups and restrict access.
 - Keep the default `SHELLPP_BIND` of `127.0.0.1:8080` behind the reverse proxy, and set `SHELLPP_TRUSTED_PROXIES` to the one address the proxy reaches the server from, never a range; otherwise forged `X-Forwarded-For` headers defeat per-IP rate limits and the TOTP delays. With the compose file and a proxy on the host that is the gateway of the compose network (`172.16.88.1/32`, its fixed subnet), not `127.0.0.1` ([decision] (D176)).

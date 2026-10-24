@@ -24,15 +24,29 @@ cd server/deploy
 cp .env.example .env
 ```
 
+The server secret goes into a file that Compose hands to the server as a
+Docker secret (`/run/secrets/server_secret`), not into `.env`: the
+environment of a container shows in `docker inspect`. It derives the
+server's own keys (the fake pre-login salts, the TOTP secrets at rest).
+Keep a copy with your backup key: a restored database needs the same
+secret, or every account's TOTP has to be reset.
+
+```bash
+mkdir -p secrets
+openssl rand -base64 48 > secrets/server_secret
+chmod 0400 secrets/server_secret
+sudo chown 10001 secrets/server_secret   # the server's user in the image
+```
+
+(On Docker Desktop the `chown` is not needed.) The server also still reads
+`SHELLPP_SERVER_SECRET` from the environment, with a warning in its log;
+both at once is refused.
+
 Fill in `.env`:
 
 - `POSTGRES_PASSWORD`: `openssl rand -base64 32`.
 - `SHELLPP_PUBLIC_URL`: the https origin your devices will type, for example
   `https://sync.example.com`.
-- `SHELLPP_SERVER_SECRET`: `openssl rand -base64 48`. It derives the
-  server's own keys (the fake pre-login salts, the TOTP secrets at rest).
-  Keep a copy with your backup key: a restored database needs the same
-  secret, or every account's TOTP has to be reset.
 - `BACKUP_AGE_RECIPIENT`: the public key of an `age` key pair made on
   another machine with `age-keygen -o shellpp-backup.key`. Keep the private
   key away from the server.
@@ -225,6 +239,18 @@ docker compose up -d
 The `migrate` service applies schema changes before `server` starts; the
 server refuses to run on a schema older than itself.
 
+From a version with `SHELLPP_SERVER_SECRET` in `.env`: move the same value
+into the file, never a new one (a new secret makes every TOTP unreadable):
+
+```bash
+mkdir -p secrets
+grep '^SHELLPP_SERVER_SECRET=' .env | cut -d= -f2- > secrets/server_secret
+chmod 0400 secrets/server_secret && sudo chown 10001 secrets/server_secret
+```
+
+then delete the `SHELLPP_SERVER_SECRET=` line from `.env`. Compose refuses
+to start while the file is missing.
+
 From a version before the fixed network (an `.env` with
 `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` or `172.16.0.0/12`): set it to
 `172.16.88.1/32`, then `docker compose down` (never with `-v`, which would
@@ -238,7 +264,8 @@ addresses".
 |---|---|---|
 | `SHELLPP_DATABASE_URL` | required | `postgres://…` or `sqlite:/data/server.db` |
 | `SHELLPP_PUBLIC_URL` | required | the origin devices use |
-| `SHELLPP_SERVER_SECRET` | required | base64, at least 32 bytes |
+| `SHELLPP_SERVER_SECRET_FILE` | required (compose: `/run/secrets/server_secret`) | a file holding the secret: base64, at least 32 bytes |
+| `SHELLPP_SERVER_SECRET` | | the secret itself, instead of the file; works with a warning in the log; not together with the file |
 | `SHELLPP_BIND` | `127.0.0.1:8080` (image: `0.0.0.0:8080`) | |
 | `SHELLPP_REGISTRATION` | `invite` | or `open` |
 | `SHELLPP_TRUSTED_PROXIES` | none (compose: `172.16.88.1/32`) | CIDRs whose `X-Forwarded-For` is believed ("Client addresses") |

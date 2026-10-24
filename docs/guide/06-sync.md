@@ -53,7 +53,7 @@ Fill in `.env` (all commands below run in `server/deploy`):
 |---|---|
 | `POSTGRES_PASSWORD` | a long random password: `openssl rand -base64 32` |
 | `SHELLPP_PUBLIC_URL` | the address your devices will type, for example `https://sync.example.com` |
-| `SHELLPP_SERVER_SECRET` | `openssl rand -base64 48`. Keep a copy with your backup key: a restored server needs the same secret, or two-step sign-in has to be set up again for every account |
+| the server secret | not in `.env`: a file, `secrets/server_secret`, made with `openssl rand -base64 48` (`server/README.md`, "Install"; Compose hands it to the server as a Docker secret). Keep a copy with your backup key: a restored server needs the same secret, or two-step sign-in has to be set up again for every account |
 | `BACKUP_AGE_RECIPIENT` | the public key of an `age` key pair made **on another machine** with `age-keygen -o shellpp-backup.key`; the private key never goes on the server |
 | `SHELLPP_REGISTRATION` | `invite` (the default: new accounts need a code from you) or `open` |
 | `SHELLPP_TRUSTED_PROXIES` | keep the value from `.env.example` (`172.16.88.1/32`): with the compose file, a proxy on the host reaches the server from the gateway of the compose network, and only that address may name the client to the rate limits (`server/README.md`, "Client addresses") |

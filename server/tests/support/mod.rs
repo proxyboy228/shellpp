@@ -207,6 +207,7 @@ impl Server {
             trusted_proxies: options.trusted_proxies,
             tombstone_retention_days: options.tombstone_retention_days,
             rate_limits: options.rate_limits,
+            warnings: Vec::new(),
         };
         let mut server = Server {
             origin,

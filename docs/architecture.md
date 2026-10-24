@@ -755,7 +755,8 @@ Environment variables:
 | `SHELLPP_DATABASE_URL` | none (required) | `postgres://…` or `sqlite://…` |
 | `SHELLPP_BIND` | `127.0.0.1:8080` (Docker image: `0.0.0.0:8080`) | listen address |
 | `SHELLPP_PUBLIC_URL` | none (required) | the https origin the clients use (with VPN-only access, the name inside the VPN), used in invitation links and emails. Keep it stable: clients bind account credentials to the origin they connect to ([security.md](security.md), section 14.4; [sync-protocol.md](sync-protocol.md), section 2.2) |
-| `SHELLPP_SERVER_SECRET` | none (required) | at least 32 bytes, base64; root of the server-only keys ([security.md](security.md)) |
+| `SHELLPP_SERVER_SECRET_FILE` | none (required, or the variable below) | a file holding the server secret: at least 32 bytes, base64; root of the server-only keys ([security.md](security.md)). The compose file hands it over as a Docker secret ([decision] (D177)) |
+| `SHELLPP_SERVER_SECRET` | none | the secret itself instead of the file, for compatibility: it works with a warning in the log; set together with `SHELLPP_SERVER_SECRET_FILE` it is refused ([decision] (D177)) |
 | `SHELLPP_REGISTRATION` | `invite` | `open` or `invite`. Invitations only by default; open registration is the operator's choice (D93) |
 | `SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES` | unset (no limit) | storage limits per account: live records and their envelope bytes; `admin user quota` sets them per account. Off by default; set them on an open server. [decision] (D93) |
 | `SHELLPP_SMTP_URL`, `SHELLPP_SMTP_FROM` | unset | optional SMTP; without it only invitation links work and "verified" is hidden (D14) |

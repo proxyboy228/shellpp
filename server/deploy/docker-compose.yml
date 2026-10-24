@@ -1,7 +1,8 @@
 # Shell++ sync server for a homelab (server/README.md): the server, its
 # PostgreSQL, the schema migration and an encrypted daily backup.
 #
-# Before the first start, create deploy/.env from deploy/.env.example.
+# Before the first start, create deploy/.env from deploy/.env.example and
+# the server secret in deploy/secrets/server_secret (README, "Install").
 # The server listens on 127.0.0.1:8080 only: put Caddy, a Cloudflare Tunnel
 # or your VPN in front of it (README, "Access").
 name: shellpp
@@ -28,7 +29,8 @@ services:
     environment: &server-env
       SHELLPP_DATABASE_URL: postgres://shellpp:${POSTGRES_PASSWORD}@postgres:5432/shellpp
       SHELLPP_PUBLIC_URL: ${SHELLPP_PUBLIC_URL:?set SHELLPP_PUBLIC_URL in .env}
-      SHELLPP_SERVER_SECRET: ${SHELLPP_SERVER_SECRET:?set SHELLPP_SERVER_SECRET in .env}
+      # A Docker secret, not the environment, which `docker inspect` shows.
+      SHELLPP_SERVER_SECRET_FILE: /run/secrets/server_secret
       SHELLPP_REGISTRATION: ${SHELLPP_REGISTRATION:-invite}
       # The gateway of the network below: a proxy on the host reaches the
       # server through the port published on 127.0.0.1 from there (README,
@@ -44,6 +46,8 @@ services:
     restart: unless-stopped
     command: ["serve"]
     environment: *server-env
+    secrets:
+      - server_secret
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -68,6 +72,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+secrets:
+  server_secret:
+    file: ./secrets/server_secret
 
 networks:
   default:

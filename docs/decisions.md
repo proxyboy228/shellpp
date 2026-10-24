@@ -1881,3 +1881,19 @@ Status: run 9 decision, 2026-10-24 (the plan of run 9, section 3.4; run 8's agen
 - The server keeps the rules of D103: the header is read only when the peer is trusted, from the right, past trusted hops; from any other peer it is ignored, so neither the sign-in limits nor the TOTP delays can be dodged by naming another address.
 
 **Spec impact:** none in the protocol (docs/sync-protocol.md, section 10.1 already says it); server/README.md, server/deploy/docker-compose.yml and .env.example, docs/security.md, section 14.4, docs/architecture.md (environment variables), docs/guide/06-sync.md and docs/guide/ru/06-sync.md.
+
+### 177. The server secret from a file (run 9)
+
+Status: run 9 decision, 2026-10-24 (D173, item 1.9; the run 7 report, section 10.1, finding 9).
+
+**Context.** `SHELLPP_SERVER_SECRET` in the environment stays in the process environment for the life of the process (removing it from a running multi-threaded process is not safe), shows in `docker inspect` and in the compose file's interpolated configuration. Docker secrets give a file instead.
+
+**Decision:**
+
+- `SHELLPP_SERVER_SECRET_FILE` names a file that holds the base64 secret (surrounding white space and a line break are ignored; at most 4 KiB). The server reads it into a buffer allocated once at its final size and wiped on drop; errors name the variable, never the contents.
+- `SHELLPP_SERVER_SECRET` keeps working for compatibility, with a warning in the log at `serve` that tells the operator to move the same value into a file.
+- Both set is refused at start, even when they agree: no precedence rule, so no one has to guess which of two secrets derives the keys (a wrong one would make every TOTP secret unreadable and change the fake salts). Neither set is refused, naming `SHELLPP_SERVER_SECRET_FILE`.
+- The compose file hands the secret to `server` as the Docker secret `server_secret` from `deploy/secrets/server_secret` (ignored by git), readable by the image's user 10001; the README says how to make it and how an existing deployment moves the same value out of `.env` (Compose refuses to start while the file is missing, so nothing runs with another secret).
+- Copies of the TOTP secret by value inside `totp-rs` (`Builder`, `Totp`) stay a known limitation (security.md, section 14.4).
+
+**Spec impact:** docs/security.md (the key table and section 14.4), docs/architecture.md (environment variables), server/README.md, server/deploy/docker-compose.yml and .env.example, the guide's table of settings (EN and RU).
