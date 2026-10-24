@@ -800,7 +800,7 @@ For each record in `seq` order:
 | Local state | Action |
 |---|---|
 | no local record | insert; `synced_revision = revision` |
-| received `revision ≤ synced_revision` | ignore: own write echoed back, duplicate, or a server rollback of this record. A version below the synced revision whose stamp is greater than that of the version this device synced, or any other version at the synced revision (a device never writes two versions at one revision), was written on a server restored from an older backup: unless its key epoch is below the one this device synced (refused as in the key epoch check below), it is kept as a conflict copy, once (section 6.7, rule 0), and another version at the synced revision also makes the local version win as under rule 0. [decision] (D173, item 1.11; D184) |
+| received `revision ≤ synced_revision` | ignore: own write echoed back, duplicate, or a server rollback of this record. A version below the synced revision whose stamp is greater than that of the version this device synced, or any other version at the synced revision (a device never writes two versions at one revision), was written on a server restored from an older backup: unless its key epoch is below the one this device synced (refused as in the key epoch check below), it is kept as a conflict copy, once, and the local version is sealed above it and pushed again as under rule 0 (section 6.7, rule 0), and another version at the synced revision also makes the local version win as under rule 0. [decision] (D173, item 1.11; D184) |
 | local record not pending | replace with the received version; `synced_revision = revision` |
 | local record pending | resolve the conflict with the received version as the server version (section 6.7) |
 

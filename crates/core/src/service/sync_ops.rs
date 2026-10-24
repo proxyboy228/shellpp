@@ -5772,6 +5772,92 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_newer_edit_below_the_synced_revision_is_kept_and_gone_over() {
+        // Cross review of run 9 (D184, rule 0): a plain pull brings another
+        // device's edit at a revision below the one this device synced (a
+        // server rolled back unnoticed). It is kept as a copy, and the local
+        // version is sealed above it to be pushed again.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Local", &random_text());
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        let now = core.now();
+        let now_text = format_timestamp(now);
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let mut local = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        // Synced at revision 3.
+        let payload = open_payload(&mut session.ring, &local).unwrap();
+        let previous = RecordRow {
+            revision: 2,
+            synced_revision: 2,
+            ..local.clone()
+        };
+        local = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &payload,
+            Some(&previous),
+            &now_text,
+        )
+        .unwrap();
+        local.synced_revision = local.revision;
+        local.base_envelope = None;
+        assert_eq!(local.revision, 3);
+        inner.store.write(|tx| tx.record_put(&local)).unwrap();
+        // Another device's later edit at revision 2.
+        let mut data = stored_data_of(session, &local);
+        data.insert("label".into(), json!("Other device, later"));
+        let later = Hlc::new(crate::model::time::unix_ms(now) + 60_000, 0);
+        let server_payload = Payload::live("host", 1, later, Uuid::now_v7(), data);
+        let server = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &server_payload,
+            Some(&RecordRow {
+                revision: 1,
+                synced_revision: 1,
+                ..local.clone()
+            }),
+            &now_text,
+        )
+        .unwrap();
+        assert_eq!(server.revision, 2);
+        let state = SyncStateRow {
+            vault_id,
+            cursor: 10,
+            ..SyncStateRow::default()
+        };
+        let result = engine::apply_page(
+            &mut inner.store,
+            session,
+            &[wire::SeqEnvelope {
+                seq: 11,
+                envelope: B64(server.envelope.clone()),
+            }],
+            11,
+            &state,
+            &Selection::all(),
+            &HashMap::new(),
+            false,
+            now,
+        )
+        .unwrap();
+        assert_eq!(result.effects.conflicts, 1);
+        let after = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!(after.synced_revision, 2, "above the server's version");
+        assert!(after.revision > 3, "pending, to be pushed again");
+        assert_eq!(stored_data_of(session, &after)["label"], json!("Local"));
+        let copies = conflict_rows(&inner.store, session).unwrap();
+        assert_eq!(
+            copies[0].1.data.as_ref().unwrap()["losing_data"]["label"],
+            json!("Other device, later")
+        );
+    }
+
     fn stored_data_of(session: &mut Session, row: &RecordRow) -> Map<String, Value> {
         open_payload(&mut session.ring, row)
             .unwrap()

@@ -745,6 +745,7 @@ pub fn apply_page(
                 } else {
                     synced_stamp(session, &local, &now_text)
                 };
+                let copies = result.effects.conflicts;
                 if !has_copy(store, session, &local, &server_payload)? {
                     keep_overwritten(
                         session,
@@ -757,7 +758,13 @@ pub fn apply_page(
                         now,
                     )?;
                 }
-                if fork {
+                // The local version goes over the server's, as rule 0 has
+                // it: at a fork, and below the synced revision when that
+                // version was an edit made after this device's (kept as a
+                // copy just now), also outside a resync (cross review of
+                // run 9). A replay of a version this device superseded
+                // changes nothing.
+                if fork || result.effects.conflicts > copies {
                     let previous = RecordRow {
                         revision: local.revision.max(row.revision),
                         synced_revision: row.revision,
