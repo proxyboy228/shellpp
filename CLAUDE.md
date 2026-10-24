@@ -19,8 +19,8 @@ $env:SHELLPP_TEST=1; cargo test --locked --no-fail-fast --manifest-path server/C
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
 ```
 
-Всё это по очереди, с журналом каждого шага в `<target>erify\`:
-`powershell -ExecutionPolicy Bypass -File scriptserify.ps1` (с
+Всё это по очереди, с журналом каждого шага в `<target>\verify\`:
+`powershell -ExecutionPolicy Bypass -File scripts\verify.ps1` (с
 `-Deploy` — и тесты развёртывания). `--locked` роняет шаг при устаревшем
 `Cargo.lock` вместо того, чтобы его переписать; `--no-fail-fast`
 показывает падения всех тестовых бинарников, а не только первого.
