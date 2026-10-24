@@ -642,3 +642,144 @@ fn a_second_prepare_or_a_lock_drops_the_first() {
     assert_eq!(server_state(&server, vault_id), before);
     assert_eq!(recover_begin_status(&server, &email, &key), 200);
 }
+
+/// Cross review, theme 1 (D195): after Log out with the local copy kept,
+/// the vault keeps its account binding, so a change with "My old password
+/// may be compromised" is refused (it would leave the server behind with
+/// a recovery verifier no key opens); one without the option stays local.
+#[test]
+fn a_compromised_change_after_log_out_is_refused_while_the_binding_stays() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    a.core.sync_sign_out(false).expect("signed out, copy kept");
+    assert!(!a.status().bound);
+    let refused = a
+        .core
+        .password_change_prepare(password.clone(), new_password());
+    assert!(
+        matches!(&refused, Err(CoreError::Sync(error)) if error.code() == "account_binding"),
+        "refused while the vault keeps its account"
+    );
+    let reissue = a.core.recovery_key_reissue_prepare(password.clone());
+    assert!(
+        matches!(&reissue, Err(CoreError::Sync(error)) if error.code() == "account_binding"),
+        "no new local recovery key either"
+    );
+    let new = new_password();
+    a.core
+        .password_change(password, new.clone())
+        .expect("without the option the change stays local");
+    a.core.lock().expect("locked");
+    a.core.unlock(new).expect("the new password");
+}
+
+/// SP 5.1, re-post step 4 (D195): a server restored from a backup made
+/// before a reissue gets this device's newer `recovery_key` record back
+/// with the records, while its recovery verifier is the older key's; the
+/// re-post offers a reissue, and after it the key Show gives recovers.
+#[test]
+fn a_repost_with_a_newer_recovery_key_offers_a_reissue() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let db_path = server.dir.path().join("server.db");
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    a.core
+        .recovery_key_reissue(password.clone())
+        .expect("reissued after the backup");
+    server.stop();
+    server.db = shellpp_server::db::Db::open(&format!("sqlite:{}", backup.display())).expect("db");
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = db_path.clone().into_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(name));
+    }
+    std::fs::copy(&backup, &db_path).expect("restore");
+    server.resume();
+    shellpp_server::admin::restored(&server.db).expect("restored");
+
+    assert!(a.core.sync_now().is_err());
+    assert!(
+        a.core
+            .sync_sign_in(sign_in_input(&server, &email, &password))
+            .is_err()
+    );
+    a.core
+        .sync_repost_epochs(password.clone())
+        .expect("re-posted");
+    assert!(a.status().recovery_reissue_needed, "a reissue is offered");
+    let shown = a.core.recovery_key_show(password.clone()).expect("shown");
+    assert_eq!(
+        recover_begin_status(&server, &email, &shown.recovery_key),
+        401,
+        "the server's verifier is the older key's"
+    );
+    let reissued = a
+        .core
+        .recovery_key_reissue(password.clone())
+        .expect("reissued");
+    assert!(!a.status().recovery_reissue_needed, "the offer is gone");
+    assert_eq!(
+        recover_begin_status(&server, &email, &reissued.recovery_key),
+        200
+    );
+    let shown = a.core.recovery_key_show(password.clone()).expect("shown");
+    assert_eq!(text(&shown.recovery_key), text(&reissued.recovery_key));
+    // Another device checks the server's recovery wrap against that key.
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    assert!(
+        !b.status().recovery_mismatch,
+        "its wrap opens to the vault key"
+    );
+}
+
+/// Cross review, theme 1 (D195): a merge at sign-in with "Remember on this
+/// device" makes the option again for the account's vault, with a new
+/// device key that replaces the keychain item (the old one would still
+/// open the pre-merge backup without the password).
+#[test]
+fn a_merge_at_sign_in_keeps_remember_with_a_new_device_key() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let b = Client::local("B", &password);
+    b.host("b-local.example.com");
+    remembering(&b);
+    let before: Vec<Vec<u8>> = b
+        .mem
+        .secret_store
+        .entries()
+        .iter()
+        .map(|(_, secret)| secret.expose_secret().to_vec())
+        .collect();
+    done(b.sign_in(&server, &email, &password));
+    let status = b.core.lock_status();
+    assert!(status.remember_device_enabled && !status.remember_device_lost);
+    let after: Vec<Vec<u8>> = b
+        .mem
+        .secret_store
+        .entries()
+        .iter()
+        .map(|(_, secret)| secret.expose_secret().to_vec())
+        .collect();
+    assert_eq!(after.len(), 1);
+    assert!(!before.contains(&after[0]), "a new device key");
+    let b = b.reopen("B");
+    assert!(b.core.try_device_unlock().expect("device unlock"));
+    assert!(b.addresses().contains(&"b-local.example.com".to_owned()));
+}

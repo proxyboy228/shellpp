@@ -504,8 +504,9 @@ impl PasswordChangeDialog {
         if self.busy {
             return;
         }
-        let new = input_text(&self.new, cx);
-        if new != input_text(&self.repeat, cx) {
+        // The passwords stay in wiping buffers (D195).
+        let new = zeroize::Zeroizing::new(input_text(&self.new, cx));
+        if *new != *zeroize::Zeroizing::new(input_text(&self.repeat, cx)) {
             self.error = Some(strings::PASSWORDS_DIFFER);
             cx.notify();
             return;
@@ -516,7 +517,7 @@ impl PasswordChangeDialog {
             return;
         }
         let current = secret(&self.current, cx);
-        let new = SecretString::from(new);
+        let new = SecretString::from(new.as_str().to_owned());
         let rotate = self.rotate();
         self.rotated = rotate;
         self.busy = true;
@@ -531,8 +532,14 @@ impl PasswordChangeDialog {
         });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = done.await;
-            let _ = this.update(cx, |dialog, cx| {
+            let _ = this.update_in(cx, |dialog, window, cx| {
                 dialog.busy = false;
+                if result.is_ok() {
+                    // The fields are not needed any more: no copy stays in them.
+                    for input in [&dialog.current, &dialog.new, &dialog.repeat] {
+                        input.update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                }
                 match result {
                     Ok(Some(prepared)) => {
                         dialog.step = PasswordStep::Key(prepared.recovery_key, prepared.id)

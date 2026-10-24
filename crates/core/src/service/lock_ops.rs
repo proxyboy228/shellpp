@@ -34,6 +34,11 @@ use crate::vault::{self, KeyRing, Rotation};
 /// so until the option is set again. Plaintext: it is not a secret.
 pub(super) const META_REMEMBER_LOST: &str = "remember_device_lost";
 
+/// `meta` flag: a re-post gave the server this device's newer `recovery_key`
+/// record while its recovery verifier is still the older key's (SP 5.1,
+/// re-post step 4; D195): Account & Sync offers a reissue until one passes.
+pub(super) const META_RECOVERY_REISSUE: &str = "recovery_reissue_needed";
+
 pub(super) struct KeyContext {
     pub local_auth: LocalAuthRow,
     pub vault: VaultRow,

@@ -125,7 +125,12 @@ impl std::fmt::Display for KeyChangeFailure {
 /// the commit.
 pub(super) fn sent_failure(error: HttpError) -> KeyChangeFailure {
     let rolled_back = match &error {
-        HttpError::Api { status, .. } => (400..500).contains(status),
+        // Only an error body of the server itself (section 8) proves a
+        // rollback; a 4xx without one (`http_408` of a proxy that gave up
+        // waiting) may have come after the commit.
+        HttpError::Api { status, code, .. } => {
+            (400..500).contains(status) && !code.starts_with("http_")
+        }
         HttpError::Refused(_) | HttpError::Tls(_) | HttpError::Origin(_) => true,
         HttpError::Network | HttpError::Timeout | HttpError::Malformed => false,
     };
@@ -133,6 +138,29 @@ pub(super) fn sent_failure(error: HttpError) -> KeyChangeFailure {
         KeyChangeFailure::NotAccepted(error.into())
     } else {
         KeyChangeFailure::Unknown(error.into())
+    }
+}
+
+/// `409 epoch_conflict` with a current epoch below this device's: the
+/// server lost epochs (a restore), which is "server state rolled back"
+/// (SP 5.1), not a concurrent change; nothing changed either way.
+fn rolled_back_epoch(failure: KeyChangeFailure, local_epoch: u32) -> KeyChangeFailure {
+    let behind = match &failure {
+        KeyChangeFailure::NotAccepted(CoreError::Sync(HttpError::Api {
+            code, details, ..
+        })) => {
+            code == code::EPOCH_CONFLICT
+                && details
+                    .get("current_epoch")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|current| current < u64::from(local_epoch))
+        }
+        _ => false,
+    };
+    if behind {
+        KeyChangeFailure::NotAccepted(CoreError::Sync(HttpError::Refused("rolled_back")))
+    } else {
+        failure
     }
 }
 
@@ -174,6 +202,7 @@ impl Core {
                 }),
             )
         } else {
+            self.require_no_account_binding(&context)?;
             (self.verify_password(&context, &password)?, None)
         };
         drop(password);
@@ -202,6 +231,7 @@ impl Core {
         lock::check_new_password(&new, "new_password")?;
         let class = self.platform.class;
         if !self.bound()? {
+            self.require_no_account_binding(&context)?;
             let old_kek = self.verify_password(&context, &current)?;
             drop((current, old_kek));
             let material = PasswordMaterial::fresh(class, context.local_auth.kdf_email.clone())?;
@@ -328,6 +358,20 @@ impl Core {
             .as_ref()
             .filter(|pending| pending.id == id)
             .map(|pending| crypto::encode_recovery_key(&pending.recovery_key))
+    }
+
+    /// After Log out with the local copy kept, the personal vault keeps its
+    /// account binding (a later sign-in is a rebind): a local rotation or a
+    /// new recovery key there would leave the server behind ("server state
+    /// rolled back") with a recovery verifier no key opens. Refused: the
+    /// change is made through the account after signing in; one without
+    /// the option stays local (SP 5.1; D195).
+    fn require_no_account_binding(&self, context: &KeyContext) -> Result<(), CoreError> {
+        let (account, _) = self.inner().store.vault_binding(&context.vault.vault_id)?;
+        if account.is_some() {
+            return Err(CoreError::Sync(HttpError::Refused("account_binding")));
+        }
+        Ok(())
     }
 
     /// A bound device that is signed out (no refresh token) cannot send a
@@ -480,8 +524,13 @@ impl Core {
         };
         if let Some(device_id) = revoke {
             // Nothing of the change is sent when the revocation fails.
+            // A signed-out device stays "signed out"; otherwise nothing of
+            // the change was sent, whatever the revocation's answer was.
             self.send_change(&link, |api, token| api.device_revoke(token, device_id))
-                .map_err(|failure| NotAccepted(failure.into_error()))?;
+                .map_err(|failure| match failure {
+                    KeyChangeFailure::SignedOut(error) => KeyChangeFailure::SignedOut(error),
+                    other => NotAccepted(other.into_error()),
+                })?;
         }
         let sent = match (&pending.new_password, &server.auth_key) {
             (Some(material), Some(auth_key)) => {
@@ -511,7 +560,7 @@ impl Core {
             }
             _ => return Err(NotAccepted(CoreError::Internal("key change"))),
         };
-        let response = sent?;
+        let response = sent.map_err(|failure| rolled_back_epoch(failure, rotation.old_epoch))?;
         let mut write = write;
         write.row.synced_revision = write.row.revision;
         write.row.base_envelope = None;
@@ -533,6 +582,12 @@ impl Core {
                 now,
             )?;
             inner.recovery_grant.grant(now);
+            if let Err(error) = inner
+                .store
+                .write(|tx| tx.meta_set(lock_ops::META_RECOVERY_REISSUE, "0"))
+            {
+                tracing::warn!(code = error.code(), "reissue offer not cleared");
+            }
             if device_lost
                 && let Err(error) = inner
                     .store
@@ -548,7 +603,12 @@ impl Core {
             self.records_rewritten(inner, ids);
             Ok(())
         })
-        .map_err(KeyChangeFailure::NotStoredHere)
+        .map_err(KeyChangeFailure::NotStoredHere)?;
+        // As in local mode: a keychain item without its wrap goes too.
+        if device_lost {
+            self.delete_device_key(&context.db_id);
+        }
+        Ok(())
     }
 
     /// Local mode: the rotation of section 5.1 with the recovery wrap of
@@ -714,6 +774,8 @@ mod tests {
             HttpError::Network,
             HttpError::Timeout,
             HttpError::Malformed,
+            api_error(408, "http_408"),
+            api_error(404, "http_404"),
             api_error(502, "bad_gateway"),
             api_error(500, "internal"),
         ] {
@@ -727,5 +789,22 @@ mod tests {
             refresh_failure(CoreError::Sync(HttpError::Network)),
             KeyChangeFailure::NotAccepted(_)
         ));
+        // An epoch conflict below this device's epoch is a rolled-back server.
+        let behind = |current: u64| {
+            let mut details = serde_json::Map::new();
+            details.insert("current_epoch".into(), current.into());
+            let failure = KeyChangeFailure::NotAccepted(CoreError::Sync(HttpError::Api {
+                status: 409,
+                code: code::EPOCH_CONFLICT.to_owned(),
+                details,
+                retry_after: None,
+            }));
+            match rolled_back_epoch(failure, 3).into_error() {
+                CoreError::Sync(error) => error.code(),
+                other => other.code().to_owned(),
+            }
+        };
+        assert_eq!(behind(1), "rolled_back");
+        assert_eq!(behind(3), "epoch_conflict", "a concurrent rotation");
     }
 }

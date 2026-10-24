@@ -254,6 +254,8 @@ pub const ERROR_ROLLED_BACK: &str =
 pub const ERROR_INTEGRITY: &str =
     "The server sent data that does not open with this account's keys.";
 pub const ERROR_OTHER: &str = "Something went wrong. Try again.";
+pub const ERROR_ACCOUNT_BINDING: &str = "This vault still belongs to your sync account. Sign in to the account in Account & Sync and change the password there, or untick “My old password may be compromised” to change it on this device only.";
+pub const RECOVERY_REISSUE_NEEDED: &str = "The server's copy of your recovery key is older than this device's, so neither key can recover the account now. Reissue the recovery key.";
 pub const ERROR_SIGNED_OUT: &str =
     "This device is signed out of the account. Sign in again in Account & Sync first.";
 

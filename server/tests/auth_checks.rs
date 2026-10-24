@@ -883,6 +883,111 @@ fn a_session_ended_after_the_key_check_changes_nothing() {
     email_change(&checked, &principal).expect("changed");
 }
 
+/// Cross review, theme 1 (D174, D178): a key checked before a recovery
+/// key reissue committed on another device. The reissue keeps the auth
+/// verifier but revokes every session, so the password change or email
+/// change that follows is refused (`401`) and the account's `kek_wrap`
+/// stays the reissue's, for its epoch: never a wrap of the older key.
+#[test]
+fn a_reissue_elsewhere_after_the_key_check_ends_the_change() {
+    let fx = Fixture::new(Registration::Open);
+    let t0 = model::now();
+    let a = fx.register(t0);
+    let vault = fx
+        .write(|tx, _| model::user_by_id(tx, a.user_id).map_err(Into::into))
+        .unwrap()
+        .expect("user")
+        .personal_vault_id;
+    let principal = fx.authenticate(&a.tokens.access_token.0, t0).unwrap();
+    let checked =
+        accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key, IP).unwrap();
+
+    // Device B reissues the recovery key.
+    let other = fx
+        .login(&a.email, &a.auth_key, Uuid::now_v7())
+        .expect("B signs in")
+        .tokens
+        .expect("tokens");
+    let b = fx.authenticate(&other.access_token.0, t0).unwrap();
+    let header = shellpp_sync_api::envelope::EnvelopeHeader {
+        class: 1,
+        tombstone: false,
+        vault_id: *vault.as_bytes(),
+        record_id: *Uuid::now_v7().as_bytes(),
+        revision: 1,
+        key_epoch: 2,
+    };
+    let mut envelope = header.encode().to_vec();
+    envelope.extend_from_slice(&[7u8; 24 + 256 + 16]);
+    let reissue_wrap = vec![8u8; 73];
+    let reissued = fx
+        .signed_in(&b, &a.auth_key, |tx, _, checked| {
+            accounts::recovery_key_reissue(
+                tx,
+                &b,
+                checked,
+                wire::RecoveryKeyReissueRequest {
+                    current_auth_key: B64(a.auth_key.to_vec()),
+                    recovery_auth_key: B64(secrets::random_bytes::<32>().to_vec()),
+                    kek_wrap: B64(reissue_wrap.clone()),
+                    rotation: wire::Rotation {
+                        epoch: 2,
+                        prev_key_wrap: B64(vec![9; 73]),
+                        recovery_wrap: B64(vec![10; 73]),
+                    },
+                    record: wire::RecordWrite {
+                        base_revision: 0,
+                        envelope: B64(envelope),
+                    },
+                },
+                t0,
+            )
+        })
+        .expect("reissued");
+
+    // A's change, checked before the reissue, is refused afterwards.
+    let password = wire::PasswordChangeRequest {
+        current_auth_key: B64(a.auth_key.to_vec()),
+        kdf: wire::Kdf::desktop(),
+        kdf_salt: B64(secrets::random_bytes::<16>().to_vec()),
+        auth_key: B64(secrets::random_bytes::<32>().to_vec()),
+        kek_wrap: B64(vec![4; 73]),
+        rotation: None,
+    };
+    refused(
+        fx.write(|tx, _| accounts::password_change(tx, &principal, &checked, password, t0)),
+        401,
+        code::UNAUTHENTICATED,
+    );
+    let email_change = wire::EmailChangeRequest {
+        current_auth_key: B64(a.auth_key.to_vec()),
+        new_email: email(),
+        kdf: Some(wire::Kdf::desktop()),
+        kdf_salt: Some(B64(secrets::random_bytes::<16>().to_vec())),
+        auth_key: Some(B64(secrets::random_bytes::<32>().to_vec())),
+        kek_wrap: Some(B64(vec![4; 73])),
+    };
+    refused(
+        fx.write(|tx, _| accounts::email_change(tx, &principal, &checked, email_change, t0)),
+        401,
+        code::UNAUTHENTICATED,
+    );
+    let now = fx
+        .authenticate(&reissued.tokens.access_token.0, t0)
+        .unwrap();
+    let bundle = fx
+        .write(|tx, shared| accounts::account(tx, shared, &now))
+        .unwrap();
+    assert_eq!(bundle.personal_vault.epoch, 2);
+    assert_eq!(
+        bundle.personal_vault.kek_wrap.as_bytes(),
+        &reissue_wrap[..],
+        "the wrap of the current epoch's key"
+    );
+    fx.login(&a.email, &a.auth_key, a.device_id)
+        .expect("the password did not change");
+}
+
 /// Cross review (D174): an email longer than any account can have is
 /// refused like an unknown one at sign-in and recovery, without being
 /// counted (it would stay in memory 15 minutes), and is `422` at

@@ -88,6 +88,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "forged_epoch" => strings::FORGED_EPOCH,
             "integrity" => strings::ERROR_INTEGRITY,
             "signed_out" => strings::ERROR_SIGNED_OUT,
+            "account_binding" => strings::ERROR_ACCOUNT_BINDING,
             _ => strings::ERROR_OTHER,
         },
         _ => strings::ERROR_OTHER,
@@ -920,6 +921,32 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
             strings::RECOVERY_MISMATCH,
             cx,
         ));
+    }
+    if status.recovery_reissue_needed {
+        // SP 5.1, re-post step 4 (D195): the server's verifier is the older
+        // key's; a reissue (shown first, with "I saved it") repairs it.
+        let reissue = state.clone();
+        block = block
+            .child(warning(
+                "sync-recovery-reissue-needed",
+                strings::RECOVERY_REISSUE_NEEDED,
+                cx,
+            ))
+            .child(
+                h_flex().child(
+                    ControlButton::new("sync-recovery-reissue", ControlKind::Accent)
+                        .label(strings::KEY_REISSUE)
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            open_recovery_key(
+                                reissue.clone(),
+                                RecoveryKeyMode::Reissue,
+                                window,
+                                cx,
+                            );
+                        }),
+                ),
+            );
     }
     let totp = state.clone();
     let (now, again, devices, review, out, delete, repost) = (

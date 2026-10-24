@@ -215,6 +215,10 @@ pub struct SyncStatus {
     pub failed: usize,
     pub integrity_warnings: usize,
     pub recovery_mismatch: bool,
+    /// The server's recovery verifier belongs to an older key than this
+    /// device's `recovery_key` record (a re-post, SP 5.1 step 4): a reissue
+    /// is offered (D195).
+    pub recovery_reissue_needed: bool,
     pub newer_epoch: bool,
     pub conflicts: usize,
     pub duplicates: usize,
@@ -1689,9 +1693,15 @@ impl Core {
         // The generation is learnt by the first cycle (a restore check
         // against nothing would push everything back for no reason).
         self.store_generation_if_unset()?;
-        let _ = self.cycle(false);
-        // A new `recovery_key` revision or epoch: rebuild the recovery row.
-        self.after_first_pull(account)?;
+        // A new `recovery_key` revision or epoch: rebuild the recovery row,
+        // only from a completed pull. Before it the record may still hold
+        // the key of before a reissue elsewhere, which would then open this
+        // copy offline (D195); a later cycle builds the row once the pull
+        // went through (`ensure_recovery_row`).
+        match self.cycle(false) {
+            Ok(_) => self.after_first_pull(account)?,
+            Err(error) => tracing::warn!(code = error.code(), "recovery row deferred"),
+        }
         Ok(())
     }
 
@@ -1732,6 +1742,9 @@ impl Core {
         let account_vault = ring.vault_id();
         let now = self.now();
         let now_text = format_timestamp(now);
+        // "Remember on this device": the old vault's `device` row goes with
+        // the old vault, so the option is made again below (D195).
+        let remembered = super::device_row_exists(&self.inner());
         // Step 1: the account vault's rows, so the pull can write records.
         let (db_id, device_id, old_vault) = self.with_session(|inner| {
             let old_vault = inner
@@ -1903,9 +1916,31 @@ impl Core {
         );
         drop(guard);
         self.recordings_resume();
+        if remembered {
+            self.remember_after_merge(&db_id);
+        }
         self.after_first_pull(account)?;
         let _ = self.cycle(false);
         Ok(())
+    }
+
+    /// After a merge with "Remember on this device" on: a new device key
+    /// replaces the keychain item (the old one would still open the
+    /// pre-merge backup without the password) and wraps the account vault's
+    /// key; when that fails the item goes and Settings says the option is
+    /// off (D195).
+    fn remember_after_merge(&self, db_id: &Uuid) {
+        if let Err(error) = self.remember_device_set_impl(true) {
+            tracing::warn!(code = error.code(), "remember on this device not renewed");
+            self.delete_device_key(db_id);
+            let mut guard = self.inner();
+            if let Err(error) = guard
+                .store
+                .write(|tx| tx.meta_set(lock_ops::META_REMEMBER_LOST, "1"))
+            {
+                tracing::warn!(code = error.code(), "remember note not stored");
+            }
+        }
     }
 
     /// The rows of the merged records and Recently deleted entries.
@@ -3024,6 +3059,10 @@ impl Core {
             failed: inner.sync.failed.len(),
             ..SyncStatus::default()
         };
+        status.recovery_reissue_needed = inner
+            .store
+            .meta_get(lock_ops::META_RECOVERY_REISSUE)?
+            .is_some_and(|value| value == "1");
         if let Some(account) = &account {
             status.bound = true;
             status.signed_in = account.refresh_token.is_some();
@@ -3494,6 +3533,28 @@ impl Core {
         let mut report = SyncReport::default();
         let mut changed = Vec::new();
         self.restore(&link, &mut report, &mut changed, false)?;
+        // Step 4: a `recovery_key` record the server holds older (a reissue
+        // after the backup) goes back with the records, but the server's
+        // recovery verifier stays the older key's, so neither key would
+        // recover: a reissue is offered until one passes (D195).
+        self.with_session(|inner| {
+            let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
+            let newer_here = session
+                .index
+                .singleton(RecordKind::RecoveryKey)
+                .map(|record| record.record_id)
+                .map(|id| inner.store.record(&link.vault_id, &id))
+                .transpose()?
+                .flatten()
+                .is_some_and(|row| row.synced_revision < row.revision);
+            if newer_here {
+                tracing::warn!("the server's recovery key is older; a reissue is offered");
+                inner
+                    .store
+                    .write(|tx| tx.meta_set(lock_ops::META_RECOVERY_REISSUE, "1"))?;
+            }
+            Ok(())
+        })?;
         let pushed = self.cycle(false)?;
         report.pushed = pushed.pushed;
         tracing::info!(epochs = steps.len(), "personal epochs re-posted");

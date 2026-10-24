@@ -2133,3 +2133,33 @@ Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5; run 8 agent
 - Tests: a russh server written for the test asks the forwarded agent for identities and for a signature by a key it learned earlier: while the app refuses, nothing is listed or signed and the system agent receives no request; allowed, it lists and signs; refused again, it stops at once (the test fails when the check is removed). A lock that lands after the request was checked (during a confirmation) keeps the system agent from signing, and one that lands while the system agent signs keeps the signature from the host. The desktop reads the setting at each lock; the Security switch is off by default and stores the choice; an export leaves the setting out and no import, a full restore included, takes it.
 
 **Spec impact:** docs/security.md, sections 8 and 11.2; docs/ui-behavior-spec.md, sections 3.1, 13.3 and 13.4 (and `docs/ru`); docs/data-model.md, section 16.1; the user guide, chapter 3 (and `docs/guide/ru`).
+
+### 195. Key changes and a vault that keeps its account (run 9)
+
+Status: run 9 decision, 2026-10-24 (the cross review of run 9, theme 1). Amends D173 (item 2, local mode) and D180; carries out SP 5.1, re-post step 4.
+
+**Context.** After Log out with the local copy kept, the server account row is gone but the personal vault keeps its account binding, so the next sign-in is a rebind. A change with "My old password may be compromised" took the local branch there: a local rotation and a new recovery key. The rebind then ended in "server state rolled back", and the re-post gave the server the new recovery wrap and record while its recovery verifier stayed the old key's: neither key recovered, without a warning, and Show displayed the new one. D180 also treated every `4xx` as a rollback, a proxy's `408` without an error body included, and a failed second revocation of "Lost or stolen" lost its "signed out" meaning.
+
+**Decision:**
+
+- While the personal vault keeps an account binding and the device is not bound, the option and a recovery key reissue are refused ("sign in to the account and change it there"); a change without the option stays local, as SP 5.1 has it. The safest choice: nothing local runs ahead of the account.
+- The re-post checks, after its restore step, whether the local `recovery_key` record is newer than the server's (pending: its synced revision below its revision); then it keeps a `meta` flag that Account & Sync shows with "Reissue…" (shown first, with "I saved it") until a reissue or a change of SP 5.9 passes.
+- Only a `4xx` with an error body of the server is a rollback; one without (`http_4xx`) counts as no answer. `409 epoch_conflict` with a `current_epoch` below this device's is "server state rolled back". A refused refresh before the second revocation of "Lost or stolen" stays "signed out".
+- The password change dialog compares the new password and its repetition in wiping buffers and empties its fields once a step passed.
+
+**Spec impact:** docs/sync-protocol.md, sections 5.1 (local mode, re-post step 4) and 5.3 (step 8); docs/ui-behavior-spec.md, sections 12.2 and 13.4 (and `docs/ru`).
+
+### 196. "Remember on this device" at a merge, and the recovery row of a rebind (run 9)
+
+Status: run 9 decision, 2026-10-24 (the cross review of run 9, theme 1). Extends D179.
+
+**Context.** The merge at sign-in removed the old vault with its `device` row, so "Remember on this device" went off without a note, and its keychain item stayed: it still opened the pre-merge backup in `backups/` without the password. The bound key change that found the device key missing left the item too, unlike the local one. A rebind whose first pull failed built the local `recovery` row of the new epoch from the record held before, which after a reissue elsewhere is the old key: its holder could open this copy offline, and the server check reported a mismatch that was not there.
+
+**Decision:**
+
+- After a merge with the option on, a new device key replaces the keychain item and wraps the account vault's key; when that fails, the item is deleted and the note of D179 is set.
+- A bound key change that finds the device key missing deletes the keychain item, as the local one does.
+- A rebind builds the `recovery` row and checks the server's recovery wrap only after its first cycle went through; otherwise a later cycle builds it from the pulled record (`ensure_recovery_row`).
+
+**Spec impact:** none beyond D179 (docs/sync-protocol.md, section 5.1, describes the rewrap).
+

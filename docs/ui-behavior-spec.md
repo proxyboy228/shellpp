@@ -1678,6 +1678,9 @@ Messages of this section [decision] (D93):
   password (the one the server knows), the app gives the server the newer keys again and
   puts back what the server lost. It is never done without asking, every time. For team
   vaults the same row is in Team (12.3).
+- **Recovery key older on the server**: after "Bring the server up to date…" brought back
+  a recovery key newer than the server's, a warning says that neither key can recover the
+  account now, with "Reissue…" (13.4). It stays until a reissue passes. [decision] (D195)
 - **Server restored**: when the server says it was restored from a backup, the app checks
   every vault against it and puts back what the server lost; the row says so until it is
   done.
@@ -2091,7 +2094,10 @@ Settings → Security (see 12.1):
     password). While a request runs, Escape and a click outside do not close the dialog;
     closing it in any other way before the confirmation drops the new key, and nothing is
     sent. A bound device that is signed out is told to sign in again before a key is
-    made.
+    made. After Log out with the local copy kept, the vault still belongs to the account:
+    the change with the option is refused with a line that says to sign in to the
+    account first and change the password there, or to untick the option to change it
+    on this device only. [decision] (D195)
 - **Recovery key**: only with a sync account (stage 7), on every device of the account; in
   local mode the item is hidden and the key is never shown (D29). "Show…" and
   "Reissue…", both after entering the master password. "Show" shows the key as in 13.5,
