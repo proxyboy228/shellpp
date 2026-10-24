@@ -242,15 +242,14 @@ with **Sync now**.
   server (**Keep** or **Delete again**).
 - **Recently deleted…** opens the Recently deleted screen (below).
 - **Devices…** lists the account's devices. **Sign out** next to another
-  device asks whether it was lost or stolen. **Lost or stolen** leads you
-  to change the master password with **My old password may be
-  compromised** fixed on: the new recovery key is shown first; after **I
-  saved the recovery key**, **Change password** signs the device out and
-  changes the password, the vault key and the recovery key at once, so
-  the old password and the old recovery key the device holds stop
-  working. **Cancel** only signs the device out. Nothing is wiped on the
-  lost device itself: change the passwords of your important servers
-  too.
+  device asks whether it was lost or stolen. **Lost or stolen** signs the
+  device out and leads you to change the master password with **My old
+  password may be compromised** fixed on: the new recovery key is shown
+  first; after **I saved the recovery key**, **Change password** changes
+  the password, the vault key and the recovery key at once, so the old
+  password and the old recovery key the device holds stop working.
+  Nothing is wiped on the lost device itself: change the passwords of
+  your important servers too.
 - **Two-step sign-in…** adds a one-time code (TOTP) to every new sign-in:
   enter the master password, scan the QR code with an authenticator app
   and enter its code. It cannot be turned off from the app in this

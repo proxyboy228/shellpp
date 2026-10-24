@@ -1594,13 +1594,13 @@ With a connected server:
   "This device" for the current one. Revoke on another device asks "Was this device lost
   or stolen?":
   - "Revoke only": the device is signed out and stops syncing; its data stays on it;
-  - "Lost or stolen": the password change of 13.4 opens with "My old password may be
-    compromised" on and fixed, so the personal vault gets a new key and the recovery key
-    is reissued (the lost device holds the old one). The new recovery key is shown with
-    the required "I saved the recovery key"; "Change password" then revokes the device
-    and sends the change right after it, so the old password and recovery key stop
-    working at once; "Cancel" revokes the device only. [decision] (D173, D178); then a
-    list of the team vaults the user owns, all ticked, offers to give each a
+  - "Lost or stolen": the device is revoked, then the password change of 13.4 opens with
+    "My old password may be compromised" on and fixed, so the personal vault gets a new
+    key and the recovery key is reissued (the lost device holds the old one). The new
+    recovery key is shown with the required "I saved the recovery key"; "Change password"
+    revokes the device once more and sends the change right after it. When the change
+    fails, the dialog adds that the device stays signed out but still holds the old
+    password and recovery key. [decision] (D173, D178); then a list of the team vaults the user owns, all ticked, offers to give each a
     new key ("Rotate"); for the team vaults the user does not own, it names their owners and
     says to ask one of them to rotate the key. The dialog says that nothing is wiped on the
     lost device, and that changing the passwords of important hosts is the only guaranteed
@@ -2050,7 +2050,10 @@ Settings → Security (see 12.1):
     the server did not answer (keep the key shown and both passwords until this device
     signs in again, then Show tells the valid key); or the server made the change but this
     device could not store it (the key shown is the account's; sign in with the new
-    password).
+    password). While a request runs, Escape and a click outside do not close the dialog;
+    closing it in any other way before the confirmation drops the new key, and nothing is
+    sent. A bound device that is signed out is told to sign in again before a key is
+    made.
 - **Recovery key**: only with a sync account (stage 7), on every device of the account; in
   local mode the item is hidden and the key is never shown (D29). "Show…" and
   "Reissue…", both after entering the master password. "Show" shows the key as in 13.5,

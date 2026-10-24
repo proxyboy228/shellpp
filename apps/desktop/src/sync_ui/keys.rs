@@ -27,15 +27,20 @@ use crate::panels::widgets;
 use crate::state::AppState;
 use crate::theme::metrics;
 
-/// What the user is told after a confirmed change failed (D180).
-pub fn failure_text(failure: &KeyChangeFailure) -> &'static str {
-    match failure {
-        KeyChangeFailure::NotAccepted(_) => strings::KEY_NOT_ACCEPTED,
-        KeyChangeFailure::SignedOut(_) => strings::KEY_SIGNED_OUT,
-        KeyChangeFailure::Unknown(_) => strings::KEY_UNKNOWN,
-        KeyChangeFailure::NotStoredHere(_) => strings::KEY_NOT_STORED,
+/// What the user is told after a confirmed change failed (D180); a
+/// reissue alone changes no password, so its texts name none.
+pub fn failure_text(failure: &KeyChangeFailure, password: bool) -> &'static str {
+    match (failure, password) {
+        (KeyChangeFailure::NotAccepted(_), _) => strings::KEY_NOT_ACCEPTED,
+        (KeyChangeFailure::SignedOut(_), _) => strings::KEY_SIGNED_OUT,
+        (KeyChangeFailure::Unknown(_), true) => strings::KEY_UNKNOWN,
+        (KeyChangeFailure::Unknown(_), false) => strings::KEY_UNKNOWN_REISSUE,
+        (KeyChangeFailure::NotStoredHere(_), true) => strings::KEY_NOT_STORED,
+        (KeyChangeFailure::NotStoredHere(_), false) => strings::KEY_NOT_STORED_REISSUE,
     }
 }
+
+type CoreRef = std::sync::Arc<shellpp_core::Core>;
 
 /// The key as text in the monospaced font, with "Copy" (the core copies it
 /// as a sensitive value and clears the clipboard after 30 seconds).
@@ -43,8 +48,8 @@ pub(super) fn key_block(
     state: &Entity<AppState>,
     key: &SecretString,
     target: SecretCopyTarget,
-    copied: bool,
-    on_copied: impl Fn(&mut App) + 'static,
+    copied: Option<bool>,
+    on_copied: impl Fn(&mut App, bool) + 'static,
     cx: &App,
 ) -> impl IntoElement {
     let state = state.clone();
@@ -75,15 +80,20 @@ pub(super) fn key_block(
                                 return;
                             };
                             match core.secret_copy(target.clone()) {
-                                Ok(()) => on_copied(cx),
+                                Ok(()) => on_copied(cx, true),
                                 Err(error) => {
-                                    tracing::info!(code = error.code(), "recovery key not copied")
+                                    tracing::info!(code = error.code(), "recovery key not copied");
+                                    on_copied(cx, false);
                                 }
                             }
                         }),
                 )
-                .when(copied, |row| {
-                    row.child(widgets::caption(strings::KEY_COPIED, cx))
+                .when_some(copied, |row, copied| {
+                    row.child(if copied {
+                        widgets::caption(strings::KEY_COPIED, cx)
+                    } else {
+                        widgets::error_text(strings::KEY_NOT_COPIED, cx)
+                    })
                 }),
         )
 }
@@ -127,11 +137,13 @@ pub enum RecoveryStep {
 
 pub struct RecoveryKeyDialog {
     state: Entity<AppState>,
+    /// Drops a prepared key that was never confirmed when the dialog goes.
+    core: Option<CoreRef>,
     pub mode: RecoveryKeyMode,
     password: Entity<InputState>,
     pub step: RecoveryStep,
     pub saved: bool,
-    copied: bool,
+    copied: Option<bool>,
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -144,6 +156,9 @@ impl RecoveryKeyDialog {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
+        if self.busy {
+            return;
+        }
         let password = secret(&self.password, cx);
         let mode = self.mode;
         self.busy = true;
@@ -180,7 +195,7 @@ impl RecoveryKeyDialog {
         let RecoveryStep::Key(_, Some(id)) = self.step else {
             return;
         };
-        if !self.saved {
+        if !self.saved || self.busy {
             return;
         }
         self.busy = true;
@@ -195,7 +210,7 @@ impl RecoveryKeyDialog {
                     Ok(()) => RecoveryStep::Done,
                     Err(failure) => {
                         tracing::info!(code = failure.error().code(), "reissue failed");
-                        RecoveryStep::Failed(failure_text(&failure))
+                        RecoveryStep::Failed(failure_text(&failure, false))
                     }
                 };
                 dialog
@@ -207,12 +222,18 @@ impl RecoveryKeyDialog {
     }
 
     /// Closing before "Reissue" drops the prepared key: nothing was sent.
-    fn cancel(&self, cx: &App) {
-        if let RecoveryStep::Key(_, Some(id)) = self.step
-            && let Some(core) = self.state.read(cx).core()
-        {
-            core.key_change_cancel(id);
+    fn cancel(&self) {
+        if let (RecoveryStep::Key(_, Some(id)), Some(core)) = (&self.step, &self.core) {
+            core.key_change_cancel(*id);
         }
+    }
+}
+
+impl Drop for RecoveryKeyDialog {
+    /// Any way the dialog goes (Cancel, Escape, a lock) drops a prepared key
+    /// that was never confirmed; a confirmed one is no longer pending.
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -252,9 +273,9 @@ impl Render for RecoveryKeyDialog {
                     &key,
                     target,
                     self.copied,
-                    move |cx| {
+                    move |cx, copied| {
                         let _ = this.update(cx, |dialog, cx| {
-                            dialog.copied = true;
+                            dialog.copied = Some(copied);
                             cx.notify();
                         });
                     },
@@ -311,13 +332,15 @@ pub fn open_recovery_key(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<RecoveryKeyDialog> {
+    let core = state.read(cx).core().cloned();
     let dialog = cx.new(|cx| RecoveryKeyDialog {
         state,
+        core,
         mode,
         password: cx.new(|cx| InputState::new(window, cx).masked(true)),
         step: RecoveryStep::Password,
         saved: false,
-        copied: false,
+        copied: None,
         busy: false,
         error: None,
         task: None,
@@ -347,7 +370,7 @@ pub fn open_recovery_key(
                     .disabled(busy)
                     .on_click(move |_, window, cx| {
                         if let Some(dialog) = cancel.upgrade() {
-                            dialog.read(cx).cancel(cx);
+                            dialog.read(cx).cancel();
                         }
                         window.close_dialog(cx);
                     }),
@@ -381,6 +404,9 @@ pub fn open_recovery_key(
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
+            // Not while a request runs: its answer must reach the user.
+            .keyboard(!busy)
+            .overlay_closable(!busy)
             .title(title(match mode {
                 RecoveryKeyMode::Show => strings::KEY_SHOW_TITLE,
                 RecoveryKeyMode::Reissue => strings::KEY_REISSUE_TITLE,
@@ -410,6 +436,8 @@ pub enum PasswordStep {
 
 pub struct PasswordChangeDialog {
     state: Entity<AppState>,
+    /// Drops a prepared change that was never confirmed when the dialog goes.
+    core: Option<CoreRef>,
     current: Entity<InputState>,
     new: Entity<InputState>,
     repeat: Entity<InputState>,
@@ -417,14 +445,16 @@ pub struct PasswordChangeDialog {
     pub compromised: bool,
     /// After "Lost or stolen": the option is on and cannot be turned off.
     pub fixed: bool,
-    /// The device reported lost or stolen: revoked when the change is
-    /// confirmed, right before it is sent, or alone on Cancel (SP 4.7).
+    /// The device reported lost or stolen: revoked already, and once more
+    /// right before the change is sent (SP 4.7).
     lost_device: Option<Uuid>,
     pub step: PasswordStep,
     pub saved: bool,
-    copied: bool,
+    copied: Option<bool>,
     /// The recovery key was replaced too (the "Done" text says so).
     reissued: bool,
+    /// The option as the change was started with (the "Done" text).
+    rotated: bool,
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -448,6 +478,9 @@ impl PasswordChangeDialog {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
+        if self.busy {
+            return;
+        }
         let new = input_text(&self.new, cx);
         if new != input_text(&self.repeat, cx) {
             self.error = Some(strings::PASSWORDS_DIFFER);
@@ -462,6 +495,7 @@ impl PasswordChangeDialog {
         let current = secret(&self.current, cx);
         let new = SecretString::from(new);
         let rotate = self.rotate();
+        self.rotated = rotate;
         self.busy = true;
         self.error = None;
         cx.notify();
@@ -502,7 +536,7 @@ impl PasswordChangeDialog {
         let PasswordStep::Key(_, id) = self.step else {
             return;
         };
-        if !self.saved {
+        if !self.saved || self.busy {
             return;
         }
         let lost = self.lost_device;
@@ -526,7 +560,7 @@ impl PasswordChangeDialog {
                     }
                     Err(failure) => {
                         tracing::info!(code = failure.error().code(), "password change failed");
-                        PasswordStep::Failed(failure_text(&failure))
+                        PasswordStep::Failed(failure_text(&failure, true))
                     }
                 };
                 dialog
@@ -537,22 +571,11 @@ impl PasswordChangeDialog {
         }));
     }
 
-    /// Cancel: nothing of the change is sent. After "Lost or stolen" the
-    /// device is still revoked, as "Revoke only" would.
-    fn cancel(&self, cx: &App) {
-        let Some(core) = self.state.read(cx).core().cloned() else {
-            return;
-        };
-        if let PasswordStep::Key(_, id) = self.step {
-            core.key_change_cancel(id);
-        }
-        if let Some(device_id) = self.lost_device {
-            cx.background_spawn(async move {
-                if let Err(error) = core.sync_device_revoke(device_id) {
-                    tracing::info!(code = error.code(), "lost device not revoked");
-                }
-            })
-            .detach();
+    /// Cancel: nothing of the change is sent (after "Lost or stolen" the
+    /// device is revoked already).
+    fn cancel(&self) {
+        if let (PasswordStep::Key(_, id), Some(core)) = (&self.step, &self.core) {
+            core.key_change_cancel(*id);
         }
     }
 
@@ -591,7 +614,7 @@ impl PasswordChangeDialog {
                 Checkbox::new("sync-compromised")
                     .label(strings::COMPROMISED)
                     .checked(self.rotate())
-                    .disabled(fixed)
+                    .disabled(fixed || self.busy)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.compromised = *checked;
                         cx.notify();
@@ -623,9 +646,9 @@ impl Render for PasswordChangeDialog {
                     &key,
                     SecretCopyTarget::PendingRecoveryKey { id },
                     self.copied,
-                    move |cx| {
+                    move |cx, copied| {
                         let _ = this.update(cx, |dialog, cx| {
-                            dialog.copied = true;
+                            dialog.copied = Some(copied);
                             cx.notify();
                         });
                     },
@@ -644,7 +667,7 @@ impl Render for PasswordChangeDialog {
             PasswordStep::Done => widgets::caption(
                 if self.reissued {
                     strings::PASSWORD_CHANGED_REISSUED
-                } else if self.rotate() {
+                } else if self.rotated {
                     strings::PASSWORD_CHANGED_ROTATED
                 } else {
                     strings::PASSWORD_CHANGED
@@ -652,12 +675,21 @@ impl Render for PasswordChangeDialog {
                 cx,
             )
             .into_any_element(),
-            PasswordStep::Failed(text) => div()
-                .id("sync-key-failed")
-                .test_support()
-                .text_size(metrics::FONT_SIZE_CAPTION)
-                .text_color(cx.theme().danger)
-                .child(text)
+            PasswordStep::Failed(text) => v_flex()
+                .gap(metrics::SPACE_2)
+                .child(
+                    div()
+                        .id("sync-key-failed")
+                        .test_support()
+                        .text_size(metrics::FONT_SIZE_CAPTION)
+                        .text_color(cx.theme().danger)
+                        .child(text),
+                )
+                // The device is signed out, but it still holds the old
+                // password and recovery key.
+                .when(self.fixed, |this| {
+                    this.child(widgets::caption(strings::LOST_NOT_CHANGED, cx))
+                })
                 .into_any_element(),
         };
         v_flex()
@@ -670,6 +702,13 @@ impl Render for PasswordChangeDialog {
     }
 }
 
+impl Drop for PasswordChangeDialog {
+    /// Any way the dialog goes drops a prepared change never confirmed.
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 impl std::fmt::Debug for PasswordChangeDialog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PasswordChangeDialog")
@@ -678,15 +717,18 @@ impl std::fmt::Debug for PasswordChangeDialog {
 }
 
 /// Opens the password change; `lost`: the device reported lost or stolen
-/// (Devices, UI 12.2), revoked by this dialog.
+/// (Devices, UI 12.2), already revoked; revoked again right before the
+/// change is sent.
 pub fn open_password_change(
     state: Entity<AppState>,
     lost: Option<Uuid>,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<PasswordChangeDialog> {
+    let core = state.read(cx).core().cloned();
     let dialog = cx.new(|cx| PasswordChangeDialog {
         state,
+        core,
         current: cx.new(|cx| InputState::new(window, cx).masked(true)),
         new: cx.new(|cx| InputState::new(window, cx).masked(true)),
         repeat: cx.new(|cx| InputState::new(window, cx).masked(true)),
@@ -695,14 +737,14 @@ pub fn open_password_change(
         lost_device: lost,
         step: PasswordStep::Form,
         saved: false,
-        copied: false,
+        copied: None,
         reissued: false,
+        rotated: false,
         busy: false,
         error: None,
         task: None,
     });
     let shown = dialog.clone();
-    let lost_mode = lost.is_some();
     window.open_dialog(cx, move |modal, _, cx| {
         let handle = shown.downgrade();
         let this = shown.read(cx);
@@ -723,7 +765,7 @@ pub fn open_password_change(
                     .disabled(busy)
                     .on_click(move |_, window, cx| {
                         if let Some(dialog) = cancel.upgrade() {
-                            dialog.read(cx).cancel(cx);
+                            dialog.read(cx).cancel();
                         }
                         window.close_dialog(cx);
                     }),
@@ -746,10 +788,9 @@ pub fn open_password_change(
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
-            // After "Lost or stolen" only the buttons close it: both revoke
-            // the device (Escape would leave it signed in).
-            .keyboard(!lost_mode)
-            .overlay_closable(!lost_mode)
+            // Not while a request runs: its answer must reach the user.
+            .keyboard(!busy)
+            .overlay_closable(!busy)
             .title(title(strings::CHANGE_PASSWORD_TITLE))
             .child(shown.clone())
             .footer(row)

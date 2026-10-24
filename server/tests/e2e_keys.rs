@@ -197,9 +197,9 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
     remembering(&c);
     assert_eq!(server_epochs(&server, vault_id), (1, 1));
 
-    // Devices ▸ Revoke ▸ "Lost or stolen" for B: the change with the option
-    // fixed on shows its new key first; "I saved it" revokes B and sends
-    // the change right after.
+    // Devices ▸ Revoke ▸ "Lost or stolen" for B: revoked at once, then the
+    // change with the option fixed on shows its new key first.
+    a.core.sync_device_revoke(b_id).expect("revoked");
     let new = new_password();
     let prepared = a
         .core
@@ -212,8 +212,12 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
         "nothing is sent before \"I saved it\""
     );
     assert_eq!(recover_begin_status(&server, &email, &old_key), 200);
-    // B is not revoked yet: its sync still works.
+    // While the user saves the key, the thief signs in again with the old
+    // password, which clears the revocation (SP 4.7).
+    assert!(b.core.sync_now().is_err(), "B is revoked");
+    done(b.sign_in(&server, &email, &password));
     b.sync();
+    // "I saved it": B is revoked once more and the change sent right after.
     a.core
         .key_change_confirm_lost(prepared.id, b_id)
         .expect("revoked and committed");
@@ -248,6 +252,12 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
         .core
         .sync_sign_in(sign_in_input(&server, &email, &password));
     assert!(again.is_err(), "the thief's password no longer signs in");
+    // Signed out, B cannot even make a key to show (nothing could be sent).
+    let refused = b.core.recovery_key_reissue_prepare(password.clone());
+    assert!(
+        matches!(&refused, Err(CoreError::Sync(error)) if error.code() == "signed_out"),
+        "a signed-out device is told to sign in first"
+    );
     assert_eq!(
         b.addresses(),
         vec!["before.example.com", "thief.example.com"]

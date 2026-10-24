@@ -78,6 +78,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "previous_account" => strings::ERROR_PREVIOUS,
             "rolled_back" => strings::ERROR_ROLLED_BACK,
             "integrity" => strings::ERROR_INTEGRITY,
+            "signed_out" => strings::ERROR_SIGNED_OUT,
             _ => strings::ERROR_OTHER,
         },
         _ => strings::ERROR_OTHER,
@@ -166,7 +167,7 @@ pub struct ConnectDialog {
     /// The account's recovery key on the step that shows it.
     recovery_key: Option<SecretString>,
     pub key_saved: bool,
-    key_copied: bool,
+    key_copied: Option<bool>,
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -193,7 +194,7 @@ impl ConnectDialog {
             first_run,
             recovery_key: None,
             key_saved: false,
-            key_copied: false,
+            key_copied: None,
             busy: false,
             error: None,
             task: None,
@@ -333,7 +334,8 @@ impl ConnectDialog {
                             self.step = ConnectStep::RecoveryKey;
                         }
                         Some(Err(error)) => {
-                            tracing::warn!(code = error.code(), "recovery key not shown")
+                            tracing::warn!(code = error.code(), "recovery key not shown");
+                            self.error = Some(strings::KEY_REGISTERED_NOT_SHOWN);
                         }
                         None => {}
                     }
@@ -375,9 +377,9 @@ impl ConnectDialog {
             &key,
             shellpp_core::service::dto::SecretCopyTarget::RecoveryKey,
             self.key_copied,
-            move |cx| {
+            move |cx, copied| {
                 let _ = this.update(cx, |dialog, cx| {
-                    dialog.key_copied = true;
+                    dialog.key_copied = Some(copied);
                     cx.notify();
                 });
             },
@@ -716,11 +718,15 @@ pub fn open_connect(
     let dialog = cx.new(|cx| ConnectDialog::new(state, first_run, window, cx));
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
+        // The key step closes only with "Finish", after "I saved it".
+        let closable = shown.read(cx).step != ConnectStep::RecoveryKey;
         modal
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
             .close_button(false)
+            .keyboard(closable)
+            .overlay_closable(closable)
             .title(title(if first_run {
                 strings::RESTORE_FROM_SYNC
             } else {
@@ -1320,10 +1326,9 @@ impl DevicesDialog {
         }));
     }
 
-    /// Revokes. With `lost` the password change opens instead, with the
-    /// option fixed on; it revokes the device right before it sends the
-    /// change, once the new recovery key is saved, or alone on Cancel
-    /// (UI 12.2, "Lost or stolen"; SP 4.7).
+    /// Revokes; with `lost`, then opens the password change with the
+    /// option fixed on, which revokes the device once more right before it
+    /// sends the change (UI 12.2, "Lost or stolen"; SP 4.7).
     fn revoke(
         &mut self,
         device_id: uuid::Uuid,
@@ -1335,17 +1340,18 @@ impl DevicesDialog {
             return;
         };
         self.asking = None;
-        if lost {
-            window.close_dialog(cx);
-            open_password_change(self.state.clone(), Some(device_id), window, cx);
-            return;
-        }
         let revoked = cx.background_spawn(async move { core.sync_device_revoke(device_id) });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = revoked.await;
             let _ = this.update_in(cx, |dialog, window, cx| {
-                if let Err(error) = result {
-                    dialog.error = Some(error_text(&error));
+                match result {
+                    Ok(()) if lost => {
+                        window.close_dialog(cx);
+                        open_password_change(dialog.state.clone(), Some(device_id), window, cx);
+                        return;
+                    }
+                    Ok(()) => {}
+                    Err(error) => dialog.error = Some(error_text(&error)),
                 }
                 dialog.reload(window, cx);
             });

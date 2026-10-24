@@ -10,6 +10,7 @@ use gpui::{
     AnyWindowHandle, AppContext as _, Bounds, Entity, SharedString, TestAppContext, WindowBounds,
     WindowOptions, px, size,
 };
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -356,6 +357,10 @@ fn lost_or_stolen_fixes_the_option(cx: &mut TestAppContext) {
     ui.bind(cx);
     let dialog = open_password(&ui, Some(uuid::Uuid::now_v7()), cx);
     assert!(ui.visible("sync-compromised", cx));
+    assert!(
+        ui.visible("sync-lost-text", cx),
+        "the dialog says what it does"
+    );
     let fixed = cx.update(|cx| {
         let dialog = dialog.read(cx);
         dialog.compromised && dialog.fixed && matches!(dialog.step, PasswordStep::Form)
@@ -406,4 +411,36 @@ fn the_wizard_shows_the_key_after_registration(cx: &mut TestAppContext) {
 fn generated_key() -> SecretString {
     let key = shellpp_core::crypto::Key32::generate().expect("random");
     shellpp_core::crypto::encode_recovery_key(&key)
+}
+
+/// Closing the Reissue dialog on its key step (here as a lock closes it)
+/// drops the prepared key: it can no longer be confirmed or copied.
+#[gpui::test]
+fn closing_the_dialog_drops_the_prepared_key(cx: &mut TestAppContext) {
+    let mut profile = TestProfile::new();
+    let opened = profile.open_unlocked();
+    let password = profile.password().clone();
+    let ui = Ui::open(cx, opened);
+    ui.bind(cx);
+    let dialog = open_recovery(&ui, RecoveryKeyMode::Reissue, cx);
+    ui.type_text("sync-key-password", password.expose_secret(), cx);
+    ui.click("sync-key-next", cx);
+    assert!(ui.wait_for("sync-key-saved", cx));
+    let id = cx.update(|cx| match dialog.read(cx).step {
+        RecoveryStep::Key(_, Some(id)) => id,
+        _ => panic!("no prepared key"),
+    });
+    drop(dialog);
+    // As a lock closes it (`close_overlays`).
+    cx.update_window(ui.handle, |_, window, cx| window.close_all_dialogs(cx))
+        .unwrap();
+    ui.settle(cx);
+    assert!(!ui.visible("sync-recovery-key", cx), "closed");
+    let core = ui.core(cx);
+    assert!(
+        core.secret_copy(shellpp_core::service::dto::SecretCopyTarget::PendingRecoveryKey { id })
+            .is_err()
+    );
+    assert!(core.key_change_confirm(id).is_err(), "nothing to confirm");
+    ui.finish(cx);
 }

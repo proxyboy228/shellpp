@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use secrecy::SecretString;
 use shellpp_sync_api::api::{self as wire, B64, code};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use super::lock_ops;
 use super::lock_ops::KeyContext;
@@ -165,6 +164,7 @@ impl Core {
     ) -> Result<PreparedKey, CoreError> {
         let context = self.unlocked_key_context()?;
         let (kek, server) = if self.bound()? {
+            self.require_signed_in()?;
             let (_, keys) = self.current_keys(&password)?;
             (
                 keys.kek,
@@ -219,6 +219,7 @@ impl Core {
                 .map_err(KeyChangeFailure::into_error)?;
             return Ok(None);
         }
+        self.require_signed_in()?;
         let (link, current_keys) = self.current_keys(&current)?;
         drop(current);
         let origin = link.api.origin().to_owned();
@@ -255,9 +256,11 @@ impl Core {
         self.key_change_confirm_revoking(id, None)
     }
 
-    /// "Lost or stolen" (UI 12.2; SP 4.7): after "I saved it", the device
-    /// is revoked and the prepared change sent right after, so the thief's
-    /// old password and recovery key stop working within one step.
+    /// "Lost or stolen" (UI 12.2; SP 4.7): the device was revoked when the
+    /// user chose it; after "I saved it" it is revoked once more (a sign-in
+    /// with the old password meanwhile would have cleared that) and the
+    /// prepared change is sent right after, so the thief's old password and
+    /// recovery key stop working.
     pub fn key_change_confirm_lost(
         &self,
         id: u64,
@@ -327,6 +330,21 @@ impl Core {
             .map(|pending| crypto::encode_recovery_key(&pending.recovery_key))
     }
 
+    /// A bound device that is signed out (no refresh token) cannot send a
+    /// key change: it is refused before a new key is shown.
+    fn require_signed_in(&self) -> Result<(), CoreError> {
+        let guard = self.inner();
+        let signed_in = guard
+            .store
+            .server_account()?
+            .is_some_and(|account| account.refresh_token.is_some());
+        if signed_in {
+            Ok(())
+        } else {
+            Err(CoreError::Sync(HttpError::Refused("signed_out")))
+        }
+    }
+
     fn unlocked_key_context(&self) -> Result<KeyContext, CoreError> {
         let guard = self.inner();
         Self::require_session(&guard)?;
@@ -371,25 +389,11 @@ impl Core {
             if error.api_code() == Some(code::ACCOUNT_DELETED) {
                 return KeyChangeFailure::NotAccepted(self.on_call_error(error));
             }
-            let failure = sent_failure(error);
-            match failure {
-                KeyChangeFailure::Unknown(error) => self.probe_after_no_answer(link, error),
-                other => other,
-            }
+            // No answer stays "not known": the server may still be running
+            // the transaction (it goes on after the client gave up), so not
+            // even a later answer of another request proves it rolled back.
+            sent_failure(error)
         })
-    }
-
-    /// No answer to the change: every commit revokes the caller's tokens,
-    /// so an access token that still works proves the change was not made.
-    fn probe_after_no_answer(&self, link: &Link, error: CoreError) -> KeyChangeFailure {
-        let held: Option<Zeroizing<String>> = self.inner().sync.access.clone();
-        let Some(token) = held else {
-            return KeyChangeFailure::Unknown(error);
-        };
-        match link.api.account(&token) {
-            Ok(_) => KeyChangeFailure::NotAccepted(error),
-            Err(_) => KeyChangeFailure::Unknown(error),
-        }
     }
 
     /// Through the server: the reissue of section 5.3, or with a new

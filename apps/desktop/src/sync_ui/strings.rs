@@ -181,6 +181,8 @@ pub const ERROR_ROLLED_BACK: &str =
 pub const ERROR_INTEGRITY: &str =
     "The server sent data that does not open with this account's keys.";
 pub const ERROR_OTHER: &str = "Something went wrong. Try again.";
+pub const ERROR_SIGNED_OUT: &str =
+    "This device is signed out of the account. Sign in again in Account & Sync first.";
 
 pub const TOTP_SETUP: &str = "Two-step sign-in…";
 pub const TOTP_INTRO: &str =
@@ -196,7 +198,7 @@ pub const NEW_PASSWORD: &str = "New master password";
 pub const REPEAT_PASSWORD: &str = "Repeat the new password";
 pub const COMPROMISED: &str = "My old password may be compromised";
 pub const COMPROMISED_HINT: &str = "Recommended. Also gives your personal vault a new key and replaces your recovery key, so the old password and the old recovery key stop working, on the server and in its backups.";
-pub const COMPROMISED_HINT_LOCAL: &str = "Recommended. Also gives your vault a new key, so older copies of it no longer open new data with the old password.";
+pub const COMPROMISED_HINT_LOCAL: &str = "Recommended. Also gives your vault a new key and a new recovery key (kept in the vault, not shown), so older copies of it no longer open new data with the old password.";
 pub const COMPROMISED_OFF_HINT: &str =
     "Only the password changes: your vault key and your recovery key stay as they are.";
 pub const SIGNED_OUT_WARNING: &str =
@@ -210,7 +212,8 @@ pub const PASSWORD_CHANGED_REISSUED: &str = "The master password is changed, you
 pub const LOST_QUESTION: &str = "Was this device lost or stolen?";
 pub const REVOKE_ONLY: &str = "Revoke only";
 pub const LOST_OR_STOLEN: &str = "Lost or stolen";
-pub const LOST_TEXT: &str = "Changing the password here revokes the device first, then gives you a new master password, a new vault key and a new recovery key, so the ones the device holds stop working. Cancel only revokes the device. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too.";
+pub const LOST_TEXT: &str = "The device is signed out. Changing the password here gives you a new master password, a new vault key and a new recovery key, so the ones the device holds stop working. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too.";
+pub const LOST_NOT_CHANGED: &str = "The lost device stays signed out, but it still holds your old password and recovery key: change the password again as soon as you can.";
 
 pub const RECOVERY_TEXT: &str = "Enter your account's recovery key and a new master password. The new password also becomes the account password; your other devices sign in again with it.";
 pub const RECOVERY_KEY: &str = "Recovery key";
@@ -226,6 +229,7 @@ pub const COPY: &str = "Copy";
 pub const CONTINUE: &str = "Continue";
 pub const FINISH: &str = "Finish";
 pub const KEY_COPIED: &str = "Copied. The clipboard is cleared in 30 seconds.";
+pub const KEY_NOT_COPIED: &str = "The key could not be copied. Write it down instead.";
 pub const KEY_SAVED: &str = "I saved the recovery key";
 pub const RECOVERY_KEY_SECTION: &str = "Recovery key";
 pub const RECOVERY_KEY_HINT: &str = "With the recovery key you can set a new master password if you forget yours. Show it to make a copy; reissue it if someone else may know it. Both ask for the master password.";
@@ -242,9 +246,12 @@ pub const KEY_SHOWN_TEXT: &str =
 pub const KEY_NEW_TEXT: &str = "This is your new recovery key. Save it now: once you click Reissue, the old key stops working. Nothing changes before that.";
 pub const KEY_NEW_WITH_PASSWORD_TEXT: &str = "The change also replaces your recovery key with this new one. Save it now: once you click Change password, the old key stops working. Nothing changes before that.";
 pub const KEY_REISSUED: &str = "The new recovery key is in effect; the old one no longer works. Your other devices sign in again.";
-pub const KEY_NOT_ACCEPTED: &str = "The server did not accept the change, so nothing changed: your password and recovery key are the ones from before. Discard the recovery key shown here: it is not valid. If another device changed the recovery key at the same time, use Show to see the valid one.";
-pub const KEY_SIGNED_OUT: &str = "This device was signed out before the change was sent: the account was changed on another device. Keep the recovery key shown here for now and sign in again; then Show tells you which recovery key is valid.";
-pub const KEY_UNKNOWN: &str = "The server did not answer, so it is not known whether the change was made. Keep the recovery key shown here, and remember both passwords, until this device signs in again; then Show tells you which recovery key is valid.";
-pub const KEY_NOT_STORED: &str = "The server made the change, but this device could not store it. The recovery key shown here is now your account's: keep it, and sign in again with the new password.";
+pub const KEY_NOT_ACCEPTED: &str = "The server did not accept the change, so nothing changed: your password and recovery key are the ones from before. Discard the recovery key you were just shown: it is not valid. If another device changed the recovery key at the same time, sign in again on this device and use Show to see the valid one.";
+pub const KEY_SIGNED_OUT: &str = "This device was signed out before the change was sent: the account was changed on another device, or by an earlier attempt from here. Keep the recovery key you were just shown for now and sign in again; then Show tells you which recovery key is valid.";
+pub const KEY_UNKNOWN: &str = "The server did not answer, so it is not known whether the change was made. Keep the recovery key you were just shown, and remember both passwords, until this device signs in again; then Show tells you which recovery key is valid.";
+pub const KEY_UNKNOWN_REISSUE: &str = "The server did not answer, so it is not known whether the new recovery key was taken. Keep both the old one and the one you were just shown until this device signs in again; then Show tells you which one is valid.";
+pub const KEY_NOT_STORED: &str = "The server made the change, but this device could not store it. The recovery key you were just shown is now your account's: keep it, and sign in again with the new password.";
+pub const KEY_NOT_STORED_REISSUE: &str = "The server took the new recovery key, but this device could not store it. The key you were just shown is now your account's: keep it, and sign in again.";
+pub const KEY_REGISTERED_NOT_SHOWN: &str = "The recovery key could not be shown here. Open Settings ▸ Security ▸ Recovery key ▸ Show… now and save it.";
 pub const KEY_REGISTERED_TITLE: &str = "Recovery key";
 pub const KEY_REGISTERED_TEXT: &str = "This is the recovery key of your account. With it you can set a new master password if you forget yours. Save it now, outside this device; you can see it again in Settings ▸ Security.";
