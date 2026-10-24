@@ -10,7 +10,8 @@
 //!
 //! Runs with `SHELLPP_TEST_DEPLOY=docker` (Docker running, network for the
 //! images); otherwise it returns at once. Every container and network it
-//! starts carries the label `shellpp-test=deploy` and is removed at the end.
+//! starts carries the labels `shellpp-test=deploy` and `shellpp-run=<run>`
+//! (`support::run_label`) and is removed at the end.
 
 mod support;
 
@@ -81,6 +82,8 @@ fn example_configurations_validate() {
             "--rm",
             "--label",
             "shellpp-test=deploy",
+            "--label",
+            run_label(),
             "-v",
             &mount(&dir, "/cfg"),
             "caddy:2.10-alpine",
@@ -98,6 +101,8 @@ fn example_configurations_validate() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "-v",
         &mount(&dir, "/cfg"),
         "cloudflare/cloudflared:latest",
@@ -123,6 +128,8 @@ fn the_backup_script_deletes_files_past_retention() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "-v",
         &format!("{}:/backup.sh:ro", script.display()),
         "-v",
@@ -164,6 +171,8 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
         "create",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         &network,
     ]);
     assert!(ok, "network: {text}");
@@ -187,6 +196,8 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
         "--rm".into(),
         "--label".into(),
         "shellpp-test=deploy".into(),
+        "--label".into(),
+        run_label().into(),
         "-v".into(),
         format!("{volume}:/data"),
     ];
@@ -200,6 +211,8 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
         "-d".into(),
         "--label".into(),
         "shellpp-test=deploy".into(),
+        "--label".into(),
+        run_label().into(),
         "--network".into(),
         network.clone(),
         "--network-alias".into(),
@@ -224,6 +237,8 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
         "-d",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "--network",
         &network,
         "-p",
@@ -395,6 +410,8 @@ fn age_key() -> (String, String) {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "--entrypoint",
         "age-keygen",
         backup_image(),
@@ -448,6 +465,8 @@ fn a_failed_dump_fails_the_backup_and_leaves_no_backup_file() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "-v",
         &format!("{}:/backups", dir.path().display()),
         "-e",
@@ -499,6 +518,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         "create",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         &network,
     ]);
     cleanup.1 = Some(network.clone());
@@ -509,6 +530,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
             "-d",
             "--label",
             "shellpp-test=deploy",
+            "--label",
+            run_label(),
             "--network",
             &network,
             "--network-alias",
@@ -580,6 +603,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
             "-d",
             "--label",
             "shellpp-test=deploy",
+            "--label",
+            run_label(),
             "--network",
             &network,
             "-p",
@@ -647,6 +672,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "--network",
         &network,
         "-v",
@@ -694,6 +721,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "--network",
         &network,
         "-v",
@@ -713,6 +742,8 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         "--rm",
         "--label",
         "shellpp-test=deploy",
+        "--label",
+        run_label(),
         "--network",
         &network,
         "-e",

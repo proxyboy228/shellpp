@@ -5,8 +5,8 @@
 //! time; nothing touches a real profile.
 //!
 //! `SHELLPP_TEST_POSTGRES=docker` runs every server on PostgreSQL: one
-//! `postgres:17-alpine` container per test process (it stops itself after
-//! 30 minutes and is removed), one database per server.
+//! `postgres:17-alpine` container per test process, stopped and removed when
+//! the process ends, one database per server.
 
 #![allow(dead_code)]
 
@@ -53,22 +53,47 @@ pub fn email() -> String {
 // PostgreSQL in Docker
 // ---------------------------------------------------------------------------
 
+/// The label every container of a test run carries besides its kind
+/// (`shellpp-test=<kind>`): `shellpp-run=<SHELLPP_TEST_RUN>`, `local` when
+/// the variable is unset, so a run or an agent finds and removes only its
+/// own containers.
+pub fn run_label() -> &'static str {
+    static LABEL: OnceLock<String> = OnceLock::new();
+    LABEL.get_or_init(|| {
+        let run = std::env::var("SHELLPP_TEST_RUN")
+            .ok()
+            .filter(|run| !run.is_empty())
+            .unwrap_or_else(|| "local".to_owned());
+        format!("shellpp-run={run}")
+    })
+}
+
 struct Postgres {
     port: u16,
     password: String,
+    /// `docker start -a -i`, holding the container's stdin. The container
+    /// stops when it reads the end of it, which comes when this process
+    /// ends however it ends (the OS closes the pipe), and `--rm` then
+    /// removes it with its volume.
+    _attach: std::process::Child,
 }
 
 fn postgres() -> &'static Postgres {
     static PG: OnceLock<Postgres> = OnceLock::new();
     PG.get_or_init(|| {
         let password = random_hex(12);
+        // The shell is the container's first process: when `cat` sees the
+        // end of stdin it exits, and the container stops with it. The
+        // timeout is only a backstop for a stdin that never closes.
         let output = Command::new("docker")
             .args([
-                "run",
-                "-d",
+                "create",
+                "-i",
                 "--rm",
                 "--label",
                 "shellpp-test=postgres",
+                "--label",
+                run_label(),
                 "-e",
                 &format!("POSTGRES_PASSWORD={password}"),
                 "-p",
@@ -77,23 +102,40 @@ fn postgres() -> &'static Postgres {
                 "sh",
                 "postgres:17-alpine",
                 "-c",
-                "timeout 1800 docker-entrypoint.sh postgres",
+                "docker-entrypoint.sh postgres & timeout 7200 cat > /dev/null",
             ])
             .output()
             .expect("docker runs");
-        assert!(output.status.success(), "postgres container did not start");
+        assert!(
+            output.status.success(),
+            "postgres container was not created"
+        );
         let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        let port_out = Command::new("docker")
-            .args(["port", &id, "5432/tcp"])
-            .output()
-            .expect("docker port");
-        let text = String::from_utf8_lossy(&port_out.stdout);
-        let port: u16 = text
-            .lines()
-            .next()
-            .and_then(|line| line.rsplit(':').next())
-            .and_then(|port| port.trim().parse().ok())
-            .expect("a mapped port");
+        let attach = Command::new("docker")
+            .args(["start", "-a", "-i", &id])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("docker start runs");
+        let mut port = None;
+        for _ in 0..120 {
+            let port_out = Command::new("docker")
+                .args(["port", &id, "5432/tcp"])
+                .output()
+                .expect("docker port");
+            let text = String::from_utf8_lossy(&port_out.stdout);
+            port = text
+                .lines()
+                .next()
+                .and_then(|line| line.rsplit(':').next())
+                .and_then(|port| port.trim().parse::<u16>().ok());
+            if port.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        let port = port.expect("a mapped port");
         // Ready when a connection and a query work.
         let url = format!("postgres://postgres:{password}@127.0.0.1:{port}/postgres");
         let mut ready = false;
@@ -107,7 +149,11 @@ fn postgres() -> &'static Postgres {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         assert!(ready, "postgres did not become ready");
-        Postgres { port, password }
+        Postgres {
+            port,
+            password,
+            _attach: attach,
+        }
     })
 }
 

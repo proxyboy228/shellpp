@@ -28,12 +28,16 @@
 #   SHELLPP_OPENSSH_LIFETIME  seconds after which the container stops by
 #                             itself (default 3600)
 #   SHELLPP_OPENSSH_TIMEOUT   seconds to wait for the server (default 60)
+#   SHELLPP_TEST_RUN          the run or agent; the container is labelled
+#                             shellpp-run=<it> (default local), so stop.sh
+#                             --all removes only this run's containers
 #   SHELLPP_OPENSSH_VARIANT   a variant of the server (variants/<name>.sh,
 #                             README.md "Variants"; default none)
 
 set -euo pipefail
 
 readonly LABEL='dev.shellpp.test=openssh'
+readonly RUN_LABEL="shellpp-run=${SHELLPP_TEST_RUN:-local}"
 readonly PASSWORD_USER='pwuser'
 readonly KEY_USER='keyuser'
 readonly KI_USER='kiuser'
@@ -178,7 +182,7 @@ fi
 docker create \
     --init \
     --name "$name" \
-    --label "$LABEL" \
+    --label "$LABEL" --label "$RUN_LABEL" \
     --hostname shellpp-openssh \
     --publish 127.0.0.1::22 \
     --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" \

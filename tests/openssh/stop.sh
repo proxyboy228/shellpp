@@ -5,6 +5,9 @@
 #                                          start.sh <workdir> started
 #   bash tests/openssh/stop.sh --all       remove every container started by
 #                                          start.sh (label dev.shellpp.test=openssh)
+#                                          in this run (label
+#                                          shellpp-run=$SHELLPP_TEST_RUN, default
+#                                          local)
 #
 # Safe to run more than once. The files in <workdir> (server.json, the client
 # key) belong to the caller, who removes the directory.
@@ -15,6 +18,7 @@
 set -euo pipefail
 
 readonly LABEL='dev.shellpp.test=openssh'
+readonly RUN_LABEL="shellpp-run=${SHELLPP_TEST_RUN:-local}"
 
 # Git for Windows: keep Docker arguments as they are.
 export MSYS_NO_PATHCONV=1
@@ -29,7 +33,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [ "$1" = '--all' ]; then
-    containers="$(docker ps --all --quiet --filter "label=$LABEL" 2>/dev/null)" || exit 0
+    containers="$(docker ps --all --quiet --filter "label=$LABEL" --filter "label=$RUN_LABEL" 2>/dev/null)" || exit 0
     while read -r id; do
         [ -n "$id" ] || continue
         # A container frozen by control.sh freeze is resumed first.

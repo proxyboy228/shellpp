@@ -24,11 +24,12 @@
 #
 # Exit status: 0 done; 1 failed; 2 usage; 3 Docker is not available.
 # Environment: SHELLPP_OPENSSH_IMAGE, SHELLPP_OPENSSH_LIFETIME,
-# SHELLPP_OPENSSH_TIMEOUT as for start.sh.
+# SHELLPP_OPENSSH_TIMEOUT and SHELLPP_TEST_RUN as for start.sh.
 
 set -euo pipefail
 
 readonly LABEL='dev.shellpp.test=openssh-lab'
+readonly RUN_LABEL="shellpp-run=${SHELLPP_TEST_RUN:-local}"
 readonly SERVERS='jump1 jump2 target app1 app2 app3'
 
 log() {
@@ -141,7 +142,7 @@ fi
 
 suffix="$(random_hex | cut -c 1-10)"
 network="shellpp-lab-$suffix"
-docker network create --internal --label "$LABEL" "$network" >/dev/null || die 'docker network create failed'
+docker network create --internal --label "$LABEL" --label "$RUN_LABEL" "$network" >/dev/null || die 'docker network create failed'
 printf '%s\n' "$network" >"$workdir/network"
 : >"$workdir/containers"
 
@@ -166,12 +167,12 @@ for server in $SERVERS; do
     if [ "$server" = jump1 ]; then
         # The way in: published on loopback, on the default network; joins
         # the lab network below.
-        docker create --init --name "$name" --label "$LABEL" --hostname "$server" \
+        docker create --init --name "$name" --label "$LABEL" --label "$RUN_LABEL" --hostname "$server" \
             --publish 127.0.0.1::22 \
             --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" "$image" >/dev/null ||
             die "docker create $server failed"
     else
-        docker create --init --name "$name" --label "$LABEL" --hostname "$server" \
+        docker create --init --name "$name" --label "$LABEL" --label "$RUN_LABEL" --hostname "$server" \
             --network "$network" --network-alias "$server" \
             --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" "$image" >/dev/null ||
             die "docker create $server failed"
@@ -189,7 +190,7 @@ rm -rf "$input"
 
 # The proxies: published on loopback, reaching the lab network.
 proxy_name="shellpp-lab-proxy-$suffix"
-docker create --init --name "$proxy_name" --label "$LABEL" --hostname proxy \
+docker create --init --name "$proxy_name" --label "$LABEL" --label "$RUN_LABEL" --hostname proxy \
     --publish 127.0.0.1::3128 --publish 127.0.0.1::1080 \
     --env "SHELLPP_OPENSSH_LIFETIME=$lifetime" "$proxy_image" >/dev/null ||
     die 'docker create proxy failed'

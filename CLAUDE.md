@@ -38,8 +38,8 @@ powershell -ExecutionPolicy Bypass -File scripts\measure-startup.ps1
 `crates/core` (из них собираются образ сервера и клиенты теста), в файлах
 Docker (`server/Dockerfile`, `server/deploy/`) и в скрипте бэкапа. В полный
 критерий не входит; нужны запущенный Docker и сеть (образы, apk,
-crates.io). Тесты собирают образы, поднимают свои контейнеры с меткой
-`shellpp-test=deploy` и удаляют их:
+crates.io). Тесты собирают образы, поднимают свои контейнеры с метками
+`shellpp-test=deploy` и `shellpp-run=<прогон>` и удаляют их:
 
 ```
 $env:SHELLPP_TEST_DEPLOY='docker'; cargo test --manifest-path server/Cargo.toml --test deploy -- --test-threads=1
@@ -99,9 +99,17 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
     `russh`, а не на общем контейнере с параллельными тестами;
   - `SHELLPP_TEST_PUTTYGEN=docker` — тесты форматов против настоящего
     puttygen;
-  - `SHELLPP_TEST_POSTGRES=docker` — тесты сервера на PostgreSQL: сами
-    поднимают контейнер `postgres:17-alpine` и удаляют его; без
-    переменной — на SQLite;
+  - `SHELLPP_TEST_POSTGRES=docker` — тесты сервера на PostgreSQL: каждый
+    тестовый бинарник поднимает свой контейнер `postgres:17-alpine`
+    (метки `shellpp-test=postgres` и `shellpp-run=<прогон>`); контейнер
+    останавливается и удаляется вместе с томом, как только процесс
+    бинарника завершился, как бы он ни завершился (контейнер ждёт конца
+    своего stdin). Без переменной — на SQLite;
+  - `SHELLPP_TEST_RUN` — имя прогона или агента (`run10`,
+    `run11-a`): все тестовые контейнеры (PostgreSQL, развёртывание,
+    OpenSSH) получают метку `shellpp-run=<имя>`, по умолчанию `local`;
+    `tests/openssh/stop.sh --all` удаляет только контейнеры своего имени.
+    Найти свои: `docker ps -a --filter label=shellpp-run=<имя>`;
   - `SHELLPP_SFTP_BENCH=1` — замер SFTP (release-сборка).
 - Перед сборкой проверять свободное место на диске C (пороги — ROADMAP,
   раздел 6.5): при нехватке — удалить `target\debug\incremental`, потом
