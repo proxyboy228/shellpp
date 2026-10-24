@@ -1677,6 +1677,18 @@ Messages of this section [decision] (D93):
 - **Server restored**: when the server says it was restored from a backup, the app checks
   every vault against it and puts back what the server lost; the row says so until it is
   done.
+- **Forged key epoch** [decision] (D173, item 1.7; D183): when the server sends a record
+  sealed with a key of the personal vault that the server itself does not report (forged
+  or broken), sync of the vault stops and a warning row says "Sync stopped: the server sent
+  a record sealed with a key this vault does not have. Shell++ does not accept such a
+  key." with "Reset sync state of this vault…" (signed in only). The confirmation, titled
+  "Reset sync state of this vault", says that the whole vault is downloaded from the
+  server again and compared with this device, that nothing on this device is changed or
+  deleted and what the server lacks is sent back, that records sealed with a key the
+  server does not hold are refused and counted as damaged, and that a repeat may mean a
+  faulty server or one in someone else's hands. Buttons: Cancel and "Reset sync state".
+  It is never done without asking, every time; until then the row stays and sync of the
+  vault stays stopped.
 
 Also:
 

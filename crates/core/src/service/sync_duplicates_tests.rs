@@ -320,6 +320,7 @@ fn pull(core: &Core, seq: u64, envelope: &[u8]) {
         &state,
         &Selection::all(),
         &HashMap::new(),
+        false,
         now,
     )
     .unwrap();

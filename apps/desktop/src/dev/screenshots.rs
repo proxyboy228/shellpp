@@ -378,6 +378,9 @@ pub enum ShotState {
     SyncDuplicates,
     /// The comparison of a sync conflict over the host card's badge.
     SyncConflict,
+    /// The confirmation of "Reset sync state of this vault" after a forged
+    /// key epoch (run 9; D173, item 1.7).
+    SyncReset,
     // Run 9, plan 3.3 (D187): `sync_trust_shot`.
     /// The dialog of a changed pinned certificate the system trusts.
     SyncCertificateChanged,
@@ -535,7 +538,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 111] = [
+    pub const ALL: [Self; 112] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -611,6 +614,7 @@ impl ShotState {
         Self::HostsDuplicates,
         Self::SyncDuplicates,
         Self::SyncConflict,
+        Self::SyncReset,
         Self::SyncCertificateChanged,
         Self::SyncTrustCa,
         Self::SyncWeakerKdf,
@@ -789,6 +793,7 @@ impl ShotState {
             Self::HostsDuplicates => "hosts-duplicates",
             Self::SyncDuplicates => "sync-duplicates",
             Self::SyncConflict => "sync-conflict",
+            Self::SyncReset => "sync-reset",
             Self::SyncCertificateChanged => "sync-certificate-changed",
             Self::SyncTrustCa => "sync-trust-ca",
             Self::SyncWeakerKdf => "sync-weaker-kdf",
@@ -1946,6 +1951,7 @@ pub async fn reach_state(
         | ShotState::SyncReview
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
+        | ShotState::SyncReset
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
         ShotState::SyncCertificateChanged | ShotState::SyncTrustCa | ShotState::SyncWeakerKdf => {
             sync_trust_shot::reach(cx, handle, root, state, shot_state).await
@@ -2215,6 +2221,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SyncReview
             | ShotState::HostsDuplicates
             | ShotState::SyncConflict
+            | ShotState::SyncReset
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
             ShotState::SyncCertificateChanged
             | ShotState::SyncTrustCa

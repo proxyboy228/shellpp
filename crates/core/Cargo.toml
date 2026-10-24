@@ -14,7 +14,9 @@ default = []
 # `Core::sync_conflict_insert_for_test`: writes a sync conflict copy without
 # a server (UI 13.6); `Core::sync_duplicates_scan` and
 # `Core::sync_duplicate_copy_for_test`: list duplicate pairs as a pull would
-# and write a record's copy as another device would (UI 13.7). For the tests
+# and write a record's copy as another device would (UI 13.7);
+# `recording::fail_rekey`: makes a recording's re-encryption fail once
+# (storage-format 8.4). For the tests
 # and the desktop's screenshot run.
 # Never in a release build (only dev-dependencies and the `screenshots`
 # feature).

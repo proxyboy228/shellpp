@@ -220,7 +220,7 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'host-panel-telnet', 'serial-dialog', 'telnet-tab', 'serial-tab', 'new-tab-workspaces-missing',
     'serial-dialog-manual-port', 'settings-updates', 'top-bar-update',
     'sync-connect', 'sync-trust', 'sync-account', 'recently-deleted', 'sync-review', 'hosts-duplicates',
-    'sync-duplicates', 'sync-conflict')
+    'sync-duplicates', 'sync-conflict', 'sync-reset')
 # Run 9 (D187): the changed-certificate dialog and a CA file's confirmation.
 $allStates += @('sync-certificate-changed', 'sync-trust-ca', 'sync-weaker-kdf')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the

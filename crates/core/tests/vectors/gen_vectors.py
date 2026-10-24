@@ -131,6 +131,7 @@ def build() -> dict:
         "shellpp/v1/local-secrets", "shellpp/v1/recording", "shellpp/v1/export",
         "shellpp/v1/wrap/kek", "shellpp/v1/wrap/recovery", "shellpp/v1/wrap/device",
         "shellpp/v1/wrap/epoch-chain", "shellpp/v1/wrap/refresh-token",
+        "shellpp/v1/wrap/recording-rekey",
         "shellpp/v1/hpke/vault-key", "shellpp/v1/identity-fp",
     ]
     hdr = header(0x02, False, VAULT_ID, RECORD_ID, 3, 1)

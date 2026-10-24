@@ -76,6 +76,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "weaker_kdf" => strings::ERROR_WEAKER_KDF,
             "previous_account" => strings::ERROR_PREVIOUS,
             "rolled_back" => strings::ERROR_ROLLED_BACK,
+            "forged_epoch" => strings::FORGED_EPOCH,
             "integrity" => strings::ERROR_INTEGRITY,
             _ => strings::ERROR_OTHER,
         },
@@ -765,6 +766,7 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
             .child(text)
     };
     let rolled_back = status.last_error.as_deref() == Some("rolled_back");
+    let forged = status.last_error.as_deref() == Some("forged_epoch");
     // A changed or refused certificate stops sync (SP 2.1): its dialog.
     let certificate = match status.last_error.as_deref() {
         Some("certificate_changed") => Some(strings::CERTIFICATE_CHANGED_ROW),
@@ -790,6 +792,8 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
         );
     } else if rolled_back {
         block = block.child(warning("sync-rolled-back", strings::ROLLED_BACK, cx));
+    } else if forged {
+        block = block.child(warning("sync-forged-epoch", strings::FORGED_EPOCH, cx));
     } else if let Some(error) = &status.last_error
         && status.signed_in
     {
@@ -818,6 +822,7 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
         state.clone(),
         state.clone(),
     );
+    let reset = state.clone();
     let mut buttons = h_flex().gap(metrics::SPACE_2).flex_wrap();
     buttons = if status.signed_in {
         buttons.child(
@@ -853,6 +858,16 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                 .on_click(move |_, window, cx| {
                     window.close_dialog(cx);
                     open_password_action(repost.clone(), PasswordAction::Repost, window, cx);
+                }),
+        );
+    }
+    if forged && status.signed_in {
+        buttons = buttons.child(
+            ControlButton::new("sync-reset", ControlKind::Neutral)
+                .label(strings::RESET_SYNC)
+                .on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    open_reset(reset.clone(), window, cx);
                 }),
         );
     }
@@ -1522,6 +1537,100 @@ pub fn open_sign_out(
                         .on_click(move |_, window, cx| {
                             let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
                         }),
+                    ),
+            )
+    });
+    dialog
+}
+
+/// "Reset sync state of this vault" (UI 12.2): the confirmation, then the
+/// full resync of sync-protocol 6.9 that refuses the forged epoch.
+#[derive(Debug)]
+pub struct ResetDialog {
+    state: Entity<AppState>,
+    busy: bool,
+    error: Option<&'static str>,
+    task: Option<Task<()>>,
+}
+
+impl ResetDialog {
+    fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(core) = self.state.read(cx).core().cloned() else {
+            return;
+        };
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        let done = cx.background_spawn(async move { core.sync_reset_vault_state() });
+        self.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = done.await;
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                dialog.busy = false;
+                dialog
+                    .state
+                    .update(cx, |state, cx| state.refresh_sync_status(cx));
+                match result {
+                    Ok(_) => window.close_dialog(cx),
+                    Err(error) => dialog.error = Some(error_text(&error)),
+                }
+                cx.notify();
+            });
+        }));
+    }
+}
+
+impl Render for ResetDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("sync-reset-dialog")
+            .test_support()
+            .w_full()
+            .gap(metrics::SPACE_3)
+            .child(widgets::caption(strings::RESET_TEXT, cx))
+            .child(widgets::caption(strings::RESET_HINT, cx))
+            .children(error_line(self.error, cx))
+    }
+}
+
+pub fn open_reset(
+    state: Entity<AppState>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<ResetDialog> {
+    let dialog = cx.new(|_| ResetDialog {
+        state,
+        busy: false,
+        error: None,
+        task: None,
+    });
+    let shown = dialog.clone();
+    window.open_dialog(cx, move |modal, _, cx| {
+        let run = shown.downgrade();
+        let busy = shown.read(cx).busy;
+        modal
+            .w(metrics::scaled(DIALOG_WIDTH, cx))
+            .bg(cx.theme().popover)
+            .rounded(metrics::RADIUS_OVERLAY)
+            .close_button(false)
+            .title(title(strings::RESET_TITLE))
+            .child(shown.clone())
+            .footer(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap(metrics::SPACE_2)
+                    .child(
+                        ControlButton::new("sync-reset-cancel", ControlKind::Neutral)
+                            .label(strings::CANCEL)
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        ControlButton::new("sync-reset-run", ControlKind::Accent)
+                            .label(strings::RESET_RUN)
+                            .disabled(busy)
+                            .on_click(move |_, window, cx| {
+                                let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
+                            }),
                     ),
             )
     });

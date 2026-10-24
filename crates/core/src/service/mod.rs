@@ -138,6 +138,10 @@ pub struct Core {
     /// Serializes the operations that talk to the sync server; never taken
     /// while holding `inner`.
     sync_guard: Mutex<()>,
+    /// The recordings being written now (`recordings.rs`).
+    open_recordings: crate::recording::OpenFiles,
+    /// One re-encryption of recordings at a time (`recordings.rs`).
+    rekeying: Mutex<()>,
     /// What stands for the system's certificate trust of sync connections
     /// (the OS store; a fixed set in tests, `sync_trust.rs`).
     sync_roots: Mutex<crate::sync::SystemRoots>,
@@ -200,6 +204,8 @@ impl Core {
             inner: Mutex::new(inner),
             remember: Mutex::new(()),
             sync_guard: Mutex::new(()),
+            open_recordings: crate::recording::OpenFiles::default(),
+            rekeying: Mutex::new(()),
             sync_roots: Mutex::new(crate::sync::SystemRoots::Platform),
         })
     }
@@ -508,7 +514,12 @@ impl Core {
     /// device" is on. `Ok(false)` (and the state stays `locked`) when the
     /// option is off or anything fails (missing keychain item, failed unwrap).
     pub fn try_device_unlock(&self) -> Result<bool, CoreError> {
-        self.try_device_unlock_impl()
+        let unlocked = self.try_device_unlock_impl()?;
+        if unlocked {
+            self.recordings_resume();
+            self.abandoned_merge_cleanup();
+        }
+        Ok(unlocked)
     }
 
     /// First run (UI 13.1): creates ids, the personal vault, wraps and the
@@ -536,7 +547,12 @@ impl Core {
     /// `too_many_attempts` during a pause after 5 wrong passwords in a row
     /// (D29), checked before any key derivation.
     pub fn unlock(&self, password: SecretString) -> Result<LockStatus, CoreError> {
-        self.unlock_impl(password)
+        let status = self.unlock_impl(password)?;
+        // Upkeep after the session opened (storage-format.md 8.4;
+        // data-model 18.5).
+        self.recordings_resume();
+        self.abandoned_merge_cleanup();
+        Ok(status)
     }
 
     /// The time left before the next unlock attempt is accepted; `None` when

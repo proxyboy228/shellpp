@@ -100,14 +100,26 @@ pub(super) struct SyncRuntime {
     /// a client of that origin.
     access_origin: Option<String>,
     pending: Option<PendingSignIn>,
-    /// Items the server refused; not retried automatically (section 6.5).
-    failed: HashSet<Uuid>,
+    /// Items the server refused, with the status; not retried
+    /// automatically (section 6.5): "Sync now" retries them all, a pushed
+    /// deletion those refused for the quota.
+    failed: HashMap<Uuid, String>,
     failures: u32,
     backoff_until: Option<SystemTime>,
     integrity_warnings: usize,
     /// The server's `recovery_wrap` does not hold the personal vault key.
     recovery_mismatch: bool,
+    /// The `recovery_key` record (id and revision) and the personal epoch
+    /// the server's `recovery_wrap` was last found right for; checked in
+    /// every cycle until then, and again when either changes (D173, 1.17).
+    recovery_checked: Option<(Uuid, u64, u32)>,
     newer_epoch: bool,
+    /// The user confirmed "Reset sync state of this vault": the next cycle
+    /// refuses headers with an epoch the server does not hold.
+    reset_refuse_newer: bool,
+    /// Tests: the next merge at sign-in stops after its pull.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fail_merge: bool,
     /// The last sign-in refused weaker KDF parameters (D189).
     pub(super) weaker_kdf: Option<super::sync_trust::WeakerKdf>,
 }
@@ -124,6 +136,7 @@ impl SyncRuntime {
         self.access = None;
         self.access_origin = None;
         self.pending = None;
+        self.recovery_checked = None;
     }
 }
 
@@ -1213,9 +1226,73 @@ impl Core {
         Ok(SignInOutcome::Done(self.sync_status()?))
     }
 
-    /// The wizard's Cancel at the TOTP step: the derived key goes.
+    /// The wizard's Cancel: the derived key of a TOTP step goes, and so
+    /// does the vault an abandoned merge at sign-in left (run 7 finding 18).
+    /// While a sign-in still runs nothing is removed; the next unlock does
+    /// it.
     pub fn sync_sign_in_cancel(&self) {
         self.inner().sync.pending = None;
+        self.abandoned_merge_cleanup();
+    }
+
+    /// Removes the account vaults an interrupted merge at sign-in left
+    /// (data-model 18.5): personal vaults that are neither the local
+    /// personal vault nor bound nor archived, with their records and rows,
+    /// and the `.rekey` files of recordings that name them. The local
+    /// vault's data is never touched: the merge copies it, and only its
+    /// last transaction switches the personal vault. Runs only when no
+    /// sign-in or sync is talking to the server (the guard is free).
+    pub(super) fn abandoned_merge_cleanup(&self) {
+        let Ok(_sync) = self.sync_guard.try_lock() else {
+            return;
+        };
+        let removed = (|| -> Result<Vec<Uuid>, CoreError> {
+            let mut guard = self.inner();
+            let Some(personal) = guard.personal_vault_id else {
+                return Ok(Vec::new());
+            };
+            let leftovers: Vec<Uuid> = guard
+                .store
+                .vaults()?
+                .into_iter()
+                .filter(|vault| {
+                    vault.kind == crate::service::dto::VaultKind::Personal
+                        && vault.status == crate::service::dto::VaultStatus::Active
+                        && !vault.bound
+                        && vault.vault_id != personal
+                })
+                .map(|vault| vault.vault_id)
+                .collect();
+            // A merge names its account vault's account only in its last
+            // transaction: a vault that names one was bound and is kept.
+            let mut unbound = Vec::new();
+            for vault_id in leftovers {
+                if guard.store.vault_binding(&vault_id)?.0.is_none() {
+                    unbound.push(vault_id);
+                }
+            }
+            let leftovers = unbound;
+            if leftovers.is_empty() {
+                return Ok(leftovers);
+            }
+            guard.store.write(|tx| {
+                for vault_id in &leftovers {
+                    tx.vault_purge(vault_id)?;
+                }
+                Ok(())
+            })?;
+            for vault_id in &leftovers {
+                recordings::remove_rekeys_for(&guard.store, *vault_id);
+            }
+            Ok(leftovers)
+        })();
+        match removed {
+            Ok(removed) if !removed.is_empty() => {
+                tracing::info!(count = removed.len(), "abandoned sign-in merge removed");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(code = error.code(), "abandoned merge not removed"),
+        }
     }
 
     /// The TOTP step of a sign-in.
@@ -1669,8 +1746,13 @@ impl Core {
                 &state,
                 &all,
                 &HashMap::new(),
+                false,
                 now,
             )?;
+            if result.stopped && page.current_epoch <= new_session.ring.current_epoch() {
+                // An epoch the server does not hold (D183): never accepted.
+                return Err(refused("forged_epoch"));
+            }
             if result.stopped {
                 return Err(refused("newer_epoch"));
             }
@@ -1685,6 +1767,10 @@ impl Core {
         let inner = &mut *guard;
         if inner.state != LockState::Unlocked {
             return Err(CoreError::Locked);
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        if std::mem::take(&mut inner.sync.fail_merge) {
+            return Err(CoreError::Internal("injected merge failure"));
         }
         let mut old_session = inner.session.take().ok_or(CoreError::Locked)?;
         let outcome = self.merge_records(inner, &mut old_session, &mut new_session, now);
@@ -1722,6 +1808,14 @@ impl Core {
         if let Ok(Some(existing)) = inner.store.vault(&account_vault) {
             vault_row.created_at = existing.created_at;
         }
+        // The recordings follow their vault (storage 8.4): their keys are
+        // kept for the account vault before the old vault's keys go.
+        if let Err(error) =
+            recordings::prepare_rekeys(&inner.store, &old_session.ring, &new_session.ring)
+        {
+            inner.session = Some(old_session);
+            return Err(error);
+        }
         let written = inner.store.write(|tx| {
             tx.vault_put(&vault_row)?;
             tx.key_wrap_put(&kek_row)?;
@@ -1749,8 +1843,6 @@ impl Core {
             inner.session = Some(old_session);
             return Err(error.into());
         }
-        // The recordings follow their vault (storage 8.4).
-        recordings::reencrypt_all(&inner.store, &old_session.ring, &new_session.ring);
         drop(old_session);
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
@@ -1765,6 +1857,7 @@ impl Core {
             },
         );
         drop(guard);
+        self.recordings_resume();
         self.after_first_pull(account)?;
         let _ = self.cycle(false);
         Ok(())
@@ -1781,75 +1874,155 @@ impl Core {
         let now_text = format_timestamp(now);
         let old_vault = old.ring.vault_id();
         let new_vault = new.ring.vault_id();
-        // Natural keys of the account's live records.
-        let mut account_keys: HashMap<(RecordKind, String), Uuid> = HashMap::new();
-        for record in new.index.iter() {
-            if let Some(key) = natural::key(record.kind, record.data()) {
-                account_keys
-                    .entry((record.kind, key))
-                    .or_insert(record.record_id);
+        // Natural keys of the account's live records (data-model 18.6, in
+        // the account vault).
+        let mut account_keys: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
+        {
+            let keys = natural::Keys::new(&new.index);
+            for record in new.index.iter() {
+                if let Some(key) = keys.key_of(record) {
+                    account_keys
+                        .entry((record.kind, key))
+                        .or_default()
+                        .push(record.record_id);
+                }
             }
         }
         struct Item {
+            old_id: Uuid,
             new_id: Uuid,
             class: u8,
             type_name: String,
             v: u32,
             data: Map<String, Value>,
+            /// The account records with the same natural key.
+            twins: Vec<Uuid>,
+            /// The account record it is dropped for (equal data).
+            dropped: Option<Uuid>,
         }
-        let mut map: HashMap<String, String> = HashMap::new();
+        // Every local record that moves, with a new id and the account
+        // records of its natural key (computed in the local vault: parents
+        // by their natural keys, a host's effective port and username).
         let mut items = Vec::new();
-        let mut pairs = Vec::new();
-        for row in inner.store.records(&old_vault, None)? {
-            if row.tombstone {
-                continue;
-            }
-            let Some(payload) = open_payload(&mut old.ring, &row) else {
-                continue; // Damaged rows stay in the backup.
-            };
-            if NOT_MERGED.contains(&payload.type_name.as_str()) || payload.deleted {
-                continue;
-            }
-            let Some(data) = payload.data.clone() else {
-                continue;
-            };
-            let mut twin = None;
-            if let Some(kind) = RecordKind::from_name(&payload.type_name)
-                && let Some(key) = natural::key(kind, &data)
-                && let Some(existing) = account_keys.get(&(kind, key))
-            {
-                // Dropped only when nothing but references differs; a record
-                // that only shares the natural key (another group, other
-                // settings) is kept beside it as a duplicate pair (UI 13.7):
-                // principle 3 before tidiness.
-                let same = new.index.get(existing).is_some_and(|record| {
-                    engine::data_equal(Some(record.data()), Some(&remap_data(&data, &map)))
-                });
-                if same {
-                    map.insert(row.record_id.to_string(), existing.to_string());
+        {
+            let local_keys = natural::Keys::new(&old.index);
+            for row in inner.store.records(&old_vault, None)? {
+                if row.tombstone {
                     continue;
                 }
-                twin = Some(*existing);
+                let Some(payload) = open_payload(&mut old.ring, &row) else {
+                    continue; // Damaged rows stay in the backup.
+                };
+                if NOT_MERGED.contains(&payload.type_name.as_str()) || payload.deleted {
+                    continue;
+                }
+                let Some(data) = payload.data.clone() else {
+                    continue;
+                };
+                let twins = RecordKind::from_name(&payload.type_name)
+                    .and_then(|kind| {
+                        let key = match old.index.get(&row.record_id) {
+                            Some(record) if record.kind == kind => local_keys.key_of(record),
+                            _ => local_keys.key(kind, &data),
+                        };
+                        key.and_then(|key| account_keys.get(&(kind, key)))
+                    })
+                    .cloned()
+                    .unwrap_or_default();
+                items.push(Item {
+                    old_id: row.record_id,
+                    new_id: inner.ids.next(now),
+                    class: row.class,
+                    type_name: payload.type_name.clone(),
+                    v: payload.v,
+                    data,
+                    twins,
+                    dropped: None,
+                });
             }
-            let new_id = inner.ids.next(now);
-            map.insert(row.record_id.to_string(), new_id.to_string());
-            if let Some(existing) = twin {
+        }
+        // A record is dropped only when its data, with the references
+        // rewritten to the records they map to, equals an account record of
+        // its natural key. The references are compared after rewriting (run
+        // 7 finding 6), as the greatest set of drops that holds: every
+        // record with an account twin starts as dropped, and a record whose
+        // rewritten data matches no twin is kept, until nothing changes. So
+        // neither the order of the rows nor references in a cycle (a group
+        // whose jump host is in the group) leave an extra pair, and every
+        // drop is checked against the final map. A record that only shares
+        // the natural key stays beside it as a duplicate pair (UI 13.7):
+        // principle 3 before tidiness.
+        let account_data: HashMap<Uuid, &Map<String, Value>> = items
+            .iter()
+            .flat_map(|item| item.twins.iter())
+            .filter_map(|id| new.index.get(id).map(|record| (*id, record.data())))
+            .collect();
+        for item in &mut items {
+            item.dropped = item.twins.first().copied();
+        }
+        let map_of = |items: &[Item]| -> HashMap<String, String> {
+            items
+                .iter()
+                .map(|item| {
+                    let to = item.dropped.unwrap_or(item.new_id);
+                    (item.old_id.to_string(), to.to_string())
+                })
+                .collect()
+        };
+        let equal = |id: &Uuid, data: &Map<String, Value>| {
+            account_data
+                .get(id)
+                .is_some_and(|account| engine::data_equal(Some(account), Some(data)))
+        };
+        // Choosing among several twins may change other records' choices;
+        // the rounds are bounded, and the last loop below only keeps.
+        for _ in 0..=items.len() {
+            let map = map_of(&items);
+            let mut changed = false;
+            for item in items.iter_mut() {
+                let Some(current) = item.dropped else {
+                    continue;
+                };
+                let data = remap_data(&item.data, &map);
+                if equal(&current, &data) {
+                    continue;
+                }
+                item.dropped = item.twins.iter().copied().find(|twin| equal(twin, &data));
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+        loop {
+            let map = map_of(&items);
+            let mut changed = false;
+            for item in items.iter_mut() {
+                if let Some(current) = item.dropped
+                    && !equal(&current, &remap_data(&item.data, &map))
+                {
+                    item.dropped = None;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let map = map_of(&items);
+        let mut pairs = Vec::new();
+        for item in items.iter().filter(|item| item.dropped.is_none()) {
+            if let Some(existing) = item.twins.first() {
                 pairs.push(DuplicatePairRow {
                     vault_id: new_vault,
-                    record_id: existing,
-                    other_record_id: new_id,
+                    record_id: *existing,
+                    other_record_id: item.new_id,
                     found_at: now_text.clone(),
                     kept: false,
                 });
             }
-            items.push(Item {
-                new_id,
-                class: row.class,
-                type_name: payload.type_name.clone(),
-                v: payload.v,
-                data,
-            });
         }
+        items.retain(|item| item.dropped.is_none());
         let mut rows = Vec::with_capacity(items.len());
         for item in &items {
             let data = remap_data(&item.data, &map);
@@ -1935,6 +2108,9 @@ impl Core {
                     account.personal_vault.epoch == epoch && key.ct_eq(session.ring.current_key())
                 });
                 inner.sync.recovery_mismatch = !matches;
+                // The bundle may predate the record pulled after it (a
+                // reissue in between): the next cycle checks again.
+                inner.sync.recovery_checked = None;
                 if !matches {
                     tracing::warn!("the server's recovery wrap does not hold the vault key");
                 }
@@ -2165,6 +2341,42 @@ impl Core {
         self.cycle(false)
     }
 
+    /// "Reset sync state of this vault" (section 6.9; UI 12.2; D173, item
+    /// 1.7), after the user's confirmation: a full resync of the personal
+    /// vault from cursor 0, in which a record whose header names a key
+    /// epoch above this device's while the server reports none above it is
+    /// refused like a damaged one (not applied, the cursor goes on, the
+    /// integrity warning counts it). Such an epoch is never accepted: no
+    /// key row changes. Local data is not touched: records the snapshot
+    /// lacks are kept and pushed back, as in every full resync.
+    pub fn sync_reset_vault_state(&self) -> Result<SyncReport, CoreError> {
+        let _sync = self.sync_lock();
+        {
+            let mut guard = self.inner();
+            let inner = &mut *guard;
+            let session = Self::require_session(inner)?;
+            let vault_id = session.ring.vault_id();
+            match inner.store.server_account()? {
+                Some(row) if row.refresh_token.is_some() => {}
+                _ => return Err(CoreError::WrongState),
+            }
+            let classes = selection(&inner.store).classes;
+            let mut state = inner.store.sync_state(&vault_id)?;
+            state.vault_id = vault_id;
+            state.cursor = 0;
+            state.resync_classes = classes;
+            state.last_error = None;
+            inner.store.write(|tx| tx.sync_state_put(&state))?;
+            inner.sync.reset_refuse_newer = true;
+            inner.sync.failed.clear();
+            inner.sync.backoff_until = None;
+            tracing::info!("sync state reset by the user");
+        }
+        let result = self.cycle(false);
+        self.inner().sync.reset_refuse_newer = false;
+        result
+    }
+
     /// The automatic cycle (after unlock, after a change, every 60 s):
     /// refused items stay parked; nothing runs during the retry pause.
     pub fn sync_auto(&self) -> Result<SyncReport, CoreError> {
@@ -2244,6 +2456,8 @@ impl Core {
     }
 
     fn cycle_inner(&self, link: &Link, first: bool) -> Result<SyncReport, CoreError> {
+        // The confirmed "Reset sync state" runs this cycle only.
+        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer);
         let mut report = SyncReport::default();
         let mut changed: Vec<Uuid> = Vec::new();
         let mut changed_classes: Vec<u8> = Vec::new();
@@ -2266,7 +2480,7 @@ impl Core {
             .server_account()?
             .and_then(|row| row.server_generation);
         if !first && generation.is_some() && stored.is_some() && generation != stored {
-            self.restore(link, &mut report, &mut changed)?;
+            self.restore(link, &mut report, &mut changed, refuse_newer)?;
         }
         if generation.is_some() && generation != stored {
             let mut guard = self.inner();
@@ -2319,7 +2533,7 @@ impl Core {
                         .and_then(Value::as_str)
                         .unwrap_or("purged");
                     if reason == "ahead" {
-                        self.restore(link, &mut report, &mut changed)?;
+                        self.restore(link, &mut report, &mut changed, refuse_newer)?;
                         report.restored = true;
                         continue;
                     }
@@ -2360,9 +2574,17 @@ impl Core {
                     &state,
                     &selection,
                     &HashMap::new(),
+                    refuse_newer && page.current_epoch <= local_epoch,
                     self.now(),
                 )
             })?;
+            if result.stopped && page.current_epoch <= local_epoch {
+                // A header names an epoch the server itself does not hold:
+                // forged or broken. Never accepted; the vault's sync stops
+                // until the user resets its sync state (section 6.9; D173,
+                // item 1.7). What the page applied before it is kept.
+                return Err(refused("forged_epoch"));
+            }
             report.pulled += page.records.len();
             report.conflicts += result.effects.conflicts;
             report.integrity_warnings += result.effects.integrity_warnings;
@@ -2406,13 +2628,23 @@ impl Core {
             })?;
             report.brought_back += back.len();
         }
+        // The server's `recovery_wrap`, until it is found right (after the
+        // pull, so a failing push does not skip it).
+        if let Err(error) = self.check_recovery_wrap(link) {
+            tracing::warn!(code = error.code(), "recovery wrap not checked");
+        }
         // Push.
         if !report.newer_epoch {
             // Batches continue while records wait; rounds that only re-push
             // after conflicts are capped (section 6.11).
             let mut repush_rounds = 0;
+            let mut stale_rounds = 0;
+            // Items still answered `stale_key_epoch` after the one retry:
+            // left out for the rest of this cycle (pending, not refused).
+            let mut stale_skip: HashSet<Uuid> = HashSet::new();
             for _ in 0..MAX_PUSH_BATCHES {
-                let skip = self.inner().sync.failed.clone();
+                let mut skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
+                skip.extend(stale_skip.iter().copied());
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
                     engine::build_push(&mut inner.store, session, &selection, &skip, self.now())
@@ -2446,18 +2678,52 @@ impl Core {
                 report.newer_epoch |= effects.newer_epoch;
                 changed.extend(effects.changed.iter().copied());
                 changed_classes.extend(effects.classes.iter().copied());
+                // Section 6.5: a pushed deletion frees room, so the items
+                // refused for the quota go again (in this cycle).
+                let mut retry = false;
                 {
                     let mut guard = self.inner();
-                    guard
-                        .sync
-                        .failed
-                        .extend(effects.failed.iter().map(|(id, _)| *id));
+                    let failed = &mut guard.sync.failed;
+                    failed.extend(effects.failed.iter().cloned());
+                    if effects.pushed_deletion {
+                        let before = failed.len();
+                        failed.retain(|_, status| status != "quota_exceeded");
+                        retry = failed.len() != before;
+                    }
+                }
+                // `stale_key_epoch`: the keys, then the push again in this
+                // cycle (section 6.5). The personal vault's newer key comes
+                // only with a sign-in (section 5.1): the records stay
+                // pending, not refused.
+                if !effects.stale_key_epoch.is_empty() && stale_rounds > 0 {
+                    stale_skip.extend(effects.stale_key_epoch.iter().copied());
+                    retry = true;
+                } else if !effects.stale_key_epoch.is_empty() {
+                    let keys =
+                        self.authed(link, |api, token| api.vault_keys(token, link.vault_id))?;
+                    let local = self.with_session(|inner| {
+                        Ok(inner
+                            .session
+                            .as_ref()
+                            .map_or(0, |session| session.ring.current_epoch()))
+                    })?;
+                    match keys.current_epoch.cmp(&local) {
+                        std::cmp::Ordering::Greater => report.newer_epoch = true,
+                        std::cmp::Ordering::Less => return Err(refused("rolled_back")),
+                        std::cmp::Ordering::Equal => {
+                            // Re-sealed under the current epoch by the next
+                            // batch; once per cycle.
+                            stale_rounds += 1;
+                            retry = true;
+                        }
+                    }
                 }
                 if effects.repush && !batch.more {
                     repush_rounds += 1;
                 }
-                if !(effects.repush || batch.more)
+                if !(effects.repush || batch.more || retry)
                     || effects.newer_epoch
+                    || report.newer_epoch
                     || repush_rounds >= MAX_PUSH_ROUNDS
                 {
                     break;
@@ -2520,6 +2786,68 @@ impl Core {
         })
     }
 
+    /// Section 4.4: opens the server's `recovery_wrap` with the key of the
+    /// synced `recovery_key` record and compares it with the personal vault
+    /// key. Runs in every cycle until the check passes, and again whenever
+    /// the record gets a new revision (a reissue on any device) or the
+    /// vault a new epoch; a device without the record yet waits for it
+    /// (run 7 finding 17).
+    fn check_recovery_wrap(&self, link: &Link) -> Result<(), CoreError> {
+        let mark = self.with_session(|inner| {
+            let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
+            let Some(record) = session.index.singleton(RecordKind::RecoveryKey) else {
+                return Ok(None);
+            };
+            let mark = (
+                record.record_id,
+                record.revision,
+                session.ring.current_epoch(),
+            );
+            Ok((inner.sync.recovery_checked != Some(mark)).then_some(mark))
+        })?;
+        let Some(mark) = mark else {
+            return Ok(());
+        };
+        let account = self.authed(link, |api, token| api.account(token))?;
+        self.with_session(|inner| {
+            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+            let vault_id = session.ring.vault_id();
+            let epoch = session.ring.current_epoch();
+            let current = session
+                .index
+                .singleton(RecordKind::RecoveryKey)
+                .map(|record| (record.record_id, record.revision, epoch));
+            if account.personal_vault.vault_id != vault_id {
+                // Another personal vault: not this device's wrap at all.
+                inner.sync.recovery_mismatch = true;
+                tracing::warn!("the server names another personal vault");
+                return Ok(());
+            }
+            if current != Some(mark) || account.personal_vault.epoch != epoch {
+                // Changed meanwhile, or an epoch this device does not hold
+                // yet: the next cycle checks again.
+                return Ok(());
+            }
+            let recovery_key = lock_ops::recovery_key_of(session)?;
+            let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
+            let matches = open_account_wrap(
+                vault_id,
+                epoch,
+                account.personal_vault.recovery_wrap.as_bytes(),
+                &recovery_kek,
+                WrapKind::Recovery,
+            )
+            .is_some_and(|key| key.ct_eq(session.ring.current_key()));
+            inner.sync.recovery_mismatch = !matches;
+            if matches {
+                inner.sync.recovery_checked = Some(mark);
+            } else {
+                tracing::warn!("the server's recovery wrap does not hold the vault key");
+            }
+            Ok(())
+        })
+    }
+
     fn set_cursor(&self, vault_id: Uuid, cursor: u64) -> Result<(), CoreError> {
         let mut guard = self.inner();
         let mut state = guard.store.sync_state(&vault_id)?;
@@ -2548,6 +2876,7 @@ impl Core {
         link: &Link,
         report: &mut SyncReport,
         changed: &mut Vec<Uuid>,
+        refuse_newer: bool,
     ) -> Result<(), CoreError> {
         let selection = selection(&self.inner().store);
         let mut pages = Vec::new();
@@ -2603,6 +2932,7 @@ impl Core {
                     &state,
                     &selection,
                     &held,
+                    refuse_newer && page.current_epoch <= session.ring.current_epoch(),
                     self.now(),
                 )?;
                 report.integrity_warnings += result.effects.integrity_warnings;
@@ -2611,6 +2941,10 @@ impl Core {
                 for (id, revision) in &result.received {
                     let entry = server.entry(*id).or_insert(0);
                     *entry = (*entry).max(*revision);
+                }
+                if result.stopped && page.current_epoch <= session.ring.current_epoch() {
+                    // An epoch the server does not hold (D183).
+                    return Err(refused("forged_epoch"));
                 }
                 if result.stopped {
                     // A newer epoch: the device signs in again first; the
@@ -3263,7 +3597,7 @@ impl Core {
         }
         let mut report = SyncReport::default();
         let mut changed = Vec::new();
-        self.restore(&link, &mut report, &mut changed)?;
+        self.restore(&link, &mut report, &mut changed, false)?;
         let pushed = self.cycle(false)?;
         report.pushed = pushed.pushed;
         tracing::info!(epochs = steps.len(), "personal epochs re-posted");
@@ -3943,8 +4277,9 @@ impl Core {
                 })
                 .collect();
             let mut by_key: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
+            let keys = natural::Keys::new(&session.index);
             for record in session.index.iter() {
-                if let Some(key) = natural::key(record.kind, record.data()) {
+                if let Some(key) = keys.key_of(record) {
                     by_key
                         .entry((record.kind, key))
                         .or_default()
@@ -3975,6 +4310,33 @@ impl Core {
             self.emit_sync(inner);
             Ok(pairs.len())
         })
+    }
+
+    /// Test support (feature `test-hooks`): the next merge at sign-in stops
+    /// after it pulled the account vault, as a lost connection would.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn sync_merge_fail_once_for_test(&self) {
+        self.inner().sync.fail_merge = true;
+    }
+
+    /// Test support (feature `test-hooks`): every vault row as (id, kind,
+    /// status, bound).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn vault_rows_for_test(&self) -> Result<Vec<(Uuid, String, String, bool)>, CoreError> {
+        Ok(self
+            .inner()
+            .store
+            .vaults()?
+            .into_iter()
+            .map(|vault| {
+                (
+                    vault.vault_id,
+                    format!("{:?}", vault.kind).to_lowercase(),
+                    format!("{:?}", vault.status).to_lowercase(),
+                    vault.bound,
+                )
+            })
+            .collect())
     }
 
     /// Test support (feature `test-hooks`): writes a copy of a live
@@ -5377,6 +5739,68 @@ mod tests {
         // This device's own record names the current version.
         assert_eq!(item.current_device_name.as_deref(), Some("TEST"));
         assert!(item.current_this_device);
+    }
+
+    #[test]
+    fn stale_key_epoch_keeps_the_item_pending_and_not_refused() {
+        // Run 7 finding 19 (section 6.5): `stale_key_epoch` asks for the
+        // keys and another push, it does not park the item; an accepted
+        // deletion is reported, so the quota's refusals go again.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Stale", &random_text());
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let now = core.now();
+        let batch = engine::build_push(
+            &mut inner.store,
+            session,
+            &Selection::all(),
+            &HashSet::new(),
+            now,
+        )
+        .unwrap();
+        assert!(batch.sent.iter().any(|row| row.record_id == host));
+        let results: Vec<wire::PushResult> = batch
+            .sent
+            .iter()
+            .map(|row| wire::PushResult {
+                record_id: row.record_id,
+                status: if row.record_id == host {
+                    wire::ItemStatus::StaleKeyEpoch
+                } else {
+                    wire::ItemStatus::QuotaExceeded
+                },
+                seq: None,
+                current: None,
+            })
+            .collect();
+        let effects = engine::apply_push_results(
+            &mut inner.store,
+            session,
+            &batch.sent,
+            &results,
+            &Selection::all(),
+            now,
+        )
+        .unwrap();
+        assert_eq!(effects.stale_key_epoch, vec![host]);
+        assert!(!effects.newer_epoch, "the keys decide, not the answer");
+        assert!(
+            effects
+                .failed
+                .iter()
+                .all(|(id, status)| *id != host && status == "quota_exceeded"),
+            "{:?}",
+            effects.failed
+        );
+        assert!(!effects.pushed_deletion);
+        let row = inner
+            .store
+            .record(&session.ring.vault_id(), &host)
+            .unwrap()
+            .unwrap();
+        assert_ne!(row.revision, row.synced_revision, "still pending");
     }
 
     #[test]

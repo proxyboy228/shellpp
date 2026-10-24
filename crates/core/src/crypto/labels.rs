@@ -37,6 +37,8 @@ pub const WRAP_DEVICE: &[u8] = b"shellpp/v1/wrap/device";
 pub const WRAP_EPOCH_CHAIN: &[u8] = b"shellpp/v1/wrap/epoch-chain";
 /// AAD prefix of the wrapped refresh token.
 pub const WRAP_REFRESH_TOKEN: &[u8] = b"shellpp/v1/wrap/refresh-token";
+/// AAD prefix of a recording key waiting for its re-encryption (run 9).
+pub const WRAP_RECORDING_REKEY: &[u8] = b"shellpp/v1/wrap/recording-rekey";
 /// HPKE `info` prefix of a team vault key wrap.
 pub const HPKE_VAULT_KEY: &[u8] = b"shellpp/v1/hpke/vault-key";
 /// Prefix of the identity fingerprint hash.
@@ -61,6 +63,7 @@ pub const ALL: &[&[u8]] = &[
     WRAP_DEVICE,
     WRAP_EPOCH_CHAIN,
     WRAP_REFRESH_TOKEN,
+    WRAP_RECORDING_REKEY,
     HPKE_VAULT_KEY,
     IDENTITY_FP,
 ];

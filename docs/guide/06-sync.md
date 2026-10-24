@@ -373,6 +373,12 @@ If a device holds newer keys than the backup (after a password change with
 back" with **Bring the server up to date…**, which asks for the account
 password before it sends anything.
 
+If the server sends a record sealed with a key the account does not have
+(a fault or tampering), sync stops with a warning and **Reset sync state of
+this vault…**. After you confirm, the app downloads the vault again and
+compares it with the device: nothing on the device is changed or deleted,
+and records with such a key are refused.
+
 ### Your devices
 
 Each device keeps the three newest copies of its database in `backups\`

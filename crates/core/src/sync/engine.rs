@@ -92,6 +92,12 @@ pub struct Effects {
     pub failed: Vec<(Uuid, String)>,
     /// Items that need another push round in this cycle.
     pub repush: bool,
+    /// Items the server answered `stale_key_epoch` for: the keys, then the
+    /// push again (section 6.5); they stay pending.
+    pub stale_key_epoch: Vec<Uuid>,
+    /// A deletion was accepted: items refused for the quota go again
+    /// (section 6.5).
+    pub pushed_deletion: bool,
 }
 
 impl Effects {
@@ -332,6 +338,116 @@ fn adopt_version(
     }
 }
 
+/// The stamp of the version this device last synced for `local`: its own
+/// envelope when synced, its base envelope when pending (`None` when it was
+/// never synced or does not open).
+fn synced_stamp(
+    session: &mut Session,
+    local: &RecordRow,
+    now_text: &str,
+) -> Option<(Hlc, [u8; 16])> {
+    if local.revision == local.synced_revision {
+        return payload_of(session, local).map(|payload| stamp(&payload));
+    }
+    let base = local
+        .base_envelope
+        .as_ref()
+        .and_then(|bytes| row_from_envelope(local.vault_id, bytes, None, now_text))?;
+    payload_of(session, &base).map(|payload| stamp(&payload))
+}
+
+/// D184 (rule 0 of section 6.7; section 6.9): a server version below the
+/// revision this device synced but written after the version it synced
+/// (its stamp is greater) is an edit made on a server restored from an
+/// older backup, which this device's newer version goes over. It never
+/// wins, and it is never lost either: it is kept as a conflict copy, pushed
+/// and synced like every copy. A stale version whose stamp is not greater
+/// (a version this device superseded, a replay) adds nothing and gets no
+/// copy, nor does one equal to the local version or a conflict copy.
+#[allow(clippy::too_many_arguments)]
+fn keep_overwritten(
+    session: &mut Session,
+    effects: &mut Effects,
+    local: &RecordRow,
+    local_payload: &Payload,
+    synced: Option<(Hlc, [u8; 16])>,
+    server_row: &RecordRow,
+    server_payload: &Payload,
+    now: SystemTime,
+) -> Result<(), CoreError> {
+    if local_payload.type_name == "conflict" || server_payload.type_name == "conflict" {
+        return Ok(());
+    }
+    if local_payload.deleted == server_payload.deleted
+        && data_equal(local_payload.data.as_ref(), server_payload.data.as_ref())
+    {
+        return Ok(());
+    }
+    if synced.is_some_and(|synced| stamp(server_payload) <= synced) {
+        return Ok(());
+    }
+    let now_text = format_timestamp(now);
+    let hlc = session.hlc.tick(crate::model::time::unix_ms(now));
+    let payload = Payload::live(
+        "conflict",
+        1,
+        hlc,
+        session.device_id,
+        conflict_data(server_row, server_payload),
+    );
+    let row = vault::seal_row(
+        &mut session.ring,
+        local.class,
+        Uuid::now_v7(),
+        &payload,
+        None,
+        &now_text,
+    )?;
+    effects.put(row);
+    effects.conflicts += 1;
+    effects.repush = true;
+    Ok(())
+}
+
+/// A conflict copy of `losing` (by its record, stamp and deletion) is held
+/// here already: a repeated resync or restore, or a replay, makes none.
+fn has_copy(
+    store: &Store,
+    session: &mut Session,
+    local: &RecordRow,
+    losing: &Payload,
+) -> Result<bool, CoreError> {
+    let original = local.record_id.to_string();
+    let hlc = losing.hlc.to_text();
+    let device = losing.device_id.to_string();
+    for row in store.records(&local.vault_id, Some(&[local.class]))? {
+        if row.tombstone || session.index.get(&row.record_id).is_some() {
+            continue;
+        }
+        let Some(payload) = payload_of(session, &row) else {
+            continue;
+        };
+        if payload.type_name != "conflict" {
+            continue;
+        }
+        let field = |name: &str| {
+            payload
+                .data
+                .as_ref()
+                .and_then(|data| data.get(name))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        if field("original_record_id").as_deref() == Some(original.as_str())
+            && field("losing_hlc").as_deref() == Some(hlc.as_str())
+            && field("losing_device_id").as_deref() == Some(device.as_str())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Resolves a conflict between the local pending version and the server's
 /// (section 6.7). `server` is `None` when the record is absent there.
 /// `no_copy` suppresses the copy of rule 5 (a server restore's stale copy).
@@ -380,6 +496,7 @@ pub fn resolve(
     // it never replaces the local version, whatever rules 2-5 would say
     // (principle 3; section 6.9, step 3: no conflict copy for it).
     if server.revision < local.synced_revision.max(base_revision) {
+        keep_overwritten(session, effects, local, &l, base, server, &s, now)?;
         let previous = RecordRow {
             revision: local.revision.max(server.revision),
             synced_revision: server.revision,
@@ -502,12 +619,14 @@ pub fn apply_page(
     state: &SyncStateRow,
     selection: &Selection,
     no_copy_below: &HashMap<Uuid, u64>,
+    refuse_newer: bool,
     now: SystemTime,
 ) -> Result<PageResult, CoreError> {
     let vault_id = session.ring.vault_id();
     let now_text = format_timestamp(now);
     let mut result = PageResult::default();
-    let mut keys = KeyCache::new();
+    // New live records, checked for duplicates once the page is read.
+    let mut inserted: Vec<(RecordKind, Uuid)> = Vec::new();
     for record in records {
         let bytes = record.envelope.as_bytes();
         // Step 1: the vault, and an id that belongs to no other vault here.
@@ -521,8 +640,15 @@ pub fn apply_page(
             result.effects.integrity_warnings += 1;
             continue;
         }
-        // Step 2: an epoch this device does not hold yet.
+        // Step 2: an epoch this device does not hold yet. After the user's
+        // "Reset sync state" (section 6.9, a header epoch the server does
+        // not hold), it is refused like a failure of steps 1-3: never
+        // accepted, the cursor advances.
         if row.key_epoch > session.ring.current_epoch() {
+            if refuse_newer {
+                result.effects.integrity_warnings += 1;
+                continue;
+            }
             result.effects.newer_epoch = true;
             result.stopped = true;
             break;
@@ -558,16 +684,9 @@ pub fn apply_page(
             // A new record: insert.
             if let Opened::Live(kind, payload) = &opened
                 && selection.type_name(kind.name())
+                && payload.data.is_some()
             {
-                duplicates(
-                    session,
-                    &mut keys,
-                    &mut result.effects,
-                    *kind,
-                    payload,
-                    &row,
-                    &now_text,
-                );
+                inserted.push((*kind, row.record_id));
             }
             adopt_version(
                 &mut result.effects,
@@ -582,7 +701,72 @@ pub fn apply_page(
             continue;
         };
         if row.revision <= local.synced_revision {
-            continue; // An echo, a duplicate or a server rollback of this record.
+            // An echo, a duplicate or a server rollback of this record. A
+            // version below the synced one written after it (an edit on a
+            // restored server) is kept as a conflict copy (D184): the
+            // restore's mark pushes the local version over it.
+            // Another version at the synced revision is a fork of the
+            // server's history (a restore): this device's version goes over
+            // it as over a stale one (rule 0), and it is kept as a copy.
+            let synced_envelope = if local.revision == local.synced_revision {
+                Some(&local.envelope)
+            } else {
+                local.base_envelope.as_ref()
+            };
+            let fork = row.revision == local.synced_revision
+                && synced_envelope.is_some_and(|envelope| *envelope != row.envelope);
+            // Below the epoch this device synced (D93): refused, no copy.
+            let old_epoch = synced_epoch(&local).is_some_and(|epoch| row.key_epoch < epoch);
+            if (row.revision < local.synced_revision || fork) && old_epoch {
+                result.effects.integrity_warnings += 1;
+                continue;
+            }
+            if (row.revision < local.synced_revision || fork)
+                && let (Some(server_payload), Some(local_payload)) =
+                    (payload_of(session, &row), payload_of(session, &local))
+            {
+                // A version at the synced revision is never one this device
+                // made (a write always raises the revision), so a fork is
+                // kept whatever its stamp.
+                let synced = if fork {
+                    None
+                } else {
+                    synced_stamp(session, &local, &now_text)
+                };
+                if !has_copy(store, session, &local, &server_payload)? {
+                    keep_overwritten(
+                        session,
+                        &mut result.effects,
+                        &local,
+                        &local_payload,
+                        synced,
+                        &row,
+                        &server_payload,
+                        now,
+                    )?;
+                }
+                if fork {
+                    let previous = RecordRow {
+                        revision: local.revision.max(row.revision),
+                        synced_revision: row.revision,
+                        server_seq: row.server_seq,
+                        envelope: row.envelope.clone(),
+                        base_envelope: Some(row.envelope.clone()),
+                        ..local.clone()
+                    };
+                    let resealed = vault::seal_row(
+                        &mut session.ring,
+                        local.class,
+                        local.record_id,
+                        &local_payload,
+                        Some(&previous),
+                        &now_text,
+                    )?;
+                    result.effects.put(resealed);
+                    result.effects.repush = true;
+                }
+            }
+            continue;
         }
         // D93: a version below the key epoch this device synced is refused.
         // Records pushed back by a resync or a restore (synced revision 0)
@@ -636,50 +820,72 @@ pub fn apply_page(
     }
     let effects = std::mem::take(&mut result.effects);
     result.effects = effects.commit(store, session, Some(&state))?;
+    // The pairs are raised against the index with the page in it, so a
+    // parent that came in the same page counts (its natural key, a host's
+    // inherited port). They are hints the scan raises again (UI 13.7).
+    let pairs = duplicates(session, &inserted, vault_id, &now_text);
+    if !pairs.is_empty() {
+        store.write(|tx| {
+            for pair in &pairs {
+                tx.duplicate_pair_put(pair)?;
+            }
+            Ok(())
+        })?;
+    }
     Ok(result)
 }
 
 /// Raises a duplicate pair when a pulled insert has the natural key of a
 /// live record of the same type (data-model 18.3; not history or logs).
-/// Natural keys of the index's live records per kind, built once per page
-/// (a first pull of thousands of records stays linear).
-type KeyCache = HashMap<RecordKind, HashMap<String, Vec<Uuid>>>;
-
+/// The keys are those of data-model 18.6 in this vault (parents by their
+/// own natural keys, a host's effective port and username), built once per
+/// page and kind after the page is stored, so a first pull of thousands of
+/// records stays linear. A record the page also removed again is skipped.
 fn duplicates(
     session: &Session,
-    keys: &mut KeyCache,
-    effects: &mut Effects,
-    kind: RecordKind,
-    payload: &Payload,
-    row: &RecordRow,
+    inserted: &[(RecordKind, Uuid)],
+    vault_id: Uuid,
     now_text: &str,
-) {
-    let Some(data) = payload.data.as_ref() else {
-        return;
-    };
-    let Some(key) = natural::key(kind, data) else {
-        return;
-    };
-    let by_key = keys.entry(kind).or_insert_with(|| {
-        let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
-        for other in session.index.of_kind(kind) {
-            if let Some(key) = natural::key(kind, other.data()) {
-                map.entry(key).or_default().push(other.record_id);
+) -> Vec<DuplicatePairRow> {
+    let mut pairs = Vec::new();
+    if inserted.is_empty() {
+        return pairs;
+    }
+    let keys = natural::Keys::new(&session.index);
+    let mut cache: HashMap<RecordKind, HashMap<String, Vec<Uuid>>> = HashMap::new();
+    for (kind, record_id) in inserted {
+        let Some(record) = session.index.get_kind(record_id, *kind) else {
+            continue;
+        };
+        let Some(key) = keys.key_of(record) else {
+            continue;
+        };
+        let by_key = cache.entry(*kind).or_insert_with(|| {
+            let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
+            for other in session.index.of_kind(*kind) {
+                if let Some(key) = keys.key_of(other) {
+                    map.entry(key).or_default().push(other.record_id);
+                }
+            }
+            map
+        });
+        for other in by_key.get(&key).into_iter().flatten() {
+            // Pairs among the page's own records are raised once, from the
+            // later one.
+            let earlier = inserted.iter().position(|entry| entry.1 == *other);
+            let this = inserted.iter().position(|entry| entry.1 == *record_id);
+            if other != record_id && earlier.is_none_or(|earlier| Some(earlier) < this) {
+                pairs.push(DuplicatePairRow {
+                    vault_id,
+                    record_id: *other,
+                    other_record_id: *record_id,
+                    found_at: now_text.to_owned(),
+                    kept: false,
+                });
             }
         }
-        map
-    });
-    for other in by_key.get(&key).into_iter().flatten() {
-        if *other != row.record_id {
-            effects.duplicates.push(DuplicatePairRow {
-                vault_id: row.vault_id,
-                record_id: *other,
-                other_record_id: row.record_id,
-                found_at: now_text.to_owned(),
-                kept: false,
-            });
-        }
     }
+    pairs
 }
 
 /// A push batch: the items and the rows they were built from.
@@ -794,6 +1000,7 @@ pub fn apply_push_results(
         match result.status {
             ItemStatus::Ok => {
                 let seq = result.seq;
+                effects.pushed_deletion |= pushed.tombstone;
                 let mut row = local.clone();
                 if local.revision == pushed.revision {
                     row.synced_revision = row.revision;
@@ -840,11 +1047,16 @@ pub fn apply_push_results(
                     effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
+                // A `current` above this device's epoch: the cycle pushes
+                // only after a pull whose `current_epoch` is not above it,
+                // so the server holds no such key (D183): refused like a
+                // damaged version, not retried automatically.
                 if current
                     .as_ref()
                     .is_some_and(|row| row.key_epoch > session.ring.current_epoch())
                 {
-                    effects.newer_epoch = true;
+                    effects.integrity_warnings += 1;
+                    effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
                 resolve(
@@ -858,10 +1070,8 @@ pub fn apply_push_results(
                 )?;
             }
             ItemStatus::StaleKeyEpoch => {
-                effects
-                    .failed
-                    .push((local.record_id, "stale_key_epoch".into()));
-                effects.newer_epoch = true;
+                // Not refused for good: the keys, then the push again.
+                effects.stale_key_epoch.push(local.record_id);
             }
             ItemStatus::QuotaExceeded => {
                 effects
