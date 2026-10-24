@@ -272,6 +272,30 @@ pub const ERROR_ROLLED_BACK: &str =
 pub const ERROR_INTEGRITY: &str =
     "The server sent data that does not open with this account's keys.";
 pub const ERROR_OTHER: &str = "Something went wrong. Try again.";
+/// The texts of the server's error codes (SP 8: the client shows its own
+/// text by code, never the code itself; run 10).
+pub const ERROR_REQUEST: &str =
+    "The server did not accept the request. Updating Shell++ or the server may help.";
+pub const ERROR_ACCOUNT_DELETED: &str = "The account was deleted on the server.";
+pub const ERROR_ACCOUNT_DISABLED: &str =
+    "The account is disabled on the server. Ask the server's administrator.";
+pub const ERROR_FORBIDDEN: &str = "The server does not allow this for this account.";
+pub const ERROR_NOT_FOUND: &str = "The server does not know this account or item any more.";
+pub const ERROR_SAME_TIME: &str =
+    "Another device changed the same thing at the same time. It is tried again.";
+pub const ERROR_RESYNC: &str = "Sync had to start over; it goes on by itself.";
+pub const ERROR_TOO_LARGE: &str = "An item is too large for the server.";
+pub const ERROR_ANSWER_TOO_LARGE: &str = "The server's answer was too large.";
+pub const ERROR_SERVER_DOWN: &str =
+    "The server has a problem right now. Sync tries again by itself.";
+pub const ERROR_QUOTA: &str = "The account's storage on the server is full.";
+pub const ERROR_MALFORMED: &str =
+    "The server's answer could not be read. Is the address that of a Shell++ server?";
+pub const ERROR_CERTIFICATE: &str = "The server's certificate is not trusted.";
+pub const ERROR_CERTIFICATE_CHANGED: &str = "The server's certificate changed.";
+pub const ERROR_SNAPSHOT: &str =
+    "The server's data could not be read completely. Sync tries again.";
+pub const ERROR_NEWER_EPOCH: &str = "The account's keys changed on another device.";
 pub const ERROR_ACCOUNT_BINDING: &str = "This vault still belongs to your sync account. Sign in to the account in Account & Sync and change the password there, or untick “My old password may be compromised” to change it on this device only.";
 pub const RECOVERY_REISSUE_NEEDED: &str = "The server's copy of your recovery key is older than this device's, so neither key can recover the account now. Reissue the recovery key.";
 pub const ERROR_SIGNED_OUT: &str =

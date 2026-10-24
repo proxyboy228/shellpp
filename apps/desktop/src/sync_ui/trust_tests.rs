@@ -500,6 +500,69 @@ fn the_weaker_kdf_dialog_shows_both_settings_and_cancel_keeps_the_device_out(
     ui.finish(cx);
 }
 
+/// Run 10 (SP 8): every error code of the protocol, and the client's own,
+/// has a text; none shows the code itself, and an unknown one is general.
+#[test]
+fn every_error_code_has_a_text() {
+    use super::{code_text, strings};
+    let codes = [
+        "bad_request",
+        "invalid_envelope",
+        "weak_kdf_params",
+        "unauthenticated",
+        "invalid_credentials",
+        "invalid_totp",
+        "ticket_expired",
+        "refresh_token_reused",
+        "account_deleted",
+        "forbidden",
+        "not_member",
+        "insufficient_role",
+        "class_not_allowed",
+        "registration_closed",
+        "account_disabled",
+        "not_found",
+        "revision_conflict",
+        "stale_key_epoch",
+        "epoch_conflict",
+        "email_taken",
+        "sole_owner",
+        "invitation_state",
+        "cursor_expired",
+        "invitation_expired",
+        "payload_too_large",
+        "validation_failed",
+        "rate_limited",
+        "internal",
+        "unavailable",
+        "quota_exceeded",
+        "network",
+        "timeout",
+        "invalid_origin",
+        "certificate_changed",
+        "certificate_refused",
+        "malformed_answer",
+        "answer_too_large",
+        "unsafe_kdf",
+        "weaker_kdf",
+        "kdf_changed",
+        "previous_account",
+        "rolled_back",
+        "forged_epoch",
+        "integrity",
+        "signed_out",
+        "account_binding",
+        "incomplete_snapshot",
+        "newer_epoch",
+    ];
+    for code in codes {
+        let text = code_text(code);
+        assert_ne!(text, strings::ERROR_OTHER, "{code} has its own text");
+        assert!(!text.contains(code), "{code} is not shown");
+    }
+    assert_eq!(code_text("something_new"), strings::ERROR_OTHER);
+}
+
 /// The sign-out warning counts what is not on the server (D190).
 #[test]
 fn the_sign_out_warning_counts_what_is_not_on_the_server() {

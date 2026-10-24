@@ -1570,6 +1570,12 @@ Connection log in the form of a table.
 The application works without an account. With no server connected, this section has only
 the "Connect sync server" button (it opens the wizard, see 13.5) and data export. [decision]
 
+An error of the server or of sync shows as the app's own text for its code ("Last error:
+The server has a problem right now. Sync tries again by itself."), in this section, the
+wizard and the sync dialogs alike, never as the code (`docs/sync-protocol.md`, 8); an
+unknown code gets "Something went wrong. Try again." and goes to the log. [decision]
+(run 10)
+
 With a connected server:
 
 - server address; account email marked "verified / not verified";

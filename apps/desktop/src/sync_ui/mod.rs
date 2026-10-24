@@ -114,26 +114,52 @@ pub fn error_text(error: &CoreError) -> &'static str {
     match error {
         CoreError::InvalidPassword => strings::ERROR_PASSWORD,
         CoreError::Sync(HttpError::Origin(OriginError::HttpNotLocal)) => strings::ERROR_HTTP,
-        CoreError::Sync(error) => match error.code().as_str() {
-            "invalid_origin" => strings::ERROR_ADDRESS,
-            "network" | "timeout" => strings::ERROR_NETWORK,
-            "invalid_credentials" => strings::ERROR_CREDENTIALS,
-            "invalid_totp" => strings::ERROR_TOTP,
-            "ticket_expired" => strings::ERROR_TICKET,
-            "rate_limited" => strings::ERROR_RATE_LIMITED,
-            "registration_closed" => strings::ERROR_CLOSED,
-            "email_taken" => strings::ERROR_TAKEN,
-            "unsafe_kdf" | "weak_kdf_params" => strings::ERROR_KDF,
-            "weaker_kdf" => strings::ERROR_WEAKER_KDF,
-            "kdf_changed" => strings::ERROR_KDF_CHANGED,
-            "previous_account" => strings::ERROR_PREVIOUS,
-            "rolled_back" => strings::ERROR_ROLLED_BACK,
-            "forged_epoch" => strings::FORGED_EPOCH,
-            "integrity" => strings::ERROR_INTEGRITY,
-            "signed_out" => strings::ERROR_SIGNED_OUT,
-            "account_binding" => strings::ERROR_ACCOUNT_BINDING,
-            _ => strings::ERROR_OTHER,
-        },
+        CoreError::Sync(error) => code_text(&error.code()),
+        _ => strings::ERROR_OTHER,
+    }
+}
+
+/// The text for an error code of the server (SP 8) or of the sync client,
+/// as `sync_state.last_error` keeps it: the app shows its own text, never
+/// the code (SP 8; run 10). An unknown code gets the general text; the code
+/// stays in the log.
+pub fn code_text(code: &str) -> &'static str {
+    match code {
+        "invalid_origin" => strings::ERROR_ADDRESS,
+        "network" | "timeout" => strings::ERROR_NETWORK,
+        "invalid_credentials" => strings::ERROR_CREDENTIALS,
+        "invalid_totp" => strings::ERROR_TOTP,
+        "ticket_expired" => strings::ERROR_TICKET,
+        "rate_limited" => strings::ERROR_RATE_LIMITED,
+        "registration_closed" => strings::ERROR_CLOSED,
+        "email_taken" => strings::ERROR_TAKEN,
+        "unsafe_kdf" | "weak_kdf_params" => strings::ERROR_KDF,
+        "weaker_kdf" => strings::ERROR_WEAKER_KDF,
+        "kdf_changed" => strings::ERROR_KDF_CHANGED,
+        "previous_account" => strings::ERROR_PREVIOUS,
+        "rolled_back" => strings::ERROR_ROLLED_BACK,
+        "forged_epoch" => strings::FORGED_EPOCH,
+        "integrity" => strings::ERROR_INTEGRITY,
+        "signed_out" | "unauthenticated" | "refresh_token_reused" => strings::ERROR_SIGNED_OUT,
+        "account_binding" => strings::ERROR_ACCOUNT_BINDING,
+        "bad_request" | "validation_failed" | "invalid_envelope" | "class_not_allowed" => {
+            strings::ERROR_REQUEST
+        }
+        "account_deleted" => strings::ERROR_ACCOUNT_DELETED,
+        "account_disabled" => strings::ERROR_ACCOUNT_DISABLED,
+        "forbidden" | "not_member" | "insufficient_role" | "sole_owner" => strings::ERROR_FORBIDDEN,
+        "not_found" | "invitation_expired" | "invitation_state" => strings::ERROR_NOT_FOUND,
+        "revision_conflict" | "stale_key_epoch" | "epoch_conflict" => strings::ERROR_SAME_TIME,
+        "cursor_expired" => strings::ERROR_RESYNC,
+        "payload_too_large" => strings::ERROR_TOO_LARGE,
+        "answer_too_large" => strings::ERROR_ANSWER_TOO_LARGE,
+        "internal" | "unavailable" => strings::ERROR_SERVER_DOWN,
+        "quota_exceeded" => strings::ERROR_QUOTA,
+        "malformed_answer" => strings::ERROR_MALFORMED,
+        "certificate_refused" => strings::ERROR_CERTIFICATE,
+        "certificate_changed" => strings::ERROR_CERTIFICATE_CHANGED,
+        "incomplete_snapshot" => strings::ERROR_SNAPSHOT,
+        "newer_epoch" => strings::ERROR_NEWER_EPOCH,
         _ => strings::ERROR_OTHER,
     }
 }
@@ -1018,7 +1044,7 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
         && status.signed_in
     {
         block = block.child(widgets::caption(
-            format!("{}: {error}", strings::STATUS_ERROR),
+            format!("{}: {}", strings::STATUS_ERROR, code_text(error)),
             cx,
         ));
     }
