@@ -413,6 +413,10 @@ fn another_client_waits_at_most_the_soft_delay_of_the_account() {
     wait_out(wait);
     let answer = totp(&server, &ticket, &right(&secret), USER);
     assert_eq!(answer.status, 200, "the user signs in: {}", answer.body);
+    let bearer = format!(
+        "Bearer {}",
+        answer.body["tokens"]["access_token"].as_str().unwrap()
+    );
     let ticket = login_ticket(&server, &email, &auth_key);
     assert_delayed(&totp(&server, &ticket, &wrong(&secret), ATTACKER), 1..=6);
     // Signed in from there, the user's network is known: the soft limit
@@ -423,4 +427,14 @@ fn another_client_waits_at_most_the_soft_delay_of_the_account() {
         1..=4,
     );
     assert_wrong(&totp(&server, &ticket, &wrong(&secret), USER));
+    // Review finding: a code in a signed-in request (here: turning TOTP
+    // off) is held by the soft limit on every network, known or not; a
+    // stolen token gets no network out of it.
+    let disable = post(
+        &server,
+        "/v1/account/totp/disable",
+        &[("authorization", &bearer), ("x-forwarded-for", USER)],
+        json!({"current_auth_key": b64(&auth_key), "code": wrong(&secret)}),
+    );
+    assert_delayed(&disable, 1..=8);
 }

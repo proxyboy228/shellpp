@@ -155,9 +155,6 @@ impl FromRequestParts<AppState> for Auth {
             .limiters
             .api(principal.device_id)
             .map_err(ApiError::rate_limited)?;
-        // A network the account is used from is not held by the soft TOTP
-        // limit of the account (D175).
-        state.limiters.account_seen(principal.user_id, ip);
         Ok(Auth(principal))
     }
 }

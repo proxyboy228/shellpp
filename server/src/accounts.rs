@@ -20,7 +20,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::model::{
     self, DELETED_ACCOUNT_DAYS, LOGIN_TICKET_LIFETIME, RECOVERY_TICKET_LIFETIME, REFRESH_LIFETIME,
     REFRESH_RETRY, TICKET_ATTEMPTS, User, WRAP_LEN, exact_len, issue_family, revoke_all,
-    upsert_device, user_by_email, user_by_id,
+    upsert_device, user_by_email,
 };
 use crate::records;
 use crate::secrets;
@@ -585,7 +585,7 @@ fn check_ticket_totp(
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id, ip)
+        .totp_allowed(user.user_id, ip, true)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1015,7 +1015,9 @@ pub fn recover_complete(
     if device_id != request.device_id {
         return Err(ticket_expired());
     }
-    let user = user_by_id(tx, user_id)?.ok_or_else(ticket_expired)?;
+    // Locked, as at login: the TOTP counters of one account are asked by
+    // one code at a time (D175).
+    let user = model::user_by_id_locked(tx, user_id)?.ok_or_else(ticket_expired)?;
     if user.totp_enabled {
         let code = request
             .totp_code
@@ -1209,7 +1211,7 @@ pub fn totp_enable(
     }
     shared
         .limiters
-        .totp_allowed(user.user_id, ip)
+        .totp_allowed(user.user_id, ip, false)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1267,7 +1269,7 @@ fn check_user_totp(
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id, ip)
+        .totp_allowed(user.user_id, ip, false)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc

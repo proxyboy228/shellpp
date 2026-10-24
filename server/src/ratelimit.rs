@@ -207,13 +207,14 @@ impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
 pub const TOTP_FIRST_DELAY: Duration = Duration::from_secs(2);
 /// The longest delay per account and client network.
 pub const TOTP_PAIR_MAX_DELAY: Duration = Duration::from_secs(15 * 60);
-/// The longest delay of the soft limit per account: the longest any client
-/// waits because of failures from other networks.
-pub const TOTP_ACCOUNT_MAX_DELAY: Duration = Duration::from_secs(5 * 60);
+/// The longest delay of the soft limit per account: the longest one try
+/// waits because of failures from other networks. Shorter than a login
+/// ticket's 5 minutes, so the ticket outlives one wait.
+pub const TOTP_ACCOUNT_MAX_DELAY: Duration = Duration::from_secs(4 * 60);
 /// Failures are forgotten this long after the last one.
 pub const TOTP_MEMORY: Duration = Duration::from_secs(24 * 60 * 60);
-/// A network the account was used from (a right code, or a request with a
-/// token of the account) stays known this long after the last use.
+/// A network a right code of the account came from stays known this long
+/// after the last one.
 pub const TOTP_KNOWN_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// The known networks kept per account, the most recent.
 const TOTP_KNOWN_MAX: usize = 8;
@@ -258,11 +259,12 @@ impl Strikes {
 
 /// The TOTP delays (D175; docs/sync-protocol.md, section 10.1): a growing
 /// delay per account and client network, and a soft limit per account
-/// whose delay never passes [`TOTP_ACCOUNT_MAX_DELAY`]. The soft limit does
-/// not apply to the networks the account is known from, so failures from
-/// elsewhere never lock its usual networks out, even when an attacker takes
-/// every turn of the soft limit. A delay is an answer `429` with the
-/// seconds to wait, never a wait in the request.
+/// whose delay never passes [`TOTP_ACCOUNT_MAX_DELAY`]. At sign-in the soft
+/// limit does not apply to a network a right code of the account came from
+/// (only a right code marks one), so failures from elsewhere never lock
+/// those networks out, even when an attacker takes every turn of the soft
+/// limit. A delay is an answer `429` with the seconds to wait, never a wait
+/// in the request.
 #[derive(Debug, Default)]
 pub struct TotpDelays {
     pairs: Mutex<HashMap<(Uuid, IpAddr), Strikes>>,
@@ -270,9 +272,9 @@ pub struct TotpDelays {
     known: Mutex<HashMap<Uuid, Vec<(IpAddr, Instant)>>>,
 }
 
-/// More entries than this are pruned (forgotten ones first, then all but
-/// the last 15 minutes): an attacker with many addresses cannot grow them
-/// without bound. The count of the account still holds.
+/// More entries than this are pruned, forgotten ones first, then the oldest
+/// down to half: an attacker with many addresses cannot grow the maps
+/// without bound, and a prune runs at most once per half of them.
 const TOTP_MAX_ENTRIES: usize = 100_000;
 
 fn lock<T>(map: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -283,11 +285,15 @@ fn lock<T>(map: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn add_strike<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Strikes>, key: K, now: Instant) {
     if map.len() > TOTP_MAX_ENTRIES {
         map.retain(|_, strikes| strikes.at(now) > 0);
-    }
-    if map.len() > TOTP_MAX_ENTRIES {
-        map.retain(|_, strikes| {
-            now.saturating_duration_since(strikes.last) < Duration::from_secs(15 * 60)
-        });
+        let keep = TOTP_MAX_ENTRIES / 2;
+        if map.len() > keep {
+            // The newest `keep` stay.
+            let mut times: Vec<Instant> = map.values().map(|strikes| strikes.last).collect();
+            let dropped = times.len() - keep;
+            let (_, cutoff, _) = times.select_nth_unstable(dropped);
+            let cutoff = *cutoff;
+            map.retain(|_, strikes| strikes.last >= cutoff);
+        }
     }
     let strikes = map.entry(key).or_insert(Strikes {
         failures: 0,
@@ -300,7 +306,8 @@ fn add_strike<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Strikes>, key: K, no
 }
 
 impl TotpDelays {
-    /// `Err(seconds)` while `user` must wait before a code from `ip`.
+    /// `Err(seconds)` while `user` must wait before a sign-in code (login,
+    /// recovery) from `ip`.
     pub fn check(
         &self,
         user: Uuid,
@@ -308,16 +315,42 @@ impl TotpDelays {
         limits: &RateLimits,
         now: Instant,
     ) -> Result<(), u64> {
+        self.wait(user, ip, limits, now, true)
+    }
+
+    /// [`Self::check`] for a code of a signed-in request (enable, disable,
+    /// account deletion): the soft limit holds every network, known or not,
+    /// since whoever holds a token is already past the sign-in.
+    pub fn check_signed_in(
+        &self,
+        user: Uuid,
+        ip: IpAddr,
+        limits: &RateLimits,
+        now: Instant,
+    ) -> Result<(), u64> {
+        self.wait(user, ip, limits, now, false)
+    }
+
+    fn wait(
+        &self,
+        user: Uuid,
+        ip: IpAddr,
+        limits: &RateLimits,
+        now: Instant,
+        known_counts: bool,
+    ) -> Result<(), u64> {
         let pair = lock(&self.pairs)
             .get(&(user, network_of(ip)))
             .map_or(Duration::ZERO, |strikes| {
                 strikes.wait(now, limits.totp_free_failures, TOTP_PAIR_MAX_DELAY)
             });
-        let known = lock(&self.known).get(&user).is_some_and(|networks| {
-            networks.iter().any(|(network, seen)| {
-                *network == network_of(ip) && now.saturating_duration_since(*seen) < TOTP_KNOWN_FOR
-            })
-        });
+        let known = known_counts
+            && lock(&self.known).get(&user).is_some_and(|networks| {
+                networks.iter().any(|(network, seen)| {
+                    *network == network_of(ip)
+                        && now.saturating_duration_since(*seen) < TOTP_KNOWN_FOR
+                })
+            });
         let account = match lock(&self.accounts).get(&user) {
             Some(strikes) if !known => {
                 strikes.wait(now, limits.totp_soft_failures, TOTP_ACCOUNT_MAX_DELAY)
@@ -347,9 +380,9 @@ impl TotpDelays {
         self.seen(user, ip, now);
     }
 
-    /// The account was used from `ip` (a right code, or a request with one
-    /// of its tokens): the soft limit no longer applies to that network.
-    pub fn seen(&self, user: Uuid, ip: IpAddr, now: Instant) {
+    /// A right code of the account came from `ip`: the soft limit no longer
+    /// holds that network at sign-in.
+    fn seen(&self, user: Uuid, ip: IpAddr, now: Instant) {
         let network = network_of(ip);
         let mut known = lock(&self.known);
         let networks = known.entry(user).or_default();
@@ -488,9 +521,15 @@ impl Limiters {
         self.failures.refund(&email.to_owned());
     }
 
-    /// Before a TOTP code of `user` from `ip` is checked (D175).
-    pub fn totp_allowed(&self, user: Uuid, ip: IpAddr) -> Result<(), u64> {
-        self.totp.check(user, ip, &self.limits, Instant::now())
+    /// Before a TOTP code of `user` from `ip` is checked (D175): at sign-in
+    /// (login, recovery), or in a signed-in request.
+    pub fn totp_allowed(&self, user: Uuid, ip: IpAddr, sign_in: bool) -> Result<(), u64> {
+        if sign_in {
+            self.totp.check(user, ip, &self.limits, Instant::now())
+        } else {
+            self.totp
+                .check_signed_in(user, ip, &self.limits, Instant::now())
+        }
     }
 
     pub fn totp_failed(&self, user: Uuid, ip: IpAddr) {
@@ -499,11 +538,6 @@ impl Limiters {
 
     pub fn totp_succeeded(&self, user: Uuid, ip: IpAddr) {
         self.totp.succeed(user, ip, Instant::now());
-    }
-
-    /// A request with a token of `user` from `ip` (D175).
-    pub fn account_seen(&self, user: Uuid, ip: IpAddr) {
-        self.totp.seen(user, ip, Instant::now());
     }
 
     /// Before a bearer token is looked up for a request from `ip`.
@@ -723,10 +757,10 @@ mod tests {
     }
 
     /// D175: failures from many networks put a soft delay on the account
-    /// that never passes 5 minutes, while each attacking network waits up
+    /// that never passes 4 minutes, while each attacking network waits up
     /// to 15 minutes; another network waits at most the soft delay.
     #[test]
-    fn the_soft_limit_of_an_account_never_passes_5_minutes() {
+    fn the_soft_limit_of_an_account_never_passes_4_minutes() {
         let delays = TotpDelays::default();
         let limits = RateLimits::default();
         let user = Uuid::now_v7();
@@ -745,13 +779,13 @@ mod tests {
         for i in 0..200u32 {
             let ip = IpAddr::from([10, 1, (i / 256) as u8, (i % 256) as u8]);
             if let Err(wait) = delays.check(user, ip, &limits, now) {
-                assert!(wait <= 300, "the soft delay is at most 5 minutes: {wait}");
+                assert!(wait <= 240, "the soft delay is at most 4 minutes: {wait}");
                 now += secs(wait);
             }
             delays.fail(user, ip, now);
         }
         let soft = delays.check(user, user_ip, &limits, now).unwrap_err();
-        assert_eq!(soft, 300, "at its cap");
+        assert_eq!(soft, 240, "at its cap");
         // The attacker's own network also has its growing delay.
         for _ in 0..12 {
             now += secs(
@@ -763,14 +797,41 @@ mod tests {
             delays.fail(user, attacker, now);
         }
         assert_eq!(delays.check(user, attacker, &limits, now), Err(900));
-        assert_eq!(delays.check(user, user_ip, &limits, now), Err(300));
+        assert_eq!(delays.check(user, user_ip, &limits, now), Err(240));
         // After the soft delay the user's network may try; the attacker's
         // still waits.
-        now += secs(300);
+        now += secs(240);
         delays
             .check(user, user_ip, &limits, now)
             .expect("the user's turn");
-        assert_eq!(delays.check(user, attacker, &limits, now), Err(600));
+        assert_eq!(delays.check(user, attacker, &limits, now), Err(660));
+    }
+
+    /// Review finding (D175): past 100,000 entries the oldest go down to
+    /// half at once, so a flood costs one prune per 50,000 failures; the
+    /// newest entries stay.
+    #[test]
+    fn totp_maps_are_pruned_to_their_newest_half() {
+        let delays = TotpDelays::default();
+        let user = Uuid::now_v7();
+        let start = Instant::now();
+        for i in 0..=TOTP_MAX_ENTRIES as u32 {
+            let ip = IpAddr::from(i.to_be_bytes());
+            delays.fail(user, ip, start + Duration::from_millis(u64::from(i)));
+        }
+        let newest = IpAddr::from((TOTP_MAX_ENTRIES as u32).to_be_bytes());
+        assert_eq!(lock(&delays.pairs).len(), TOTP_MAX_ENTRIES + 1);
+        delays.fail(user, newest, start + secs(200));
+        let pairs = lock(&delays.pairs);
+        assert!(pairs.len() <= TOTP_MAX_ENTRIES / 2 + 1, "{}", pairs.len());
+        assert_eq!(pairs.get(&(user, newest)).map(|s| s.failures), Some(2));
+        assert!(!pairs.contains_key(&(user, IpAddr::from(0u32.to_be_bytes()))));
+        drop(pairs);
+        assert_eq!(
+            lock(&delays.accounts).get(&user).map(|s| s.failures),
+            Some(TOTP_MAX_ENTRIES as u32 + 2),
+            "the account count stays"
+        );
     }
 
     #[test]
