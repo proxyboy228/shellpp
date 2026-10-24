@@ -1833,3 +1833,18 @@ Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the 
    - The `wip/salvage-*` branches are kept.
 
 **Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
+
+### 174. Argon2id checks outside the database transaction (run 9)
+
+Status: run 9 decision, 2026-10-24 (D173, item 1.1; the run 7 report, section 10.1, finding 1).
+
+**Context.** Every sign-in ran its Argon2id check (m = 19 MiB, t = 2) inside its database transaction. On SQLite the server has one connection, so a burst of unauthenticated sign-ins, even with wrong keys for unknown emails, held the database for every other request (a request behind 64 such sign-ins waited for all of them); on PostgreSQL it held pool connections. The fix has to keep the order of the checks, the dummy check of unknown emails and the failure limits, and must not act on a key whose verifier changed meanwhile.
+
+**Decision:**
+
+- `login`, `recover/begin` and every signed-in endpoint that checks `current_auth_key` (email change, TOTP setup and disable, account deletion, a personal key epoch) check the key in two steps, through one helper (`accounts::check_sign_in`, `accounts::check_current_auth_key`, which return a `CheckedKey`): the user row is read in a read transaction of its own, then the failure limit and the Argon2id check run outside any transaction; an unknown email or a key of the wrong length is still checked against the dummy verifier. The write transaction then takes the user row with `CheckedKey::user` (locked on PostgreSQL), which goes on only while the verifier the key matched (`auth_verifier`, or `recovery_verifier` for recovery) is still the stored one. A password change, email change, recovery or reissue committed in between answers `401 invalid_credentials` without counting a failure; a user deleted in between answers what it answered before (`unauthenticated` for a signed-in request, `invalid_credentials` for a sign-in).
+- A registration makes its two verifiers the same way: its code (on an invite-only server) and the request's shape are checked first in a read transaction, so a request that will be refused costs no hash; the write transaction checks everything again and stores the verifiers made before.
+- At most half the CPUs, 1 to 8, Argon2id checks run at once (a semaphore of the server); the others wait without holding the database. Before, SQLite let only one run at a time and PostgreSQL as many as its pool: without the bound, a burst would allocate 19 MiB per request on as many threads as the blocking pool has.
+- `/account/password` and `/account/recovery-key` keep their check inside the transaction in this run (another agent extends them and the combined request of D173, item 2); at the merge they move to the same helper: the handler calls `current_auth_key` and the operation takes the user with `CheckedKey::user`. The new verifiers of password changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
+
+**Spec impact:** docs/sync-protocol.md, section 4.4 (server rules).

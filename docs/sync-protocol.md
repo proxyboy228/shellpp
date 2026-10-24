@@ -333,6 +333,7 @@ It answers like a login without TOTP, without the `status` field.
 Server rules:
 
 - Unknown email: run a dummy Argon2id verification against a fixed PHC string computed at startup, then answer `401 invalid_credentials`. Wrong `auth_key`: the same code. Both count as failed sign-ins for that email (section 10).
+- The Argon2id check of `auth_key`, `recovery_auth_key` and `current_auth_key` runs outside any database transaction: the server reads the user, checks the key, then writes in a transaction that goes on only while the verifier is still the one the key matched; one changed in between (a password change, recovery or reissue committed meanwhile) answers `401 invalid_credentials`. At most half the server's CPUs, 1 to 8, checks run at once. [decision] (D174)
 - `403 account_disabled` is returned only after a correct `auth_key`.
 - `device_id` bound to another user: `422 validation_failed` (section 4.7).
 - TOTP enabled: create an `auth_tickets` row (`kind = login`, 5 minutes, 5 attempts) and return the ticket. No tokens yet.
