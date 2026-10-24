@@ -104,6 +104,10 @@ pub(super) struct SyncRuntime {
     integrity_warnings: usize,
     /// The server's `recovery_wrap` does not hold the personal vault key.
     recovery_mismatch: bool,
+    /// The `recovery_key` record (id and revision) and the personal epoch
+    /// the server's `recovery_wrap` was last found right for; checked in
+    /// every cycle until then, and again when either changes (D173, 1.17).
+    recovery_checked: Option<(Uuid, u64, u32)>,
     newer_epoch: bool,
 }
 
@@ -112,6 +116,7 @@ impl SyncRuntime {
     pub(super) fn wipe(&mut self) {
         self.access = None;
         self.pending = None;
+        self.recovery_checked = None;
     }
 }
 
@@ -2430,6 +2435,10 @@ impl Core {
         if let Err(error) = self.ensure_recovery_row(&changed) {
             tracing::warn!(code = error.code(), "recovery row not rebuilt");
         }
+        // The server's `recovery_wrap`, until it is found right.
+        if let Err(error) = self.check_recovery_wrap(link) {
+            tracing::warn!(code = error.code(), "recovery wrap not checked");
+        }
         if !changed.is_empty() {
             changed.sort_unstable();
             changed.dedup();
@@ -2477,6 +2486,65 @@ impl Core {
                 session.ring.current_key(),
             )?;
             inner.store.write(|tx| tx.key_wrap_put(&row))?;
+            Ok(())
+        })
+    }
+
+    /// Section 4.4: opens the server's `recovery_wrap` with the key of the
+    /// synced `recovery_key` record and compares it with the personal vault
+    /// key. Runs in every cycle until the check passes, and again whenever
+    /// the record gets a new revision (a reissue on any device) or the
+    /// vault a new epoch; a device without the record yet waits for it
+    /// (run 7 finding 17).
+    fn check_recovery_wrap(&self, link: &Link) -> Result<(), CoreError> {
+        let mark = self.with_session(|inner| {
+            let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
+            let Some(record) = session.index.singleton(RecordKind::RecoveryKey) else {
+                return Ok(None);
+            };
+            let mark = (
+                record.record_id,
+                record.revision,
+                session.ring.current_epoch(),
+            );
+            Ok((inner.sync.recovery_checked != Some(mark)).then_some(mark))
+        })?;
+        let Some(mark) = mark else {
+            return Ok(());
+        };
+        let account = self.authed(link, |api, token| api.account(token))?;
+        self.with_session(|inner| {
+            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+            let vault_id = session.ring.vault_id();
+            let epoch = session.ring.current_epoch();
+            let current = session
+                .index
+                .singleton(RecordKind::RecoveryKey)
+                .map(|record| (record.record_id, record.revision, epoch));
+            if current != Some(mark)
+                || account.personal_vault.vault_id != vault_id
+                || account.personal_vault.epoch != epoch
+            {
+                // Changed meanwhile, or an epoch this device does not hold
+                // yet: the next cycle checks again.
+                return Ok(());
+            }
+            let recovery_key = lock_ops::recovery_key_of(session)?;
+            let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
+            let matches = open_account_wrap(
+                vault_id,
+                epoch,
+                account.personal_vault.recovery_wrap.as_bytes(),
+                &recovery_kek,
+                WrapKind::Recovery,
+            )
+            .is_some_and(|key| key.ct_eq(session.ring.current_key()));
+            inner.sync.recovery_mismatch = !matches;
+            if matches {
+                inner.sync.recovery_checked = Some(mark);
+            } else {
+                tracing::warn!("the server's recovery wrap does not hold the vault key");
+            }
             Ok(())
         })
     }
