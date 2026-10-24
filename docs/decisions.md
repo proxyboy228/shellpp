@@ -1784,3 +1784,52 @@ Status: run 8 decision, 2026-10-23 (plan, C5). Extends D63 (imported forwarding 
 **Decision:** Import Data turns Agent Forwarding (and "Also offer the system agent's keys") off on every host of the file, and counts the hosts it adds that way (a new host or an imported copy) in the summary ("Hosts imported with Agent Forwarding turned off"), unless the user chose "Full restore from my backup". Such a host is compared with the records here without these flags, like the autostart flags of a rule (D63): a host that is the same here stays "already here" with the user's own setting, and the next import of the same file finds the host or its copy again instead of adding another. The `~/.ssh/config` import keeps mapping `ForwardAgent` (D60): that file is the user's own config.
 
 **Spec impact:** docs/export-format.md, section 4 (the import rules); the user guide, chapter 7.
+
+## Run 9 of 2026-10-24
+
+The decisions below were taken during the owner's ninth long run (its plan, section 1), marked "run 9". D173 records the owner's answers given before the run; the disputable decisions of the run are listed for the owner in the run report.
+
+### 173. The owner's answers before run 9 (run 9)
+
+Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the findings of the run 7 report, section 10.1, the questions of ROADMAP section 4 and those of run 8's agent C). Amends D102 (the order in which a reissued recovery key is shown) and the stage 0 default of "My old password may be compromised" (docs/sync-protocol.md, section 5.1). The parts marked "run 10" or "stage 8" are carried out there.
+
+**Decision:**
+
+1. Run 7 review findings (run 7 report, section 10.1):
+   1. The Argon2 verification moves out of the database transaction now.
+   2. TOTP: instead of the fixed window of SP 10.1 (10 failures in 15 minutes per account), a growing delay per account and client IP, and a soft limit per account that never locks sign-in out entirely. The delay is an answer "retry after N seconds", never a wait inside the request.
+   3. The per-user lock in the quota step: stage 8.
+   4. `B64` and `Secret` of `crates/sync-api` are wiped on drop now; copies inside reqwest and hyper are a known limitation (security.md).
+   5. Prelogin on a bound, signed-out device with weaker KDF parameters (still above the floor) than the local ones: refused with a warning about a possible downgrade attack; going on only after an explicit confirmation in a dialog of its own.
+   6. The merge at sign-in compares in two passes and leaves no extra duplicate pairs.
+   7. A forged `key_epoch`: an error with the action "Reset sync state of this vault" (a full resync that leaves local data untouched, after a confirmation); the forged epoch is never accepted.
+   8. The `roster_entry` type rule: stage 8.
+   9. The server secret is read from a file (`SHELLPP_SERVER_SECRET_FILE`, as Docker secrets provide it); the environment variable stays for compatibility, with a warning in the log; copies inside `totp-rs` are a known limitation.
+   10. The empty `CHANNEL_DATA` of russh: a second patch in `third_party/russh` with a test, and the text for upstream in `docs/upstream/`.
+   11. A device back after a long absence: the server version that the device pushes its own over is never lost; it is kept as a conflict record on every device.
+   12. The duplicates hint hidden for viewers and archives: stage 8.
+   13. The duplicates hint on Keychain, Port Forwarding, workspaces and themes: run 10.
+   14. `keys_merge` in two transactions: accepted (a failure of the second step leaves both keys; nothing is lost).
+   15. f6d74c5 (run 7) is already in main, as is f3e1c2b (run 8).
+   16. Natural keys as data-model 18.6 defines them: the effective port and username, inherited from groups, and references compared after they are rewritten.
+   17. The server's `recovery_wrap` is checked in every cycle until the check passes, also after a recovery key reissue.
+   18. An abandoned sign-in merge: the extra vault is removed when the user gives up the sign-in.
+   19. The `failed` set and `stale_key_epoch` follow the table of SP 6.5 exactly.
+2. The recovery key and the password change:
+   - Keeping and showing the key stay as the specifications have them (the `recovery_key` record; Show and Reissue in UI 13.4; the key at registration, UI 13.5, step 4); only the code is missing.
+   - A reissued key is shown and confirmed ("I saved it") before anything is sent (SP 5.3, step 4). This replaces the interim order of D102, which showed the key after the server committed it.
+   - A password change, the rotation of the personal vault key and a recovery key reissue go to the server as one request applied in one transaction, with everything SP 5.1 and 5.3 list for them: the new `recovery_wrap`, the new verifier of `recovery_auth_key` and the new revision of the `recovery_key` record checked against its `base_revision`. A failed request changes nothing on the server, and the user is told that the old password and key still work. `/account/password` and `/account/recovery-key` stay for their own cases.
+   - "Lost or stolen" changes the password and reissues the recovery key through that request.
+   - "My old password may be compromised" now also reissues the recovery key, through the same request, and is on by default (the stage 0 default of SP 5.1 was off). Turned off, the change rewraps without a rotation and the recovery key stays.
+   - Without an account (local mode) the option is on by default too and does the same without a server: the rotation of SP 5.1 with the recovery wrap of its step 5, and a new `recovery_key` record whose key is not shown. Whoever knew the old password could read the old record, which would become the account's key at registration.
+   - The other devices are signed out as in SP 5.1; after signing in with the new password they go on syncing.
+   - "Remember on this device" after a rotation made on another device: the `device` wrap is made again with the device key from the OS key store; without that key the option is turned off with a clear note; never on a revoked device.
+3. The server certificate behaves as SP 2.1, UI 12.2 and UI 13.5 have it: the trust choice when the issuer is unknown, a CA added in that dialog, the changed-certificate dialog with all its buttons, a confirmation that goes on without signing out. Beyond the specification only a row with the current trust in Account & Sync (UI 12.2). An added CA counts for the sync server only, never for SSH or the system.
+4. Run 8, agent B (ROADMAP 4.3): `fido2-hid` stays off on macOS and Linux until a check with a real key; CSV keeps importing passwords (the reminder to delete the file exists, D141); autocomplete only in shells with bracketed paste, and script generation with the API key in the OS store and one OpenAI-compatible provider type, are confirmed.
+5. Other:
+   - Signing in or registering on a device whose personal vault is bound to an earlier account makes the archive of data-model 18.5 instead of refusing. The archive is exported like any vault (storage-format 13.1); viewing it in the interface comes with stage 8, together with the archives of removed members.
+   - Publishing the SSH ID again and changing the email are postponed.
+   - The behaviour questions of run 8's agent C (its report, section 8) are decided in run 9 by "the safest default; the user can turn it on explicitly"; the test infrastructure questions of that section go to run 10; only the owner makes the minisign signing key.
+   - The `wip/salvage-*` branches are kept.
+
+**Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
