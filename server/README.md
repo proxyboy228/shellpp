@@ -170,7 +170,7 @@ this server address only (never for other servers, SSH or the system):
   fingerprint first
   (`openssl s_client -connect sync.home.arpa:443 </dev/null | openssl x509 -noout -fingerprint -sha256`).
   A pin suits a long-lived certificate: when the server shows another one,
-  sync stops before any request and Account & Sync offers **Review…**:
+  sync stops before any request and Account & Sync offers **Review certificate…**:
   "Trust the new certificate", "Use the system's trust" (only when the
   system trusts the new one) or Cancel. Confirming keeps the device signed
   in.

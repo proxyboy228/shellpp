@@ -181,7 +181,7 @@ certificate on the server.
 When the server shows another certificate than the one you pinned, sync
 stops before anything is sent, nothing on the device changes, and
 Settings > **Account & Sync** says "The server's certificate changed" with
-**Review…**. The dialog shows the pinned and the new fingerprint side by
+**Review certificate…**. The dialog shows the pinned and the new fingerprint side by
 side and whether your system trusts the new certificate:
 
 - **Trust the new certificate** pins the new one, and sync goes on: you
@@ -194,7 +194,7 @@ side and whether your system trusts the new certificate:
 
 With an added CA, a certificate that no longer comes from that CA stops
 sync the same way ("The server's certificate is not trusted"), and
-**Review…** offers the choice again. Signing in again on a signed-out
+**Review certificate…** offers the choice again. Signing in again on a signed-out
 device and **Restore from sync** check the certificate with the same
 dialogs.
 
