@@ -219,6 +219,7 @@ Make one now: `docker compose run --rm -e BACKUP_ONCE=1 backup`.
    docker compose exec postgres dropdb -U shellpp shellpp
    docker compose exec postgres createdb -U shellpp shellpp
    docker compose exec -T postgres psql -U shellpp -v ON_ERROR_STOP=1 --single-transaction shellpp < restore.sql
+   rm restore.sql   # the plaintext dump: verifiers, wraps, metadata
    ```
 
 4. **Always** run `docker compose run --rm server admin restored`. It gives
@@ -267,6 +268,7 @@ to start while the file is missing. Then:
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
+docker compose pull postgres
 docker compose build --pull --no-cache backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d

@@ -24,8 +24,10 @@ DIR=${BACKUP_DIR_IN_CONTAINER:-/backups}
 RETENTION=${BACKUP_RETENTION_DAYS:-30}
 INTERVAL=${BACKUP_INTERVAL_SECONDS:-86400}
 
-# What a run killed in the middle left behind (never a backup).
-rm -f "$DIR"/shellpp-*.sql.age.part
+# What a run killed in the middle left behind (never a backup); a day old,
+# so a run going on at the same time (`docker compose run ... backup`)
+# keeps its file.
+find "$DIR" -maxdepth 1 -type f -name 'shellpp-*.sql.age.part' -mmin +1440 -delete
 
 fail() {
     echo "backup failed: $1" >&2
@@ -51,7 +53,7 @@ backup() {
         rm -f "$target.part"
         fail "pg_dump or age exited with an error; no file written"
     fi
-    mv "$target.part" "$target"
+    mv "$target.part" "$target" || fail "the finished backup could not be renamed"
     echo "backup written: $(basename "$target")"
 }
 
@@ -62,7 +64,7 @@ fi
 
 while :; do
     backup
-    prune
+    prune || fail "the old backups could not be pruned (BACKUP_RETENTION_DAYS is a number of days)"
     [ "${BACKUP_ONCE:-0}" = "1" ] && exit 0
     sleep "$INTERVAL"
 done
