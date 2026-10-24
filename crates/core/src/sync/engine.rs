@@ -790,6 +790,31 @@ pub fn apply_page(
             continue;
         }
         let pending = local.revision != local.synced_revision;
+        // In a server restore (section 6.9; `no_copy_below` holds the
+        // synced revisions of before): a newer server version replaces a
+        // version this device synced with the server of before, which the
+        // restored server may never have had (lost with the writes after
+        // its backup). That version is kept as a conflict copy, so the
+        // replace loses nothing (cross review of run 9, D184).
+        if !pending
+            && no_copy_below
+                .get(&row.record_id)
+                .is_some_and(|held| *held > 0)
+            && let (Some(server_payload), Some(local_payload)) =
+                (payload_of(session, &row), payload_of(session, &local))
+            && !has_copy(store, session, &local, &local_payload)?
+        {
+            keep_overwritten(
+                session,
+                &mut result.effects,
+                &row,
+                &server_payload,
+                None,
+                &local,
+                &local_payload,
+                now,
+            )?;
+        }
         if !pending {
             let previous_live = if local.tombstone {
                 None
