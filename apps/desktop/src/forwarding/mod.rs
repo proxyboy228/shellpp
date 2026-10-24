@@ -180,6 +180,8 @@ pub struct ForwardingScreen {
     /// Screenshots: the statuses on screen are set by hand, not read.
     frozen: bool,
     _subscriptions: Vec<Subscription>,
+    /// The duplicates-from-sync hint (UI 13.7).
+    duplicates_hint: Entity<crate::sync_ui::duplicates::DuplicatesHint>,
 }
 
 impl std::fmt::Debug for ForwardingScreen {
@@ -225,6 +227,15 @@ impl ForwardingScreen {
                 | AppStateEvent::LocationChanged(_)
                 | AppStateEvent::AutoLockDue => {}
             });
+        let duplicates_hint = cx.new(|cx| {
+            crate::sync_ui::duplicates::DuplicatesHint::new(
+                state.clone(),
+                "fwd-duplicates",
+                crate::sync_ui::duplicates::FORWARDING,
+                view::CONTENT_PADDING,
+                cx,
+            )
+        });
         let mut screen = Self {
             state,
             search,
@@ -245,6 +256,7 @@ impl ForwardingScreen {
             undo: None,
             poll: None,
             frozen: false,
+            duplicates_hint,
             _subscriptions: vec![search_subscription, state_subscription],
         };
         screen.reload(cx);

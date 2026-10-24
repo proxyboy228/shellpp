@@ -30,7 +30,7 @@ use crate::theme::focus::FocusRingExt as _;
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+pub(super) const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// A card holds three lines: title, summary, status.
 const CARD_HEIGHT: gpui::Rems = metrics::rpx(80.);
 const SEARCH_MIN_WIDTH: gpui::Rems = metrics::rpx(160.);
@@ -884,6 +884,7 @@ impl Render for ForwardingScreen {
                     .pb(metrics::SPACE_3)
                     .child(self.render_action_bar(window, cx)),
             )
+            .child(self.duplicates_hint.clone())
             .child(
                 div()
                     .id("fwd-content")

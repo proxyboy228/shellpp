@@ -61,6 +61,8 @@ pub struct HighlightRulesBlock {
     case_insensitive: bool,
     color: usize,
     error: Option<&'static str>,
+    /// The duplicates-from-sync hint (UI 13.7).
+    duplicates_hint: Entity<crate::sync_ui::duplicates::DuplicatesHint>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -88,8 +90,18 @@ impl HighlightRulesBlock {
                 _ => {}
             },
         );
+        let duplicates_hint = cx.new(|cx| {
+            crate::sync_ui::duplicates::DuplicatesHint::new(
+                state.clone(),
+                "settings-highlight-duplicates",
+                crate::sync_ui::duplicates::HIGHLIGHT_RULES,
+                gpui::rems(0.),
+                cx,
+            )
+        });
         let mut block = Self {
             state,
+            duplicates_hint,
             rules: Vec::new(),
             pattern,
             case_insensitive: true,
@@ -494,6 +506,7 @@ impl Render for HighlightRulesBlock {
             .child(categories)
             .child(super::label(strings::HL_CUSTOM, cx))
             .child(widgets::caption(strings::HL_CUSTOM_HINT, cx))
+            .child(self.duplicates_hint.clone())
             .child(custom)
     }
 }

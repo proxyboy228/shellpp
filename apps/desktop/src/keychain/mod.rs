@@ -477,6 +477,8 @@ pub struct KeychainScreen {
     reloads: usize,
     _subscriptions: Vec<Subscription>,
     panel_subscriptions: Vec<Subscription>,
+    /// The duplicates-from-sync hint (UI 13.7).
+    duplicates_hint: Entity<crate::sync_ui::duplicates::DuplicatesHint>,
 }
 
 impl std::fmt::Debug for KeychainScreen {
@@ -542,6 +544,15 @@ impl KeychainScreen {
                 AppStateEvent::SelectionChanged | AppStateEvent::LocationChanged(_) => {}
             });
         let (layout, sort) = saved_view(state.read(cx));
+        let duplicates_hint = cx.new(|cx| {
+            crate::sync_ui::duplicates::DuplicatesHint::new(
+                state.clone(),
+                "keychain-duplicates",
+                crate::sync_ui::duplicates::KEYCHAIN,
+                view::CONTENT_PADDING,
+                cx,
+            )
+        });
         Self {
             state,
             search,
@@ -568,6 +579,7 @@ impl KeychainScreen {
             loading: None,
             #[cfg(test)]
             reloads: 0,
+            duplicates_hint,
             _subscriptions: vec![search_subscription, state_subscription],
             panel_subscriptions: Vec::new(),
         }

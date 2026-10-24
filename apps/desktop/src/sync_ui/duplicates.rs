@@ -45,6 +45,15 @@ pub const HOSTS: &[&str] = &["host", "group"];
 pub const KNOWN_HOSTS: &[&str] = &["known_host"];
 /// The types of the Snippets screen's hint.
 pub const SNIPPETS: &[&str] = &["snippet", "snippet_package"];
+/// The types of the Keychain screen's hint (keys merge as 7.2 has it).
+pub const KEYCHAIN: &[&str] = &["key", "identity"];
+/// The types of the Port Forwarding screen's hint.
+pub const FORWARDING: &[&str] = &["forwarding_rule"];
+/// The types of the new tab page's hint (its workspaces).
+pub const WORKSPACES: &[&str] = &["workspace"];
+/// The types of the hint of Settings → Terminal. Themes are not records
+/// (no theme import yet), so only the highlighting rules can pair.
+pub const HIGHLIGHT_RULES: &[&str] = &["highlight_rule"];
 
 /// The pairs a hint or a dialog covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

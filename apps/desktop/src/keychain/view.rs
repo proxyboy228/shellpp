@@ -39,7 +39,7 @@ use crate::state::records_edit::{IdentityView, KeyKind};
 use crate::theme::{self, metrics, palette};
 
 /// Horizontal padding of the content (`--space-5`), as on the Hosts screen.
-const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
+pub(super) const CONTENT_PADDING: gpui::Rems = metrics::SPACE_5;
 /// A section heading row ("Keys", "Identities"), as on the Hosts screen.
 const HEADING_HEIGHT: gpui::Rems = metrics::rpx(40.);
 /// The tile of a list row (the 36 px card tile does not fit a 44 px row).
@@ -1173,6 +1173,7 @@ impl Render for KeychainScreen {
                     .pb(metrics::SPACE_3)
                     .child(self.render_action_bar(window, cx)),
             )
+            .child(self.duplicates_hint.clone())
             .child(
                 div()
                     .id("kc-content")

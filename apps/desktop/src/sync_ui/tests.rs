@@ -474,3 +474,65 @@ fn a_forged_epoch_offers_the_reset_after_a_confirmation(cx: &mut TestAppContext)
     assert!(!ui.visible("sync-reset-dialog", cx));
     ui.finish(cx);
 }
+
+/// Run 10 (UI 13.7): Keychain, Port Forwarding, the workspaces of the new
+/// tab page and the highlighting rules of Settings → Terminal have the
+/// hint too. A pair of each kind, as a pull would list it.
+#[gpui::test]
+fn the_other_screens_show_their_duplicates(cx: &mut TestAppContext) {
+    use shellpp_core::model::identity::PasswordChange;
+    use shellpp_core::service::keychain::IdentitySaveInput;
+    use shellpp_core::service::snippets::RecordInput;
+
+    let ui = Ui::open(cx);
+    let secret = generated_password();
+    let host = ui.host("Web", "web.example.com", &secret, cx);
+    let core = ui.core(cx);
+    let vault_id = ui.state.read_with(cx, |state, _| state.vault_id().unwrap());
+    let input = |data: serde_json::Value| RecordInput {
+        vault_id,
+        record_id: None,
+        data: data.as_object().cloned().unwrap(),
+    };
+    for _ in 0..2 {
+        core.identity_save(IdentitySaveInput {
+            vault_id,
+            record_id: None,
+            label: "ops".into(),
+            username: "ops".into(),
+            key_id: None,
+            password: PasswordChange::Keep,
+        })
+        .expect("identity");
+        core.forwarding_rule_save(input(json!({"type": "local", "host_id": host,
+            "bind_port": 15432, "dest_address": "db.internal", "dest_port": 5432})))
+            .expect("forwarding rule");
+        let link = json!({"vault_id": vault_id.to_string(), "record_id": host.to_string()});
+        core.workspace_save(input(json!({"name": "Daily",
+            "tabs": [{"root": {"session": {"kind": "ssh", "host": link}}}]})))
+            .expect("workspace");
+        core.highlight_rule_save(input(json!({"kind": "custom", "pattern": "ERROR",
+            "case_insensitive": true, "color_dark": "#ff5555", "color_light": "#cc0000",
+            "enabled": true})))
+            .expect("highlight rule");
+    }
+    assert_eq!(core.sync_duplicates_scan().expect("scan"), 4);
+    ui.settle(cx);
+    for (id, types) in [
+        ("keychain-duplicates", duplicates::KEYCHAIN),
+        ("fwd-duplicates", duplicates::FORWARDING),
+        ("new-tab-duplicates", duplicates::WORKSPACES),
+        ("settings-highlight-duplicates", duplicates::HIGHLIGHT_RULES),
+    ] {
+        let state = ui.state.clone();
+        let hint =
+            cx.new(|cx| duplicates::DuplicatesHint::new(state, id, types, gpui::rems(0.), cx));
+        assert_eq!(hint.read_with(cx, |hint, _| hint.count()), 2, "{id}");
+    }
+    // On the screens themselves.
+    ui.click("nav-keychain", cx);
+    assert!(ui.visible("keychain-duplicates", cx));
+    ui.click("nav-port-forwarding", cx);
+    assert!(ui.visible("fwd-duplicates", cx));
+    ui.finish(cx);
+}

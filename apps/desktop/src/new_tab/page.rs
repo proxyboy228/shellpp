@@ -3,10 +3,11 @@
 //!
 //! Layout: a column of at most [`COLUMN_WIDTH`] centered at the top of the
 //! tab's area (`--space-6` above it, `--space-5` at the sides): the search
-//! field with the Ctrl+K hint, then the header "Recent connections" (16 px,
-//! 600, design-system 5) with "Create a workspace" (disabled until stage 9,
-//! tooltip) and Restore (disabled without a snapshot of the previous
-//! launch), then the list. While the field holds text the header gives way
+//! field with the Ctrl+K hint, the duplicates-from-sync hint of the
+//! workspaces (UI 13.7), the saved workspaces, then the header "Recent
+//! connections" (16 px, 600, design-system 5) with "Create a workspace"
+//! (disabled while the window has no tab a workspace can keep) and Restore
+//! (disabled without a snapshot of the previous launch), then the list. While the field holds text the header gives way
 //! to the search results (open tabs, then hosts).
 
 use crate::state::WorkspaceItem;
@@ -37,6 +38,8 @@ pub struct NewTabPage {
     workspaces: Vec<WorkspaceItem>,
     /// The window has tabs a workspace can keep.
     can_create_workspace: bool,
+    /// The duplicates-from-sync hint of the workspaces (UI 13.7).
+    duplicates_hint: Entity<crate::sync_ui::duplicates::DuplicatesHint>,
 }
 
 impl std::fmt::Debug for NewTabPage {
@@ -70,11 +73,21 @@ impl Focusable for NewTabPage {
 impl NewTabPage {
     /// The page; the search field takes the focus.
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let duplicates_hint = cx.new(|cx| {
+            crate::sync_ui::duplicates::DuplicatesHint::new(
+                state.clone(),
+                "new-tab-duplicates",
+                crate::sync_ui::duplicates::WORKSPACES,
+                gpui::rems(0.),
+                cx,
+            )
+        });
         Self {
             picker: Picker::new(PickerKind::Page, "new-tab", state, None, window, cx),
             restore_available: false,
             workspaces: Vec::new(),
             can_create_workspace: false,
+            duplicates_hint,
         }
     }
 
@@ -304,6 +317,9 @@ impl Render for NewTabPage {
             .min_h_0()
             .gap(metrics::SPACE_4)
             .child(field)
+            .when(!self.picker.is_searching(), |this| {
+                this.child(self.duplicates_hint.clone())
+            })
             .children(workspaces)
             .children(header)
             .child(list);

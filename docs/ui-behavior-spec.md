@@ -2239,7 +2239,8 @@ Settings → Security (see 12.1):
 - When sync brings an object that matches one already here (the same host imported from
   `~/.ssh/config` on two devices, the same snippet, the same known host), the screen of
   that kind (Hosts, Keychain, Snippets, Port Forwarding, Known Hosts; workspaces on the new
-  tab page; themes and highlighting rules in Settings → Terminal) shows a hint, for example
+  tab page; themes and highlighting rules in Settings → Terminal, themes once imported
+  themes are records, which they are not yet) shows a hint, for example
   "2 hosts may be duplicates", with "Review". Objects match by their natural key
   (`docs/data-model.md`, 18.6): a host by its import key (the `~/.ssh/config` alias) when
   it has one, else by its address, port and user, a snippet by its
