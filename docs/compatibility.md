@@ -75,7 +75,7 @@ programs (`tests/openssh/programs.Dockerfile`, D83; bash,
 `TERM=xterm-256color`, `LANG=C.UTF-8`) at 1280x800, in both themes: the
 screenshot states `terminal-tmux`, `terminal-tmux-resize`, `terminal-mc`,
 `terminal-vim`, `terminal-nano`, `terminal-less`, `terminal-emacs`,
-`terminal-vttest` and `terminal-unicode` (`scripts/ui-screens.ps1 -Sizes
+`terminal-vttest`, `terminal-vttest-132` and `terminal-unicode` (`scripts/ui-screens.ps1 -Sizes
 1280x800 -States …`, OpenSSH only; files in `target\ui-screens\`). Each
 state checks what the program shows before the capture.
 
@@ -87,23 +87,37 @@ state checks what the program shows before the capture.
 | nano 8.4 | title bar, syntax colors, the two help rows, the status message in reverse video |
 | less 668 | the `less -M` prompt on the last row, the alternate screen |
 | emacs 30.1 (`-nw`) | menu bar, syntax colors, mode line, echo area |
-| vttest 2.7 | test 1 (cursor movements): the outer frame of `*` and `+`, the frame of `E`s and the text inside it are right; the inner bottom row of `+` lands too far right when the window is wider than 80 columns (see below) |
+| vttest 2.7 | test 1 (cursor movements) at 80 columns and, after Return, at 132 (DECCOLM, see below): the outer frame of `*` and `+`, the frame of `E`s and the text inside it are right in a wider window |
 | Cyrillic | right, including `ё` and `ъ` |
 | Combining marks | right: `é ä ñ ộ` from a letter plus marks, in one cell |
 | CJK, Hangul, fullwidth Latin | two cells each, in the right columns |
 | Box drawing | right |
-| Emoji | a single emoji right (two cells); sequences below |
+| Emoji | a single emoji right (two cells); an emoji with the variation selector VS16 (`❤️`) two cells (run 12, D206); sequences below |
 
 ### Known limits
 
-- **Emoji sequences** (run 5, D90). A skin tone modifier (`👍🏽`), a ZWJ
-  sequence (`👨‍👩‍👧`) and a flag (`🇺🇦`) are drawn as one glyph two cells wide
-  at their first cell. The grid still holds one character per cell as the
-  shell's `wcwidth` counts them, so the columns stay right; the cells after
-  the glyph stay blank (`👍🏽` takes four columns, the family six). Windows has
-  no flag glyphs: the font draws the two letters in boxes. An emoji with the
-  variation selector VS16 (`❤️`) is still drawn two cells wide in a one-cell
-  slot and covers the next cell. Not fixed.
+- **Emoji sequences** (run 5, D90; run 12, D206). A skin tone modifier
+  (`👍🏽`), a ZWJ sequence (`👨‍👩‍👧`) and a flag (`🇺🇦`) are drawn as one picture
+  at their first cell. The font's own placement of the glyphs stays when it
+  fits the sequence's cells: Segoe UI Emoji on Windows 10 draws a ZWJ family
+  from several glyphs it places together, and spread one per two cells they
+  fell apart (until run 12). The grid still holds one character per cell as
+  the shell's `wcwidth` counts them, so the columns stay right; the cells
+  after the picture stay blank (`👍🏽` takes four columns, the family six).
+- **Flags on Windows** (run 12: postponed). Windows ships no flag glyphs:
+  Segoe UI Emoji draws a flag's two regional indicators as the two letters
+  (`UA`), and so does the terminal. Drawing flags needs a font with them
+  shipped with the app, under a license the clean room allows (OFL), in a
+  format Windows 10 draws in color (COLR v0 or bitmaps); that choice is the
+  owner's. Elsewhere the system's emoji font draws them (not checked on
+  Linux yet).
+- **VS16 emoji take two cells** (run 12, D206). An emoji that is one column
+  wide by itself (`❤`, `⚠`, `✔`) followed by VS16 becomes two cells wide when
+  the selector arrives, as an emoji presentation is: the text after it moves
+  one column on. A program that counts such an emoji as one column (bash's
+  readline with glibc's `wcwidth`) can put the cursor one column off while
+  editing a command line that holds one. At the last column there is no
+  second cell and the emoji stays one cell wide.
 - **Known limitation: the blank cells after an emoji sequence** (D92). They
   stay: closing them up needs the terminal and the shell to agree on grapheme
   clusters (mode 2027, as in WezTerm and foot), which the shells in common

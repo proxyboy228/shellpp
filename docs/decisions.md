@@ -2294,3 +2294,17 @@ Status: run 12 (plan, section 3.0).
 - Both workspaces also run `cargo clippy --locked --workspace -- -D warnings`, without `--all-targets`: the libraries and binaries with the features a release build has. On a warm build it takes seconds.
 
 **Spec impact:** CLAUDE.md ("Тесты"); CONTRIBUTING.md, "Secret scanning"; docs/security.md, section 16.
+### 206. VS16 emoji take two cells; emoji sequences keep their font's placement; flags on Windows wait for a font (run 12)
+
+Status: run 12 (plan, section 3.1). Amends D90 for VS16; D92 (no mode 2027, blank cells after a sequence) stays.
+
+**Context.** The plan asks for emoji with VS16 two cells wide, ZWJ sequences as one group, flags as flags and vttest at 80/132 columns. Before run 12 an emoji with VS16 (`❤️`) kept the one cell `wcwidth` gives its base and was drawn two cells wide over the next cell (D90 left it). A ZWJ family on Windows 10 fell apart into two pictures: Segoe UI Emoji draws it from several glyphs it places together, and the renderer forced one glyph per two cells, as for a wide character. Flags are drawn as two letters: Segoe UI Emoji has no flag glyphs. DECCOLM has worked since run 5 (D90); only the 132-column screen had no screenshot.
+
+**Decision:**
+
+- **VS16.** When VS16 follows a narrow character that has an emoji presentation (the base and VS16 are two columns wide by `unicode-width`'s string rules), with nothing joined to it yet and room for a second cell in the row, the cell becomes a wide character: the selector joins it and a spacer is written after it the way the emulator writes a wide character's (insert mode, attributes and the wrap at the row's end as for any character). At the last column the emoji stays narrow. Programs that count such an emoji as one column (bash's readline with glibc's `wcwidth`) can put the cursor one column off while editing a line that holds one; the plan asks for two cells, so that is accepted and recorded in `docs/compatibility.md`.
+- **Sequences.** A ZWJ sequence, a skin tone modifier and a flag stay one picture at their first cell (D90), and the grid keeps the columns `wcwidth` counts (D92). The picture keeps the font's own placement of its glyphs when that fits the sequence's cells; otherwise one glyph per two cells, as before.
+- **Flags on Windows** are postponed: they need a font with flag glyphs shipped with the app under a license the clean room allows (OFL) and in a format Windows 10 draws in color; downloading and choosing one is the owner's call (run 12 report).
+- **vttest at 132 columns** gets its screenshot state, `terminal-vttest-132`: test 1 again after Return, at 132 columns.
+
+**Spec impact:** docs/compatibility.md, section 2.

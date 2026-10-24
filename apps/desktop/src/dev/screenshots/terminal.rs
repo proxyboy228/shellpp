@@ -734,6 +734,7 @@ pub async fn reach(
         | ShotState::TerminalLess
         | ShotState::TerminalEmacs
         | ShotState::TerminalVttest
+        | ShotState::TerminalVttest132
         | ShotState::TerminalUnicode => programs::reach(cx, handle, root, state, rig, shot).await,
         ShotState::TerminalTofu => {
             rig.forget_host_keys(&core)?;

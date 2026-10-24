@@ -873,16 +873,58 @@ fn continues_emoji(prev: &str, next: &str) -> bool {
         || (regional(first) && prev.chars().filter(|ch| regional(*ch)).count() % 2 == 1)
 }
 
+/// An emoji sequence's glyphs (D90, D206). A font may draw one sequence as
+/// several glyphs it places together (Segoe UI Emoji on Windows 10 draws a
+/// ZWJ family so): spread one per two cells, as a wide character's, they
+/// fall apart. So the font's own placement stays when it fits the
+/// sequence's `columns`; otherwise one glyph per two cells.
+fn shape_sequence(
+    window: &Window,
+    text: &str,
+    runs: &[TextRun],
+    metrics: &Metrics,
+    columns: usize,
+) -> ShapedLine {
+    let natural = window.text_system().shape_line(
+        SharedString::from(text.to_owned()),
+        metrics.font_size,
+        runs,
+        None,
+    );
+    if sequence_keeps_its_placement(natural.width, metrics.cell_width, columns) {
+        natural
+    } else {
+        shape(
+            window,
+            text,
+            runs,
+            metrics.font_size,
+            metrics.cell_width * 2.,
+        )
+    }
+}
+
+/// Whether an emoji sequence `width` wide as its font places it fits its
+/// `columns` cells.
+fn sequence_keeps_its_placement(width: Pixels, cell_width: Pixels, columns: usize) -> bool {
+    width <= cell_width * columns as f32
+}
+
+/// The columns a cell takes: two for a wide character.
+fn cell_columns(cell: &CellOut) -> usize {
+    if cell.flags.contains(Flags::WIDE_CHAR) {
+        2
+    } else {
+        1
+    }
+}
+
 /// Adds a cell's background to the row's runs.
 fn add_background(backgrounds: &mut Vec<BackgroundRun>, cell: &CellOut) {
     let Some(bg) = cell.bg else {
         return;
     };
-    let width = if cell.flags.contains(Flags::WIDE_CHAR) {
-        2
-    } else {
-        1
-    };
+    let width = cell_columns(cell);
     let color = rgb_token(bg).hsla();
     match backgrounds.last_mut() {
         Some(last) if last.color == color && last.column + last.cells == cell.column => {
@@ -921,15 +963,11 @@ fn layout_row(
             if end > index + 1 {
                 narrow.finish(style, metrics, window, &mut segments);
                 let runs = [RunStyle::of(cell).run(text.len(), &style.fonts)];
+                let last = &cells[end - 1];
+                let columns = last.column + cell_columns(last) - cell.column;
                 segments.push(Segment {
                     column: cell.column,
-                    line: shape(
-                        window,
-                        &text,
-                        &runs,
-                        metrics.font_size,
-                        metrics.cell_width * 2.,
-                    ),
+                    line: shape_sequence(window, &text, &runs, metrics, columns),
                 });
                 index = end;
                 continue;
@@ -1156,6 +1194,17 @@ mod tests {
 
     fn fg_of(cells: &[CellOut]) -> Vec<(usize, Rgb)> {
         cells.iter().map(|cell| (cell.column, cell.fg)).collect()
+    }
+
+    /// An emoji sequence keeps the placement of its font's glyphs when they
+    /// fit the sequence's cells (a ZWJ family has six), and is one glyph per
+    /// two cells when they do not (D206).
+    #[test]
+    fn emoji_sequences_keep_the_fonts_placement_when_it_fits() {
+        let cell = px(8.);
+        assert!(sequence_keeps_its_placement(px(30.), cell, 6));
+        assert!(sequence_keeps_its_placement(px(16.), cell, 2));
+        assert!(!sequence_keeps_its_placement(px(16.5), cell, 2));
     }
 
     /// Wide characters are one cell in the output (spacers left out);

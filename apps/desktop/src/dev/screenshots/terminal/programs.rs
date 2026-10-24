@@ -22,7 +22,7 @@ use crate::shell::Shell;
 use crate::state::AppState;
 
 /// The states of this module, in capture order.
-pub const STATES: [ShotState; 9] = [
+pub const STATES: [ShotState; 10] = [
     ShotState::TerminalTmux,
     ShotState::TerminalTmuxResize,
     ShotState::TerminalMc,
@@ -31,6 +31,7 @@ pub const STATES: [ShotState; 9] = [
     ShotState::TerminalLess,
     ShotState::TerminalEmacs,
     ShotState::TerminalVttest,
+    ShotState::TerminalVttest132,
     ShotState::TerminalUnicode,
 ];
 
@@ -176,12 +177,39 @@ pub async fn reach(
             // Test 1, its first screen: a frame of E's in a border.
             start(cx, handle, &pane, shot, "1", VTTEST_MARKER).await
         }
+        ShotState::TerminalVttest132 => {
+            start(cx, handle, &pane, shot, "vttest", VTTEST_MENU_MARKER).await?;
+            start(cx, handle, &pane, shot, "1", VTTEST_MARKER).await?;
+            // Return: the same screen at 132 columns (DECCOLM).
+            type_line(cx, handle, &pane, "")?;
+            wait_until(
+                cx,
+                handle,
+                shot,
+                "vttest at 132 columns",
+                STEP_TIMEOUT,
+                |cx| Ok(vttest_at_132(&pane, cx)),
+            )
+            .await?;
+            sleep(cx, HTOP_DRAW).await;
+            render(cx, handle)
+        }
         ShotState::TerminalUnicode => {
             let line = printf_command(&UNICODE_LINES);
             start(cx, handle, &pane, shot, &line, UNICODE_MARKER).await
         }
         _ => Err(ScreenshotError::state(shot, "not a program state")),
     }
+}
+
+/// Whether vttest's test 1 is on screen at 132 columns: its frame of E's,
+/// and a border row of `*` as wide as that.
+fn vttest_at_132(pane: &Entity<SessionPane>, cx: &App) -> bool {
+    let rows = screen(pane, cx);
+    shows(pane, VTTEST_MARKER, cx)
+        && rows
+            .iter()
+            .any(|row| row.trim_end().len() == 132 && row.chars().all(|ch| ch == '*' || ch == ' '))
 }
 
 /// Whether tmux's status line (`marker` first) is the last row on screen.
@@ -221,6 +249,10 @@ pub fn check(
         ShotState::TerminalVttest => need(
             shows(&pane, VTTEST_MARKER, cx),
             "vttest's test is not on screen",
+        ),
+        ShotState::TerminalVttest132 => need(
+            vttest_at_132(&pane, cx),
+            "vttest's test is not on screen at 132 columns",
         ),
         ShotState::TerminalUnicode => need(
             shows(&pane, UNICODE_MARKER, cx),

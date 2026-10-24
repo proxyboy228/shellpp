@@ -468,6 +468,8 @@ pub enum ShotState {
     TerminalEmacs,
     /// vttest: the first screen of its cursor movement test.
     TerminalVttest,
+    /// vttest: the same test at 132 columns (DECCOLM, D90).
+    TerminalVttest132,
     /// Cyrillic, emoji, wide and combining characters, box drawing.
     TerminalUnicode,
     /// A dropped connection: the output stays, the reason with Reconnect
@@ -556,7 +558,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 119] = [
+    pub const ALL: [Self; 120] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -674,13 +676,14 @@ impl ShotState {
         Self::TerminalLess,
         Self::TerminalEmacs,
         Self::TerminalVttest,
+        Self::TerminalVttest132,
         Self::TerminalUnicode,
         Self::TerminalHostKeyChanged,
     ];
     /// The states with sessions to the SSH test server: the terminal states
     /// (owner's stage 2a and 2b, step 5.1) and the offer to save a
     /// quick-connect host, which needs a session that connected.
-    pub const TERMINAL: [Self; 33] = [
+    pub const TERMINAL: [Self; 34] = [
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -712,6 +715,7 @@ impl ShotState {
         Self::TerminalLess,
         Self::TerminalEmacs,
         Self::TerminalVttest,
+        Self::TerminalVttest132,
         Self::TerminalUnicode,
         Self::TerminalHostKeyChanged,
     ];
@@ -853,6 +857,7 @@ impl ShotState {
             Self::TerminalLess => "terminal-less",
             Self::TerminalEmacs => "terminal-emacs",
             Self::TerminalVttest => "terminal-vttest",
+            Self::TerminalVttest132 => "terminal-vttest-132",
             Self::TerminalUnicode => "terminal-unicode",
             Self::TerminalDrop => "terminal-drop",
             Self::TerminalLocal => "terminal-local",
@@ -924,6 +929,7 @@ impl ShotState {
             | Self::TerminalLess
             | Self::TerminalEmacs
             | Self::TerminalVttest
+            | Self::TerminalVttest132
             | Self::TerminalUnicode
             | Self::TerminalDrop
             | Self::TerminalLocal
@@ -2012,6 +2018,7 @@ pub async fn reach_state(
         | ShotState::TerminalLess
         | ShotState::TerminalEmacs
         | ShotState::TerminalVttest
+        | ShotState::TerminalVttest132
         | ShotState::TerminalUnicode
         | ShotState::TerminalDrop
         | ShotState::TerminalLocal
@@ -2294,6 +2301,7 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::TerminalLess
             | ShotState::TerminalEmacs
             | ShotState::TerminalVttest
+            | ShotState::TerminalVttest132
             | ShotState::TerminalUnicode
             | ShotState::TerminalDrop
             | ShotState::TerminalLocal

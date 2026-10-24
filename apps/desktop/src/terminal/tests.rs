@@ -550,6 +550,42 @@ fn emoji_sequences_are_one_glyph(cx: &mut TestAppContext) {
     assert!(d > segments[6].0);
 }
 
+/// An emoji with VS16 (`❤️`) takes two cells (D206): one segment at its
+/// cell, the text after it two columns on, the cursor on both cells when it
+/// sits there.
+#[gpui_kit::test]
+fn vs16_emoji_take_two_cells(cx: &mut TestAppContext) {
+    let fixture = Fixture::open(cx);
+    fixture.feed(cx, "a\u{2764}\u{FE0F}b\u{2764}c".as_bytes());
+    let prepaint = |fixture: &Fixture, cx: &mut TestAppContext| {
+        fixture.with_window(cx, |terminal, window, cx| {
+            let style = terminal.read(cx).frame_style(window);
+            let layout = terminal.read(cx).layout_state();
+            let bounds = Bounds::new(point(px(0.), px(0.)), size(px(600.), px(200.)));
+            render::prepaint(
+                bounds,
+                &fixture.handle,
+                &mut layout.borrow_mut(),
+                &style,
+                window,
+            )
+        })
+    };
+    let frame = prepaint(&fixture, cx);
+    assert_eq!(
+        frame.segments(0),
+        [
+            (0, "a".to_owned()),
+            (1, "\u{2764}\u{FE0F}".to_owned()),
+            (3, "b\u{2764}c".to_owned()),
+        ],
+        "a heart without VS16 stays one cell"
+    );
+    assert_eq!(frame.cursor(), Some((0, 6, false)));
+    fixture.feed(cx, b"\r\x1b[1C");
+    assert_eq!(prepaint(&fixture, cx).cursor(), Some((0, 1, true)));
+}
+
 /// Wide characters: one segment per wide character, two cells each; the
 /// narrow text around them keeps its columns; the cursor follows.
 #[gpui_kit::test]

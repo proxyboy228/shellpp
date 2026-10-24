@@ -115,8 +115,9 @@
   both themes. Only the PNGs of those states at the run's sizes are
   replaced in the output folder.
 
-  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (244 files for the
-  default sizes; -Zoom other than 100 puts the zoom in the names:
+  Output: target\ui-screens\<W>x<H>-<theme>-<state>.png (268 files for the
+  default sizes against OpenSSH, 248 on the russh server, which leaves the
+  ten terminal program states out; -Zoom other than 100 puts the zoom in the names:
   <W>x<H>-<theme>-<zoom>-<state>.png). Exits with 1 when the build, the run or
   a file check fails.
 
@@ -254,10 +255,10 @@ $run4States = @('snippet-leave', 'forwarding-wizard-type', 'forwarding-wizard-re
     'forwarding-wizard-summary')
 $allStates += $run4States
 # Run 4, plan 9.2: full-screen programs and Unicode (ShotState::Terminal{Tmux,
-# TmuxResize,Mc,Vim,Nano,Less,Emacs,Vttest,Unicode}); OpenSSH only, left out
+# TmuxResize,Mc,Vim,Nano,Less,Emacs,Vttest,Vttest132,Unicode}); OpenSSH only, left out
 # on the russh test server.
 $programStates = @('terminal-tmux', 'terminal-tmux-resize', 'terminal-mc', 'terminal-vim', 'terminal-nano',
-    'terminal-less', 'terminal-emacs', 'terminal-vttest', 'terminal-unicode')
+    'terminal-less', 'terminal-emacs', 'terminal-vttest', 'terminal-vttest-132', 'terminal-unicode')
 $allStates += $programStates
 $allStates += $stage6States
 $allStates += $stage5States
