@@ -366,6 +366,65 @@ fn totp_sign_in() {
     assert!(b.status().signed_in);
 }
 
+/// D175 from the client's side: a code answered with a delay (`429`) keeps
+/// the login ticket, and the right code after `Retry-After` finishes the
+/// same sign-in without the password again (SP 8: wait and retry).
+#[test]
+fn a_delayed_totp_code_keeps_the_ticket() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let setup = a.core.sync_totp_setup(password.clone()).expect("setup");
+    let secret = secrecy::ExposeSecret::expose_secret(&setup.secret).to_owned();
+    let key = totp_key(&secret);
+    a.core
+        .sync_totp_enable(&shellpp_server::secrets::totp_code(&key, totp_now()))
+        .expect("enabled");
+
+    let b = Client::empty("B");
+    assert_eq!(
+        b.sign_in(&server, &email, &password),
+        SignInOutcome::TotpRequired
+    );
+    let right = shellpp_server::secrets::totp_code(&key, totp_now() + 30);
+    let wrong = if right == "000000" {
+        "111111"
+    } else {
+        "000000"
+    };
+    // The free failures of this address (D175: three).
+    for _ in 0..3 {
+        let error = b.core.sync_sign_in_totp(wrong).expect_err("a wrong code");
+        assert_eq!(api_code(&error), "invalid_totp");
+    }
+    // Now even the right code waits.
+    let error = b.core.sync_sign_in_totp(&right).expect_err("a delay");
+    assert_eq!(api_code(&error), "rate_limited");
+    let CoreError::Sync(shellpp_core::sync::HttpError::Api {
+        retry_after: Some(seconds),
+        ..
+    }) = error
+    else {
+        panic!("a Retry-After: {error:?}");
+    };
+    std::thread::sleep(std::time::Duration::from_millis(seconds * 1_000 + 500));
+    done(
+        b.core
+            .sync_sign_in_totp(&right)
+            .expect("the kept ticket after the wait"),
+    );
+    assert!(b.status().signed_in);
+}
+
+fn api_code(error: &CoreError) -> String {
+    match error {
+        CoreError::Sync(error) => error.code(),
+        other => format!("{other:?}"),
+    }
+}
+
 fn totp_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
