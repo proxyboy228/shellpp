@@ -1072,6 +1072,16 @@ pub fn apply_push_results(
                     effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
+                // A `current` that does not open is refused like a damaged
+                // version (section 6.5), not met again in every batch.
+                if current
+                    .as_ref()
+                    .is_some_and(|row| payload_of(session, row).is_none())
+                {
+                    effects.integrity_warnings += 1;
+                    effects.failed.push((local.record_id, "integrity".into()));
+                    continue;
+                }
                 resolve(
                     store,
                     session,

@@ -33,6 +33,8 @@ enum Mode {
     /// The header of the first record names key epoch 7 (the server holds
     /// epoch 1).
     ForgeEpoch,
+    /// Push answers carry no results (the server's write is unknown).
+    EmptyPush,
     /// Forces a full resync (`410 purged`), leaves `hide` out of the
     /// snapshot and answers its push-back with the older `stale` version.
     Purge {
@@ -46,6 +48,8 @@ struct Proxy {
     origin: String,
     mode: Arc<Mutex<Mode>>,
     seen: Arc<Mutex<Vec<Value>>>,
+    /// Push requests passed on.
+    pushes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Proxy {
@@ -71,6 +75,9 @@ fn record_id(record: &Value) -> Option<[u8; 16]> {
 
 /// A push answer whose `conflict` for `hide` carries `stale` as `current`.
 fn rewrite_push(mode: &Mode, body: &[u8]) -> Option<Vec<u8>> {
+    if *mode == Mode::EmptyPush {
+        return Some(br#"{"results":[]}"#.to_vec());
+    }
     let Mode::Purge { hide, stale, .. } = mode else {
         return None;
     };
@@ -92,7 +99,7 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
     let records = page.get_mut("records")?.as_array_mut()?;
     seen.lock().unwrap().extend(records.iter().cloned());
     match mode {
-        Mode::Pass => return None,
+        Mode::Pass | Mode::EmptyPush => return None,
         Mode::Swap => {
             if records.len() >= 2 {
                 let first = records[0]["envelope"].clone();
@@ -211,19 +218,23 @@ fn proxy(server: &Server) -> Proxy {
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .expect("bind");
     let port = listener.local_addr().expect("addr").port();
-    let (task_mode, task_seen) = (mode.clone(), seen.clone());
+    let pushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (task_mode, task_seen, task_pushes) = (mode.clone(), seen.clone(), pushes.clone());
     server.runtime().spawn(async move {
         loop {
             let Ok((mut client, _)) = listener.accept().await else {
                 return;
             };
-            let (mode, seen) = (task_mode.clone(), task_seen.clone());
+            let (mode, seen, pushes) = (task_mode.clone(), task_seen.clone(), task_pushes.clone());
             tokio::spawn(async move {
                 let Some((head, body)) = read_message(&mut client).await else {
                     return;
                 };
                 let pull = head.starts_with("GET /v1/vaults/") && head.contains("/changes");
                 let push = head.starts_with("POST /v1/vaults/") && head.contains("/changes");
+                if push {
+                    pushes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 // The forced resync: one `410 purged` for the first pull.
                 let send_410 = pull && {
                     let mut current = mode.lock().unwrap();
@@ -288,6 +299,7 @@ connection: close
         origin: format!("http://127.0.0.1:{port}"),
         mode,
         seen,
+        pushes,
     }
 }
 
@@ -577,4 +589,25 @@ fn a_forged_key_epoch_stops_sync_until_the_user_resets_it() {
     a.sync();
     b.sync();
     assert!(labels(&b).contains(&"after the reset".to_owned()));
+}
+
+/// Cross review of run 9 (section 6.5): push answers without results leave
+/// the items pending. A cycle sends each of them once, not the same batch
+/// up to the batch limit: 600 items go in two requests.
+#[test]
+fn items_left_pending_by_a_push_are_sent_once_per_cycle() {
+    let server = Server::start();
+    let (proxy, a, _b, _, _) = setup(&server);
+    for i in 0..600 {
+        a.host(&format!("bulk{i}.example.com"));
+    }
+    proxy.set(Mode::EmptyPush);
+    let before = proxy.pushes.load(std::sync::atomic::Ordering::SeqCst);
+    let _ = a.core.sync_now();
+    let sent = proxy.pushes.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert!(sent <= 2, "{sent} pushes in one cycle");
+    assert!(a.status().pending >= 600, "nothing is taken as synced");
+    proxy.set(Mode::Pass);
+    a.sync();
+    assert_eq!(a.status().pending, 0);
 }

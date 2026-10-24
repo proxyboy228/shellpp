@@ -854,12 +854,12 @@ Client handling of item results:
 | Status | Client action |
 |---|---|
 | `ok` | `synced_revision` = pushed revision, `server_seq = seq`, clear the base stamp. If the record changed locally meanwhile, it stays pending and its base stamp becomes that of the pushed version. |
-| `conflict` | resolve with `current` as the server version (section 6.7). A `current` that fails the key epoch check of section 6.4, or that names a key epoch above the device's (the pull of the same cycle reported none, [decision] (D183)), is not adopted and cannot win: the local version stays, is marked "not synced" with the integrity warning and is not retried automatically. [decision] (D93) |
+| `conflict` | resolve with `current` as the server version (section 6.7). A `current` that fails the key epoch check of section 6.4, or that names a key epoch above the device's (the pull of the same cycle reported none, [decision] (D183)), or that does not open, is not adopted and cannot win: the local version stays, is marked "not synced" with the integrity warning and is not retried automatically. [decision] (D93) |
 | `stale_key_epoch` | fetch keys, re-seal, push again in the same cycle, once: an item answered so again is left for the next cycle. The item stays pending and is not counted as refused. When the keys show a personal epoch above the device's, its key comes with the next sign-in (section 5.1): the item waits for it and sync status shows the newer epoch; an epoch below the device's is "server state rolled back". [decision] (D173, item 1.19) |
 | `quota_exceeded` | the account's storage limit on the server is reached (section 6.6, check 8). Keep the local version and mark it "not synced: the server's storage limit is reached"; sync status shows the usage from the account bundle (section 4.4). Retried at "Sync now" and, in the same cycle, after this device pushed a deletion (an accepted tombstone), not in every cycle ([decision] (D173, item 1.19)). Local data is never touched (principles 2 and 3). [decision] (D93) |
 | `insufficient_role` | the local role is stale. Refresh `GET /v1/vaults`; the rejected local version stays visible as "not synced: no write access" with "Copy to personal vault" and "Discard". (stage 0 decision) |
 | `invalid_envelope`, `class_not_allowed`, `payload_too_large` | a client bug or an oversized record: keep the local version, mark it "not synced" with the code, show it in sync errors, do not retry automatically |
-| unknown status | keep the record pending and retry in the next cycle |
+| unknown status | keep the record pending and retry in the next cycle; an item the answer leaves out is treated the same, and a cycle sends an item at most once at a revision (run 9) |
 
 A retry after a lost response is safe: the server already holds the pushed revision, the retry gets `conflict` with the client's own version as `current`, and rule 2 of section 6.7 adopts it.
 

@@ -2698,13 +2698,31 @@ impl Core {
             // Items still answered `stale_key_epoch` after the one retry:
             // left out for the rest of this cycle (pending, not refused).
             let mut stale_skip: HashSet<Uuid> = HashSet::new();
+            // Every item sent in this cycle, at the revision sent: one still
+            // pending at that revision (an unknown status, missing from the
+            // results) waits for the next cycle instead of filling every
+            // batch of this one (cross review of run 9).
+            let mut sent_this_cycle: HashMap<Uuid, u64> = HashMap::new();
             for _ in 0..MAX_PUSH_BATCHES {
                 let mut skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
                 skip.extend(stale_skip.iter().copied());
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+                    let vault_id = session.ring.vault_id();
+                    for (id, revision) in &sent_this_cycle {
+                        let unchanged = inner
+                            .store
+                            .record(&vault_id, id)?
+                            .is_some_and(|row| row.revision == *revision);
+                        if unchanged {
+                            skip.insert(*id);
+                        }
+                    }
                     engine::build_push(&mut inner.store, session, &selection, &skip, self.now())
                 })?;
+                for row in &batch.sent {
+                    sent_this_cycle.insert(row.record_id, row.revision);
+                }
                 if batch.items.is_empty() {
                     break;
                 }
