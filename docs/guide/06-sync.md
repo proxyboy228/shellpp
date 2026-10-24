@@ -181,8 +181,8 @@ certificate on the server.
 When the server shows another certificate than the one you pinned, sync
 stops before anything is sent, nothing on the device changes, and
 Settings > **Account & Sync** says "The server's certificate changed" with
-**Review certificate…**. The dialog shows the pinned and the new fingerprint side by
-side and whether your system trusts the new certificate:
+**Review certificate…**. The dialog shows the pinned and the new fingerprint one
+above the other and whether your system trusts the new certificate:
 
 - **Trust the new certificate** pins the new one, and sync goes on: you
   stay signed in.
