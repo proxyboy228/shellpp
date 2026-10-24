@@ -37,7 +37,9 @@ and must pass on that release.
   remove this directory, the `[patch.crates-io]` entry of the root
   `Cargo.toml`, the `third_party/russh` allowlist of `.gitleaks.toml` and the
   "Patched crates" paragraph of `THIRD_PARTY_NOTICES.md`.
-- **Only one fixed:** the copy stays. Replace its source with the fixed
-  release's (and its version in the root `Cargo.toml`, this file and
-  `THIRD_PARTY_NOTICES.md`), apply the other patch again and remove the
-  fixed one from the list above.
+- **Only one fixed:** the copy stays. Replace its contents with the fixed
+  release's source, apply the other patch and change 3 again, remove the
+  fixed one from the list above, and update the version and the number of
+  patches here, in the root `Cargo.toml` (the version and the comment of
+  `[patch.crates-io]`), `.gitleaks.toml`, `THIRD_PARTY_NOTICES.md` and the
+  russh paragraph of CLAUDE.md.

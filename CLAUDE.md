@@ -66,9 +66,11 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
   обе — перейти на него и убрать каталог `third_party/russh`, запись
   `[patch.crates-io]`, исключение в `.gitleaks.toml` и абзац в
   THIRD_PARTY_NOTICES. Когда только одну — каталог остаётся: заменить его
-  исходники исходниками этого релиза (версия — в `Cargo.toml`,
-  `PATCHES.md` и THIRD_PARTY_NOTICES), заново наложить вторую заплатку
-  и убрать исправленную из `PATCHES.md`.
+  содержимое исходниками этого релиза, заново наложить оставшуюся
+  заплатку и правку `Cargo.toml` копии (п. 3 `PATCHES.md`), убрать
+  исправленную из `PATCHES.md`, поправить версию и число заплаток в этом
+  абзаце, `PATCHES.md`, корневом `Cargo.toml`, `.gitleaks.toml`
+  и THIRD_PARTY_NOTICES.
 
 - Тесты сессий на общем контейнере OpenSSH — только с `--test-threads=1`:
   одни тесты роняют соединения и меняют ключ хоста, соседние от этого

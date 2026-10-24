@@ -37,6 +37,13 @@ const STEP: Duration = Duration::from_secs(10);
 const CHANNEL_DATA: u8 = 94;
 const CHANNEL_EXTENDED_DATA: u8 = 95;
 
+/// `future`, or a panic naming `what` after [`STEP`].
+async fn in_time<T>(what: &str, future: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(STEP, future)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: no answer in time"))
+}
+
 /// Cleartext transport, so that the proxy can read and add packets.
 fn cleartext() -> Preferred {
     Preferred {
@@ -271,10 +278,11 @@ async fn an_empty_data_packet_does_not_end_an_sftp_session() {
     // The first data packet is the server's VERSION, the second the answer
     // to the first request: the empty one comes mid-session, between two.
     let (addr, added) = start(&password, CHANNEL_DATA, 2).await;
-    let handle = connect(addr, &password).await;
-    let channel = handle.channel_open_session().await.expect("opens");
-    channel
-        .request_subsystem(true, "sftp")
+    let handle = in_time("connect", connect(addr, &password)).await;
+    let channel = in_time("open", handle.channel_open_session())
+        .await
+        .expect("opens");
+    in_time("subsystem", channel.request_subsystem(true, "sftp"))
         .await
         .expect("subsystem requested");
     let sftp = tokio::time::timeout(
@@ -302,9 +310,13 @@ async fn an_empty_data_packet_does_not_end_an_sftp_session() {
 async fn an_empty_data_packet_does_not_end_a_channel_stream() {
     let password = random_secret("pw");
     let (addr, added) = start(&password, CHANNEL_DATA, 1).await;
-    let handle = connect(addr, &password).await;
-    let channel = handle.channel_open_session().await.expect("opens");
-    channel.exec(true, "lines").await.expect("exec sent");
+    let handle = in_time("connect", connect(addr, &password)).await;
+    let channel = in_time("open", handle.channel_open_session())
+        .await
+        .expect("opens");
+    in_time("exec", channel.exec(true, "lines"))
+        .await
+        .expect("exec sent");
     let mut stream = channel.into_stream();
     let mut output = Vec::new();
     tokio::time::timeout(STEP, stream.read_to_end(&mut output))
@@ -319,9 +331,13 @@ async fn an_empty_data_packet_does_not_end_a_channel_stream() {
 async fn an_empty_extended_data_packet_does_not_end_a_stderr_reader() {
     let password = random_secret("pw");
     let (addr, added) = start(&password, CHANNEL_EXTENDED_DATA, 1).await;
-    let handle = connect(addr, &password).await;
-    let mut channel = handle.channel_open_session().await.expect("opens");
-    channel.exec(true, "lines").await.expect("exec sent");
+    let handle = in_time("connect", connect(addr, &password)).await;
+    let mut channel = in_time("open", handle.channel_open_session())
+        .await
+        .expect("opens");
+    in_time("exec", channel.exec(true, "lines"))
+        .await
+        .expect("exec sent");
     let mut output = Vec::new();
     tokio::time::timeout(
         STEP,

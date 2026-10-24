@@ -13,8 +13,8 @@ release contains it.
 as `src/channels/io/rx.rs` shows).
 
 **Description.** RFC 4254, section 5.2, puts no lower bound on the data of
-`SSH_MSG_CHANNEL_DATA` and `SSH_MSG_CHANNEL_EXTENDED_DATA`, and some servers
-send an empty one now and then. The client's `CHANNEL_DATA` handler passes
+`SSH_MSG_CHANNEL_DATA` and `SSH_MSG_CHANNEL_EXTENDED_DATA`, so a server may
+send an empty one. The client's `CHANNEL_DATA` handler passes
 it on as `ChannelMsg::Data` with empty `data`, and `ChannelRx::poll_read`
 copies its 0 bytes into the caller's buffer and returns `Poll::Ready(Ok(()))`.
 Under the `AsyncRead` contract, a successful read that fills nothing into a
@@ -31,8 +31,8 @@ holds for an empty `CHANNEL_EXTENDED_DATA` read with `make_reader_ext`.
    MAC and compression (test only), with a TCP proxy between them that
    forwards the server's packets and, after the first `CHANNEL_DATA` of a
    channel, adds an empty one for the same recipient channel (payload
-   `[94, channel (u32), 0u32]`, padded to 8 bytes as RFC 4253, section 6,
-   asks).
+   `[94, channel (u32), 0u32]`, padded to a multiple of 8 bytes as
+   RFC 4253, section 6, asks).
 2. On the server, answer `exec` with `data("first\n")`, `data("second\n")`,
    `eof` and `close`.
 3. On the client, `exec`, then `channel.into_stream().read_to_end(&mut out)`.
