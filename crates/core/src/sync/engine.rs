@@ -453,6 +453,7 @@ fn has_copy(
 /// `no_copy` suppresses the copy of rule 5 (a server restore's stale copy).
 #[allow(clippy::too_many_arguments)]
 pub fn resolve(
+    store: &Store,
     session: &mut Session,
     effects: &mut Effects,
     local: &RecordRow,
@@ -495,8 +496,19 @@ pub fn resolve(
     // pushed back by a resync or a restore keeps it as its base) is stale:
     // it never replaces the local version, whatever rules 2-5 would say
     // (principle 3; section 6.9, step 3: no conflict copy for it).
-    if server.revision < local.synced_revision.max(base_revision) {
-        keep_overwritten(session, effects, local, &l, base, server, &s, now)?;
+    // Another version at the revision of the base (other bytes) is a fork
+    // of the server's history, as a record a restore or a resync marked
+    // meets it (synced below its base): the local version wins as over a
+    // stale one, and the server's is kept as a copy whatever its stamp
+    // (D184, as in the pull).
+    let fork = base_row
+        .as_ref()
+        .is_some_and(|base| base.revision == server.revision && base.envelope != server.envelope);
+    if fork || server.revision < local.synced_revision.max(base_revision) {
+        let synced = if fork { None } else { base };
+        if !has_copy(store, session, local, &s)? {
+            keep_overwritten(session, effects, local, &l, synced, server, &s, now)?;
+        }
         let previous = RecordRow {
             revision: local.revision.max(server.revision),
             synced_revision: server.revision,
@@ -804,6 +816,7 @@ pub fn apply_page(
                 .get(&row.record_id)
                 .is_some_and(|held| row.revision < *held);
             resolve(
+                store,
                 session,
                 &mut result.effects,
                 &local,
@@ -1060,6 +1073,7 @@ pub fn apply_push_results(
                     continue;
                 }
                 resolve(
+                    store,
                     session,
                     &mut effects,
                     &local,

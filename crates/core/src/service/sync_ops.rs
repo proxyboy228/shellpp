@@ -5638,6 +5638,103 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_at_the_base_of_a_restore_mark_keeps_both_versions() {
+        // Cross review of run 9 (D184): a record a restore marked (synced
+        // 1, base at revision 2) meets another version at revision 2. It is
+        // a fork: the local version wins, the server's is kept as a copy.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Local", &random_text());
+        let mut data = stored_data(&core, host);
+        data.insert("label".into(), json!("Local, edited"));
+        if let Some(ssh) = data.get_mut("ssh").and_then(Value::as_object_mut) {
+            ssh.remove("password"); // Secrets go in their own map.
+        }
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        core.record_save(crate::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: Some(host),
+            record_type: crate::service::dto::RecordType::Host,
+            data,
+            secrets: std::collections::BTreeMap::new(),
+        })
+        .unwrap();
+        let now = core.now();
+        let now_text = format_timestamp(now);
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let mut row = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!(row.revision, 2);
+        row.synced_revision = 2;
+        row.base_envelope = None;
+        inner.store.write(|tx| tx.record_put(&row)).unwrap();
+        // The server restored from a backup holds revision 1.
+        engine::restore_mark(
+            &mut inner.store,
+            session,
+            &HashMap::from([(host, 1)]),
+            &shellpp_sync_api::classes::ALL,
+        )
+        .unwrap();
+        let local = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!((local.revision, local.synced_revision), (2, 1));
+        // Another device's version at revision 2, made on the restored server.
+        let mut server_data = stored_data_of(session, &local);
+        server_data.insert("label".into(), json!("Server"));
+        let payload = Payload::live("host", 1, Hlc::new(1, 0), Uuid::now_v7(), server_data);
+        let previous = RecordRow {
+            revision: 1,
+            synced_revision: 1,
+            base_envelope: None,
+            ..local.clone()
+        };
+        let server = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &payload,
+            Some(&previous),
+            &now_text,
+        )
+        .unwrap();
+        assert_eq!(server.revision, 2);
+        let mut effects = engine::Effects::default();
+        engine::resolve(
+            &inner.store,
+            session,
+            &mut effects,
+            &local,
+            Some(&server),
+            &Selection::all(),
+            false,
+            now,
+        )
+        .unwrap();
+        assert_eq!(effects.conflicts, 1, "the server's version is kept");
+        effects.commit(&mut inner.store, session, None).unwrap();
+        let after = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert!(after.revision > 2, "the local version goes over it");
+        assert_eq!(
+            stored_data_of(session, &after)["label"],
+            json!("Local, edited")
+        );
+        let copies = conflict_rows(&inner.store, session).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(
+            copies[0].1.data.as_ref().unwrap()["losing_data"]["label"],
+            json!("Server")
+        );
+    }
+
+    fn stored_data_of(session: &mut Session, row: &RecordRow) -> Map<String, Value> {
+        open_payload(&mut session.ring, row)
+            .unwrap()
+            .data
+            .clone()
+            .unwrap()
+    }
+
+    #[test]
     fn stale_key_epoch_keeps_the_item_pending_and_not_refused() {
         // Run 7 finding 19 (section 6.5): `stale_key_epoch` asks for the
         // keys and another push, it does not park the item; an accepted
