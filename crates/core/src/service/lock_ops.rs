@@ -572,7 +572,19 @@ impl Core {
         let app_version = self.config.app_version.clone();
         let reopen_old = |inner: &mut Inner| match Store::open(&data_dir, &app_version) {
             Ok((store, _)) => inner.store = store,
-            Err(error) => tracing::error!(code = error.code(), "database not reopened"),
+            Err(error) => {
+                // No database to write to: an open session would keep
+                // edits in memory only and lose them. It is closed; the app
+                // opens the database again at its next start (cross review
+                // of run 9).
+                tracing::error!(code = error.code(), "database not reopened");
+                if inner.session.take().is_some() {
+                    inner.sync.wipe();
+                    self.clear_clipboard_if_ours(inner);
+                }
+                inner.state = LockState::Locked;
+                self.lock_changed(inner);
+            }
         };
         let now = self.now();
         let archived = match lock::new_vault::archive_data_file(&data_dir, now) {

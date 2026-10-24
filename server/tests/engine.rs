@@ -289,3 +289,55 @@ fn an_older_offline_edit_pushed_after_a_restore_is_kept() {
     b.sync();
     assert!(losing_labels(&b).contains(&"B offline, earlier".to_owned()));
 }
+
+/// Cross review of run 9 (D184): after a restore the device notices (a new
+/// server generation), another device's edits on the restored server
+/// reach a revision above the one this device synced, so they replace its
+/// version. The replaced version, which the restored server lost, is kept
+/// as a conflict copy.
+#[test]
+fn a_version_replaced_in_a_restore_is_kept_as_a_conflict() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    let host = a.save(
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        serde_json::json!({"address": "replaced.example.com", "label": "first"}),
+    );
+    a.register(&server, &email, &password);
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    let edit = |client: &Client, label: &str| {
+        let mut data = client.data(host);
+        data["label"] = serde_json::Value::String(label.into());
+        client.save(
+            Some(host),
+            shellpp_core::service::dto::RecordType::Host,
+            data,
+        );
+    };
+    edit(&a, "A once");
+    edit(&a, "A after the backup");
+    a.sync();
+    restore(&mut server, &backup);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    for label in ["B one", "B two", "B three"] {
+        edit(&b, label);
+    }
+    b.sync();
+    let report = a.sync();
+    assert!(report.restored, "A noticed the restore");
+    assert_eq!(label_of(&a, host), "B three");
+    assert_eq!(losing_labels(&a), vec!["A after the backup"]);
+    b.sync();
+    assert_eq!(losing_labels(&b), vec!["A after the backup"]);
+}

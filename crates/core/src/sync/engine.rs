@@ -453,6 +453,7 @@ fn has_copy(
 /// `no_copy` suppresses the copy of rule 5 (a server restore's stale copy).
 #[allow(clippy::too_many_arguments)]
 pub fn resolve(
+    store: &Store,
     session: &mut Session,
     effects: &mut Effects,
     local: &RecordRow,
@@ -495,8 +496,19 @@ pub fn resolve(
     // pushed back by a resync or a restore keeps it as its base) is stale:
     // it never replaces the local version, whatever rules 2-5 would say
     // (principle 3; section 6.9, step 3: no conflict copy for it).
-    if server.revision < local.synced_revision.max(base_revision) {
-        keep_overwritten(session, effects, local, &l, base, server, &s, now)?;
+    // Another version at the revision of the base (other bytes) is a fork
+    // of the server's history, as a record a restore or a resync marked
+    // meets it (synced below its base): the local version wins as over a
+    // stale one, and the server's is kept as a copy whatever its stamp
+    // (D184, as in the pull).
+    let fork = base_row
+        .as_ref()
+        .is_some_and(|base| base.revision == server.revision && base.envelope != server.envelope);
+    if fork || server.revision < local.synced_revision.max(base_revision) {
+        let synced = if fork { None } else { base };
+        if !has_copy(store, session, local, &s)? {
+            keep_overwritten(session, effects, local, &l, synced, server, &s, now)?;
+        }
         let previous = RecordRow {
             revision: local.revision.max(server.revision),
             synced_revision: server.revision,
@@ -733,6 +745,7 @@ pub fn apply_page(
                 } else {
                     synced_stamp(session, &local, &now_text)
                 };
+                let copies = result.effects.conflicts;
                 if !has_copy(store, session, &local, &server_payload)? {
                     keep_overwritten(
                         session,
@@ -745,7 +758,13 @@ pub fn apply_page(
                         now,
                     )?;
                 }
-                if fork {
+                // The local version goes over the server's, as rule 0 has
+                // it: at a fork, and below the synced revision when that
+                // version was an edit made after this device's (kept as a
+                // copy just now), also outside a resync (cross review of
+                // run 9). A replay of a version this device superseded
+                // changes nothing.
+                if fork || result.effects.conflicts > copies {
                     let previous = RecordRow {
                         revision: local.revision.max(row.revision),
                         synced_revision: row.revision,
@@ -778,6 +797,31 @@ pub fn apply_page(
             continue;
         }
         let pending = local.revision != local.synced_revision;
+        // In a server restore (section 6.9; `no_copy_below` holds the
+        // synced revisions of before): a newer server version replaces a
+        // version this device synced with the server of before, which the
+        // restored server may never have had (lost with the writes after
+        // its backup). That version is kept as a conflict copy, so the
+        // replace loses nothing (cross review of run 9, D184).
+        if !pending
+            && no_copy_below
+                .get(&row.record_id)
+                .is_some_and(|held| *held > 0)
+            && let (Some(server_payload), Some(local_payload)) =
+                (payload_of(session, &row), payload_of(session, &local))
+            && !has_copy(store, session, &local, &local_payload)?
+        {
+            keep_overwritten(
+                session,
+                &mut result.effects,
+                &row,
+                &server_payload,
+                None,
+                &local,
+                &local_payload,
+                now,
+            )?;
+        }
         if !pending {
             let previous_live = if local.tombstone {
                 None
@@ -804,6 +848,7 @@ pub fn apply_page(
                 .get(&row.record_id)
                 .is_some_and(|held| row.revision < *held);
             resolve(
+                store,
                 session,
                 &mut result.effects,
                 &local,
@@ -1059,7 +1104,18 @@ pub fn apply_push_results(
                     effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
+                // A `current` that does not open is refused like a damaged
+                // version (section 6.5), not met again in every batch.
+                if current
+                    .as_ref()
+                    .is_some_and(|row| payload_of(session, row).is_none())
+                {
+                    effects.integrity_warnings += 1;
+                    effects.failed.push((local.record_id, "integrity".into()));
+                    continue;
+                }
                 resolve(
+                    store,
                     session,
                     &mut effects,
                     &local,

@@ -35,6 +35,31 @@ use rows::{
     u64_to_db, uuid_from_blob, vault_kind_str, vault_status_str,
 };
 
+/// Tests (`test-hooks`; never in a release build): the next `n` calls of
+/// [`Store::open`] on this thread fail.
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod fail_open {
+    use std::cell::Cell;
+
+    thread_local! {
+        static LEFT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub fn next(n: usize) {
+        LEFT.with(|left| left.set(n));
+    }
+
+    pub(super) fn take() -> bool {
+        LEFT.with(|left| {
+            let n = left.get();
+            if n > 0 {
+                left.set(n - 1);
+            }
+            n > 0
+        })
+    }
+}
+
 /// The schema version created by this app (`PRAGMA user_version`).
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -209,6 +234,12 @@ impl Store {
     /// version returns [`StoreError::NewerSchema`] without modifying the
     /// file. Then writes `meta.last_app_version = app_version`.
     pub fn open(data_dir: &Path, app_version: &str) -> Result<(Store, OpenOutcome), StoreError> {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if fail_open::take() {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected open failure",
+            )));
+        }
         Self::open_with(data_dir, app_version, &PLAN, SystemTime::now())
     }
 

@@ -449,6 +449,13 @@ pub fn rekey_file(
     })();
     drop(output);
     drop(input);
+    // A file deleted meanwhile (its log entry went) is not brought back.
+    let written = written.and_then(|()| match path.try_exists() {
+        Ok(true) => Ok(()),
+        _ => Err(RecordingError::Io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        ))),
+    });
     let renamed = written.and_then(|()| std::fs::rename(&temp, path).map_err(Into::into));
     if renamed.is_err() {
         let _ = std::fs::remove_file(&temp);

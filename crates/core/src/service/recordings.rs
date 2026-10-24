@@ -147,18 +147,41 @@ fn rekey_path(dir: &Path, file_id: Uuid, vault_id: Uuid) -> PathBuf {
 }
 
 fn read_rekey(dir: &Path, file_id: Uuid, vault_id: Uuid) -> Option<Rekey> {
-    std::fs::read(rekey_path(dir, file_id, vault_id))
-        .ok()
-        .and_then(|bytes| Rekey::parse(&bytes))
-        .filter(|rekey| rekey.file_id == file_id && rekey.vault_id == vault_id)
+    read_rekey_strict(dir, file_id, vault_id).ok().flatten()
+}
+
+/// [`read_rekey`] that tells a file that is not there (or not a `.rekey`
+/// of this file and vault) from one that cannot be read now.
+fn read_rekey_strict(dir: &Path, file_id: Uuid, vault_id: Uuid) -> std::io::Result<Option<Rekey>> {
+    match std::fs::read(rekey_path(dir, file_id, vault_id)) {
+        Ok(bytes) => Ok(Rekey::parse(&bytes)
+            .filter(|rekey| rekey.file_id == file_id && rekey.vault_id == vault_id)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// The header of the recording at `path` (its first 63 bytes only).
 fn header_of(path: &Path) -> Option<Header> {
+    header_strict(path).ok().flatten()
+}
+
+/// [`header_of`] that tells a file that is gone, too short or not a
+/// recording (`Ok(None)`) from one that cannot be read now (`Err`: held
+/// open by another program, no permission).
+fn header_strict(path: &Path) -> std::io::Result<Option<Header>> {
     use std::io::Read as _;
     let mut head = [0u8; recording::HEADER_LEN];
-    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
-    Header::parse(&head).ok()
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match file.read_exact(&mut head) {
+        Ok(()) => Ok(Header::parse(&head).ok()),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Writes `bytes` beside `path`, syncs and renames it over `path`.
@@ -212,8 +235,10 @@ pub(super) fn prepare_rekeys(store: &Store, old: &KeyRing, new: &KeyRing) -> Res
         if path.extension().and_then(|ext| ext.to_str()) != Some(recording::EXTENSION) {
             continue;
         }
-        let Some(header) = header_of(&path) else {
-            continue; // Not a recording this app can read; left as it is.
+        // A file that cannot be read now (held open by another program)
+        // stops the merge: its key would go with the old vault.
+        let Some(header) = header_strict(&path).map_err(io)? else {
+            continue; // Gone, too short, or not a recording: left as it is.
         };
         let file_id = header.file_id;
         let key = if header.vault_id == old.vault_id() {
@@ -221,7 +246,9 @@ pub(super) fn prepare_rekeys(store: &Store, old: &KeyRing, new: &KeyRing) -> Res
                 .map(|vault_key| crypto::derive_recording_key(vault_key, &file_id))
         } else {
             // A re-encryption into `old` that has not run yet.
-            read_rekey(&dir, file_id, old.vault_id()).and_then(|rekey| rekey.open(old))
+            read_rekey_strict(&dir, file_id, old.vault_id())
+                .map_err(io)?
+                .and_then(|rekey| rekey.open(old))
         };
         let Some(key) = key else {
             continue;
@@ -230,31 +257,6 @@ pub(super) fn prepare_rekeys(store: &Store, old: &KeyRing, new: &KeyRing) -> Res
         write_synced(&rekey_path(&dir, file_id, new.vault_id()), &bytes).map_err(io)?;
     }
     Ok(())
-}
-
-/// Removes the `.rekey` files for `vault_id` (an account vault an
-/// abandoned sign-in left); the recordings keep opening with the vault
-/// they name.
-pub(super) fn remove_rekeys_for(store: &Store, vault_id: Uuid) {
-    let Some(dir) = recordings_dir(store) else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some(REKEY_EXTENSION) {
-            continue;
-        }
-        let names_vault = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| Rekey::parse(&bytes))
-            .is_some_and(|rekey| rekey.vault_id == vault_id);
-        if names_vault {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
 }
 
 /// One recording to re-encrypt.
@@ -491,7 +493,20 @@ impl Core {
             let path = file_path(parts.store, file_id).ok_or(CoreError::NotFound)?;
             (file_id, path)
         };
-        let bytes = match std::fs::read(&path) {
+        // The re-encryption may rename the file and drop its `.rekey`
+        // between the read and the key lookup: read it once more then.
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match self.recording_read_once(file_id, &path) {
+                Err(CoreError::Locked) if attempts < 2 && self.inner().session.is_some() => {}
+                result => return result.map(Some),
+            }
+        }
+    }
+
+    fn recording_read_once(&self, file_id: Uuid, path: &Path) -> Result<Recording, CoreError> {
+        let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(CoreError::NotFound);
@@ -515,8 +530,7 @@ impl Core {
                     .and_then(|rekey| rekey.open(ring))
             }
         };
-        let recording = recording::read(&bytes, |_| key).map_err(recording_error)?;
-        Ok(Some(recording))
+        recording::read(&bytes, |_| key).map_err(recording_error)
     }
 
     /// "Export to .txt" (UI 11.2): the recording of `log_id` as plain text

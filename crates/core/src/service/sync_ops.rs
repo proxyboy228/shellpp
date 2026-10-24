@@ -50,6 +50,10 @@ use crate::sync::engine::{self, Selection};
 use crate::sync::{HttpApi, HttpError, TlsProblem, TrustMode, natural, normalize_origin, trash};
 use crate::vault::{self, KeyRing, Rotation};
 
+/// `meta` key: the vault whose "Reset sync state" resync has not completed
+/// yet (D183); empty when none.
+const META_SYNC_RESET: &str = "sync_reset_vault";
+
 /// Pull rounds of one cycle before it yields (a large first pull continues
 /// in the next cycle).
 const MAX_PULL_PAGES: usize = 10_000;
@@ -1244,8 +1248,8 @@ impl Core {
 
     /// Removes the account vaults an interrupted merge at sign-in left
     /// (data-model 18.5): personal vaults that are neither the local
-    /// personal vault nor bound nor archived, with their records and rows,
-    /// and the `.rekey` files of recordings that name them. The local
+    /// personal vault nor bound nor archived, with their records and rows
+    /// (never a `.rekey` file: it may be another store's key). The local
     /// vault's data is never touched: the merge copies it, and only its
     /// last transaction switches the personal vault. Runs only when no
     /// sign-in or sync is talking to the server (the guard is free).
@@ -1288,9 +1292,10 @@ impl Core {
                 }
                 Ok(())
             })?;
-            for vault_id in &leftovers {
-                recordings::remove_rekeys_for(&guard.store, *vault_id);
-            }
+            // `.rekey` files are not touched: one naming this vault may be
+            // another store's (set aside with "Also delete the local copy",
+            // D190) only key of a recording; the re-encryption deletes
+            // them once their recording is done or gone.
             Ok(leftovers)
         })();
         match removed {
@@ -2067,8 +2072,18 @@ impl Core {
                 if equal(&current, &data) {
                     continue;
                 }
-                item.dropped = item.twins.iter().copied().find(|twin| equal(twin, &data));
-                changed = true;
+                // Only a switch to another twin here: what a record names
+                // may still move to its own twin this round (cross review
+                // of run 9). Keeping is the last loop's.
+                if let Some(twin) = item
+                    .twins
+                    .iter()
+                    .copied()
+                    .find(|twin| *twin != current && equal(twin, &data))
+                {
+                    item.dropped = Some(twin);
+                    changed = true;
+                }
             }
             if !changed {
                 break;
@@ -2446,7 +2461,11 @@ impl Core {
             state.cursor = 0;
             state.resync_classes = classes;
             state.last_error = None;
-            inner.store.write(|tx| tx.sync_state_put(&state))?;
+            let vault_text = vault_id.to_string();
+            inner.store.write(|tx| {
+                tx.sync_state_put(&state)?;
+                tx.meta_set(META_SYNC_RESET, &vault_text)
+            })?;
             inner.sync.reset_refuse_newer = true;
             inner.sync.failed.clear();
             inner.sync.backoff_until = None;
@@ -2537,7 +2556,12 @@ impl Core {
 
     fn cycle_inner(&self, link: &Link, first: bool) -> Result<SyncReport, CoreError> {
         // The confirmed "Reset sync state" runs this cycle only.
-        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer);
+        // ... and the resync it started until that resync completes, also
+        // after an interrupted cycle or a restart (`meta`, cross review of
+        // run 9).
+        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer)
+            || self.inner().store.meta_get(META_SYNC_RESET)?.as_deref()
+                == Some(link.vault_id.to_string().as_str());
         let mut report = SyncReport::default();
         let mut changed: Vec<Uuid> = Vec::new();
         let mut changed_classes: Vec<u8> = Vec::new();
@@ -2703,7 +2727,11 @@ impl Core {
                 let mut state = inner.store.sync_state(&link.vault_id)?;
                 state.vault_id = link.vault_id;
                 state.resync_classes.clear();
-                inner.store.write(|tx| tx.sync_state_put(&state))?;
+                inner.store.write(|tx| {
+                    tx.sync_state_put(&state)?;
+                    // A reset's resync is complete (D183).
+                    tx.meta_set(META_SYNC_RESET, "")
+                })?;
                 Ok(ids)
             })?;
             report.brought_back += back.len();
@@ -2722,13 +2750,31 @@ impl Core {
             // Items still answered `stale_key_epoch` after the one retry:
             // left out for the rest of this cycle (pending, not refused).
             let mut stale_skip: HashSet<Uuid> = HashSet::new();
+            // Every item sent in this cycle, at the revision sent: one still
+            // pending at that revision (an unknown status, missing from the
+            // results) waits for the next cycle instead of filling every
+            // batch of this one (cross review of run 9).
+            let mut sent_this_cycle: HashMap<Uuid, u64> = HashMap::new();
             for _ in 0..MAX_PUSH_BATCHES {
                 let mut skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
                 skip.extend(stale_skip.iter().copied());
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
+                    let vault_id = session.ring.vault_id();
+                    for (id, revision) in &sent_this_cycle {
+                        let unchanged = inner
+                            .store
+                            .record(&vault_id, id)?
+                            .is_some_and(|row| row.revision == *revision);
+                        if unchanged {
+                            skip.insert(*id);
+                        }
+                    }
                     engine::build_push(&mut inner.store, session, &selection, &skip, self.now())
                 })?;
+                for row in &batch.sent {
+                    sent_this_cycle.insert(row.record_id, row.revision);
+                }
                 if batch.items.is_empty() {
                     break;
                 }
@@ -5696,6 +5742,214 @@ mod tests {
         // This device's own record names the current version.
         assert_eq!(item.current_device_name.as_deref(), Some("TEST"));
         assert!(item.current_this_device);
+    }
+
+    #[test]
+    fn a_fork_at_the_base_of_a_restore_mark_keeps_both_versions() {
+        // Cross review of run 9 (D184): a record a restore marked (synced
+        // 1, base at revision 2) meets another version at revision 2. It is
+        // a fork: the local version wins, the server's is kept as a copy.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Local", &random_text());
+        let mut data = stored_data(&core, host);
+        data.insert("label".into(), json!("Local, edited"));
+        if let Some(ssh) = data.get_mut("ssh").and_then(Value::as_object_mut) {
+            ssh.remove("password"); // Secrets go in their own map.
+        }
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        core.record_save(crate::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: Some(host),
+            record_type: crate::service::dto::RecordType::Host,
+            data,
+            secrets: std::collections::BTreeMap::new(),
+        })
+        .unwrap();
+        let now = core.now();
+        let now_text = format_timestamp(now);
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let mut row = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!(row.revision, 2);
+        row.synced_revision = 2;
+        row.base_envelope = None;
+        inner.store.write(|tx| tx.record_put(&row)).unwrap();
+        // The server restored from a backup holds revision 1.
+        engine::restore_mark(
+            &mut inner.store,
+            session,
+            &HashMap::from([(host, 1)]),
+            &shellpp_sync_api::classes::ALL,
+        )
+        .unwrap();
+        let local = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!((local.revision, local.synced_revision), (2, 1));
+        // Another device's version at revision 2, made on the restored server.
+        let mut server_data = stored_data_of(session, &local);
+        server_data.insert("label".into(), json!("Server"));
+        let payload = Payload::live("host", 1, Hlc::new(1, 0), Uuid::now_v7(), server_data);
+        let previous = RecordRow {
+            revision: 1,
+            synced_revision: 1,
+            base_envelope: None,
+            ..local.clone()
+        };
+        let server = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &payload,
+            Some(&previous),
+            &now_text,
+        )
+        .unwrap();
+        assert_eq!(server.revision, 2);
+        let mut effects = engine::Effects::default();
+        engine::resolve(
+            &inner.store,
+            session,
+            &mut effects,
+            &local,
+            Some(&server),
+            &Selection::all(),
+            false,
+            now,
+        )
+        .unwrap();
+        assert_eq!(effects.conflicts, 1, "the server's version is kept");
+        effects.commit(&mut inner.store, session, None).unwrap();
+        let after = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert!(after.revision > 2, "the local version goes over it");
+        assert_eq!(
+            stored_data_of(session, &after)["label"],
+            json!("Local, edited")
+        );
+        let copies = conflict_rows(&inner.store, session).unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(
+            copies[0].1.data.as_ref().unwrap()["losing_data"]["label"],
+            json!("Server")
+        );
+    }
+
+    #[test]
+    fn a_newer_edit_below_the_synced_revision_is_kept_and_gone_over() {
+        // Cross review of run 9 (D184, rule 0): a plain pull brings another
+        // device's edit at a revision below the one this device synced (a
+        // server rolled back unnoticed). It is kept as a copy, and the local
+        // version is sealed above it to be pushed again.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Local", &random_text());
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        let now = core.now();
+        let now_text = format_timestamp(now);
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let mut local = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        // Synced at revision 3.
+        let payload = open_payload(&mut session.ring, &local).unwrap();
+        let previous = RecordRow {
+            revision: 2,
+            synced_revision: 2,
+            ..local.clone()
+        };
+        local = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &payload,
+            Some(&previous),
+            &now_text,
+        )
+        .unwrap();
+        local.synced_revision = local.revision;
+        local.base_envelope = None;
+        assert_eq!(local.revision, 3);
+        inner.store.write(|tx| tx.record_put(&local)).unwrap();
+        // Another device's later edit at revision 2.
+        let mut data = stored_data_of(session, &local);
+        data.insert("label".into(), json!("Other device, later"));
+        let later = Hlc::new(crate::model::time::unix_ms(now) + 60_000, 0);
+        let server_payload = Payload::live("host", 1, later, Uuid::now_v7(), data);
+        let server = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &server_payload,
+            Some(&RecordRow {
+                revision: 1,
+                synced_revision: 1,
+                ..local.clone()
+            }),
+            &now_text,
+        )
+        .unwrap();
+        assert_eq!(server.revision, 2);
+        let state = SyncStateRow {
+            vault_id,
+            cursor: 10,
+            ..SyncStateRow::default()
+        };
+        let result = engine::apply_page(
+            &mut inner.store,
+            session,
+            &[wire::SeqEnvelope {
+                seq: 11,
+                envelope: B64(server.envelope.clone()),
+            }],
+            11,
+            &state,
+            &Selection::all(),
+            &HashMap::new(),
+            false,
+            now,
+        )
+        .unwrap();
+        assert_eq!(result.effects.conflicts, 1);
+        let after = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!(after.synced_revision, 2, "above the server's version");
+        assert!(after.revision > 3, "pending, to be pushed again");
+        assert_eq!(stored_data_of(session, &after)["label"], json!("Local"));
+        let copies = conflict_rows(&inner.store, session).unwrap();
+        assert_eq!(
+            copies[0].1.data.as_ref().unwrap()["losing_data"]["label"],
+            json!("Other device, later")
+        );
+    }
+
+    fn stored_data_of(session: &mut Session, row: &RecordRow) -> Map<String, Value> {
+        open_payload(&mut session.ring, row)
+            .unwrap()
+            .data
+            .clone()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_set_aside_that_cannot_reopen_the_database_closes_the_session() {
+        // Cross review of run 9 (D190): "Also delete the local copy" fails
+        // to open the new database, and the old one does not open again
+        // either. The session must not go on writing to memory only.
+        let (_dir, core) = unlocked_core();
+        save_host(&core, "Kept", &random_text());
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        crate::store::fail_open::next(2);
+        assert!(core.sync_sign_out(true).is_err());
+        crate::store::fail_open::next(0);
+        assert_eq!(core.lock_status().state, LockState::Locked);
+        let saved = core.record_save(crate::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: None,
+            record_type: crate::service::dto::RecordType::Host,
+            data: json!({"address": "lost.example.com"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            secrets: std::collections::BTreeMap::new(),
+        });
+        assert!(saved.is_err(), "no edit goes to a store in memory");
     }
 
     #[test]

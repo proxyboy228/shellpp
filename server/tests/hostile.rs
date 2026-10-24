@@ -33,6 +33,13 @@ enum Mode {
     /// The header of the first record names key epoch 7 (the server holds
     /// epoch 1).
     ForgeEpoch,
+    /// Push answers carry no results (the server's write is unknown).
+    EmptyPush,
+    /// `ForgeEpoch` on the first page of a pull from 0, and the first pull
+    /// of a later page fails with `500` (`failed` once it did).
+    ForgeThenFail {
+        failed: bool,
+    },
     /// Forces a full resync (`410 purged`), leaves `hide` out of the
     /// snapshot and answers its push-back with the older `stale` version.
     Purge {
@@ -46,6 +53,8 @@ struct Proxy {
     origin: String,
     mode: Arc<Mutex<Mode>>,
     seen: Arc<Mutex<Vec<Value>>>,
+    /// Push requests passed on.
+    pushes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Proxy {
@@ -71,6 +80,9 @@ fn record_id(record: &Value) -> Option<[u8; 16]> {
 
 /// A push answer whose `conflict` for `hide` carries `stale` as `current`.
 fn rewrite_push(mode: &Mode, body: &[u8]) -> Option<Vec<u8>> {
+    if *mode == Mode::EmptyPush {
+        return Some(br#"{"results":[]}"#.to_vec());
+    }
     let Mode::Purge { hide, stale, .. } = mode else {
         return None;
     };
@@ -92,7 +104,7 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
     let records = page.get_mut("records")?.as_array_mut()?;
     seen.lock().unwrap().extend(records.iter().cloned());
     match mode {
-        Mode::Pass => return None,
+        Mode::Pass | Mode::EmptyPush => return None,
         Mode::Swap => {
             if records.len() >= 2 {
                 let first = records[0]["envelope"].clone();
@@ -133,7 +145,7 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
             page["next_cursor"] = Value::from(seq);
         }
         Mode::LowerEpoch => page["current_epoch"] = Value::from(0),
-        Mode::ForgeEpoch => {
+        Mode::ForgeEpoch | Mode::ForgeThenFail { .. } => {
             if let Some(record) = records.first_mut() {
                 let text = record["envelope"].as_str()?.to_owned();
                 let mut bytes = BASE64URL_NOPAD.decode(text.as_bytes()).ok()?;
@@ -211,19 +223,23 @@ fn proxy(server: &Server) -> Proxy {
         .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
         .expect("bind");
     let port = listener.local_addr().expect("addr").port();
-    let (task_mode, task_seen) = (mode.clone(), seen.clone());
+    let pushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (task_mode, task_seen, task_pushes) = (mode.clone(), seen.clone(), pushes.clone());
     server.runtime().spawn(async move {
         loop {
             let Ok((mut client, _)) = listener.accept().await else {
                 return;
             };
-            let (mode, seen) = (task_mode.clone(), task_seen.clone());
+            let (mode, seen, pushes) = (task_mode.clone(), task_seen.clone(), task_pushes.clone());
             tokio::spawn(async move {
                 let Some((head, body)) = read_message(&mut client).await else {
                     return;
                 };
                 let pull = head.starts_with("GET /v1/vaults/") && head.contains("/changes");
                 let push = head.starts_with("POST /v1/vaults/") && head.contains("/changes");
+                if push {
+                    pushes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 // The forced resync: one `410 purged` for the first pull.
                 let send_410 = pull && {
                     let mut current = mode.lock().unwrap();
@@ -235,6 +251,29 @@ fn proxy(server: &Server) -> Proxy {
                         _ => false,
                     }
                 };
+                // The first pull of a later page fails once.
+                let from_zero = head.contains("since=0&") || head.contains("since=0 ");
+                let send_500 = pull && !from_zero && {
+                    let mut current = mode.lock().unwrap();
+                    match &mut *current {
+                        Mode::ForgeThenFail { failed } if !*failed => {
+                            *failed = true;
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if send_500 {
+                    let body = r#"{"error":{"code":"internal","message":"internal"}}"#;
+                    let head = format!(
+                        "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = client.write_all(head.as_bytes()).await;
+                    let _ = client.write_all(body.as_bytes()).await;
+                    let _ = client.shutdown().await;
+                    return;
+                }
                 {
                     if send_410 {
                         let body = r#"{"error":{"code":"cursor_expired","message":"cursor expired","details":{"reason":"purged"}}}"#;
@@ -288,6 +327,7 @@ connection: close
         origin: format!("http://127.0.0.1:{port}"),
         mode,
         seen,
+        pushes,
     }
 }
 
@@ -577,4 +617,61 @@ fn a_forged_key_epoch_stops_sync_until_the_user_resets_it() {
     a.sync();
     b.sync();
     assert!(labels(&b).contains(&"after the reset".to_owned()));
+}
+
+/// Cross review of run 9 (section 6.5): push answers without results leave
+/// the items pending. A cycle sends each of them once, not the same batch
+/// up to the batch limit: 600 items go in two requests.
+#[test]
+fn items_left_pending_by_a_push_are_sent_once_per_cycle() {
+    let server = Server::start();
+    let (proxy, a, _b, _, _) = setup(&server);
+    for i in 0..600 {
+        a.host(&format!("bulk{i}.example.com"));
+    }
+    proxy.set(Mode::EmptyPush);
+    let before = proxy.pushes.load(std::sync::atomic::Ordering::SeqCst);
+    let _ = a.core.sync_now();
+    let sent = proxy.pushes.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert!(sent <= 2, "{sent} pushes in one cycle");
+    assert!(a.status().pending >= 600, "nothing is taken as synced");
+    proxy.set(Mode::Pass);
+    a.sync();
+    assert_eq!(a.status().pending, 0);
+}
+
+/// Cross review of run 9 (D183): a reset whose resync is cut off after the
+/// forged page (a later page fails) goes on refusing that record in the
+/// next cycle, until its resync completes; the stop does not come back.
+#[test]
+fn an_interrupted_reset_still_refuses_the_forged_epoch() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    // More than one page (500 records each).
+    for i in 0..600 {
+        a.host(&format!("page{i}.example.com"));
+    }
+    a.sync();
+    b.sync();
+    edit_both(&a);
+    proxy.set(Mode::ForgeEpoch);
+    assert!(b.core.sync_now().is_err(), "the forged epoch stops sync");
+    assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
+
+    proxy.set(Mode::ForgeThenFail { failed: false });
+    assert!(
+        b.core.sync_reset_vault_state().is_err(),
+        "the second page fails"
+    );
+    // The next cycle continues the reset's resync: the forged record is
+    // refused again, not a new stop.
+    let report = b.core.sync_now().expect("the resync completes");
+    assert!(report.integrity_warnings >= 1);
+    assert_eq!(b.status().last_error, None);
+    // Once it is complete, a forged header stops sync again.
+    proxy.set(Mode::Pass);
+    edit_both(&a);
+    proxy.set(Mode::ForgeEpoch);
+    assert!(b.core.sync_now().is_err());
+    assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
 }
