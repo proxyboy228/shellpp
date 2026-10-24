@@ -222,7 +222,7 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'sync-connect', 'sync-trust', 'sync-account', 'recently-deleted', 'sync-review', 'hosts-duplicates',
     'sync-duplicates', 'sync-conflict')
 # Run 9 (D187): the changed-certificate dialog and a CA file's confirmation.
-$allStates += @('sync-certificate-changed', 'sync-trust-ca')
+$allStates += @('sync-certificate-changed', 'sync-trust-ca', 'sync-weaker-kdf')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the
 # imports, captured after new-host; the PuTTY and CSV ones from run 8).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config',

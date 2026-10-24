@@ -206,6 +206,15 @@ pub const ERROR_CLOSED: &str = "This server needs a valid invitation code.";
 pub const ERROR_TAKEN: &str = "An account with this email exists: sign in instead.";
 pub const ERROR_PASSWORD: &str = "This is not the master password of this device.";
 pub const ERROR_KDF: &str = "The server sent unsafe key derivation parameters.";
+pub const ERROR_WEAKER_KDF: &str =
+    "The server asked for weaker key derivation than this device uses. Nothing was sent.";
+pub const KDF_WEAKER_TITLE: &str = "Weaker key derivation";
+pub const KDF_WEAKER_HEADING: &str = "The server asks for weaker settings";
+pub const KDF_WEAKER_TEXT: &str = "To sign in, this device derives a key from your master password. The server asks it to use weaker settings than the ones it uses for this account now. Nothing was derived or sent yet.";
+pub const KDF_THIS_DEVICE: &str = "This device";
+pub const KDF_FROM_SERVER: &str = "The server asks for";
+pub const KDF_WEAKER_WARNING: &str = "This is expected after the password was changed on a device with weaker settings, such as a phone. Otherwise it can mean that someone poses as your server to make your password easier to guess: then cancel.";
+pub const KDF_CONTINUE: &str = "Sign in with weaker settings";
 pub const ERROR_PREVIOUS: &str = "This device was bound to another account before; connecting it to a new one is not supported yet.";
 pub const ERROR_ROLLED_BACK: &str =
     "Server state rolled back: the server holds older keys than this device.";

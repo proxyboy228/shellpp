@@ -1853,3 +1853,17 @@ Status: run 9 decision, 2026-10-24 (plan, section 3.3; D173, item 3). Implements
 - An added CA lives only in the verifier of its origin; nothing is written to the OS store, and SSH host keys never consult it. The system's trust of sync connections is the OS verifier, or a fixed root set in tests (`Core::sync_set_system_roots_for_test`, behind the `test-hooks` feature): no test changes the machine's store, and the tests of the trust choices do not read it (the run 7 tests of the verifier still check one origin through the OS verifier, the path the app takes).
 
 **Spec impact:** docs/sync-protocol.md, section 2.1 (a choice is kept only after the server answers; a kept choice keeps the account signed in); docs/ui-behavior-spec.md, section 12.2 (the trust row only shows the trust; the refused certificate of an added CA; confirming goes on without signing in), and `docs/ru`; the user guide, chapter 6 (en, ru); `server/README.md`, access 3.
+
+### 189. Weaker KDF parameters at pre-login are a possible downgrade (run 9)
+
+Status: run 9 decision, 2026-10-24 (D173, item 1.5; run 7 report, section 10.1, finding 5). Adds to docs/sync-protocol.md, section 4.2.
+
+**Context.** On a bound, signed-out device, a server could answer pre-login with weaker KDF parameters than the ones the device holds for the account, still within the floor; the client derived the auth key under them, sent it, and the rebind stored them. A hostile server, or one that took over the address, then gets an auth key that is cheaper to attack offline than the device's own. A weaker answer is also what an honest server sends after the password was changed on a phone (the mobile preset, 32 MiB × 4 passes, against the desktop's 64 MiB × 3).
+
+**Decision:**
+
+- "Weaker" is less memory, or less memory × passes, than `local_auth.kdf` (lanes change neither); the check runs for a device whose `server_account` row names the origin and has no refresh token (signed out), after the floor check and before anything is derived or sent. It refuses with `weaker_kdf` and keeps both parameters for the dialog (`Core::sync_weaker_kdf`).
+- The wizard opens "Weaker key derivation", a dialog of its own: this device's and the server's settings side by side (memory, passes, lanes), why this is expected after a password change on a phone and what else it can mean. Cancel keeps the device signed out; "Sign in with weaker settings", a danger button, signs in through `Core::sync_sign_in_accepting_kdf`, which goes on only when the pre-login answers exactly the parameters the user confirmed.
+- Not covered: a device that signed out with Log out (it is no longer bound: its sign-in is a rebind or a merge, and the account password may differ from the local one), and the first sign-in of an empty device (nothing to compare with).
+
+**Spec impact:** docs/sync-protocol.md, section 4.2; docs/ui-behavior-spec.md, section 13.5, step 2, and `docs/ru`.

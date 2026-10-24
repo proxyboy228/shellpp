@@ -451,3 +451,51 @@ fn a_choice_the_server_refuses_keeps_nothing(cx: &mut TestAppContext) {
     );
     ui.finish(cx);
 }
+
+/// The weaker KDF confirmation (D189): both settings side by side, Cancel
+/// and the danger button; Cancel closes it and the wizard stays on its
+/// account step, signed out.
+#[gpui::test]
+fn the_weaker_kdf_dialog_shows_both_settings_and_cancel_keeps_the_device_out(
+    cx: &mut TestAppContext,
+) {
+    use shellpp_core::crypto::{KdfParams, PlatformClass};
+    let ui = Ui::open(cx);
+    let state = ui.state.clone();
+    let wizard = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_connect(state, false, window, cx)
+        })
+        .unwrap();
+    let offer = shellpp_core::service::WeakerKdf {
+        local: KdfParams::preset(PlatformClass::Desktop),
+        server: KdfParams::preset(PlatformClass::Mobile),
+    };
+    let shown = wizard.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        super::kdf::open_weaker_kdf(shown, offer, window, cx)
+    })
+    .unwrap();
+    ui.settle(cx);
+    for id in [
+        "sync-weaker-kdf",
+        "sync-kdf-local",
+        "sync-kdf-server",
+        "sync-kdf-cancel",
+        "sync-kdf-continue",
+    ] {
+        assert!(ui.visible(id, cx), "{id}");
+    }
+    ui.click("sync-kdf-cancel", cx);
+    assert!(!ui.visible("sync-weaker-kdf", cx));
+    assert!(ui.visible("sync-connect", cx), "the wizard stays");
+    assert_eq!(
+        super::kdf::describe(&KdfParams::preset(PlatformClass::Desktop)),
+        "64 MiB, 3 passes, 4 lanes"
+    );
+    assert_eq!(
+        super::kdf::describe(&KdfParams::preset(PlatformClass::Mobile)),
+        "32 MiB, 4 passes, 2 lanes"
+    );
+    ui.finish(cx);
+}

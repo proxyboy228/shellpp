@@ -1,8 +1,9 @@
 //! The run 9 certificate states of the screenshot run (plan 1.3, 3.3;
 //! D187): the dialog of a changed pinned certificate whose new certificate
 //! the system trusts (both fingerprints, "Use the system's trust"), and the
-//! confirmation of a CA file in the wizard's certificate step. Made-up
-//! certificates: no server is asked and nothing is stored.
+//! confirmation of a CA file in the wizard's certificate step, and the
+//! confirmation of weaker KDF parameters at a sign-in (D189). Made-up
+//! certificates and parameters: no server is asked and nothing is stored.
 
 use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, Entity};
 use gpui_kit::test::TestWindowExt as _;
@@ -13,7 +14,11 @@ use crate::app::RootView;
 use crate::state::AppState;
 
 /// The states of this module.
-pub const STATES: [ShotState; 2] = [ShotState::SyncCertificateChanged, ShotState::SyncTrustCa];
+pub const STATES: [ShotState; 3] = [
+    ShotState::SyncCertificateChanged,
+    ShotState::SyncTrustCa,
+    ShotState::SyncWeakerKdf,
+];
 
 const ORIGIN: &str = "https://sync.home.arpa";
 
@@ -88,6 +93,22 @@ pub async fn reach(
             .map_err(|_| ScreenshotError::WindowClosed)?;
             settle(cx, handle).await
         }
+        ShotState::SyncWeakerKdf => {
+            cx.update_window(handle, move |_, window, cx| {
+                let wizard = crate::sync_ui::open_connect(state, false, window, cx);
+                let offer = shellpp_core::service::WeakerKdf {
+                    local: shellpp_core::crypto::KdfParams::preset(
+                        shellpp_core::crypto::PlatformClass::Desktop,
+                    ),
+                    server: shellpp_core::crypto::KdfParams::preset(
+                        shellpp_core::crypto::PlatformClass::Mobile,
+                    ),
+                };
+                crate::sync_ui::kdf::open_weaker_kdf(wizard, offer, window, cx);
+            })
+            .map_err(|_| ScreenshotError::WindowClosed)?;
+            settle(cx, handle).await
+        }
         _ => Err(ScreenshotError::state(shot, "not a certificate state")),
     }
 }
@@ -113,10 +134,13 @@ pub fn check(
             Ok(())
         }
         ShotState::SyncTrustCa if shown(cx, "sync-ca-confirm")? => Ok(()),
-        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa => Err(ScreenshotError::state(
-            shot,
-            "the certificate dialog is not shown",
-        )),
+        ShotState::SyncWeakerKdf if shown(cx, "sync-weaker-kdf")? => Ok(()),
+        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa | ShotState::SyncWeakerKdf => {
+            Err(ScreenshotError::state(
+                shot,
+                "the certificate dialog is not shown",
+            ))
+        }
         _ => Err(ScreenshotError::state(shot, "not a certificate state")),
     }
 }

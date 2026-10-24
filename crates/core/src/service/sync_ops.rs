@@ -105,6 +105,8 @@ pub(super) struct SyncRuntime {
     /// The server's `recovery_wrap` does not hold the personal vault key.
     recovery_mismatch: bool,
     newer_epoch: bool,
+    /// The last sign-in refused weaker KDF parameters (D189).
+    pub(super) weaker_kdf: Option<super::sync_trust::WeakerKdf>,
 }
 
 impl SyncRuntime {
@@ -1064,23 +1066,51 @@ impl Core {
     /// (UI 13.2): the device gets the account's vault. With a local vault it
     /// is a rebind (the same personal vault) or the merge of data-model 18.5.
     pub fn sync_sign_in(&self, input: SignInInput) -> Result<SignInOutcome, CoreError> {
+        self.sign_in_with(input, None)
+    }
+
+    /// The sign-in of a bound, signed-out device after the user confirmed
+    /// the weaker KDF parameters of `sync_weaker_kdf` (D189): it goes on only
+    /// when the server sends exactly `accepted` again.
+    pub fn sync_sign_in_accepting_kdf(
+        &self,
+        input: SignInInput,
+        accepted: KdfParams,
+    ) -> Result<SignInOutcome, CoreError> {
+        self.sign_in_with(input, Some(&accepted))
+    }
+
+    fn sign_in_with(
+        &self,
+        input: SignInInput,
+        accepted: Option<&KdfParams>,
+    ) -> Result<SignInOutcome, CoreError> {
         let _sync = self.sync_lock();
         let origin = normalize_origin(&input.origin).map_err(HttpError::from)?;
         let email = crypto::normalize_email(&input.email);
         let class = self.platform.class;
-        let (api, device_id) = {
-            let guard = self.inner();
+        let (api, device_id, bound_kdf) = {
+            let mut guard = self.inner();
+            guard.sync.weaker_kdf = None;
+            let mut bound_kdf = None;
             match guard.state {
                 LockState::FirstRun => {}
                 LockState::Unlocked => {
                     // A bound device signed out (refused refresh, offline
                     // recovery) signs in again: the rebind below.
-                    if guard
-                        .store
-                        .server_account()?
+                    let account = guard.store.server_account()?;
+                    if account
+                        .as_ref()
                         .is_some_and(|row| row.refresh_token.is_some())
                     {
                         return Err(refused("already_bound"));
+                    }
+                    // Its KDF parameters are the account's as last known.
+                    if account.is_some_and(|row| row.server_url == origin) {
+                        bound_kdf = guard
+                            .store
+                            .local_auth()?
+                            .and_then(|row| KdfParams::from_json(&row.kdf_json).ok());
                     }
                 }
                 _ => return Err(CoreError::Locked),
@@ -1089,7 +1119,7 @@ impl Core {
                 .store
                 .meta_get(META_DEVICE_ID)?
                 .and_then(|text| Uuid::parse_str(&text).ok());
-            (self.api(&guard.store, &origin)?, device_id)
+            (self.api(&guard.store, &origin)?, device_id, bound_kdf)
         };
         let device_id = match device_id {
             Some(id) => id,
@@ -1101,6 +1131,18 @@ impl Core {
             .kdf_salt
             .exact()
             .ok_or_else(|| refused("unsafe_kdf"))?;
+        kdf.check(class).map_err(|_| refused("unsafe_kdf"))?;
+        // Weaker than this device's own parameters: a possible downgrade
+        // attack (D189). Nothing is derived or sent until the user confirms
+        // these very parameters.
+        if let Some(local) = bound_kdf
+            && super::sync_trust::kdf_weaker(&kdf, &local)
+            && accepted != Some(&kdf)
+        {
+            self.inner().sync.weaker_kdf =
+                Some(super::sync_trust::WeakerKdf { local, server: kdf });
+            return Err(refused("weaker_kdf"));
+        }
         let derived = derive(&kdf, &kdf_salt, &email, &input.password, &origin, class)?;
         drop(input);
         let response = api.login(&wire::LoginRequest {

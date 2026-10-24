@@ -15,9 +15,26 @@ use serde::Serialize;
 
 use super::Core;
 use super::sync_ops::{ServerCheck, TrustChoice, trust_of};
+use crate::crypto::KdfParams;
 use crate::error::CoreError;
 use crate::sync::tls::{self, SystemRoots};
 use crate::sync::{HttpError, TrustMode, normalize_origin};
+
+/// KDF parameters a sign-in refused (D189): the server's are weaker than
+/// the ones this bound device holds for the account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WeakerKdf {
+    pub local: KdfParams,
+    pub server: KdfParams,
+}
+
+/// `server` costs an attacker less than `local`: less memory, or less
+/// memory times passes (the lanes change neither).
+pub(super) fn kdf_weaker(server: &KdfParams, local: &KdfParams) -> bool {
+    server.m_kib < local.m_kib
+        || u64::from(server.m_kib) * u64::from(server.t)
+            < u64::from(local.m_kib) * u64::from(local.t)
+}
 
 /// How the sync server's certificate is trusted (the row of UI 12.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -137,6 +154,12 @@ impl Core {
         Ok(check)
     }
 
+    /// The weaker KDF parameters the last sign-in refused (D189), for the
+    /// dialog that asks to go on with them.
+    pub fn sync_weaker_kdf(&self) -> Option<WeakerKdf> {
+        self.inner().sync.weaker_kdf.clone()
+    }
+
     /// The stored trust of `origin` (UI 12.2).
     pub fn sync_server_trust_info(&self, origin: &str) -> Result<ServerTrust, CoreError> {
         let origin = normalize_origin(origin).map_err(HttpError::from)?;
@@ -157,6 +180,32 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kdf(m_kib: u32, t: u32, p: u32) -> KdfParams {
+        KdfParams {
+            m_kib,
+            t,
+            p,
+            ..KdfParams::preset(crate::crypto::PlatformClass::Desktop)
+        }
+    }
+
+    #[test]
+    fn weaker_means_less_memory_or_less_work() {
+        let desktop = kdf(65_536, 3, 4);
+        assert!(
+            kdf_weaker(&kdf(32_768, 4, 2), &desktop),
+            "the mobile preset"
+        );
+        assert!(kdf_weaker(&kdf(49_152, 3, 4), &desktop));
+        assert!(!kdf_weaker(&desktop, &desktop));
+        assert!(!kdf_weaker(&kdf(65_536, 3, 1), &desktop), "lanes only");
+        assert!(!kdf_weaker(&kdf(131_072, 3, 4), &desktop));
+        assert!(
+            kdf_weaker(&kdf(98_304, 3, 4), &kdf(65_536, 5, 4)),
+            "less work"
+        );
+    }
 
     #[test]
     fn a_ca_is_named_by_its_common_name() {

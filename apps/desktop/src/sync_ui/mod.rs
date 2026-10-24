@@ -22,6 +22,7 @@
 mod badge_tests;
 pub mod compare;
 pub mod duplicates;
+pub mod kdf;
 pub mod strings;
 #[cfg(test)]
 mod tests;
@@ -70,6 +71,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "registration_closed" => strings::ERROR_CLOSED,
             "email_taken" => strings::ERROR_TAKEN,
             "unsafe_kdf" | "weak_kdf_params" => strings::ERROR_KDF,
+            "weaker_kdf" => strings::ERROR_WEAKER_KDF,
             "previous_account" => strings::ERROR_PREVIOUS,
             "rolled_back" => strings::ERROR_ROLLED_BACK,
             "integrity" => strings::ERROR_INTEGRITY,
@@ -264,6 +266,17 @@ impl ConnectDialog {
 
     /// Step 2: sign in or register.
     pub fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_accepting(None, window, cx);
+    }
+
+    /// Step 2, after the user confirmed `accepted`, the weaker KDF
+    /// parameters the server sent (D189): a sign-in with exactly these.
+    pub fn run_accepting(
+        &mut self,
+        accepted: Option<shellpp_core::crypto::KdfParams>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(core), Some(origin)) = (self.state.read(cx).core().cloned(), self.origin.clone())
         else {
             return;
@@ -281,14 +294,34 @@ impl ConnectDialog {
         cx.notify();
         let ran = cx.background_spawn(async move {
             if register {
-                core.sync_register(input).map(SignInOutcome::Done)
-            } else {
-                core.sync_sign_in(input)
+                return core.sync_register(input).map(SignInOutcome::Done);
+            }
+            match accepted {
+                Some(kdf) => core.sync_sign_in_accepting_kdf(input, kdf),
+                None => core.sync_sign_in(input),
             }
         });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = ran.await;
-            let _ = this.update(cx, |dialog, cx| dialog.finish(result, cx));
+            let _ = this.update_in(cx, |dialog, window, cx| {
+                // Weaker KDF parameters: their dialog of its own (D189).
+                let offer = matches!(
+                    &result,
+                    Err(CoreError::Sync(HttpError::Refused("weaker_kdf")))
+                )
+                .then(|| {
+                    dialog
+                        .state
+                        .read(cx)
+                        .core()
+                        .and_then(|core| core.sync_weaker_kdf())
+                })
+                .flatten();
+                dialog.finish(result, cx);
+                if let Some(offer) = offer {
+                    kdf::open_weaker_kdf(cx.entity(), offer, window, cx);
+                }
+            });
         }));
     }
 

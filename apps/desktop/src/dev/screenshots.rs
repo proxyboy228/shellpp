@@ -383,6 +383,9 @@ pub enum ShotState {
     SyncCertificateChanged,
     /// The confirmation of a CA file in the wizard's certificate step.
     SyncTrustCa,
+    // Run 9, plan 3.6 (D189): `sync_trust_shot`.
+    /// The confirmation of weaker KDF parameters at a sign-in.
+    SyncWeakerKdf,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -532,7 +535,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 110] = [
+    pub const ALL: [Self; 111] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -610,6 +613,7 @@ impl ShotState {
         Self::SyncConflict,
         Self::SyncCertificateChanged,
         Self::SyncTrustCa,
+        Self::SyncWeakerKdf,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -787,6 +791,7 @@ impl ShotState {
             Self::SyncConflict => "sync-conflict",
             Self::SyncCertificateChanged => "sync-certificate-changed",
             Self::SyncTrustCa => "sync-trust-ca",
+            Self::SyncWeakerKdf => "sync-weaker-kdf",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1942,7 +1947,7 @@ pub async fn reach_state(
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
-        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa => {
+        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa | ShotState::SyncWeakerKdf => {
             sync_trust_shot::reach(cx, handle, root, state, shot_state).await
         }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
@@ -2211,9 +2216,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::HostsDuplicates
             | ShotState::SyncConflict
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
-            ShotState::SyncCertificateChanged | ShotState::SyncTrustCa => {
-                Err("checked with the certificate screens")
-            }
+            ShotState::SyncCertificateChanged
+            | ShotState::SyncTrustCa
+            | ShotState::SyncWeakerKdf => Err("checked with the certificate screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor

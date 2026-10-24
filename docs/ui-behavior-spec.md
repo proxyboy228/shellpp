@@ -2070,6 +2070,15 @@ Settings → Security (see 12.1):
        the reason, with no option to trust it. [decision] (D93)
   2. **Sign in or register**:
      - Sign in: the email and the account's master password;
+     - signing in again on a device bound to the account: when the server asks for weaker
+       key derivation settings than this device holds for the account
+       (`docs/sync-protocol.md`, 4.2), nothing is derived or sent, and a dialog of its own,
+       "Weaker key derivation", shows this device's and the server's settings (memory,
+       passes, lanes) and says that this is expected after the password was changed on a
+       device with weaker settings, such as a phone, and can otherwise mean that someone
+       poses as the server to make the password easier to guess. Cancel keeps the device
+       signed out; "Sign in with weaker settings" (a danger button) signs in with exactly
+       these settings; [decision] (D189)
      - Register: the email and the current master password, entered again to confirm. If
        the server allows registration only by invitation, an "Invite code" field is shown
        and is required.

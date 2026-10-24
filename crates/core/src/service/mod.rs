@@ -85,7 +85,7 @@ pub use sync_ops::{
     DuplicateSide, FieldDifference, KeepOther, PairField, ServerCheck, SignInInput, SignInOutcome,
     SyncReport, SyncStatus, TotpSetup, TrustChoice,
 };
-pub use sync_trust::ServerTrust;
+pub use sync_trust::{ServerTrust, WeakerKdf};
 
 /// Startup configuration resolved by the host (the core never looks up OS directories).
 #[derive(Clone, Debug)]
