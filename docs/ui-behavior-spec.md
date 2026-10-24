@@ -570,8 +570,8 @@ The same form is used for creating and editing; it opens in the details panel.
        focused, a system notification names the host ("web-1 asks for a signature",
        nothing of the key), and a click on it brings the window and the tab forward. The
        answer takes both away. [decision, D68] While the app is locked, the
-       forwarded agent offers no keys, the system agent's neither, unless "Forward the
-       system agent while locked" is on (13.4). [decision] (D194)
+       forwarded agent offers no Keychain keys, and the system agent's only when "Forward
+       the system agent while locked" is on (13.4). [decision] (D194)
      - Startup snippet with `{{name}}` variables: after each login the session's tab asks
        their values in the form of the Snippets screen (9.4) and then runs it; Cancel skips
        it for that login. [decision, D66]
@@ -2033,10 +2033,11 @@ Settings → Security (see 12.1):
 - **Auto-lock**: a dropdown with Never, 5, 15, 30 and 60 minutes; Never by default.
 - **Forward the system agent while locked**: a switch, off by default, with the
   explanation under it. Off, a host with Agent Forwarding gets no signatures while the app
-  is locked; on, a host that also offers the system agent's keys (3.1) can still ask the
+  is locked; on, a host with "Also offer the system agent's keys" (3.1) can still ask the
   system agent for signatures while the app is locked, and the system agent applies its
-  own policy. Read at each lock; a file never sets it (only a full restore of the user's
-  own backup does). [decision] (D194)
+  own policy; with "Ask before every signature" it still gets none, since the question
+  cannot be answered while locked. Read at each lock. It belongs to the device: an export
+  leaves it out and no import sets it, a full restore neither. [decision] (D194)
 - **Change master password**: the current password, the new password and its
   confirmation. The new password follows the rules of 13.1 (at least 8 characters, the
   strength indicator). [decision]

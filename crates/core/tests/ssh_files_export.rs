@@ -186,12 +186,13 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
         .expect("overwrite");
     assert_eq!(again.hosts, 4);
 
-    // The exported folder reads back through the ~/.ssh/config import.
+    // The exported folder reads back through the ~/.ssh/config import. It
+    // is not the user's own config, so its ForwardAgent comes back off (D193).
     let target = first_run();
     let source = SshConfigSource {
         path: ssh_dir.join(CONFIG_FILE),
         home: home.path().to_path_buf(),
-        own: true,
+        own: false,
     };
     let preview = target.core.ssh_config_preview(source.clone()).unwrap();
     // Rule 4 orders by group path first: the host without a group is
@@ -223,6 +224,7 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
         .unwrap();
     assert_eq!(imported.added, 4);
     assert_eq!(imported.keys_added, 2);
+    assert_eq!(imported.hosts_agent_forwarding_off, 1);
     let fingerprints = |core: &shellpp_core::Core| {
         let mut prints: Vec<String> = core
             .keys_list()

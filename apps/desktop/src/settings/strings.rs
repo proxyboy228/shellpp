@@ -101,8 +101,8 @@ pub const AUTO_LOCK_HINT: &str =
 pub const NEVER: &str = "Never";
 pub const SYSTEM_AGENT_WHILE_LOCKED: &str = "Forward the system agent while locked";
 pub const SYSTEM_AGENT_WHILE_LOCKED_HINT: &str = "While Shell++ is locked, hosts with Agent \
-     Forwarding get no signatures. Turned on, hosts that also offer the system agent's keys \
-     can still ask your system agent for them.";
+     Forwarding get no signatures. Turned on, hosts with \"Also offer the system agent's \
+     keys\" can still ask your system agent to sign while Shell++ is locked.";
 pub const REMEMBER_DEVICE: &str = "Remember on this device";
 pub const REMEMBER_DEVICE_HINT: &str = crate::lock::strings::REMEMBER_DEVICE_HINT;
 pub const FAILED: &str = "The setting was not saved. Try again.";

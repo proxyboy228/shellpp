@@ -130,8 +130,8 @@ What is imported:
   file (or was imported before); otherwise the host keeps the missing hop,
   its notes say so, and it does not connect until you fix the chain;
 - `ForwardAgent` turns on Agent Forwarding together with **Also offer the
-  system agent's keys**, but only from your own `~/.ssh/config`: from a
-  file chosen elsewhere the host comes with Agent Forwarding off, its notes
+  system agent's keys**, but only from your own `~/.ssh/config`: from
+  any other file the host comes with Agent Forwarding off, its notes
   say so and the summary counts it, and you turn it on yourself if you trust
   the host; `ServerAliveInterval` sets the keepalive, `SetEnv` the
   environment variables;

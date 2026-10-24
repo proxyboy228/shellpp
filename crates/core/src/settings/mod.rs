@@ -109,8 +109,8 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     // Never by default (decision D29).
     add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
     // Off by default (D194): while the app is locked, forwarded agents offer
-    // no keys at all, the system agent's neither. A `security.` setting is
-    // never imported from a file.
+    // no keys at all, the system agent's neither. It belongs to the device:
+    // no import takes it, a full restore neither (`device_setting`).
     add(SYSTEM_AGENT_WHILE_LOCKED_KEY, Kind::Bool, json!(false));
     // Script generation from a description (UI 9.5; run 8, D144): off by
     // default; the provider's address (an OpenAI-compatible API) and model.

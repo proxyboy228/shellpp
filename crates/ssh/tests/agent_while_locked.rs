@@ -8,7 +8,7 @@
 mod support;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
@@ -26,10 +26,13 @@ use tokio::sync::mpsc;
 /// What one probe of the server found: identities listed, signature made.
 type Probe = (usize, bool);
 
-/// No Keychain keys; the system agent behind a switch (the app's lock).
+/// No Keychain keys; the system agent behind a switch (the app's lock): it
+/// allows this many more requests ([`OPEN`]: all of them, 0: none).
 struct Gate {
-    open: AtomicBool,
+    budget: Mutex<usize>,
 }
+
+const OPEN: usize = usize::MAX;
 
 impl AgentKeys for Gate {
     fn keys(&self) -> Vec<Arc<PrivateKeyArc>> {
@@ -37,7 +40,15 @@ impl AgentKeys for Gate {
     }
 
     fn system_agent_allowed(&self) -> bool {
-        self.open.load(Ordering::SeqCst)
+        let mut left = self.budget.lock().unwrap();
+        match *left {
+            0 => false,
+            OPEN => true,
+            _ => {
+                *left -= 1;
+                true
+            }
+        }
     }
 }
 
@@ -166,9 +177,9 @@ async fn probe(
     gate: &Gate,
     shell: &mut shellpp_ssh::Shell,
     probes: &mut mpsc::UnboundedReceiver<Probe>,
-    open: bool,
+    budget: usize,
 ) -> Probe {
-    gate.open.store(open, Ordering::SeqCst);
+    *gate.budget.lock().unwrap() = budget;
     shell.writer().write(b"x").await.expect("write");
     tokio::time::timeout(SHORT, probes.recv())
         .await
@@ -176,17 +187,26 @@ async fn probe(
         .expect("probe")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_system_agent_is_not_forwarded_while_the_app_refuses_it() {
+/// A test agent with one key, the prober in front of a connection that
+/// forwards it behind `gate`, and the shell that cues the prober.
+struct Setup {
+    agent: TestAgent,
+    connection: shellpp_ssh::Connection,
+    shell: shellpp_ssh::Shell,
+    probes: mpsc::UnboundedReceiver<Probe>,
+    gate: Arc<Gate>,
+}
+
+async fn setup() -> Setup {
     let generated = generate_key(KeyType::Ed25519, "agent", None).expect("key");
     let key: PrivateKey =
         russh::keys::decode_secret_key(generated.private_openssh.expose_secret(), None)
             .expect("decodes");
     let known = key.public_key().clone();
     let agent = TestAgent::start(vec![key]).await;
-    let (addr, mut probes) = start_prober(known).await;
+    let (addr, probes) = start_prober(known).await;
     let gate = Arc::new(Gate {
-        open: AtomicBool::new(false),
+        budget: Mutex::new(0),
     });
     let mut spec = spec(addr, Some("mallory"), password_plan("anything"));
     spec.forward_agent = Some(ForwardedAgent {
@@ -197,30 +217,64 @@ async fn the_system_agent_is_not_forwarded_while_the_app_refuses_it() {
     let connection = connect(spec, TestInteraction::accepting().as_dyn())
         .await
         .expect("connects");
-    let mut shell = connection
+    let shell = connection
         .open_shell(ShellRequest {
             agent_forwarding: true,
             ..shell_request()
         })
         .await
         .expect("shell");
+    Setup {
+        agent,
+        connection,
+        shell,
+        probes,
+        gate,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_system_agent_is_not_forwarded_while_the_app_refuses_it() {
+    let Setup {
+        agent,
+        connection,
+        mut shell,
+        mut probes,
+        gate,
+    } = setup().await;
     // Locked: nothing listed, the known key signs nothing, and the system
     // agent is never asked.
-    assert_eq!(
-        probe(&gate, &mut shell, &mut probes, false).await,
-        (0, false)
-    );
+    assert_eq!(probe(&gate, &mut shell, &mut probes, 0).await, (0, false));
     assert_eq!(agent.requests(), 0);
     // Unlocked (or allowed while locked): listed and signed.
-    assert_eq!(probe(&gate, &mut shell, &mut probes, true).await, (1, true));
+    assert_eq!(probe(&gate, &mut shell, &mut probes, OPEN).await, (1, true));
     assert_eq!(agent.signatures(), 1);
     // Locked again: refused at once.
     let asked = agent.requests();
-    assert_eq!(
-        probe(&gate, &mut shell, &mut probes, false).await,
-        (0, false)
-    );
+    assert_eq!(probe(&gate, &mut shell, &mut probes, 0).await, (0, false));
     assert_eq!(agent.requests(), asked);
+    assert_eq!(agent.signatures(), 1);
+    connection.disconnect().await;
+}
+
+/// A lock that lands while a signature is under way: the gate is asked for
+/// the listing (1), before the signature (2), before it goes to the system
+/// agent (3) and once its answer is back (4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lock_during_a_signature_keeps_it_from_the_host() {
+    let Setup {
+        agent,
+        connection,
+        mut shell,
+        mut probes,
+        gate,
+    } = setup().await;
+    // Locked after the check of the request (a confirmation, say): the
+    // system agent is not asked to sign.
+    assert_eq!(probe(&gate, &mut shell, &mut probes, 2).await, (1, false));
+    assert_eq!(agent.signatures(), 0);
+    // Locked while the system agent signed: the host does not get it.
+    assert_eq!(probe(&gate, &mut shell, &mut probes, 3).await, (1, false));
     assert_eq!(agent.signatures(), 1);
     connection.disconnect().await;
 }

@@ -571,6 +571,9 @@ async fn sign(
                 return failure_frame();
             };
             match relay(system, upstream, frame).await {
+                // A lock while the system agent was busy (its own
+                // confirmation, say) keeps the signature from the host.
+                Some(_) if system_agent(agent).is_none() => failure_frame(),
                 Some(reply) => reply,
                 None => {
                     *upstream = None;
