@@ -414,7 +414,7 @@ On lock:
 | Terminal scrollback | stays in memory, hidden: open session tabs stay alive behind the unlock screen (UI 13.3, D29; RR11) |
 | An open session recording | keeps its own `recording_key[file]` until the file is closed, so output keeps being recorded; this key opens only that file ([storage-format.md](storage-format.md)) (stage 0 decision) |
 | Reconnects, forward autostart, new connections | wait for unlock (D9) |
-| Proxying of the system agent for open sessions | continues; the system agent applies its own policy (stage 0 decision) |
+| Forwarding of the system agent's keys in open sessions | stops until unlock: a forwarded agent offers no keys at all; with "Forward the system agent while locked" on (UI 13.4) it continues and the system agent applies its own policy. This replaces the stage 0 decision, under which it always continued [decision] (D194) |
 
 Unlock:
 
@@ -665,7 +665,7 @@ S11 algorithm (stage 0 decision; thresholds are tuned in stage 2 against the tes
 - Private keys never leave the client; only signatures are sent. A key passphrase is either saved in the vault or asked on every connection (UI 7.3).
 - `rsa` crate: RUSTSEC-2023-0071 is a timing side channel; signing happens locally, without a remote oracle, so the risk is low (D4).
 - Agent forwarding is off by default per host (UI 3.1). When it is on, the host can ask the forwarded agent for signatures while the session lasts but cannot extract keys (RR19).
-- The built-in agent works only inside the app: no socket or named pipe is exposed to other processes (D5). It refuses requests while locked (section 8).
+- The built-in agent works only inside the app: no socket or named pipe is exposed to other processes (D5). It refuses requests while locked (section 8). While locked, a forwarded agent does not pass requests to the system agent either, unless the user turned on "Forward the system agent while locked" (UI 13.4) [decision] (D194).
 - Legacy SHA-1 algorithms (`ssh-rsa` signatures, SHA-1 key exchange and MACs) and CBC ciphers are disabled by default; the host setting "Allow legacy algorithms" (`ssh.allow_legacy_algorithms`, with a warning while it is on) offers them after all modern ones (D80). 3DES, RC4, Blowfish, `ssh-dss`, `diffie-hellman-group1-sha1` and MD5 MACs are never offered. (stage 0 decision; opt-in: D80)
 
 ### 11.3 Port forwarding
@@ -776,7 +776,7 @@ Rules (stage 0 decision):
 (stage 0 decision except where cited)
 
 - Every import parser treats its input as untrusted and fails per item, not per file.
-- ssh config: `Match exec`, `ProxyCommand`, `LocalCommand`, `PermitLocalCommand` and `KnownHostsCommand` are never executed or stored as commands; they are skipped and counted in the import summary. `Include` follows only local files, at most 16 levels deep, with cycle detection.
+- ssh config: `Match exec`, `ProxyCommand`, `LocalCommand`, `PermitLocalCommand` and `KnownHostsCommand` are never executed or stored as commands; they are skipped and counted in the import summary. `ForwardAgent` turns Agent Forwarding on only from the user's own `~/.ssh/config`; a host from any other file is imported with it off, with a note, and counted in the summary [decision] (D193). `Include` follows only local files, at most 16 levels deep, with cycle detection.
 - Keys are parsed with `ssh-key` and RustCrypto crates and imported with a passphrase prompt (D21).
 - Encrypted JSON import enforces the KDF bounds (section 5.4); the decrypted content is validated against the export schema before anything is written.
 - Terminal themes accept only the fields of the theme format (D25, [design-system.md](design-system.md), section 7.2): colors are `#RRGGBB`, only `selection` may also be `#RRGGBBAA`, and a file with an unknown field or another `version` is rejected.

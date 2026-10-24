@@ -191,6 +191,7 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
     let source = SshConfigSource {
         path: ssh_dir.join(CONFIG_FILE),
         home: home.path().to_path_buf(),
+        own: true,
     };
     let preview = target.core.ssh_config_preview(source.clone()).unwrap();
     // Rule 4 orders by group path first: the host without a group is

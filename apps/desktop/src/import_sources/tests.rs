@@ -190,6 +190,49 @@ fn a_config_is_previewed_chosen_and_imported(cx: &mut TestAppContext) {
     assert!(!ui.visible(cx, "import-dialog"));
 }
 
+/// D193: `ForwardAgent` from a file other than the user's own config (the
+/// suggested file stands in for `~/.ssh/config`) is imported turned off and
+/// counted in the summary; the user's own config keeps mapping it (D60).
+#[gpui_kit::test]
+fn forward_agent_turns_on_only_from_the_users_own_config(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let own = ui.ssh().join("config");
+    std::fs::write(
+        &own,
+        "Host own\n  HostName own.example.com\n  ForwardAgent yes\n",
+    )
+    .unwrap();
+    let other = ui.home.path().join("Downloads").join("config");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    std::fs::write(
+        &other,
+        "Host other\n  HostName other.example.com\n  ForwardAgent yes\n",
+    )
+    .unwrap();
+    ui.frame(cx, |_, cx| {
+        assert!(is_own_config(&own, cx));
+        assert!(!is_own_config(&other, cx));
+        assert!(!is_own_config(&ui.home.path().join("missing"), cx));
+    });
+
+    for (path, off) in [(&other, 1), (&own, 0)] {
+        let dialog = ui.dialog(cx);
+        ui.click(cx, "import-next");
+        ui.frame(cx, |window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_path(path, window, cx))
+        });
+        ui.click(cx, "import-next");
+        ui.click(cx, "import-next");
+        let Step::Summary(summary) = dialog.read_with(cx, |dialog, _| dialog.step().clone()) else {
+            panic!("no summary");
+        };
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.hosts_agent_forwarding_off, off);
+        assert_eq!(ui.visible(cx, "import-agent-off"), off > 0);
+        ui.click(cx, "import-close");
+    }
+}
+
 #[gpui_kit::test]
 fn other_sources_hand_over(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);

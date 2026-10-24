@@ -143,6 +143,30 @@ fn auto_lock_is_never_by_default_and_changes_at_once(cx: &mut TestAppContext) {
     ui.finish(cx);
 }
 
+/// UI 13.4 (D194): "Forward the system agent while locked" is off by
+/// default and its switch stores the choice at once.
+#[gpui::test]
+fn the_system_agent_while_locked_is_off_by_default_and_toggles(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new().into_unlocked());
+    ui.press("ctrl-,", cx);
+    assert!(ui.visible("settings-system-agent-row", cx));
+    let stored = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            ui.state.read(cx).core().unwrap().settings_get().unwrap()
+                ["security.system_agent_while_locked"]
+                .clone()
+        })
+    };
+    assert_eq!(stored(cx), serde_json::json!(false));
+    assert!(!cx.update(|cx| ui.state.read(cx).system_agent_while_locked()));
+    ui.click("settings-system-agent", cx);
+    assert_eq!(stored(cx), serde_json::json!(true));
+    assert!(cx.update(|cx| ui.state.read(cx).system_agent_while_locked()));
+    ui.click("settings-system-agent", cx);
+    assert_eq!(stored(cx), serde_json::json!(false));
+    ui.finish(cx);
+}
+
 /// UI 13.4: "Remember on this device" turns the device key on (with the
 /// warning) and off again; the in-memory secret store holds it meanwhile.
 #[gpui::test]

@@ -25,6 +25,10 @@ pub const VIEW_SCREENS: &[&str] = &["hosts", "keychain", "forwarding", "snippets
 /// The auto-lock setting key.
 pub const AUTO_LOCK_KEY: &str = "security.auto_lock_minutes";
 
+/// Whether forwarded agents keep offering the system agent's keys while the
+/// app is locked (D194).
+pub const SYSTEM_AGENT_WHILE_LOCKED_KEY: &str = "security.system_agent_while_locked";
+
 /// Limits of a saved tab (docs/data-model.md, section 12): workspaces and
 /// the last session of Restore (`crate::service::last_session`).
 pub const SESSION_LAST_MAX_TABS: usize = 32;
@@ -104,6 +108,10 @@ fn definitions(os: OsKind) -> BTreeMap<String, Def> {
     add("appearance.ui_zoom", Kind::Number(0.8, 2.0), json!(1.0));
     // Never by default (decision D29).
     add(AUTO_LOCK_KEY, Kind::AutoLock, Value::Null);
+    // Off by default (D194): while the app is locked, forwarded agents offer
+    // no keys at all, the system agent's neither. A `security.` setting is
+    // never imported from a file.
+    add(SYSTEM_AGENT_WHILE_LOCKED_KEY, Kind::Bool, json!(false));
     // Script generation from a description (UI 9.5; run 8, D144): off by
     // default; the provider's address (an OpenAI-compatible API) and model.
     // The API key is never a setting (the OS keychain holds it). Not
@@ -521,6 +529,7 @@ mod tests {
         assert_eq!(values["appearance.ui_theme"], json!("auto"));
         assert_eq!(values["appearance.ui_zoom"], json!(1.0));
         assert_eq!(values[AUTO_LOCK_KEY], Value::Null);
+        assert_eq!(values[SYSTEM_AGENT_WHILE_LOCKED_KEY], json!(false));
         assert_eq!(values["view.hosts.sort"], json!("manual"));
         assert_eq!(values["view.keychain.sort"], json!("name"));
         assert_eq!(values["view.hosts.layout"], json!("grid"));

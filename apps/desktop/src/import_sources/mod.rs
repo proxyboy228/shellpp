@@ -83,6 +83,19 @@ pub fn default_path(cx: &App) -> Option<PathBuf> {
     ::dirs::home_dir().map(|home| home.join(".ssh").join("config"))
 }
 
+/// Whether `path` is the user's own `~/.ssh/config` (the suggested file of
+/// [`default_path`], the same file once links are resolved): only that
+/// file turns Agent Forwarding on with `ForwardAgent` (D60); any other
+/// file is imported with it off (D193).
+fn is_own_config(path: &Path, cx: &App) -> bool {
+    default_path(cx).is_some_and(|own| {
+        match (std::fs::canonicalize(path), std::fs::canonicalize(own)) {
+            (Ok(path), Ok(own)) => path == own,
+            _ => false,
+        }
+    })
+}
+
 /// The home folder for `~` in a config at `path`: the parent of its `.ssh`
 /// folder, else the user's home.
 fn home_for(path: &Path) -> PathBuf {
@@ -426,6 +439,7 @@ impl ImportSourcesDialog {
         };
         let source = SshConfigSource {
             home: home_for(&path),
+            own: is_own_config(&path, cx),
             path,
         };
         self.step = Step::Running;
@@ -517,6 +531,7 @@ impl ImportSourcesDialog {
         let input = SshConfigImportInput {
             source: SshConfigSource {
                 home: home_for(&path),
+                own: is_own_config(&path, cx),
                 path,
             },
             aliases: Some(self.chosen.iter().cloned().collect()),
@@ -873,6 +888,14 @@ impl ImportSourcesDialog {
                     "import-commands-skipped",
                     strings::SUMMARY_COMMANDS_SKIPPED,
                     summary.commands_skipped,
+                ))
+            })
+            // A file other than the user's own config forwards no agent (D193).
+            .when(summary.hosts_agent_forwarding_off > 0, |this| {
+                this.child(row(
+                    "import-agent-off",
+                    strings::SUMMARY_AGENT_OFF,
+                    summary.hosts_agent_forwarding_off,
                 ))
             })
     }

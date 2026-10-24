@@ -1858,3 +1858,33 @@ Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.4). `crates/sync-api
 - Tests: both types are `ZeroizeOnDrop` (the compile-time check used for the other wiping types), `zeroize()` empties them, `Debug` of the types, of bodies made of them and of the TOTP setup step shows neither the value nor its base64, the wire form stays a plain string, and `into_inner()` hands the contents over.
 
 **Spec impact:** docs/security.md, section 9.5 (the wiped values; the limitation) and RR11.
+
+### 193. `ForwardAgent` only from the user's own `~/.ssh/config` (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5: "the safest default; the user can turn it on explicitly"; run 8 agent C's report, section 8). Narrows D60 and the last sentence of D172 for the OpenSSH config import. Changes behaviour users are used to: a config imported from another path used to turn Agent Forwarding on.
+
+**Context.** The import maps `ForwardAgent yes` to Agent Forwarding with "Also offer the system agent's keys" (D60), because OpenSSH forwards the user's agent. D172 kept that for `~/.ssh/config` as the user's own file, but the import reads any path the user picks: a config from a colleague, a download or a repository is a file from elsewhere (security.md, A10), and its hosts could get the user's keys while a session is open (RR19).
+
+**Decision:**
+
+- The core's `SshConfigSource` says whether the file is the user's own (`own`, false when left out); only then does `ForwardAgent yes` turn Agent Forwarding on. The app decides it by comparing the chosen file with its suggested `~/.ssh/config` (the home folder's file, or the stand-in that tests and the demo set) once both are resolved by the file system; any other file, a missing one included, is not the user's own.
+- From another file, `ForwardAgent yes` imports the host with Agent Forwarding off, the preview and the host's notes say "ForwardAgent is imported turned off: the file is not your ~/.ssh/config", and the summary counts such hosts ("Hosts imported with Agent Forwarding turned off (see their notes)", `hosts_agent_forwarding_off`, the name of the Import Data count of D172). The user turns forwarding on per host. `ForwardAgent no` needs no note. The import key stays the alias, so importing the user's own config later finds such a host "already exists" and does not change it.
+- Files included by the user's own config (`Include`) are part of it. PuTTY sessions (D140) come from the user's own registry and keep mapping agent forwarding.
+- Tests: the core imports `ForwardAgent yes` from another file turned off with the note and the count, and from the user's own file turned on (D60, unchanged); the dialog tells the two apart and shows the summary row only for the other file.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 2.5 (and `docs/ru`); docs/security.md, section 13.5; the user guide, chapter 2 (and `docs/guide/ru`).
+
+### 194. While the app is locked, forwarded agents offer no keys (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5; run 8 agent C's report, section 8). Replaces the stage 0 decision of security.md, section 8 ("Proxying of the system agent for open sessions: continues; the system agent applies its own policy"). Changes behaviour users are used to: with "Also offer the system agent's keys" on, a host could ask the system agent for signatures while Shell++ was locked.
+
+**Context.** A lock wipes the Keychain keys of the built-in agent, so a forwarded agent stops offering them (D60), but requests for the system agent's keys were still passed to the system agent. Locking says "I am away"; a host whose root is hostile could then sign in elsewhere with the user's system agent keys for as long as the session stays open (RR19), without the user at the screen to notice a confirmation or to close the session.
+
+**Decision:**
+
+- While the app is locked, a forwarded agent channel lists none of the system agent's keys and refuses a signature with one of them before anything reaches the system agent, as it already did for the Keychain's keys. In `shellpp-ssh` the built-in agent's key source answers `system_agent_allowed()` at every request (true by default); the desktop's answers "unlocked, or the user chose so".
+- The explicit way to keep the old behaviour: Settings → Security → "Forward the system agent while locked" (`security.system_agent_while_locked`, a per-device setting, off by default). On, a host that also offers the system agent's keys can still ask the system agent for signatures while the app is locked, and the system agent applies its own policy (a confirming agent still asks). The sessions read it at each lock, before they learn of the lock, so no request sees the lock with an older choice. Like every `security.` setting it never comes from an imported file; only a full restore of the user's own backup brings it back.
+- Sessions, port forwards and transfers keep running while locked as before (D9); only signatures through forwarding stop, and they come back at unlock without reconnecting.
+- Tests: a russh server written for the test asks the forwarded agent for identities and for a signature by a key it learned earlier: while the app refuses, nothing is listed or signed and the system agent receives no request; allowed, it lists and signs; refused again, it stops at once (the test fails when the check is removed). The desktop reads the setting at each lock; the Security switch is off by default and stores the choice.
+
+**Spec impact:** docs/security.md, sections 8 and 11.2; docs/ui-behavior-spec.md, sections 3.1, 13.3 and 13.4 (and `docs/ru`); docs/data-model.md, section 16.1; the user guide, chapter 3 (and `docs/guide/ru`).
