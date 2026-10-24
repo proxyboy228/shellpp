@@ -376,7 +376,6 @@ fn server_image() -> &'static str {
     "shellpp-server:test"
 }
 
-/// The backup image of the compose file (D176), built once per process.
 /// Runs the backup script's prune in Alpine's busybox (the shell of the
 /// backup image) on `dir`, after `setup` (a shell snippet that makes
 /// files in /backups), with the extra environment `env`.
@@ -454,12 +453,135 @@ done";
         ],
         "{text}"
     );
+    let accepted =
+        std::fs::read_to_string(dir.path().join(".accepted-size")).expect("the accepted backup");
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(".accepted-size"))
-            .expect("the accepted backup")
-            .trim(),
-        "shellpp-small-1.sql.age"
+        accepted.split_whitespace().nth(1),
+        Some("100"),
+        "its time and size: {accepted}"
     );
+}
+
+/// Review of D199: the acceptance lasts. Once the accepted backup itself
+/// has aged out, the older, larger backups still kept (weekly, monthly)
+/// do not pause the pruning again.
+#[test]
+fn an_accepted_shrink_stays_accepted() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let setup = "set -e; cd /backups; now=$(date -u +%s)
+make() {
+  head -c $2 /dev/zero > shellpp-$1.sql.age
+  touch -d \"$(date -u -d @$((now - $3 * 86400 - 60)) '+%Y-%m-%d %H:%M:%S')\" shellpp-$1.sql.age
+}
+for age in 100 90 80 70 60 50 40; do make good-$age 10000 $age; done
+for age in 39 30 20 10 0; do make small-$age 100 $age; done";
+    let text = prune_in(
+        dir.path(),
+        setup,
+        &["BACKUP_RETENTION_DAYS=30", "BACKUP_ACCEPT_SMALLER=1"],
+    );
+    assert!(!text.contains("pruning paused"), "{text}");
+    // A month on: the accepted backup is gone, newer small ones came.
+    let later = "set -e; cd /backups; now=$(date -u +%s)
+rm -f shellpp-small-39.sql.age shellpp-small-30.sql.age shellpp-small-0.sql.age
+head -c 100 /dev/zero > shellpp-small-new.sql.age";
+    let text = prune_in(dir.path(), later, &["BACKUP_RETENTION_DAYS=30"]);
+    assert!(!text.contains("pruning paused"), "{text}");
+}
+
+/// Review of D199: a database cut down in steps, each half of the one
+/// before, pauses the pruning as a cut at once does: the measure is the
+/// largest backup, not the last good one.
+#[test]
+fn a_shrink_in_steps_pauses_the_rotation() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let setup = "set -e; cd /backups; now=$(date -u +%s)
+make() {
+  head -c $2 /dev/zero > shellpp-$1.sql.age
+  touch -d \"$(date -u -d @$((now - $3 * 86400 - 60)) '+%Y-%m-%d %H:%M:%S')\" shellpp-$1.sql.age
+}
+for age in 45 40 35 30 25 20 15 10 5 3; do make good-$age 10000 $age; done
+make half 5000 2; make quarter 2500 1; make again 2500 0";
+    let text = prune_in(dir.path(), setup, &["BACKUP_RETENTION_DAYS=1"]);
+    assert!(text.contains("pruning paused"), "{text}");
+    assert_eq!(backups_in(dir.path()).len(), 13, "nothing deleted: {text}");
+}
+
+/// Review of D199: a setting that is not a whole number stops the service
+/// before it dumps anything, so a restart loop does not fill the disk.
+#[test]
+fn a_bad_rotation_setting_makes_no_backup() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let script = deploy_dir().join("backup.sh");
+    let mount_script = format!("{}:/backup.sh:ro", script.display());
+    let mount_dir = format!("{}:/backups", dir.path().display());
+    // Stand-ins for pg_dump and age: a dump would leave a backup file.
+    let command = "printf '#!/bin/sh\necho dump\n' > /usr/local/bin/pg_dump
+printf '#!/bin/sh\nshift 2; [ \"$1\" = -o ] && cat > \"$2\"\n' > /usr/local/bin/age
+chmod +x /usr/local/bin/pg_dump /usr/local/bin/age
+/bin/sh /backup.sh";
+    let (ok, text) = docker(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--label",
+        run_label(),
+        "-v",
+        &mount_script,
+        "-v",
+        &mount_dir,
+        "-e",
+        "AGE_RECIPIENT=age1unused",
+        "-e",
+        "BACKUP_ONCE=1",
+        "-e",
+        "BACKUP_MIN_PERCENT=50%",
+        "--entrypoint",
+        "/bin/sh",
+        "alpine:3.22",
+        "-c",
+        command,
+    ]);
+    assert!(!ok, "the run fails: {text}");
+    assert!(
+        text.contains("BACKUP_MIN_PERCENT must be a whole number"),
+        "{text}"
+    );
+    assert!(backups_in(dir.path()).is_empty(), "no backup was written");
+    // The stand-ins work: with good settings the same run writes one.
+    let (ok, text) = docker(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--label",
+        run_label(),
+        "-v",
+        &mount_script,
+        "-v",
+        &mount_dir,
+        "-e",
+        "AGE_RECIPIENT=age1unused",
+        "-e",
+        "BACKUP_ONCE=1",
+        "--entrypoint",
+        "/bin/sh",
+        "alpine:3.22",
+        "-c",
+        command,
+    ]);
+    assert!(ok, "the run went through: {text}");
+    assert_eq!(backups_in(dir.path()).len(), 1, "{text}");
 }
 
 /// D199: besides the daily backups of the retention, the first backup of
@@ -500,6 +622,7 @@ done";
     assert!(ages.len() <= 2 + 4 + 3, "no more than that: {ages:?}");
 }
 
+/// The backup image of the compose file (D176), built once per process.
 fn backup_image() -> &'static str {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {

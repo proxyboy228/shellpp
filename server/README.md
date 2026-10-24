@@ -225,18 +225,27 @@ the machine.
 
 Rotation, after each backup (D199):
 
-- backups younger than `BACKUP_RETENTION_DAYS` (30) stay;
-- so do the first backup of each of the last `BACKUP_KEEP_WEEKS` (4)
-  calendar weeks and of each of the last `BACKUP_KEEP_MONTHS` (3) calendar
-  months, and always the newest backup; older ones are deleted;
+- backups not older than `BACKUP_RETENTION_DAYS` (30) whole days stay;
+- before them, so do the first backup of each of the `BACKUP_KEEP_WEEKS`
+  (4) calendar weeks and of each of the `BACKUP_KEEP_MONTHS` (3) calendar
+  months before the end of the retention, and always the newest backup;
+  older ones are deleted. With the defaults that keeps weekly backups up
+  to about two months back and monthly ones up to four;
 - nothing is deleted while the newest backup is less than
-  `BACKUP_MIN_PERCENT` (50) percent of the size of the last good one. A
-  database emptied or cut down by mistake would otherwise push the good
-  backups out night after night; `docker compose logs backup` then says
-  "pruning paused". If you deleted that much on purpose, accept the new
-  size once:
+  `BACKUP_MIN_PERCENT` (50) percent of the size of the largest one since
+  the last accepted shrink. A database emptied or cut down by mistake, at
+  once or in steps, would otherwise push the good backups out night after
+  night; `docker compose logs backup` then says "pruning paused". If you
+  deleted that much on purpose, accept the new size once:
   `docker compose run --rm -e BACKUP_PRUNE_ONLY=1 -e BACKUP_ACCEPT_SMALLER=1 backup`
-  (it remembers the newest backup in `backups/.accepted-size`).
+  (it keeps the newest backup's time and size in `backups/.accepted-size`;
+  older, larger backups no longer count).
+- A backup's time is the stamp in its name, so a backup copied back by
+  hand keeps its place. The four settings must be whole numbers: anything
+  else stops the service before it dumps (`docker compose logs backup`).
+- On a very small database (a few records) the fixed part of the dump, the
+  schema, can keep the dump of an emptied database above half the size of
+  a good one; there, set `BACKUP_MIN_PERCENT` higher (80).
 
 Its image is built once from `deploy/backup.Dockerfile` (Alpine with the
 PostgreSQL client and `age`) by the first `docker compose up`, so a backup

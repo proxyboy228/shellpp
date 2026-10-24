@@ -362,12 +362,12 @@ off, and Settings > **Security** says so; turn it on again there.
 
 The compose file's `backup` service writes
 `backups/shellpp-<time>.sql.age` every 24 hours (a database dump encrypted
-to your `age` key). It keeps the backups of the last 30 days, the first one
-of each of the last 4 weeks and of each of the last 3 months, and deletes
-the rest. While the newest backup is less than half the size of the last
-good one (a database emptied by mistake), it deletes nothing and the log
-says "pruning paused"; `server/README.md`, "Backups", tells how to accept a
-deliberate shrink. Its tools are in an image built once at the first start,
+to your `age` key). It keeps the backups of the last 30 days and, before
+them, the first one of each of 4 weeks and of each of 3 months, and deletes
+the rest. While the newest backup is less than half the size of the
+largest one (a database emptied by mistake), it deletes nothing and the
+log says "pruning paused"; `server/README.md`, "Backups", tells how to
+accept a deliberate shrink. Its tools are in an image built once at the first start,
 so a backup needs no network; a backup that fails shows in
 `docker compose logs backup` and leaves no file. Copy that folder off the
 machine regularly. Make one now with
