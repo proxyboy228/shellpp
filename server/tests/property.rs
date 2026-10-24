@@ -145,9 +145,25 @@ fn run(seed: u64, steps: usize) {
     assert_eq!(a.addresses(), b.addresses(), "seed {seed}: converged");
 }
 
+/// `SHELLPP_PROPERTY_SEEDS` (how many seeds, from the four fixed ones on)
+/// and `SHELLPP_PROPERTY_STEPS` (steps per seed) make a longer run of the
+/// verification runs; the default is four seeds of 60 steps.
 #[test]
 fn local_data_is_never_lost_under_random_operations() {
-    for seed in [0x5eed_0001_u64, 0x5eed_0002, 0x5eed_0003, 0x0bad_c0de] {
-        run(seed, 60);
+    let number = |name: &str, default: u64| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default)
+    };
+    let seeds = number("SHELLPP_PROPERTY_SEEDS", 4);
+    let steps = usize::try_from(number("SHELLPP_PROPERTY_STEPS", 60)).unwrap_or(60);
+    let fixed = [0x5eed_0001_u64, 0x5eed_0002, 0x5eed_0003, 0x0bad_c0de];
+    for index in 0..seeds {
+        let seed = fixed
+            .get(index as usize)
+            .copied()
+            .unwrap_or(0x5eed_1000 + index);
+        run(seed, steps);
     }
 }
