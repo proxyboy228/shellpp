@@ -42,6 +42,25 @@ pub fn failure_text(failure: &KeyChangeFailure, password: bool) -> &'static str 
 
 type CoreRef = std::sync::Arc<shellpp_core::Core>;
 
+/// Groups of the key on one line: `RK1` and six groups, then the other five.
+const KEY_GROUPS_PER_LINE: usize = 7;
+
+/// The key in lines that break only between its groups (a hyphen ends every
+/// line but the last), so a group is never split when it is written down.
+pub(super) fn key_lines(key: &str) -> Vec<String> {
+    let groups: Vec<&str> = key.split('-').collect();
+    let lines: Vec<&[&str]> = groups.chunks(KEY_GROUPS_PER_LINE).collect();
+    let last = lines.len().saturating_sub(1);
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let text = line.join("-");
+            if index < last { text + "-" } else { text }
+        })
+        .collect()
+}
+
 /// The key as text in the monospaced font, with "Copy" (the core copies it
 /// as a sensitive value and clears the clipboard after 30 seconds).
 pub(super) fn key_block(
@@ -67,7 +86,11 @@ pub(super) fn key_block(
                 .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                 .text_size(metrics::FONT_SIZE_BODY)
                 .text_color(cx.theme().popover_foreground)
-                .child(key.expose_secret().to_owned()),
+                .children(
+                    key_lines(key.expose_secret())
+                        .into_iter()
+                        .map(|line| div().child(line)),
+                ),
         )
         .child(
             h_flex()
