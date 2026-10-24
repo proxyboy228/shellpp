@@ -87,8 +87,8 @@ pub use key_change::{KeyChangeFailure, PreparedKey};
 use session::Session;
 pub use sync_ops::{
     BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
-    DuplicateSide, FieldDifference, KeepOther, LocalCopyFile, PairField, ServerCheck, SignInInput,
-    SignInOutcome, SyncReport, SyncStatus, TotpSetup, TrustChoice,
+    DuplicateSide, FieldDifference, KeepOther, LocalCopyFile, LocalOnly, PairField, ServerCheck,
+    SignInInput, SignInOutcome, SyncReport, SyncStatus, TotpSetup, TrustChoice,
 };
 pub use sync_trust::{ServerTrust, WeakerKdf};
 

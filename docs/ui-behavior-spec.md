@@ -1596,7 +1596,10 @@ With a connected server:
   are not on the server. Log out with the option checked asks a second time in the same
   dialog: "Delete the local copy? This cannot be undone." and, when there are any, the
   set-aside copies and backups by name, date and size ("These files are only on this
-  device, not on the server, and are deleted too"); the button becomes "Delete and sign
+  device, not on the server, and are deleted too"), and what only this device holds, lost
+  for good: the records sync leaves out (history and the connection log unless turned on,
+  anything turned off) and the session recordings ("Only on this device, and lost for
+  good: … Export Data first to keep them."); the button becomes "Delete and sign
   out". Cancel at either step deletes nothing; [decision] (D197, which revokes D190)
 - master password change is in Settings → Security (see 13.4), because it exists without
   a server too. The recovery key of the account is there as well; [decision]
@@ -2187,10 +2190,12 @@ Settings → Security (see 12.1):
   from it.
 - On a device that was connected to an account before, other key derivation settings or
   another salt in the server's answer mean the account's password or email changed on
-  another device (`docs/sync-protocol.md`, 4.2): the account step says "The password or
-  email of this account was changed on another device. Enter the account's current
-  password and sign in again.", empties the password field, and derives nothing until the
-  user signs in again. Weaker settings first get their own dialog (D189); [decision]
+  another device, or that this device's password was changed or recovered without the
+  account (`docs/sync-protocol.md`, 4.2): the account step says "The account's password
+  settings differ from this device's: the password or email was changed on another device,
+  or this device's password was changed or recovered without the account. Enter the
+  account's current password and sign in again.", empties the password field, and derives
+  nothing until the user signs in again. Weaker settings first get their own dialog (D189); [decision]
   (D200)
 - Signing in or registering on a device whose vault belongs to another account is refused
   until the previous account's archive (data-model 18.5) exists, after release 1.0. The

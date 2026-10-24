@@ -51,8 +51,8 @@ use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::CoreError;
 use shellpp_core::service::{
-    BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, LocalCopyFile, ServerCheck,
-    SignInInput, SignInOutcome, SyncStatus,
+    BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, LocalCopyFile, LocalOnly,
+    ServerCheck, SignInInput, SignInOutcome, SyncStatus,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
 use trust::TrustPanel;
@@ -87,6 +87,41 @@ fn on_enter<T: 'static>(
                 move |this: &mut T, _, event: &InputEvent, window, cx| {
                     if let InputEvent::PressEnter { .. } = event {
                         step(this, window, cx);
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+/// Enter in a form's field (UI 13.5; cross review of run 10): the focus
+/// goes on to the next empty field after it, and from the last one, or when
+/// every later field is filled, the step runs. So a field that may be left
+/// empty (a TOTP code without two-factor) is not skipped over by accident: a
+/// server counts an empty code as an attempt.
+fn on_enter_form<T: 'static>(
+    fields: &[&Entity<InputState>],
+    window: &mut Window,
+    cx: &mut Context<T>,
+    step: impl Fn(&mut T, &mut Window, &mut Context<T>) + Clone + 'static,
+) -> Vec<Subscription> {
+    let all: Vec<Entity<InputState>> = fields.iter().map(|field| (*field).clone()).collect();
+    fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let step = step.clone();
+            let later: Vec<Entity<InputState>> = all[index + 1..].to_vec();
+            cx.subscribe_in(
+                *field,
+                window,
+                move |this: &mut T, _, event: &InputEvent, window, cx| {
+                    if !matches!(event, InputEvent::PressEnter { .. }) {
+                        return;
+                    }
+                    match later.iter().find(|field| input_text(field, cx).is_empty()) {
+                        Some(empty) => empty.update(cx, |input, cx| input.focus(window, cx)),
+                        None => step(this, window, cx),
                     }
                 },
             )
@@ -1706,6 +1741,9 @@ pub struct SignOutDialog {
     /// "Also delete the local copy" asks a second time (D197), listing the
     /// set-aside copies and backups the server does not have.
     pub confirming: Option<Vec<LocalCopyFile>>,
+    /// What only this device holds (history, classes sync leaves out,
+    /// recordings): the second step says it is lost for good.
+    pub local_only: LocalOnly,
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -1719,8 +1757,14 @@ impl SignOutDialog {
         let delete_local = self.delete_local;
         if delete_local && self.confirming.is_none() {
             // The first click only asks again: nothing is deleted yet.
-            match core.local_copy_files() {
-                Ok(files) => self.confirming = Some(files),
+            match core
+                .local_copy_files()
+                .and_then(|files| Ok((files, core.local_only_data()?)))
+            {
+                Ok((files, only)) => {
+                    self.confirming = Some(files);
+                    self.local_only = only;
+                }
                 Err(error) => self.error = Some(error_text(&error)),
             }
             cx.notify();
@@ -1762,12 +1806,27 @@ impl Render for SignOutDialog {
                     )
                 })
                 .collect();
+            let only = strings::delete_local_only(
+                self.local_only.records,
+                self.local_only.recordings,
+                &crate::sftp::listing::human_size(self.local_only.recording_bytes),
+            );
             return v_flex()
                 .id("sync-delete-local-confirm")
                 .test_support()
                 .w_full()
                 .gap(metrics::SPACE_3)
                 .child(widgets::caption(strings::DELETE_CONFIRM_TEXT, cx))
+                .when_some(only, |this, text| {
+                    this.child(
+                        div()
+                            .id("sync-delete-local-only")
+                            .test_support()
+                            .text_size(metrics::FONT_SIZE_CAPTION)
+                            .text_color(cx.theme().warning)
+                            .child(text),
+                    )
+                })
                 .when(!lines.is_empty(), |this| {
                     this.child(widgets::caption(strings::DELETE_CONFIRM_FILES, cx))
                         .child(
@@ -1842,6 +1901,7 @@ pub fn open_sign_out(
         state,
         delete_local: false,
         confirming: None,
+        local_only: LocalOnly::default(),
         busy: false,
         error: None,
         task: None,
@@ -2119,8 +2179,13 @@ pub fn open_password_action(
     let dialog = cx.new(|cx| {
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let code = cx.new(|cx| InputState::new(window, cx));
-        let subscriptions = on_enter(
-            &[&password, &code],
+        // Deleting the account asks for the code too (shown only there).
+        let fields: Vec<&Entity<InputState>> = match action {
+            PasswordAction::DeleteAccount => vec![&password, &code],
+            PasswordAction::Repost => vec![&password],
+        };
+        let subscriptions = on_enter_form(
+            &fields,
             window,
             cx,
             |this: &mut PasswordDialog, window, cx| {
@@ -2642,7 +2707,7 @@ pub fn open_recovery(
         let new = cx.new(|cx| InputState::new(window, cx).masked(true));
         let repeat = cx.new(|cx| InputState::new(window, cx).masked(true));
         let totp = cx.new(|cx| InputState::new(window, cx));
-        let subscriptions = on_enter(
+        let subscriptions = on_enter_form(
             &[&key, &email, &new, &repeat, &totp],
             window,
             cx,

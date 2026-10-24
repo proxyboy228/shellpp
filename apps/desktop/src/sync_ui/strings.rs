@@ -195,6 +195,28 @@ pub const DELETE_CONFIRM_FILES: &str =
     "These files are only on this device, not on the server, and are deleted too:";
 pub const DELETE_CONFIRM_RUN: &str = "Delete and sign out";
 
+/// What only this device holds and the deletion loses for good (D197;
+/// cross review of run 10); `None` when there is nothing.
+pub fn delete_local_only(records: usize, recordings: usize, size: &str) -> Option<String> {
+    let records = match records {
+        0 => None,
+        1 => Some("1 item that never goes to the server (history, the connection log, or what sync is turned off for)".to_owned()),
+        n => Some(format!("{n} items that never go to the server (history, the connection log, or what sync is turned off for)")),
+    };
+    let recordings = match recordings {
+        0 => None,
+        1 => Some(format!("1 session recording ({size})")),
+        n => Some(format!("{n} session recordings ({size})")),
+    };
+    let parts: Vec<String> = records.into_iter().chain(recordings).collect();
+    (!parts.is_empty()).then(|| {
+        format!(
+            "Only on this device, and lost for good: {}. Export Data first to keep them.",
+            parts.join(" and ")
+        )
+    })
+}
+
 /// A line of the confirmation's list (D197): a set-aside copy or a backup.
 pub fn local_file_line(name: &str, set_aside: bool, when: Option<&str>, size: &str) -> String {
     let what = if set_aside {
@@ -272,7 +294,7 @@ pub const KDF_FROM_SERVER: &str = "The server asks for";
 pub const KDF_WEAKER_WARNING: &str = "This is expected after the password was changed on a device with weaker settings, such as a phone. Otherwise it can mean that someone poses as your server to make your password easier to guess: then cancel. If you go on, this device uses these settings for its local copy too.";
 pub const KDF_CONTINUE: &str = "Sign in with weaker settings";
 pub const ERROR_PREVIOUS: &str = "This vault belongs to another sync account, so it cannot join this one. To use another account without losing anything: export your data if you want to take it along (File > Export Data…), lock Shell++ and choose Forgot password? > Start with a new vault. The current vault is set aside, not deleted, and still opens with its master password; Shell++ starts empty, and you can connect it to the other account.";
-pub const ERROR_KDF_CHANGED: &str = "The password or email of this account was changed on another device. Enter the account's current password and sign in again.";
+pub const ERROR_KDF_CHANGED: &str = "The account's password settings differ from this device's: the password or email was changed on another device, or this device's password was changed or recovered without the account. Enter the account's current password and sign in again.";
 pub const ERROR_ROLLED_BACK: &str =
     "Server state rolled back: the server holds older keys than this device.";
 pub const ERROR_INTEGRITY: &str =

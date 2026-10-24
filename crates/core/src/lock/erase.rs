@@ -89,10 +89,19 @@ fn is_set_aside_file(name: &str) -> bool {
     is_set_aside(database)
 }
 
-/// `backups/shellpp-<stamp>.db`, a copy the app took before a migration or
-/// a merge.
+/// `backups/shellpp-<yyyymmddThhmmssZ>.db`, a copy the app took before a
+/// migration or a merge (`crate::store`).
 fn is_backup(name: &str) -> bool {
-    name.starts_with("shellpp-") && name.ends_with(".db")
+    name.strip_prefix("shellpp-")
+        .and_then(|rest| rest.strip_suffix(".db"))
+        .is_some_and(|stamp| {
+            stamp.len() == 16
+                && stamp.bytes().enumerate().all(|(i, b)| match i {
+                    8 => b == b'T',
+                    15 => b == b'Z',
+                    _ => b.is_ascii_digit(),
+                })
+        })
 }
 
 /// `recordings/<uuid>.…`: a recording, its `.rekey` file, or a
@@ -146,6 +155,19 @@ pub fn files_not_on_server(data_dir: &Path) -> Vec<LocalFile> {
     }
     files.sort_by(|a, b| a.name.cmp(&b.name));
     files
+}
+
+/// The recordings in `data_dir`: how many, and their bytes (they never go
+/// to the server; the confirmation counts them, D197).
+pub fn recordings(data_dir: &Path) -> (usize, u64) {
+    let suffix = format!(".{}", recording::EXTENSION);
+    files_in(data_dir, recording::DIR_NAME, is_recording_file)
+        .iter()
+        .filter(|name| name.ends_with(&suffix))
+        .filter_map(|name| fs::metadata(data_dir.join(name)).ok())
+        .fold((0, 0), |(count, bytes), metadata| {
+            (count + 1, bytes + metadata.len())
+        })
 }
 
 /// The database ids of the set-aside copies, read from their `meta` table,

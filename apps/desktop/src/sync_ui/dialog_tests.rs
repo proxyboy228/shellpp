@@ -214,7 +214,8 @@ fn the_password_dialogs_focus_their_field_and_enter_runs_them(cx: &mut TestAppCo
         .unwrap();
     ui.settle(cx);
 
-    // The recovery: the key first; Enter checks the fields.
+    // The recovery: the key first; Enter goes on to the next empty field,
+    // and from the last one it checks the fields.
     let state = ui.state.clone();
     let recovery = cx
         .update_window(ui.handle, move |_, window, cx| {
@@ -224,6 +225,14 @@ fn the_password_dialogs_focus_their_field_and_enter_runs_them(cx: &mut TestAppCo
     ui.settle(cx);
     assert_eq!(ui.focused("sync-recovery-key", cx), Some(true));
     ui.type_and_enter("x", cx);
+    assert!(recovery.read_with(cx, |dialog, _| dialog.error.is_none()));
+    assert_ne!(ui.focused("sync-recovery-key", cx), Some(true), "moved on");
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("sync-recovery-totp", cx);
+    })
+    .unwrap();
+    ui.type_and_enter("", cx);
     assert!(recovery.read_with(cx, |dialog, _| dialog.error.is_some()));
     cx.update_window(ui.handle, |_, window, cx| window.close_dialog(cx))
         .unwrap();
@@ -238,7 +247,11 @@ fn the_password_dialogs_focus_their_field_and_enter_runs_them(cx: &mut TestAppCo
         .unwrap();
     ui.settle(cx);
     assert_eq!(ui.focused("sync-action-password", cx), Some(true));
+    // The code is still empty: Enter goes on to it, nothing is sent.
     ui.type_and_enter("not the password", cx);
+    assert_eq!(ui.focused("sync-action-code", cx), Some(true));
+    assert!(delete.read_with(cx, |dialog, _| dialog.error.is_none()));
+    ui.type_and_enter("123456", cx);
     assert!(delete.read_with(cx, |dialog, _| dialog.error.is_some()));
     ui.finish(cx);
 }

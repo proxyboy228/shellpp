@@ -62,7 +62,7 @@ impl Selection {
         class == shellpp_sync_api::classes::VAULT || self.classes.contains(&class)
     }
 
-    fn type_name(&self, name: &str) -> bool {
+    pub(crate) fn type_name(&self, name: &str) -> bool {
         // The last session is device-local whatever the toggles (16.3).
         name != "last_session" && !self.skip_types.iter().any(|skip| skip == name)
     }

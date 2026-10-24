@@ -239,6 +239,17 @@ pub enum SignInOutcome {
     TotpRequired,
 }
 
+/// What only this device holds (D197; cross review of run 10): the live
+/// records of the classes or types sync leaves out (history and the
+/// connection log unless turned on, anything turned off) and the session
+/// recordings. Deleting the local copy loses them for good.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LocalOnly {
+    pub records: usize,
+    pub recordings: usize,
+    pub recording_bytes: u64,
+}
+
 /// A file of the local copy that the server does not have (D197).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalCopyFile {
@@ -3387,6 +3398,35 @@ impl Core {
         Ok(())
     }
 
+    /// What only this device holds ([`LocalOnly`]): the confirmation of
+    /// "Also delete the local copy" says it is lost with it.
+    pub fn local_only_data(&self) -> Result<LocalOnly, CoreError> {
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        let mut only = LocalOnly::default();
+        if let Some(data_dir) = inner.store.data_dir() {
+            (only.recordings, only.recording_bytes) = crate::lock::erase::recordings(data_dir);
+        }
+        let sel = selection(&inner.store);
+        let Some(session) = inner.session.as_mut() else {
+            return Ok(only);
+        };
+        let vault_id = session.ring.vault_id();
+        for row in inner.store.records(&vault_id, None)? {
+            if row.tombstone {
+                continue;
+            }
+            let left_out = !sel.class(row.class)
+                || open_payload(&mut session.ring, &row).is_some_and(|payload| {
+                    payload.type_name != "last_session" && !sel.type_name(&payload.type_name)
+                });
+            if left_out {
+                only.records += 1;
+            }
+        }
+        Ok(only)
+    }
+
     /// The set-aside copies and backups on this device, which the server
     /// does not have: the confirmation of "Also delete the local copy"
     /// lists them (UI 12.2; D197).
@@ -6278,6 +6318,25 @@ mod tests {
             secrets: std::collections::BTreeMap::new(),
         });
         assert!(saved.is_err(), "no edit goes to a store in memory");
+    }
+
+    #[test]
+    fn what_sync_leaves_out_is_counted_as_local_only() {
+        // Cross review of run 10 (D197): deleting the local copy loses what
+        // never goes to the server; the confirmation counts it.
+        let (_dir, core) = unlocked_core();
+        save_host(&core, "Synced", &random_text());
+        assert_eq!(core.local_only_data().unwrap().records, 0);
+        core.settings_set(crate::service::dto::SettingsSetInput {
+            values: std::collections::BTreeMap::from([(
+                "sync.toggles".to_owned(),
+                json!({"hosts": false}),
+            )]),
+            reset: Vec::new(),
+        })
+        .unwrap();
+        save_host(&core, "Only here", &random_text());
+        assert_eq!(core.local_only_data().unwrap().records, 2, "both hosts");
     }
 
     #[test]

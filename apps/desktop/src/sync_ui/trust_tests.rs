@@ -567,6 +567,17 @@ fn every_error_code_has_a_text() {
     assert_eq!(code_text("something_new"), strings::ERROR_OTHER);
 }
 
+/// What only this device holds is named in the second step (cross review
+/// of run 10).
+#[test]
+fn the_deletion_names_what_only_this_device_holds() {
+    use super::strings::delete_local_only;
+    assert_eq!(delete_local_only(0, 0, "0 B"), None);
+    let text = delete_local_only(3, 1, "2.0 MB").unwrap();
+    assert!(text.starts_with("Only on this device, and lost for good: 3 items"));
+    assert!(text.contains("1 session recording (2.0 MB)"));
+}
+
 /// The hint's plurals (review of run 10).
 #[test]
 fn the_duplicates_hint_counts_in_plurals() {

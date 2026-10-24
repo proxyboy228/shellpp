@@ -30,6 +30,11 @@ pub async fn reach(
                 let dialog = crate::sync_ui::open_sign_out(state, window, cx);
                 dialog.update(cx, |dialog, cx| {
                     dialog.delete_local = true;
+                    dialog.local_only = shellpp_core::service::LocalOnly {
+                        records: 14,
+                        recordings: 2,
+                        recording_bytes: 4_718_592,
+                    };
                     dialog.confirming = Some(vec![
                         shellpp_core::service::LocalCopyFile {
                             name: "shellpp.db.20261020T101500Z.old".into(),
