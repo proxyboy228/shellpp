@@ -444,3 +444,20 @@ fn closing_the_dialog_drops_the_prepared_key(cx: &mut TestAppContext) {
     assert!(core.key_change_confirm(id).is_err(), "nothing to confirm");
     ui.finish(cx);
 }
+
+/// The key breaks only between its groups: `RK1` and six groups, then the
+/// other five; a group is never split across lines, and the lines put
+/// together are the key.
+#[test]
+fn the_key_breaks_only_between_its_groups() {
+    let key = "RK1-K2C5C-68EHX-R5K16-9JKG8-FQBXA-9ATVA-HEDD1-4YANQ-7ZG0A-YA8AM-QH2ER";
+    let lines = super::keys::key_lines(key);
+    assert_eq!(
+        lines,
+        vec![
+            "RK1-K2C5C-68EHX-R5K16-9JKG8-FQBXA-9ATVA-",
+            "HEDD1-4YANQ-7ZG0A-YA8AM-QH2ER",
+        ]
+    );
+    assert_eq!(lines.concat(), key);
+}

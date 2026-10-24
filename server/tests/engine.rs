@@ -88,7 +88,9 @@ fn live_records(server: &Server) -> u64 {
             let rows = tx.query(
                 "SELECT record_id FROM records WHERE NOT tombstone",
                 &[],
-                &[Ty::Bytes],
+                // A blob on SQLite, a `uuid` on PostgreSQL: the layer reads
+                // both as `Uuid`.
+                &[Ty::Uuid],
             )?;
             Ok(rows.len() as u64)
         })
