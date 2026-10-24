@@ -220,8 +220,23 @@ prints the address `SHELLPP_TRUSTED_PROXIES` names.
 ## Backups
 
 The `backup` service writes `backups/shellpp-<time>.sql.age` every 24 hours
-(a `pg_dump`, encrypted to `BACKUP_AGE_RECIPIENT`) and deletes files older
-than `BACKUP_RETENTION_DAYS` (30). Copy the directory off the machine.
+(a `pg_dump`, encrypted to `BACKUP_AGE_RECIPIENT`). Copy the directory off
+the machine.
+
+Rotation, after each backup (D199):
+
+- backups younger than `BACKUP_RETENTION_DAYS` (30) stay;
+- so do the first backup of each of the last `BACKUP_KEEP_WEEKS` (4)
+  calendar weeks and of each of the last `BACKUP_KEEP_MONTHS` (3) calendar
+  months, and always the newest backup; older ones are deleted;
+- nothing is deleted while the newest backup is less than
+  `BACKUP_MIN_PERCENT` (50) percent of the size of the last good one. A
+  database emptied or cut down by mistake would otherwise push the good
+  backups out night after night; `docker compose logs backup` then says
+  "pruning paused". If you deleted that much on purpose, accept the new
+  size once:
+  `docker compose run --rm -e BACKUP_PRUNE_ONLY=1 -e BACKUP_ACCEPT_SMALLER=1 backup`
+  (it remembers the newest backup in `backups/.accepted-size`).
 
 Its image is built once from `deploy/backup.Dockerfile` (Alpine with the
 PostgreSQL client and `age`) by the first `docker compose up`, so a backup

@@ -377,6 +377,129 @@ fn server_image() -> &'static str {
 }
 
 /// The backup image of the compose file (D176), built once per process.
+/// Runs the backup script's prune in Alpine's busybox (the shell of the
+/// backup image) on `dir`, after `setup` (a shell snippet that makes
+/// files in /backups), with the extra environment `env`.
+fn prune_in(dir: &Path, setup: &str, env: &[&str]) -> String {
+    let script = deploy_dir().join("backup.sh");
+    let mount_script = format!("{}:/backup.sh:ro", script.display());
+    let mount_dir = format!("{}:/backups", dir.display());
+    let command = format!(
+        "{setup}
+/bin/sh /backup.sh"
+    );
+    let mut args = vec![
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--label",
+        run_label(),
+        "-v",
+        &mount_script,
+        "-v",
+        &mount_dir,
+        "-e",
+        "AGE_RECIPIENT=age1unused",
+        "-e",
+        "BACKUP_PRUNE_ONLY=1",
+    ];
+    for value in env {
+        args.push("-e");
+        args.push(value);
+    }
+    args.extend(["--entrypoint", "/bin/sh", "alpine:3.22", "-c", &command]);
+    let (ok, text) = docker(&args);
+    assert!(ok, "the prune ran: {text}");
+    text
+}
+
+/// D199: a run of empty or much smaller dumps after good ones (a database
+/// emptied by mistake) deletes nothing, however old the good backups are,
+/// until the operator accepts the smaller size.
+#[test]
+fn the_backup_rotation_keeps_good_backups_when_dumps_shrink() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    // Three good backups long past the retention, then three tiny ones.
+    let setup = "set -e; cd /backups
+for day in 10 11 12; do
+  head -c 10000 /dev/zero > shellpp-202001${day}T000000Z.sql.age
+  touch -d \"2020-01-$day 00:00:00\" shellpp-202001${day}T000000Z.sql.age
+done
+now=$(date -u +%s)
+for back in 3 2 1; do
+  name=shellpp-small-$back.sql.age
+  head -c 100 /dev/zero > $name
+  touch -d \"$(date -u -d @$((now - back * 86400)) '+%Y-%m-%d %H:%M:%S')\" $name
+done";
+    let text = prune_in(dir.path(), setup, &["BACKUP_RETENTION_DAYS=30"]);
+    assert!(text.contains("pruning paused"), "{text}");
+    assert_eq!(backups_in(dir.path()).len(), 6, "nothing deleted: {text}");
+
+    // The operator checked: the database really shrank.
+    let text = prune_in(
+        dir.path(),
+        "true",
+        &["BACKUP_RETENTION_DAYS=30", "BACKUP_ACCEPT_SMALLER=1"],
+    );
+    assert_eq!(
+        backups_in(dir.path()),
+        vec![
+            "shellpp-small-1.sql.age",
+            "shellpp-small-2.sql.age",
+            "shellpp-small-3.sql.age"
+        ],
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".accepted-size"))
+            .expect("the accepted backup")
+            .trim(),
+        "shellpp-small-1.sql.age"
+    );
+}
+
+/// D199: besides the daily backups of the retention, the first backup of
+/// each of the last weeks and months stays.
+#[test]
+fn the_backup_rotation_keeps_weekly_and_monthly_backups() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    // A backup a day for 120 days, the same size; a retention of one day.
+    let setup = "set -e; cd /backups; now=$(date -u +%s); day=0
+while [ $day -lt 120 ]; do
+  name=$(printf 'shellpp-age-%03d.sql.age' $day)
+  head -c 1000 /dev/zero > $name
+  touch -d \"$(date -u -d @$((now - day * 86400 - 60)) '+%Y-%m-%d %H:%M:%S')\" $name
+  day=$((day + 1))
+done";
+    let text = prune_in(dir.path(), setup, &["BACKUP_RETENTION_DAYS=1"]);
+    let ages: Vec<u32> = backups_in(dir.path())
+        .iter()
+        .map(|name| name["shellpp-age-".len()..][..3].parse().expect("an age"))
+        .collect();
+    assert!(
+        ages.contains(&0) && ages.contains(&1),
+        "the retention: {ages:?}"
+    );
+    assert!(
+        ages.iter().any(|age| (14..28).contains(age)),
+        "a weekly backup: {ages:?}
+{text}"
+    );
+    assert!(
+        ages.iter().any(|age| (31..120).contains(age)),
+        "a monthly backup: {ages:?}"
+    );
+    assert!(!ages.contains(&119), "the oldest went: {ages:?}");
+    assert!(ages.len() <= 2 + 4 + 3, "no more than that: {ages:?}");
+}
+
 fn backup_image() -> &'static str {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {

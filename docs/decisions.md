@@ -2193,3 +2193,18 @@ Status: run 10 decision, 2026-10-24 (plan of run 10, section 3.2; D197). Amends 
 **Decision:** The server's `seq` tells them apart where it can. A server gives a `seq` only to a later write, so on a server that was not restored a lower revision of a record always has a lower `seq`. A version below the synced revision whose `seq` is above the `seq` of the version this device synced was therefore written after a restore, whatever the writer's clock, and is kept as a conflict copy like one with a greater stamp. What stays open: a late edit with a lower stamp that the restored server gave a `seq` still below the synced version's (the restored server has handed out fewer sequences since the backup than it lost). That needs a clock behind by more than the time between the two edits and fewer writes after the restore than were lost, on a record that lost two revisions or more. A hostile server can give an old authenticated version a high `seq` and so cause a copy of it: a superfluous copy, never a loss.
 
 **Spec impact:** docs/sync-protocol.md, sections 6.4 (step 6), 6.7 (rule 0) and 6.9 (step 3).
+
+### 199. The backup rotation keeps good backups (run 10)
+
+Status: run 10 decision, 2026-10-24 (plan of run 10, section 2.2; D197). Amends D176 and the backup bullets of docs/security.md, section 14.4.
+
+**Context.** The backup service deleted every file older than `BACKUP_RETENTION_DAYS`. After a database was emptied or cut down by mistake, it kept making backups of the empty database, and after 30 nights only those were left.
+
+**Decision:**
+
+- **Size guard.** The backups are read oldest first; the measure is the size of the last good one, and a backup smaller than `BACKUP_MIN_PERCENT` percent of it (default 50) is small and does not become the measure. While the newest backup is small, nothing is deleted and the log says "pruning paused". The size is that of the encrypted file (age adds a near-constant overhead). Half is the threshold: a real database shrinks by half in one day only after a mass deletion, and a pause costs one small file a day.
+- **A deliberate shrink** is accepted by the operator: `BACKUP_ACCEPT_SMALLER=1` (with `BACKUP_PRUNE_ONLY=1`) writes the newest backup's name to `.accepted-size`, and that backup is the measure from then on. There is no automatic acceptance: a database emptied by mistake looks the same to the script, however long it stays empty.
+- **Weekly and monthly backups.** Besides the backups of the retention, the first backup of each of the last `BACKUP_KEEP_WEEKS` calendar weeks (ISO, UTC; default 4) and of each of the last `BACKUP_KEEP_MONTHS` calendar months (default 3) stays, and so does the newest backup. With the defaults that keeps one or two backups beyond 30 days, up to 3 months old. The first backup of a period, not the newest, so a backup once kept stays kept.
+- Ages and periods come from the files' modification times, as the retention did.
+
+**Spec impact:** docs/security.md, section 14.4; server/README.md, "Backups"; docs/guide/06-sync.md (and `docs/guide/ru`).
