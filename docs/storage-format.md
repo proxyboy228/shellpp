@@ -449,7 +449,7 @@ For a 32-byte key, n = 32 and the blob is 73 bytes.
 
 - `server_account.refresh_token` = wrap blob (n = 54, 95 bytes) of the UTF-8 token text (`shellpp_rt_` followed by 43 base64url characters).
 - Key: `local_secrets_key` = HKDF(`vault_key[personal, secrets_epoch]`, `"shellpp/v1/local-secrets"` ‖ `device_id` ‖ `be32(secrets_epoch)`).
-- AAD: `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`.
+- AAD: `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(o))` ‖ `o`, where `o` is the ASCII of `server_account.server_url`, the normalized origin that issued the token (the encoding of the auth keys, [security.md](security.md), section 5.5). The token therefore opens only for that origin: a `server_url` changed in the database never receives it, and the device signs in again. A token wrapped before run 9 (without the origin) no longer opens: such a device signs in once more. [decision] (D188)
 - After a rotation of the personal vault, the token is rewrapped under the new epoch and `secrets_epoch` is updated.
 - An offline recovery of the local copy on a bound device sets the column to `NULL`: the account is signed out on this device until the next sign-in or recovery through the server writes a new token ([sync-protocol.md](sync-protocol.md), section 5.2). (stage 0 decision)
 

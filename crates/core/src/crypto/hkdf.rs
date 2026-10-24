@@ -24,7 +24,7 @@ pub fn hkdf32(ikm: &Key32, label: &[u8], context: &[&[u8]]) -> Key32 {
 }
 
 /// `be16(len(origin)) ‖ origin` for the origin-bound derivations.
-fn origin_context(origin: &str) -> Vec<u8> {
+pub(crate) fn origin_context(origin: &str) -> Vec<u8> {
     let bytes = origin.as_bytes();
     // Origins are URLs of a few dozen bytes; a longer one is not a valid
     // origin and is truncated to the length the prefix can describe.

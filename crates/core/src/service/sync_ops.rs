@@ -458,7 +458,10 @@ pub struct DeviceItem {
 /// TOTP setup (UI 13.5): the secret for manual entry and the QR text.
 pub struct TotpSetup {
     pub secret: SecretString,
-    pub otpauth_uri: SecretString,
+    /// The server's `otpauth://totp/` URI for the QR code; `None` when it is
+    /// not one (another scheme, another secret: D188), and only the secret
+    /// is shown.
+    pub otpauth_uri: Option<SecretString>,
 }
 
 impl std::fmt::Debug for TotpSetup {
@@ -719,13 +722,14 @@ fn ring_from_chain(
 fn wrap_refresh(
     ring: &KeyRing,
     device_id: &Uuid,
+    origin: &str,
     token: &str,
 ) -> Result<(Vec<u8>, u32), CoreError> {
     let epoch = ring.current_epoch();
     let key = crypto::derive_local_secrets_key(ring.current_key(), device_id, epoch);
     let blob = crypto::wrap_seal(
         &key,
-        &crypto::refresh_token_aad(device_id),
+        &crypto::refresh_token_aad(device_id, origin),
         token.as_bytes(),
     )?;
     Ok((blob, epoch))
@@ -739,7 +743,10 @@ fn open_refresh(
     let blob = account.refresh_token.as_ref()?;
     let vault_key = ring.key(account.secrets_epoch)?;
     let key = crypto::derive_local_secrets_key(vault_key, device_id, account.secrets_epoch);
-    let plain = crypto::wrap_open(&key, &crypto::refresh_token_aad(device_id), blob).ok()?;
+    // Bound to the origin it was stored with (D188): another server_url
+    // never opens it.
+    let aad = crypto::refresh_token_aad(device_id, &account.server_url);
+    let plain = crypto::wrap_open(&key, &aad, blob).ok()?;
     String::from_utf8(plain.to_vec()).ok().map(Zeroizing::new)
 }
 
@@ -1010,8 +1017,12 @@ impl Core {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
             let device_id = session.device_id;
-            let (refresh, secrets_epoch) =
-                wrap_refresh(&session.ring, &device_id, &response.tokens.refresh_token.0)?;
+            let (refresh, secrets_epoch) = wrap_refresh(
+                &session.ring,
+                &device_id,
+                &origin,
+                &response.tokens.refresh_token.0,
+            )?;
             let mut local_auth = context.local_auth.clone();
             local_auth.kdf_email = Some(email.clone());
             local_auth.updated_at = now_text.clone();
@@ -1279,7 +1290,8 @@ impl Core {
         generation: Option<Vec<u8>>,
         now_text: &str,
     ) -> Result<(ServerAccountRow, LocalAuthRow, KeyWrapRow), CoreError> {
-        let (refresh, secrets_epoch) = wrap_refresh(ring, device_id, &tokens.refresh_token.0)?;
+        let (refresh, secrets_epoch) =
+            wrap_refresh(ring, device_id, &pending.origin, &tokens.refresh_token.0)?;
         let vault_id = ring.vault_id();
         let account_row = ServerAccountRow {
             server_url: pending.origin.clone(),
@@ -1966,8 +1978,17 @@ impl Core {
             let guard = self.inner();
             let session = Self::require_session(&guard)?;
             let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
-            let token = open_refresh(&session.ring, &link.device_id, &account)
-                .ok_or(refused("signed_out"))?;
+            let Some(token) = open_refresh(&session.ring, &link.device_id, &account) else {
+                // A stored token that does not open for this origin (the
+                // server address changed, D188, or the blob is damaged) is
+                // never sent anywhere: the device signs in again.
+                let stored = account.refresh_token.is_some();
+                drop(guard);
+                if stored {
+                    self.signed_out_locally()?;
+                }
+                return Err(refused("signed_out"));
+            };
             let epoch = session.ring.current_epoch();
             let key = crypto::derive_local_secrets_key(
                 session.ring.current_key(),
@@ -1986,7 +2007,7 @@ impl Core {
                 let access = Zeroizing::new(tokens.access_token.0.clone());
                 let blob = crypto::wrap_seal(
                     &secrets_key,
-                    &crypto::refresh_token_aad(&link.device_id),
+                    &crypto::refresh_token_aad(&link.device_id, link.api.origin()),
                     tokens.refresh_token.0.as_bytes(),
                 )?;
                 let mut guard = self.inner();
@@ -2746,9 +2767,15 @@ impl Core {
             current_auth_key: key_b64(&auth_key),
         };
         let response = self.authed(&link, |api, token| api.totp_setup(token, &request))?;
+        let otpauth_uri =
+            super::sync_trust::checked_otpauth(&response.otpauth_uri.0, &response.secret.0)
+                .map(SecretString::from);
+        if otpauth_uri.is_none() {
+            tracing::warn!("the server's TOTP URI is not an otpauth://totp/ URI of its secret");
+        }
         Ok(TotpSetup {
             secret: SecretString::from(response.secret.0),
-            otpauth_uri: SecretString::from(response.otpauth_uri.0),
+            otpauth_uri,
         })
     }
 
@@ -2973,8 +3000,13 @@ impl Core {
                 .ring
                 .push_epoch(rotation.new_epoch, rotation.new_key());
         }
-        let (blob, epoch) = wrap_refresh(&session.ring, device_id, &tokens.refresh_token.0)?;
         let account = store.server_account()?;
+        let origin = account
+            .as_ref()
+            .map(|row| row.server_url.clone())
+            .unwrap_or_default();
+        let (blob, epoch) =
+            wrap_refresh(&session.ring, device_id, &origin, &tokens.refresh_token.0)?;
         let written = store.write(|tx| {
             if let Some(rotation) = rotation {
                 rotation.write(tx)?;
@@ -3296,8 +3328,12 @@ impl Core {
             return Err(CoreError::WrongState);
         }
         ring.push_epoch(rotation.new_epoch, rotation.new_key());
-        let (blob, secrets_epoch) =
-            wrap_refresh(&ring, &context.device_id, &tokens.refresh_token.0)?;
+        let (blob, secrets_epoch) = wrap_refresh(
+            &ring,
+            &context.device_id,
+            &account.server_url,
+            &tokens.refresh_token.0,
+        )?;
         let mut account_row = account;
         account_row.email = email;
         account_row.refresh_token = Some(blob);
@@ -4646,7 +4682,7 @@ mod tests {
         let vault_id = Uuid::now_v7();
         let device = Uuid::now_v7();
         let ring = KeyRing::new(vault_id, 1, Key32::generate().unwrap());
-        let (blob, epoch) = wrap_refresh(&ring, &device, "shellpp_rt_abc").unwrap();
+        let (blob, epoch) = wrap_refresh(&ring, &device, "https://x", "shellpp_rt_abc").unwrap();
         let mut account = ServerAccountRow {
             server_url: "https://x".into(),
             user_id: Uuid::now_v7(),
@@ -4664,6 +4700,11 @@ mod tests {
         );
         // Another device id (the AAD) or a flipped byte does not open.
         assert!(open_refresh(&ring, &Uuid::now_v7(), &account).is_none());
+        // Nor another server address (D188): the token goes only to the
+        // origin that issued it.
+        let mut moved = account.clone();
+        moved.server_url = "https://attacker.example".into();
+        assert!(open_refresh(&ring, &device, &moved).is_none());
         let mut tampered = blob;
         let last = tampered.len() - 1;
         tampered[last] ^= 1;

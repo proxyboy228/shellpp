@@ -5,6 +5,7 @@
 //! Secrets travel only in bodies and the `Authorization` header; requests
 //! carry nothing else of ours than `User-Agent: shellpp/<version>`.
 
+use std::io::Read as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,20 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// A token refresh (D93: retried at once within the 60 s window).
 pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The largest answer the client reads (D188; docs/sync-protocol.md, section
+/// 10.2). The largest legitimate one but a push is a pull page: at most
+/// 8 MiB of envelopes plus the one that crossed it (262 232 bytes), under
+/// 12 MiB as base64url in JSON; every other answer is far smaller.
+pub const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
+
+/// The largest answer to a push of `items` items: each may come back as a
+/// conflict carrying the server's envelope (349 643 base64url characters at
+/// most) with its record id, seq and status.
+pub fn push_answer_limit(items: usize) -> usize {
+    const ITEM: usize = 349_643 + 512;
+    MAX_ANSWER_BYTES.saturating_add(items.saturating_mul(ITEM))
+}
 
 /// Why a server address was refused before any request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -156,6 +171,36 @@ impl HttpError {
     }
 }
 
+/// The body of `response`, at most `limit` bytes; more is `answer_too_large`.
+fn read_limited(response: reqwest::blocking::Response, limit: usize) -> Result<Vec<u8>, HttpError> {
+    let too_large = || HttpError::Refused("answer_too_large");
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            let timed_out = error.kind() == std::io::ErrorKind::TimedOut
+                || std::error::Error::source(&error)
+                    .and_then(|source| source.downcast_ref::<reqwest::Error>())
+                    .is_some_and(reqwest::Error::is_timeout);
+            if timed_out {
+                HttpError::Timeout
+            } else {
+                HttpError::Network
+            }
+        })?;
+    if bytes.len() > limit {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
+
 /// The client of one server origin.
 pub struct HttpApi {
     origin: String,
@@ -225,6 +270,21 @@ impl HttpApi {
         token: Option<&str>,
         timeout: Duration,
     ) -> Result<Option<T>, HttpError> {
+        self.send_limited(method, path, body, token, timeout, MAX_ANSWER_BYTES)
+    }
+
+    /// [`Self::send`] reading at most `limit` bytes of the answer: a longer
+    /// one (announced or sent) is refused as `answer_too_large` before it is
+    /// parsed, so a hostile server cannot make the client hold more.
+    fn send_limited<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+        token: Option<&str>,
+        timeout: Duration,
+        limit: usize,
+    ) -> Result<Option<T>, HttpError> {
         let _ = self.take_problem();
         let mut request = self
             .client
@@ -256,13 +316,7 @@ impl HttpApi {
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<u64>().ok());
-        let bytes = response.bytes().map_err(|error| {
-            if error.is_timeout() {
-                HttpError::Timeout
-            } else {
-                HttpError::Network
-            }
-        })?;
+        let bytes = read_limited(response, limit)?;
         if status.is_success() {
             if status == StatusCode::NO_CONTENT || bytes.is_empty() {
                 return Ok(None);
@@ -501,11 +555,16 @@ impl HttpApi {
         vault_id: Uuid,
         items: Vec<wire::RecordWrite>,
     ) -> Result<wire::PushResponse, HttpError> {
-        self.post(
+        let limit = push_answer_limit(items.len());
+        self.send_limited::<_, wire::PushResponse>(
+            Method::POST,
             &format!("/v1/vaults/{vault_id}/changes"),
-            &wire::PushRequest { items },
+            Some(&wire::PushRequest { items }),
             Some(access),
-        )
+            REQUEST_TIMEOUT,
+            limit,
+        )?
+        .ok_or(HttpError::Malformed)
     }
 }
 

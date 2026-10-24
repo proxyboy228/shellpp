@@ -2088,7 +2088,9 @@ Settings → Security (see 12.1):
   3. **TOTP**:
      - sign in: a one-time code, if TOTP is enabled for the account;
      - register: an offer to enable TOTP now (a QR code, the secret as text, and a code to
-       confirm). It can be skipped and enabled later (see 12.2).
+       confirm). It can be skipped and enabled later (see 12.2). The QR code carries only an
+       `otpauth://totp/` URI of that secret; for any other URI from the server the dialog
+       shows the secret alone (`docs/sync-protocol.md`, 5.5). [decision] (D188)
   4. **Recovery key** (registration only): the recovery key that protects the account is
      shown as text in a monospace font with a "Copy" button; the clipboard is cleared after
      30 seconds, as for private keys (see 7.3). The "I saved the recovery key" checkbox is

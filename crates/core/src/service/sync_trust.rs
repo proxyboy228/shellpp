@@ -36,6 +36,43 @@ pub(super) fn kdf_weaker(server: &KdfParams, local: &KdfParams) -> bool {
             < u64::from(local.m_kib) * u64::from(local.t)
 }
 
+/// The server's TOTP URI when the QR code may carry it (SP 5.5; D188): the
+/// `otpauth://totp/` scheme and type, printable ASCII without spaces, at most
+/// 1024 bytes, and a `secret` parameter equal to the secret sent beside it.
+/// Anything else (a web link, another secret) is not shown at all.
+pub(super) fn checked_otpauth(uri: &str, secret: &str) -> Option<String> {
+    const MAX: usize = 1024;
+    let prefix = "otpauth://totp/";
+    if uri.len() > MAX
+        || !uri.is_char_boundary(prefix.len())
+        || !uri[..prefix.len()].eq_ignore_ascii_case(prefix)
+        || !uri.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return None;
+    }
+    let normal = |text: &str| text.trim_end_matches('=').to_ascii_uppercase();
+    let base32 = |text: &str| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|byte| matches!(byte.to_ascii_uppercase(), b'A'..=b'Z' | b'2'..=b'7' | b'='))
+    };
+    if !base32(secret) {
+        return None;
+    }
+    let (_, query) = uri.split_once('?')?;
+    let query = query.split('#').next().unwrap_or_default();
+    let mut secrets = query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(name, _)| name.eq_ignore_ascii_case("secret"));
+    let (_, given) = secrets.next()?;
+    if secrets.next().is_some() || normal(given) != normal(secret) {
+        return None;
+    }
+    Some(uri.to_owned())
+}
+
 /// How the sync server's certificate is trusted (the row of UI 12.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum ServerTrust {
@@ -188,6 +225,30 @@ mod tests {
             p,
             ..KdfParams::preset(crate::crypto::PlatformClass::Desktop)
         }
+    }
+
+    #[test]
+    fn the_qr_code_carries_only_an_otpauth_uri_of_the_secret() {
+        let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+        let good = "otpauth://totp/Shell%2B%2B:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Shell%2B%2B";
+        assert_eq!(checked_otpauth(good, secret).as_deref(), Some(good));
+        assert!(checked_otpauth(&good.replace("otpauth://", "OTPAUTH://"), secret).is_some());
+        for bad in [
+            "https://evil.example/otpauth?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+            "javascript:alert(1)",
+            "otpauth://hotp/x?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&counter=1",
+            "otpauth://totp/x?secret=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "otpauth://totp/x",
+            "otpauth://totp/x?issuer=a",
+            "otpauth://totp/x y?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+            "otpauth://totp/x?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&secret=AAAA",
+            "otpauth://totp/\u{202e}?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+        ] {
+            assert!(checked_otpauth(bad, secret).is_none(), "{bad}");
+        }
+        let long = format!("{good}&x={}", "a".repeat(1024));
+        assert!(checked_otpauth(&long, secret).is_none());
+        assert!(checked_otpauth(good, "not base32!").is_none());
     }
 
     #[test]

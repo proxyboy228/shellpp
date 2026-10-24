@@ -1697,7 +1697,8 @@ pub enum TotpStep {
     /// The secret for the authenticator app and the code to confirm it.
     Code {
         secret: String,
-        uri: String,
+        /// `None`: the server's URI was not one for the QR code (D188).
+        uri: Option<String>,
     },
     Done,
 }
@@ -1733,7 +1734,10 @@ impl TotpDialog {
                                 use secrecy::ExposeSecret as _;
                                 dialog.step = TotpStep::Code {
                                     secret: setup.secret.expose_secret().to_owned(),
-                                    uri: setup.otpauth_uri.expose_secret().to_owned(),
+                                    uri: setup
+                                        .otpauth_uri
+                                        .as_ref()
+                                        .map(|uri| uri.expose_secret().to_owned()),
                                 };
                             }
                             Err(error) => dialog.error = Some(error_text(&error)),
@@ -1784,7 +1788,8 @@ impl Render for TotpDialog {
             TotpStep::Code { secret, uri } => v_flex()
                 .gap(metrics::SPACE_2)
                 .child(widgets::caption(strings::TOTP_SECRET_HINT, cx))
-                .children(qr_code(&uri))
+                // Only an otpauth://totp/ URI of this secret (D188).
+                .children(uri.as_deref().and_then(qr_code))
                 .child(
                     div()
                         .id("sync-totp-secret")
@@ -1794,7 +1799,7 @@ impl Render for TotpDialog {
                         .text_color(cx.theme().popover_foreground)
                         .child(secret),
                 )
-                .child(widgets::caption(uri, cx))
+                .children(uri.map(|uri| widgets::caption(uri, cx)))
                 .child(widgets::field(
                     strings::TOTP_CODE,
                     widgets::text_input(
