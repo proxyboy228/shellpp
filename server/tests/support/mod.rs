@@ -124,10 +124,11 @@ fn postgres() -> &'static Postgres {
         let log_path = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("postgres-{}.log", &id[..id.len().min(12)]));
         let log = std::fs::File::create(&log_path).expect("the container's log file");
+        let log_out = log.try_clone().expect("the container's log file");
         let attach = Command::new("docker")
             .args(["start", "-a", "-i", &id])
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
+            .stdout(log_out)
             .stderr(log)
             .spawn()
             .expect("docker start runs");

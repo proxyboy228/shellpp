@@ -601,3 +601,33 @@ fn lock_screens_fit_the_smallest_window(cx: &mut TestAppContext) {
     ui.finish(cx);
     drop(profile);
 }
+
+/// First run at 960 x 600 (run 12): "Restore from sync…" sits on the app
+/// name's line, inside its height, and the tagline starts under that line
+/// with the card's whole width.
+#[gpui::test]
+fn the_restore_button_is_on_the_title_line_at_the_smallest_window(cx: &mut TestAppContext) {
+    let (opened, _) = TestProfile::new().into_opened();
+    let ui = Ui::open_sized(cx, opened, 960., 600.);
+    assert_eq!(ui.screen(cx), Screen::FirstRun);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.render_frame(cx);
+        let row = window.find("lock-title-row").bounds();
+        let name = window.find("lock-app-name").bounds();
+        let restore = window.find("first-run-restore-sync").bounds();
+        let subtitle = window.find("lock-subtitle").bounds();
+        assert!(restore.origin.y >= row.origin.y && restore.bottom() <= row.bottom());
+        assert!(name.origin.y >= row.origin.y && name.bottom() <= row.bottom());
+        assert!(
+            restore.origin.x > name.right(),
+            "the button follows the name"
+        );
+        assert!(
+            subtitle.origin.y >= row.bottom(),
+            "the tagline is under the line"
+        );
+        assert_eq!(subtitle.origin.x, row.origin.x);
+    })
+    .unwrap();
+    ui.finish(cx);
+}
