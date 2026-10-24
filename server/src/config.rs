@@ -64,7 +64,18 @@ pub struct Config {
     pub trusted_proxies: Vec<Cidr>,
     pub tombstone_retention_days: u64,
     pub rate_limits: RateLimits,
+    /// What the operator should change, logged by `serve` (never a value).
+    pub warnings: Vec<&'static str>,
 }
+
+/// The warning of a server secret in the environment (D177).
+pub const SECRET_IN_ENVIRONMENT: &str = "SHELLPP_SERVER_SECRET is read from the environment, \
+     where `docker inspect` and the process list of this user show it; put the same value in a \
+     file and name it with SHELLPP_SERVER_SECRET_FILE (Docker secrets, server README)";
+
+/// The longest server secret file read (a base64 secret of 32 to a few
+/// hundred bytes, and a line break).
+const SECRET_FILE_MAX: u64 = 4096;
 
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -97,13 +108,36 @@ impl Config {
         };
         let public_url = normalize_origin(&required("SHELLPP_PUBLIC_URL")?)
             .ok_or_else(|| ConfigError("SHELLPP_PUBLIC_URL is not an http(s) origin".to_owned()))?;
-        let secret = Zeroizing::new(required("SHELLPP_SERVER_SECRET")?);
+        // The secret from a file (Docker secrets), or for compatibility from
+        // the environment with a warning; both at once is refused, so no one
+        // has to guess which of two secrets derives the keys (D177).
+        let mut warnings = Vec::new();
+        let in_env = get("SHELLPP_SERVER_SECRET").map(Zeroizing::new);
+        let in_env = in_env.filter(|value| !value.trim().is_empty());
+        let file = get("SHELLPP_SERVER_SECRET_FILE").filter(|value| !value.trim().is_empty());
+        let (name, secret) = match (in_env, file) {
+            (Some(_), Some(_)) => {
+                return Err(ConfigError(
+                    "SHELLPP_SERVER_SECRET and SHELLPP_SERVER_SECRET_FILE are both set; keep only \
+                     SHELLPP_SERVER_SECRET_FILE"
+                        .to_owned(),
+                ));
+            }
+            (None, Some(path)) => ("SHELLPP_SERVER_SECRET_FILE", read_secret_file(path.trim())?),
+            (Some(secret), None) => {
+                warnings.push(SECRET_IN_ENVIRONMENT);
+                ("SHELLPP_SERVER_SECRET", secret)
+            }
+            (None, None) => {
+                return Err(ConfigError(
+                    "SHELLPP_SERVER_SECRET_FILE (or SHELLPP_SERVER_SECRET) is required".to_owned(),
+                ));
+            }
+        };
         let server_secret = decode_secret(secret.trim())
-            .ok_or_else(|| ConfigError("SHELLPP_SERVER_SECRET is not base64".to_owned()))?;
+            .ok_or_else(|| ConfigError(format!("{name} is not base64")))?;
         if server_secret.len() < 32 {
-            return Err(ConfigError(
-                "SHELLPP_SERVER_SECRET must hold at least 32 bytes".to_owned(),
-            ));
+            return Err(ConfigError(format!("{name} must hold at least 32 bytes")));
         }
         let registration = match get("SHELLPP_REGISTRATION").as_deref().map(str::trim) {
             None | Some("") | Some("invite") => Registration::Invite,
@@ -148,8 +182,42 @@ impl Config {
             trusted_proxies,
             tombstone_retention_days: number("SHELLPP_TOMBSTONE_RETENTION_DAYS")?.unwrap_or(90),
             rate_limits: RateLimits::from_env(&get)?,
+            warnings,
         })
     }
+}
+
+/// The text of the server secret file at `path`, in a buffer wiped on
+/// drop. The error names the variable, never the path's contents.
+fn read_secret_file(path: &str) -> Result<Zeroizing<String>, ConfigError> {
+    use std::io::Read as _;
+    let unreadable =
+        |what: &str| ConfigError(format!("SHELLPP_SERVER_SECRET_FILE cannot be read: {what}"));
+    // A regular file only: opening a FIFO would block the start for ever.
+    let metadata = std::fs::metadata(path).map_err(|e| unreadable(&e.kind().to_string()))?;
+    if !metadata.is_file() {
+        return Err(unreadable("not a regular file"));
+    }
+    if metadata.len() > SECRET_FILE_MAX {
+        return Err(unreadable("larger than 4 KiB"));
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| unreadable(&e.kind().to_string()))?;
+    // Allocated once at its largest size: a buffer that grows leaves
+    // unwiped copies behind (security.md, section 9.5).
+    let mut bytes = Zeroizing::new(Vec::with_capacity(SECRET_FILE_MAX as usize + 1));
+    (&mut file)
+        .take(SECRET_FILE_MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| unreadable(&e.kind().to_string()))?;
+    if bytes.len() as u64 > SECRET_FILE_MAX {
+        return Err(unreadable("larger than 4 KiB"));
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| unreadable("not text"))?;
+    // A byte order mark, as some editors and PowerShell 5 write one.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut secret = Zeroizing::new(String::with_capacity(text.len()));
+    secret.push_str(text);
+    Ok(secret)
 }
 
 /// The bytes of a base64 server secret (with or without padding), decoded
@@ -274,6 +342,101 @@ mod tests {
         assert!(short.is_err());
         let missing = Config::from_env(env(&[("SHELLPP_DATABASE_URL", "sqlite::memory:")]));
         assert!(missing.unwrap_err().0.contains("SHELLPP_PUBLIC_URL"));
+    }
+
+    /// D177: the secret is read from the file `SHELLPP_SERVER_SECRET_FILE`
+    /// names (with or without a line break) without a warning; from the
+    /// environment it works with a warning; both at once, an empty file, a
+    /// missing or oversized one are refused, naming the variable only.
+    #[test]
+    fn the_server_secret_comes_from_a_file() {
+        let bytes = crate::secrets::random_bytes::<40>();
+        let text = data_encoding::BASE64.encode(&bytes);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server_secret");
+        let path_text = path.display().to_string();
+        let config_with = |pairs: Vec<(&'static str, String)>| {
+            Config::from_env(move |name: &str| {
+                let base = [
+                    ("SHELLPP_DATABASE_URL", "sqlite::memory:".to_owned()),
+                    ("SHELLPP_PUBLIC_URL", "https://sync.example.com".to_owned()),
+                ];
+                base.iter()
+                    .chain(pairs.iter())
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        for content in [
+            text.clone(),
+            format!("{text}\n"),
+            format!("  {text}\r\n"),
+            format!("\u{feff}{text}\r\n"),
+        ] {
+            std::fs::write(&path, content).unwrap();
+            let config =
+                config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text.clone())]).unwrap();
+            assert_eq!(config.server_secret.as_slice(), &bytes[..]);
+            assert!(config.warnings.is_empty(), "no warning for a file");
+        }
+        // The environment: the same secret, with the warning.
+        let config = config_with(vec![("SHELLPP_SERVER_SECRET", text.clone())]).unwrap();
+        assert_eq!(config.server_secret.as_slice(), &bytes[..]);
+        assert_eq!(config.warnings, vec![SECRET_IN_ENVIRONMENT]);
+        // Both: refused, even when they agree.
+        let both = config_with(vec![
+            ("SHELLPP_SERVER_SECRET", text.clone()),
+            ("SHELLPP_SERVER_SECRET_FILE", path_text.clone()),
+        ])
+        .unwrap_err();
+        assert!(both.0.contains("both set"), "{}", both.0);
+        // Neither.
+        let neither = config_with(Vec::new()).unwrap_err();
+        assert!(
+            neither.0.contains("SHELLPP_SERVER_SECRET_FILE"),
+            "{}",
+            neither.0
+        );
+        // A missing file, a folder, an empty one, a short secret, an
+        // oversized file.
+        let folder = dir.path().display().to_string();
+        let error = config_with(vec![("SHELLPP_SERVER_SECRET_FILE", folder)]).unwrap_err();
+        assert!(error.0.contains("not a regular file"), "{}", error.0);
+        let missing = dir.path().join("absent").display().to_string();
+        let error = config_with(vec![("SHELLPP_SERVER_SECRET_FILE", missing)]).unwrap_err();
+        assert!(
+            error
+                .0
+                .starts_with("SHELLPP_SERVER_SECRET_FILE cannot be read"),
+            "{}",
+            error.0
+        );
+        std::fs::write(&path, "").unwrap();
+        let error =
+            config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text.clone())]).unwrap_err();
+        assert!(
+            error.0.contains("SHELLPP_SERVER_SECRET_FILE"),
+            "{}",
+            error.0
+        );
+        std::fs::write(&path, "c2hvcnQ=").unwrap();
+        let error =
+            config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text.clone())]).unwrap_err();
+        assert!(error.0.contains("at least 32 bytes"), "{}", error.0);
+        std::fs::write(&path, format!("{text}{}", " ".repeat(5000))).unwrap();
+        let error =
+            config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text.clone())]).unwrap_err();
+        assert!(error.0.contains("4 KiB"), "{}", error.0);
+        // A broken secret in the file: the error never shows it.
+        let broken = format!("{}!", data_encoding::BASE64_NOPAD.encode(&bytes));
+        std::fs::write(&path, &broken).unwrap();
+        let error = config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text)]).unwrap_err();
+        assert!(
+            error.0.contains("SHELLPP_SERVER_SECRET_FILE is not base64"),
+            "{}",
+            error.0
+        );
+        assert!(!error.0.contains(&broken[..8]));
     }
 
     /// The server secret is decoded with and without padding into a buffer

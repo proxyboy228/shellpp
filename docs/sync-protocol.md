@@ -335,6 +335,7 @@ It answers like a login without TOTP, without the `status` field.
 Server rules:
 
 - Unknown email: run a dummy Argon2id verification against a fixed PHC string computed at startup, then answer `401 invalid_credentials`. Wrong `auth_key`: the same code. Both count as failed sign-ins for that email (section 10).
+- The Argon2id check of `auth_key`, `recovery_auth_key` and `current_auth_key` runs outside any database transaction: the server reads the user, checks the key, then writes in a transaction that goes on only while the verifier is still the one the key matched; one changed in between (a password change, recovery or reissue committed meanwhile) answers `401 invalid_credentials`. At most half the server's CPUs, 1 to 8, checks run at once. [decision] (D174)
 - `403 account_disabled` is returned only after a correct `auth_key`.
 - `device_id` bound to another user: `422 validation_failed` (section 4.7).
 - TOTP enabled: create an `auth_tickets` row (`kind = login`, 5 minutes, 5 attempts) and return the ticket. No tokens yet.
@@ -1419,14 +1420,16 @@ In-memory token buckets (crate `governor`), keyed by client IP (from the socket,
 |---|---|---|
 | prelogin, register, login, login/totp, recover/*, token/refresh, invitations/lookup | IP | 20 per minute, burst 10; checked before the request body is read [decision] (D103) |
 | bearer tokens the server never issued (an expired token or one of a revoked device does not count) | IP, the /64 of an IPv6 address | 60 per 15 minutes, then `429` before the database is asked, until the window ends [decision] (D103) |
-| failed sign-ins, failed `current_auth_key` checks and recovery attempts | normalized email, known or not | 10 per 15 minutes, then `429` until the window ends |
-| TOTP attempts | ticket and account | 5 per ticket; 10 failures per 15 minutes per account |
+| failed sign-ins, failed `current_auth_key` checks and recovery attempts | normalized email, known or not | 10 per 15 minutes, then `429` until the window ends; an attempt counts from before its check until it passes, so checks that run at once never pass the limit together [decision] (D174) |
+| TOTP codes (login, recovery, enable, disable, account deletion) [decision] (D175) | ticket; account and client network (an IPv4 address, the /64 of an IPv6 one); account | 5 per ticket. Per account and network: 3 failures free, then a delay of 2 seconds that each further failure doubles, up to 15 minutes (`SHELLPP_RATE_LIMIT_FREE_TOTP`). Per account from every network, the soft limit: 10 failures free, then 2 seconds doubling, up to 4 minutes (`SHELLPP_RATE_LIMIT_FAILED_TOTP`); at sign-in it does not hold a network a right code of the account came from in the last 30 days. A delay runs from the last failure; a right code ends the delay of its network, not the account's count; failures are forgotten 24 hours after the last one |
 | authenticated API | device | 300 per minute, burst 60 |
 | push | device | 60 requests per minute |
 | invitation creation | user | 20 per hour |
 | email code sending | user | 5 per hour |
 
 The failed sign-in limit is keyed by the normalized email whether or not the account exists, so the limit does not reveal account existence. (stage 0 decision)
+
+A TOTP delay is the answer `429 rate_limited` with `Retry-After` in seconds, never a wait inside the request, and it applies to the right code as well, so the answer tells nothing about the code. The longest one try waits because of failures from other networks is the soft limit's 4 minutes (a login ticket outlives it), while the network that sent them waits up to 15 minutes. At sign-in, a network that a right code of the account came from in the last 30 days (the 8 most recent per account, in memory only) is not held by the soft limit at all, so wrong codes from elsewhere never lock those networks out. A network without such a code can lose its turn to an attacker who tries the moment each wait ends; the codes of signed-in requests (enable, disable, account deletion) are held by the soft limit on every network. Codes need the password first (a login ticket or a signed-in request). Under a lasting attack from many networks the account takes at most 15 wrong codes an hour from networks without a recent right code, against 40 of the earlier fixed window (10 per 15 minutes per account, which locked the user out with it); from one network, 4 an hour. [decision] (D175)
 
 ### 10.2 Size limits
 

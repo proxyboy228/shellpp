@@ -132,10 +132,14 @@ pub fn hash_token(token: &str) -> Vec<u8> {
 
 /// A new token: the prefix and base64url of 32 random bytes.
 pub fn new_token(prefix: &str) -> String {
-    format!(
-        "{prefix}{}",
-        data_encoding::BASE64URL_NOPAD.encode(&random_bytes::<32>())
-    )
+    // Encoded straight into a string of its final size: no intermediate
+    // copy of the token is left unwiped (the caller wraps the result).
+    let bytes = Zeroizing::new(random_bytes::<32>());
+    let encoding = &data_encoding::BASE64URL_NOPAD;
+    let mut token = String::with_capacity(prefix.len() + encoding.encode_len(bytes.len()));
+    token.push_str(prefix);
+    encoding.encode_append(&bytes[..], &mut token);
+    token
 }
 
 /// Crockford base32 (no padding), the form of registration codes and
@@ -221,10 +225,19 @@ pub fn totp_secret_text(secret: &[u8]) -> String {
 /// The `otpauth://` URI of a TOTP secret.
 pub fn otpauth_uri(email: &str, secret: &[u8]) -> String {
     let label = percent_encode(&format!("Shell++:{email}"));
-    format!(
-        "otpauth://totp/{label}?secret={}&issuer=Shell%2B%2B",
-        totp_secret_text(secret)
-    )
+    // Built in a string of its final size, the secret encoded straight into
+    // it: no intermediate copy of the secret is left unwiped.
+    let (head, middle, tail) = ("otpauth://totp/", "?secret=", "&issuer=Shell%2B%2B");
+    let encoding = &data_encoding::BASE32_NOPAD;
+    let mut uri = String::with_capacity(
+        head.len() + label.len() + middle.len() + encoding.encode_len(secret.len()) + tail.len(),
+    );
+    uri.push_str(head);
+    uri.push_str(&label);
+    uri.push_str(middle);
+    encoding.encode_append(secret, &mut uri);
+    uri.push_str(tail);
+    uri
 }
 
 fn percent_encode(text: &str) -> String {

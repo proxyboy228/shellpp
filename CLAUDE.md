@@ -34,6 +34,17 @@ powershell -ExecutionPolicy Bypass -File scripts\measure-startup.ps1
 
 Скриншоты — в `target\ui-screens\` (`<W>x<H>-<тема>-<состояние>.png`).
 
+Проверка развёртывания — после изменений в `server/`, `crates/sync-api` и
+`crates/core` (из них собираются образ сервера и клиенты теста), в файлах
+Docker (`server/Dockerfile`, `server/deploy/`) и в скрипте бэкапа. В полный
+критерий не входит; нужны запущенный Docker и сеть (образы, apk,
+crates.io). Тесты собирают образы, поднимают свои контейнеры с меткой
+`shellpp-test=deploy` и удаляют их:
+
+```
+$env:SHELLPP_TEST_DEPLOY='docker'; cargo test --manifest-path server/Cargo.toml --test deploy -- --test-threads=1
+```
+
 Наборы против OpenSSH в Docker:
 
 ```

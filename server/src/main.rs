@@ -131,6 +131,9 @@ fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Serve => {
             let config = Config::from_env(env).map_err(|e| e.to_string())?;
+            for warning in &config.warnings {
+                tracing::warn!("{warning}");
+            }
             let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
             runtime
                 .block_on(shellpp_server::serve(config, async {
