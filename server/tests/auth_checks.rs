@@ -771,7 +771,11 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
         fx.shared
             .limiters
             .failures
-            .check(&a.email, 1, std::time::Instant::now())
+            .check(
+                &shellpp_server::ratelimit::email_key(&a.email),
+                1,
+                std::time::Instant::now()
+            )
             .is_ok(),
         "no failure counted"
     );
@@ -801,6 +805,107 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
         401,
         code::UNAUTHENTICATED,
     );
+}
+
+/// Cross review (D174): the key of a signed-in request is checked outside
+/// the transaction that acts on it; a device revoked or an account
+/// disabled in between ends the request with `401 unauthenticated` and
+/// changes nothing.
+#[test]
+fn a_session_ended_after_the_key_check_changes_nothing() {
+    let fx = Fixture::new(Registration::Open);
+    let t0 = model::now();
+    let email_change = |checked: &CheckedKey, principal: &Principal| {
+        let request = wire::EmailChangeRequest {
+            current_auth_key: B64(vec![0; 32]),
+            new_email: email(),
+            kdf: Some(wire::Kdf::desktop()),
+            kdf_salt: Some(B64(secrets::random_bytes::<16>().to_vec())),
+            auth_key: Some(B64(secrets::random_bytes::<32>().to_vec())),
+            kek_wrap: Some(B64(vec![4; 73])),
+        };
+        fx.write(|tx, _| accounts::email_change(tx, principal, checked, request, t0))
+    };
+    let delete = |checked: &CheckedKey| {
+        let request = wire::AccountDeleteRequest {
+            current_auth_key: B64(vec![0; 32]),
+            totp_code: None,
+        };
+        fx.write(|tx, shared| accounts::account_delete(tx, shared, checked, request, IP, t0))
+    };
+    // A device revoked after the check.
+    let a = fx.register(t0);
+    let principal = fx.authenticate(&a.tokens.access_token.0, t0).unwrap();
+    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key).unwrap();
+    fx.write(|tx, _| accounts::device_revoke(tx, &principal, a.device_id, t0))
+        .unwrap();
+    refused(
+        email_change(&checked, &principal),
+        401,
+        code::UNAUTHENTICATED,
+    );
+    refused(delete(&checked), 401, code::UNAUTHENTICATED);
+    // An account disabled after the check.
+    let b = fx.register(t0);
+    let principal = fx.authenticate(&b.tokens.access_token.0, t0).unwrap();
+    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key).unwrap();
+    admin::user_disable(&fx.server.db, &b.email, true).unwrap();
+    refused(
+        email_change(&checked, &principal),
+        401,
+        code::UNAUTHENTICATED,
+    );
+    refused(delete(&checked), 401, code::UNAUTHENTICATED);
+    // Both accounts are still there, unchanged.
+    for account in [&a, &b] {
+        let kept = fx
+            .write(|tx, _| model::user_by_id(tx, account.user_id).map_err(Into::into))
+            .unwrap()
+            .expect("kept");
+        assert_eq!(kept.email, account.email);
+    }
+    // A session alive goes through.
+    let c = fx.register(t0);
+    let principal = fx.authenticate(&c.tokens.access_token.0, t0).unwrap();
+    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &c.auth_key).unwrap();
+    email_change(&checked, &principal).expect("changed");
+}
+
+/// Cross review (D174): an email longer than any account can have is
+/// refused like an unknown one at sign-in and recovery, without being
+/// counted (it would stay in memory 15 minutes), and is `422` at
+/// pre-login.
+#[test]
+fn an_email_no_account_can_have_is_refused_and_not_kept() {
+    let fx = Fixture::new(Registration::Open);
+    let long = format!("{}@example.com", "x".repeat(1 << 20));
+    let just_too_long = format!("{}@example.com", "x".repeat(320 - 11));
+    for email in [&long, &just_too_long] {
+        for kind in [KeyKind::Auth, KeyKind::Recovery] {
+            refused(
+                fx.sign_in_key(email, kind, &[0; 32]),
+                401,
+                code::INVALID_CREDENTIALS,
+            );
+        }
+        let request = wire::PreloginRequest {
+            email: email.clone(),
+        };
+        refused(
+            fx.write(|tx, shared| accounts::prelogin(tx, shared, request)),
+            422,
+            code::VALIDATION_FAILED,
+        );
+    }
+    assert!(fx.shared.limiters.failures.is_empty(), "nothing counted");
+    // At the limit it is an email like any other.
+    let longest = format!("{}@example.com", "x".repeat(320 - 12));
+    refused(
+        fx.sign_in_key(&longest, KeyKind::Auth, &[0; 32]),
+        401,
+        code::INVALID_CREDENTIALS,
+    );
+    assert_eq!(fx.shared.limiters.failures.len(), 1);
 }
 
 /// Recovery: only the recovery key opens a ticket; the ticket is found by

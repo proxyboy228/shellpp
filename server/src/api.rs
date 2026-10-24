@@ -278,12 +278,28 @@ async fn argon2<T: Send + 'static>(
     state: &AppState,
     check: impl FnOnce(&Shared) -> ApiResult<T> + Send + 'static,
 ) -> ApiResult<T> {
-    let slot = state
-        .argon2_slots
-        .clone()
-        .acquire_owned()
+    // A bounded queue, for a bounded time (cross review of D174): a flood
+    // beyond it is answered `429` at once instead of holding its body in
+    // memory while it waits.
+    struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+    impl Drop for Waiting<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let busy = || ApiError::rate_limited(ARGON2_RETRY_AFTER);
+    let before = state
+        .argon2_waiting
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let waiting = Waiting(&state.argon2_waiting);
+    if before >= ARGON2_MAX_WAITING {
+        return Err(busy());
+    }
+    let slot = tokio::time::timeout(ARGON2_MAX_WAIT, state.argon2_slots.clone().acquire_owned())
         .await
+        .map_err(|_| busy())?
         .map_err(|_| ApiError::internal())?;
+    drop(waiting);
     let shared = state.clone();
     tokio::task::spawn_blocking(move || {
         let result = check(&shared);
@@ -293,6 +309,13 @@ async fn argon2<T: Send + 'static>(
     .await
     .map_err(|_| ApiError::internal())?
 }
+
+/// How many requests wait for an Argon2id slot at most; more are `429`.
+pub const ARGON2_MAX_WAITING: usize = 64;
+/// How long a request waits for a slot at most; then `429`.
+pub const ARGON2_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+/// The `Retry-After` of a request turned away by the queue.
+const ARGON2_RETRY_AFTER: u64 = 5;
 
 /// A signed-in request's `current_auth_key`, checked before the write
 /// transaction that acts on it, which takes the user with
@@ -856,6 +879,50 @@ mod tests {
         })
         .unwrap();
         Shared::new(crate::db::Db::open("sqlite::memory:").unwrap(), config)
+    }
+
+    /// Cross review (D174): with every slot busy, at most
+    /// `ARGON2_MAX_WAITING` requests wait, for at most `ARGON2_MAX_WAIT`;
+    /// one more is turned away at once with `429` and a `Retry-After`.
+    #[tokio::test(start_paused = true)]
+    async fn the_argon2_queue_is_bounded_in_length_and_time() {
+        let state = state();
+        let slots = state.argon2_slots.available_permits() as u32;
+        let _all = state
+            .argon2_slots
+            .clone()
+            .acquire_many_owned(slots)
+            .await
+            .unwrap();
+        let waiters: Vec<_> = (0..ARGON2_MAX_WAITING)
+            .map(|_| {
+                let state = state.clone();
+                tokio::spawn(async move { argon2(&state, |_| Ok(())).await })
+            })
+            .collect();
+        // Let them all queue.
+        while state
+            .argon2_waiting
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < ARGON2_MAX_WAITING
+        {
+            tokio::task::yield_now().await;
+        }
+        let refused = argon2(&state, |_| Ok(())).await.unwrap_err();
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.retry_after.is_some());
+        // The queued ones give up after the longest wait.
+        tokio::time::advance(ARGON2_MAX_WAIT + std::time::Duration::from_secs(1)).await;
+        for waiter in waiters {
+            let error = waiter.await.unwrap().unwrap_err();
+            assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+        }
+        assert_eq!(
+            state
+                .argon2_waiting
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     /// Review finding (D174): a check keeps its Argon2id slot until it ends,

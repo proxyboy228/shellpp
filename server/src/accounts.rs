@@ -81,9 +81,11 @@ pub struct CheckedKey {
     user_id: Uuid,
     kind: KeyKind,
     verifier: String,
-    /// From a signed-in request: a user gone since is `401 unauthenticated`
-    /// (as before the check), else `401 invalid_credentials`.
-    signed_in: bool,
+    /// The session of a signed-in request: the write goes on only while it
+    /// is alive (a user gone, a device revoked, a family revoked or an
+    /// account disabled since is `401 unauthenticated`, as before the
+    /// check); `None` at sign-in (`401 invalid_credentials`).
+    principal: Option<Principal>,
 }
 
 impl std::fmt::Debug for CheckedKey {
@@ -120,12 +122,35 @@ impl CheckedKey {
             return Err(ApiError::internal());
         }
         let Some(user) = model::user_by_id_locked(tx, self.user_id)? else {
-            return Err(if self.signed_in {
+            return Err(if self.principal.is_some() {
                 ApiError::unauthenticated()
             } else {
                 ApiError::invalid_credentials()
             });
         };
+        if let Some(principal) = &self.principal {
+            // The key was checked outside this transaction: the session may
+            // have ended meanwhile (cross review of D174). Its access
+            // tokens go with a device revocation, a revoked family and a
+            // password change.
+            let alive = tx
+                .query_one(
+                    "SELECT a.device_id FROM access_tokens a \
+                     JOIN devices d ON d.device_id = a.device_id \
+                     WHERE a.family_id = ? AND a.device_id = ? AND a.user_id = ? \
+                     AND d.revoked_at IS NULL",
+                    &[
+                        principal.family_id.into(),
+                        principal.device_id.into(),
+                        principal.user_id.into(),
+                    ],
+                    &[Ty::Uuid],
+                )?
+                .is_some();
+            if !alive || user.disabled || principal.user_id != user.user_id {
+                return Err(ApiError::unauthenticated());
+            }
+        }
         let current = match kind {
             KeyKind::Auth => &user.auth_verifier,
             KeyKind::Recovery => &user.recovery_verifier,
@@ -151,7 +176,13 @@ pub fn check_sign_in(
     kind: KeyKind,
     key: &[u8],
 ) -> ApiResult<CheckedKey> {
-    let email = secrets::normalize_email(email);
+    // No account has an email longer than registration allows: such a one
+    // is refused like an unknown email, without being counted or kept
+    // (cross review of D174: 1 MiB emails filled the failure windows).
+    let Some(email) = bounded_email(email) else {
+        let _ = secrets::check_verifier(&shared.dummy_verifier, key);
+        return Err(ApiError::invalid_credentials());
+    };
     shared
         .limiters
         .signin_attempt(&email)
@@ -171,7 +202,7 @@ pub fn check_sign_in(
                 user_id: user.user_id,
                 kind,
                 verifier,
-                signed_in: false,
+                principal: None,
             })
         }
         (_, verifier) => {
@@ -211,7 +242,7 @@ pub fn check_current_auth_key_after(
         user_id: user.user_id,
         kind: KeyKind::Auth,
         verifier: user.auth_verifier,
-        signed_in: true,
+        principal: Some(*principal),
     })
 }
 
@@ -231,13 +262,27 @@ fn invalid_totp() -> ApiError {
     )
 }
 
-/// `POST /v1/auth/prelogin`.
+/// The longest email an account can have, normalized (section 4.3).
+pub const EMAIL_MAX: usize = 320;
+
+/// The normalized email when it can belong to an account: at most
+/// [`EMAIL_MAX`] bytes. A longer text is not normalized at all.
+pub fn bounded_email(email: &str) -> Option<String> {
+    // A text more than four times as long is refused before normalizing
+    // it (no client sends one): its normalization would cost time.
+    if email.len() > EMAIL_MAX * 4 {
+        return None;
+    }
+    Some(secrets::normalize_email(email)).filter(|email| email.len() <= EMAIL_MAX)
+}
+
+/// `POST /v1/auth/prelogin`; an email no account can have is `422`.
 pub fn prelogin(
     tx: &mut dyn Tx,
     shared: &Shared,
     request: PreloginRequest,
 ) -> ApiResult<PreloginResponse> {
-    let email = secrets::normalize_email(&request.email);
+    let email = bounded_email(&request.email).ok_or_else(|| ApiError::validation("email"))?;
     match user_by_email(tx, &email)? {
         Some(user) => Ok(PreloginResponse {
             kdf: user.kdf,

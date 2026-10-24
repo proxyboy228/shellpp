@@ -24,6 +24,8 @@ pub struct Shared {
     /// transaction (D174), at most this many at once: each holds 19 MiB.
     /// A check holds its slot until it ends, also when its request is gone.
     pub argon2_slots: Arc<Semaphore>,
+    /// Requests waiting for a slot (bounded, cross review of D174).
+    pub argon2_waiting: std::sync::atomic::AtomicUsize,
 }
 
 /// How many Argon2id checks run at once: half the CPUs, from 1 to 8, so a
@@ -53,6 +55,7 @@ impl Shared {
             limiters,
             dummy_verifier,
             argon2_slots: Arc::new(Semaphore::new(argon2_slot_count())),
+            argon2_waiting: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 }

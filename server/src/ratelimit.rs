@@ -137,7 +137,46 @@ impl<K: std::hash::Hash + Eq> Default for FailureWindows<K> {
     }
 }
 
+/// More windows than this are pruned: ended ones first, then the oldest
+/// down to half, so a flood of keys cannot grow the map without bound and
+/// prunes at most once per half of it (D174, cross review).
+pub const WINDOWS_MAX: usize = 100_000;
+
+fn cap_windows<K: std::hash::Hash + Eq>(windows: &mut HashMap<K, (Instant, u32)>, now: Instant) {
+    if windows.len() <= WINDOWS_MAX {
+        return;
+    }
+    windows.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
+    let keep = WINDOWS_MAX / 2;
+    if windows.len() > keep {
+        let mut starts: Vec<Instant> = windows.values().map(|(start, _)| *start).collect();
+        let dropped = starts.len() - keep;
+        let (_, cutoff, _) = starts.select_nth_unstable(dropped);
+        let cutoff = *cutoff;
+        windows.retain(|_, (start, _)| *start >= cutoff);
+    }
+}
+
+/// The key of an email in the failure windows: its SHA-256, so a long
+/// email costs 32 bytes, and no email is kept in memory (D174).
+pub fn email_key(normalized_email: &str) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(normalized_email.as_bytes()).into()
+}
+
 impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
+    /// The number of keys held.
+    pub fn len(&self) -> usize {
+        self.windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// `Err(seconds)` while `key` has `max` failures in its window.
     pub fn check(&self, key: &K, max: u32, now: Instant) -> Result<(), u64> {
         let windows = self
@@ -161,9 +200,7 @@ impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
             .windows
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if windows.len() > 100_000 {
-            windows.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
-        }
+        cap_windows(&mut windows, now);
         let entry = windows.entry(key.clone()).or_insert((now, 0));
         if now.duration_since(entry.0) >= WINDOW {
             *entry = (now, 0);
@@ -192,9 +229,7 @@ impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
             .windows
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if windows.len() > 100_000 {
-            windows.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
-        }
+        cap_windows(&mut windows, now);
         let entry = windows.entry(key.clone()).or_insert((now, 0));
         if now.duration_since(entry.0) >= WINDOW {
             *entry = (now, 0);
@@ -427,7 +462,7 @@ pub struct Limiters {
     api_device: DefaultKeyedRateLimiter<Uuid>,
     push_device: DefaultKeyedRateLimiter<Uuid>,
     /// Keyed by normalized email, known or not (section 10.1).
-    pub failures: FailureWindows<String>,
+    pub failures: FailureWindows<[u8; 32]>,
     /// The TOTP delays, per account and client network and per account.
     pub totp: TotpDelays,
     /// Bearer tokens that did not authenticate, keyed by client IP.
@@ -491,9 +526,12 @@ impl Limiters {
         }
     }
 
-    /// The unauthenticated auth endpoints, per client IP.
+    /// The unauthenticated auth endpoints, per client IP; an IPv6 client by
+    /// its /64, which one host usually holds whole (cross review of D174).
     pub fn auth(&self, ip: IpAddr) -> Result<(), u64> {
-        self.auth_ip.check_key(&ip).map_err(wait_seconds)
+        self.auth_ip
+            .check_key(&network_of(ip))
+            .map_err(wait_seconds)
     }
 
     /// Any authenticated request, per device.
@@ -510,7 +548,7 @@ impl Limiters {
     /// failure until [`Self::signin_succeeded`] takes it back (D174).
     pub fn signin_attempt(&self, email: &str) -> Result<(), u64> {
         self.failures.charge(
-            &email.to_owned(),
+            &email_key(email),
             self.limits.failures_per_window,
             Instant::now(),
         )
@@ -518,7 +556,7 @@ impl Limiters {
 
     /// The check that [`Self::signin_attempt`] counted passed.
     pub fn signin_succeeded(&self, email: &str) {
-        self.failures.refund(&email.to_owned());
+        self.failures.refund(&email_key(email));
     }
 
     /// Before a TOTP code of `user` from `ip` is checked (D175): at sign-in
@@ -832,6 +870,50 @@ mod tests {
             Some(TOTP_MAX_ENTRIES as u32 + 2),
             "the account count stays"
         );
+    }
+
+    /// Cross review (D174): an email of any length is kept as its 32-byte
+    /// hash, and 200,000 different keys keep the map at its cap.
+    #[test]
+    fn failure_windows_keep_hashed_keys_and_stay_at_their_cap() {
+        let limiters = Limiters::new(RateLimits::default());
+        let long = "x".repeat(1 << 20);
+        limiters.signin_attempt(&long).unwrap();
+        assert_eq!(limiters.failures.len(), 1);
+        assert!(
+            limiters
+                .failures
+                .check(&email_key(&long), 1, Instant::now())
+                .is_err(),
+            "counted under its 32-byte hash"
+        );
+        let windows = FailureWindows::<u32>::default();
+        let start = Instant::now();
+        for i in 0..200_000u32 {
+            windows.fail(&i, start + Duration::from_millis(u64::from(i) / 100));
+            assert!(windows.len() <= WINDOWS_MAX + 1);
+        }
+        // The newest keys stay.
+        assert!(windows.check(&199_999, 1, start + secs(2)).is_err());
+    }
+
+    /// Cross review (D174): two addresses of one IPv6 /64 share the
+    /// bucket of the auth endpoints; another /64 has its own.
+    #[test]
+    fn the_auth_limit_keys_ipv6_by_its_64() {
+        let limiters = Limiters::new(RateLimits {
+            auth_per_minute: 1,
+            auth_burst: 2,
+            ..RateLimits::default()
+        });
+        limiters.auth("2001:db8:0:1::1".parse().unwrap()).unwrap();
+        limiters.auth("2001:db8:0:1::2".parse().unwrap()).unwrap();
+        assert!(
+            limiters
+                .auth("2001:db8:0:1:ffff::3".parse().unwrap())
+                .is_err()
+        );
+        limiters.auth("2001:db8:0:2::1".parse().unwrap()).unwrap();
     }
 
     #[test]
