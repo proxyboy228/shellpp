@@ -989,7 +989,7 @@ Using the helpers of section 14.3 and `keys` of the personal vault:
 FRAME = 65536 + 16
 
 
-def read_recording(path: str, keys: dict) -> bytes:
+def read_recording(path: str, keys: dict, key: bytes | None = None) -> bytes:
     with open(path, "rb") as f:
         data = f.read()
     header, body = data[:63], data[63:]
@@ -997,7 +997,8 @@ def read_recording(path: str, keys: dict) -> bytes:
         raise ValueError("not a version 1 recording")
     file_id, prefix = header[8:24], header[44:63]
     key_epoch = struct.unpack(">I", header[40:44])[0]
-    key = hkdf32(keys[key_epoch], b"shellpp/v1/recording" + file_id)
+    if key is None:  # else the key of its `.rekey` file (below)
+        key = hkdf32(keys[key_epoch], b"shellpp/v1/recording" + file_id)
     out, i = bytearray(), 0
     while len(body) >= FRAME:  # full frames are never the final chunk
         out += aead_open(body[:FRAME], header, prefix + be32(i) + b"\x00", key)
@@ -1006,6 +1007,24 @@ def read_recording(path: str, keys: dict) -> bytes:
         raise ValueError("incomplete recording: no final chunk")
     out += aead_open(body, header, prefix + be32(i) + b"\x01", key)
     return bytes(out)  # asciicast v2 text, section 8.3
+```
+
+A recording that still waits to be re-encrypted after a sign-in merged this device's data into an account (section 8.4) is sealed under the key of the earlier vault, which the account's `keys` do not hold. It opens through its `recordings/<file_id>.<vault_id>.rekey` file, whose `vault_id` is the account's personal vault and whose epoch is one of `keys`:
+
+```python
+def rekey_key(path: str, keys: dict) -> bytes:
+    with open(path, "rb") as f:
+        data = f.read()
+    head, blob = data[:44], data[44:]
+    if head[:7] != b"shpprky" or head[7] != 0x01:
+        raise ValueError("not a version 1 .rekey file")
+    file_id, epoch = head[8:24], struct.unpack(">I", head[40:44])[0]
+    recording_key = hkdf32(keys[epoch], b"shellpp/v1/recording" + file_id)
+    label = b"shellpp/v1/wrap/recording-rekey"
+    return open_wrap(blob, hkdf32(recording_key, label), label + head)
+
+
+# read_recording(recording_path, keys, rekey_key(rekey_path, keys))
 ```
 
 ### 14.7 Encrypted export
