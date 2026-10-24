@@ -27,12 +27,16 @@
   (-WarmupMinutes) with the last window of the run, each -WindowMinutes
   long. Memory (working set, private bytes, heap) is compared by the lowest
   value of each window, handles and threads by the median. Growth above
-  10 % is marked and the script exits with 2.
+  10 % is marked and the script exits with 2; a window with fewer than 10
+  samples gives no verdict and the script exits with 3. The heap columns
+  are the app's last heap line (at most 5 s old).
 
   -Analyze <soak.csv> only writes the summary of an earlier run's samples.
 
   -Load passes SHELLPP_SOAK_LOAD to the app: tabs, forward or sftp
-  (OpenSSH) runs that part of the load only.
+  (OpenSSH) runs that part of the load only (the forwarding rules exist in
+  every run; they carry downloads with the whole load and with forward);
+  direct (russh only) downloads without the forwards.
 
   The container is removed at the end. Docker Desktop must be running.
 
@@ -50,9 +54,10 @@ param(
     # A sample every so many minutes (and at the start and the end).
     [ValidateRange(1, 60)]
     [int] $SampleMinutes = 5,
-    # A sample every so many seconds instead (0: -SampleMinutes).
+    # A sample every so many seconds (0: every -SampleMinutes instead). The
+    # summary's windows need at least 10 samples each.
     [ValidateRange(0, 3600)]
-    [int] $SampleSeconds = 0,
+    [int] $SampleSeconds = 15,
     # The minutes before the first window of the summary.
     [ValidateRange(0, 600)]
     [int] $WarmupMinutes = 15,
@@ -112,16 +117,23 @@ function Get-Growth($samples) {
     $lines = New-Object System.Collections.Generic.List[string]
     $grew = @()
     $lastMinute = (ConvertTo-Number $samples[$samples.Count - 1].Minute)
+    # Fewer samples than this in a window give no verdict: its lowest value
+    # is then too likely a swing (review of run 12).
+    $minSamples = 10
     $warmup = [math]::Min([double]$WarmupMinutes, $lastMinute / 4)
     $window = [math]::Min([double]$WindowMinutes, ($lastMinute - $warmup) / 2)
     if ($window -le 0) {
         $lines.Add('The run is too short for two windows: no growth to compare.')
-        return @{ Lines = $lines; Grew = $grew }
+        return @{ Lines = $lines; Grew = $grew; Inconclusive = $true }
     }
     $first = @($samples | Where-Object { $m = ConvertTo-Number $_.Minute; $m -ge $warmup -and $m -lt $warmup + $window })
     $last = @($samples | Where-Object { (ConvertTo-Number $_.Minute) -ge $lastMinute - $window })
     $lines.Add(("Windows: minutes {0:0.#}-{1:0.#} ({2} samples) and {3:0.#}-{4:0.#} ({5} samples); memory by the lowest value of each window, handles and threads by the median." -f
         $warmup, ($warmup + $window), $first.Count, ($lastMinute - $window), $lastMinute, $last.Count))
+    if ($first.Count -lt $minSamples -or $last.Count -lt $minSamples) {
+        $lines.Add("Fewer than $minSamples samples in a window: no verdict. Sample more often (-SampleSeconds) or run longer.")
+        return @{ Lines = $lines; Grew = $grew; Inconclusive = $true }
+    }
     $names = @('WorkingSetMB', 'PrivateMB', 'Handles', 'Threads')
     if ($samples[0].PSObject.Properties.Name -contains 'HeapLiveMB') { $names += 'HeapLiveMB' }
     foreach ($name in $names) {
@@ -136,7 +148,7 @@ function Get-Growth($samples) {
         if ($percent -gt 10) { $grew += $name }
         $lines.Add(("- {0} ({1}): {2} -> {3} ({4:+0.0;-0.0;0.0} %){5}" -f $name, $how, $from, $to, $percent, $mark))
     }
-    return @{ Lines = $lines; Grew = $grew }
+    return @{ Lines = $lines; Grew = $grew; Inconclusive = $false }
 }
 
 if ($Analyze) {
@@ -150,6 +162,7 @@ if ($Analyze) {
         Write-Host "soak: grew above 10 %: $($growth.Grew -join ', ')" -ForegroundColor Yellow
         exit 2
     }
+    if ($growth.Inconclusive) { exit 3 }
     exit 0
 }
 
@@ -245,7 +258,8 @@ try {
     $info.EnvironmentVariables['APPDATA'] = (Join-Path $runDir 'appdata')
     $info.EnvironmentVariables['LOCALAPPDATA'] = (Join-Path $runDir 'localappdata')
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
-    if ($Load) { $info.EnvironmentVariables['SHELLPP_SOAK_LOAD'] = $Load }
+    # ValidateSet lets any letter case through; the app knows lower case.
+    if ($Load) { $info.EnvironmentVariables['SHELLPP_SOAK_LOAD'] = $Load.ToLowerInvariant() }
     $process = [System.Diagnostics.Process]::Start($info)
     $stderr = $process.StandardError.ReadToEndAsync()
     Write-Host "soak: app pid $($process.Id)"
@@ -363,7 +377,6 @@ finally {
 if ($samples.Count -eq 0) { Fail "no sample$(if ($problem) { ": $problem" })" }
 
 # The growth: windows, not single samples (see the help).
-$base = $null
 $last = $samples[$samples.Count - 1]
 $lines = New-Object System.Collections.Generic.List[string]
 $serverName = if ($useOpenSsh) { 'OpenSSH in Docker' } else { 'russh test server (no SFTP, no htop)' }
@@ -422,10 +435,9 @@ for ($i = 0; $i -lt $panels.Count; $i++) {
     $graphics.DrawRectangle($axis, $left, $top, $plotW, $plotH)
     $graphics.DrawString("0", $font, $text, $left - 4, $top + $plotH + 4)
     $graphics.DrawString("$([math]::Round($maxMinute)) min", $font, $text, $left + $plotW - 40, $top + $plotH + 4)
-    if ($base) {
-        $x15 = $left + $plotW * [double]$base.Minute / $maxMinute
-        $graphics.DrawLine((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(200, 200, 200)), 1), $x15, $top, $x15, $top + $plotH)
-    }
+    # The end of the warm-up, where the first window of the summary starts.
+    $xWarm = $left + $plotW * [math]::Min([double]$WarmupMinutes, $maxMinute / 4) / $maxMinute
+    $graphics.DrawLine((New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(200, 200, 200)), 1), $xWarm, $top, $xWarm, $top + $plotH)
     $pen = New-Object System.Drawing.Pen $panel.Color, 2
     $points = @()
     foreach ($s in $samples) {
@@ -444,5 +456,9 @@ if ($problem) { Fail $problem }
 if ($grew.Count -gt 0) {
     Write-Host "soak: grew above 10 %: $($grew -join ', ')" -ForegroundColor Yellow
     exit 2
+}
+if ($growth.Inconclusive) {
+    Write-Host 'soak: too few samples for a verdict' -ForegroundColor Yellow
+    exit 3
 }
 exit 0

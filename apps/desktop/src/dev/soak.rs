@@ -102,6 +102,14 @@ pub async fn run(
     // downloads go to the run's own server without the forwards (russh
     // only): what the run itself costs.
     let only = std::env::var("SHELLPP_SOAK_LOAD").unwrap_or_default();
+    match (only.as_str(), real_shell) {
+        ("" | "tabs" | "forward", _) | ("sftp", true) | ("direct", false) => {}
+        ("sftp", false) => return Err("SHELLPP_SOAK_LOAD=sftp needs OpenSSH".to_owned()),
+        ("direct", true) => {
+            return Err("SHELLPP_SOAK_LOAD=direct is for the russh server".to_owned());
+        }
+        (other, _) => return Err(format!("unknown SHELLPP_SOAK_LOAD {other:?}")),
+    }
     let direct = only == "direct" && !real_shell;
     let tabs_load = matches!(only.as_str(), "" | "tabs");
     let forward_load = !matches!(only.as_str(), "tabs" | "sftp");
@@ -227,6 +235,8 @@ pub async fn run(
         ));
     }
     say("soak load");
+    // The heap's first period starts with the load, not at the app's start.
+    let _ = super::heap::take_peak();
 
     let started = Instant::now();
     let end = started + Duration::from_secs(minutes * 60);
@@ -283,9 +293,17 @@ pub async fn run(
         opened.handle.close();
     }
     // With SHELLPP_HEAP_TRACE=1: where the large allocations were made.
-    for (count, largest, frames) in super::heap::sites().into_iter().take(20) {
+    let sites = super::heap::sites();
+    let shown = sites.len().min(20);
+    for (count, largest, frames) in sites.into_iter().take(shown) {
         say(&format!(
             "soak heap site {count} x up to {largest} bytes: {frames}"
+        ));
+    }
+    let left_out = super::heap::sites_left_out();
+    if left_out > 0 {
+        say(&format!(
+            "soak heap sites: {left_out} allocations at places over the map's limit not kept"
         ));
     }
     say("ready");

@@ -15,7 +15,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TRACE: AtomicBool = AtomicBool::new(false);
@@ -27,6 +27,13 @@ pub const LARGE: usize = 1024 * 1024;
 /// the largest. At most [`MAX_SITES`] places.
 static SITES: Mutex<BTreeMap<String, (u64, usize)>> = Mutex::new(BTreeMap::new());
 const MAX_SITES: usize = 64;
+/// Allocations at places the full map could not take.
+static LEFT_OUT: AtomicU64 = AtomicU64::new(0);
+
+/// How many large allocations were made at places the map had no room for.
+pub fn sites_left_out() -> u64 {
+    LEFT_OUT.load(Ordering::Relaxed)
+}
 
 thread_local! {
     /// Set while a place is noted: the noting's own allocations are not.
@@ -45,7 +52,11 @@ impl Counting {
         }
         let size = isize::try_from(size).unwrap_or(isize::MAX);
         let live = LIVE.fetch_add(size, Ordering::Relaxed) + size;
-        PEAK.fetch_max(live, Ordering::Relaxed);
+        // A plain load first: the compare-exchange loop of `fetch_max` on
+        // every allocation of every thread would slow what is measured.
+        if live > PEAK.load(Ordering::Relaxed) {
+            PEAK.fetch_max(live, Ordering::Relaxed);
+        }
         if size >= LARGE as isize && TRACE.load(Ordering::Relaxed) {
             note(size.unsigned_abs());
         }
@@ -165,12 +176,14 @@ fn note(size: usize) {
             .take(8)
             .collect();
         let key = frames.join(" <- ");
-        if let Ok(mut sites) = SITES.lock()
-            && (sites.len() < MAX_SITES || sites.contains_key(&key))
-        {
-            let entry = sites.entry(key).or_default();
-            entry.0 += 1;
-            entry.1 = entry.1.max(size);
+        if let Ok(mut sites) = SITES.lock() {
+            if sites.len() < MAX_SITES || sites.contains_key(&key) {
+                let entry = sites.entry(key).or_default();
+                entry.0 += 1;
+                entry.1 = entry.1.max(size);
+            } else {
+                LEFT_OUT.fetch_add(1, Ordering::Relaxed);
+            }
         }
         noting.set(false);
     });
