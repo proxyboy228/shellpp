@@ -597,7 +597,7 @@ impl Core {
     /// vault stays open; the names of other files that stayed are returned.
     pub(super) fn erase_store(&self) -> Result<Vec<String>, CoreError> {
         let _remember = self.remember_lock();
-        let (left, set_aside) = {
+        let (result, set_aside) = {
             let mut guard = self.inner();
             let inner = &mut *guard;
             if inner.state != LockState::Unlocked {
@@ -622,21 +622,26 @@ impl Core {
                     return Err(CoreError::Store(error.into()));
                 }
             };
-            match Store::open(&data_dir, &self.config.app_version) {
+            let result = match Store::open(&data_dir, &self.config.app_version) {
                 Ok((store, _)) => {
                     tracing::info!(left = left.len(), "local copy deleted; first run");
                     self.enter_first_run(inner, store, self.now());
+                    Ok(left)
                 }
                 // The database is gone: what `reopen_store` does when the
                 // old one does not open (the next start begins at first run).
-                Err(_) => self.reopen_store(inner, &data_dir),
-            }
-            (left, set_aside)
+                Err(error) => {
+                    self.reopen_store(inner, &data_dir);
+                    Err(open_error(error))
+                }
+            };
+            (result, set_aside)
         };
+        // The set-aside copies are gone either way.
         for db_id in set_aside {
             self.delete_device_key(&db_id);
         }
-        Ok(left)
+        result
     }
 
     /// Opens the database of `data_dir` again after a failed set-aside or

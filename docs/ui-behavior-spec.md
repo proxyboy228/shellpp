@@ -545,8 +545,10 @@ The same form is used for creating and editing; it opens in the details panel.
        it can be unlinked;
      - a "+" button to link a key, an identity or a certificate (a key with an OpenSSH
        certificate). Each linked item is shown as its own field and can be unlinked.
-       A type that is already linked disappears from the list of options. A FIDO2 key
-       joins the list with FIDO2 support (D5) and is hidden until then. [decision]
+       A type that is already linked disappears from the list of options. A FIDO2 security
+       key is a key of the Keychain (7.3, D143) and is linked through "Key", the field a
+       connection uses; there is no separate FIDO2 entry. A FIDO2 key an older version linked
+       in its own field shows as its own row and can be unlinked. [decision] (D201)
        For a key, the list offers the existing keys and a short way to add a new one:
        paste the key text or choose a file. An encrypted key asks for its passphrase
        (as in 7.3), and the key is saved to the Keychain; [decision]
@@ -2177,6 +2179,18 @@ Settings → Security (see 12.1):
      account exists at this step, so it has only "Finish", no "Back".
 - The master password never leaves the device; the server receives only a key derived
   from it.
+- On a device that was connected to an account before, other key derivation settings or
+  another salt in the server's answer mean the account's password or email changed on
+  another device (`docs/sync-protocol.md`, 4.2): the account step says "The password or
+  email of this account was changed on another device. Enter the account's current
+  password and sign in again.", empties the password field, and derives nothing until the
+  user signs in again. Weaker settings first get their own dialog (D189); [decision]
+  (D200)
+- Signing in or registering on a device whose vault belongs to another account is refused
+  until the previous account's archive (data-model 18.5) exists, after release 1.0. The
+  message names the safe path: export the data to take it along, lock, then Forgot
+  password? > Start with a new vault (13.2), which sets the vault aside, not deleting it,
+  and starts empty; then connect. [decision] (D197)
 - Signing in to an existing account on a device that already has local data merges the
   data: the local records are re-encrypted with the account's keys and merged with the
   account's data, with deduplication as in import (see 2.5). From then on, this device uses

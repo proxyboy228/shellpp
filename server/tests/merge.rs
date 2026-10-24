@@ -451,7 +451,8 @@ fn an_abandoned_merge_leaves_no_extra_vault() {
 }
 
 /// Cross review of run 9: a `.rekey` file may be the only key of a
-/// recording of a store set aside by "Also delete the local copy" (D190).
+/// recording of a store set aside by "Start with a new vault" (until D197
+/// also by "Also delete the local copy", which now deletes the recordings).
 /// A merge into the same account vault that is given up later removes its
 /// begun vault, never that file.
 #[test]
@@ -469,9 +470,9 @@ fn giving_up_a_merge_keeps_the_rekey_of_a_store_set_aside() {
     let account_vault = l.vault_id();
     let rekey = recordings_dir(&l).join(format!("{file_id}.{account_vault}.rekey"));
     assert!(rekey.exists(), "the recording still waits for its key");
-    l.core
-        .sync_sign_out(true)
-        .expect("signed out, copy set aside");
+    l.core.sync_sign_out(false).expect("signed out");
+    l.core.lock().expect("locked");
+    l.core.start_new_vault().expect("copy set aside");
 
     // A new store on the same directory merges into the same account vault
     // and gives up half-way.

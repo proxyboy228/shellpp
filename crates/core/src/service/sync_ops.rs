@@ -160,6 +160,10 @@ pub(super) struct SyncRuntime {
     fail_merge: bool,
     /// The last sign-in refused weaker KDF parameters (D189).
     pub(super) weaker_kdf: Option<super::sync_trust::WeakerKdf>,
+    /// The KDF settings and salt the last sign-in found changed (SP 4.2):
+    /// the next one goes on with them only after the user typed the
+    /// current password.
+    kdf_changed: Option<(KdfParams, [u8; 16])>,
 }
 
 impl SyncRuntime {
@@ -1162,7 +1166,20 @@ impl Core {
     /// (UI 13.2): the device gets the account's vault. With a local vault it
     /// is a rebind (the same personal vault) or the merge of data-model 18.5.
     pub fn sync_sign_in(&self, input: SignInInput) -> Result<SignInOutcome, CoreError> {
-        self.sign_in_with(input, None)
+        self.sign_in_with(input, None, false)
+    }
+
+    /// The sign-in of a device bound now or before after it refused with
+    /// `kdf_changed` (SP 4.2: the password or the email changed on another
+    /// device) and the user typed the account's current password: it goes
+    /// on only when the server sends the same settings and salt again.
+    /// `accepted` carries weaker settings the user confirmed (D189).
+    pub fn sync_sign_in_after_kdf_change(
+        &self,
+        input: SignInInput,
+        accepted: Option<KdfParams>,
+    ) -> Result<SignInOutcome, CoreError> {
+        self.sign_in_with(input, accepted.as_ref(), true)
     }
 
     /// The sign-in of a bound, signed-out device after the user confirmed
@@ -1173,13 +1190,14 @@ impl Core {
         input: SignInInput,
         accepted: KdfParams,
     ) -> Result<SignInOutcome, CoreError> {
-        self.sign_in_with(input, Some(&accepted))
+        self.sign_in_with(input, Some(&accepted), false)
     }
 
     fn sign_in_with(
         &self,
         input: SignInInput,
         accepted: Option<&KdfParams>,
+        change_told: bool,
     ) -> Result<SignInOutcome, CoreError> {
         let _sync = self.sync_lock();
         let origin = normalize_origin(&input.origin).map_err(HttpError::from)?;
@@ -1212,9 +1230,10 @@ impl Core {
                     };
                     if account.is_some() || vault_bound {
                         let row = guard.store.local_auth()?.ok_or(CoreError::Damaged)?;
-                        bound_kdf = Some(
+                        bound_kdf = Some((
                             KdfParams::from_json(&row.kdf_json).map_err(|_| CoreError::Damaged)?,
-                        );
+                            row.kdf_salt,
+                        ));
                     }
                 }
                 _ => return Err(CoreError::Locked),
@@ -1239,13 +1258,29 @@ impl Core {
         // Weaker than this device's own parameters: a possible downgrade
         // attack (D189). Nothing is derived or sent until the user confirms
         // these very parameters.
-        if let Some(local) = bound_kdf
-            && super::sync_trust::kdf_weaker(&kdf, &local)
+        if let Some((local, _)) = &bound_kdf
+            && super::sync_trust::kdf_weaker(&kdf, local)
             && accepted != Some(&kdf)
         {
-            self.inner().sync.weaker_kdf =
-                Some(super::sync_trust::WeakerKdf { local, server: kdf });
+            self.inner().sync.weaker_kdf = Some(super::sync_trust::WeakerKdf {
+                local: local.clone(),
+                server: kdf,
+            });
             return Err(refused("weaker_kdf"));
+        }
+        // Other settings or another salt than this device's (SP 4.2, stage
+        // 0 decision): the password or the email changed on another device,
+        // so the password typed is likely not the account's current one.
+        // The user is told so and types it again before anything is derived;
+        // that sign-in goes on only with the very settings and salt seen.
+        if let Some((local, local_salt)) = &bound_kdf
+            && (kdf != *local || kdf_salt != *local_salt)
+        {
+            let seen = self.inner().sync.kdf_changed.take();
+            if !(change_told && seen.as_ref() == Some(&(kdf.clone(), kdf_salt))) {
+                self.inner().sync.kdf_changed = Some((kdf, kdf_salt));
+                return Err(refused("kdf_changed"));
+            }
         }
         let derived = derive(&kdf, &kdf_salt, &email, &input.password, &origin, class)?;
         drop(input);
@@ -1608,15 +1643,24 @@ impl Core {
         // before. The first cycle runs the restore of section 6.9 when the
         // server's differs (a restore while the device was out of the
         // account); without one it keeps every replaced version as a copy.
-        let known_generation = {
+        // A doubt not resolved yet (the first cycle after an earlier unsure
+        // rebind did not go through) stays (review of run 10).
+        let (known_generation, still_unsure) = {
             let guard = self.inner();
             let row = guard.store.server_account()?;
             let kept = guard.store.meta_get(META_LAST_GENERATION)?;
-            rebind_generation(row.as_ref(), kept.as_deref(), account.user_id)
+            let flag = guard.store.meta_get(META_REBIND_UNSURE)?;
+            (
+                rebind_generation(row.as_ref(), kept.as_deref(), account.user_id),
+                flag.as_deref() == Some(account.personal_vault.vault_id.to_string().as_str()),
+            )
         };
-        let unsure = |vault_id: &Uuid| match known_generation {
-            Some(_) => String::new(),
-            None => vault_id.to_string(),
+        let unsure = |vault_id: &Uuid| {
+            if known_generation.is_none() || still_unsure {
+                vault_id.to_string()
+            } else {
+                String::new()
+            }
         };
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
@@ -2656,7 +2700,10 @@ impl Core {
         let unsure = self.inner().store.meta_get(META_REBIND_UNSURE)?.as_deref()
             == Some(link.vault_id.to_string().as_str());
         if restored || unsure {
-            self.restore(link, &mut report, &mut changed, refuse_newer)?;
+            // Not sure: records the server lacks may be deletions whose
+            // tombstones were purged, so they are listed as a resync lists
+            // them.
+            self.restore(link, &mut report, &mut changed, refuse_newer, !restored)?;
             report.restored = restored;
         }
         if unsure {
@@ -2715,7 +2762,7 @@ impl Core {
                         .and_then(Value::as_str)
                         .unwrap_or("purged");
                     if reason == "ahead" {
-                        self.restore(link, &mut report, &mut changed, refuse_newer)?;
+                        self.restore(link, &mut report, &mut changed, refuse_newer, false)?;
                         report.restored = true;
                         continue;
                     }
@@ -2801,7 +2848,14 @@ impl Core {
                 // the rebind's generation check missed it) is skipped by the
                 // pull; the restore's mark pushes the newer local version,
                 // an edit or a deletion, again (section 6.9, step 2).
-                engine::restore_mark(&mut inner.store, session, &held_by_server, &resync)?;
+                engine::restore_mark(
+                    &mut inner.store,
+                    session,
+                    &held_by_server,
+                    &resync,
+                    false,
+                    self.now(),
+                )?;
                 let mut state = inner.store.sync_state(&link.vault_id)?;
                 state.vault_id = link.vault_id;
                 state.resync_classes.clear();
@@ -3074,13 +3128,15 @@ impl Core {
     /// The server restore (section 6.9): every page from 0 is read first,
     /// the synced revisions are set to the server's, and the pages are
     /// applied without the stale copies of rule 5; the push sends back what
-    /// the server lost.
+    /// the server lost. With `list_missing` (an unsure rebind, D197) what it
+    /// lacks is listed in "Brought back".
     fn restore(
         &self,
         link: &Link,
         report: &mut SyncReport,
         changed: &mut Vec<Uuid>,
         refuse_newer: bool,
+        list_missing: bool,
     ) -> Result<(), CoreError> {
         let selection = selection(&self.inner().store);
         let mut pages = Vec::new();
@@ -3159,7 +3215,14 @@ impl Core {
                 state.cursor = page.next_cursor;
             }
             // Step 2: the synced revisions become the server's (or 0).
-            engine::restore_mark(&mut inner.store, session, &server, &selection.classes)?;
+            engine::restore_mark(
+                &mut inner.store,
+                session,
+                &server,
+                &selection.classes,
+                list_missing,
+                self.now(),
+            )?;
             Ok(())
         })?;
         report.restored = true;
@@ -3696,7 +3759,7 @@ impl Core {
         }
         let mut report = SyncReport::default();
         let mut changed = Vec::new();
-        self.restore(&link, &mut report, &mut changed, false)?;
+        self.restore(&link, &mut report, &mut changed, false, false)?;
         // Step 4: a `recovery_key` record the server holds older (a reissue
         // after the backup) goes back with the records, but the server's
         // recovery verifier stays the older key's, so neither key would
@@ -5944,6 +6007,8 @@ mod tests {
             session,
             &HashMap::from([(host, 1)]),
             &shellpp_sync_api::classes::ALL,
+            false,
+            std::time::SystemTime::now(),
         )
         .unwrap();
         let local = inner.store.record(&vault_id, &host).unwrap().unwrap();
@@ -5994,6 +6059,91 @@ mod tests {
             copies[0].1.data.as_ref().unwrap()["losing_data"]["label"],
             json!("Server")
         );
+    }
+
+    #[test]
+    fn a_late_sequence_below_the_base_is_kept_when_the_push_conflicts() {
+        // Review of run 10 (D198): a record a restore marked (synced 1, base
+        // at revision 2, synced at sequence 950) meets, at its push, another
+        // device's version at revision 1 with a lower stamp but sequence 961:
+        // written after the restore by a device whose clock is behind. Rule
+        // 0 lets the local version win, and the server's is kept as a copy.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Local", &random_text());
+        let mut data = stored_data(&core, host);
+        data.insert("label".into(), json!("Local, edited"));
+        if let Some(ssh) = data.get_mut("ssh").and_then(Value::as_object_mut) {
+            ssh.remove("password");
+        }
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        core.record_save(crate::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: Some(host),
+            record_type: crate::service::dto::RecordType::Host,
+            data,
+            secrets: std::collections::BTreeMap::new(),
+        })
+        .unwrap();
+        let now = core.now();
+        let now_text = format_timestamp(now);
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let mut row = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        row.synced_revision = 2;
+        row.server_seq = Some(950);
+        row.base_envelope = None;
+        inner.store.write(|tx| tx.record_put(&row)).unwrap();
+        engine::restore_mark(
+            &mut inner.store,
+            session,
+            &HashMap::from([(host, 1)]),
+            &shellpp_sync_api::classes::ALL,
+            false,
+            now,
+        )
+        .unwrap();
+        let local = inner.store.record(&vault_id, &host).unwrap().unwrap();
+        assert_eq!((local.synced_revision, local.server_seq), (1, Some(950)));
+        let mut server_data = stored_data_of(session, &local);
+        server_data.insert("label".into(), json!("Late, clock behind"));
+        let payload = Payload::live("host", 1, Hlc::new(1, 0), Uuid::now_v7(), server_data);
+        let previous = RecordRow {
+            revision: 0,
+            synced_revision: 0,
+            base_envelope: None,
+            ..local.clone()
+        };
+        let mut server = vault::seal_row(
+            &mut session.ring,
+            local.class,
+            host,
+            &payload,
+            Some(&previous),
+            &now_text,
+        )
+        .unwrap();
+        assert_eq!(server.revision, 1);
+        let resolve = |server: &RecordRow, session: &mut Session| {
+            let mut effects = engine::Effects::default();
+            engine::resolve(
+                &inner.store,
+                session,
+                &mut effects,
+                &local,
+                Some(server),
+                &Selection::all(),
+                false,
+                now,
+            )
+            .unwrap();
+            effects.conflicts
+        };
+        // At a sequence not above the synced one: a stale version, no copy.
+        server.server_seq = Some(940);
+        assert_eq!(resolve(&server, session), 0);
+        server.server_seq = Some(961);
+        assert_eq!(resolve(&server, session), 1, "the late edit is kept");
     }
 
     #[test]
@@ -6092,9 +6242,9 @@ mod tests {
 
     #[test]
     fn a_set_aside_that_cannot_reopen_the_database_closes_the_session() {
-        // Cross review of run 9 (D190): "Also delete the local copy" fails
-        // to open the new database, and the old one does not open again
-        // either. The session must not go on writing to memory only.
+        // Cross review of run 9 (D190, D197): "Also delete the local copy"
+        // fails to open the new database, and none opens again. The session
+        // must not go on writing to memory only.
         let (_dir, core) = unlocked_core();
         save_host(&core, "Kept", &random_text());
         let vault_id = core.vaults().unwrap()[0].vault_id;

@@ -464,15 +464,25 @@ impl Client {
             .expect("registered")
     }
 
+    /// Signs in as the user would: when the device says the account's
+    /// password or email changed elsewhere (SP 4.2, `kdf_changed`), the
+    /// user types `password`, the current one, again.
     pub fn sign_in(&self, server: &Server, email: &str, password: &SecretString) -> SignInOutcome {
-        self.core
-            .sync_sign_in(SignInInput {
-                origin: server.origin.clone(),
-                email: email.to_owned(),
-                password: password.clone(),
-                registration_code: None,
-            })
-            .expect("signed in")
+        let input = || SignInInput {
+            origin: server.origin.clone(),
+            email: email.to_owned(),
+            password: password.clone(),
+            registration_code: None,
+        };
+        match self.core.sync_sign_in(input()) {
+            Err(shellpp_core::CoreError::Sync(shellpp_core::sync::HttpError::Refused(
+                "kdf_changed",
+            ))) => self
+                .core
+                .sync_sign_in_after_kdf_change(input(), None)
+                .expect("signed in with the current password"),
+            other => other.expect("signed in"),
+        }
     }
 
     pub fn sync(&self) -> shellpp_core::service::SyncReport {

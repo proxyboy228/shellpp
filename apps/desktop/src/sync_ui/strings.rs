@@ -265,7 +265,8 @@ pub const KDF_THIS_DEVICE: &str = "This device";
 pub const KDF_FROM_SERVER: &str = "The server asks for";
 pub const KDF_WEAKER_WARNING: &str = "This is expected after the password was changed on a device with weaker settings, such as a phone. Otherwise it can mean that someone poses as your server to make your password easier to guess: then cancel. If you go on, this device uses these settings for its local copy too.";
 pub const KDF_CONTINUE: &str = "Sign in with weaker settings";
-pub const ERROR_PREVIOUS: &str = "This device was bound to another account before; connecting it to a new one is not supported yet.";
+pub const ERROR_PREVIOUS: &str = "This vault belongs to another sync account, so it cannot join this one. To use another account without losing anything: export your data if you want to take it along (File > Export Data…), lock Shell++ and choose Forgot password? > Start with a new vault. The current vault is set aside, not deleted, and still opens with its master password; Shell++ starts empty, and you can connect it to the other account.";
+pub const ERROR_KDF_CHANGED: &str = "The password or email of this account was changed on another device. Enter the account's current password and sign in again.";
 pub const ERROR_ROLLED_BACK: &str =
     "Server state rolled back: the server holds older keys than this device.";
 pub const ERROR_INTEGRITY: &str =

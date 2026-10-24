@@ -505,7 +505,14 @@ pub fn resolve(
         .as_ref()
         .is_some_and(|base| base.revision == server.revision && base.envelope != server.envelope);
     if fork || server.revision < local.synced_revision.max(base_revision) {
-        let synced = if fork { None } else { base };
+        // A later server sequence: written after a restore (D198), or a
+        // record pushed back after a purge; either way the copy costs
+        // nothing, as the local version wins anyway.
+        let synced = if fork || later_seq(server, local) {
+            None
+        } else {
+            base
+        };
         if !has_copy(store, session, local, &s)? {
             keep_overwritten(session, effects, local, &l, synced, server, &s, now)?;
         }
@@ -720,10 +727,18 @@ pub fn apply_page(
             // Another version at the synced revision is a fork of the
             // server's history (a restore): this device's version goes over
             // it as over a stale one (rule 0), and it is kept as a copy.
+            // The version this device holds at the synced revision: its own
+            // when nothing is pending, else its base, but only when the base
+            // is at that revision (a record a restore marked keeps a newer
+            // base, which says nothing about the server's version there;
+            // review of run 10).
             let synced_envelope = if local.revision == local.synced_revision {
                 Some(&local.envelope)
             } else {
-                local.base_envelope.as_ref()
+                local.base_envelope.as_ref().filter(|bytes| {
+                    row_from_envelope(vault_id, bytes, None, &now_text)
+                        .is_some_and(|base| base.revision == local.synced_revision)
+                })
             };
             let fork = row.revision == local.synced_revision
                 && synced_envelope.is_some_and(|envelope| *envelope != row.envelope);
@@ -739,15 +754,13 @@ pub fn apply_page(
             {
                 // A version at the synced revision is never one this device
                 // made (a write always raises the revision), so a fork is
-                // kept whatever its stamp. So is a version whose server
-                // sequence is above that of the version this device synced:
-                // a server gives a sequence only to a later write, so it was
-                // written after a restore, even by a device whose clock is
-                // behind (D198; D184, residual 1).
-                let later_seq = matches!(
-                    (row.server_seq, local.server_seq),
-                    (Some(server), Some(synced)) if server > synced
-                );
+                // kept whatever its stamp. In a server restore, so is a
+                // version whose server sequence is above that of the version
+                // this device synced: written after the restore, even by a
+                // device whose clock is behind (D198; D184, residual 1).
+                // Only there: a record pushed back after its tombstone was
+                // purged also has a lower revision at a higher sequence.
+                let later_seq = !no_copy_below.is_empty() && later_seq(&row, &local);
                 let synced = if fork || later_seq {
                     None
                 } else {
@@ -1219,10 +1232,22 @@ pub fn push_back_missing(
     Ok(ids)
 }
 
+/// `true` when the server gave `server` a sequence above the one of the
+/// version `local` synced (D198).
+fn later_seq(server: &RecordRow, local: &RecordRow) -> bool {
+    matches!(
+        (server.server_seq, local.server_seq),
+        (Some(server), Some(synced)) if server > synced
+    )
+}
+
 /// The server restore (section 6.9, step 2): every local record's synced
 /// revision becomes the server's (or 0 when it has none), so whatever is
 /// newer here, or missing there, is pushed again. Returns, per record, the
-/// synced revision held before, for step 3.
+/// synced revision held before, for step 3. With `list`, the deletable live
+/// records the server lacks go to "Brought back" (a rebind that is not sure
+/// a restore happened, D197: they may be deletions whose tombstones were
+/// purged).
 ///
 /// A synced revision is only ever lowered: a server revision above it is a
 /// version the pull received but did not apply (a type that is off, a
@@ -1233,10 +1258,14 @@ pub fn restore_mark(
     session: &mut Session,
     server: &HashMap<Uuid, u64>,
     classes: &[u8],
+    list: bool,
+    now: SystemTime,
 ) -> Result<HashMap<Uuid, u64>, CoreError> {
     let vault_id = session.ring.vault_id();
+    let now_text = format_timestamp(now);
     let mut held = HashMap::new();
     let mut rows = Vec::new();
+    let mut listed = Vec::new();
     for row in store.records(&vault_id, Some(classes))? {
         let server_revision = server.get(&row.record_id).copied().unwrap_or(0);
         if row.synced_revision <= server_revision {
@@ -1254,12 +1283,22 @@ pub fn restore_mark(
         changed.synced_revision = server_revision.min(row.revision);
         if server_revision == 0 {
             changed.server_seq = None;
+            if list
+                && !row.tombstone
+                && payload_of(session, &row)
+                    .is_some_and(|payload| trash::deletable_type(&payload.type_name))
+            {
+                listed.push(row.record_id);
+            }
         }
         rows.push(changed);
     }
     store.write(|tx| {
         for row in &rows {
             tx.record_put(row)?;
+        }
+        for id in &listed {
+            tx.resync_returned_put(&vault_id, id, &now_text)?;
         }
         Ok(())
     })?;

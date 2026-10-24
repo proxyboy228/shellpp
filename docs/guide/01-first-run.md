@@ -78,7 +78,12 @@ anywhere, so it cannot be shown or reset. You have these options:
   [Sync](06-sync.md#forgot-password-restore-from-sync).
 - **Start with a new vault**: Shell++ starts empty. The old data file is
   not deleted: it is renamed (`shellpp.db.<date>.old`) and kept next to the
-  new one, but only the forgotten password opens it.
+  new one, but only the forgotten password opens it. To open it later:
+  quit Shell++, copy `shellpp.db.<date>.old` into an empty folder as
+  `shellpp.db` (and `….old-wal`, `….old-shm`, if there are any, as
+  `shellpp.db-wal`, `shellpp.db-shm`), start Shell++ with the
+  `SHELLPP_DATA_DIR` environment variable set to that folder, unlock it
+  with its master password and use **Export Data…**.
 
 ## Where the data lives
 

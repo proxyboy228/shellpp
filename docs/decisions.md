@@ -2190,7 +2190,9 @@ Status: run 10 decision, 2026-10-24 (plan of run 10, section 3.2; D197). Amends 
 
 **Context.** D184 keeps as a conflict copy a server version below the synced revision whose stamp is greater than that of the version this device synced: such a version was written on a server restored from an older backup. Residual 1: an edit made there by a device whose clock is behind (by more than the time since the lost version) has a lower stamp and was pushed over without a copy. The rule "not sure, keep a copy" (D197) would copy every older version a restored backup holds: the device cannot tell such a version from a late edit by stamps, so every record the restore rolled back would get a copy of its superseded version on every device.
 
-**Decision:** The server's `seq` tells them apart where it can. A server gives a `seq` only to a later write, so on a server that was not restored a lower revision of a record always has a lower `seq`. A version below the synced revision whose `seq` is above the `seq` of the version this device synced was therefore written after a restore, whatever the writer's clock, and is kept as a conflict copy like one with a greater stamp. What stays open: a late edit with a lower stamp that the restored server gave a `seq` still below the synced version's (the restored server has handed out fewer sequences since the backup than it lost). That needs a clock behind by more than the time between the two edits and fewer writes after the restore than were lost, on a record that lost two revisions or more. A hostile server can give an old authenticated version a high `seq` and so cause a copy of it: a superfluous copy, never a loss.
+**Decision:** The server's `seq` tells them apart where it can. A server gives a `seq` only to a later write, so in a restore a version below the synced revision whose `seq` is above the `seq` of the version this device synced was written after the restore, whatever the writer's clock, and is kept as a conflict copy like one with a greater stamp. The pull applies this only inside the restore procedure (sync-protocol 6.9), whose snapshot is where such versions arrive: outside it, a record pushed back after its tombstone was purged also has a lower revision at a higher `seq` (review of run 10), and there the rule would put another device's tombstone over it. Rule 0 at a push conflict applies it always: the local version wins there anyway, so the rule only adds a copy (it covers a late edit pushed between this device's restore procedure and its push).
+
+What stays open: a late edit with a lower stamp that the restored server gave a `seq` still below the synced version's (the restored server has handed out fewer sequences since the backup than it lost). That needs a clock behind by more than the time between the two edits and fewer writes after the restore than were lost, on a record that lost two revisions or more. A hostile server can give an old authenticated version a high `seq` (with a new `server_generation`, so the device runs the restore procedure) and so cause a copy of it, per record and again each time the user deletes the copy: superfluous copies, never a loss.
 
 **Spec impact:** docs/sync-protocol.md, sections 6.4 (step 6), 6.7 (rule 0) and 6.9 (step 3).
 
@@ -2208,3 +2210,23 @@ Status: run 10 decision, 2026-10-24 (plan of run 10, section 2.2; D197). Amends 
 - Ages and periods come from the files' modification times, as the retention did.
 
 **Spec impact:** docs/security.md, section 14.4; server/README.md, "Backups"; docs/guide/06-sync.md (and `docs/guide/ru`).
+
+### 200. Changed key derivation settings at sign-in ask for the current password first (run 10)
+
+Status: run 10 decision, 2026-10-24 (plan of run 10, sections 2.3 and 3.4). Carries out the stage 0 decision of docs/sync-protocol.md, section 4.2, which was not built.
+
+**Context.** On a device bound now or before, a pre-login answer whose `kdf` or `kdf_salt` differs from `local_auth` means the password or the email changed on another device. The user then most likely types the old password, which the client derived and sent under the new settings: a failed sign-in that counts against the limits, and an auth key of the old password for the server.
+
+**Decision:** The sign-in stops with `kdf_changed` before anything is derived or sent and keeps the settings and salt it saw. The wizard says "The password or email of this account was changed on another device. Enter the account's current password and sign in again." and empties the password field. The next sign-in (`sync_sign_in_after_kdf_change`) goes on only when the server answers the very settings and salt seen; otherwise it stops again. It applies to every device bound before, at any address, as the weaker-settings check of D189 does, and after it: weaker settings get their dialog first, and the confirmed ones are carried to the next sign-in. Another account's email also differs in salt and gets the same message; the binding check then refuses it as before (D197).
+
+**Spec impact:** docs/sync-protocol.md, section 4.2; docs/ui-behavior-spec.md, section 13.5 (and `docs/ru`).
+
+### 201. A FIDO2 key is linked to a host as a key (run 10)
+
+Status: run 10 decision, 2026-10-24 (plan of run 10, section 3.5; ROADMAP 5, "FIDO2 in the host panel"). Amends UI 3.1 ("a FIDO2 key joins the list with FIDO2 support").
+
+**Context.** Since D143 FIDO2 security keys are Keychain keys that sign. The host panel's "+" never offered FIDO2 (it waited for D5), and a FIDO2 entry would fill `ssh.fido2_key_id`, which no connection reads: a connection authenticates with `ssh.key_id` (data-model 8.3), where a FIDO2 key already works. The only "In development" left was a branch no menu reached.
+
+**Decision:** A FIDO2 key is linked through "Key"; the "+" has no FIDO2 entry, and the FIDO2 form opens the key form. A `fido2_key_id` written by an older version still shows as its own row and can be unlinked. The field stays in the data model for compatibility.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 3.1 (and `docs/ru`).

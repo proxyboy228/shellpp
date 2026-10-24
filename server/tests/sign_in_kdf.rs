@@ -3,7 +3,10 @@
 //! above the floor) are refused before anything is derived or sent, as a
 //! possible downgrade attack; the sign-in goes on only when the user
 //! confirms these very parameters. The legitimate case is a password
-//! changed on a device of the mobile preset.
+//! changed on a device of the mobile preset. Settings or a salt that differ
+//! otherwise mean the password or the email changed on another device: the
+//! device says so and asks for the current password before deriving
+//! anything (SP 4.2, stage 0 decision; run 10).
 
 mod support;
 
@@ -90,10 +93,18 @@ fn weaker_kdf_parameters_are_refused_until_the_user_confirms_them() {
         other => panic!("expected the refusal again, got {other:?}"),
     }
 
-    // The explicit confirmation of these parameters signs in.
-    let outcome = laptop
+    // The confirmation of these parameters goes on to SP 4.2: the password
+    // changed elsewhere, the user types the current one again.
+    match laptop
         .core
         .sync_sign_in_accepting_kdf(input(&server, &email, &second), offer.server.clone())
+    {
+        Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+        other => panic!("expected the changed settings, got {other:?}"),
+    }
+    let outcome = laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&server, &email, &second), Some(offer.server.clone()))
         .expect("signed in after the confirmation");
     assert!(matches!(outcome, SignInOutcome::Done(_)));
     let status = laptop.status();
@@ -144,9 +155,98 @@ fn the_same_kdf_parameters_sign_in_without_a_question() {
     assert!(matches!(outcome, SignInOutcome::Done(_)));
 }
 
-/// A plain-HTTP server that answers pre-login with the mobile preset and
-/// records the paths it is asked for (anything else `401`).
-fn weak_prelogin_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+/// SP 4.2: the password changed on another device of the same preset. The
+/// signed-out device sees another salt, says so before deriving anything,
+/// and signs in once the user typed the current password.
+#[test]
+fn changed_kdf_settings_ask_for_the_current_password_first() {
+    let server = Server::start();
+    let email = email();
+    let first = new_password();
+    let laptop = Client::local("laptop", &first);
+    laptop.host("kept.example.com");
+    laptop.register(&server, &email, &first);
+    let desktop = Client::empty("desktop");
+    let outcome = desktop
+        .core
+        .sync_sign_in(input(&server, &email, &first))
+        .expect("signed in");
+    assert!(matches!(outcome, SignInOutcome::Done(_)));
+    let second = new_password();
+    desktop
+        .core
+        .password_change(first.clone(), second.clone())
+        .expect("password changed on the desktop");
+    let _ = laptop.core.sync_now();
+    assert!(!laptop.status().signed_in, "the laptop is signed out");
+
+    // The old password, as the user would type it: refused before anything
+    // is derived, and so is the new one until the user was told.
+    for password in [&first, &second] {
+        match laptop.core.sync_sign_in(input(&server, &email, password)) {
+            Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+            other => panic!("expected the changed settings, got {other:?}"),
+        }
+    }
+    let outcome = laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&server, &email, &second), None)
+        .expect("signed in with the current password");
+    assert!(matches!(outcome, SignInOutcome::Done(_)));
+    assert_eq!(laptop.addresses(), vec!["kept.example.com"]);
+    laptop.core.lock().expect("locked");
+    laptop
+        .core
+        .unlock(second.clone())
+        .expect("the local copy opens with the current password");
+}
+
+/// SP 4.2 at a server that only answers pre-login, with the desktop preset
+/// and a salt this device has not seen: no login request is sent, also not
+/// with the acknowledgement for other settings.
+#[test]
+fn changed_kdf_settings_send_nothing_before_the_user_is_told() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let laptop = Client::local("laptop", &password);
+    laptop.register(&server, &email, &password);
+    laptop.core.sync_sign_out(false).expect("logged out");
+    let (other, seen) = prelogin_server(DESKTOP_PRELOGIN);
+    let input = |origin: &str| SignInInput {
+        origin: origin.to_owned(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    };
+    match laptop.core.sync_sign_in(input(&other)) {
+        Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+        other => panic!("expected the changed settings, got {other:?}"),
+    }
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["/v1/auth/prelogin"],
+        "no auth key was sent"
+    );
+    // Told, the next sign-in derives and sends; this server refuses it.
+    match laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&other), None)
+    {
+        Err(CoreError::Sync(HttpError::Api { status: 401, .. })) => {}
+        other => panic!("expected the server's refusal, got {other:?}"),
+    }
+    assert_eq!(seen.lock().unwrap().len(), 3, "pre-login, pre-login, login");
+}
+
+const MOBILE_PRELOGIN: &str = r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":32768,"t":4,"p":2},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#;
+const DESKTOP_PRELOGIN: &str = r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":65536,"t":3,"p":4},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#;
+
+/// A plain-HTTP server that answers pre-login with `prelogin` and records
+/// the paths it is asked for (anything else `401`).
+fn prelogin_server(
+    prelogin: &'static str,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -174,10 +274,7 @@ fn weak_prelogin_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String
                     .to_owned();
                 log.lock().unwrap().push(path.clone());
                 let (status, body) = if path == "/v1/auth/prelogin" {
-                    (
-                        "200 OK",
-                        r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":32768,"t":4,"p":2},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#,
-                    )
+                    ("200 OK", prelogin)
                 } else {
                     (
                         "401 Unauthorized",
@@ -210,7 +307,7 @@ fn a_device_bound_before_refuses_weaker_parameters_at_any_address() {
     laptop.core.sync_sign_out(false).expect("logged out");
     assert!(!laptop.status().bound);
 
-    let (hostile, seen) = weak_prelogin_server();
+    let (hostile, seen) = prelogin_server(MOBILE_PRELOGIN);
     let input = SignInInput {
         origin: hostile,
         email,

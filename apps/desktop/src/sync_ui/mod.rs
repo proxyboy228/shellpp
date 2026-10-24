@@ -85,6 +85,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "email_taken" => strings::ERROR_TAKEN,
             "unsafe_kdf" | "weak_kdf_params" => strings::ERROR_KDF,
             "weaker_kdf" => strings::ERROR_WEAKER_KDF,
+            "kdf_changed" => strings::ERROR_KDF_CHANGED,
             "previous_account" => strings::ERROR_PREVIOUS,
             "rolled_back" => strings::ERROR_ROLLED_BACK,
             "forged_epoch" => strings::FORGED_EPOCH,
@@ -186,6 +187,12 @@ pub struct ConnectDialog {
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    /// The server's key derivation settings differ from this device's (SP
+    /// 4.2): the next sign-in carries the current password the user typed
+    /// after being told so.
+    pub kdf_changed: bool,
+    /// The weaker settings the user accepted (D189), kept for that sign-in.
+    accepted_kdf: Option<shellpp_core::crypto::KdfParams>,
 }
 
 impl ConnectDialog {
@@ -214,6 +221,8 @@ impl ConnectDialog {
             busy: false,
             error: None,
             task: None,
+            kdf_changed: false,
+            accepted_kdf: None,
         }
     }
 
@@ -316,6 +325,11 @@ impl ConnectDialog {
             registration_code: (!code.trim().is_empty()).then(|| SecretString::from(code)),
         };
         let register = self.register && !self.first_run;
+        if accepted.is_some() {
+            self.accepted_kdf = accepted.clone();
+        }
+        let accepted = accepted.or_else(|| self.accepted_kdf.clone());
+        let kdf_changed = self.kdf_changed;
         self.busy = true;
         self.error = None;
         cx.notify();
@@ -323,9 +337,10 @@ impl ConnectDialog {
             if register {
                 return core.sync_register(input).map(SignInOutcome::Done);
             }
-            match accepted {
-                Some(kdf) => core.sync_sign_in_accepting_kdf(input, kdf),
-                None => core.sync_sign_in(input),
+            match (kdf_changed, accepted) {
+                (true, accepted) => core.sync_sign_in_after_kdf_change(input, accepted),
+                (false, Some(kdf)) => core.sync_sign_in_accepting_kdf(input, kdf),
+                (false, None) => core.sync_sign_in(input),
             }
         });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -344,6 +359,17 @@ impl ConnectDialog {
                         .and_then(|core| core.sync_weaker_kdf())
                 })
                 .flatten();
+                // Changed settings (SP 4.2): the password typed is not the
+                // account's current one; it is asked for again.
+                if matches!(
+                    &result,
+                    Err(CoreError::Sync(HttpError::Refused("kdf_changed")))
+                ) {
+                    dialog.kdf_changed = true;
+                    dialog
+                        .password
+                        .update(cx, |input, cx| input.set_value("", window, cx));
+                }
                 dialog.finish(result, cx);
                 if let Some(offer) = offer {
                     kdf::open_weaker_kdf(cx.entity(), offer, window, cx);

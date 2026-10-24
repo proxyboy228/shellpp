@@ -360,6 +360,13 @@ fn a_version_replaced_at_a_rebind_after_a_restore_is_kept() {
         shellpp_core::service::dto::RecordType::Host,
         serde_json::json!({"address": "rebind.example.com", "label": "first"}),
     );
+    // Only A edits this one after the backup: the restore rolls it back,
+    // and the rebind must push A's version again without a copy.
+    let untouched = a.save(
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        serde_json::json!({"address": "untouched.example.com", "label": "other first"}),
+    );
     a.register(&server, &email, &password);
     let backup = server.dir.path().join("backup.db");
     server
@@ -377,6 +384,13 @@ fn a_version_replaced_at_a_rebind_after_a_restore_is_kept() {
     };
     edit(&a, "A once");
     edit(&a, "A after the backup");
+    let mut data = a.data(untouched);
+    data["label"] = serde_json::Value::String("other, A after the backup".into());
+    a.save(
+        Some(untouched),
+        shellpp_core::service::dto::RecordType::Host,
+        data,
+    );
     a.sync();
     a.core.sync_sign_out(false).expect("signed out");
     restore(&mut server, &backup);
@@ -389,9 +403,16 @@ fn a_version_replaced_at_a_rebind_after_a_restore_is_kept() {
     done(a.sign_in(&server, &email, &password));
     a.sync();
     assert_eq!(label_of(&a, host), "B three");
+    assert_eq!(label_of(&a, untouched), "other, A after the backup");
     assert_eq!(losing_labels(&a), vec!["A after the backup"]);
+    assert_eq!(
+        a.core.sync_conflicts().expect("conflicts").len(),
+        1,
+        "no copy of the rolled-back version A synced again"
+    );
     b.sync();
     assert_eq!(losing_labels(&b), vec!["A after the backup"]);
+    assert_eq!(label_of(&b, untouched), "other, A after the backup");
 }
 
 /// D197: without a restore, the rebind finds the generation it kept at
@@ -476,8 +497,73 @@ fn a_rebind_without_a_known_generation_keeps_replaced_versions() {
     a.sync();
     assert_eq!(label_of(&a, host), "B meanwhile");
     assert_eq!(losing_labels(&a), vec!["first"]);
+    let report = a.sync();
+    assert!(!report.restored);
+    assert_eq!(
+        a.core.sync_conflicts().expect("conflicts").len(),
+        1,
+        "the doubt is settled once"
+    );
     b.sync();
     assert_eq!(losing_labels(&b), vec!["first"], "the copy reaches B");
+}
+
+/// A deletion whose tombstone the server purged while the device was out
+/// of the account: the rebind's resync pushes the record back and lists it
+/// in "Brought back". With a known generation (no restore) nobody gets a
+/// conflict copy, though the pushed-back record has a lower revision at a
+/// higher sequence than the other device's tombstone (review of run 10).
+fn a_purged_deletion_at_a_rebind(forget_generation: bool) -> (usize, Client, Client) {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("keep.example.com");
+    let gone = a.host("gone.example.com");
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    a.core.sync_sign_out(false).expect("signed out");
+    if forget_generation {
+        let db = rusqlite::Connection::open(a.dir.path().join("data").join("shellpp.db"))
+            .expect("the client's database");
+        db.execute(
+            "UPDATE meta SET value = '' WHERE key = 'sync_last_generation'",
+            [],
+        )
+        .expect("forgotten");
+    }
+    b.delete(gone);
+    b.sync();
+    // Tombstones older than 0 days: the deletion is purged.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    shellpp_server::admin::purge(&server.db, 0).expect("purged");
+    done(a.sign_in(&server, &email, &password));
+    a.sync();
+    let brought_back = a.core.sync_brought_back().expect("brought back").len();
+    // B's own resync after the purge pushes its deletion again over the
+    // pushed-back record (D103); neither side makes a copy.
+    b.sync();
+    a.sync();
+    (brought_back, a, b)
+}
+
+#[test]
+fn a_purged_deletion_pushed_back_at_a_rebind_makes_no_copies() {
+    let (brought_back, a, b) = a_purged_deletion_at_a_rebind(false);
+    assert_eq!(brought_back, 1);
+    assert!(a.core.sync_conflicts().expect("conflicts").is_empty());
+    assert!(b.core.sync_conflicts().expect("conflicts").is_empty());
+}
+
+/// D197: a rebind that does not know the generation of before lists what
+/// it pushes back in "Brought back" too, as the resync would.
+#[test]
+fn an_unsure_rebind_lists_what_it_brings_back() {
+    let (brought_back, a, b) = a_purged_deletion_at_a_rebind(true);
+    assert_eq!(brought_back, 1);
+    assert!(a.core.sync_conflicts().expect("conflicts").is_empty());
+    assert!(b.core.sync_conflicts().expect("conflicts").is_empty());
 }
 
 /// D184, residual 1 (D198): after a restore, a device whose clock is

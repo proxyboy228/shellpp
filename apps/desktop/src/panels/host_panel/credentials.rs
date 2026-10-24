@@ -12,7 +12,9 @@
 //! - Certificate: paste an OpenSSH user certificate; it is stored on the key
 //!   linked to the host (own or inherited) and referenced by
 //!   `ssh.certificate_key_id`.
-//! - FIDO2 key: the "In development" placeholder.
+//! - FIDO2 key: a key of the Keychain like any other (D143), linked through
+//!   "Key" (`ssh.key_id`, the slot a connection uses); a `fido2_key_id` an
+//!   older version wrote shows as its own row and can be unlinked (D201).
 //!
 //! A type that is already linked disappears from the "+" list (UI 3.1). The
 //! forms create their records on an explicit button (Create, Import, Attach):
@@ -169,7 +171,7 @@ impl HostPanel {
     }
 
     /// Credential types the "+" still offers (a linked type disappears; a
-    /// FIDO2 key is not offered before FIDO2 support, D5).
+    /// FIDO2 key is linked through "Key", D201).
     pub fn available_credentials(&self) -> Vec<CredentialKind> {
         CredentialKind::OFFERED
             .into_iter()
@@ -323,8 +325,8 @@ impl HostPanel {
         )
     }
 
-    /// Opens the "+" form of `kind` (FIDO2, which the "+" does not offer
-    /// yet, shows the placeholder).
+    /// Opens the "+" form of `kind`. A FIDO2 key is a key (D201): its form
+    /// is the key form.
     pub fn open_credential(
         &mut self,
         kind: CredentialKind,
@@ -332,12 +334,10 @@ impl HostPanel {
         cx: &mut Context<Self>,
     ) {
         self.dropdown = None;
-        if kind == CredentialKind::Fido2 {
-            self.credentials.form = None;
-            cx.emit(PanelEvent::Toast(strings::IN_DEVELOPMENT.into()));
-            cx.notify();
-            return;
-        }
+        let kind = match kind {
+            CredentialKind::Fido2 => CredentialKind::Key,
+            other => other,
+        };
         self.refresh_keychain(cx);
         self.reset_forms(window, cx);
         self.credentials.form = Some(kind);
