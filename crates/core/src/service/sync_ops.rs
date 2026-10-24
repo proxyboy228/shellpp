@@ -2891,6 +2891,11 @@ impl Core {
             // results) waits for the next cycle instead of filling every
             // batch of this one (cross review of run 9).
             let mut sent_this_cycle: HashMap<Uuid, u64> = HashMap::new();
+            // The items refused in this cycle, each once: one refused for
+            // the quota and refused again after a pushed deletion counts
+            // once, and not at all when the retry went through (run 9
+            // review finding).
+            let mut failed_ids: HashSet<Uuid> = HashSet::new();
             for _ in 0..MAX_PUSH_BATCHES {
                 let mut skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
                 skip.extend(stale_skip.iter().copied());
@@ -2936,7 +2941,7 @@ impl Core {
                     .count();
                 report.conflicts += effects.conflicts;
                 report.integrity_warnings += effects.integrity_warnings;
-                report.failed += effects.failed.len();
+                failed_ids.extend(effects.failed.iter().map(|(id, _)| *id));
                 report.newer_epoch |= effects.newer_epoch;
                 changed.extend(effects.changed.iter().copied());
                 changed_classes.extend(effects.classes.iter().copied());
@@ -2991,6 +2996,11 @@ impl Core {
                     break;
                 }
             }
+            let guard = self.inner();
+            report.failed = failed_ids
+                .iter()
+                .filter(|id| guard.sync.failed.contains_key(id))
+                .count();
         }
         // The local `recovery` row follows the synced `recovery_key` record
         // (section 4.4): built when missing, rebuilt on a new revision.

@@ -42,6 +42,9 @@ pub use recovery::{
     CROCKFORD_ALPHABET, RECOVERY_KEY_CHARS, RECOVERY_KEY_PREFIX, RECOVERY_KEY_TEXT_LEN,
     decode_recovery_key, encode_recovery_key,
 };
+/// A wrap with a given nonce: known-answer vectors only.
+#[cfg(test)]
+pub(crate) use wrap::wrap_seal_with_nonce;
 pub use wrap::{
     WRAP_NONCE_LEN, WRAP_OVERHEAD, WRAP_VERSION, WRAPPED_KEY_LEN, WrapPurpose, refresh_token_aad,
     unwrap_key, vault_wrap_aad, wrap_key, wrap_open, wrap_seal,

@@ -547,3 +547,63 @@ impl Core {
         .map_err(io)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(text: &str) -> Vec<u8> {
+        data_encoding::HEXLOWER.decode(text.as_bytes()).unwrap()
+    }
+
+    /// An independent known-answer vector of a `.rekey` file (run 10;
+    /// ROADMAP 2.2, run 9's review): the bytes were computed outside this
+    /// code, HKDF-SHA256 from Python's standard library and
+    /// XChaCha20-Poly1305 written out from its specification and checked
+    /// against the specification's own vector. The file opens with the
+    /// vault's key, and sealing the same key with the same nonce gives the
+    /// same bytes.
+    #[test]
+    fn a_rekey_file_matches_an_independent_vector() {
+        let vault_key = crypto::Key32::from_bytes(std::array::from_fn(|i| i as u8));
+        let file_id = Uuid::parse_str("01890000-0000-7000-8000-000000000001").unwrap();
+        let vault_id = Uuid::parse_str("01890000-0000-7000-8000-0000000000aa").unwrap();
+        let file_key = crypto::Key32::from_bytes(std::array::from_fn(|i| 0x40 + i as u8));
+        let nonce: [u8; crypto::WRAP_NONCE_LEN] = std::array::from_fn(|i| 0xa0 + i as u8);
+        let expected = hex(concat!(
+            "73687070726b790101890000000070008000000000000001018900000000700080000000",
+            "000000aa0000000301a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7082df270",
+            "e169b323a9fd6e613b4d65d0b71f1df79331dddec8a823d9fc87e7d4ba60f301d4a7187e40",
+            "3c3d090c845db0",
+        ));
+        assert_eq!(
+            Rekey::wrapping(&vault_key, file_id).expose().to_vec(),
+            hex("07b11af4e639d3b7aef574ad17975891cc0d25027a854b8dd1fe220ccaa3cd28")
+        );
+        // Opened as the app opens a `.rekey` file.
+        let rekey = Rekey::parse(&expected).expect("parses");
+        let ring = KeyRing::new(vault_id, 3, vault_key.duplicate());
+        let opened = rekey.open(&ring).expect("opens with the vault's key");
+        assert_eq!(opened.expose(), file_key.expose());
+        // Sealed with the same nonce, the same bytes.
+        let head = Rekey::head(file_id, vault_id, 3);
+        let wrapping = Rekey::wrapping(&vault_key, file_id);
+        let wrap =
+            crypto::wrap_seal_with_nonce(&wrapping, &Rekey::aad(&head), file_key.expose(), &nonce)
+                .unwrap();
+        let mut bytes = head.to_vec();
+        bytes.extend_from_slice(&wrap);
+        assert_eq!(bytes, expected);
+        // Another vault, epoch or key does not open it.
+        assert!(
+            rekey
+                .open(&KeyRing::new(Uuid::now_v7(), 3, vault_key.duplicate()))
+                .is_none()
+        );
+        assert!(
+            rekey
+                .open(&KeyRing::new(vault_id, 4, vault_key.duplicate()))
+                .is_none()
+        );
+    }
+}
