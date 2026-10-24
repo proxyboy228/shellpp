@@ -511,8 +511,11 @@ fn the_other_screens_show_their_duplicates(cx: &mut TestAppContext) {
         core.workspace_save(input(json!({"name": "Daily",
             "tabs": [{"root": {"session": {"kind": "ssh", "host": link}}}]})))
             .expect("workspace");
+        let colors = crate::theme::highlight::PALETTE[0];
         core.highlight_rule_save(input(json!({"kind": "custom", "pattern": "ERROR",
-            "case_insensitive": true, "color_dark": "#ff5555", "color_light": "#cc0000",
+            "case_insensitive": true,
+            "color_dark": crate::theme::highlight::hex(colors[0]),
+            "color_light": crate::theme::highlight::hex(colors[1]),
             "enabled": true})))
             .expect("highlight rule");
     }
