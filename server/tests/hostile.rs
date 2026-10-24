@@ -35,6 +35,11 @@ enum Mode {
     ForgeEpoch,
     /// Push answers carry no results (the server's write is unknown).
     EmptyPush,
+    /// `ForgeEpoch` on the first page of a pull from 0, and the first pull
+    /// of a later page fails with `500` (`failed` once it did).
+    ForgeThenFail {
+        failed: bool,
+    },
     /// Forces a full resync (`410 purged`), leaves `hide` out of the
     /// snapshot and answers its push-back with the older `stale` version.
     Purge {
@@ -140,7 +145,7 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
             page["next_cursor"] = Value::from(seq);
         }
         Mode::LowerEpoch => page["current_epoch"] = Value::from(0),
-        Mode::ForgeEpoch => {
+        Mode::ForgeEpoch | Mode::ForgeThenFail { .. } => {
             if let Some(record) = records.first_mut() {
                 let text = record["envelope"].as_str()?.to_owned();
                 let mut bytes = BASE64URL_NOPAD.decode(text.as_bytes()).ok()?;
@@ -246,6 +251,29 @@ fn proxy(server: &Server) -> Proxy {
                         _ => false,
                     }
                 };
+                // The first pull of a later page fails once.
+                let from_zero = head.contains("since=0&") || head.contains("since=0 ");
+                let send_500 = pull && !from_zero && {
+                    let mut current = mode.lock().unwrap();
+                    match &mut *current {
+                        Mode::ForgeThenFail { failed } if !*failed => {
+                            *failed = true;
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if send_500 {
+                    let body = r#"{"error":{"code":"internal","message":"internal"}}"#;
+                    let head = format!(
+                        "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = client.write_all(head.as_bytes()).await;
+                    let _ = client.write_all(body.as_bytes()).await;
+                    let _ = client.shutdown().await;
+                    return;
+                }
                 {
                     if send_410 {
                         let body = r#"{"error":{"code":"cursor_expired","message":"cursor expired","details":{"reason":"purged"}}}"#;
@@ -610,4 +638,40 @@ fn items_left_pending_by_a_push_are_sent_once_per_cycle() {
     proxy.set(Mode::Pass);
     a.sync();
     assert_eq!(a.status().pending, 0);
+}
+
+/// Cross review of run 9 (D183): a reset whose resync is cut off after the
+/// forged page (a later page fails) goes on refusing that record in the
+/// next cycle, until its resync completes; the stop does not come back.
+#[test]
+fn an_interrupted_reset_still_refuses_the_forged_epoch() {
+    let server = Server::start();
+    let (proxy, a, b, _, _) = setup(&server);
+    // More than one page (500 records each).
+    for i in 0..600 {
+        a.host(&format!("page{i}.example.com"));
+    }
+    a.sync();
+    b.sync();
+    edit_both(&a);
+    proxy.set(Mode::ForgeEpoch);
+    assert!(b.core.sync_now().is_err(), "the forged epoch stops sync");
+    assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
+
+    proxy.set(Mode::ForgeThenFail { failed: false });
+    assert!(
+        b.core.sync_reset_vault_state().is_err(),
+        "the second page fails"
+    );
+    // The next cycle continues the reset's resync: the forged record is
+    // refused again, not a new stop.
+    let report = b.core.sync_now().expect("the resync completes");
+    assert!(report.integrity_warnings >= 1);
+    assert_eq!(b.status().last_error, None);
+    // Once it is complete, a forged header stops sync again.
+    proxy.set(Mode::Pass);
+    edit_both(&a);
+    proxy.set(Mode::ForgeEpoch);
+    assert!(b.core.sync_now().is_err());
+    assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
 }

@@ -278,6 +278,7 @@ The plaintext still reveals metadata: the number of records per class and vault,
 | `created_at` | timestamp of the first run | first run |
 | `last_app_version` | semver of the last app version that opened the database | every start |
 | `account_user_id`, `account_server_url` | `user_id` (UUID text) and server origin of the last bound account | at binding; kept after log out and account deletion (stage 0 decision) |
+| `sync_reset_vault` | the vault whose "Reset sync state" resync has not completed yet (UUID text), empty when none ([sync-protocol.md](sync-protocol.md), section 6.4, step 2) | at the user's confirmation; emptied when that resync completes ([decision] (D183)) |
 
 The last two keys exist because an archived team vault must stay readable after the `server_account` row is gone (principle 3): opening its HPKE wrap needs the recipient's `user_id` in the HPKE `info`, and the sender's public key is found in a `member_pin` record by (`server_url`, `user_id`) (section 14.5). They name only the last account, so since D93 every `vaults` row also keeps the `account_user_id` and `server_url` it was bound to (section 4.2): an archive of an earlier account stays readable after the device binds to another one, with that account's key pair and pins from its archived personal vault. The `meta` keys stay as the fallback for rows that predate the migration. [decision] (D93; Choice 4 (a))
 

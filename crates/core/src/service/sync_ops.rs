@@ -50,6 +50,10 @@ use crate::sync::engine::{self, Selection};
 use crate::sync::{HttpApi, HttpError, TlsProblem, TrustMode, natural, normalize_origin, trash};
 use crate::vault::{self, KeyRing, Rotation};
 
+/// `meta` key: the vault whose "Reset sync state" resync has not completed
+/// yet (D183); empty when none.
+const META_SYNC_RESET: &str = "sync_reset_vault";
+
 /// Pull rounds of one cycle before it yields (a large first pull continues
 /// in the next cycle).
 const MAX_PULL_PAGES: usize = 10_000;
@@ -2422,7 +2426,11 @@ impl Core {
             state.cursor = 0;
             state.resync_classes = classes;
             state.last_error = None;
-            inner.store.write(|tx| tx.sync_state_put(&state))?;
+            let vault_text = vault_id.to_string();
+            inner.store.write(|tx| {
+                tx.sync_state_put(&state)?;
+                tx.meta_set(META_SYNC_RESET, &vault_text)
+            })?;
             inner.sync.reset_refuse_newer = true;
             inner.sync.failed.clear();
             inner.sync.backoff_until = None;
@@ -2513,7 +2521,12 @@ impl Core {
 
     fn cycle_inner(&self, link: &Link, first: bool) -> Result<SyncReport, CoreError> {
         // The confirmed "Reset sync state" runs this cycle only.
-        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer);
+        // ... and the resync it started until that resync completes, also
+        // after an interrupted cycle or a restart (`meta`, cross review of
+        // run 9).
+        let refuse_newer = std::mem::take(&mut self.inner().sync.reset_refuse_newer)
+            || self.inner().store.meta_get(META_SYNC_RESET)?.as_deref()
+                == Some(link.vault_id.to_string().as_str());
         let mut report = SyncReport::default();
         let mut changed: Vec<Uuid> = Vec::new();
         let mut changed_classes: Vec<u8> = Vec::new();
@@ -2679,7 +2692,11 @@ impl Core {
                 let mut state = inner.store.sync_state(&link.vault_id)?;
                 state.vault_id = link.vault_id;
                 state.resync_classes.clear();
-                inner.store.write(|tx| tx.sync_state_put(&state))?;
+                inner.store.write(|tx| {
+                    tx.sync_state_put(&state)?;
+                    // A reset's resync is complete (D183).
+                    tx.meta_set(META_SYNC_RESET, "")
+                })?;
                 Ok(ids)
             })?;
             report.brought_back += back.len();
