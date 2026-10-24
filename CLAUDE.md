@@ -54,9 +54,13 @@ powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 
 powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 -Stage3
 powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -Server russh -Only output -SeqLines 3000000
 powershell -ExecutionPolicy Bypass -File scripts\measure-startup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\verify-linux.ps1 -AllFeatures
 ```
 
 Скриншоты — в `target\ui-screens\` (`<W>x<H>-<тема>-<состояние>.png`).
+`verify-linux.ps1` — сборка и тесты клиента на Linux в Docker (образ
+`tests/linux/Dockerfile`, тома `shellpp-linux-target` и `shellpp-linux-cargo`),
+журналы — в `target\verify-linux\`.
 
 Проверка развёртывания — после изменений в `server/`, `crates/sync-api`,
 `crates/core` и `crates/private-file` (из них собираются образ сервера
