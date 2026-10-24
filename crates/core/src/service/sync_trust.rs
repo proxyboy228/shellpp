@@ -9,8 +9,6 @@
 //! origin: the account, its tokens and every local record stay, so sync goes
 //! on without signing out.
 
-use std::sync::Arc;
-
 use serde::Serialize;
 
 use super::Core;
@@ -145,7 +143,7 @@ impl Core {
             .sync_roots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            SystemRoots::Fixed(Arc::new(roots));
+            SystemRoots::Fixed(std::sync::Arc::new(roots));
     }
 
     /// The trust dialogs' choice (SP 2.1): asks `GET /v1/server` under it

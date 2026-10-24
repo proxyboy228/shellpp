@@ -2266,3 +2266,31 @@ The commits are in main, which moves fast-forward only, so they stay in the hist
 - `.gitleaksignore` is for false positives in commits already pushed. A finding in a change not yet pushed is fixed in the change (a test secret made at run time, ROADMAP 7.11) or gets a narrow allowlist entry in `.gitleaks.toml`, as before. A real secret is never ignored: it is removed and rotated.
 
 **Spec impact:** CONTRIBUTING.md, "If the hook flags something"; docs/security.md, section 16.
+
+### 204. Owner decisions for run 12: Mosh, Android, the 1.0 platforms, local checks, the sync server's domain
+
+Status: owner decision, 2026-10-24 (plan of run 12, section 2). One decision for all of them, as the plan asks.
+
+**Decision:**
+
+- **Mosh.** For release 1.0 the desktop hides the Mosh toggle: today it only saves its value (D29). The field stays in the data model. Mosh is built together with the mobile client.
+- **The mobile client is Android** (the owner's phone is a Samsung S25). The case: now and then, away from home, open SSH to one's own servers and do what is needed; full sync is wanted from day one. No iPhone app. Run 12 only studies what the Rust core needs to build for Android (`docs/android-feasibility.md`); no app code.
+- **The platforms of release 1.0** are Windows and Linux. macOS cannot be checked without a Mac; it is decided in the release preparation run.
+- **GitHub Actions** are turned off by the owner. Checks are local only (the full criterion of `CLAUDE.md`, `scripts\verify.ps1`); the workflows stay in the repository.
+- **The findings of the verification run** (ROADMAP 2.4) are all fixed in run 12.
+- **The sync server** goes on the owner's public domain: Let's Encrypt through Caddy, and the client trusts it through the system's roots.
+
+**Spec impact:** docs/ui-behavior-spec.md (the Mosh toggle); the user guide; ROADMAP 1, 3 and a line for the mobile client.
+
+### 205. The full criterion scans for secrets and checks the libraries and binaries alone (run 12)
+
+Status: run 12 (plan, section 3.0).
+
+**Context.** With GitHub Actions off (D204) the Secret scan workflow no longer runs, and the full criterion did not scan. A release build of the desktop warned about an unused import in `crates/core/src/service/sync_trust.rs` that the criterion's clippy missed: `--all-targets` builds the tests, whose dev-dependencies turn on `shellpp-core`'s `test-hooks` for the whole workspace (feature unification), so code only the hooks use looks used.
+
+**Decision:**
+
+- `scripts\verify.ps1` runs gitleaks with the workflow's version (the Docker image `ghcr.io/gitleaks/gitleaks:v8.30.1`), `.gitleaks.toml` and `.gitleaksignore`, `--redact`, over the whole history of every branch of the repository; a finding fails the step. The git directory is mounted on its own, because in a worktree `.git` is a file with a Windows path the container cannot follow. The step needs Docker, as the PostgreSQL tests already do.
+- Both workspaces also run `cargo clippy --locked --workspace -- -D warnings`, without `--all-targets`: the libraries and binaries with the features a release build has. On a warm build it takes seconds.
+
+**Spec impact:** CLAUDE.md ("Тесты"); CONTRIBUTING.md, "Secret scanning"; docs/security.md, section 16.

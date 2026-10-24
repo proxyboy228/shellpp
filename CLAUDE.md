@@ -7,14 +7,17 @@ git push и изменения remote — только по явной прос�
 ```
 cargo metadata --locked --format-version 1
 cargo metadata --manifest-path server/Cargo.toml --locked --format-version 1
+docker run --rm -v "${PWD}:/src:ro" -v "$(git rev-parse --path-format=absolute --git-common-dir):/git:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 git --config /src/.gitleaks.toml --gitleaks-ignore-path /src/.gitleaksignore --redact --verbose --exit-code 1 /git
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo clippy --locked --workspace -- -D warnings
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --locked --no-fail-fast --workspace
 cargo test --locked --no-fail-fast -p shellpp-desktop --all-features
 cargo fmt --manifest-path server/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo clippy --locked --manifest-path server/Cargo.toml --workspace -- -D warnings
 $env:SHELLPP_TEST=1; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
 ```
@@ -24,6 +27,17 @@ $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --
 `-Deploy` — и тесты развёртывания). `--locked` роняет шаг при устаревшем
 `Cargo.lock` вместо того, чтобы его переписать; `--no-fail-fast`
 показывает падения всех тестовых бинарников, а не только первого.
+
+Скан секретов (gitleaks) — тот же образ, конфиг и `.gitleaksignore`, что
+в workflow `secret-scan.yml`, по всей истории всех веток; любая находка
+роняет шаг (что с ней делать — D203, CONTRIBUTING). Каталог git
+монтируется отдельно: в worktree `.git` — файл с путём Windows, который
+контейнер не видит. Нужен запущенный Docker.
+
+clippy без `--all-targets` видит код как release-сборка: с тестами
+dev-зависимости включают `test-hooks` в `shellpp-core` для всего workspace
+(объединение фич), и предупреждение в коде, нужном только хукам, не видно
+(прогон 11).
 
 Сервер (`server/`) — отдельный workspace, корневые команды его не видят;
 строки с `server/Cargo.toml` — его критерий: тесты на SQLite и они же на

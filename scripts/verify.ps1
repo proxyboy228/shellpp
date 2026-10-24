@@ -9,12 +9,21 @@
   ROADMAP 7.1):
 
   - cargo metadata --locked for both workspaces;
-  - the root workspace: rustfmt, clippy (default and all features), the
-    tests (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all
-    features;
-  - the server workspace: rustfmt, clippy (default and all features), the
-    tests on SQLite and on PostgreSQL in Docker;
+  - the secret scan: gitleaks in Docker over the whole history of every
+    branch, with the image, config and ignore file of the Secret scan
+    workflow (run 12); a finding fails the step;
+  - the root workspace: rustfmt, clippy (default and all features), clippy
+    of the libraries and binaries alone, the tests
+    (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all features;
+  - the server workspace: rustfmt, clippy (default and all features),
+    clippy of the libraries and binaries alone, the tests on SQLite and on
+    PostgreSQL in Docker;
   - with -Deploy, the deployment tests in Docker (they need the network).
+
+  Clippy of the libraries and binaries alone sees the code as a release
+  build does: with --all-targets the tests' dev-dependencies turn on
+  shellpp-core's test-hooks for the whole workspace (feature unification),
+  and a warning in code that only the hooks use stays hidden (run 11).
 
   Every cargo command that reads Cargo.lock runs with --locked, so a stale
   lock file fails the step instead of being rewritten; every test step runs
@@ -56,24 +65,39 @@ foreach ($name in 'SHELLPP_TEST', 'SHELLPP_TEST_POSTGRES', 'SHELLPP_TEST_DEPLOY'
 
 $server = @('--manifest-path', 'server/Cargo.toml')
 
-# One step: its name, its environment, its cargo arguments. A function, not
-# nested array literals: in PowerShell the comma binds tighter than `+`, so
-# `@('a', @{}, @('x') + $y)` is not three elements (run 10).
-function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments) {
-    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments }
+# One step: its name, its environment, its cargo arguments (or, with
+# -Program, another program's). A function, not nested array literals: in
+# PowerShell the comma binds tighter than `+`, so `@('a', @{}, @('x') + $y)`
+# is not three elements (run 10).
+function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo') {
+    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program }
 }
+
+# The secret scan of the Secret scan workflow (.github/workflows/secret-scan.yml)
+# in its Docker image of the same version. The git directory is mounted on
+# its own: in a worktree `.git` is a file naming a Windows path the
+# container cannot follow. The scan covers every branch of the repository.
+$gitleaksImage = 'ghcr.io/gitleaks/gitleaks:v8.30.1'
+$gitDir = (Resolve-Path (git -C $repo rev-parse --path-format=absolute --git-common-dir)).Path
+$gitleaks = @('run', '--rm', '-v', "${repo}:/src:ro", '-v', "${gitDir}:/git:ro", $gitleaksImage,
+    'git', '--config', '/src/.gitleaks.toml', '--gitleaks-ignore-path', '/src/.gitleaksignore',
+    '--redact', '--verbose', '--exit-code', '1', '/git')
+
 $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
     (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
+    (Step 'gitleaks' @{} $gitleaks 'docker'),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
+    (Step 'clippy-lib-bin' @{} @('clippy', '--locked', '--workspace', '--', '-D', 'warnings')),
     (Step 'test' $russh @('test', '--locked', '--no-fail-fast', '--workspace')),
     (Step 'test-desktop-all-features' $russh @('test', '--locked', '--no-fail-fast', '-p', 'shellpp-desktop', '--all-features')),
     (Step 'fmt-server' @{} (@('fmt') + $server + @('--all', '--', '--check'))),
     (Step 'clippy-server' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--', '-D', 'warnings'))),
     (Step 'clippy-server-all-features' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings'))),
+    (Step 'clippy-server-lib-bin' @{} (@('clippy', '--locked') + $server + @('--workspace', '--', '-D', 'warnings'))),
     (Step 'test-server' @{ SHELLPP_TEST = '1' } (@('test', '--locked', '--no-fail-fast') + $server + @('--workspace'))),
     (Step 'test-server-postgres' @{ SHELLPP_TEST = '1'; SHELLPP_TEST_POSTGRES = 'docker' } (@('test', '--locked', '--no-fail-fast') + $server + @('--workspace')))
 )
@@ -84,7 +108,7 @@ if ($Deploy) {
 if ($List) {
     foreach ($step in $steps) {
         $environment = ($step.Environment.Keys | Sort-Object | ForEach-Object { "$_=$($step.Environment[$_])" }) -join ' '
-        Write-Host ("{0,-28} {1,-50} cargo {2}" -f $step.Name, $environment, ($step.Arguments -join ' '))
+        Write-Host ("{0,-28} {1,-50} {2} {3}" -f $step.Name, $environment, $step.Program, ($step.Arguments -join ' '))
     }
     exit 0
 }
@@ -103,12 +127,14 @@ try {
         }
         $started = Get-Date
         Write-Host ("{0,-28}" -f $name) -NoNewline
-        # Start-Process keeps cargo's output as it is (UTF-8, no error
-        # records around the lines of stderr) and gives its exit code. A
+        # Start-Process keeps the output as it is (UTF-8, no error records
+        # around the lines of stderr) and gives the exit code. It joins the
+        # arguments with spaces, so one with a space (a path) is quoted. A
         # step that does not even start is a failure.
+        $arguments = $step.Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
         $code = -1
         try {
-            $process = Start-Process -FilePath 'cargo' -ArgumentList $step.Arguments -NoNewWindow -Wait -PassThru `
+            $process = Start-Process -FilePath $step.Program -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
                 -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logDir "$name.err.log") -ErrorAction Stop
             $code = $process.ExitCode
         } catch {
