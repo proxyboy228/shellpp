@@ -1469,6 +1469,7 @@ pub fn open_sign_out(
 
 /// "Reset sync state of this vault" (UI 12.2): the confirmation, then the
 /// full resync of sync-protocol 6.9 that refuses the forged epoch.
+#[derive(Debug)]
 pub struct ResetDialog {
     state: Entity<AppState>,
     busy: bool,

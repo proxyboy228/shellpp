@@ -684,10 +684,9 @@ pub fn apply_page(
             // A new record: insert.
             if let Opened::Live(kind, payload) = &opened
                 && selection.type_name(kind.name())
+                && payload.data.is_some()
             {
-                if payload.data.is_some() {
-                    inserted.push((*kind, row.record_id));
-                }
+                inserted.push((*kind, row.record_id));
             }
             adopt_version(
                 &mut result.effects,
