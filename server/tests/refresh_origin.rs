@@ -111,3 +111,57 @@ fn a_changed_server_address_never_receives_the_refresh_token() {
     let client = Client { dir, mem, core };
     assert_eq!(client.addresses(), vec!["kept.example.com"]);
 }
+
+/// The TOTP setup's QR code is made by the client from the secret the
+/// server sent and the account email (D188), never from the server's URI.
+#[test]
+fn the_totp_qr_code_is_made_from_the_servers_secret() {
+    use secrecy::ExposeSecret as _;
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let setup = a.core.sync_totp_setup(password).expect("setup");
+    let uri = setup.otpauth_uri.expect("a QR code");
+    let expected = format!(
+        "otpauth://totp/Shell%2B%2B:{}?secret={}&issuer=Shell%2B%2B",
+        email.replace('@', "%40"),
+        setup.secret.expose_secret()
+    );
+    assert_eq!(uri.expose_secret(), expected);
+}
+
+/// The access token kept in memory is used only with its own origin: an
+/// address changed while the app is unlocked gets neither token (review of
+/// D188).
+#[test]
+fn a_changed_address_while_unlocked_gets_no_access_token_either() {
+    let server = Server::start();
+    let password = new_password();
+    let a = Client::local("A", &password);
+    a.host("kept.example.com");
+    a.register(&server, &email(), &password);
+    a.sync();
+    assert!(a.core.sync_devices().is_ok(), "an access token is held");
+
+    let (other, seen) = recorder();
+    let db = rusqlite::Connection::open(a.dir.path().join("data").join("shellpp.db")).expect("db");
+    db.busy_timeout(std::time::Duration::from_secs(10))
+        .expect("busy timeout");
+    db.execute("UPDATE server_account SET server_url = ?1", [&other])
+        .expect("server_url changed");
+    drop(db);
+
+    let _ = a.core.sync_now();
+    let _ = a.core.sync_devices();
+    let requests = seen.lock().unwrap().clone();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.contains("shellpp_at_") && !request.contains("shellpp_rt_")),
+        "a token reached another server: {requests:?}"
+    );
+    assert!(!a.status().signed_in, "signed out: sign in again");
+    assert_eq!(a.addresses(), vec!["kept.example.com"]);
+}

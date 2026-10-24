@@ -34,7 +34,10 @@ pub const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 /// conflict carrying the server's envelope (349 643 base64url characters at
 /// most) with its record id, seq and status.
 pub fn push_answer_limit(items: usize) -> usize {
-    const ITEM: usize = 349_643 + 512;
+    // The largest envelope as base64url without padding, and its record id,
+    // seq and status.
+    const ENVELOPE: usize = wire::limits::MAX_ENVELOPE_BYTES as usize;
+    const ITEM: usize = (ENVELOPE * 4).div_ceil(3) + 512;
     MAX_ANSWER_BYTES.saturating_add(items.saturating_mul(ITEM))
 }
 
@@ -182,10 +185,14 @@ fn read_limited(response: reqwest::blocking::Response, limit: usize) -> Result<V
     }
     let mut bytes = Vec::new();
     response
-        .take(limit as u64 + 1)
+        .take((limit as u64).saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| {
             let timed_out = error.kind() == std::io::ErrorKind::TimedOut
+                || error
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<reqwest::Error>())
+                    .is_some_and(reqwest::Error::is_timeout)
                 || std::error::Error::source(&error)
                     .and_then(|source| source.downcast_ref::<reqwest::Error>())
                     .is_some_and(reqwest::Error::is_timeout);

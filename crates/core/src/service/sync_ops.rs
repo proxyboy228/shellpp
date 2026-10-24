@@ -96,6 +96,9 @@ impl From<HttpError> for CoreError {
 #[derive(Default)]
 pub(super) struct SyncRuntime {
     access: Option<Zeroizing<String>>,
+    /// The origin that issued `access` (D188): the token is used only with
+    /// a client of that origin.
+    access_origin: Option<String>,
     pending: Option<PendingSignIn>,
     /// Items the server refused; not retried automatically (section 6.5).
     failed: HashSet<Uuid>,
@@ -110,9 +113,16 @@ pub(super) struct SyncRuntime {
 }
 
 impl SyncRuntime {
+    /// Keeps the access token `origin` issued.
+    fn hold_access(&mut self, token: Zeroizing<String>, origin: &str) {
+        self.access = Some(token);
+        self.access_origin = Some(origin.to_owned());
+    }
+
     /// Drops the access token and a half-finished sign-in (lock).
     pub(super) fn wipe(&mut self) {
         self.access = None;
+        self.access_origin = None;
         self.pending = None;
     }
 }
@@ -458,9 +468,9 @@ pub struct DeviceItem {
 /// TOTP setup (UI 13.5): the secret for manual entry and the QR text.
 pub struct TotpSetup {
     pub secret: SecretString,
-    /// The server's `otpauth://totp/` URI for the QR code; `None` when it is
-    /// not one (another scheme, another secret: D188), and only the secret
-    /// is shown.
+    /// The `otpauth://totp/` URI for the QR code, made by the client from
+    /// the secret and the account email (D188); `None` shows only the
+    /// secret.
     pub otpauth_uri: Option<SecretString>,
 }
 
@@ -1056,7 +1066,10 @@ impl Core {
                 }
                 Ok(())
             })?;
-            inner.sync.access = Some(Zeroizing::new(response.tokens.access_token.0.clone()));
+            inner.sync.hold_access(
+                Zeroizing::new(response.tokens.access_token.0.clone()),
+                &origin,
+            );
             tracing::info!("account registered");
             super::checkpoint(&inner.store);
             self.emit_sync(inner);
@@ -1401,7 +1414,10 @@ impl Core {
         inner.personal_vault_id = Some(vault_id);
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
-        inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        inner.sync.hold_access(
+            Zeroizing::new(tokens.access_token.0.clone()),
+            &pending.origin,
+        );
         tracing::info!("signed in on an empty device");
         self.emit(
             inner,
@@ -1469,7 +1485,10 @@ impl Core {
                     tx.vault_binding_set(&vault_id, Some(&account.user_id), Some(&pending.origin))?;
                     tx.server_account_put(&account_row)
                 })?;
-                inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+                inner.sync.hold_access(
+                    Zeroizing::new(tokens.access_token.0.clone()),
+                    &pending.origin,
+                );
                 tracing::warn!("signed in to a server whose personal epoch is behind");
                 return Err(refused("rolled_back"));
             }
@@ -1534,7 +1553,10 @@ impl Core {
                 }
                 return Err(error.into());
             }
-            inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+            inner.sync.hold_access(
+                Zeroizing::new(tokens.access_token.0.clone()),
+                &pending.origin,
+            );
             super::checkpoint(&inner.store);
             tracing::info!(epoch, "personal vault bound again");
             Ok(())
@@ -1730,7 +1752,7 @@ impl Core {
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
         inner.personal_vault_id = Some(account_vault);
-        inner.sync.access = Some(access);
+        inner.sync.hold_access(access, &pending.origin);
         super::checkpoint(&inner.store);
         tracing::info!(merged = rows.len(), "local data merged into the account");
         self.emit(
@@ -1988,6 +2010,11 @@ impl Core {
             let guard = self.inner();
             let session = Self::require_session(&guard)?;
             let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
+            // The address changed after this client was made: nothing is
+            // sent; the next cycle uses the stored one (D188).
+            if account.server_url != link.api.origin() {
+                return Err(refused("signed_out"));
+            }
             let Some(token) = open_refresh(&session.ring, &link.device_id, &account) else {
                 // A stored token that does not open for this origin (the
                 // server address changed, D188, or the blob is damaged) is
@@ -2029,7 +2056,7 @@ impl Core {
                 if Self::require_session(&guard).is_err() {
                     return Err(CoreError::Locked);
                 }
-                guard.sync.access = Some(access.clone());
+                guard.sync.hold_access(access.clone(), link.api.origin());
                 Ok(access)
             }
             Err(error) => {
@@ -2053,7 +2080,15 @@ impl Core {
         link: &Link,
         call: impl Fn(&HttpApi, &str) -> Result<T, HttpError>,
     ) -> Result<T, CoreError> {
-        let held = self.inner().sync.access.clone();
+        // Only a token of this client's origin (D188).
+        let held = {
+            let inner = self.inner();
+            inner
+                .sync
+                .access
+                .clone()
+                .filter(|_| inner.sync.access_origin.as_deref() == Some(link.api.origin()))
+        };
         let token = match held {
             Some(token) => token,
             None => self.refresh(link)?,
@@ -2784,15 +2819,23 @@ impl Core {
             current_auth_key: key_b64(&auth_key),
         };
         let response = self.authed(&link, |api, token| api.totp_setup(token, &request))?;
-        let otpauth_uri =
-            super::sync_trust::checked_otpauth(&response.otpauth_uri.0, &response.secret.0)
-                .map(SecretString::from);
-        if otpauth_uri.is_none() {
-            tracing::warn!("the server's TOTP URI is not an otpauth://totp/ URI of its secret");
-        }
+        // The secret only when it is one; the QR code's URI is made here
+        // (D188): the server's `otpauth_uri` is never shown.
+        let Some(checked) = super::sync_trust::checked_totp_secret(&response.secret.0) else {
+            tracing::warn!("the server's TOTP secret is not base32");
+            return Err(refused("totp_secret"));
+        };
+        let email = self
+            .inner()
+            .store
+            .server_account()?
+            .map(|account| account.email)
+            .unwrap_or_default();
+        let uri = super::sync_trust::otpauth_uri(&checked, &email);
+        drop(response);
         Ok(TotpSetup {
-            secret: SecretString::from(response.secret.into_inner()),
-            otpauth_uri,
+            secret: SecretString::from(checked),
+            otpauth_uri: Some(SecretString::from(uri)),
         })
     }
 
@@ -3049,7 +3092,7 @@ impl Core {
             }
             return Err(error.into());
         }
-        sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        sync.hold_access(Zeroizing::new(tokens.access_token.0.clone()), &origin);
         let mut ids = Vec::new();
         if let Some(write) = record {
             ids.push(write.record_id);
@@ -3361,7 +3404,10 @@ impl Core {
             tx.local_auth_put(&local_auth)?;
             tx.server_account_put(&account_row)
         })?;
-        inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
+        inner.sync.hold_access(
+            Zeroizing::new(tokens.access_token.0.clone()),
+            &account_row.server_url,
+        );
         tracing::info!(
             epoch = rotation.new_epoch,
             "recovered through the server; vault rotated"

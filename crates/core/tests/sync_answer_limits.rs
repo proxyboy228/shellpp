@@ -121,3 +121,72 @@ fn the_limits_cover_the_largest_legitimate_answers() {
     assert!(push_answer_limit(500) >= MAX_ANSWER_BYTES + 500 * (one + 128));
     assert_eq!(push_answer_limit(0), MAX_ANSWER_BYTES);
 }
+
+/// A push answer may be larger than 16 MiB (a conflict per item carries
+/// the server's envelope): `push` reads up to its own limit, so 20 MiB for
+/// 100 items is read, while the same answer to any other request is not.
+#[test]
+fn a_push_answer_has_the_limit_of_its_batch() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            thread::spawn(move || {
+                // The whole request first (head and body).
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 64 * 1024];
+                let length = loop {
+                    if let Some(end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buffer[..end]).to_ascii_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break end + 4 + length;
+                    }
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    }
+                };
+                while buffer.len() < length {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let head = br#"{"results":[],"padding":""#;
+                let tail = b"\"}";
+                let padding = 20 * 1024 * 1024;
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    head.len() + padding + tail.len()
+                );
+                let _ = stream.write_all(answer.as_bytes());
+                let _ = stream.write_all(head);
+                let _ = stream.write_all(&vec![b'a'; padding]);
+                let _ = stream.write_all(tail);
+                let _ = stream.flush();
+            });
+        }
+    });
+    let origin = format!("http://127.0.0.1:{port}");
+    let api = HttpApi::new(&origin, TrustMode::System, "0.7.0").expect("api");
+    let items: Vec<shellpp_sync_api::api::RecordWrite> = (0..100)
+        .map(|_| shellpp_sync_api::api::RecordWrite {
+            base_revision: 0,
+            envelope: shellpp_sync_api::api::B64(vec![0u8; 344]),
+        })
+        .collect();
+    let answer = api
+        .push("shellpp_at_x", uuid::Uuid::nil(), items)
+        .expect("a push answer within its batch's limit");
+    assert!(answer.results.is_empty());
+    assert_eq!(
+        api.server_info().map(|_| ()),
+        Err(HttpError::Refused("answer_too_large")),
+        "16 MiB for any other answer"
+    );
+}

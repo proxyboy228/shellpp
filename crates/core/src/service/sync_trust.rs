@@ -36,41 +36,35 @@ pub(super) fn kdf_weaker(server: &KdfParams, local: &KdfParams) -> bool {
             < u64::from(local.m_kib) * u64::from(local.t)
 }
 
-/// The server's TOTP URI when the QR code may carry it (SP 5.5; D188): the
-/// `otpauth://totp/` scheme and type, printable ASCII without spaces, at most
-/// 1024 bytes, and a `secret` parameter equal to the secret sent beside it.
-/// Anything else (a web link, another secret) is not shown at all.
-pub(super) fn checked_otpauth(uri: &str, secret: &str) -> Option<String> {
-    const MAX: usize = 1024;
-    let prefix = "otpauth://totp/";
-    if uri.len() > MAX
-        || !uri.is_char_boundary(prefix.len())
-        || !uri[..prefix.len()].eq_ignore_ascii_case(prefix)
-        || !uri.bytes().all(|byte| byte.is_ascii_graphic())
-    {
-        return None;
+/// The TOTP secret the server sent, when it is one (D188): RFC 4648 base32
+/// of 16 to 128 characters (160 bits are 32), padding aside, uppercase.
+pub(super) fn checked_totp_secret(secret: &str) -> Option<String> {
+    let bare = secret.trim_end_matches('=');
+    let base32 = bare
+        .bytes()
+        .all(|byte| matches!(byte.to_ascii_uppercase(), b'A'..=b'Z' | b'2'..=b'7'));
+    (base32 && (16..=128).contains(&bare.len())).then(|| bare.to_ascii_uppercase())
+}
+
+/// The `otpauth://` URI of the QR code (SP 5.5; D188), made by the client
+/// from the checked secret and the account email under the fixed issuer
+/// "Shell++": the server's `otpauth_uri` is never shown or encoded, so it
+/// can carry no web link, other secret or parameter of its own.
+pub(super) fn otpauth_uri(secret: &str, email: &str) -> String {
+    fn encode(text: &str) -> String {
+        text.bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    char::from(byte).to_string()
+                }
+                other => format!("%{other:02X}"),
+            })
+            .collect()
     }
-    let normal = |text: &str| text.trim_end_matches('=').to_ascii_uppercase();
-    let base32 = |text: &str| {
-        !text.is_empty()
-            && text
-                .bytes()
-                .all(|byte| matches!(byte.to_ascii_uppercase(), b'A'..=b'Z' | b'2'..=b'7' | b'='))
-    };
-    if !base32(secret) {
-        return None;
-    }
-    let (_, query) = uri.split_once('?')?;
-    let query = query.split('#').next().unwrap_or_default();
-    let mut secrets = query
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .filter(|(name, _)| name.eq_ignore_ascii_case("secret"));
-    let (_, given) = secrets.next()?;
-    if secrets.next().is_some() || normal(given) != normal(secret) {
-        return None;
-    }
-    Some(uri.to_owned())
+    format!(
+        "otpauth://totp/Shell%2B%2B:{}?secret={secret}&issuer=Shell%2B%2B",
+        encode(email)
+    )
 }
 
 /// How the sync server's certificate is trusted (the row of UI 12.2).
@@ -228,27 +222,34 @@ mod tests {
     }
 
     #[test]
-    fn the_qr_code_carries_only_an_otpauth_uri_of_the_secret() {
+    fn the_qr_code_is_made_here_from_a_checked_secret() {
         let secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
-        let good = "otpauth://totp/Shell%2B%2B:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Shell%2B%2B";
-        assert_eq!(checked_otpauth(good, secret).as_deref(), Some(good));
-        assert!(checked_otpauth(&good.replace("otpauth://", "OTPAUTH://"), secret).is_some());
+        assert_eq!(checked_totp_secret(secret).as_deref(), Some(secret));
+        assert_eq!(
+            checked_totp_secret("jbswy3dpehpk3pxp====").as_deref(),
+            Some("JBSWY3DPEHPK3PXP")
+        );
         for bad in [
-            "https://evil.example/otpauth?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-            "javascript:alert(1)",
-            "otpauth://hotp/x?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&counter=1",
-            "otpauth://totp/x?secret=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "otpauth://totp/x",
-            "otpauth://totp/x?issuer=a",
-            "otpauth://totp/x y?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
-            "otpauth://totp/x?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&secret=AAAA",
-            "otpauth://totp/\u{202e}?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+            "",
+            "====",
+            "SHORT",
+            "https://evil.example/",
+            "JBSWY3DPEHPK3PXP0189",
+            "JBSWY3DP EHPK3PXP",
         ] {
-            assert!(checked_otpauth(bad, secret).is_none(), "{bad}");
+            assert!(checked_totp_secret(bad).is_none(), "{bad}");
         }
-        let long = format!("{good}&x={}", "a".repeat(1024));
-        assert!(checked_otpauth(&long, secret).is_none());
-        assert!(checked_otpauth(good, "not base32!").is_none());
+        assert!(checked_totp_secret(&"A".repeat(129)).is_none());
+        // The SP 5.5 example, made by the client.
+        assert_eq!(
+            otpauth_uri(secret, "alice@example.com"),
+            "otpauth://totp/Shell%2B%2B:alice%40example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Shell%2B%2B"
+        );
+        // An email cannot add parameters.
+        assert_eq!(
+            otpauth_uri(secret, "a?secret=X&b#c"),
+            "otpauth://totp/Shell%2B%2B:a%3Fsecret%3DX%26b%23c?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Shell%2B%2B"
+        );
     }
 
     #[test]

@@ -71,7 +71,7 @@ Migration 1 → 2 runs at the first start of a version with sync, after the back
 | `duplicate_pairs` | `vault_id`, `record_id`, `other_record_id`, `found_at`, `kept` | possible duplicates raised by sync or the merge at sign-in |
 | `server_tls` | `server_url`, `kind` (`pinned`, `ca`), `cert_sha256`, `ca_der`, `created_at` | the trust choice for a sync server (public data, readable while locked) |
 
-With a bound account: `server_account.refresh_token` is a wrap blob of the refresh token under `local_secrets_key` (HKDF of the vault key with the device id and `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`; `local_auth.kdf_email` holds the account email; synced records keep `synced_revision`, `server_seq` and, while a local change is pending, `base_envelope`; deletions write tombstones. The setting `sync.toggles` (object: toggle → bool) chooses what the personal vault syncs on this device.
+With a bound account: `server_account.refresh_token` is a wrap blob of the refresh token under `local_secrets_key` (HKDF of the vault key with the device id and `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(origin))` ‖ origin (the server that issued it, D188); `local_auth.kdf_email` holds the account email; synced records keep `synced_revision`, `server_seq` and, while a local change is pending, `base_envelope`; deletions write tombstones. The setting `sync.toggles` (object: toggle → bool) chooses what the personal vault syncs on this device.
 
 ## 3. Records
 

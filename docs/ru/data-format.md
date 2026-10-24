@@ -71,7 +71,7 @@ UUID — `BLOB` по 16 байт; метки времени — `TEXT` в RFC 33
 | `duplicate_pairs` | `vault_id`, `record_id`, `other_record_id`, `found_at`, `kept` | возможные дубликаты от синхронизации или слияния при входе |
 | `server_tls` | `server_url`, `kind` (`pinned`, `ca`), `cert_sha256`, `ca_der`, `created_at` | выбор доверия к серверу синхронизации (открытые данные, читаются и при блокировке) |
 
-С привязанным аккаунтом: `server_account.refresh_token` — обёртка refresh-токена под `local_secrets_key` (HKDF ключа vault с id устройства и `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`; `local_auth.kdf_email` хранит email аккаунта; синхронизированные записи хранят `synced_revision`, `server_seq` и, пока локальное изменение не отправлено, `base_envelope`; удаления пишут tombstone. Настройка `sync.toggles` (объект: переключатель → bool) выбирает, что личный vault синхронизирует на этом устройстве.
+С привязанным аккаунтом: `server_account.refresh_token` — обёртка refresh-токена под `local_secrets_key` (HKDF ключа vault с id устройства и `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(origin))` ‖ origin (сервер, который его выдал, D188); `local_auth.kdf_email` хранит email аккаунта; синхронизированные записи хранят `synced_revision`, `server_seq` и, пока локальное изменение не отправлено, `base_envelope`; удаления пишут tombstone. Настройка `sync.toggles` (объект: переключатель → bool) выбирает, что личный vault синхронизирует на этом устройстве.
 
 ## 3. Записи
 
