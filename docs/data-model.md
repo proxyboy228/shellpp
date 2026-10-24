@@ -942,6 +942,7 @@ App settings are per device and never synced (D15). Each is one `local_settings`
 | `appearance.ui_theme` | enum `auto`, `light`, `dark` | `auto` | 12.1 | |
 | `appearance.ui_zoom` | number 0.8–2.0: the steps 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0 (another value snaps to the nearest) | 1.0 | 1.4 View | D96 |
 | `security.auto_lock_minutes` | 1, 5, 15, 30, 60 or null (never); the app offers null, 5, 15, 30 and 60 | null | 13.4 | D9, D29 |
+| `security.system_agent_while_locked` | bool: forwarded agents keep offering the system agent's keys while the app is locked | `false` | 13.4 | D194 |
 | `terminal.autocomplete` | enum `off`, `history` | `off` | 4.2, 12.4 | beta: suggestions from the host's history (D142) |
 | `terminal.autoreconnect` | bool | `true` | 12.4 | D18 |
 | `terminal.record_history` | bool | `true` | 12.4 | UI 12.4 |

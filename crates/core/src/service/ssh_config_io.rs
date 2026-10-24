@@ -14,7 +14,9 @@
 //!   notes say so and the summary counts it, so the host is refused at
 //!   connect instead of connecting directly (D44);
 //! - `ForwardAgent` → `ssh.agent_forwarding` with `agent_forward_system`
-//!   (OpenSSH forwards the system agent, D60), `ServerAliveInterval` →
+//!   (OpenSSH forwards the system agent, D60) when the file is the user's
+//!   own `~/.ssh/config`; from any other file it is imported turned off,
+//!   with a note, and the summary counts it (D193); `ServerAliveInterval` →
 //!   `ssh.keepalive_s` (at most 3600), `SetEnv` → `ssh.env`;
 //! - `ProxyCommand` → the host is not imported ("not supported");
 //! - `LocalForward`, `RemoteForward`, `DynamicForward` → forwarding rules
@@ -159,6 +161,9 @@ struct HostPlan {
     /// `*Forward` keywords, in file order.
     forwards: Vec<Map<String, Value>>,
     notes: Vec<String>,
+    /// `ForwardAgent yes` imported turned off: the file is not the user's
+    /// own `~/.ssh/config` (D193).
+    agent_off: bool,
     error: Option<String>,
 }
 
@@ -254,7 +259,7 @@ fn forwards_of(options: &Options, notes: &mut Vec<String>) -> Vec<Map<String, Va
     rules
 }
 
-fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
+fn plan_host(alias: &str, options: &Options, home: &Path, own: bool) -> HostPlan {
     let mut notes = Vec::new();
     let mut error = None;
     let mut ssh = Map::new();
@@ -294,12 +299,22 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         }
         None => {}
     }
+    let mut agent_off = false;
     if first(options, "forwardagent").is_some_and(|value| {
         value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true")
     }) {
-        ssh.insert("agent_forwarding".into(), json!(true));
-        // OpenSSH forwards the user's ssh-agent: the system agent (D60).
-        ssh.insert("agent_forward_system".into(), json!(true));
+        if own {
+            ssh.insert("agent_forwarding".into(), json!(true));
+            // OpenSSH forwards the user's ssh-agent: the system agent (D60).
+            ssh.insert("agent_forward_system".into(), json!(true));
+        } else {
+            // A file from elsewhere could hand the user's keys to its hosts:
+            // the user turns forwarding on per host (D193, like D172).
+            agent_off = true;
+            notes.push(
+                "ForwardAgent is imported turned off: the file is not your ~/.ssh/config".into(),
+            );
+        }
     }
     if let Some(raw) = first(options, "serveraliveinterval") {
         match raw.parse::<u32>() {
@@ -402,6 +417,7 @@ fn plan_host(alias: &str, options: &Options, home: &Path) -> HostPlan {
         jump_raw,
         forwards,
         notes,
+        agent_off,
         error,
     }
 }
@@ -560,7 +576,7 @@ impl Core {
             }
             let (options, cost) = config.options_with(&alias, &index);
             work += cost;
-            plans.push(plan_host(&alias, &options, &source.home));
+            plans.push(plan_host(&alias, &options, &source.home, source.own));
         }
         Ok((config, plans))
     }
@@ -805,6 +821,9 @@ impl Core {
                     built.insert("import_key".into(), json!(import_key(&plan.alias)));
                     plan_writes.set(RecordKind::Host, id, built);
                     writes += 1;
+                    if plan.agent_off {
+                        summary.hosts_agent_forwarding_off += 1;
+                    }
                     // Its forwarding rules, in file order.
                     for (index, rule) in plan.forwards.iter().enumerate() {
                         let mut rule = rule.clone();

@@ -751,7 +751,9 @@ fn open_refresh(
     let vault_key = ring.key(account.secrets_epoch)?;
     let key = crypto::derive_local_secrets_key(vault_key, device_id, account.secrets_epoch);
     let plain = crypto::wrap_open(&key, &crypto::refresh_token_aad(device_id), blob).ok()?;
-    String::from_utf8(plain.to_vec()).ok().map(Zeroizing::new)
+    std::str::from_utf8(&plain)
+        .ok()
+        .map(|text| Zeroizing::new(text.to_owned()))
 }
 
 /// What an authenticated call needs, read under the lock.
@@ -811,7 +813,7 @@ impl Core {
                     origin,
                     invite_only: matches!(info.registration, wire::Registration::Invite),
                     version: info.version,
-                    server_generation: info.server_generation.map(|generation| generation.0),
+                    server_generation: info.server_generation.map(wire::B64::into_inner),
                 })
             }
             Err(HttpError::Tls(problem)) => Ok(ServerCheck::Certificate {
@@ -890,7 +892,7 @@ impl Core {
             class,
         )?;
         let info = api.server_info()?;
-        let generation = info.server_generation.map(|generation| generation.0);
+        let generation = info.server_generation.map(wire::B64::into_inner);
         let code_text = input
             .registration_code
             .as_ref()
@@ -1112,7 +1114,7 @@ impl Core {
                 started: self.now(),
                 origin,
                 email,
-                ticket: Zeroizing::new(ticket.0),
+                ticket: Zeroizing::new(ticket.into_inner()),
                 kek: derived.kek,
                 kdf,
                 kdf_salt,
@@ -1263,9 +1265,9 @@ impl Core {
             WrapKind::Kek,
         )
         .ok_or_else(|| refused("integrity"))?;
-        let access = tokens.access_token.0.clone();
+        let access = tokens.access_token.0.as_str();
         let keys = if epoch > 1 {
-            api.vault_keys(&access, vault_id)?.epoch_chain
+            api.vault_keys(access, vault_id)?.epoch_chain
         } else {
             Vec::new()
         };
@@ -1330,7 +1332,7 @@ impl Core {
     fn generation(api: &HttpApi) -> Option<Vec<u8>> {
         api.server_info()
             .ok()
-            .and_then(|info| info.server_generation.map(|generation| generation.0))
+            .and_then(|info| info.server_generation.map(wire::B64::into_inner))
     }
 
     /// Sign-in on an empty device (storage 6.6): the account's vault becomes
@@ -1579,7 +1581,7 @@ impl Core {
         chain_rows: Vec<KeyWrapRow>,
     ) -> Result<(), CoreError> {
         let generation = Self::generation(api);
-        let access = tokens.access_token.0.clone();
+        let access = Zeroizing::new(tokens.access_token.0.clone());
         let account_vault = ring.vault_id();
         let now = self.now();
         let now_text = format_timestamp(now);
@@ -1743,7 +1745,7 @@ impl Core {
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
         inner.personal_vault_id = Some(account_vault);
-        inner.sync.access = Some(Zeroizing::new(access));
+        inner.sync.access = Some(access);
         super::checkpoint(&inner.store);
         tracing::info!(merged = rows.len(), "local data merged into the account");
         self.emit(
@@ -2347,7 +2349,7 @@ impl Core {
         }
         // A server restored from a backup (section 6.9): a new generation.
         let info = link.api.server_info()?;
-        let generation = info.server_generation.map(|generation| generation.0);
+        let generation = info.server_generation.map(wire::B64::into_inner);
         let stored = self
             .inner()
             .store
@@ -3015,8 +3017,8 @@ impl Core {
         };
         let response = self.authed(&link, |api, token| api.totp_setup(token, &request))?;
         Ok(TotpSetup {
-            secret: SecretString::from(response.secret.0),
-            otpauth_uri: SecretString::from(response.otpauth_uri.0),
+            secret: SecretString::from(response.secret.into_inner()),
+            otpauth_uri: SecretString::from(response.otpauth_uri.into_inner()),
         })
     }
 

@@ -546,6 +546,39 @@ async fn agent_forwarding_offers_the_keychain_keys() {
     server.shutdown().await;
 }
 
+/// D194: each lock reads "Forward the system agent while locked" before the
+/// sessions learn of the lock (the forwarded agents read the flag at every
+/// request); off by default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_lock_reads_whether_the_system_agent_stays_forwarded() {
+    let harness = Harness::new();
+    let kept = || {
+        harness
+            .manager
+            .shared
+            .system_agent_while_locked
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    harness.manager.set_unlocked(false);
+    assert!(!kept(), "off by default");
+    harness.manager.set_unlocked(true);
+    harness
+        .core
+        .settings_set(shellpp_core::service::dto::SettingsSetInput {
+            values: [(
+                shellpp_core::settings::SYSTEM_AGENT_WHILE_LOCKED_KEY.to_owned(),
+                json!(true),
+            )]
+            .into_iter()
+            .collect(),
+            reset: Vec::new(),
+        })
+        .unwrap();
+    harness.manager.set_unlocked(false);
+    assert!(kept(), "the user's choice");
+    harness.manager.set_unlocked(true);
+}
+
 /// "Ask before every signature" (D60): a forwarded signature waits for the
 /// question in the session's view; Allow signs, Cancel refuses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -9,13 +9,14 @@
 //! [`serve_forwarded_channel`] with a [`ForwardedAgent`]: the built-in
 //! agent's keys (the Keychain's, signed here, never sent) and, when the
 //! option is on, the system agent's (identity listings and signature
-//! requests passed to a fresh connection to it). Every other request
-//! (adding, removing or locking keys, extensions) gets a failure. The
-//! server can ask for signatures while the session lasts but cannot extract
-//! or change keys. With confirmation on, every signature waits for the
-//! user's yes. RSA keys sign with SHA-2 only (the request's flags); a
-//! request for a SHA-1 `ssh-rsa` signature is refused (docs/security.md,
-//! 11.2).
+//! requests passed to a fresh connection to it; while the app is locked
+//! only when the user chose so, [`AgentKeys::system_agent_allowed`], D194).
+//! Every other request (adding, removing or locking keys, extensions) gets
+//! a failure. The server can ask for signatures while the session lasts
+//! but cannot extract or change keys. With confirmation on, every signature
+//! waits for the user's yes. RSA keys sign with SHA-2 only (the request's
+//! flags); a request for a SHA-1 `ssh-rsa` signature is refused
+//! (docs/security.md, 11.2).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -40,6 +41,13 @@ pub use russh::keys::ssh_key::PrivateKey as PrivateKeyArc;
 pub trait AgentKeys: Send + Sync {
     /// The decrypted keys to offer; empty while the app is locked.
     fn keys(&self) -> Vec<Arc<PrivateKey>>;
+
+    /// Whether the system agent's keys may be offered now, when the host
+    /// forwards them: the app refuses them while locked unless the user
+    /// chose otherwise (D194). Read at every request, like [`Self::keys`].
+    fn system_agent_allowed(&self) -> bool {
+        true
+    }
 }
 
 /// Asks the user before a forwarded signature (the option is off by
@@ -439,6 +447,15 @@ where
     tracing::debug!(requests, "forwarded agent channel closed");
 }
 
+/// The system agent to pass a request to: with the host's option on, and
+/// only while the app allows it (D194).
+fn system_agent(agent: &ForwardedAgent) -> Option<&SystemAgent> {
+    agent
+        .system
+        .as_ref()
+        .filter(|_| agent.keys.system_agent_allowed())
+}
+
 /// The identities answer: the built-in keys first, then (with the option)
 /// the system agent's.
 async fn list_identities(
@@ -452,7 +469,7 @@ async fn list_identities(
         .iter()
         .filter_map(|key| Some((key_blob(key)?, key.comment().as_bytes().to_vec())))
         .collect();
-    if let Some(system) = &agent.system {
+    if let Some(system) = system_agent(agent) {
         match relay(system, upstream, frame)
             .await
             .as_deref()
@@ -506,7 +523,7 @@ async fn sign(
         None => {
             // A key of the system agent: one it lists, and for RSA never a
             // SHA-1 signature (the system agent would make one).
-            let Some(system) = &agent.system else {
+            let Some(system) = system_agent(agent) else {
                 return failure_frame();
             };
             let Ok(public) = russh::keys::ssh_key::PublicKey::from_bytes(blob) else {
@@ -550,10 +567,13 @@ async fn sign(
             None => failure_frame(),
         },
         None => {
-            let Some(system) = &agent.system else {
+            let Some(system) = system_agent(agent) else {
                 return failure_frame();
             };
             match relay(system, upstream, frame).await {
+                // A lock while the system agent was busy (its own
+                // confirmation, say) keeps the signature from the host.
+                Some(_) if system_agent(agent).is_none() => failure_frame(),
                 Some(reply) => reply,
                 None => {
                     *upstream = None;
