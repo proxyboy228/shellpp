@@ -591,3 +591,31 @@ fn history_travels_only_when_asked_for(cx: &mut TestAppContext) {
         ["uptime"]
     );
 }
+
+/// Run 10 (UI 14): the export of Recently deleted offers the JSON formats
+/// only; "OpenSSH files" would write the vault's hosts and keys, not the
+/// trash's, so it is neither shown nor taken.
+#[gpui_kit::test]
+fn the_export_of_recently_deleted_offers_json_only(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, &[json!({"address": "web.example.com"})]);
+    let export = ui.export(cx);
+    assert!(
+        ui.visible(cx, "data-export-format-openssh"),
+        "an ordinary export"
+    );
+    ui.frame(cx, |window, cx| {
+        gpui_kit::component::WindowExt::close_dialog(window, cx)
+    });
+    let export_of_trash = ui.export(cx);
+    export_of_trash.update(cx, |dialog, cx| {
+        dialog.recently_deleted = vec![uuid::Uuid::now_v7()];
+        dialog.set_format(super::ExportFormat::OpenSsh, cx);
+    });
+    assert_eq!(
+        export_of_trash.read_with(cx, |dialog, _| dialog.format()),
+        super::ExportFormat::Data
+    );
+    assert!(!ui.visible(cx, "data-export-format-openssh"));
+    assert!(ui.visible(cx, "data-export-format-data"));
+    drop(export);
+}

@@ -190,6 +190,11 @@ impl ExportDialog {
         if self.step != ExportStep::Form {
             return;
         }
+        // Recently deleted exports its entries as JSON only (UI 14): the
+        // OpenSSH files are written from the vault, not from the trash.
+        if format == ExportFormat::OpenSsh && !self.recently_deleted.is_empty() {
+            return;
+        }
         self.format = format;
         self.understood = false;
         self.error = None;
@@ -290,7 +295,9 @@ impl ExportDialog {
             return;
         }
         if self.format == ExportFormat::OpenSsh {
-            self.run_openssh(window, cx);
+            if self.recently_deleted.is_empty() {
+                self.run_openssh(window, cx);
+            }
             return;
         }
         let Ok(password) = self.checked_secret(cx) else {
@@ -462,6 +469,9 @@ impl Render for ExportDialog {
                 );
         }
         let openssh = self.format == ExportFormat::OpenSsh;
+        // From Recently deleted only the JSON formats (UI 14): the OpenSSH
+        // files would be the vault's, not the trash's.
+        let trash = !self.recently_deleted.is_empty();
         let format =
             v_flex()
                 .gap(metrics::SPACE_1)
@@ -474,15 +484,17 @@ impl Render for ExportDialog {
                             this.set_format(ExportFormat::Data, cx)
                         })),
                 )
-                .child(
-                    Radio::new("data-export-format-openssh")
-                        .label(strings::FORMAT_OPENSSH)
-                        .checked(openssh)
-                        .disabled(running)
-                        .on_click(cx.listener(|this, _: &bool, _, cx| {
-                            this.set_format(ExportFormat::OpenSsh, cx)
-                        })),
-                );
+                .when(!trash, |this| {
+                    this.child(
+                        Radio::new("data-export-format-openssh")
+                            .label(strings::FORMAT_OPENSSH)
+                            .checked(openssh)
+                            .disabled(running)
+                            .on_click(cx.listener(|this, _: &bool, _, cx| {
+                                this.set_format(ExportFormat::OpenSsh, cx)
+                            })),
+                    )
+                });
         let mut body = v_flex().w_full().gap(metrics::SPACE_3).child(format);
         if openssh {
             body = body
