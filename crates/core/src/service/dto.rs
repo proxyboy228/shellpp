@@ -1303,6 +1303,11 @@ fn default_true() -> bool {
 pub struct SshConfigSource {
     pub path: std::path::PathBuf,
     pub home: std::path::PathBuf,
+    /// The file is the user's own `~/.ssh/config` (the caller compares it
+    /// with the home folder's). Only then does `ForwardAgent` turn Agent
+    /// Forwarding on (D60); from another file it is imported off (D193).
+    #[serde(default)]
+    pub own: bool,
 }
 
 /// The state of one entry of an import preview (UI 2.5).
@@ -1512,6 +1517,9 @@ pub struct SshConfigImportSummary {
     /// Forwarding rules made from `LocalForward`, `RemoteForward` and
     /// `DynamicForward` of the imported hosts (stage 5).
     pub rules_added: usize,
+    /// Imported hosts whose `ForwardAgent` was turned off because the file
+    /// is not the user's own `~/.ssh/config` (D193; their notes say so).
+    pub hosts_agent_forwarding_off: usize,
 }
 
 /// One record of an import that was not imported.

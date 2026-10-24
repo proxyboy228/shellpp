@@ -241,6 +241,8 @@ pub struct SessionSettings {
     pub local_shell: Option<String>,
     /// Built-in slug of `terminal.default_theme`.
     pub default_theme: String,
+    /// `security.system_agent_while_locked`, off by default (D194).
+    pub system_agent_while_locked: bool,
 }
 
 impl Default for SessionSettings {
@@ -251,6 +253,7 @@ impl Default for SessionSettings {
             term: DEFAULT_TERM.to_owned(),
             local_shell: None,
             default_theme: DEFAULT_THEME.to_owned(),
+            system_agent_while_locked: false,
         }
     }
 }
@@ -285,6 +288,10 @@ impl SessionSettings {
                 .get("terminal.default_theme")
                 .and_then(theme_slug)
                 .unwrap_or(defaults.default_theme),
+            system_agent_while_locked: flag(
+                shellpp_core::settings::SYSTEM_AGENT_WHILE_LOCKED_KEY,
+                defaults.system_agent_while_locked,
+            ),
         }
     }
 

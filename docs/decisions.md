@@ -1888,3 +1888,58 @@ Status: run 9 decision, 2026-10-24 (plan, section 2.5; run 8, agent C, report se
 **Decision:** no. A change of the master password keeps asking for the current one, also when the vault was opened with the device key: otherwise anyone who starts the app on an unattended computer could replace the password, and with it the lock screen's protection, in seconds; with an account the server would refuse the change anyway, since it needs the proof of the current password (SP 4.8). The ways out stay: with an account, "Restore from sync" with the recovery key (shown at registration and in Settings ▸ Security, SP 5.2); in local mode, Export while the app is open, "Start with a new vault" and Import, as the user guide already says (chapter 1, "If you forgot the master password"). Nothing in the code changes.
 
 **Spec impact:** none (the user guide already describes the ways out).
+
+### 191. A second russh patch: empty channel data is not the end of a stream (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.10). Extends D100 (item 3: russh is built from `third_party/russh` with one patch) to two patches.
+
+**Context.** The run 7 review (its report, section 10.1, finding 10) found that russh 0.64.1's `ChannelRx`, the reader behind `Channel::into_stream`, hands an empty `CHANNEL_DATA` to the reader as a read of 0 bytes, which every `AsyncRead` user takes for the end of the stream. RFC 4254 allows empty data, so a server may send it; an SFTP session then closed as if the server had ended it. The app reads two more channels through the same type: the `direct-tcpip` channel that carries a ProxyJump connection (an empty packet from the jump host ended the whole inner connection) and a forwarded agent channel; port forwards and the shell read messages and were not affected. Reproduced before the fix: all three tests below failed on 0.64.1.
+
+**Decision:** a second patch in `third_party/russh`, the smallest that fixes it: in `ChannelRx::poll_read` an empty `Data` (or `ExtendedData` of the stream being read) takes the arm that already skips messages the reader does not want, so the next poll reads the next message (two `!data.is_empty()` guards, marked "Shell++ patch"). `PATCHES.md` lists both patches and how to remove each one alone when a russh release fixes it (CLAUDE.md says the same); the text for the upstream issue and pull request is `docs/upstream/russh-empty-data.md`. Tests (`crates/ssh/tests/empty_channel_data.rs`): a russh server behind a proxy that adds an empty data packet for the same channel (both ends negotiate the `none` cipher and MAC, test only, since russh never sends empty data itself): an SFTP session answers requests after the empty packet, an exec channel's stream reads all of its output, a stderr reader all of its stream.
+
+**Spec impact:** none (a library fix); `third_party/russh/PATCHES.md`, `THIRD_PARTY_NOTICES.md`, CLAUDE.md ("Подводные камни").
+
+### 192. The values of the sync API are wiped on drop (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.4). `crates/sync-api` gets one dependency, `zeroize`, which only wipes memory: the crate stays without cryptography and I/O (docs/architecture.md, section 2.3).
+
+**Context.** The run 7 reviews (its report, section 10.1, finding 4) found that `B64` and `Secret`, through which `auth_key`, `recovery_auth_key`, tokens, tickets, TOTP codes and the TOTP setup answer travel on both sides, kept their bytes in freed memory, and that the client copied the access token into plain `String`s on the way.
+
+**Decision:**
+
+- `B64` and `Secret` derive `Zeroize` and `ZeroizeOnDrop` (`zeroize`, already in both lock files, MIT OR Apache-2.0); the base64 text a `B64` is decoded from or encoded to is held in `Zeroizing`, and it is decoded into a value that wipes itself, also when the text turns out malformed. Their fields stay public, so building and reading a value does not change; moving the contents out, which a `Drop` type forbids, goes through the new `into_inner()`, which moves the buffer without a copy (the client puts tickets and the TOTP setup answer straight into `Zeroizing` and `SecretString`; the server hands salts and wraps to the database).
+- The client: the access token is borrowed or held in `Zeroizing` on the sign-in paths (it was copied into plain `String`s for the first requests of a sign-in and of the merge, and the merge's copy was left unwiped when a step failed); the decrypted refresh token is turned into text without an intermediate copy (a defensive change: only an unreachable error path left one); the TOTP setup dialog keeps the secret and its `otpauth://` text in `Zeroizing` instead of plain `String`s, and its `Debug` shows neither.
+- Copies outside these values stay a known limitation (security.md, section 9.5): the JSON text that serde_json writes and reads, and what reqwest, hyper and, on the server, axum keep of the bodies and of the `Authorization` header. Wiping them needs an allocator that wipes freed memory, which D83 left out.
+- Tests: both types are `ZeroizeOnDrop` (the compile-time check used for the other wiping types), `zeroize()` empties them, `Debug` of the types, of bodies made of them and of the TOTP setup step shows neither the value nor its base64, the wire form stays a plain string, and `into_inner()` hands the contents over.
+
+**Spec impact:** docs/security.md, section 9.5 (the wiped values; the limitation) and RR11.
+
+### 193. `ForwardAgent` only from the user's own `~/.ssh/config` (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5: "the safest default; the user can turn it on explicitly"; run 8 agent C's report, section 8). Narrows D60 and the last sentence of D172 for the OpenSSH config import. Changes behaviour users are used to: a config imported from another path used to turn Agent Forwarding on.
+
+**Context.** The import maps `ForwardAgent yes` to Agent Forwarding with "Also offer the system agent's keys" (D60), because OpenSSH forwards the user's agent. D172 kept that for `~/.ssh/config` as the user's own file, but the import reads any path the user picks: a config from a colleague, a download or a repository is a file from elsewhere (security.md, A10), and its hosts could get the user's keys while a session is open (RR19).
+
+**Decision:**
+
+- The core's `SshConfigSource` says whether the file is the user's own (`own`, false when left out); only then does `ForwardAgent yes` turn Agent Forwarding on. The app decides it by comparing the chosen file with its suggested `~/.ssh/config` (the home folder's file, or the stand-in that tests set; the demo has none, so no file is its own there) once both are resolved by the file system; any other file, a missing one included, is not the user's own.
+- From another file, `ForwardAgent yes` imports the host with Agent Forwarding off, the preview and the host's notes say "ForwardAgent is imported turned off: the file is not your ~/.ssh/config", and the summary counts such hosts ("Hosts imported with Agent Forwarding turned off (see their notes)", `hosts_agent_forwarding_off`, the name of the Import Data count of D172). The user turns forwarding on per host. `ForwardAgent no` needs no note. The import key stays the alias, so importing the user's own config later finds such a host "already exists" and does not change it. Hosts imported earlier from other files keep their setting: nothing is changed in place.
+- Files included by the user's own config (`Include`) are part of it. PuTTY sessions (D140) come from the user's own registry and keep mapping agent forwarding.
+- Tests: the core imports `ForwardAgent yes` from another file turned off with the note and the count, and from the user's own file turned on (D60, unchanged); the dialog tells the two apart and shows the summary row only for the other file.
+
+**Spec impact:** docs/ui-behavior-spec.md, section 2.5 (and `docs/ru`); docs/security.md, section 13.5; the user guide, chapter 2 (and `docs/guide/ru`).
+
+### 194. While the app is locked, forwarded agents offer no keys (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5; run 8 agent C's report, section 8). Replaces the stage 0 decision of security.md, section 8 ("Proxying of the system agent for open sessions: continues; the system agent applies its own policy"). Changes behaviour users are used to: with "Also offer the system agent's keys" on, a host could ask the system agent for signatures while Shell++ was locked.
+
+**Context.** A lock wipes the Keychain keys of the built-in agent, so a forwarded agent stops offering them (D60), but requests for the system agent's keys were still passed to the system agent. Locking says "I am away"; a host whose root is hostile could then sign in elsewhere with the user's system agent keys for as long as the session stays open (RR19), without the user at the screen to notice a confirmation or to close the session.
+
+**Decision:**
+
+- While the app is locked, a forwarded agent channel lists none of the system agent's keys and refuses a signature with one of them before anything reaches the system agent, as it already did for the Keychain's keys. In `shellpp-ssh` the built-in agent's key source answers `system_agent_allowed()` at every request (true by default); the desktop's answers "unlocked, or the user chose so".
+- The explicit way to keep the old behaviour: Settings → Security → "Forward the system agent while locked" (`security.system_agent_while_locked`, a per-device setting, off by default). On, a host that also offers the system agent's keys can still ask the system agent for signatures while the app is locked, and the system agent applies its own policy (a confirming agent still asks). The sessions read it at each lock, before they learn of the lock, so no request sees the lock with an older choice. It belongs to the device, like the serial port (D95): an export leaves it out and no import takes it, a full restore neither.
+- Sessions, port forwards and transfers keep running while locked as before (D9); only signatures through forwarding stop, and they come back at unlock without reconnecting.
+- Tests: a russh server written for the test asks the forwarded agent for identities and for a signature by a key it learned earlier: while the app refuses, nothing is listed or signed and the system agent receives no request; allowed, it lists and signs; refused again, it stops at once (the test fails when the check is removed). A lock that lands after the request was checked (during a confirmation) keeps the system agent from signing, and one that lands while the system agent signs keeps the signature from the host. The desktop reads the setting at each lock; the Security switch is off by default and stores the choice; an export leaves the setting out and no import, a full restore included, takes it.
+
+**Spec impact:** docs/security.md, sections 8 and 11.2; docs/ui-behavior-spec.md, sections 3.1, 13.3 and 13.4 (and `docs/ru`); docs/data-model.md, section 16.1; the user guide, chapter 3 (and `docs/guide/ru`).

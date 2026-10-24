@@ -714,7 +714,8 @@ means the crate is available under either license.
 <!-- rust-crates:end -->
 
 Patched crates: `russh` 0.64.1 is built from `third_party/russh`, a copy of
-the published crate with one change (the channel leak of D98, D100), listed in
+the published crate with two changes (the channel leak of D98, D100, and empty
+channel data read as the end of a stream, D191), listed in
 `third_party/russh/PATCHES.md`. It keeps its Apache-2.0 license
 (`third_party/russh/LICENSE`).
 

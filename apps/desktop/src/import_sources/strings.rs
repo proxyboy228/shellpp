@@ -45,6 +45,8 @@ pub const SUMMARY_KEYS_EXISTING: &str = "Keys already in the Keychain";
 pub const SUMMARY_KEYS_SKIPPED: &str = "Key files left out";
 pub const SUMMARY_JUMP_LEFT_OUT: &str = "Hosts without their jump hosts (see their notes)";
 pub const SUMMARY_COMMANDS_SKIPPED: &str = "Commands neither run nor imported";
+pub const SUMMARY_AGENT_OFF: &str =
+    "Hosts imported with Agent Forwarding turned off (see their notes)";
 pub const IMPORT_FAILED: &str = "The import failed.";
 
 pub const NEXT: &str = "Next";

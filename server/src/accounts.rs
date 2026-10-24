@@ -756,8 +756,8 @@ pub fn password_change(
             serde_json::to_value(&request.kdf)
                 .map_err(|_| ApiError::internal())?
                 .into(),
-            request.kdf_salt.0.into(),
-            request.kek_wrap.0.into(),
+            request.kdf_salt.into_inner().into(),
+            request.kek_wrap.into_inner().into(),
             now.into(),
             user.user_id.into(),
         ],
@@ -872,8 +872,8 @@ pub fn recover_complete(
             serde_json::to_value(&request.kdf)
                 .map_err(|_| ApiError::internal())?
                 .into(),
-            request.kdf_salt.0.into(),
-            request.kek_wrap.0.into(),
+            request.kdf_salt.into_inner().into(),
+            request.kek_wrap.into_inner().into(),
             now.into(),
             user.user_id.into(),
         ],
@@ -912,7 +912,7 @@ pub fn recovery_key_reissue(
          WHERE user_id = ?",
         &[
             secrets::make_verifier(request.recovery_auth_key.as_bytes()).into(),
-            request.kek_wrap.0.into(),
+            request.kek_wrap.into_inner().into(),
             now.into(),
             user.user_id.into(),
         ],
@@ -964,8 +964,8 @@ pub fn credentials_change(
             serde_json::to_value(&request.kdf)
                 .map_err(|_| ApiError::internal())?
                 .into(),
-            request.kdf_salt.0.into(),
-            request.kek_wrap.0.into(),
+            request.kdf_salt.into_inner().into(),
+            request.kek_wrap.into_inner().into(),
             secrets::make_verifier(request.recovery_auth_key.as_bytes()).into(),
             now.into(),
             user.user_id.into(),
@@ -1029,8 +1029,8 @@ pub fn email_change(
             serde_json::to_value(&kdf)
                 .map_err(|_| ApiError::internal())?
                 .into(),
-            kdf_salt.0.into(),
-            kek_wrap.0.into(),
+            kdf_salt.into_inner().into(),
+            kek_wrap.into_inner().into(),
             now.into(),
             user.user_id.into(),
         ],
@@ -1356,7 +1356,10 @@ pub fn personal_key_epoch(
     )?;
     tx.exec(
         "UPDATE users SET kek_wrap = ? WHERE user_id = ?",
-        &[request.account_wraps.kek_wrap.0.into(), user.user_id.into()],
+        &[
+            request.account_wraps.kek_wrap.into_inner().into(),
+            user.user_id.into(),
+        ],
     )?;
     Ok(request.epoch)
 }

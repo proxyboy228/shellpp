@@ -224,6 +224,10 @@ pub(crate) struct Shared {
     pub(crate) forwarding: background::ForwardingService,
     /// The rules that start on launch were started in this app run.
     launch_autostart_done: AtomicBool,
+    /// Forwarded agents keep offering the system agent's keys while the app
+    /// is locked (`security.system_agent_while_locked`, D194): read at each
+    /// lock, before the sessions learn of it.
+    pub(crate) system_agent_while_locked: Arc<AtomicBool>,
 }
 
 impl Shared {
@@ -815,6 +819,7 @@ impl SessionManager {
             shut_down: AtomicBool::new(false),
             forwarding: background::ForwardingService::default(),
             launch_autostart_done: AtomicBool::new(false),
+            system_agent_while_locked: Arc::new(AtomicBool::new(false)),
         });
         // Shells are detected lazily, at the first local terminal of the run,
         // and kept until the next start (D100, item 5): WSL detection is slow
@@ -945,6 +950,14 @@ impl SessionManager {
 
     /// The lock state changed (call it from the app's lock events).
     pub fn set_unlocked(&self, unlocked: bool) {
+        if !unlocked {
+            // Read before the lock reaches the agents, so no request sees
+            // the lock with an older choice (D194).
+            let keep = SessionSettings::read(&*self.shared.core).system_agent_while_locked;
+            self.shared
+                .system_agent_while_locked
+                .store(keep, Ordering::SeqCst);
+        }
         let changed = self.shared.unlocked.send_replace(unlocked) != unlocked;
         if !changed {
             return;

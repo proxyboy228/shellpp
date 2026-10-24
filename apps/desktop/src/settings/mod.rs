@@ -282,6 +282,21 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// "Forward the system agent while locked" (D194).
+    pub fn set_system_agent_while_locked(&mut self, on: bool, cx: &mut Context<Self>) {
+        let result = self
+            .state
+            .update(cx, |state, cx| state.set_system_agent_while_locked(on, cx));
+        self.error = match result {
+            Ok(()) => None,
+            Err(error) => {
+                tracing::warn!(code = error.code(), "system agent setting not saved");
+                Some(strings::FAILED.into())
+            }
+        };
+        cx.notify();
+    }
+
     /// Sets the auto-lock interval (`None`: Never).
     pub fn set_auto_lock(&mut self, minutes: Option<u64>, cx: &mut Context<Self>) {
         self.auto_lock_open = false;
@@ -399,6 +414,7 @@ impl SettingsView {
         let remember_lost = state.remember_lost() && !remembered;
         // Show and Reissue only with a sync account (UI 13.4; D29).
         let bound = state.sync_status().is_some_and(|status| status.bound);
+        let system_agent = state.system_agent_while_locked();
         let trigger = widgets::select_trigger(
             "settings-auto-lock",
             None,
@@ -436,6 +452,28 @@ impl SettingsView {
             .child(widgets::caption(strings::AUTO_LOCK_HINT, cx))
             .child(div().w(metrics::rpx(240.)).child(trigger))
             .children(list.map(|list| div().w(metrics::rpx(240.)).child(list)));
+        // D194: off by default; forwarded agents sign nothing while locked.
+        let system_agent = v_flex()
+            .id("settings-system-agent-row")
+            .test_support()
+            .gap(metrics::SPACE_2)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap(metrics::SPACE_3)
+                    .child(label(strings::SYSTEM_AGENT_WHILE_LOCKED, cx))
+                    .child(
+                        Switch::new("settings-system-agent")
+                            .checked(system_agent)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.set_system_agent_while_locked(*checked, cx)
+                            })),
+                    ),
+            )
+            .child(widgets::caption(
+                strings::SYSTEM_AGENT_WHILE_LOCKED_HINT,
+                cx,
+            ));
         let remember = available.then(|| {
             let explanation = if self.remember_turned_on && remembered {
                 notice(
@@ -537,6 +575,8 @@ impl SettingsView {
                     .child(strings::SECURITY),
             )
             .child(auto_lock)
+            .child(widgets::divider(cx))
+            .child(system_agent)
             .when_some(remember, |this, remember| {
                 this.child(widgets::divider(cx)).child(remember)
             })
