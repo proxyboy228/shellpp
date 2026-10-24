@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-24, after run 10. What each stage is comes from
+State of the project on 2026-10-24, after run 11. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -17,7 +17,7 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 4 | SFTP | done | names that are not UTF-8 on the server are a known limitation (D50, item 12) |
 | 5 | Port forwarding, jump hosts, proxy, snippets | done | |
 | 6 | Logs, settings, shortcuts, highlighting | done | interface scale (run 6) |
-| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); what is left is in section 2; team parts belong to stage 8 |
+| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
 | 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; mobile apps, shared sessions, cloud provider import and Mosh are not started (Mosh's toggle only saves its value, D29) |
@@ -84,37 +84,75 @@ None loses data as built.
   a 500-item push answer may hold about 192 MB (D188); TOTP codes travel as
   plain strings; the short gap after the core's auto-lock in the D194 gate.
 
-### 2.3 Checks not obtained
+### 2.3 Checks
 
-The verification run (section 3) is for these.
+Run 11, the verification run, obtained these on a quiet machine; its report
+has the numbers.
 
-- The 120-minute test against OpenSSH in Docker under all three loads at once
-  (run 7): 110–120 minutes without growth of memory, handles or threads were
-  seen, a clean 120 minutes was not.
-- The flaky test search `scripts\find-flaky.ps1 -Runs 15` (run 8): 7 of 15
-  runs done, one real cause found and fixed; the rest needs a quiet machine.
-  Run 9 saw `hosts_screen::quick_connect_opens_a_session_without_saving` fail
-  once (a gpui "test is not deterministic" panic).
-- The "no data is lost" property with large parameters: runs 9 and 10 ran 40
-  seeds × 500 steps (5–9 minutes, green); `SHELLPP_PROPERTY_SEEDS=100`
-  `SHELLPP_PROPERTY_STEPS=800` takes about 40 minutes.
-- The full screenshot set (`scripts\ui-screens.ps1` without `-States`): runs
-  9 and 10 took only their new and changed states, at 1280x800.
-- The owner's own install: the server in the homelab (`server/README.md`,
-  `docs/guide/06-sync.md`) and two devices.
-- CI runs the deployment tests (`server-deploy.yml`, run 10) but not the
-  server's own tests on SQLite and PostgreSQL, though section 9.2 of
-  `docs/architecture.md` lists "sync end-to-end with PostgreSQL" in the Linux
-  job (question in section 5).
+- The 120-minute test against OpenSSH in Docker under all three loads at
+  once: a clean 120 minutes, no errors (34 733 HTTP downloads, 34 723 through
+  SOCKS, 54 620 SFTP files), no growth: the lowest private bytes of each ten
+  minutes 197 MB at the start and 195 MB at the end, handles 744–752, threads
+  80. Private bytes go up by 30–110 MB for a few seconds at a time under the
+  SFTP load (section 2.4); a five-minute sample that met one was the
+  "320 MB peak at minute 15" of runs 6 and 7.
+- The flaky test search: 8 runs in run 11, none failed (7 more in run 8).
+  `hosts_screen::quick_connect_opens_a_session_without_saving` (run 9) failed
+  17 times in 4 756 runs on a CPU loaded on purpose: the terminal's parser
+  thread could close the wake channel of the view's pump and so wake a GPUI
+  task from its own thread; fixed in run 11 (the pump keeps a sender), 0 in
+  4 322 runs after.
+- The "no data is lost" property with 100 seeds × 800 steps: green, 30
+  minutes.
+- The full screenshot set (`scripts\ui-screens.ps1` without `-States`): 266
+  screenshots, three sizes, both themes; findings in section 2.4.
+- CI runs the server's own tests on SQLite and on PostgreSQL in Docker
+  (`server.yml`, D202) on the changes the deployment tests run on; its first
+  run on GitHub comes with the owner's next push.
+
+Not obtained: the owner's own install, the server in the homelab
+(`server/README.md`, `docs/guide/06-sync.md`) and two devices; it is step 3
+of section 3.
+
+### 2.4 Findings of run 11
+
+None loses data or weakens protection; the run changed no code for them
+(its plan, rule 1.2).
+
+- **SFTP memory saw-tooth**: under the soak's SFTP load (files of 16 KB, 1 MB
+  and 8 MB up and down, about 8 a second) private bytes swing between about
+  198 and 265 MB, at times 310 MB, for 5–15 seconds; without SFTP (the russh
+  soak) they stay within 195–208 MB. `crates/ssh/src/sftp.rs` keeps about
+  2 MiB in flight per direction, so the source is elsewhere (russh's channel
+  buffers, russh-sftp); a measurement of SFTP alone with a heap profiler is
+  the next step.
+- **A spike at the start of the load**: one sample of 498 MB 26 seconds into
+  the russh soak, 309 MB at minutes 2–3 of the OpenSSH one; once per run.
+- **`scripts\soak.ps1` reports growth that is not there**: it compares one
+  sample at minute 15 with the last one and fails (exit 2) when the last
+  meets a saw-tooth peak; it should compare the lowest values or medians of
+  windows.
+- **A warning in builds of the desktop alone**:
+  `crates/core/src/service/sync_trust.rs:12` imports `Arc`, which only code
+  under `cfg(any(test, feature = "test-hooks"))` uses; `cargo build -p
+  shellpp-desktop` (release, dist, CI's "Build the app") warns, and the
+  criterion's workspace clippy misses it because feature unification turns
+  `test-hooks` on.
+- **Screens**: on first run at 960x600 "Restore from sync…" beside the
+  subtitle breaks it into two lines and lines up with the subtitle, not the
+  title; flags (regional indicator pairs) are drawn as letters in the
+  terminal; the CSV import's column list is cut mid-row without a sign of
+  scrolling; `scripts\ui-screens.ps1` says 244 files for the default sizes,
+  a run makes 266.
 
 ## 3. The path to release 1.0
 
 Release 1.0 ships without team vaults (D197).
 
-1. **Run 10** — interface and small things (this state).
-2. **The verification run** — the checks of 2.3: the long test, the flaky
-   test search, the large property run, the full screenshot set at every
-   size; no new features.
+1. **Run 10** — interface and small things.
+2. **The verification run** (run 11, this state) — the checks of 2.3: the
+   long test, the flaky test search, the large property run, the full
+   screenshot set at every size; no new features.
 3. **The owner uses it** day to day and writes down the differences from
    Termius that matter.
 4. **1–2 parity runs** — the list of step 3.
@@ -152,14 +190,10 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-The run 10 report (section 4) has the details.
-
-- CI: add the server's own tests (SQLite, and PostgreSQL in Docker) to the
-  workflows, as `docs/architecture.md` 9.2 says, or change the text?
-- Restore while signed out (D197): a device that signed out before this
-  version keeps no generation, so its next rebind keeps a copy of every
-  version it replaces once (copies it may not need); accept, or skip the
-  copies for such devices?
+Both questions after run 10 are answered (D202): the server's tests run in
+CI, and the superfluous copies after a sign-out before run 10 are accepted.
+None is open; the run 11 report lists what to look at in the first run of
+`server.yml` on GitHub.
 
 ## 6. Technical debt
 
@@ -212,7 +246,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D202;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D203;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.
