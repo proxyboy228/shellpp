@@ -64,7 +64,10 @@ fn weaker_kdf_parameters_are_refused_until_the_user_confirms_them() {
         .expect("password changed on the phone");
     let _ = laptop.core.sync_now();
     let status = laptop.status();
-    assert!(status.bound && !status.signed_in, "the laptop is signed out");
+    assert!(
+        status.bound && !status.signed_in,
+        "the laptop is signed out"
+    );
 
     // Signing in again: refused before anything is derived or sent.
     match laptop.core.sync_sign_in(input(&server, &email, &second)) {

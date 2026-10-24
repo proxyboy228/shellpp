@@ -1574,7 +1574,10 @@ With a connected server:
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
-  (principle 3 in SPEC.md);
+  (principle 3 in SPEC.md). Deleting it starts the app over with an empty vault at first
+  run; the old data file is set aside as "Start with a new vault" (13.2) does and opens
+  only with the master password, and the data stays on the server; a caption under the
+  option says so; [decision] (D190)
 - master password change is in Settings → Security (see 13.4), because it exists without
   a server too. The recovery key of the account is there as well; [decision]
 - deleting the account on the server. The local copy is kept in that case.

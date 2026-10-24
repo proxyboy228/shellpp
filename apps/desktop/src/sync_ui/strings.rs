@@ -183,6 +183,7 @@ pub const SIGN_OUT_TITLE: &str = "Sign out of the account";
 pub const SIGN_OUT_TEXT: &str =
     "Sync stops on this device. The local copy stays and opens with the same password.";
 pub const DELETE_LOCAL: &str = "Also delete the local copy on this device";
+pub const DELETE_LOCAL_HINT: &str = "Shell++ starts over with an empty vault. The data stays on the server; the old data file is set aside in the data folder and opens only with this master password.";
 pub const SIGN_OUT_RUN: &str = "Sign out";
 
 pub const DELETE_TITLE: &str = "Delete the account";

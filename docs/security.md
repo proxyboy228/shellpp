@@ -487,7 +487,7 @@ Rules:
 - SQLite runs with `secure_delete = ON`, which overwrites deleted content inside the database file. Files are deleted by unlinking; copies kept by the file system, SSD wear leveling, snapshots or OS backups are not erased (RR18).
 - Pre-migration copies in `backups/` are ciphertext but keep the wraps of their time (RR6).
 - "Start with a new vault" (section 8) renames the database files and never deletes them; the archive stays in the data directory until the user removes it.
-- "Delete local copy" at log out removes the whole data directory, `backups/` and `recordings/` included, the temporary directory and the keychain item ([storage-format.md](storage-format.md), "Backup and restore").
+- "Delete local copy" at log out sets the database aside as "Start with a new vault" does and deletes the keychain item first, so the set-aside file opens only with the master password; `backups/` and `recordings/` stay. Wiping a device means deleting the data directory by hand ([storage-format.md](storage-format.md), "Backup and restore"; [decision] (D190)).
 - Full-disk encryption and encrypted swap are recommended in the user documentation, because memory can reach swap and hibernation files (RR11).
 
 ### 9.4 Clipboard

@@ -306,9 +306,12 @@ without a sync server. They stay there for 90 days, on this device only.
 ## Signing out and deleting the account
 
 - **Sign out…** stops sync on this device. The local copy stays and opens
-  with the same password. (In this version, leave **Also delete the local
-  copy on this device** off: with it, the device is signed out but the
-  copy is not deleted, and the dialog says "Something went wrong".)
+  with the same password. With **Also delete the local copy on this
+  device**, Shell++ starts over with an empty vault (the first-run screen;
+  **Restore from sync…** brings the account back). The data stays on the
+  server, and the old data file is set aside in the data folder
+  (`shellpp.db.<date>.old`), not erased: it opens only with the master
+  password. To wipe the device, delete the data folder yourself.
 - **Delete account…** deletes the account and its data on the server
   (after the master password, and the two-step code if it is on). Every
   device keeps its local copy; **Export data…** first if you want a file.

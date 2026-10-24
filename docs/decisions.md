@@ -1867,3 +1867,17 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.5; run 7 report, section 10.1, 
 - Not covered: a device that signed out with Log out (it is no longer bound: its sign-in is a rebind or a merge, and the account password may differ from the local one), and the first sign-in of an empty device (nothing to compare with).
 
 **Spec impact:** docs/sync-protocol.md, section 4.2; docs/ui-behavior-spec.md, section 13.5, step 2, and `docs/ru`.
+
+### 190. Log out with "delete local copy" sets the copy aside (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.6; run 8, agent C, finding 3). Amends docs/storage-format.md, "Backup and restore", and docs/security.md, which had the whole data directory deleted.
+
+**Context.** Sign out with "Also delete the local copy on this device" failed: the device was signed out, then `start_new_vault` refused with `WrongState` because it needs the Locked state, and the dialog said "Something went wrong" (reproduced by `server/tests/sign_out_local.rs` before the fix). The code meant to set the database aside as "Start with a new vault" does, while the specifications said that everything in the data directory, `backups/` and `recordings/` included, is deleted. A deletion would lose what is not on the server: edits not pushed yet, the types that do not sync (command history and the connection log unless turned on, session recordings never), Recently deleted and kept conflict copies.
+
+**Decision:**
+
+- The variant that loses no data and keeps the protection: after the account is unbound, the device key leaves the OS keychain together with its `device` row (so nothing opens the old file without the master password), the vault locks, and the database is set aside exactly as "Start with a new vault" sets it aside (`shellpp.db.<stamp>.old` next to the new empty store, never deleted); the app starts at first run, where "Restore from sync" brings the account back. The data on the server is untouched. `backups/` and `recordings/` stay.
+- The dialog says so under the option when it is ticked; the user guide says that wiping a device means deleting the data folder by hand.
+- For the owner: whether "delete" should really erase the files (the old text) is open; the code now follows this entry.
+
+**Spec impact:** docs/storage-format.md, "Backup and restore"; docs/security.md (the log out row of the key lifecycle stays, the paragraph on deletion changes); docs/data-format.md, section 1, and `docs/ru/data-format.md`; docs/ui-behavior-spec.md, section 12.2 (Log out), and `docs/ru`; the user guide, chapter 6 (en, ru).

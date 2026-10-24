@@ -25,7 +25,7 @@ Files in the data directory:
 | `shellpp.db-wal`, `shellpp.db-shm` | the SQLite write-ahead log and its index; part of the database |
 | `shellpp.lock` | empty. The running app holds an exclusive OS file lock on it; a second process waits up to 3 seconds and then fails with a storage error |
 | `backups/shellpp-<UTC yyyymmddThhmmssZ>.db` | a copy (`VACUUM INTO`) taken before a schema migration, the 3 newest kept. Schema 1 has no migrations, so none exist yet |
-| `shellpp.db.<UTC yyyymmddThhmmssZ>.old`, with `-wal` and `-shm` | the database archived by "Start with a new vault" (section 6) |
+| `shellpp.db.<UTC yyyymmddThhmmssZ>.old`, with `-wal` and `-shm` | the database archived by "Start with a new vault" (section 6), or by log out with "delete local copy" (D190) |
 | `shellpp.db.<UTC yyyymmddThhmmssZ>-failed.old`, with `-wal` and `-shm` | a new database set aside when "Start with a new vault" could not complete it (section 6); rare |
 | `logs/shellpp.log`, `shellpp.log.1` … `.4` | diagnostic log, rotated at 5 MiB, when the logs directory is inside the data directory (Windows, `SHELLPP_DATA_DIR`). No secrets, addresses, usernames or paths |
 | `tmp/` | temporary files of explicit user actions, emptied at start (no writer yet) |

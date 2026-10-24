@@ -2656,6 +2656,15 @@ impl Core {
             self.emit_sync(inner);
         }
         if delete_local {
+            // The local copy is set aside as "Start with a new vault" does
+            // (D190): the data file is renamed next to the new store, never
+            // deleted, and it opens only with the master password, so the
+            // device key leaves the OS keychain first. The new store needs
+            // the vault closed: lock, then start over.
+            if let Err(error) = self.remember_device_set_impl(false) {
+                tracing::warn!(code = error.code(), "device key not removed");
+            }
+            self.lock_impl()?;
             self.start_new_vault()?;
         }
         Ok(())

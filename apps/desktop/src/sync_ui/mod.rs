@@ -1441,6 +1441,10 @@ impl Render for SignOutDialog {
                         cx.notify();
                     })),
             )
+            // What "delete" does (D190): set aside, never erased silently.
+            .when(self.delete_local, |this| {
+                this.child(widgets::caption(strings::DELETE_LOCAL_HINT, cx))
+            })
             .children(error_line(self.error, cx))
     }
 }

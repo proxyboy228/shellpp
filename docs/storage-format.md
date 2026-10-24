@@ -612,7 +612,7 @@ After a restore:
 - A restored copy keeps its `device_id` and wrapped refresh token. Running it alongside the installation it came from is not supported: the shared refresh token is detected as reused and both are signed out ([sync-protocol.md](sync-protocol.md)). To set up a second device, sign in on a fresh installation or import an export.
 - When the account password changed after the copy was taken, the copy unlocks with the old password and then needs a sign-in with the new one.
 
-Removing the local copy (log out with "delete local copy", UI 12.2) deletes everything in the data directory, including `backups/` and `recordings/`, the temporary directory and the keychain item; the app then starts at first run. Recently deleted and the trust choices for sync servers are tables of the database and go with it ([decision] (D93)).
+Removing the local copy (log out with "delete local copy", UI 12.2) sets the database aside as "Start with a new vault" does (UI 13.2; docs/data-format.md): `shellpp.db` is renamed to `shellpp.db.<stamp>.old` next to the new empty one, never deleted, and the keychain item and the `device` row go first, so the old file opens only with the master password; the app then starts at first run. `backups/` and `recordings/` stay in the data directory. Recently deleted and the trust choices for sync servers are tables of the database and go with it ([decision] (D93)). Before run 9 the text said everything in the data directory is deleted; the set-aside file keeps unsynced data and local-only types (history, the connection log, recordings) that a deletion would lose. [decision] (D190)
 
 ## 13. Export formats
 
