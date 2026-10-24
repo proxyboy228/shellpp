@@ -503,7 +503,7 @@ UI 3.1 "SSH" block and "Show more". "Inherit" fields follow section 8.
 | `startup_snippet_id` | ref(snippet)? | none | runs in the interactive session right after login; variables are asked as for any run |
 | `env` | list<env_var>[64] | `[]` | names unique (case-sensitive); sent as SSH `env` requests, which the server accepts only for names it allows |
 | `keepalive_s` | int[0..3600]? | the global value | D20; `0` = off |
-| `mosh` | bool | `false` | shown and saved; Mosh connections come in their own stage (D29) |
+| `mosh` | bool | `false` | not shown and kept as it is until Mosh is built with the mobile client (D204; D29) |
 
 Rules:
 

@@ -233,8 +233,8 @@ fn show_more_fields_are_saved(cx: &mut TestAppContext) {
         assert!(window.find("host-charset-utf-8").visible());
         window.click("host-charset-iso-8859-15", cx);
         window.render_frame(cx);
-        // Mosh: only the value is saved (lead decision 2).
-        window.click("host-mosh", cx);
+        // Mosh is not shown until it is built (D204).
+        assert!(window.try_find("host-mosh").is_none());
         // Terminal theme: Graphite (default) or Paper.
         window.click("host-terminal-theme", cx);
         window.render_frame(cx);
@@ -254,7 +254,7 @@ fn show_more_fields_are_saved(cx: &mut TestAppContext) {
     settle(cx);
     let data = stored(cx, &state, host);
     assert_eq!(data["charset"], json!("iso-8859-15"));
-    assert_eq!(data["ssh"]["mosh"], json!(true));
+    assert!(data["ssh"].get("mosh").is_none());
     assert_eq!(data["terminal_theme"], json!({"builtin": "paper"}));
     assert_eq!(data["record_output"], json!("on"));
     assert!(data["ssh"].get("startup_snippet_id").is_none());
@@ -284,7 +284,6 @@ fn show_more_fields_are_saved(cx: &mut TestAppContext) {
     let (_, again) = open_panel(cx, &state, Some(host));
     cx.update(|cx| {
         let draft = again.read(cx).draft();
-        assert!(draft.mosh);
         assert_eq!(draft.terminal_theme.as_deref(), Some("paper"));
         assert_eq!(draft.keepalive, "400");
     });
@@ -709,7 +708,6 @@ const FITTING_IDS: &[&str] = &[
     "host-history-off",
     "host-output-default",
     "host-output-off",
-    "host-mosh",
     "host-terminal-theme",
     "host-telnet-port",
     "host-telnet-remove",
@@ -804,7 +802,6 @@ fn panel_values_survive_a_restart(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.click("host-show-more", cx);
         window.render_frame(cx);
-        window.click("host-mosh", cx);
         window.click("host-agent-forwarding", cx);
         window.click("host-proxy-http", cx);
         window.render_frame(cx);
@@ -832,7 +829,6 @@ fn panel_values_survive_a_restart(cx: &mut TestAppContext) {
         let state = reopened.read(cx);
         let host = state.host(host).expect("host after restart");
         let data = host.data_map();
-        assert_eq!(data["ssh"]["mosh"], json!(true));
         assert_eq!(data["ssh"]["agent_forwarding"], json!(true));
         assert_eq!(
             data["ssh"]["proxy"],

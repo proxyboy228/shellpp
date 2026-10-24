@@ -328,7 +328,8 @@ pub struct HostDraft {
     pub keepalive: String,
     pub record_history: OverrideMode,
     pub record_output: OverrideMode,
-    /// `ssh.mosh` (lead decision 2: shown, only the value is saved).
+    /// `ssh.mosh`: not shown until Mosh is built with the mobile client (D204);
+    /// the value read is written back as it was.
     pub mosh: bool,
     /// `ssh.allow_legacy_algorithms` (off by default; D80).
     pub allow_legacy_algorithms: bool,

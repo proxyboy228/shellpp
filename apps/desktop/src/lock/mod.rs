@@ -129,24 +129,53 @@ pub(crate) fn frame(
 /// The card heading: the app name (20 px, 600) and one line under it
 /// (14 px, `--text-secondary`).
 pub(crate) fn heading(subtitle: &'static str, cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
+    v_flex()
+        .gap(metrics::SPACE_1)
+        .child(app_name(cx))
+        .child(subtitle_line(subtitle, cx))
+}
+
+/// [`heading`] with `action` at the end of the app name's line, centered on
+/// it: the line under it keeps the card's whole width (first run at
+/// 960 x 600, run 12).
+pub(crate) fn heading_with(
+    subtitle: &'static str,
+    action: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
     v_flex()
         .gap(metrics::SPACE_1)
         .child(
-            div()
-                .text_size(metrics::FONT_SIZE_TITLE)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(strings::APP_NAME),
-        )
-        .child(
-            div()
-                .id("lock-subtitle")
+            h_flex()
+                .id("lock-title-row")
                 .test_support()
-                .text_size(metrics::FONT_SIZE_BODY)
-                .text_color(theme.muted_foreground)
-                .child(subtitle),
+                .w_full()
+                .justify_between()
+                .items_center()
+                .gap(metrics::SPACE_2)
+                .child(app_name(cx))
+                .child(action),
         )
+        .child(subtitle_line(subtitle, cx))
+}
+
+fn app_name(cx: &App) -> impl IntoElement {
+    div()
+        .id("lock-app-name")
+        .test_support()
+        .text_size(metrics::FONT_SIZE_TITLE)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.theme().foreground)
+        .child(strings::APP_NAME)
+}
+
+fn subtitle_line(subtitle: &'static str, cx: &App) -> impl IntoElement {
+    div()
+        .id("lock-subtitle")
+        .test_support()
+        .text_size(metrics::FONT_SIZE_BODY)
+        .text_color(cx.theme().muted_foreground)
+        .child(subtitle)
 }
 
 /// A labelled password field: caption, then the masked input with its

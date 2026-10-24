@@ -87,7 +87,6 @@ pub const CERTIFICATE_PLACEHOLDER: &str =
 pub const CERTIFICATE_NEEDS_KEY: &str = "A certificate belongs to a key. Link a key first.";
 pub const ATTACH: &str = "Attach";
 pub const NO_SNIPPETS: &str = "No snippets yet";
-pub const MOSH: &str = "Mosh";
 pub const TELNET: &str = "Telnet";
 pub const TELNET_DEFAULT_PORT: &str = "23";
 pub const REMOVE_TELNET: &str = "Remove Telnet";

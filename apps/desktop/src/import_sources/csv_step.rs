@@ -24,7 +24,7 @@ use gpui::{
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{ActiveTheme as _, IconName, h_flex, v_flex};
 use shellpp_core::CoreError;
 use shellpp_core::import::csv::{self, Role};
@@ -548,7 +548,9 @@ impl ImportSourcesDialog {
                     .pr(metrics::SPACE_3)
                     .child(body),
             )
-            .child(Scrollbar::vertical(&self.preview_scroll))
+            // Always shown: the list is cut at the dialog's height, often in
+            // the middle of a row, and the bar says there is more (run 12).
+            .child(Scrollbar::vertical(&self.preview_scroll).mode(ScrollbarMode::Always))
             .into_any_element()
     }
 
@@ -662,7 +664,9 @@ impl ImportSourcesDialog {
                     .pr(metrics::SPACE_3)
                     .child(body),
             )
-            .child(Scrollbar::vertical(&self.preview_scroll))
+            // Always shown: the list is cut at the dialog's height, often in
+            // the middle of a row, and the bar says there is more (run 12).
+            .child(Scrollbar::vertical(&self.preview_scroll).mode(ScrollbarMode::Always))
             .into_any_element()
     }
 

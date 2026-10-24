@@ -32,7 +32,7 @@ use gpui_kit::component::{
 use shellpp_core::{CoreError, ValidationReason};
 
 use super::strength::Strength;
-use super::{NoticeKind, error_line, heading, hint_line, notice, password_field, strings};
+use super::{NoticeKind, error_line, heading_with, hint_line, notice, password_field, strings};
 use crate::state::AppState;
 use crate::state::security::ArchivedDataFile;
 use crate::theme::controls::{ButtonColors as _, Filled};
@@ -387,22 +387,10 @@ impl Render for FirstRunScreen {
             // messages appear (UI 13.1).
             .track_focus(&self.focus)
             // Stage 7 (UI 13.2): a new device can take its data from the
-            // account instead of creating a vault; beside the tagline, so
-            // the card keeps its height (960 x 600).
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .gap(metrics::SPACE_2)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(heading(strings::FIRST_RUN_TAGLINE, cx)),
-                    )
-                    .child(restore),
-            )
+            // account instead of creating a vault; on the app name's line,
+            // so the card keeps its height and the tagline its one line
+            // (960 x 600, run 12).
+            .child(heading_with(strings::FIRST_RUN_TAGLINE, restore, cx))
             .when_some(archived, |this, name| {
                 this.child(notice(
                     "first-run-archived",

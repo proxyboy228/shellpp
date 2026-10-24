@@ -587,8 +587,8 @@ The same form is used for creating and editing; it opens in the details panel.
        (see 4.2, 12.4); [decision]
      - Record output: As in settings / On / Off, "As in settings" by default
        (see 11.2, 12.6); [decision]
-     - Mosh: on/off, off by default. Shown, although Mosh connections come in a later
-       stage (D29);
+     - Mosh: not shown until Mosh connections are built, together with the
+       mobile client (D204); a value saved before stays as it is;
      - terminal theme for this host: a preview thumbnail + name; clicking it
        opens theme selection. The theme set is our own; dark theme by default.
 6. **Add Telnet**: add a second protocol with its own settings to the same host: a Telnet
@@ -1973,7 +1973,11 @@ server. The same password later becomes the password of the sync account. Sectio
   with a new vault" (13.2). It comes before any other screen and covers the whole window
   like the unlock screen; only the window buttons stay available. [decision]
 - A centered block, from top to bottom:
-  - the app name and one line saying that the data is stored locally and encrypted;
+  - the app name and one line saying that the data is stored locally and encrypted. At
+    the end of the app name's line, centered on it, "Restore from sync…" (stage 7): a new
+    device takes its data from the account instead of creating a vault (the connect
+    wizard, sign-in only, 13.5); the line under the name keeps the block's whole width
+    (run 12);
   - the "Master password" and "Repeat password" fields, masked, with show/hide buttons.
     Focus is in the first field; [decision on show/hide and focus]
   - a strength indicator under the password. The minimum is 8 characters; there are no

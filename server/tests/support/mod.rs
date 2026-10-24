@@ -78,6 +78,13 @@ struct Postgres {
     _attach: std::process::Child,
 }
 
+/// The last lines of a command's output, for a failure message.
+fn last_lines(output: &[u8]) -> String {
+    let text = String::from_utf8_lossy(output);
+    let lines: Vec<&str> = text.trim().lines().collect();
+    lines[lines.len().saturating_sub(30)..].join("\n")
+}
+
 fn postgres() -> &'static Postgres {
     static PG: OnceLock<Postgres> = OnceLock::new();
     PG.get_or_init(|| {
@@ -108,16 +115,28 @@ fn postgres() -> &'static Postgres {
             .expect("docker runs");
         assert!(
             output.status.success(),
-            "postgres container was not created"
+            "postgres container was not created: {}",
+            last_lines(&output.stderr)
         );
         let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        // The container's own output (and docker's errors) go to a file in
+        // the target folder, for the message when it does not start.
+        let log_path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("postgres-{}.log", &id[..id.len().min(12)]));
+        let log = std::fs::File::create(&log_path).expect("the container's log file");
         let attach = Command::new("docker")
             .args(["start", "-a", "-i", &id])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(log)
             .spawn()
             .expect("docker start runs");
+        let failed = |what: &str| -> ! {
+            panic!(
+                "{what}; docker and the container said:\n{}",
+                last_lines(&std::fs::read(&log_path).unwrap_or_default())
+            )
+        };
         let mut port = None;
         for _ in 0..120 {
             let port_out = Command::new("docker")
@@ -135,7 +154,7 @@ fn postgres() -> &'static Postgres {
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
-        let port = port.expect("a mapped port");
+        let port = port.unwrap_or_else(|| failed("postgres has no mapped port"));
         // Ready when a connection and a query work.
         let url = format!("postgres://postgres:{password}@127.0.0.1:{port}/postgres");
         let mut ready = false;
@@ -148,7 +167,9 @@ fn postgres() -> &'static Postgres {
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        assert!(ready, "postgres did not become ready");
+        if !ready {
+            failed("postgres did not become ready");
+        }
         Postgres {
             port,
             password,

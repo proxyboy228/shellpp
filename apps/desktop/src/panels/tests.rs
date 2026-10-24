@@ -206,7 +206,9 @@ fn host_panel_blocks_follow_ui_3_1(cx: &mut TestAppContext) {
         assert!(window.try_find("host-more").is_none());
         window.click("host-show-more", cx);
         window.render_frame(cx);
-        // Lead decision 2: every "Show more" field of UI 3.1, Mosh included.
+        // Every "Show more" field of UI 3.1; Mosh is not shown until it is
+        // built (D204).
+        assert!(window.try_find("host-mosh").is_none());
         assert_top_to_bottom(
             window,
             &[
@@ -219,7 +221,6 @@ fn host_panel_blocks_follow_ui_3_1(cx: &mut TestAppContext) {
                 "host-keepalive",
                 "host-history-default",
                 "host-output-default",
-                "host-mosh",
                 "host-terminal-theme",
             ],
         );

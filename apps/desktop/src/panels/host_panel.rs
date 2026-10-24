@@ -15,8 +15,9 @@
 //!    ([`credentials`]), inherited values as "from group X", and "Show more"
 //!    with one field per line: Agent Forwarding, Startup snippet, Host
 //!    Chaining, Proxy, Environment Variables, Charset, Keepalive, Record
-//!    history, Record output, Mosh (lead decision 2: shown, only the value is
-//!    saved) and the terminal theme.
+//!    history, Record output, legacy algorithms and the terminal theme. Mosh
+//!    is not shown until it is built with the mobile client (D204); a value
+//!    saved before stays as it is.
 //! 6. Telnet (`host-block-telnet`): "Add Telnet" adds a second protocol block
 //!    to the same host (port, placeholder 23, and username; removable), with
 //!    the warning that Telnet is not encrypted. The "…" menu's Add Telnet
@@ -1990,12 +1991,6 @@ impl HostPanel {
                     this.child(widgets::caption(strings::AGENT_CONFIRM_NOTE, cx))
                 })
         });
-        let mosh = Switch::new("host-mosh")
-            .checked(self.draft.mosh)
-            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                this.draft.mosh = *checked;
-                this.changed(cx);
-            }));
         // Legacy algorithms (D80): off by default; on, the warning stays.
         let legacy = Switch::new("host-legacy-algorithms")
             .checked(self.draft.allow_legacy_algorithms)
@@ -2052,7 +2047,6 @@ impl HostPanel {
                 |draft, mode| draft.record_output = mode,
                 cx,
             ))
-            .child(widgets::inline_row(strings::MOSH, mosh, cx))
             .child(widgets::inline_row(strings::LEGACY_ALGORITHMS, legacy, cx))
             .children(legacy_warning)
             .child(self.render_terminal_theme(window, cx))
