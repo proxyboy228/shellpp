@@ -155,6 +155,9 @@ impl FromRequestParts<AppState> for Auth {
             .limiters
             .api(principal.device_id)
             .map_err(ApiError::rate_limited)?;
+        // A network the account is used from is not held by the soft TOTP
+        // limit of the account (D175).
+        state.limiters.account_seen(principal.user_id, ip);
         Ok(Auth(principal))
     }
 }
@@ -455,6 +458,7 @@ async fn login(
 
 async fn login_totp(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<LoginTotpRequest>,
 ) -> ApiResult<Response> {
     let shared = state.clone();
@@ -462,7 +466,7 @@ async fn login_totp(
     let response = state
         .db
         .run(TxKind::Write, move |tx| -> ApiResult<ApiResult<_>> {
-            sticky(accounts::login_totp(tx, &shared, request, model::now()))
+            sticky(accounts::login_totp(tx, &shared, request, ip, model::now()))
         })
         .await??;
     Ok(Json(response).into_response())
@@ -517,6 +521,7 @@ async fn recover_begin(
 
 async fn recover_complete(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverCompleteRequest>,
 ) -> ApiResult<Response> {
     let shared = state.clone();
@@ -528,6 +533,7 @@ async fn recover_complete(
                 tx,
                 &shared,
                 request,
+                ip,
                 model::now(),
             ))
         })
@@ -631,6 +637,7 @@ async fn totp_setup(
 
 async fn totp_enable(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<TotpCode>,
 ) -> ApiResult<StatusCode> {
@@ -638,7 +645,7 @@ async fn totp_enable(
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::totp_enable(tx, &shared, &principal, request, model::now())
+            accounts::totp_enable(tx, &shared, &principal, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -646,6 +653,7 @@ async fn totp_enable(
 
 async fn totp_disable(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<TotpDisableRequest>,
 ) -> ApiResult<StatusCode> {
@@ -654,7 +662,7 @@ async fn totp_disable(
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::totp_disable(tx, &shared, &checked, request, model::now())
+            accounts::totp_disable(tx, &shared, &checked, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -676,6 +684,7 @@ async fn ssh_id(
 
 async fn account_delete(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<AccountDeleteRequest>,
 ) -> ApiResult<StatusCode> {
@@ -684,7 +693,7 @@ async fn account_delete(
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::account_delete(tx, &shared, &checked, request, model::now())
+            accounts::account_delete(tx, &shared, &checked, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)

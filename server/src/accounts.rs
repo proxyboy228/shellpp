@@ -1,6 +1,8 @@
 //! Authentication and account operations (docs/sync-protocol.md, sections
 //! 4 and 5). Every function runs inside one database transaction.
 
+use std::net::IpAddr;
+
 use axum::http::StatusCode;
 use shellpp_sync_api::api::{
     AccountDeleteRequest, B64, Device, DeviceList, EmailChangeRequest, EmailChangeResponse,
@@ -567,8 +569,10 @@ fn ticket(
     ))
 }
 
-/// Checks a TOTP code for a user with a ticket: a wrong code counts an
-/// attempt (the 5th deletes the ticket) and an account failure.
+/// Checks a TOTP code for a user with a ticket, from the client at `ip`:
+/// while a delay runs, `429` (D175); a wrong code counts an attempt (the
+/// 5th deletes the ticket) and a failure of the account from that client.
+#[allow(clippy::too_many_arguments)]
 fn check_ticket_totp(
     tx: &mut dyn Tx,
     shared: &Shared,
@@ -576,11 +580,12 @@ fn check_ticket_totp(
     ticket_hash: &[u8],
     attempts: i64,
     code: &str,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -593,9 +598,12 @@ fn check_ticket_totp(
         now.unix_timestamp().max(0) as u64,
         user.totp_last_step,
     ) {
-        Some(step) => Ok(step),
+        Some(step) => {
+            shared.limiters.totp_succeeded(user.user_id, ip);
+            Ok(step)
+        }
         None => {
-            shared.limiters.totp_failed(user.user_id);
+            shared.limiters.totp_failed(user.user_id, ip);
             if attempts + 1 >= TICKET_ATTEMPTS {
                 tx.exec(
                     "DELETE FROM auth_tickets WHERE ticket_hash = ?",
@@ -612,11 +620,12 @@ fn check_ticket_totp(
     }
 }
 
-/// `POST /v1/auth/login/totp`.
+/// `POST /v1/auth/login/totp` from the client at `ip`.
 pub fn login_totp(
     tx: &mut dyn Tx,
     shared: &Shared,
     request: LoginTotpRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<LoginResponse> {
     let (hash, user_id, device_id, attempts) = ticket(tx, &request.login_ticket.0, "login", now)?;
@@ -636,7 +645,7 @@ pub fn login_totp(
         )?;
         return Err(ticket_expired());
     }
-    let step = check_ticket_totp(tx, shared, &user, &hash, attempts, &request.code.0, now)?;
+    let step = check_ticket_totp(tx, shared, &user, &hash, attempts, &request.code.0, ip, now)?;
     tx.exec(
         "UPDATE users SET totp_last_step = ? WHERE user_id = ?",
         &[(step as i64).into(), user_id.into()],
@@ -998,6 +1007,7 @@ pub fn recover_complete(
     tx: &mut dyn Tx,
     shared: &Shared,
     request: RecoverCompleteRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<Tokens> {
     let (hash, user_id, device_id, attempts) =
@@ -1012,7 +1022,7 @@ pub fn recover_complete(
             .as_ref()
             .map(|code| code.0.as_str())
             .unwrap_or("");
-        let step = check_ticket_totp(tx, shared, &user, &hash, attempts, code, now)?;
+        let step = check_ticket_totp(tx, shared, &user, &hash, attempts, code, ip, now)?;
         tx.exec(
             "UPDATE users SET totp_last_step = ? WHERE user_id = ?",
             &[(step as i64).into(), user_id.into()],
@@ -1190,6 +1200,7 @@ pub fn totp_enable(
     shared: &Shared,
     principal: &Principal,
     request: TotpCode,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
     let user = me(tx, principal)?;
@@ -1198,7 +1209,7 @@ pub fn totp_enable(
     }
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1212,9 +1223,10 @@ pub fn totp_enable(
         None,
     )
     .ok_or_else(|| {
-        shared.limiters.totp_failed(user.user_id);
+        shared.limiters.totp_failed(user.user_id, ip);
         invalid_totp()
     })?;
+    shared.limiters.totp_succeeded(user.user_id, ip);
     tx.exec(
         "UPDATE users SET totp_enabled = TRUE, totp_last_step = ? WHERE user_id = ?",
         &[(step as i64).into(), user.user_id.into()],
@@ -1229,11 +1241,12 @@ pub fn totp_disable(
     shared: &Shared,
     checked: &CheckedKey,
     request: TotpDisableRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
     let user = checked.user(tx)?;
     if user.totp_enabled {
-        check_user_totp(shared, &user, &request.code.0, now)?;
+        check_user_totp(shared, &user, &request.code.0, ip, now)?;
     }
     tx.exec(
         "UPDATE users SET totp_secret_enc = NULL, totp_enabled = FALSE, totp_last_step = NULL \
@@ -1243,16 +1256,18 @@ pub fn totp_disable(
     Ok(())
 }
 
-/// A TOTP code of a signed-in user (no ticket): disable, account deletion.
+/// A TOTP code of a signed-in user (no ticket) from the client at `ip`:
+/// disable, account deletion; the delays of D175 apply.
 fn check_user_totp(
     shared: &Shared,
     user: &User,
     code: &str,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1265,8 +1280,9 @@ fn check_user_totp(
         now.unix_timestamp().max(0) as u64,
         user.totp_last_step,
     )
+    .inspect(|_| shared.limiters.totp_succeeded(user.user_id, ip))
     .ok_or_else(|| {
-        shared.limiters.totp_failed(user.user_id);
+        shared.limiters.totp_failed(user.user_id, ip);
         invalid_totp()
     })
 }
@@ -1291,6 +1307,7 @@ pub fn account_delete(
     shared: &Shared,
     checked: &CheckedKey,
     request: AccountDeleteRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
     let user = checked.user(tx)?;
@@ -1300,7 +1317,7 @@ pub fn account_delete(
             .as_ref()
             .map(|code| code.0.as_str())
             .unwrap_or("");
-        check_user_totp(shared, &user, code, now)?;
+        check_user_totp(shared, &user, code, ip, now)?;
     }
     // Sole owner of a team vault with other members (D14).
     let sole: Vec<Val> = tx

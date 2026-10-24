@@ -445,11 +445,12 @@ pub fn expose(secret: &SecretString) -> &str {
 // Raw HTTP
 // ---------------------------------------------------------------------------
 
-/// The answer of [`raw_http`]: the status and the body (`Value::Null`
-/// when it is not JSON).
+/// The answer of [`raw_http`]: the status, the body (`Value::Null` when it
+/// is not JSON) and the seconds of a `Retry-After` header.
 pub struct RawAnswer {
     pub status: u16,
     pub body: Value,
+    pub retry_after: Option<u64>,
 }
 
 impl RawAnswer {
@@ -492,9 +493,17 @@ pub fn raw_http(
         .nth(1)
         .and_then(|code| code.parse().ok())
         .expect("a status line");
-    let body = text
-        .split_once("\r\n\r\n")
-        .and_then(|(_, body)| serde_json::from_str(body).ok())
-        .unwrap_or(Value::Null);
-    RawAnswer { status, body }
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((text.as_ref(), ""));
+    let retry_after = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("retry-after")
+            .then(|| value.trim().parse().ok())?
+    });
+    let body = serde_json::from_str(body).unwrap_or(Value::Null);
+    RawAnswer {
+        status,
+        body,
+        retry_after,
+    }
 }

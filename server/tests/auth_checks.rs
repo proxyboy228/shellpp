@@ -25,6 +25,10 @@ use support::*;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
+/// The client address of the operations run directly (the TOTP delays of
+/// D175 are kept per account and client network).
+const IP: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1));
+
 fn ms(n: i64) -> Duration {
     Duration::milliseconds(n)
 }
@@ -37,7 +41,8 @@ fn s(n: i64) -> Duration {
 fn limits() -> RateLimits {
     RateLimits {
         failures_per_window: 1_000,
-        totp_failures_per_window: 1_000,
+        totp_free_failures: 1_000,
+        totp_soft_failures: 1_000,
         ..RateLimits::generous()
     }
 }
@@ -258,7 +263,7 @@ impl Fixture {
             login_ticket: Secret(ticket.to_owned()),
             code: Secret(code.to_owned()),
         };
-        self.write(|tx, shared| accounts::login_totp(tx, shared, request, now))
+        self.write(|tx, shared| accounts::login_totp(tx, shared, request, IP, now))
     }
 
     /// Sets TOTP up (not enabled yet): the principal and the secret.
@@ -290,7 +295,7 @@ impl Fixture {
             code: Secret(code.to_owned()),
         };
         self.write_with(shared, |tx, shared| {
-            accounts::totp_enable(tx, shared, principal, request, now)
+            accounts::totp_enable(tx, shared, principal, request, IP, now)
         })
     }
 
@@ -594,7 +599,7 @@ fn a_deleted_accounts_refresh_token_answers_account_deleted_for_30_days() {
             totp_code: None,
         };
         fx.signed_in(&principal, key, |tx, shared, checked| {
-            accounts::account_delete(tx, shared, checked, request, t0)
+            accounts::account_delete(tx, shared, checked, request, IP, t0)
         })
     };
     refused(
@@ -818,7 +823,7 @@ fn recovery_checks_the_key_the_ticket_and_its_device() {
     };
     let complete = |ticket: &str, device_id: Uuid, now: OffsetDateTime| {
         let request = complete_request(&a.email, ticket, device_id, None);
-        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, now))
+        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, IP, now))
     };
     for key in [
         flipped(&a.recovery_auth_key, 0),
@@ -894,7 +899,7 @@ fn login_tickets_are_found_by_hash_and_kind_and_survive_four_wrong_codes() {
     }
     let request = complete_request(&a.email, &ticket, a.device_id, Some(&next));
     refused(
-        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, t0)),
+        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, IP, t0)),
         401,
         code::TICKET_EXPIRED,
     );
@@ -997,7 +1002,7 @@ fn signed_in_totp_checks_refuse_wrong_used_and_missing_codes() {
             code: Secret(totp.to_owned()),
         };
         fx.signed_in(&principal, key, |tx, shared, checked| {
-            accounts::totp_disable(tx, shared, checked, request, t0)
+            accounts::totp_disable(tx, shared, checked, request, IP, t0)
         })
     };
     let delete = |totp: Option<&str>| {
@@ -1006,7 +1011,7 @@ fn signed_in_totp_checks_refuse_wrong_used_and_missing_codes() {
             totp_code: totp.map(|totp| Secret(totp.to_owned())),
         };
         fx.signed_in(&principal, &a.auth_key, |tx, shared, checked| {
-            accounts::account_delete(tx, shared, checked, request, t0)
+            accounts::account_delete(tx, shared, checked, request, IP, t0)
         })
     };
     let next = code_at(&secret, t0 + s(30));

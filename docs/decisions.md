@@ -1849,3 +1849,19 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.1; the run 7 report, section 10
 - `/account/password` and `/account/recovery-key` keep their check inside the transaction in this run (another agent extends them and the combined request of D173, item 2); at the merge they move to the same helper: the handler calls `current_auth_key` and the operation takes the user with `CheckedKey::user`. The new verifiers of password changes, email changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
 
 **Spec impact:** docs/sync-protocol.md, section 4.4 (server rules).
+
+### 175. TOTP: a growing delay per account and network, and a soft limit per account (run 9)
+
+Status: run 9 decision, 2026-10-24 (D173, item 1.2; the run 7 report, section 10.1, finding 2). Replaces the TOTP row of docs/sync-protocol.md, section 10.1 (stage 0 decision: 10 failures per 15 minutes per account).
+
+**Context.** The fixed window let anyone who knows the password try 40 codes an hour for ever (about 65 % success in a year against a 6-digit code with ±1 step), and, keyed by the account alone, let anyone who knows the email and password lock the owner out for 15 minutes at a time. The owner chose a growing delay per account and client address, and a soft limit per account that never locks sign-in out entirely; a delay is an answer "retry after N seconds", never a wait inside the request.
+
+**Decision:**
+
+- Every TOTP check (login, recovery, enable, disable, account deletion) first asks two counters, both in memory: the account with the client's network (an IPv4 address, the /64 of an IPv6 one, as for bearer tokens, D103) and the account alone. While either delay runs, the answer is `429 rate_limited` with `Retry-After` in whole seconds rounded up, also for the right code, and the ticket's 5 attempts are not used.
+- Per account and network: 3 failures free, then 2 seconds, doubled by each further failure, up to 15 minutes (`SHELLPP_RATE_LIMIT_FREE_TOTP`, default 3). A right code from the network starts it over.
+- The soft limit per account, from every network together: 10 failures free, then 2 seconds doubling, up to 5 minutes (`SHELLPP_RATE_LIMIT_FAILED_TOTP`, default 10; it named the failures of the fixed window before). A right code does not reset it, so a sign-in of the owner gives an attacker elsewhere no new tries. It does not apply to a network the account is known from: one with a right code, or a request with one of the account's tokens, in the last 30 days (the 8 most recent per account). So an attacker who takes every turn of the soft limit still never locks out the networks the owner's devices use; a new network waits at most 5 minutes per try.
+- Each delay runs from the last failure that counts for it; failures are forgotten 24 hours after the last one. The maps are pruned when they pass 100,000 entries (forgotten ones first, then all but the last 15 minutes), which only lowers the network counters; the account counter stays.
+- What it gives: from one network 4 codes an hour, from many networks at most 12 an hour once the soft limit is at its cap (about 27 % success in a year of a lasting attack with the password known, against 65 %), while no one waits longer than 5 minutes because of failures elsewhere, and the owner's usual networks not at all. The checks run inside the transaction that locks the user row (SQLite: one writer; PostgreSQL: `FOR UPDATE`), except the recovery's, which locks its ticket, so two codes of one account are not checked against the counters at the same moment.
+
+**Spec impact:** docs/sync-protocol.md, section 10.1 (the TOTP row and the paragraph after the table).
