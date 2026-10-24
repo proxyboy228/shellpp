@@ -32,8 +32,8 @@ mod trust_tests;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Task, Window,
-    div, prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Task, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -49,6 +49,7 @@ use shellpp_core::service::{
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
 use trust::TrustPanel;
+use zeroize::Zeroizing;
 
 use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
@@ -1692,16 +1693,28 @@ debug_opaque!(
 // ---------------------------------------------------------------------------
 
 /// Where the TOTP setup is.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TotpStep {
     Password,
-    /// The secret for the authenticator app and the code to confirm it.
+    /// The secret for the authenticator app and the code to confirm it,
+    /// wiped when the step is left (D192).
     Code {
-        secret: String,
+        secret: Zeroizing<String>,
         /// `None`: the server's URI was not one for the QR code (D188).
-        uri: Option<String>,
+        uri: Option<Zeroizing<String>>,
     },
     Done,
+}
+
+impl std::fmt::Debug for TotpStep {
+    /// Never the secret or its `otpauth://` text.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Password => "Password",
+            Self::Code { .. } => "Code(..)",
+            Self::Done => "Done",
+        })
+    }
 }
 
 pub struct TotpDialog {
@@ -1734,11 +1747,11 @@ impl TotpDialog {
                             Ok(setup) => {
                                 use secrecy::ExposeSecret as _;
                                 dialog.step = TotpStep::Code {
-                                    secret: setup.secret.expose_secret().to_owned(),
+                                    secret: Zeroizing::new(setup.secret.expose_secret().to_owned()),
                                     uri: setup
                                         .otpauth_uri
                                         .as_ref()
-                                        .map(|uri| uri.expose_secret().to_owned()),
+                                        .map(|uri| Zeroizing::new(uri.expose_secret().to_owned())),
                                 };
                             }
                             Err(error) => dialog.error = Some(error_text(&error)),
@@ -1790,7 +1803,7 @@ impl Render for TotpDialog {
                 .gap(metrics::SPACE_2)
                 .child(widgets::caption(strings::TOTP_SECRET_HINT, cx))
                 // Only an otpauth://totp/ URI of this secret (D188).
-                .children(uri.as_deref().and_then(qr_code))
+                .children(uri.as_ref().and_then(|uri| qr_code(uri.as_str())))
                 .child(
                     div()
                         .id("sync-totp-secret")
@@ -1798,9 +1811,12 @@ impl Render for TotpDialog {
                         .font_family(crate::terminal::fonts::JETBRAINS_MONO)
                         .text_size(metrics::FONT_SIZE_BODY)
                         .text_color(cx.theme().popover_foreground)
-                        .child(secret),
+                        .child(SharedString::new(secret.as_str())),
                 )
-                .children(uri.map(|uri| widgets::caption(uri, cx)))
+                .children(
+                    uri.as_ref()
+                        .map(|uri| widgets::caption(SharedString::new(uri.as_str()), cx)),
+                )
                 .child(widgets::field(
                     strings::TOTP_CODE,
                     widgets::text_input(

@@ -357,3 +357,40 @@ fn a_full_restore_applies_the_settings_of_the_file_but_not_the_devices() {
     assert_eq!(value("serial.flow"), "none");
     assert_eq!(value("updates.last_check"), 0);
 }
+
+/// D194: "Forward the system agent while locked" belongs to the device: an
+/// export leaves it out, and no import takes it, a full restore neither.
+#[test]
+fn the_system_agent_while_locked_never_comes_from_a_file() {
+    let key = shellpp_core::settings::SYSTEM_AGENT_WHILE_LOCKED_KEY;
+    let source = first_run();
+    source
+        .core
+        .settings_set(SettingsSetInput {
+            values: BTreeMap::from([(key.to_owned(), json!(true))]),
+            reset: Vec::new(),
+        })
+        .expect("settings");
+    let export = source
+        .core
+        .data_export(DataExportInput::default())
+        .expect("export");
+    let mut document: serde_json::Value =
+        serde_json::from_str(export.text.expose_secret()).expect("json");
+    assert!(document["settings"].get(key).is_none());
+    document["settings"][key] = json!(true);
+    let text = document.to_string();
+    for full_restore in [false, true] {
+        let target = first_run();
+        target
+            .core
+            .data_import(DataImportInput {
+                apply_settings: true,
+                full_restore,
+                ..DataImportInput::new(SecretString::from(text.clone()), None)
+            })
+            .expect("import");
+        let settings = target.core.settings_get().expect("settings");
+        assert_eq!(settings[key], json!(false), "full restore: {full_restore}");
+    }
+}

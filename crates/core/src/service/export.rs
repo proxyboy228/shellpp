@@ -151,10 +151,12 @@ pub fn imported_setting(key: &str) -> bool {
 /// full restore included.
 pub fn device_setting(key: &str) -> bool {
     // Script generation (D144): a file never chooses where descriptions
-    // go, not even a full restore.
+    // go, not even a full restore; nor whether forwarded agents keep the
+    // system agent while locked (D194).
     key.starts_with("serial.")
         || key.starts_with("snippets.generation")
         || key == "updates.last_check"
+        || key == crate::settings::SYSTEM_AGENT_WHILE_LOCKED_KEY
 }
 
 /// Whether an export writes records of `kind`: never the recovery key

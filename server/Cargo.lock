@@ -2569,6 +2569,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

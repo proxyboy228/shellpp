@@ -223,7 +223,8 @@ opt-level = 3
 [profile.dev.package.crypto-primes]
 opt-level = 3
 
-# russh 0.64.1 with the one-line fix of the channel leak (D98, D100):
-# third_party/russh/PATCHES.md. Remove once a russh release has the fix.
+# russh 0.64.1 with two small fixes, the channel leak (D98, D100) and empty
+# data read as the end of a stream (D191): third_party/russh/PATCHES.md,
+# which says how to remove each once a russh release has it.
 [patch.crates-io]
 russh = { path = "third_party/russh" }

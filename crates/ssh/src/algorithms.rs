@@ -346,6 +346,19 @@ mod tests {
     }
 
     #[test]
+    fn a_cleartext_transport_is_never_offered() {
+        // The empty-data tests negotiate one; the app never does, legacy
+        // algorithms or not.
+        for legacy in [false, true] {
+            let preferred = preferred(&[], legacy);
+            assert!(!preferred.kex.contains(&kex::NONE));
+            assert!(!preferred.cipher.contains(&cipher::NONE));
+            assert!(!preferred.cipher.contains(&cipher::CLEAR));
+            assert!(!preferred.mac.contains(&mac::NONE));
+        }
+    }
+
+    #[test]
     fn legacy_algorithms_come_last_and_only_when_allowed() {
         use crate::AlgorithmKind as K;
         assert!(KNOWN.len() <= 128);

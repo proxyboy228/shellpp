@@ -43,7 +43,10 @@ where
         };
 
         match (&msg, self.ext) {
-            (ChannelMsg::Data { data }, None) => {
+            // Shell++ patch (third_party/russh/PATCHES.md): empty data is
+            // skipped like any other message; handed on, it read as 0 bytes,
+            // which a reader takes for the end of the stream.
+            (ChannelMsg::Data { data }, None) if !data.is_empty() => {
                 let readable = buf.remaining().min(data.len() - idx);
 
                 // Clamped to maximum `buf.remaining()` and `data.len() - idx` with `.min`
@@ -57,7 +60,9 @@ where
 
                 Poll::Ready(Ok(()))
             }
-            (ChannelMsg::ExtendedData { data, ext }, Some(target)) if *ext == target => {
+            (ChannelMsg::ExtendedData { data, ext }, Some(target))
+                if *ext == target && !data.is_empty() =>
+            {
                 let readable = buf.remaining().min(data.len() - idx);
 
                 // Clamped to maximum `buf.remaining()` and `data.len() - idx` with `.min`

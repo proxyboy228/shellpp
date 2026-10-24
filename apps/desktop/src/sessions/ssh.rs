@@ -1106,10 +1106,13 @@ async fn wait_unlocked(unlocked: &mut watch::Receiver<bool>) {
 /// The keys of the built-in agent for one connection (D60): the Keychain's
 /// keys that open without asking (unencrypted, or with a saved
 /// passphrase). A lock wipes them at once and an unlock loads them again;
-/// none are offered while the app is locked (docs/security.md, section 8).
+/// none are offered while the app is locked (docs/security.md, section 8),
+/// nor the system agent's unless the user chose so (D194).
 struct AgentKeyStore {
     keys: Mutex<Vec<Arc<shellpp_ssh::agent::PrivateKeyArc>>>,
     unlocked: watch::Receiver<bool>,
+    /// The system agent's keys stay offered while locked (D194).
+    system_while_locked: Arc<std::sync::atomic::AtomicBool>,
     /// Dropped with the store: ends its lock watcher.
     _alive: tokio::sync::oneshot::Sender<()>,
 }
@@ -1140,6 +1143,15 @@ impl shellpp_ssh::AgentKeys for AgentKeyStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// While locked, the system agent's keys only when the user chose so in
+    /// Settings > Security (D194).
+    fn system_agent_allowed(&self) -> bool {
+        *self.unlocked.borrow()
+            || self
+                .system_while_locked
+                .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -1222,6 +1234,7 @@ async fn built_in_agent(
     let store = Arc::new(AgentKeyStore {
         keys: Mutex::new(load_agent_keys(shared).await),
         unlocked: shared.unlocked(),
+        system_while_locked: Arc::clone(&shared.system_agent_while_locked),
         _alive: alive,
     });
     // One watcher per store, ending with it: wipe at the lock, load again

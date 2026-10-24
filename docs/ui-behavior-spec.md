@@ -481,9 +481,13 @@ On the right:
   one, a passphrase field and "Save the passphrases in the vault"; then the lines that could
   not be read. An imported host keeps what was left out in its notes; a host whose ProxyJump
   names a host that is not imported keeps that hop in its chain as a missing host, with a
-  note that says so, so it is not connected (D44), never silently connected directly. The summary adds, when there are any, the hosts left without
-  their jump hosts and the commands of the file that were neither run nor imported
-  (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec). [decision]
+  note that says so, so it is not connected (D44), never silently connected directly. `ForwardAgent` turns Agent
+  Forwarding on only when the file is the user's own `~/.ssh/config` (the suggested
+  path, D60); from any other file the host is imported with it off and a note that says
+  so. [decision] (D193) The summary adds, when there are any, the hosts left without
+  their jump hosts, the commands of the file that were neither run nor imported
+  (ProxyCommand, LocalCommand, KnownHostsCommand, Match exec) and the hosts imported with
+  Agent Forwarding turned off. [decision]
 
 ### 2.6 Move or copy to a vault [decision]
 
@@ -565,7 +569,9 @@ The same form is used for creating and editing; it opens in the details panel.
        dot, also when another tab or screen is shown; when the app's window is not
        focused, a system notification names the host ("web-1 asks for a signature",
        nothing of the key), and a click on it brings the window and the tab forward. The
-       answer takes both away. [decision, D68]
+       answer takes both away. [decision, D68] While the app is locked, the
+       forwarded agent offers no Keychain keys, and the system agent's only when "Forward
+       the system agent while locked" is on (13.4). [decision] (D194)
      - Startup snippet with `{{name}}` variables: after each login the session's tab asks
        their values in the form of the Snippets screen (9.4) and then runs it; Cancel skips
        it for that login. [decision, D66]
@@ -2023,6 +2029,9 @@ server. The same password later becomes the password of the sync account. Sectio
   - the vault keys and decrypted secrets are wiped from memory; [decision]
   - everything that needs secrets waits for unlock: automatic reconnection (see 4.6) and
     the autostart of forwarding rules (see 8.4). [decision]
+  - a forwarded agent (3.1) offers no keys until unlock: the Keychain's are wiped, and the
+    system agent's are not offered either unless "Forward the system agent while locked"
+    is on (13.4). [decision] (D194)
 - After unlock, every window returns to the state it had before the lock. [decision]
 - Lock and auto-lock always ask for the master password, also with "Remember on this
   device": the remembered key is used only at launch (see 13.4). [decision]
@@ -2032,6 +2041,13 @@ server. The same password later becomes the password of the sync account. Sectio
 Settings → Security (see 12.1):
 
 - **Auto-lock**: a dropdown with Never, 5, 15, 30 and 60 minutes; Never by default.
+- **Forward the system agent while locked**: a switch, off by default, with the
+  explanation under it. Off, a host with Agent Forwarding gets no signatures while the app
+  is locked; on, a host with "Also offer the system agent's keys" (3.1) can still ask the
+  system agent for signatures while the app is locked, and the system agent applies its
+  own policy; with "Ask before every signature" it still gets none, since the question
+  cannot be answered while locked. Read at each lock. It belongs to the device: an export
+  leaves it out and no import sets it, a full restore neither. [decision] (D194)
 - **Change master password**: the current password, the new password and its
   confirmation. The new password follows the rules of 13.1 (at least 8 characters, the
   strength indicator). [decision]
