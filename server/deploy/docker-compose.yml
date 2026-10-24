@@ -56,7 +56,12 @@ services:
         condition: service_completed_successfully
 
   backup:
-    image: alpine:3.22
+    # Built once from backup.Dockerfile (PostgreSQL client and age inside),
+    # so a backup needs no network (README, "Backups").
+    build:
+      context: .
+      dockerfile: backup.Dockerfile
+    image: shellpp-backup:latest
     restart: unless-stopped
     environment:
       PGHOST: postgres
@@ -66,9 +71,7 @@ services:
       AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?set BACKUP_AGE_RECIPIENT (an age public key) in .env}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-    entrypoint: ["/bin/sh", "/backup.sh"]
     volumes:
-      - ./backup.sh:/backup.sh:ro
       - ${BACKUP_DIR:-./backups}:/backups
     depends_on:
       postgres:

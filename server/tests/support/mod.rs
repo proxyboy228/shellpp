@@ -470,9 +470,27 @@ pub fn raw_http(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> RawAnswer {
+    raw_http_at(
+        server.origin.trim_start_matches("http://"),
+        method,
+        path,
+        headers,
+        body,
+    )
+    .expect("connect")
+}
+
+/// [`raw_http`] to `addr` (`host:port`), for a server in a container;
+/// `None` when nothing answers there.
+pub fn raw_http_at(
+    addr: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Option<RawAnswer> {
     use std::io::{Read, Write};
-    let addr = server.origin.trim_start_matches("http://");
-    let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+    let mut stream = std::net::TcpStream::connect(addr).ok()?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .expect("timeout");
@@ -484,16 +502,15 @@ pub fn raw_http(
         "content-length: {}\r\nconnection: close\r\n\r\n",
         body.len()
     ));
-    stream.write_all(head.as_bytes()).expect("write");
-    stream.write_all(body).expect("write");
+    stream.write_all(head.as_bytes()).ok()?;
+    stream.write_all(body).ok()?;
     let mut answer = Vec::new();
-    stream.read_to_end(&mut answer).expect("read");
+    stream.read_to_end(&mut answer).ok()?;
     let text = String::from_utf8_lossy(&answer);
     let status = text
         .split_whitespace()
         .nth(1)
-        .and_then(|code| code.parse().ok())
-        .expect("a status line");
+        .and_then(|code| code.parse().ok())?;
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((text.as_ref(), ""));
     let retry_after = head.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
@@ -502,9 +519,9 @@ pub fn raw_http(
             .then(|| value.trim().parse().ok())?
     });
     let body = serde_json::from_str(body).unwrap_or(Value::Null);
-    RawAnswer {
+    Some(RawAnswer {
         status,
         body,
         retry_after,
-    }
+    })
 }

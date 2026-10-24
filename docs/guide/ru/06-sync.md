@@ -315,8 +315,11 @@ Shell++ синхронизируется сразу после разблоки�
 
 Сервис `backup` из compose-файла каждые 24 часа записывает
 `backups/shellpp-<time>.sql.age` (дамп базы данных, зашифрованный для
-вашего ключа `age`) и удаляет копии старше 30 дней. Регулярно копируйте
-эту папку на другую машину. Сделать копию прямо сейчас:
+вашего ключа `age`) и удаляет копии старше 30 дней. Его инструменты лежат
+в образе, который собирается один раз при первом запуске, поэтому для
+копии сеть не нужна; неудачная копия видна в `docker compose logs backup`
+и не оставляет файла. Регулярно копируйте эту папку на другую машину.
+Сделать копию прямо сейчас:
 
 ```bash
 docker compose run --rm -e BACKUP_ONCE=1 backup
@@ -368,6 +371,7 @@ rolled back" с кнопкой **Bring the server up to date…**; она зап
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
+docker compose build backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```

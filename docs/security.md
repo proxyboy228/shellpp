@@ -837,6 +837,7 @@ Backups ([decision] (D93); Choice 13 (c): tested recipes, no backup code in the 
 - `server/README.md` gives tested recipes, and the server's CI runs them: back up, restore into an empty database, `admin restored`. For a homelab: a `backup` service in the Docker Compose file that runs on a schedule (daily by default) and pipes the dump straight into an encrypting tool, so no unencrypted dump is written to the backup volume: `pg_dump` for PostgreSQL; for SQLite an online backup (`sqlite3 … ".backup"`) to a file on a tmpfs, encrypted at once and removed.
 - The encrypting tool is `age`, to an operator's public key (`age -r`); the private key is kept off the server, so a copy of the backup volume alone opens nothing.
 - Recommended retention: 30 days; the service deletes older files. The shorter it is, the sooner old wraps and verifiers (RR6, RR7) and deleted accounts leave the backups.
+- A dump or encryption that fails fails the backup (the pipe runs with `pipefail`): no file that looks like a backup is left, and nothing is pruned after a failure, so a broken dump never replaces the good backups as they age out. The service's image carries `pg_dump` and `age`, built once at deployment, so a backup needs no network ([decision] (D178)).
 
 Restore ([decision] (D93); Choices 14 (b) and 15 (c)):
 

@@ -1898,3 +1898,17 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.9; the run 7 report, section 10
 - Copies of the TOTP secret by value inside `totp-rs` (`Builder`, `Totp`) stay a known limitation (security.md, section 14.4).
 
 **Spec impact:** docs/security.md (the key table and section 14.4), docs/architecture.md (environment variables), server/README.md, server/deploy/docker-compose.yml and .env.example, the guide's table of settings (EN and RU).
+
+### 178. A failed backup leaves no backup; the backup image is built once (run 9)
+
+Status: run 9 decision, 2026-10-24 (the plan of run 9, section 3.7; run 8's agent C, finding S7; docs/sync-protocol.md, section 12, "the encrypted backup recipe and a restore from it").
+
+**Context.** `backup.sh` piped `pg_dump` into `age` without `pipefail`: a dump that failed (database down, wrong password) gave an encrypted empty file, the script said "backup written", and after 30 days of that the good backups were pruned. Reproduced in run 9: exit 0 and a 200-byte `.sql.age` with no database at all. The `backup` service ran a stock `alpine:3.22` that installed `postgresql17-client` and `age` with `apk add` at every start, so the nightly backup depended on the network and Alpine's mirrors. The recipe itself was not tested.
+
+**Decision:**
+
+- `backup.sh` runs with `set -o pipefail` (busybox ash has it). A failing dump or encryption removes the `.part`, prints "backup failed" and ends the script with an error, before the prune: no `.sql.age` comes from a failed run and old backups stay. Only a finished file is renamed to `.sql.age`. Missing tools are an error that names the image, not a reason to install them.
+- The service uses an image built from `server/deploy/backup.Dockerfile` (Alpine 3.22 with `postgresql17-client` and `age`, the script inside), built once by `docker compose up` or `docker compose build backup`; the Update steps rebuild it.
+- `server/tests/deploy.rs`, under `SHELLPP_TEST_DEPLOY=docker`, runs the recipe: the backup image dumps the server's PostgreSQL through `age`, the dump is decrypted and loaded into a clean PostgreSQL, `admin restored`, the server comes back at the same address; two clients keep their data and notice the restore (`server_generation`), the record made after the backup comes back from the device, and a new device sees everything. A second test runs a failing dump; a third checks the compose file as Compose reads it (trusted gateway, Docker secret, backup image). The server image takes `--build-arg BUILD_JOBS=N` for shared machines.
+
+**Spec impact:** docs/security.md, section 14.4 (backups); server/README.md (Backups, Update); docs/guide/06-sync.md and docs/guide/ru/06-sync.md.

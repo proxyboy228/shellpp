@@ -301,8 +301,10 @@ new password for the local copy only.
 
 The compose file's `backup` service writes
 `backups/shellpp-<time>.sql.age` every 24 hours (a database dump encrypted
-to your `age` key) and deletes the ones older than 30 days. Copy that
-folder off the machine regularly. Make one now with
+to your `age` key) and deletes the ones older than 30 days. Its tools are
+in an image built once at the first start, so a backup needs no network; a
+backup that fails shows in `docker compose logs backup` and leaves no file.
+Copy that folder off the machine regularly. Make one now with
 
 ```bash
 docker compose run --rm -e BACKUP_ONCE=1 backup
@@ -353,6 +355,7 @@ From the repository root:
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
+docker compose build backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```
