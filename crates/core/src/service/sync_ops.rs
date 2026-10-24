@@ -2973,6 +2973,7 @@ impl Core {
                 Some(&local_auth),
                 None,
                 &tokens,
+                link.api.origin(),
                 now,
             )?;
             tracing::info!("master password changed on the server and here");
@@ -2991,7 +2992,11 @@ impl Core {
 
     /// Writes the key rows of a server-accepted change in one transaction:
     /// the rotation (or a single `kek` row), `local_auth`, an extra record
-    /// row and the new refresh token; then re-seals older records.
+    /// row and the new refresh token; then re-seals older records. The
+    /// tokens belong to `issuer`, the origin the request went to: when the
+    /// stored `server_url` is another one now (changed while the request
+    /// ran, D188), nothing is written (`wrong_state`), so they never reach
+    /// another server.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn commit_new_keys(
         inner: &mut Inner,
@@ -3001,6 +3006,7 @@ impl Core {
         local_auth: Option<&LocalAuthRow>,
         record: Option<super::session::PendingWrite>,
         tokens: &wire::Tokens,
+        issuer: &str,
         now: SystemTime,
     ) -> Result<Vec<Uuid>, CoreError> {
         let Inner {
@@ -3019,12 +3025,17 @@ impl Core {
             .server_account()
             .map_err(CoreError::from)
             .and_then(|account| {
-                let origin = account
-                    .as_ref()
-                    .map(|row| row.server_url.clone())
-                    .unwrap_or_default();
-                let wrapped =
-                    wrap_refresh(&session.ring, device_id, &origin, &tokens.refresh_token.0)?;
+                let row = account.as_ref().ok_or(CoreError::WrongState)?;
+                if normalize_origin(&row.server_url).ok().as_deref() != Some(issuer) {
+                    tracing::warn!("server address changed during a key change; not stored");
+                    return Err(CoreError::WrongState);
+                }
+                let wrapped = wrap_refresh(
+                    &session.ring,
+                    device_id,
+                    &row.server_url,
+                    &tokens.refresh_token.0,
+                )?;
                 Ok((wrapped, account))
             });
         let ((blob, epoch), account) = match prepared {
@@ -5268,5 +5279,80 @@ mod tests {
         assert!(sel.classes.contains(&classes::HOSTS));
         assert!(!sel.classes.contains(&classes::HISTORY));
         assert!(sel.skip_types.is_empty());
+    }
+
+    /// D188 (cross review): the tokens of a key change belong to the
+    /// server the request went to. When the stored `server_url` is another
+    /// one at the commit (changed while the request ran), nothing is stored,
+    /// so the next refresh never sends them elsewhere; with the issuer's
+    /// address they are stored and open only for it.
+    #[test]
+    fn new_tokens_are_stored_only_for_the_server_that_issued_them() {
+        let (_dir, core) = unlocked_core();
+        let issuer = "https://a.example.com";
+        let account = |url: &str| ServerAccountRow {
+            server_url: url.to_owned(),
+            user_id: Uuid::now_v7(),
+            email: "user@example.com".to_owned(),
+            refresh_token: None,
+            secrets_epoch: 1,
+            bound_at: "2026-10-24T08:00:00Z".to_owned(),
+            server_generation: None,
+        };
+        let tokens = wire::Tokens {
+            access_token: Secret(format!("shellpp_at_{}", random_text())),
+            access_expires_at: "2026-10-24T09:00:00Z".to_owned(),
+            refresh_token: Secret(format!("shellpp_rt_{}", random_text())),
+            refresh_expires_at: "2026-11-24T09:00:00Z".to_owned(),
+        };
+        let commit = |core: &Core| {
+            let now = core.now();
+            let mut guard = core.inner();
+            let inner = &mut *guard;
+            let kek_row = lock_ops::key_context(&inner.store).unwrap().kek_row;
+            let device_id = inner.session.as_ref().unwrap().device_id;
+            Core::commit_new_keys(
+                inner,
+                &device_id,
+                None,
+                Some(&kek_row),
+                None,
+                None,
+                &tokens,
+                issuer,
+                now,
+            )
+        };
+        // The address was changed to B while the request to A ran.
+        core.inner()
+            .store
+            .write(|tx| tx.server_account_put(&account("https://b.example.com")))
+            .unwrap();
+        assert!(matches!(commit(&core), Err(CoreError::WrongState)));
+        let stored = core.inner().store.server_account().unwrap().unwrap();
+        assert!(
+            stored.refresh_token.is_none(),
+            "nothing for B to refresh with"
+        );
+        assert!(core.inner().sync.access.is_none());
+
+        // The issuer's own address: stored, and it opens only for that address.
+        core.inner()
+            .store
+            .write(|tx| tx.server_account_put(&account(issuer)))
+            .unwrap();
+        commit(&core).expect("stored");
+        let guard = core.inner();
+        let session = guard.session.as_ref().unwrap();
+        let mut stored = guard.store.server_account().unwrap().unwrap();
+        assert_eq!(
+            open_refresh(&session.ring, &session.device_id, &stored).as_deref(),
+            Some(&tokens.refresh_token.0)
+        );
+        stored.server_url = "https://b.example.com".to_owned();
+        assert!(
+            open_refresh(&session.ring, &session.device_id, &stored).is_none(),
+            "the wrap does not open for another address"
+        );
     }
 }

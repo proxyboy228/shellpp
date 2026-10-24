@@ -529,6 +529,7 @@ impl Core {
                 local_auth.as_ref(),
                 Some(write),
                 &response.tokens,
+                link.api.origin(),
                 now,
             )?;
             inner.recovery_grant.grant(now);
