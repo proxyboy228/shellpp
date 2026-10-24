@@ -61,10 +61,17 @@ impl Serialize for B64 {
 impl<'de> Deserialize<'de> for B64 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = Zeroizing::new(String::deserialize(deserializer)?);
-        data_encoding::BASE64URL_NOPAD
-            .decode(text.as_bytes())
-            .map(B64)
-            .map_err(|_| serde::de::Error::custom("invalid base64url"))
+        let invalid = || <D::Error as serde::de::Error>::custom("invalid base64url");
+        let encoding = &data_encoding::BASE64URL_NOPAD;
+        // Decoded into a value that wipes itself, also when the text is
+        // malformed halfway.
+        let len = encoding.decode_len(text.len()).map_err(|_| invalid())?;
+        let mut bytes = B64(vec![0; len]);
+        let len = encoding
+            .decode_mut(text.as_bytes(), &mut bytes.0)
+            .map_err(|_| invalid())?;
+        bytes.0.truncate(len);
+        Ok(bytes)
     }
 }
 
@@ -715,6 +722,26 @@ mod tests {
         bytes.zeroize();
         assert!(secret.0.is_empty());
         assert!(bytes.0.is_empty());
+    }
+
+    /// The wire form is unchanged (a plain string), and `into_inner` hands
+    /// the contents over whole.
+    #[test]
+    fn secret_and_b64_keep_their_wire_form_and_hand_over_their_contents() {
+        let secret = Secret("shellpp_at_x".to_owned());
+        let json = serde_json::to_string(&secret).unwrap();
+        assert_eq!(json, "\"shellpp_at_x\"");
+        let back: Secret = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.into_inner(), "shellpp_at_x");
+        let bytes: B64 = serde_json::from_str("\"-_8AAQ\"").unwrap();
+        assert_eq!(bytes.into_inner(), vec![0xfb, 0xff, 0x00, 0x01]);
+        for malformed in ["\"-_8AAQ=\"", "\"-_8AA\"", "\"-_8A A\"", "\"*\""] {
+            assert!(
+                serde_json::from_str::<B64>(malformed).is_err(),
+                "{malformed}"
+            );
+        }
+        assert_eq!(serde_json::from_str::<B64>("\"\"").unwrap(), B64::default());
     }
 
     #[test]

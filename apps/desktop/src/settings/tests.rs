@@ -795,9 +795,16 @@ fn totp_setup_shows_a_qr_code(cx: &mut TestAppContext) {
         let dialog = crate::sync_ui::open_totp(state, window, cx);
         dialog.update(cx, |dialog, cx| {
             dialog.step = crate::sync_ui::TotpStep::Code {
-                secret: "JBSWY3DPEHPK3PXP".into(),
-                uri: "otpauth://totp/Shell%2B%2B:user%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Shell%2B%2B".into(),
+                secret: zeroize::Zeroizing::new("JBSWY3DPEHPK3PXP".to_owned()),
+                uri: zeroize::Zeroizing::new(
+                    "otpauth://totp/Shell%2B%2B:user%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=Shell%2B%2B"
+                        .to_owned(),
+                ),
             };
+            // D192: the step holds the secret in wiping buffers and never
+            // shows it in `Debug`.
+            let shown = format!("{:?}", dialog.step);
+            assert!(!shown.contains("JBSWY3DPEHPK3PXP"), "{shown}");
             cx.notify();
         });
     })
