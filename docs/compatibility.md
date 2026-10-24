@@ -111,13 +111,17 @@ state checks what the program shows before the capture.
   format Windows 10 draws in color (COLR v0 or bitmaps); that choice is the
   owner's. Elsewhere the system's emoji font draws them (not checked on
   Linux yet).
-- **VS16 emoji take two cells** (run 12, D206). An emoji that is one column
-  wide by itself (`❤`, `⚠`, `✔`) followed by VS16 becomes two cells wide when
-  the selector arrives, as an emoji presentation is: the text after it moves
-  one column on. A program that counts such an emoji as one column (bash's
-  readline with glibc's `wcwidth`) can put the cursor one column off while
-  editing a command line that holds one. At the last column there is no
-  second cell and the emoji stays one cell wide.
+- **VS16 emoji take two cells** (run 12, D206). A character that is one
+  column wide by itself and has an emoji presentation (`❤`, `⚠`, `✔`, also
+  `©`, `®` and the keycap digits) followed by VS16 becomes two cells wide
+  when the selector arrives: the text after it moves one column on. A
+  program that counts such an emoji as one column (bash's readline with
+  glibc's `wcwidth`, a pager that fills the line) can put the cursor one
+  column off, and a full line one column longer wraps. When such a program
+  writes into the emoji's second cell, the emoji goes back to one cell (as
+  before run 12) instead of being erased. It stays one cell at the last
+  column (no second cell), in insert mode, and inside a ZWJ sequence
+  (`🤷‍♂️`, `❤️‍🔥`), whose columns stay the ones `wcwidth` counts.
 - **Known limitation: the blank cells after an emoji sequence** (D92). They
   stay: closing them up needs the terminal and the shell to agree on grapheme
   clusters (mode 2027, as in WezTerm and foot), which the shells in common

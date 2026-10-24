@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{
@@ -51,6 +52,8 @@ const ESC: u8 = 0x1B;
 
 /// VARIATION SELECTOR-16: the emoji presentation of the character before it.
 const VS16: char = '\u{FE0F}';
+/// ZERO WIDTH JOINER: joins emoji into one sequence.
+const ZWJ: char = '\u{200D}';
 
 /// Where the byte stream is, as far as OSC strings are concerned. It
 /// follows vte 0.15's state machine: ESC enters the escape state from any
@@ -300,27 +303,109 @@ impl<T: EventListener> Capped<'_, T> {
 
     /// The cell VS16 (U+FE0F) makes wide, if any: the narrow character right
     /// before the cursor, with nothing joined to it yet, which has an emoji
-    /// presentation (`❤` before `❤️`), and room for its second cell before
-    /// the end of the row (D206). Its column.
+    /// presentation (`❤` before `❤️`, also `©` and the keycap digits), is
+    /// not part of a ZWJ sequence (`🤷‍♂️` keeps the columns `wcwidth`
+    /// counts, D92), and has room for its second cell before the end of the
+    /// row (D206). Not in insert mode: the spacer would push the row's last
+    /// cell, which can be another wide character's half. Its column.
     fn widened_by_vs16(&self) -> Option<usize> {
         let grid = self.0.grid();
         let cursor = &grid.cursor;
-        if cursor.input_needs_wrap || cursor.point.column.0 == 0 {
+        if cursor.input_needs_wrap
+            || cursor.point.column.0 == 0
+            || self.0.mode().contains(TermMode::INSERT)
+        {
             return None;
         }
         let column = cursor.point.column.0 - 1;
-        let cell = &grid[cursor.point.line][alacritty_terminal::index::Column(column)];
+        let row = &grid[cursor.point.line];
+        let cell = &row[Column(column)];
         let narrow = !cell.flags.intersects(
             Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
         );
         let emoji = unicode_width::UnicodeWidthStr::width(
             [cell.c, VS16].iter().collect::<String>().as_str(),
         ) == 2;
+        // The cell before: the first cell of a wide character there.
+        let joined = column > 0 && {
+            let mut before = column - 1;
+            if row[Column(before)].flags.contains(Flags::WIDE_CHAR_SPACER) && before > 0 {
+                before -= 1;
+            }
+            row[Column(before)]
+                .zerowidth()
+                .is_some_and(|marks| marks.last() == Some(&ZWJ))
+        };
         (narrow
+            && !joined
             && cell.c.width() == Some(1)
             && cell.zerowidth().is_none_or(<[char]>::is_empty)
             && emoji)
             .then_some(column)
+    }
+
+    /// The column of the emoji VS16 made wide whose spacer is at `spacer`, if
+    /// it is one (a character one column wide by itself, a wide character
+    /// now, VS16 its first mark).
+    fn vs16_wide_before(&self, line: Line, spacer: usize) -> Option<usize> {
+        let row = &self.0.grid()[line];
+        if spacer == 0 || !row[Column(spacer)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            return None;
+        }
+        let cell = &row[Column(spacer - 1)];
+        (cell.flags.contains(Flags::WIDE_CHAR)
+            && cell.c.width() == Some(1)
+            && cell.zerowidth().and_then(<[char]>::first) == Some(&VS16))
+        .then_some(spacer - 1)
+    }
+
+    /// Makes the emoji at `column` one cell wide again (as before run 12):
+    /// its spacer at `column + 1` becomes a blank.
+    fn narrow_again(&mut self, line: Line, column: usize) {
+        let row = &mut self.0.grid_mut()[line];
+        row[Column(column)].flags.remove(Flags::WIDE_CHAR);
+        let spacer = &mut row[Column(column + 1)];
+        spacer.flags.remove(Flags::WIDE_CHAR_SPACER);
+        spacer.c = ' ';
+    }
+
+    /// Before `c` is written: an emoji VS16 made wide goes back to one cell
+    /// when its two cells would not hold (D206).
+    ///
+    /// - A ZWJ right after it: the emoji starts a ZWJ sequence (`❤️‍🔥`,
+    ///   `🏳️‍🌈`), whose columns are the ones `wcwidth` counts (D92). The
+    ///   cursor steps back onto the spacer, which the next character takes.
+    /// - A character written into its spacer: a program that counts the
+    ///   emoji as one column (readline, a pager) writes the next column
+    ///   there. The emulator would erase the emoji with its broken half; it
+    ///   stays, one cell wide.
+    fn keep_vs16_columns(&mut self, c: char, width: Option<usize>) {
+        let grid = self.0.grid();
+        let cursor = &grid.cursor;
+        let line = cursor.point.line;
+        let at = cursor.point.column.0;
+        if c == ZWJ {
+            // The spacer is right before the cursor, or under it while the
+            // wrap after the last column is pending.
+            let spacer = if cursor.input_needs_wrap {
+                Some(at)
+            } else {
+                at.checked_sub(1)
+            };
+            if let Some(spacer) = spacer
+                && let Some(column) = self.vs16_wide_before(line, spacer)
+            {
+                self.narrow_again(line, column);
+                let cursor = &mut self.0.grid_mut().cursor;
+                cursor.input_needs_wrap = false;
+                cursor.point.column = Column(spacer);
+            }
+        } else if width.is_some_and(|width| width > 0)
+            && !cursor.input_needs_wrap
+            && let Some(column) = self.vs16_wide_before(line, at)
+        {
+            self.narrow_again(line, column);
+        }
     }
 
     /// DECSET or DECRST of mode 40 or 3 (see [`Columns`]). Returns whether
@@ -449,6 +534,7 @@ impl<T: EventListener> Handler for Capped<'_, T> {
         if width == Some(0) && self.zerowidth_full() {
             return;
         }
+        self.keep_vs16_columns(c, width);
         // VS16 after a narrow emoji: the emoji takes two cells (D206). The
         // selector joins its cell, the cell becomes a wide character and a
         // spacer is written after it as `Term::input` writes one, so insert
@@ -458,7 +544,7 @@ impl<T: EventListener> Handler for Capped<'_, T> {
         {
             Handler::input(&mut *self.0, c);
             let line = self.0.grid().cursor.point.line;
-            self.0.grid_mut()[line][alacritty_terminal::index::Column(column)]
+            self.0.grid_mut()[line][Column(column)]
                 .flags
                 .insert(Flags::WIDE_CHAR);
             let template = &mut self.0.grid_mut().cursor.template.flags;
@@ -613,7 +699,6 @@ impl<T: EventListener> Handler for Capped<'_, T> {
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -794,22 +879,61 @@ mod tests {
         assert_eq!(before.grid()[Line(1)][Column(0)].c, 'x');
     }
 
-    /// In insert mode the spacer pushes the rest of the row right, as a
-    /// wide character's own does; writing over the spacer later makes the
-    /// emoji narrow again (alacritty clears a broken wide character).
+    /// In insert mode the emoji stays one cell wide: a spacer would push the
+    /// row's last cell, which can be the half of another wide character
+    /// (review of run 12).
     #[test]
-    fn vs16_in_insert_mode_and_overwritten() {
+    fn vs16_in_insert_mode_stays_narrow() {
+        let mut term = term(10);
+        feed(&mut term, "abcdefg\u{4E2D}\r\x1b[4h\u{2764}\u{FE0F}\x1b[4l");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, '\u{2764}');
+        assert!(!flags(&term, 0).contains(Flags::WIDE_CHAR));
+        assert_eq!(term.grid()[Line(0)][Column(1)].c, 'a');
+        assert_eq!(cursor(&term), (1, false));
+    }
+
+    /// A program that counts the emoji as one column writes the next
+    /// character into its spacer: the emoji stays, one cell wide again,
+    /// instead of being erased with its broken half.
+    #[test]
+    fn writing_into_the_spacer_keeps_the_emoji() {
         let mut term = term(8);
-        feed(&mut term, "abc\r\x1b[4h\u{2764}\u{FE0F}\x1b[4l");
-        let text: String = (0..5)
-            .map(|column| term.grid()[Line(0)][Column(column)].c)
-            .collect();
-        assert_eq!(text, "\u{2764} abc");
-        assert!(flags(&term, 0).contains(Flags::WIDE_CHAR));
-        feed(&mut term, "\x1b[1;2Hq");
+        feed(&mut term, "\u{2764}\u{FE0F}x\x1b[1;2Hq");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, '\u{2764}');
+        assert_eq!(marks(&term, 0, 0), 1);
         assert!(!flags(&term, 0).contains(Flags::WIDE_CHAR));
         assert!(!flags(&term, 1).contains(Flags::WIDE_CHAR_SPACER));
         assert_eq!(term.grid()[Line(0)][Column(1)].c, 'q');
+        assert_eq!(term.grid()[Line(0)][Column(2)].c, 'x');
+    }
+
+    /// In a ZWJ sequence the columns stay the ones `wcwidth` counts (D92):
+    /// VS16 on a part after a joiner (`🤷‍♂️`) does not widen it, and a joiner
+    /// after an emoji VS16 made wide (`❤️‍🔥`, also at the row's end) makes it
+    /// one cell again.
+    #[test]
+    fn vs16_in_zwj_sequences_keeps_the_wcwidth_columns() {
+        let mut shrug = term(8);
+        feed(&mut shrug, "\u{1F937}\u{200D}\u{2642}\u{FE0F}x");
+        assert!(!flags(&shrug, 2).contains(Flags::WIDE_CHAR));
+        assert_eq!(shrug.grid()[Line(0)][Column(3)].c, 'x');
+
+        let mut fire = term(8);
+        feed(&mut fire, "\u{2764}\u{FE0F}\u{200D}\u{1F525}x");
+        assert!(!flags(&fire, 0).contains(Flags::WIDE_CHAR));
+        assert_eq!(
+            fire.grid()[Line(0)][Column(0)].zerowidth(),
+            Some(&['\u{FE0F}', '\u{200D}'][..])
+        );
+        assert_eq!(fire.grid()[Line(0)][Column(1)].c, '\u{1F525}');
+        assert_eq!(fire.grid()[Line(0)][Column(3)].c, 'x');
+
+        let mut end = term(4);
+        feed(&mut end, "ab\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}");
+        assert!(!flags(&end, 2).contains(Flags::WIDE_CHAR));
+        assert_eq!(marks(&end, 0, 2), 2);
+        // The rainbow does not fit the last column: it wraps.
+        assert_eq!(end.grid()[Line(1)][Column(0)].c, '\u{1F308}');
     }
 
     /// Every row of the buffer, oldest first: its text and whether it wraps.
