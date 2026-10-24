@@ -5,7 +5,8 @@
 //!   terminal, Ctrl+Shift+T). At the top the search field with the Ctrl+K
 //!   hint, focused when the page opens; below it Recent connections with
 //!   Restore (enabled while a snapshot of the previous launch exists) and
-//!   "Create a workspace" (disabled until stage 9, with a tooltip).
+//!   "Create a workspace" (disabled while the window has no tab a workspace
+//!   can keep), with the saved workspaces above.
 //! - [`SearchOverlay`]: Ctrl+K outside the terminal and Ctrl+Shift+K
 //!   everywhere: the same search over the current window. Esc or a click
 //!   outside closes it ([`NewTabEvent::Dismissed`]) and gives the focus

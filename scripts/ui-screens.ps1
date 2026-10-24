@@ -227,6 +227,9 @@ $allStates += @('recovery-key-show', 'recovery-key-reissue', 'password-change', 
     'sync-registered-key')
 # Run 9 (D187): the changed-certificate dialog and a CA file's confirmation.
 $allStates += @('sync-certificate-changed', 'sync-trust-ca', 'sync-weaker-kdf')
+# Run 10 (D197, D200): the second step of deleting the local copy, and the
+# wizard after the key derivation settings changed elsewhere.
+$allStates += @('sync-sign-out-confirm', 'sync-kdf-changed')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the
 # imports, captured after new-host; the PuTTY and CSV ones from run 8).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config',

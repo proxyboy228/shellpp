@@ -4,7 +4,8 @@
 //! step after the server's key derivation settings changed (SP 4.2, D200).
 //! Made-up files and settings: nothing is deleted, no server is asked.
 
-use gpui::{AnyWindowHandle, AsyncApp, Entity};
+use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, Entity};
+use gpui_kit::test::TestWindowExt as _;
 
 use super::{ScreenshotError, ShotState, settle, shell_of};
 use crate::app::RootView;

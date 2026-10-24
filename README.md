@@ -14,10 +14,10 @@ Shell++ is a self-hosted, local-first SSH client. Desktop platforms (Windows, ma
 
 ## Status
 
-Shell++ is in early development. The specifications, the stage-0 design documents and the design tokens with base UI components exist; there is no application yet.
+Shell++ is approaching release 1.0. The desktop app works: hosts and groups, the keychain, an SSH terminal with tabs and split panes, a local terminal, Telnet and serial, SFTP, port forwarding, snippets, export and import. So does sync of a personal vault through a server you host yourself (`server/README.md`). Team vaults come after 1.0 (`docs/ROADMAP.md`).
 
-- The application is not usable yet, and there is nothing to install.
-- Expect breaking changes to the specifications, data formats and interfaces.
+- There are no published releases yet: build it yourself (below). Releases need the owner's signing key (`docs/release.md`).
+- Data formats may still change before 1.0.
 
 ## Running
 

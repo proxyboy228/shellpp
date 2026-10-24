@@ -5,22 +5,29 @@ git push и изменения remote — только по явной прос�
 В main — только код, на котором зелёное всё это (PowerShell):
 
 ```
+cargo metadata --locked --format-version 1
+cargo metadata --manifest-path server/Cargo.toml --locked --format-version 1
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-$env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --workspace
-cargo test -p shellpp-desktop --all-features
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+$env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --locked --no-fail-fast --workspace
+cargo test --locked --no-fail-fast -p shellpp-desktop --all-features
 cargo fmt --manifest-path server/Cargo.toml --all -- --check
-cargo clippy --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
-cargo clippy --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings
-$env:SHELLPP_TEST=1; cargo test --manifest-path server/Cargo.toml --workspace
-$env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --manifest-path server/Cargo.toml --workspace
+cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
+cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+$env:SHELLPP_TEST=1; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
+$env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
 ```
 
+Всё это по очереди, с журналом каждого шага в `<target>erify\`:
+`powershell -ExecutionPolicy Bypass -File scriptserify.ps1` (с
+`-Deploy` — и тесты развёртывания). `--locked` роняет шаг при устаревшем
+`Cargo.lock` вместо того, чтобы его переписать; `--no-fail-fast`
+показывает падения всех тестовых бинарников, а не только первого.
+
 Сервер (`server/`) — отдельный workspace, корневые команды его не видят;
-последние пять строк — его критерий: тесты на SQLite и они же на
-PostgreSQL в Docker. Пока в `server/` нет `Cargo.toml` (до этапа 7),
-эти строки пропускаются.
+строки с `server/Cargo.toml` — его критерий: тесты на SQLite и они же на
+PostgreSQL в Docker.
 
 Отдельно:
 
@@ -42,8 +49,11 @@ crates.io). Тесты собирают образы, поднимают сво�
 `shellpp-test=deploy` и `shellpp-run=<прогон>` и удаляют их:
 
 ```
-$env:SHELLPP_TEST_DEPLOY='docker'; cargo test --manifest-path server/Cargo.toml --test deploy -- --test-threads=1
+$env:SHELLPP_TEST_DEPLOY='docker'; cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --test deploy -- --test-threads=1
 ```
+
+В CI они идут в своём workflow `server-deploy.yml` при изменениях в
+`server/`, `crates/sync-api` и `crates/core`.
 
 Наборы против OpenSSH в Docker:
 

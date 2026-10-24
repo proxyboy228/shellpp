@@ -90,11 +90,11 @@ The server is meant to run on a machine of the user's own, such as a homelab. It
 | Access | How | Certificate the client sees |
 |---|---|---|
 | Own domain | a public DNS name; Caddy as the reverse proxy with automatic Let's Encrypt certificates (ports 80 and 443 open); Caddy forwards to `SHELLPP_BIND` | publicly trusted: no question in the client |
-| Cloudflare Tunnel | `cloudflared` in the compose file connects out to Cloudflare; no inbound port is opened; Cloudflare's edge terminates TLS | Cloudflare's, publicly trusted: no question |
+| Cloudflare Tunnel | `cloudflared`, run next to the compose file with `deploy/cloudflared.example.yml`, connects out to Cloudflare; no inbound port is opened; Cloudflare's edge terminates TLS | Cloudflare's, publicly trusted: no question |
 | VPN only (Tailscale or WireGuard) | the proxy listens only on the VPN address; the name resolves only inside the VPN (Tailscale MagicDNS or an internal DNS); the certificate comes from an internal CA, such as Caddy's `tls internal` | from the internal CA: the user adds that CA once per device (section 2.1), or pins a long-lived certificate. A pin of a short-lived certificate would stop sync at every renewal. Tailscale's `tailscale cert` gives a publicly trusted certificate for the `ts.net` name instead, with no question |
 
 - In every case `SHELLPP_PUBLIC_URL` is the exact origin the clients use. Account credentials are bound to it (section 4.1), so moving from one way of access to another keeps the accounts only when scheme, host and port stay the same.
-- `SHELLPP_TRUSTED_PROXIES` names the proxy that talks to the server (Caddy, or the `cloudflared` container), so per-IP rate limits see the client's address from `X-Forwarded-For` ([security.md](security.md), section 14.4).
+- `SHELLPP_TRUSTED_PROXIES` names the proxy that talks to the server (Caddy, or `cloudflared`), so per-IP rate limits see the client's address from `X-Forwarded-For` ([security.md](security.md), section 14.4).
 - With Cloudflare Tunnel, Cloudflare sees every request in the clear: auth keys, tokens, emails, envelopes, wraps and metadata, as an active server would for the transport. Record contents stay end-to-end encrypted ([security.md](security.md), RR23). A Cloudflare Access policy that asks for a browser login cannot be passed by the client and must not cover the API.
 - Plain HTTP stays for `localhost` only (section 2).
 
