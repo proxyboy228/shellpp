@@ -697,7 +697,7 @@ Stage 0 has one Linux job for the frontend (D1). From stage 1 (stage 0 decision)
 | windows | Windows | Rust tests, russh integration, UI e2e, NSIS package (stage 9) |
 | macos | macOS | build, Rust tests, russh integration, iOS check, `.dmg` (stage 9) |
 | secret-scan | Linux | existing gitleaks workflow |
-| server-deploy | Linux | the sync server's deployment tests in Docker (`server/tests/deploy.rs`: the image behind Caddy with two clients, the encrypted backup recipe end to end, the backup rotation, the compose file), only on changes to `server/`, `crates/sync-api`, `crates/core`, the root `Cargo.toml` and `rust-toolchain.toml`; its own workflow, `server-deploy.yml` (run 10) |
+| server-deploy | Linux | the sync server's deployment tests in Docker (`server/tests/deploy.rs`: the image behind Caddy with two clients, the encrypted backup recipe end to end, the backup rotation, the compose file), only on changes to `server/`, `crates/sync-api`, `crates/core`, `crates/private-file`, the root `Cargo.toml` and `rust-toolchain.toml`; its own workflow, `server-deploy.yml` (run 10) |
 | server | Linux | the sync server's own tests (the server workspace, the sync end-to-end tests with two clients included) on SQLite, then on PostgreSQL in Docker (`SHELLPP_TEST_POSTGRES=docker`, a `postgres:17-alpine` container per test binary), on the same changes as server-deploy; its own workflow, `server.yml` (D202, run 11) |
 
 ### 9.3 Test servers

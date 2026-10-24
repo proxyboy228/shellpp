@@ -12,8 +12,9 @@ name: Server deployment
 # they run only when something they test changes: the server workspace
 # (its code, Dockerfile, deploy/ with the compose file and backup.sh), the
 # sync API and the core the server image and the test clients are built
-# from, the root Cargo.toml (the dependencies they inherit) and the
-# toolchain. Every container, network and volume carries the labels
+# from, with the private-file crate the core uses (run 11, D202), the root
+# Cargo.toml (the dependencies they inherit) and the toolchain. Every
+# container, network and volume carries the labels
 # shellpp-test=deploy and shellpp-run=<this run>; the last step removes
 # whatever a failed test left.
 
@@ -23,6 +24,7 @@ on:
       - "server/**"
       - "crates/sync-api/**"
       - "crates/core/**"
+      - "crates/private-file/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - ".github/workflows/server-deploy.yml"
@@ -31,6 +33,7 @@ on:
       - "server/**"
       - "crates/sync-api/**"
       - "crates/core/**"
+      - "crates/private-file/**"
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - ".github/workflows/server-deploy.yml"

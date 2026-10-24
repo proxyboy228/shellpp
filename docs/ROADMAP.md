@@ -106,13 +106,14 @@ has the numbers.
   minutes.
 - The full screenshot set (`scripts\ui-screens.ps1` without `-States`): 266
   screenshots, three sizes, both themes; findings in section 2.4.
-- CI runs the server's own tests on SQLite and on PostgreSQL in Docker
-  (`server.yml`, D202) on the changes the deployment tests run on; its first
-  run on GitHub comes with the owner's next push.
 
-Not obtained: the owner's own install, the server in the homelab
-(`server/README.md`, `docs/guide/06-sync.md`) and two devices; it is step 3
-of section 3.
+Not obtained:
+
+- The owner's own install, the server in the homelab (`server/README.md`,
+  `docs/guide/06-sync.md`) and two devices; it is step 3 of section 3.
+- A run of the server's own tests in CI: run 11 set up `server.yml` (SQLite
+  and PostgreSQL in Docker, on the changes the deployment tests run on,
+  D202); its first run on GitHub comes with the owner's next push.
 
 ### 2.4 Findings of run 11
 
