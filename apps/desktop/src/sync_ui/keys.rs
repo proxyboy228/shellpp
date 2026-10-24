@@ -172,6 +172,8 @@ pub struct RecoveryKeyDialog {
     error: Option<&'static str>,
     task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
+    /// Whether the first field got the focus.
+    focused: Option<u8>,
 }
 
 impl RecoveryKeyDialog {
@@ -264,6 +266,10 @@ impl Drop for RecoveryKeyDialog {
 
 impl Render for RecoveryKeyDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(self.step, RecoveryStep::Password) {
+            let input = self.password.clone();
+            super::focus_once(&mut self.focused, 1, &input, window, cx);
+        }
         let body = match self.step.clone() {
             RecoveryStep::Password => v_flex()
                 .gap(metrics::SPACE_2)
@@ -370,7 +376,6 @@ pub fn open_recovery_key(
                 }
             },
         );
-        password.update(cx, |input, cx| input.focus(window, cx));
         RecoveryKeyDialog {
             state,
             core,
@@ -382,6 +387,7 @@ pub fn open_recovery_key(
             busy: false,
             error: None,
             task: None,
+            focused: None,
             _subscriptions: subscriptions,
         }
     });
@@ -501,6 +507,8 @@ pub struct PasswordChangeDialog {
     error: Option<&'static str>,
     task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
+    /// Whether the first field got the focus.
+    focused: Option<u8>,
 }
 
 impl PasswordChangeDialog {
@@ -687,6 +695,10 @@ impl PasswordChangeDialog {
 
 impl Render for PasswordChangeDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if matches!(self.step, PasswordStep::Form) {
+            let input = self.current.clone();
+            super::focus_once(&mut self.focused, 1, &input, window, cx);
+        }
         let body = match self.step.clone() {
             PasswordStep::Form => self.render_form(window, cx),
             PasswordStep::Key(key, id) => {
@@ -790,7 +802,6 @@ pub fn open_password_change(
                 }
             },
         );
-        current.update(cx, |input, cx| input.focus(window, cx));
         PasswordChangeDialog {
             state,
             core,
@@ -808,6 +819,7 @@ pub fn open_password_change(
             busy: false,
             error: None,
             task: None,
+            focused: None,
             _subscriptions: subscriptions,
         }
     });

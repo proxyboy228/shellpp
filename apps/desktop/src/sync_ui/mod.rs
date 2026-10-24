@@ -95,7 +95,9 @@ fn on_enter<T: 'static>(
 }
 
 /// Gives `input` the focus once per `mark` (a step of a dialog): the field
-/// of a step has it when the step opens (run 10).
+/// of a step has it when the step opens (run 10). Called from the render,
+/// never while the dialog is made: `open_dialog` records the focus of that
+/// moment as the place to return to when the dialog closes.
 fn focus_once(
     focused: &mut Option<u8>,
     mark: u8,
@@ -160,6 +162,10 @@ pub fn code_text(code: &str) -> &'static str {
         "certificate_changed" => strings::ERROR_CERTIFICATE_CHANGED,
         "incomplete_snapshot" => strings::ERROR_SNAPSHOT,
         "newer_epoch" => strings::ERROR_NEWER_EPOCH,
+        "unsupported_server" => strings::ERROR_UNSUPPORTED_SERVER,
+        "totp_secret" => strings::ERROR_TOTP_SECRET,
+        "email_mismatch" => strings::ERROR_EMAIL_MISMATCH,
+        "already_bound" => strings::ERROR_ALREADY_BOUND,
         _ => strings::ERROR_OTHER,
     }
 }
@@ -286,7 +292,14 @@ impl ConnectDialog {
                 }
                 match this.step {
                     ConnectStep::Server => this.check(window, cx),
+                    // No password yet: Enter goes on to it, so nothing is
+                    // sent that the server would count as a failure.
+                    ConnectStep::Account if input_text(&this.password, cx).is_empty() => {
+                        this.password
+                            .update(cx, |input, cx| input.focus(window, cx));
+                    }
                     ConnectStep::Account => this.run(window, cx),
+                    ConnectStep::Totp if input_text(&this.totp, cx).trim().is_empty() => {}
                     ConnectStep::Totp => this.verify(window, cx),
                     _ => {}
                 }
@@ -2116,7 +2129,6 @@ pub fn open_password_action(
                 }
             },
         );
-        password.update(cx, |input, cx| input.focus(window, cx));
         PasswordDialog {
             state,
             action,
@@ -2640,7 +2652,6 @@ pub fn open_recovery(
                 }
             },
         );
-        key.update(cx, |input, cx| input.focus(window, cx));
         RecoveryDialog {
             state,
             key,

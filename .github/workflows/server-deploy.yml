@@ -12,7 +12,8 @@ name: Server deployment
 # they run only when something they test changes: the server workspace
 # (its code, Dockerfile, deploy/ with the compose file and backup.sh), the
 # sync API and the core the server image and the test clients are built
-# from. Every container, network and volume carries the labels
+# from, the root Cargo.toml (the dependencies they inherit) and the
+# toolchain. Every container, network and volume carries the labels
 # shellpp-test=deploy and shellpp-run=<this run>; the last step removes
 # whatever a failed test left.
 
@@ -22,12 +23,16 @@ on:
       - "server/**"
       - "crates/sync-api/**"
       - "crates/core/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
       - ".github/workflows/server-deploy.yml"
   pull_request:
     paths:
       - "server/**"
       - "crates/sync-api/**"
       - "crates/core/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
       - ".github/workflows/server-deploy.yml"
 
 permissions:

@@ -554,6 +554,10 @@ fn every_error_code_has_a_text() {
         "account_binding",
         "incomplete_snapshot",
         "newer_epoch",
+        "unsupported_server",
+        "totp_secret",
+        "email_mismatch",
+        "already_bound",
     ];
     for code in codes {
         let text = code_text(code);
@@ -561,6 +565,16 @@ fn every_error_code_has_a_text() {
         assert!(!text.contains(code), "{code} is not shown");
     }
     assert_eq!(code_text("something_new"), strings::ERROR_OTHER);
+}
+
+/// The hint's plurals (review of run 10).
+#[test]
+fn the_duplicates_hint_counts_in_plurals() {
+    use super::strings::may_be_duplicates;
+    assert_eq!(
+        may_be_duplicates(&[("identity", 2), ("key", 3)]),
+        "2 identities and 3 keys may be duplicates"
+    );
 }
 
 /// The sign-out warning counts what is not on the server (D190).

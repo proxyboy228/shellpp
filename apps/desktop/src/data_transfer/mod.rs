@@ -309,10 +309,11 @@ impl ExportDialog {
         self.step = ExportStep::Running;
         self.error = None;
         cx.notify();
+        let trash = !self.recently_deleted.is_empty();
         let input = DataExportInput {
             password,
-            include_history: self.include_history,
-            include_connection_log: self.include_connection_log,
+            include_history: self.include_history && !trash,
+            include_connection_log: self.include_connection_log && !trash,
             recently_deleted: self.recently_deleted.clone(),
         };
         let built = cx.background_spawn(async move { core.data_export(input) });
@@ -508,7 +509,9 @@ impl Render for ExportDialog {
                             this.set_include_keys(*checked, cx)
                         })),
                 );
-        } else {
+        } else if !trash {
+            // Recently deleted exports its entries only, never the history
+            // or the connection log (UI 14).
             body = body.child(
                 v_flex()
                     .gap(metrics::SPACE_1)

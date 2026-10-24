@@ -617,5 +617,7 @@ fn the_export_of_recently_deleted_offers_json_only(cx: &mut TestAppContext) {
     );
     assert!(!ui.visible(cx, "data-export-format-openssh"));
     assert!(ui.visible(cx, "data-export-format-data"));
+    assert!(!ui.visible(cx, "data-export-history"));
+    assert!(!ui.visible(cx, "data-export-connection-log"));
     drop(export);
 }

@@ -53,7 +53,8 @@ $env:SHELLPP_TEST_DEPLOY='docker'; cargo test --locked --no-fail-fast --manifest
 ```
 
 В CI они идут в своём workflow `server-deploy.yml` при изменениях в
-`server/`, `crates/sync-api` и `crates/core`.
+`server/`, `crates/sync-api`, `crates/core`, корневом `Cargo.toml` и
+`rust-toolchain.toml`.
 
 Наборы против OpenSSH в Docker:
 
@@ -122,7 +123,7 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
     Найти свои: `docker ps -a --filter label=shellpp-run=<имя>`;
   - `SHELLPP_SFTP_BENCH=1` — замер SFTP (release-сборка).
 - Перед сборкой проверять свободное место на диске C (пороги — ROADMAP,
-  раздел 6.5): при нехватке — удалить `target\debug\incremental`, потом
+  раздел 7.5): при нехватке — удалить `target\debug\incremental`, потом
   `cargo clean`.
 - Полный запуск `scripts\ui-screens.ps1` идёт дольше 10 минут. Прежний
   сторож в 600 с считал от начала всего запуска и срабатывал там, где

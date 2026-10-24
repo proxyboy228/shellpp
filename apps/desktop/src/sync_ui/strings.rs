@@ -159,6 +159,12 @@ pub fn may_be_duplicates(counts: &[(&str, usize)]) -> String {
             let noun = type_name.replace('_', " ");
             if *count == 1 {
                 format!("{count} {noun}")
+            } else if let Some(stem) = noun
+                .strip_suffix('y')
+                .filter(|stem| !stem.ends_with(['a', 'e', 'i', 'o', 'u']))
+            {
+                // identity → identities; key → keys.
+                format!("{count} {stem}ies")
             } else {
                 format!("{count} {noun}s")
             }
@@ -296,6 +302,13 @@ pub const ERROR_CERTIFICATE_CHANGED: &str = "The server's certificate changed.";
 pub const ERROR_SNAPSHOT: &str =
     "The server's data could not be read completely. Sync tries again.";
 pub const ERROR_NEWER_EPOCH: &str = "The account's keys changed on another device.";
+pub const ERROR_UNSUPPORTED_SERVER: &str =
+    "This server speaks another version of the sync protocol. Update Shell++ or the server.";
+pub const ERROR_TOTP_SECRET: &str =
+    "The server sent a two-factor secret Shell++ cannot use. Nothing was turned on.";
+pub const ERROR_EMAIL_MISMATCH: &str =
+    "The server answered for another email than this account's. Nothing changed.";
+pub const ERROR_ALREADY_BOUND: &str = "This device is already signed in to an account.";
 pub const ERROR_ACCOUNT_BINDING: &str = "This vault still belongs to your sync account. Sign in to the account in Account & Sync and change the password there, or untick “My old password may be compromised” to change it on this device only.";
 pub const RECOVERY_REISSUE_NEEDED: &str = "The server's copy of your recovery key is older than this device's, so neither key can recover the account now. Reissue the recovery key.";
 pub const ERROR_SIGNED_OUT: &str =

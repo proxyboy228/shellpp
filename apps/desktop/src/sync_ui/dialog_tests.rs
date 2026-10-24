@@ -242,3 +242,54 @@ fn the_password_dialogs_focus_their_field_and_enter_runs_them(cx: &mut TestAppCo
     assert!(delete.read_with(cx, |dialog, _| dialog.error.is_some()));
     ui.finish(cx);
 }
+
+/// Review of run 10: the recovery key and password change dialogs focus
+/// their first field from the render, so the focus goes back where it was
+/// when they close.
+#[gpui::test]
+fn the_key_dialogs_focus_their_field_and_give_the_focus_back(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new());
+    ui.click("nav-keychain", cx);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        super::keys::open_recovery_key(state, super::keys::RecoveryKeyMode::Show, window, cx);
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-key-password", cx), Some(true));
+    cx.update_window(ui.handle, |_, window, cx| window.close_dialog(cx))
+        .unwrap();
+    ui.settle(cx);
+    let state = ui.state.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        super::keys::open_password_change(state, None, window, cx);
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-current-password", cx), Some(true));
+    ui.finish(cx);
+}
+
+/// Review of run 10: Enter in the wizard's email field with no password
+/// yet goes on to the password instead of signing in.
+#[gpui::test]
+fn enter_without_a_password_goes_on_to_it(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new());
+    let state = ui.state.clone();
+    let wizard = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_connect(state, false, window, cx)
+        })
+        .unwrap();
+    wizard.update(cx, |wizard, cx| {
+        wizard.origin = Some("https://sync.example.com".to_owned());
+        wizard.step = super::ConnectStep::Account;
+        cx.notify();
+    });
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-email", cx), Some(true));
+    ui.type_and_enter("me@example.com", cx);
+    assert_eq!(ui.focused("sync-password", cx), Some(true));
+    assert!(wizard.read_with(cx, |wizard, _| wizard.error.is_none()));
+    ui.finish(cx);
+}
