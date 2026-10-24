@@ -13,7 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use shellpp_server::accounts::{self, Principal};
+use shellpp_server::accounts::{self, CheckedKey, KeyKind, Principal};
 use shellpp_server::config::Config;
 use shellpp_server::db::{DbError, Tx, TxKind, Ty, Val};
 use shellpp_server::error::ApiResult;
@@ -24,6 +24,10 @@ use shellpp_sync_api::api::{self as wire, B64, Registration, Secret, code, token
 use support::*;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
+
+/// The client address of the operations run directly (the TOTP delays of
+/// D175 are kept per account and client network).
+const IP: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1));
 
 fn ms(n: i64) -> Duration {
     Duration::milliseconds(n)
@@ -37,7 +41,8 @@ fn s(n: i64) -> Duration {
 fn limits() -> RateLimits {
     RateLimits {
         failures_per_window: 1_000,
-        totp_failures_per_window: 1_000,
+        totp_free_failures: 1_000,
+        totp_soft_failures: 1_000,
         ..RateLimits::generous()
     }
 }
@@ -159,6 +164,35 @@ impl Fixture {
         self.write_with(&self.shared, f)
     }
 
+    /// A registration as the API runs it: the verifiers outside, then the
+    /// write transaction (D174).
+    fn register_with(
+        &self,
+        request: wire::RegisterRequest,
+        now: OffsetDateTime,
+    ) -> ApiResult<wire::RegisterResponse> {
+        let verifiers = accounts::register_verifiers(&self.shared, &request, now)?;
+        self.write(|tx, shared| accounts::register(tx, shared, request, verifiers, now))
+    }
+
+    /// The key of a login or `recover/begin`, checked outside any
+    /// transaction (D174).
+    fn sign_in_key(&self, email: &str, kind: KeyKind, key: &[u8]) -> ApiResult<CheckedKey> {
+        accounts::check_sign_in(&self.shared, &secrets::normalize_email(email), kind, key)
+    }
+
+    /// `f` with `key` checked as the `current_auth_key` of `principal`
+    /// first, outside the transaction, as the API runs it (D174).
+    fn signed_in<T>(
+        &self,
+        principal: &Principal,
+        key: &[u8],
+        f: impl FnOnce(&mut dyn Tx, &Shared, &CheckedKey) -> ApiResult<T>,
+    ) -> ApiResult<T> {
+        let checked = accounts::check_current_auth_key(&self.shared, principal, key)?;
+        self.write(|tx, shared| f(tx, shared, &checked))
+    }
+
     fn exec(&self, sql: &str, params: &[Val]) {
         self.server
             .db
@@ -181,9 +215,7 @@ impl Fixture {
             device_id,
             None,
         );
-        let response = self
-            .write(|tx, shared| accounts::register(tx, shared, request, now))
-            .expect("registered");
+        let response = self.register_with(request, now).expect("registered");
         Account {
             email,
             user_id: response.user_id,
@@ -209,7 +241,8 @@ impl Fixture {
             auth_key: B64(key.to_vec()),
             device_id,
         };
-        self.write(|tx, shared| accounts::login(tx, shared, request, model::now()))
+        let checked = self.sign_in_key(email, KeyKind::Auth, key)?;
+        self.write(|tx, shared| accounts::login(tx, shared, &checked, request, model::now()))
     }
 
     fn login_ticket(&self, account: &Account) -> String {
@@ -230,7 +263,7 @@ impl Fixture {
             login_ticket: Secret(ticket.to_owned()),
             code: Secret(code.to_owned()),
         };
-        self.write(|tx, shared| accounts::login_totp(tx, shared, request, now))
+        self.write(|tx, shared| accounts::login_totp(tx, shared, request, IP, now))
     }
 
     /// Sets TOTP up (not enabled yet): the principal and the secret.
@@ -238,11 +271,10 @@ impl Fixture {
         let principal = self
             .authenticate(&account.tokens.access_token.0, now)
             .expect("signed in");
-        let request = wire::CurrentAuth {
-            current_auth_key: B64(account.auth_key.to_vec()),
-        };
         let setup = self
-            .write(|tx, shared| accounts::totp_setup(tx, shared, &principal, request))
+            .signed_in(&principal, &account.auth_key, |tx, shared, checked| {
+                accounts::totp_setup(tx, shared, checked)
+            })
             .expect("set up");
         let secret = data_encoding::BASE32_NOPAD
             .decode(setup.secret.0.as_bytes())
@@ -263,7 +295,7 @@ impl Fixture {
             code: Secret(code.to_owned()),
         };
         self.write_with(shared, |tx, shared| {
-            accounts::totp_enable(tx, shared, principal, request, now)
+            accounts::totp_enable(tx, shared, principal, request, IP, now)
         })
     }
 
@@ -566,7 +598,9 @@ fn a_deleted_accounts_refresh_token_answers_account_deleted_for_30_days() {
             current_auth_key: B64(key.to_vec()),
             totp_code: None,
         };
-        fx.write(|tx, shared| accounts::account_delete(tx, shared, &principal, request, t0))
+        fx.signed_in(&principal, key, |tx, shared, checked| {
+            accounts::account_delete(tx, shared, checked, request, IP, t0)
+        })
     };
     refused(
         delete(&flipped(&a.auth_key, 0)),
@@ -677,6 +711,98 @@ fn auth_keys_are_checked_against_their_verifiers() {
         .expect("the new key");
 }
 
+/// D174: a key is checked outside the transaction that acts on it, so a
+/// credential change can commit in between. The write then takes the user
+/// only while the verifier is still the one the key matched; a change of
+/// the other verifier does not matter.
+#[test]
+fn a_key_checked_before_a_credential_change_is_refused_after_it() {
+    let fx = Fixture::new(Registration::Open);
+    let t0 = model::now();
+    let a = fx.register(t0);
+    let principal = fx.authenticate(&a.tokens.access_token.0, t0).unwrap();
+    let login = fx
+        .sign_in_key(&a.email, KeyKind::Auth, &a.auth_key)
+        .expect("the auth key");
+    let recovery = fx
+        .sign_in_key(&a.email, KeyKind::Recovery, &a.recovery_auth_key)
+        .expect("the recovery key");
+    let current = accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key)
+        .expect("the current auth key");
+    let set = |column: &str| {
+        fx.exec(
+            &format!("UPDATE users SET {column} = ? WHERE user_id = ?"),
+            &[
+                secrets::make_verifier(&secrets::random_bytes::<32>()).into(),
+                a.user_id.into(),
+            ],
+        );
+    };
+    let login_with = |checked: &CheckedKey| {
+        let request = wire::LoginRequest {
+            email: a.email.clone(),
+            auth_key: B64(a.auth_key.to_vec()),
+            device_id: a.device_id,
+        };
+        fx.write(|tx, shared| accounts::login(tx, shared, checked, request, t0))
+    };
+    let begin_with = |checked: &CheckedKey| {
+        let request = wire::RecoverBeginRequest {
+            email: a.email.clone(),
+            recovery_auth_key: B64(a.recovery_auth_key.to_vec()),
+            device_id: a.device_id,
+        };
+        fx.write(|tx, _| accounts::recover_begin(tx, checked, request, t0))
+    };
+    // A reissue in between replaces the recovery verifier only.
+    set("recovery_verifier");
+    login_with(&login).expect("the auth verifier did not change");
+    refused(begin_with(&recovery), 401, code::INVALID_CREDENTIALS);
+    // A password change in between replaces the auth verifier.
+    set("auth_verifier");
+    refused(login_with(&login), 401, code::INVALID_CREDENTIALS);
+    refused(
+        fx.write(|tx, shared| accounts::totp_setup(tx, shared, &current)),
+        401,
+        code::INVALID_CREDENTIALS,
+    );
+    // The keys were right: no failure counts for the email.
+    assert!(
+        fx.shared
+            .limiters
+            .failures
+            .check(&a.email, 1, std::time::Instant::now())
+            .is_ok(),
+        "no failure counted"
+    );
+    // A registration that will be refused is refused before its hashes.
+    let taken = register_request(
+        &a.email,
+        &secrets::random_bytes::<32>(),
+        &secrets::random_bytes::<32>(),
+        &secrets::random_bytes::<16>(),
+        Uuid::now_v7(),
+        None,
+    );
+    refused(
+        accounts::register_verifiers(&fx.shared, &taken, t0).map(|_| ()),
+        409,
+        code::EMAIL_TAKEN,
+    );
+    // The account deleted in between: a signed-in check is `unauthenticated`.
+    let b = fx.register(t0);
+    let principal = fx.authenticate(&b.tokens.access_token.0, t0).unwrap();
+    let current = accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key)
+        .expect("the current auth key");
+    fx.write(|tx, _| accounts::delete_user(tx, b.user_id))
+        .unwrap();
+    refused(
+        fx.write(|tx, shared| accounts::totp_setup(tx, shared, &current)),
+        401,
+        code::UNAUTHENTICATED,
+    );
+}
+
 /// Recovery: only the recovery key opens a ticket; the ticket is found by
 /// its exact hash, binds its device, is used up by the recovery and
 /// expires after 10 minutes (then it is deleted).
@@ -692,11 +818,12 @@ fn recovery_checks_the_key_the_ticket_and_its_device() {
             recovery_auth_key: B64(key.to_vec()),
             device_id: device,
         };
-        fx.write(|tx, shared| accounts::recover_begin(tx, shared, request, now))
+        let checked = fx.sign_in_key(email, KeyKind::Recovery, key)?;
+        fx.write(|tx, _| accounts::recover_begin(tx, &checked, request, now))
     };
     let complete = |ticket: &str, device_id: Uuid, now: OffsetDateTime| {
         let request = complete_request(&a.email, ticket, device_id, None);
-        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, now))
+        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, IP, now))
     };
     for key in [
         flipped(&a.recovery_auth_key, 0),
@@ -772,7 +899,7 @@ fn login_tickets_are_found_by_hash_and_kind_and_survive_four_wrong_codes() {
     }
     let request = complete_request(&a.email, &ticket, a.device_id, Some(&next));
     refused(
-        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, t0)),
+        fx.write(|tx, shared| accounts::recover_complete(tx, shared, request, IP, t0)),
         401,
         code::TICKET_EXPIRED,
     );
@@ -874,14 +1001,18 @@ fn signed_in_totp_checks_refuse_wrong_used_and_missing_codes() {
             current_auth_key: B64(key.to_vec()),
             code: Secret(totp.to_owned()),
         };
-        fx.write(|tx, shared| accounts::totp_disable(tx, shared, &principal, request, t0))
+        fx.signed_in(&principal, key, |tx, shared, checked| {
+            accounts::totp_disable(tx, shared, checked, request, IP, t0)
+        })
     };
     let delete = |totp: Option<&str>| {
         let request = wire::AccountDeleteRequest {
             current_auth_key: B64(a.auth_key.to_vec()),
             totp_code: totp.map(|totp| Secret(totp.to_owned())),
         };
-        fx.write(|tx, shared| accounts::account_delete(tx, shared, &principal, request, t0))
+        fx.signed_in(&principal, &a.auth_key, |tx, shared, checked| {
+            accounts::account_delete(tx, shared, checked, request, IP, t0)
+        })
     };
     let next = code_at(&secret, t0 + s(30));
     refused(
@@ -1012,7 +1143,7 @@ fn registration_codes_are_checked_by_hash_expiry_and_uses() {
             Uuid::now_v7(),
             given,
         );
-        fx.write(|tx, shared| accounts::register(tx, shared, request, now))
+        fx.register_with(request, now)
     };
     refused(register(None, now), 403, code::REGISTRATION_CLOSED);
     for wrong in tampered(&invite, "") {

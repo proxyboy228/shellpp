@@ -18,6 +18,8 @@ known_hosts.*
 !/third_party/russh/src/keys/known_hosts.rs
 # The example environment of the server deployment (placeholders only).
 !/server/deploy/.env.example
+# The server secret of a deployment (server/README.md, "Install").
+/server/deploy/secrets/
 !/apps/desktop/tests/known_hosts.rs
 *.p12
 *.pfx

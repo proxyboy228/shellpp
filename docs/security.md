@@ -163,7 +163,7 @@ personal vault records hold: user X25519 keypair, SSH ID private key, recovery k
 | `local_secrets_key` | 32 B | HKDF from current personal vault key | memory only; encrypts the refresh token at rest | wiped on lock | stage 0 decision |
 | `recording_key[file]` | 32 B | HKDF from personal vault key | memory only | wiped when the file is closed (an open recording keeps its key while locked, section 8) | D16; derivation: stage 0 decision |
 | `export_key` | 32 B | Argon2id(export password) then HKDF | memory only | wiped after the export or import | stage 0 decision |
-| `server_secret` | ≥ 32 B | operator, env `SHELLPP_SERVER_SECRET` | server env only; never leaves the server | keep stable (section 14.4) | stage 0 decision |
+| `server_secret` | ≥ 32 B | operator, a file named by `SHELLPP_SERVER_SECRET_FILE` (a Docker secret); env `SHELLPP_SERVER_SECRET` still works, with a warning ([decision] (D177)) | server only; never leaves the server | keep stable (section 14.4) | stage 0 decision |
 
 Other secrets:
 
@@ -827,10 +827,11 @@ The complete list (D10). Everything not listed is never sent to the server.
 
 (stage 0 decision; for the server documentation)
 
-- Keep `SHELLPP_SERVER_SECRET` secret and stable. Changing it invalidates the encrypted TOTP secrets and changes the fake pre-login salts, which lets anyone who compared answers before and after tell unregistered emails apart.
+- Keep the server secret secret and stable. Changing it invalidates the encrypted TOTP secrets and changes the fake pre-login salts, which lets anyone who compared answers before and after tell unregistered emails apart.
+- Give the server secret in a file (`SHELLPP_SERVER_SECRET_FILE`; the compose file uses a Docker secret). In `SHELLPP_SERVER_SECRET` it works, with a warning in the log, but stays in the process environment for the life of the process (removing it from a running multi-threaded process is not safe) and shows in `docker inspect`; both at once are refused. The server reads the file into a buffer wiped on drop, and refuses to start with a secret that opens none of the TOTP secrets stored in the database. Known limitation: `totp-rs` copies the TOTP secret by value inside its `Builder` and `Totp` while it checks a code, out of the code's reach; those copies stay in freed memory until it is reused (section 9.5) ([decision] (D177)).
 - Keep the public origin (`SHELLPP_PUBLIC_URL`) stable and serve the API under that one origin. Clients bind `auth_key` and `recovery_auth_key` to the origin they connect to (section 5.5), so an account cannot sign in or recover under another host name or port; moving a server to another origin is not supported in the MVP. Local data is never affected.
 - A database backup holds verifiers, wraps, salts and all metadata; whoever gets it is a passive server (A5) and can guess passwords offline. Encrypt backups and restrict access.
-- Keep the default `SHELLPP_BIND` of `127.0.0.1:8080` behind the reverse proxy, and set `SHELLPP_TRUSTED_PROXIES` to the proxy only; otherwise forged `X-Forwarded-For` headers defeat per-IP rate limits.
+- Keep the default `SHELLPP_BIND` of `127.0.0.1:8080` behind the reverse proxy, and set `SHELLPP_TRUSTED_PROXIES` to the one address the proxy reaches the server from, never a range; otherwise forged `X-Forwarded-For` headers defeat per-IP rate limits and the TOTP delays. With the compose file and a proxy on the host that is the gateway of the compose network (`172.16.88.1/32`, its fixed subnet), not `127.0.0.1` ([decision] (D176)).
 - Reverse-proxy logs contain client addresses and request paths (paths carry only ids).
 
 Backups ([decision] (D93); Choice 13 (c): tested recipes, no backup code in the server):
@@ -838,6 +839,7 @@ Backups ([decision] (D93); Choice 13 (c): tested recipes, no backup code in the 
 - `server/README.md` gives tested recipes, and the server's CI runs them: back up, restore into an empty database, `admin restored`. For a homelab: a `backup` service in the Docker Compose file that runs on a schedule (daily by default) and pipes the dump straight into an encrypting tool, so no unencrypted dump is written to the backup volume: `pg_dump` for PostgreSQL; for SQLite an online backup (`sqlite3 … ".backup"`) to a file on a tmpfs, encrypted at once and removed.
 - The encrypting tool is `age`, to an operator's public key (`age -r`); the private key is kept off the server, so a copy of the backup volume alone opens nothing.
 - Recommended retention: 30 days; the service deletes older files. The shorter it is, the sooner old wraps and verifiers (RR6, RR7) and deleted accounts leave the backups.
+- A dump or encryption that fails fails the backup (the pipe runs with `pipefail`): no file that looks like a backup is left, and nothing is pruned after a failure, so a broken dump never replaces the good backups as they age out. The service's image carries `pg_dump` and `age`, built once at deployment, so a backup needs no network ([decision] (D176)).
 
 Restore ([decision] (D93); Choices 14 (b) and 15 (c)):
 
@@ -849,7 +851,7 @@ Restore ([decision] (D93); Choices 14 (b) and 15 (c)):
 Ways of access ([decision] (D93); [sync-protocol.md](sync-protocol.md), section 2.2):
 
 - Own domain with Caddy and Let's Encrypt: the public certificate needs no choice in the client. Ports 80 and 443 are open to the internet, so rate limits and invite-only registration matter most here.
-- Cloudflare Tunnel: no inbound port is open, but Cloudflare terminates TLS and sees every request in the clear: auth keys, tokens, emails, envelopes, wraps and metadata. It is in the position of an active server (A6) for the transport: it cannot read records or wraps, and with an auth key it can sign in as the user (TOTP still asked, when on). Choose it only if that is acceptable (RR23). Set `SHELLPP_TRUSTED_PROXIES` to the `cloudflared` container.
+- Cloudflare Tunnel: no inbound port is open, but Cloudflare terminates TLS and sees every request in the clear: auth keys, tokens, emails, envelopes, wraps and metadata. It is in the position of an active server (A6) for the transport: it cannot read records or wraps, and with an auth key it can sign in as the user (TOTP still asked, when on). Choose it only if that is acceptable (RR23). Set `SHELLPP_TRUSTED_PROXIES` to the address `cloudflared` reaches the server from (above).
 - VPN only (Tailscale or WireGuard) with an internal certificate: the server is not reachable from the internet. Each device adds the internal CA once, after comparing its fingerprint, or pins a long-lived certificate (RR22). Keep the internal CA's private key off the devices that use the server.
 - Keep the origin the same when switching between them (`SHELLPP_PUBLIC_URL`, above): credentials are bound to it.
 - Open registration (`SHELLPP_REGISTRATION=open`) is the operator's choice; on an open server, set storage limits per account (`SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES`), which are off by default.

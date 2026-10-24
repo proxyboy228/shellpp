@@ -24,19 +24,40 @@ cd server/deploy
 cp .env.example .env
 ```
 
+The server secret goes into a file that Compose hands to the server as a
+Docker secret (`/run/secrets/server_secret`), not into `.env`: the
+environment of a container shows in `docker inspect`. It derives the
+server's own keys (the fake pre-login salts, the TOTP secrets at rest).
+Keep a copy with your backup key: a restored database needs the same
+secret, or every account's TOTP has to be reset.
+
+```bash
+mkdir -p secrets
+openssl rand -base64 48 > secrets/server_secret
+chmod 0400 secrets/server_secret
+sudo chown 10001 secrets/server_secret   # the server's user in the image
+```
+
+The image runs as user 10001, which must be able to read the file. If the
+server stops with "SHELLPP_SERVER_SECRET_FILE cannot be read: permission
+denied" (rootless Docker, user namespaces, Podman, SELinux), give that user
+read access the way your setup maps it, or relabel the folder (`:z`).
+The server also still reads `SHELLPP_SERVER_SECRET` from the environment,
+with a warning in its log; both at once is refused. It refuses to start
+when the secret opens none of the TOTP secrets stored in the database, so
+a wrong secret never runs.
+
 Fill in `.env`:
 
 - `POSTGRES_PASSWORD`: `openssl rand -base64 32`.
 - `SHELLPP_PUBLIC_URL`: the https origin your devices will type, for example
   `https://sync.example.com`.
-- `SHELLPP_SERVER_SECRET`: `openssl rand -base64 48`. It derives the
-  server's own keys (the fake pre-login salts, the TOTP secrets at rest).
-  Keep a copy with your backup key: a restored database needs the same
-  secret, or every account's TOTP has to be reset.
 - `BACKUP_AGE_RECIPIENT`: the public key of an `age` key pair made on
   another machine with `age-keygen -o shellpp-backup.key`. Keep the private
   key away from the server.
 - `SHELLPP_REGISTRATION`: `invite` (default) or `open`.
+- `SHELLPP_TRUSTED_PROXIES`: keep `172.16.88.1/32` (see "Client addresses"
+  below).
 
 Start it:
 
@@ -105,8 +126,8 @@ caddy run --config server/deploy/Caddyfile.example --adapter caddyfile
 ```
 
 Caddy gets and renews the certificate; the app trusts it through your
-system's roots, nothing to confirm. Set `SHELLPP_TRUSTED_PROXIES` to the
-address Caddy connects from (`127.0.0.1/32` on the host).
+system's roots, nothing to confirm. `SHELLPP_TRUSTED_PROXIES`: see
+"Client addresses" below.
 
 ### 2. Cloudflare Tunnel
 
@@ -121,7 +142,8 @@ Put the tunnel's id and credentials file into
 `deploy/cloudflared.example.yml` and run
 `cloudflared tunnel --config deploy/cloudflared.example.yml run`.
 Cloudflare terminates TLS (it sees the encrypted envelopes and your
-devices' metadata, never plaintext). `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32`.
+devices' metadata, never plaintext). `SHELLPP_TRUSTED_PROXIES`: see
+"Client addresses" below.
 
 ### 3. Only over your VPN, with an internal CA
 
@@ -140,11 +162,49 @@ instead: the root is in Caddy's data directory
 (`pki/authorities/local/root.crt`); the app accepts it as a CA added for
 this one address.
 
+### Client addresses
+
+The rate limits (failed sign-ins, the delays of two-step codes) count per
+client address. Behind a proxy every request reaches the server from the
+proxy, which names the client in `X-Forwarded-For`; the server believes
+that header only from `SHELLPP_TRUSTED_PROXIES`, and from nobody else.
+
+- A proxy on the host (Caddy, `cloudflared`) connects to `127.0.0.1:8080`;
+  Docker hands the connection to the server from the gateway of the compose
+  network, `172.16.88.1`, not from `127.0.0.1`. Keep
+  `SHELLPP_TRUSTED_PROXIES=172.16.88.1/32`. With `127.0.0.1/32` every client
+  would share the proxy's address and one budget of sign-ins.
+- A proxy container in the compose project: give it a fixed address on the
+  `default` network (`ipv4_address: 172.16.88.10`) and trust that address
+  instead.
+- If `172.16.88.0/24` is taken on your machine (`ip route` or `ipconfig`
+  shows it, or `docker compose up` answers "Pool overlaps"), set
+  `SHELLPP_SUBNET`, `SHELLPP_GATEWAY` and `SHELLPP_TRUSTED_PROXIES`
+  (the gateway with `/32`) in `.env` together.
+
+This holds only while the port is published on `127.0.0.1` alone, as in
+the compose file: then only programs on this machine come from the
+gateway. Published on every address (`8080:8080`), outside clients would
+arrive from the gateway too and could name any address. Never trust a
+whole range such as `172.16.0.0/12` either: anything inside it could name
+any client address and step around the limits. The server logs once when a
+request carried `X-Forwarded-For` from a peer it does not trust.
+
+Check it: `docker network inspect shellpp_default -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`
+prints the address `SHELLPP_TRUSTED_PROXIES` names.
+
 ## Backups
 
 The `backup` service writes `backups/shellpp-<time>.sql.age` every 24 hours
 (a `pg_dump`, encrypted to `BACKUP_AGE_RECIPIENT`) and deletes files older
 than `BACKUP_RETENTION_DAYS` (30). Copy the directory off the machine.
+
+Its image is built once from `deploy/backup.Dockerfile` (Alpine with the
+PostgreSQL client and `age`) by the first `docker compose up`, so a backup
+needs no network. A dump or encryption that fails ends the run with an
+error in `docker compose logs backup` (Docker starts it again, which tries
+again after 5 minutes) and leaves no `.sql.age` behind; old backups are not
+deleted after a failure.
 
 Make one now: `docker compose run --rm -e BACKUP_ONCE=1 backup`.
 
@@ -158,7 +218,8 @@ Make one now: `docker compose run --rm -e BACKUP_ONCE=1 backup`.
    ```bash
    docker compose exec postgres dropdb -U shellpp shellpp
    docker compose exec postgres createdb -U shellpp shellpp
-   docker compose exec -T postgres psql -U shellpp shellpp < restore.sql
+   docker compose exec -T postgres psql -U shellpp -v ON_ERROR_STOP=1 --single-transaction shellpp < restore.sql
+   rm restore.sql   # the plaintext dump: verifiers, wraps, metadata
    ```
 
 4. **Always** run `docker compose run --rm server admin restored`. It gives
@@ -171,6 +232,14 @@ A restore brings back what was deleted after the backup on the server's
 side: accounts deleted since (delete them again with `admin user delete`),
 devices revoked since (`admin device revoke`), vaults deleted since.
 
+A device whose sign-in was renewed after the backup (it renews every 15
+minutes while it syncs, so after a nightly backup that is most of them) is
+signed out by the restored server. Signing in again on it keeps its local
+data: it compares it with the server and pushes back what the backup
+lacks, as above. A load that fails half way stops at the first error
+(`ON_ERROR_STOP`) and changes nothing (`--single-transaction`): fix the
+cause and load again before `admin restored`.
+
 If a device holds newer keys than the backup (a password change with "my
 old password may be compromised" or a recovery key reissue after the
 backup), it stops with "Server state rolled back" and offers "Bring the
@@ -180,16 +249,42 @@ confirmation, because a hostile server could claim the same.
 
 ## Update
 
+From a version with `SHELLPP_SERVER_SECRET` in `.env`, first, while the
+old server still runs, move the value it runs with into the file, never a
+new one (a new secret makes every TOTP unreadable; the server refuses to
+start with one):
+
+```bash
+cd server/deploy
+mkdir -p secrets
+docker compose exec -T server printenv SHELLPP_SERVER_SECRET > secrets/server_secret
+chmod 0400 secrets/server_secret && sudo chown 10001 secrets/server_secret
+```
+
+then delete the `SHELLPP_SERVER_SECRET=` line from `.env`. Compose refuses
+to start while the file is missing. Then:
+
 ```bash
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
+docker compose pull postgres
+docker compose build --pull --no-cache backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```
 
 The `migrate` service applies schema changes before `server` starts; the
-server refuses to run on a schema older than itself.
+server refuses to run on a schema older than itself. `docker compose build
+--pull --no-cache backup` rebuilds the backup image with its script and the
+current PostgreSQL client and `age`.
+
+From a version before the fixed network (an `.env` with
+`SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` or `172.16.0.0/12`): set it to
+`172.16.88.1/32`, then `docker compose down` (never with `-v`, which would
+delete the database volume) and `docker compose up -d`, so the network is
+made again with its subnet, and check the gateway as in "Client
+addresses".
 
 ## Configuration reference
 
@@ -197,10 +292,12 @@ server refuses to run on a schema older than itself.
 |---|---|---|
 | `SHELLPP_DATABASE_URL` | required | `postgres://…` or `sqlite:/data/server.db` |
 | `SHELLPP_PUBLIC_URL` | required | the origin devices use |
-| `SHELLPP_SERVER_SECRET` | required | base64, at least 32 bytes |
+| `SHELLPP_SERVER_SECRET_FILE` | required (compose: `/run/secrets/server_secret`) | a file holding the secret: base64, at least 32 bytes |
+| `SHELLPP_SERVER_SECRET` | | the secret itself, instead of the file; works with a warning in the log; not together with the file |
 | `SHELLPP_BIND` | `127.0.0.1:8080` (image: `0.0.0.0:8080`) | |
 | `SHELLPP_REGISTRATION` | `invite` | or `open` |
-| `SHELLPP_TRUSTED_PROXIES` | none | CIDRs whose `X-Forwarded-For` is believed |
+| `SHELLPP_TRUSTED_PROXIES` | none (compose: `172.16.88.1/32`) | CIDRs whose `X-Forwarded-For` is believed ("Client addresses") |
+| `SHELLPP_RATE_LIMIT_*` | see `docs/sync-protocol.md`, section 10.1 | rate limit overrides |
 | `SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES` | no limit | per account |
 | `SHELLPP_TOMBSTONE_RETENTION_DAYS` | 90 | |
 

@@ -56,10 +56,10 @@ cp .env.example .env
 |---|---|
 | `POSTGRES_PASSWORD` | длинный случайный пароль: `openssl rand -base64 32` |
 | `SHELLPP_PUBLIC_URL` | адрес, который вы будете вводить на устройствах, например `https://sync.example.com` |
-| `SHELLPP_SERVER_SECRET` | `openssl rand -base64 48`. Сохраните копию вместе с ключом резервных копий: восстановленному серверу нужен тот же секрет, иначе двухэтапный вход придётся заново настраивать для каждой учётной записи |
+| секрет сервера | не в `.env`: файл `secrets/server_secret`, созданный командой `openssl rand -base64 48` (`server/README.md`, «Install»; Compose передаёт его серверу как секрет Docker). Сохраните копию вместе с ключом резервных копий: восстановленному серверу нужен тот же секрет, иначе двухэтапный вход придётся заново настраивать для каждой учётной записи |
 | `BACKUP_AGE_RECIPIENT` | открытый ключ пары ключей `age`, созданной **на другой машине** командой `age-keygen -o shellpp-backup.key`; закрытый ключ никогда не попадает на сервер |
 | `SHELLPP_REGISTRATION` | `invite` (по умолчанию: для новых учётных записей нужен код от вас) или `open` |
-| `SHELLPP_TRUSTED_PROXIES` | оставьте значение из `.env.example` (`172.16.0.0/12`): с этим compose-файлом соединения вашего прокси приходят на сервер из сети Docker. (`server/README.md` в разделе Access указывает `127.0.0.1/32`; это влияет только на то, какие адреса клиентов видят ограничения частоты запросов.) |
+| `SHELLPP_TRUSTED_PROXIES` | оставьте значение из `.env.example` (`172.16.88.1/32`): с этим compose-файлом прокси на хосте приходит на сервер со шлюза сети compose, и только этот адрес может называть ограничениям частоты запросов адрес клиента (`server/README.md`, «Client addresses») |
 
 Определитесь с адресом сервера (`SHELLPP_PUBLIC_URL`) до создания учётной
 записи и вводите его одинаково на всех устройствах (то же имя и тот же
@@ -315,8 +315,11 @@ Shell++ синхронизируется сразу после разблоки�
 
 Сервис `backup` из compose-файла каждые 24 часа записывает
 `backups/shellpp-<time>.sql.age` (дамп базы данных, зашифрованный для
-вашего ключа `age`) и удаляет копии старше 30 дней. Регулярно копируйте
-эту папку на другую машину. Сделать копию прямо сейчас:
+вашего ключа `age`) и удаляет копии старше 30 дней. Его инструменты лежат
+в образе, который собирается один раз при первом запуске, поэтому для
+копии сеть не нужна; неудачная копия видна в `docker compose logs backup`
+и не оставляет файла. Регулярно копируйте эту папку на другую машину.
+Сделать копию прямо сейчас:
 
 ```bash
 docker compose run --rm -e BACKUP_ONCE=1 backup
@@ -333,7 +336,8 @@ docker compose run --rm -e BACKUP_ONCE=1 backup
    ```bash
    docker compose exec postgres dropdb -U shellpp shellpp
    docker compose exec postgres createdb -U shellpp shellpp
-   docker compose exec -T postgres psql -U shellpp shellpp < restore.sql
+   docker compose exec -T postgres psql -U shellpp -v ON_ERROR_STOP=1 --single-transaction shellpp < restore.sql
+   rm restore.sql
    ```
 
 4. **Всегда** выполняйте `docker compose run --rm server admin restored`.
@@ -363,12 +367,20 @@ rolled back" с кнопкой **Bring the server up to date…**; она зап
 
 ### Обновление сервера
 
+Если `SHELLPP_SERVER_SECRET` лежал в `.env` (прежние версии), сначала
+перенесите значение, с которым работает запущенный сервер, в файл секрета
+(`server/README.md`, «Update»). Новый секрет не создавайте: иначе
+двухэтапный вход перестанет работать у всех учётных записей (сервер
+откажется запускаться с секретом, который их не открывает).
+
 Из корня репозитория:
 
 ```bash
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
+docker compose pull postgres
+docker compose build --pull --no-cache backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```

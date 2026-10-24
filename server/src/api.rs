@@ -19,15 +19,16 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use shellpp_sync_api::api::{
-    API_VERSION, AccountDeleteRequest, CurrentAuth, EmailChangeRequest, Health, KeyEpochResponse,
-    Limits, LoginRequest, LoginTotpRequest, PasswordChangeRequest, PersonalKeyEpochRequest,
-    PreloginRequest, PushRequest, RecoverBeginRequest, RecoverCompleteRequest,
-    RecoveryKeyReissueRequest, RefreshRequest, RegisterRequest, ServerInfo, SshIdRequest,
-    TokensResponse, TotpCode, TotpDisableRequest, code, limits, token_prefix,
+    API_VERSION, AccountDeleteRequest, B64, CurrentAuth, EmailChangeRequest, Health,
+    KeyEpochResponse, Limits, LoginRequest, LoginTotpRequest, PasswordChangeRequest,
+    PersonalKeyEpochRequest, PreloginRequest, PushRequest, RecoverBeginRequest,
+    RecoverCompleteRequest, RecoveryKeyReissueRequest, RefreshRequest, RegisterRequest, ServerInfo,
+    SshIdRequest, TokensResponse, TotpCode, TotpDisableRequest, code, limits, token_prefix,
 };
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
-use crate::accounts::{self, Principal};
+use crate::accounts::{self, CheckedKey, KeyKind, Principal};
 use crate::db::TxKind;
 use crate::error::{ApiError, ApiResult};
 use crate::model;
@@ -127,7 +128,8 @@ impl FromRequestParts<AppState> for Auth {
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::trim)
             .filter(|token| token.starts_with(token_prefix::ACCESS))
-            .map(str::to_owned);
+            // Wiped on drop (the header map's own copy is hyper's).
+            .map(|token| Zeroizing::new(token.to_owned()));
         let Some(token) = token else {
             state.limiters.token_failed(ip);
             return Err(ApiError::unauthenticated());
@@ -187,7 +189,25 @@ impl FromRequestParts<AppState> for ClientIp {
             .get_all("x-forwarded-for")
             .iter()
             .filter_map(|value| value.to_str().ok());
+        if !trusted(peer) && parts.headers.contains_key("x-forwarded-for") {
+            note_untrusted_forwarding();
+        }
         Ok(ClientIp(client_ip(peer, forwarded, trusted)))
+    }
+}
+
+/// Logs once per process that `X-Forwarded-For` came from a peer outside
+/// `SHELLPP_TRUSTED_PROXIES` and was ignored: behind a proxy that is not
+/// trusted, every client shares the proxy's address in the rate limits
+/// (D176). Neither address is logged.
+fn note_untrusted_forwarding() {
+    static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(
+            "X-Forwarded-For from a peer outside SHELLPP_TRUSTED_PROXIES was ignored; \
+             behind a proxy, trust the address it connects from (server README, \
+             \"Client addresses\")"
+        );
     }
 }
 
@@ -247,6 +267,62 @@ async fn limit_auth(
 ) -> ApiResult<Response> {
     state.limiters.auth(ip).map_err(ApiError::rate_limited)?;
     Ok(next.run(request).await)
+}
+
+/// Runs `check` (an Argon2id check or hash of `accounts`) on a blocking
+/// thread, outside any database transaction, in one of the slots of
+/// `Shared::argon2_slots` (run 7 finding 1; D174). The blocking task holds
+/// the slot: a request dropped while its check runs (the client closed the
+/// connection) does not free it early.
+async fn argon2<T: Send + 'static>(
+    state: &AppState,
+    check: impl FnOnce(&Shared) -> ApiResult<T> + Send + 'static,
+) -> ApiResult<T> {
+    let slot = state
+        .argon2_slots
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let shared = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = check(&shared);
+        drop(slot);
+        result
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+}
+
+/// A signed-in request's `current_auth_key`, checked before the write
+/// transaction that acts on it, which takes the user with
+/// [`CheckedKey::user`] (D174).
+async fn current_auth_key(
+    state: &AppState,
+    principal: Principal,
+    key: &B64,
+) -> ApiResult<CheckedKey> {
+    let key = Zeroizing::new(key.as_bytes().to_vec());
+    argon2(state, move |shared| {
+        accounts::check_current_auth_key(shared, &principal, &key)
+    })
+    .await
+}
+
+/// The key of a `login` or `recover/begin` for `email`, checked before the
+/// write transaction (D174).
+async fn sign_in_key(
+    state: &AppState,
+    email: &str,
+    kind: KeyKind,
+    key: &B64,
+) -> ApiResult<CheckedKey> {
+    let email = email.to_owned();
+    let key = Zeroizing::new(key.as_bytes().to_vec());
+    argon2(state, move |shared| {
+        accounts::check_sign_in(shared, &email, kind, &key)
+    })
+    .await
 }
 
 /// The router of the whole API.
@@ -367,11 +443,15 @@ async fn register(
     State(state): State<AppState>,
     Body(request): Body<RegisterRequest>,
 ) -> ApiResult<Response> {
+    let (request, verifiers) = argon2(&state, move |shared| {
+        accounts::register_verifiers(shared, &request, model::now()).map(|v| (request, v))
+    })
+    .await?;
     let shared = state.clone();
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::register(tx, &shared, request, model::now())
+            accounts::register(tx, &shared, request, verifiers, model::now())
         })
         .await?;
     Ok((StatusCode::CREATED, Json(response)).into_response())
@@ -381,11 +461,12 @@ async fn login(
     State(state): State<AppState>,
     Body(request): Body<LoginRequest>,
 ) -> ApiResult<Response> {
+    let checked = sign_in_key(&state, &request.email, KeyKind::Auth, &request.auth_key).await?;
     let shared = state.clone();
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::login(tx, &shared, request, model::now())
+            accounts::login(tx, &shared, &checked, request, model::now())
         })
         .await?;
     Ok(Json(response).into_response())
@@ -393,6 +474,7 @@ async fn login(
 
 async fn login_totp(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<LoginTotpRequest>,
 ) -> ApiResult<Response> {
     let shared = state.clone();
@@ -400,7 +482,7 @@ async fn login_totp(
     let response = state
         .db
         .run(TxKind::Write, move |tx| -> ApiResult<ApiResult<_>> {
-            sticky(accounts::login_totp(tx, &shared, request, model::now()))
+            sticky(accounts::login_totp(tx, &shared, request, ip, model::now()))
         })
         .await??;
     Ok(Json(response).into_response())
@@ -437,11 +519,17 @@ async fn recover_begin(
     State(state): State<AppState>,
     Body(request): Body<RecoverBeginRequest>,
 ) -> ApiResult<Response> {
-    let shared = state.clone();
+    let checked = sign_in_key(
+        &state,
+        &request.email,
+        KeyKind::Recovery,
+        &request.recovery_auth_key,
+    )
+    .await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::recover_begin(tx, &shared, request, model::now())
+            accounts::recover_begin(tx, &checked, request, model::now())
         })
         .await?;
     Ok(Json(response).into_response())
@@ -449,6 +537,7 @@ async fn recover_begin(
 
 async fn recover_complete(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverCompleteRequest>,
 ) -> ApiResult<Response> {
     let shared = state.clone();
@@ -460,6 +549,7 @@ async fn recover_complete(
                 tx,
                 &shared,
                 request,
+                ip,
                 model::now(),
             ))
         })
@@ -530,11 +620,11 @@ async fn email(
     Auth(principal): Auth,
     Body(request): Body<EmailChangeRequest>,
 ) -> ApiResult<Response> {
-    let shared = state.clone();
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::email_change(tx, &shared, &principal, request, model::now())
+            accounts::email_change(tx, &principal, &checked, request, model::now())
         })
         .await?;
     Ok(Json(response).into_response())
@@ -550,11 +640,12 @@ async fn totp_setup(
     Auth(principal): Auth,
     Body(request): Body<CurrentAuth>,
 ) -> ApiResult<Response> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let shared = state.clone();
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::totp_setup(tx, &shared, &principal, request)
+            accounts::totp_setup(tx, &shared, &checked)
         })
         .await?;
     Ok(Json(response).into_response())
@@ -562,6 +653,7 @@ async fn totp_setup(
 
 async fn totp_enable(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<TotpCode>,
 ) -> ApiResult<StatusCode> {
@@ -569,7 +661,7 @@ async fn totp_enable(
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::totp_enable(tx, &shared, &principal, request, model::now())
+            accounts::totp_enable(tx, &shared, &principal, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -577,14 +669,16 @@ async fn totp_enable(
 
 async fn totp_disable(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<TotpDisableRequest>,
 ) -> ApiResult<StatusCode> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let shared = state.clone();
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::totp_disable(tx, &shared, &principal, request, model::now())
+            accounts::totp_disable(tx, &shared, &checked, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -606,14 +700,16 @@ async fn ssh_id(
 
 async fn account_delete(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<AccountDeleteRequest>,
 ) -> ApiResult<StatusCode> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let shared = state.clone();
     state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::account_delete(tx, &shared, &principal, request, model::now())
+            accounts::account_delete(tx, &shared, &checked, request, ip, model::now())
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -669,11 +765,22 @@ async fn key_epochs(
     PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PersonalKeyEpochRequest>,
 ) -> ApiResult<Response> {
-    let shared = state.clone();
+    // An unknown or foreign vault answers before the key is checked.
+    let key = Zeroizing::new(request.current_auth_key.as_bytes().to_vec());
+    let checked = argon2(&state, move |shared| {
+        accounts::check_current_auth_key_after(shared, &principal, &key, |user| {
+            if user.personal_vault_id == vault_id {
+                Ok(())
+            } else {
+                Err(ApiError::not_member())
+            }
+        })
+    })
+    .await?;
     let current_epoch = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::personal_key_epoch(tx, &shared, &principal, vault_id, request, model::now())
+            accounts::personal_key_epoch(tx, &checked, vault_id, request, model::now())
         })
         .await?;
     Ok(Json(KeyEpochResponse { current_epoch }).into_response())
@@ -737,6 +844,56 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
+    }
+
+    fn state() -> AppState {
+        let secret = data_encoding::BASE64.encode(&crate::secrets::random_bytes::<32>());
+        let config = crate::config::Config::from_env(|name: &str| match name {
+            "SHELLPP_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SHELLPP_PUBLIC_URL" => Some("https://sync.example.com".to_owned()),
+            "SHELLPP_SERVER_SECRET" => Some(secret.clone()),
+            _ => None,
+        })
+        .unwrap();
+        Shared::new(crate::db::Db::open("sqlite::memory:").unwrap(), config)
+    }
+
+    /// Review finding (D174): a check keeps its Argon2id slot until it ends,
+    /// also when its request is dropped meanwhile (the client closed the
+    /// connection); else closing connections would run any number at once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_request_keeps_its_argon2_slot_until_the_check_ends() {
+        let state = state();
+        let slots = state.argon2_slots.available_permits();
+        let (started, has_started) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let request = tokio::spawn({
+            let state = state.clone();
+            async move {
+                argon2(&state, move |_| {
+                    started.send(()).unwrap();
+                    let _ = released.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        tokio::task::spawn_blocking(move || has_started.recv().unwrap())
+            .await
+            .unwrap();
+        request.abort();
+        let _ = request.await;
+        assert_eq!(
+            state.argon2_slots.available_permits(),
+            slots - 1,
+            "the check still runs"
+        );
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while state.argon2_slots.available_permits() != slots {
+            assert!(std::time::Instant::now() < deadline, "the slot came back");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     /// An IPv4 client reaching a server bound to `[::]` arrives as

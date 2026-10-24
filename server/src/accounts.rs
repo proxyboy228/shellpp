@@ -1,24 +1,26 @@
 //! Authentication and account operations (docs/sync-protocol.md, sections
 //! 4 and 5). Every function runs inside one database transaction.
 
+use std::net::IpAddr;
+
 use axum::http::StatusCode;
 use shellpp_sync_api::api::{
-    AccountDeleteRequest, B64, CurrentAuth, Device, DeviceList, EmailChangeRequest,
-    EmailChangeResponse, LoginRequest, LoginResponse, LoginTotpRequest, PasswordChangeRequest,
-    PersonalKeyEpochRequest, PreloginRequest, PreloginResponse, RecoverBeginRequest,
-    RecoverBeginResponse, RecoverCompleteRequest, RecoveryKeyReissueRequest,
-    RecoveryKeyReissueResponse, RegisterRequest, RegisterResponse, Registration, Rotation, Secret,
-    SshIdRequest, Tokens, TotpCode, TotpDisableRequest, TotpSetupResponse, code, token_prefix,
+    AccountDeleteRequest, B64, Device, DeviceList, EmailChangeRequest, EmailChangeResponse,
+    LoginRequest, LoginResponse, LoginTotpRequest, PasswordChangeRequest, PersonalKeyEpochRequest,
+    PreloginRequest, PreloginResponse, RecoverBeginRequest, RecoverBeginResponse,
+    RecoverCompleteRequest, RecoveryKeyReissueRequest, RecoveryKeyReissueResponse, RegisterRequest,
+    RegisterResponse, Registration, Rotation, Secret, SshIdRequest, Tokens, TotpCode,
+    TotpDisableRequest, TotpSetupResponse, code, token_prefix,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::db::{DbError, Tx, Ty, Val};
+use crate::db::{DbError, Tx, TxKind, Ty, Val};
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
     self, DELETED_ACCOUNT_DAYS, LOGIN_TICKET_LIFETIME, RECOVERY_TICKET_LIFETIME, REFRESH_LIFETIME,
     REFRESH_RETRY, TICKET_ATTEMPTS, User, WRAP_LEN, exact_len, issue_family, revoke_all,
-    upsert_device, user_by_email, user_by_id,
+    upsert_device, user_by_email,
 };
 use crate::records;
 use crate::secrets;
@@ -43,47 +45,174 @@ fn rate_limited(seconds: u64) -> ApiError {
     ApiError::rate_limited(seconds)
 }
 
-/// Checks `current_auth_key` (or a login's `auth_key`) of a known user,
-/// counting a failure for the email (section 10.1).
+/// Checks `current_auth_key` of a known user, counting the attempt for the
+/// email until it passed (section 10.1; D174). [`check_current_auth_key`]
+/// runs it outside any transaction; only `/account/password` and
+/// `/account/recovery-key` still call it inside theirs (D174).
 fn check_auth_key(shared: &Shared, user: &User, key: &[u8]) -> ApiResult<()> {
     shared
         .limiters
-        .signin_allowed(&user.email)
+        .signin_attempt(&user.email)
         .map_err(rate_limited)?;
     if key.len() == 32 && secrets::check_verifier(&user.auth_verifier, key) {
+        shared.limiters.signin_succeeded(&user.email);
         Ok(())
     } else {
-        shared.limiters.signin_failed(&user.email);
         Err(ApiError::invalid_credentials())
     }
 }
 
-/// The auth key check for an email that may be unknown: a dummy Argon2id
-/// verification keeps the timing alike (section 4.4).
-fn check_login(shared: &Shared, user: Option<&User>, email: &str, key: &[u8]) -> ApiResult<()> {
+/// The verifier a key is checked against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyKind {
+    /// `auth_verifier`: a login's `auth_key` and `current_auth_key`.
+    Auth,
+    /// `recovery_verifier`: the `recovery_auth_key` of `recover/begin`.
+    Recovery,
+}
+
+/// A key that matched its verifier, checked outside any database
+/// transaction (run 7 finding 1; D174): the Argon2id check never holds the
+/// database. The write transaction that acts on the key takes the user row
+/// with [`CheckedKey::user`] (or [`CheckedKey::recovery_user`]), which goes
+/// on only while the verifier is still the one the key matched.
+#[derive(Clone)]
+pub struct CheckedKey {
+    user_id: Uuid,
+    kind: KeyKind,
+    verifier: String,
+    /// From a signed-in request: a user gone since is `401 unauthenticated`
+    /// (as before the check), else `401 invalid_credentials`.
+    signed_in: bool,
+}
+
+impl std::fmt::Debug for CheckedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckedKey")
+            .field("user_id", &self.user_id)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CheckedKey {
+    pub fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
+    /// In the write transaction, for an auth key (a login's `auth_key` or
+    /// `current_auth_key`): the user row (locked on PostgreSQL), when its
+    /// `auth_verifier` is still the one the key matched. A password change,
+    /// an email change or a recovery that committed in between replaced it:
+    /// `401 invalid_credentials`, without counting a failure.
+    pub fn user(&self, tx: &mut dyn Tx) -> ApiResult<User> {
+        self.row(tx, KeyKind::Auth)
+    }
+
+    /// [`Self::user`] for a recovery key: its `recovery_verifier`.
+    pub fn recovery_user(&self, tx: &mut dyn Tx) -> ApiResult<User> {
+        self.row(tx, KeyKind::Recovery)
+    }
+
+    fn row(&self, tx: &mut dyn Tx, kind: KeyKind) -> ApiResult<User> {
+        // A recovery key never stands for an auth key, nor the reverse.
+        if kind != self.kind {
+            return Err(ApiError::internal());
+        }
+        let Some(user) = model::user_by_id_locked(tx, self.user_id)? else {
+            return Err(if self.signed_in {
+                ApiError::unauthenticated()
+            } else {
+                ApiError::invalid_credentials()
+            });
+        };
+        let current = match kind {
+            KeyKind::Auth => &user.auth_verifier,
+            KeyKind::Recovery => &user.recovery_verifier,
+        };
+        if current != &self.verifier {
+            return Err(ApiError::invalid_credentials());
+        }
+        Ok(user)
+    }
+}
+
+/// The key check of `login` (`auth_key`) and `recover/begin`
+/// (`recovery_auth_key`) for `email`, which may be unknown (sections 4.4,
+/// 5.2): the attempt counted for the normalized email (section 10.1), the
+/// user read in a transaction of its own, then, outside any transaction,
+/// the Argon2id check. An unknown email or a key of the wrong length is
+/// checked against the dummy verifier, so the timing does not tell them
+/// from a known one. A check that passes takes its attempt back. Blocking:
+/// call it from a blocking thread.
+pub fn check_sign_in(
+    shared: &Shared,
+    email: &str,
+    kind: KeyKind,
+    key: &[u8],
+) -> ApiResult<CheckedKey> {
+    let email = secrets::normalize_email(email);
     shared
         .limiters
-        .signin_allowed(email)
+        .signin_attempt(&email)
         .map_err(rate_limited)?;
-    let ok = match user {
-        Some(user) if key.len() == 32 => secrets::check_verifier(&user.auth_verifier, key),
-        // A wrong length runs the dummy verification too: the timing must
-        // not tell a known email from an unknown one (section 4.4).
-        Some(_) => {
-            let _ = secrets::check_verifier(&shared.dummy_verifier, key);
-            false
+    let user = shared.db.tx(TxKind::Read, |tx| user_by_email(tx, &email))?;
+    let verifier = user
+        .as_ref()
+        .filter(|_| key.len() == 32)
+        .map(|user| match kind {
+            KeyKind::Auth => user.auth_verifier.clone(),
+            KeyKind::Recovery => user.recovery_verifier.clone(),
+        });
+    match (user, verifier) {
+        (Some(user), Some(verifier)) if secrets::check_verifier(&verifier, key) => {
+            shared.limiters.signin_succeeded(&email);
+            Ok(CheckedKey {
+                user_id: user.user_id,
+                kind,
+                verifier,
+                signed_in: false,
+            })
         }
-        None => {
-            let _ = secrets::check_verifier(&shared.dummy_verifier, key);
-            false
+        (_, verifier) => {
+            if verifier.is_none() {
+                let _ = secrets::check_verifier(&shared.dummy_verifier, key);
+            }
+            Err(ApiError::invalid_credentials())
         }
-    };
-    if ok {
-        Ok(())
-    } else {
-        shared.limiters.signin_failed(email);
-        Err(ApiError::invalid_credentials())
     }
+}
+
+/// The `current_auth_key` check of a signed-in request (section 4.8): the
+/// user read in a transaction of its own, then the attempt counted for its
+/// email and, outside any transaction, the Argon2id check (section 10.1).
+/// Blocking: call it from a blocking thread.
+pub fn check_current_auth_key(
+    shared: &Shared,
+    principal: &Principal,
+    key: &[u8],
+) -> ApiResult<CheckedKey> {
+    check_current_auth_key_after(shared, principal, key, |_| Ok(()))
+}
+
+/// [`check_current_auth_key`] after `first`, a check of the request against
+/// the user that answers before the key is checked (the vault of a
+/// personal key epoch).
+pub fn check_current_auth_key_after(
+    shared: &Shared,
+    principal: &Principal,
+    key: &[u8],
+    first: impl FnOnce(&User) -> ApiResult<()>,
+) -> ApiResult<CheckedKey> {
+    let user = shared.db.tx(TxKind::Read, |tx| me(tx, principal))?;
+    first(&user)?;
+    check_auth_key(shared, &user, key)?;
+    Ok(CheckedKey {
+        user_id: user.user_id,
+        kind: KeyKind::Auth,
+        verifier: user.auth_verifier,
+        signed_in: true,
+    })
 }
 
 fn ticket_expired() -> ApiError {
@@ -121,14 +250,40 @@ pub fn prelogin(
     }
 }
 
-/// `POST /v1/auth/register` (section 4.3), checks in their order.
-pub fn register(
+/// The verifiers of a registration's two keys, made before its write
+/// transaction (D174): two Argon2id hashes that would otherwise hold the
+/// database for every registration of a burst.
+pub struct RegisterVerifiers {
+    auth: String,
+    recovery: String,
+}
+
+/// The first part of `POST /v1/auth/register`: the checks of [`register`]
+/// in a read transaction, so a request that will be refused costs no hash,
+/// then the verifiers, outside any transaction. [`register`] checks
+/// everything again. Blocking: call it from a blocking thread.
+pub fn register_verifiers(
+    shared: &Shared,
+    request: &RegisterRequest,
+    now: OffsetDateTime,
+) -> ApiResult<RegisterVerifiers> {
+    shared
+        .db
+        .tx(TxKind::Read, |tx| register_checks(tx, shared, request, now))?;
+    Ok(RegisterVerifiers {
+        auth: secrets::make_verifier(request.auth_key.as_bytes()),
+        recovery: secrets::make_verifier(request.recovery_auth_key.as_bytes()),
+    })
+}
+
+/// Check 1 of a registration: the code of an invite-only server, before
+/// anything about emails; its hash when there is one.
+fn register_code(
     tx: &mut dyn Tx,
     shared: &Shared,
-    request: RegisterRequest,
+    request: &RegisterRequest,
     now: OffsetDateTime,
-) -> ApiResult<RegisterResponse> {
-    // 1. The registration code, before anything about emails.
+) -> ApiResult<Option<Vec<u8>>> {
     let mut code_hash = None;
     if shared.config.registration == Registration::Invite {
         let closed = || {
@@ -152,7 +307,11 @@ pub fn register(
         }
         code_hash = Some(hash);
     }
-    // 2. KDF bounds and binary sizes.
+    Ok(code_hash)
+}
+
+/// Check 2 of a registration: KDF bounds and binary sizes.
+fn register_shape(request: &RegisterRequest) -> ApiResult<()> {
     if !request.kdf.server_acceptable() {
         return Err(ApiError::weak_kdf());
     }
@@ -168,6 +327,21 @@ pub fn register(
     if request.ssh_id_public_key.len() > 512 {
         return Err(ApiError::bad_request("ssh_id_public_key too long"));
     }
+    Ok(())
+}
+
+/// The checks of a registration in their order (section 4.3): the code's
+/// hash, when there is one, and the normalized email.
+fn register_checks(
+    tx: &mut dyn Tx,
+    shared: &Shared,
+    request: &RegisterRequest,
+    now: OffsetDateTime,
+) -> ApiResult<(Option<Vec<u8>>, String)> {
+    // 1. The registration code, before anything about emails.
+    let code_hash = register_code(tx, shared, request, now)?;
+    // 2. KDF bounds and binary sizes.
+    register_shape(request)?;
     // 3. The email.
     let email = secrets::normalize_email(&request.email);
     if email.is_empty() || email.len() > 320 || !email.contains('@') {
@@ -200,6 +374,20 @@ pub fn register(
         return Err(ApiError::validation("personal_vault.epoch_chain"));
     }
     model::device_free_for(tx, request.device_id, None)?;
+    Ok((code_hash, email))
+}
+
+/// `POST /v1/auth/register` (section 4.3), with the verifiers
+/// [`register_verifiers`] made for this request.
+pub fn register(
+    tx: &mut dyn Tx,
+    shared: &Shared,
+    request: RegisterRequest,
+    verifiers: RegisterVerifiers,
+    now: OffsetDateTime,
+) -> ApiResult<RegisterResponse> {
+    let (code_hash, email) = register_checks(tx, shared, &request, now)?;
+    let vault = &request.personal_vault;
     // 5. Create everything.
     let user_id = Uuid::now_v7();
     tx.exec(
@@ -210,8 +398,8 @@ pub fn register(
         &[
             user_id.into(),
             email.clone().into(),
-            secrets::make_verifier(request.auth_key.as_bytes()).into(),
-            secrets::make_verifier(request.recovery_auth_key.as_bytes()).into(),
+            verifiers.auth.into(),
+            verifiers.recovery.into(),
             serde_json::to_value(&request.kdf)
                 .map_err(|_| ApiError::internal())?
                 .into(),
@@ -285,17 +473,16 @@ pub fn register(
     Ok(RegisterResponse { user_id, tokens })
 }
 
-/// `POST /v1/auth/login` (section 4.4).
+/// `POST /v1/auth/login` (section 4.4), after [`check_sign_in`] passed for
+/// the request's email and `auth_key`.
 pub fn login(
     tx: &mut dyn Tx,
     shared: &Shared,
+    checked: &CheckedKey,
     request: LoginRequest,
     now: OffsetDateTime,
 ) -> ApiResult<LoginResponse> {
-    let email = secrets::normalize_email(&request.email);
-    let user = user_by_email(tx, &email)?;
-    check_login(shared, user.as_ref(), &email, request.auth_key.as_bytes())?;
-    let user = user.ok_or_else(ApiError::invalid_credentials)?;
+    let user = checked.user(tx)?;
     if user.disabled {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
@@ -382,8 +569,10 @@ fn ticket(
     ))
 }
 
-/// Checks a TOTP code for a user with a ticket: a wrong code counts an
-/// attempt (the 5th deletes the ticket) and an account failure.
+/// Checks a TOTP code for a user with a ticket, from the client at `ip`:
+/// while a delay runs, `429` (D175); a wrong code counts an attempt (the
+/// 5th deletes the ticket) and a failure of the account from that client.
+#[allow(clippy::too_many_arguments)]
 fn check_ticket_totp(
     tx: &mut dyn Tx,
     shared: &Shared,
@@ -391,11 +580,12 @@ fn check_ticket_totp(
     ticket_hash: &[u8],
     attempts: i64,
     code: &str,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip, true)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -408,9 +598,12 @@ fn check_ticket_totp(
         now.unix_timestamp().max(0) as u64,
         user.totp_last_step,
     ) {
-        Some(step) => Ok(step),
+        Some(step) => {
+            shared.limiters.totp_succeeded(user.user_id, ip);
+            Ok(step)
+        }
         None => {
-            shared.limiters.totp_failed(user.user_id);
+            shared.limiters.totp_failed(user.user_id, ip);
             if attempts + 1 >= TICKET_ATTEMPTS {
                 tx.exec(
                     "DELETE FROM auth_tickets WHERE ticket_hash = ?",
@@ -427,11 +620,12 @@ fn check_ticket_totp(
     }
 }
 
-/// `POST /v1/auth/login/totp`.
+/// `POST /v1/auth/login/totp` from the client at `ip`.
 pub fn login_totp(
     tx: &mut dyn Tx,
     shared: &Shared,
     request: LoginTotpRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<LoginResponse> {
     let (hash, user_id, device_id, attempts) = ticket(tx, &request.login_ticket.0, "login", now)?;
@@ -451,7 +645,7 @@ pub fn login_totp(
         )?;
         return Err(ticket_expired());
     }
-    let step = check_ticket_totp(tx, shared, &user, &hash, attempts, &request.code.0, now)?;
+    let step = check_ticket_totp(tx, shared, &user, &hash, attempts, &request.code.0, ip, now)?;
     tx.exec(
         "UPDATE users SET totp_last_step = ? WHERE user_id = ?",
         &[(step as i64).into(), user_id.into()],
@@ -768,36 +962,15 @@ pub fn password_change(
     Ok(tokens)
 }
 
-/// `POST /v1/auth/recover/begin` (section 5.2).
+/// `POST /v1/auth/recover/begin` (section 5.2), after [`check_sign_in`]
+/// passed for the request's email and `recovery_auth_key`.
 pub fn recover_begin(
     tx: &mut dyn Tx,
-    shared: &Shared,
+    checked: &CheckedKey,
     request: RecoverBeginRequest,
     now: OffsetDateTime,
 ) -> ApiResult<RecoverBeginResponse> {
-    let email = secrets::normalize_email(&request.email);
-    shared
-        .limiters
-        .signin_allowed(&email)
-        .map_err(rate_limited)?;
-    let user = user_by_email(tx, &email)?;
-    let ok = match &user {
-        Some(user) if request.recovery_auth_key.as_bytes().len() == 32 => secrets::check_verifier(
-            &user.recovery_verifier,
-            request.recovery_auth_key.as_bytes(),
-        ),
-        Some(_) | None => {
-            let _ = secrets::check_verifier(
-                &shared.dummy_verifier,
-                request.recovery_auth_key.as_bytes(),
-            );
-            false
-        }
-    };
-    let Some(user) = user.filter(|_| ok) else {
-        shared.limiters.signin_failed(&email);
-        return Err(ApiError::invalid_credentials());
-    };
+    let user = checked.recovery_user(tx)?;
     // As at login: `account_disabled` only after a correct key.
     if user.disabled {
         return Err(ApiError::new(
@@ -834,6 +1007,7 @@ pub fn recover_complete(
     tx: &mut dyn Tx,
     shared: &Shared,
     request: RecoverCompleteRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<Tokens> {
     let (hash, user_id, device_id, attempts) =
@@ -841,14 +1015,16 @@ pub fn recover_complete(
     if device_id != request.device_id {
         return Err(ticket_expired());
     }
-    let user = user_by_id(tx, user_id)?.ok_or_else(ticket_expired)?;
+    // Locked, as at login: the TOTP counters of one account are asked by
+    // one code at a time (D175).
+    let user = model::user_by_id_locked(tx, user_id)?.ok_or_else(ticket_expired)?;
     if user.totp_enabled {
         let code = request
             .totp_code
             .as_ref()
             .map(|code| code.0.as_str())
             .unwrap_or("");
-        let step = check_ticket_totp(tx, shared, &user, &hash, attempts, code, now)?;
+        let step = check_ticket_totp(tx, shared, &user, &hash, attempts, code, ip, now)?;
         tx.exec(
             "UPDATE users SET totp_last_step = ? WHERE user_id = ?",
             &[(step as i64).into(), user_id.into()],
@@ -924,16 +1100,19 @@ pub fn recovery_key_reissue(
 }
 
 /// `POST /v1/account/email` without SMTP: the change takes effect at once
-/// with the new key material (section 5.4).
+/// with the new key material (section 5.4). `checked`: the request's
+/// `current_auth_key` ([`check_current_auth_key`]).
 pub fn email_change(
     tx: &mut dyn Tx,
-    shared: &Shared,
     principal: &Principal,
+    checked: &CheckedKey,
     request: EmailChangeRequest,
     now: OffsetDateTime,
 ) -> ApiResult<EmailChangeResponse> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    if checked.user_id() != principal.user_id {
+        return Err(ApiError::unauthenticated());
+    }
+    let user = checked.user(tx)?;
     let email = secrets::normalize_email(&request.new_email);
     if email.is_empty() || email.len() > 320 || !email.contains('@') {
         return Err(ApiError::validation("new_email"));
@@ -992,15 +1171,14 @@ pub fn email_change(
     })
 }
 
-/// `POST /v1/account/totp/setup` (section 5.5).
+/// `POST /v1/account/totp/setup` (section 5.5); `checked`: the request's
+/// `current_auth_key`.
 pub fn totp_setup(
     tx: &mut dyn Tx,
     shared: &Shared,
-    principal: &Principal,
-    request: CurrentAuth,
+    checked: &CheckedKey,
 ) -> ApiResult<TotpSetupResponse> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    let user = checked.user(tx)?;
     if user.totp_enabled {
         return Err(ApiError::validation("totp"));
     }
@@ -1024,6 +1202,7 @@ pub fn totp_enable(
     shared: &Shared,
     principal: &Principal,
     request: TotpCode,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
     let user = me(tx, principal)?;
@@ -1032,7 +1211,7 @@ pub fn totp_enable(
     }
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip, false)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1046,9 +1225,10 @@ pub fn totp_enable(
         None,
     )
     .ok_or_else(|| {
-        shared.limiters.totp_failed(user.user_id);
+        shared.limiters.totp_failed(user.user_id, ip);
         invalid_totp()
     })?;
+    shared.limiters.totp_succeeded(user.user_id, ip);
     tx.exec(
         "UPDATE users SET totp_enabled = TRUE, totp_last_step = ? WHERE user_id = ?",
         &[(step as i64).into(), user.user_id.into()],
@@ -1056,18 +1236,19 @@ pub fn totp_enable(
     Ok(())
 }
 
-/// `POST /v1/account/totp/disable`.
+/// `POST /v1/account/totp/disable`; `checked`: the request's
+/// `current_auth_key`.
 pub fn totp_disable(
     tx: &mut dyn Tx,
     shared: &Shared,
-    principal: &Principal,
+    checked: &CheckedKey,
     request: TotpDisableRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    let user = checked.user(tx)?;
     if user.totp_enabled {
-        check_user_totp(shared, &user, &request.code.0, now)?;
+        check_user_totp(shared, &user, &request.code.0, ip, now)?;
     }
     tx.exec(
         "UPDATE users SET totp_secret_enc = NULL, totp_enabled = FALSE, totp_last_step = NULL \
@@ -1077,16 +1258,18 @@ pub fn totp_disable(
     Ok(())
 }
 
-/// A TOTP code of a signed-in user (no ticket): disable, account deletion.
+/// A TOTP code of a signed-in user (no ticket) from the client at `ip`:
+/// disable, account deletion; the delays of D175 apply.
 fn check_user_totp(
     shared: &Shared,
     user: &User,
     code: &str,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<u64> {
     shared
         .limiters
-        .totp_allowed(user.user_id)
+        .totp_allowed(user.user_id, ip, false)
         .map_err(rate_limited)?;
     let secret = user
         .totp_secret_enc
@@ -1099,8 +1282,9 @@ fn check_user_totp(
         now.unix_timestamp().max(0) as u64,
         user.totp_last_step,
     )
+    .inspect(|_| shared.limiters.totp_succeeded(user.user_id, ip))
     .ok_or_else(|| {
-        shared.limiters.totp_failed(user.user_id);
+        shared.limiters.totp_failed(user.user_id, ip);
         invalid_totp()
     })
 }
@@ -1118,23 +1302,24 @@ pub fn ssh_id(tx: &mut dyn Tx, principal: &Principal, request: SshIdRequest) -> 
 }
 
 /// `POST /v1/account/delete` (section 5.8): immediate; the refresh token
-/// hashes stay 30 days so the other devices learn why (D93).
+/// hashes stay 30 days so the other devices learn why (D93). `checked`:
+/// the request's `current_auth_key`.
 pub fn account_delete(
     tx: &mut dyn Tx,
     shared: &Shared,
-    principal: &Principal,
+    checked: &CheckedKey,
     request: AccountDeleteRequest,
+    ip: IpAddr,
     now: OffsetDateTime,
 ) -> ApiResult<()> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    let user = checked.user(tx)?;
     if user.totp_enabled {
         let code = request
             .totp_code
             .as_ref()
             .map(|code| code.0.as_str())
             .unwrap_or("");
-        check_user_totp(shared, &user, code, now)?;
+        check_user_totp(shared, &user, code, ip, now)?;
     }
     // Sole owner of a team vault with other members (D14).
     let sole: Vec<Val> = tx
@@ -1273,19 +1458,18 @@ pub fn revoke_device_tokens(
 
 /// `POST /v1/vaults/{personal}/key-epochs` (sections 5.1 and 7.7): a new
 /// epoch of the personal vault, also the re-post after a server restore.
+/// `checked`: the request's `current_auth_key`.
 pub fn personal_key_epoch(
     tx: &mut dyn Tx,
-    shared: &Shared,
-    principal: &Principal,
+    checked: &CheckedKey,
     vault_id: Uuid,
     request: PersonalKeyEpochRequest,
     now: OffsetDateTime,
 ) -> ApiResult<u32> {
-    let user = me(tx, principal)?;
+    let user = checked.user(tx)?;
     if vault_id != user.personal_vault_id {
         return Err(ApiError::not_member());
     }
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
     exact_len(request.account_wraps.kek_wrap.as_bytes(), WRAP_LEN)?;
     apply_rotation(
         tx,
