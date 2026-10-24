@@ -23,9 +23,11 @@
 //!   Reading keeps the chunks that open and stops at the first one that
 //!   does not (incomplete); only a file whose first chunk fails is refused.
 
+use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use uuid::Uuid;
@@ -147,6 +149,8 @@ pub struct RecordingWriter {
     max_chunks: u32,
     /// The limit was reached: later output is not written.
     full: bool,
+    /// Names the file among the open ones while it is written.
+    _open: Option<OpenGuard>,
 }
 
 impl std::fmt::Debug for RecordingWriter {
@@ -191,6 +195,7 @@ impl RecordingWriter {
             failed: false,
             max_chunks: MAX_CHUNKS,
             full: false,
+            _open: None,
         };
         let (width, height) = size;
         let first = serde_json::json!({
@@ -205,6 +210,12 @@ impl RecordingWriter {
 
     pub fn file_id(&self) -> Uuid {
         self.header.file_id
+    }
+
+    /// Lists the file in `open` until the writer goes, so a re-encryption
+    /// leaves it alone while output is still appended under its key.
+    pub fn track(&mut self, open: &OpenFiles) {
+        self._open = Some(open.guard(self.header.file_id));
     }
 
     /// Output of the session (UTF-8), timed from the start.
@@ -308,6 +319,134 @@ impl Drop for RecordingWriter {
             tracing::warn!(%error, "recording not closed");
         }
     }
+}
+
+/// The recordings this process is writing now (storage-format.md 8.4: a
+/// re-encryption skips them and takes them up at the next start).
+#[derive(Clone, Debug, Default)]
+pub struct OpenFiles(Arc<Mutex<HashSet<Uuid>>>);
+
+impl OpenFiles {
+    pub fn contains(&self, file_id: &Uuid) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(file_id)
+    }
+
+    fn guard(&self, file_id: Uuid) -> OpenGuard {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(file_id);
+        OpenGuard {
+            files: self.clone(),
+            file_id,
+        }
+    }
+}
+
+/// Removes its file from [`OpenFiles`] when the writer goes.
+struct OpenGuard {
+    files: OpenFiles,
+    file_id: Uuid,
+}
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        self.files
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.file_id);
+    }
+}
+
+/// Re-encrypts the recording at `path` under `new_key` with `header` (the
+/// same `file_id`, the new vault and epoch, a new nonce prefix): every
+/// chunk is opened with `old_key` and sealed again with the same plaintext
+/// and the same chunk boundaries, so the asciicast header, markers and a
+/// missing final chunk (an incomplete file) stay as they were. One chunk at
+/// a time is in memory. The new file is written beside the old one, synced
+/// and renamed over it; on any failure (a chunk that does not open
+/// included) the old file stays untouched (storage-format.md 8.4).
+pub fn rekey_file(
+    path: &Path,
+    old_key: &Key32,
+    header: &Header,
+    new_key: &Key32,
+) -> Result<(), RecordingError> {
+    let mut input = File::open(path)?;
+    let length = input.metadata()?.len();
+    let mut head = [0u8; HEADER_LEN];
+    input.read_exact(&mut head)?;
+    let old = Header::parse(&head)?;
+    if old.file_id != header.file_id {
+        return Err(RecordingError::Format);
+    }
+    let body = length - HEADER_LEN as u64;
+    let frame_len = FRAME as u64;
+    let whole = body / frame_len;
+    let rest = usize::try_from(body % frame_len).map_err(|_| RecordingError::Format)?;
+    if rest > 0 && rest < TAG {
+        return Err(RecordingError::Damaged);
+    }
+    let temp = path.with_extension("reencrypt");
+    match std::fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut output = options.open(&temp)?;
+    let written = (|| -> Result<(), RecordingError> {
+        let old_aad = old.bytes();
+        let new_aad = header.bytes();
+        output.write_all(&new_aad)?;
+        let mut frame = Zeroizing::new(vec![0u8; FRAME]);
+        let mut sealed = Vec::with_capacity(FRAME);
+        let mut chunk = |index: u32, last: bool, bytes: &[u8]| -> Result<(), RecordingError> {
+            let plain = crypto::xchacha_open(old_key, &old.nonce(index, last), &old_aad, bytes)
+                .map_err(|_| RecordingError::Damaged)?;
+            sealed.clear();
+            crypto::xchacha_seal_append(
+                new_key,
+                &header.nonce(index, last),
+                &new_aad,
+                &plain,
+                &mut sealed,
+            )
+            .map_err(|_| RecordingError::Damaged)?;
+            output.write_all(&sealed)?;
+            Ok(())
+        };
+        for index in 0..whole {
+            input.read_exact(&mut frame)?;
+            let index = u32::try_from(index).map_err(|_| RecordingError::Format)?;
+            chunk(index, false, &frame)?;
+        }
+        if rest > 0 {
+            input.read_exact(&mut frame[..rest])?;
+            let index = u32::try_from(whole).map_err(|_| RecordingError::Format)?;
+            chunk(index, true, &frame[..rest])?;
+        }
+        output.flush()?;
+        output.sync_all()?;
+        Ok(())
+    })();
+    drop(output);
+    drop(input);
+    let renamed = written.and_then(|()| std::fs::rename(&temp, path).map_err(Into::into));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    renamed
 }
 
 /// A recording read back.

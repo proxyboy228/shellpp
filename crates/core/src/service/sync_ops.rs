@@ -1618,6 +1618,14 @@ impl Core {
         if let Ok(Some(existing)) = inner.store.vault(&account_vault) {
             vault_row.created_at = existing.created_at;
         }
+        // The recordings follow their vault (storage 8.4): their keys are
+        // kept for the account vault before the old vault's keys go.
+        if let Err(error) =
+            recordings::prepare_rekeys(&inner.store, &old_session.ring, &new_session.ring)
+        {
+            inner.session = Some(old_session);
+            return Err(error);
+        }
         let written = inner.store.write(|tx| {
             tx.vault_put(&vault_row)?;
             tx.key_wrap_put(&kek_row)?;
@@ -1645,8 +1653,6 @@ impl Core {
             inner.session = Some(old_session);
             return Err(error.into());
         }
-        // The recordings follow their vault (storage 8.4).
-        recordings::reencrypt_all(&inner.store, &old_session.ring, &new_session.ring);
         drop(old_session);
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
@@ -1661,6 +1667,7 @@ impl Core {
             },
         );
         drop(guard);
+        self.recordings_resume();
         self.after_first_pull(account)?;
         let _ = self.cycle(false);
         Ok(())

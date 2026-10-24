@@ -31,6 +31,7 @@
     "shellpp/v1/wrap/device",
     "shellpp/v1/wrap/epoch-chain",
     "shellpp/v1/wrap/refresh-token",
+    "shellpp/v1/wrap/recording-rekey",
     "shellpp/v1/hpke/vault-key",
     "shellpp/v1/identity-fp"
   ],

@@ -1833,3 +1833,13 @@ Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the 
    - The `wip/salvage-*` branches are kept.
 
 **Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
+
+### 182. Recordings re-encrypted at sign-in keep their key until they are done (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.1; run 8 agent C, finding 5). Clarifies docs/storage-format.md, sections 2.2 and 8.4.
+
+**Context.** The merge at sign-in re-encrypted the recordings after the transaction that deleted the old personal vault and its keys: a recording that failed (a full disk, a file being written) stayed sealed under a key no longer on the device, nothing retried it, and the re-encryption itself rebuilt each file from its parsed events, which dropped the size-limit marker and the missing final chunk of an incomplete file, cut what did not fit the size limit, held the whole file in memory under the core's lock, and lost the output a running session appended after the rename.
+
+**Decision:** Before the merge transaction, every recording sealed under the old vault gets a `<file_id>.<vault_id>.rekey` file with its key wrapped for the new vault (under the file's key in that vault, AAD `"shellpp/v1/wrap/recording-rekey"` ‖ the file's head); a failure to write one stops the sign-in before anything changed. After the commit and at every unlock the client re-encrypts each such recording chunk by chunk with the same plaintext and the same chunk boundaries, syncs the new file, renames it over the old one and only then deletes the `.rekey` file; a file a session of this process is still writing is left for a later unlock; until then the recording opens through its `.rekey` file. One `.rekey` file per target vault, so a sign-in that does not commit never replaces the one an earlier merge left.
+
+**Spec impact:** docs/storage-format.md, sections 2.2 and 8.4; docs/security.md, section 5.6 (the wrap blob row).

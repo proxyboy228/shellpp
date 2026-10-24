@@ -242,7 +242,7 @@ Layouts and exact AAD bytes are in [storage-format.md](storage-format.md); this 
 | Object | Key | Construction and binding |
 |---|---|---|
 | Record envelope | `record_key[v, e]` | XChaCha20-Poly1305; the AAD binds version, class, flags (tombstone), vault id, record id, revision and key epoch (D14); plaintext padded to a multiple of 256 bytes (D10) |
-| Wrap blob | `kek`, `recovery_kek`, `device_wrap_key`, `chain_key[v, e]`, `local_secrets_key` | XChaCha20-Poly1305; the AAD names the purpose, the vault or device and the epoch, so a wrap cannot be moved to another slot |
+| Wrap blob | `kek`, `recovery_kek`, `device_wrap_key`, `chain_key[v, e]`, `local_secrets_key`; `recording_key[file]` of the new personal vault for the key of a recording waiting to be re-encrypted into it ([storage-format.md](storage-format.md), section 8.4; [decision] (D182)) | XChaCha20-Poly1305; the AAD names the purpose, the vault or device and the epoch (and the file for a recording), so a wrap cannot be moved to another slot |
 | Team vault key | HPKE | section 5.7 |
 | Encrypted export | `export_key` | single-shot XChaCha20-Poly1305; the AAD binds the format id, the salt and the KDF parameters |
 | Session recording | `recording_key[file]` | STREAM with 64 KiB chunks; the AAD of every chunk is the file header; the last-block flag detects truncation |
