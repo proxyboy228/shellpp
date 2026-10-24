@@ -507,7 +507,8 @@ pub fn apply_page(
     let vault_id = session.ring.vault_id();
     let now_text = format_timestamp(now);
     let mut result = PageResult::default();
-    let mut keys = KeyCache::new();
+    // New live records, checked for duplicates once the page is read.
+    let mut inserted: Vec<(RecordKind, Map<String, Value>, Uuid)> = Vec::new();
     for record in records {
         let bytes = record.envelope.as_bytes();
         // Step 1: the vault, and an id that belongs to no other vault here.
@@ -559,15 +560,9 @@ pub fn apply_page(
             if let Opened::Live(kind, payload) = &opened
                 && selection.type_name(kind.name())
             {
-                duplicates(
-                    session,
-                    &mut keys,
-                    &mut result.effects,
-                    *kind,
-                    payload,
-                    &row,
-                    &now_text,
-                );
+                if let Some(data) = &payload.data {
+                    inserted.push((*kind, data.clone(), row.record_id));
+                }
             }
             adopt_version(
                 &mut result.effects,
@@ -630,6 +625,7 @@ pub fn apply_page(
             )?;
         }
     }
+    duplicates(session, &mut result.effects, &inserted, vault_id, &now_text);
     let mut state = state.clone();
     if !result.stopped {
         state.cursor = next_cursor;
@@ -641,43 +637,45 @@ pub fn apply_page(
 
 /// Raises a duplicate pair when a pulled insert has the natural key of a
 /// live record of the same type (data-model 18.3; not history or logs).
-/// Natural keys of the index's live records per kind, built once per page
-/// (a first pull of thousands of records stays linear).
-type KeyCache = HashMap<RecordKind, HashMap<String, Vec<Uuid>>>;
-
+/// The keys are those of data-model 18.6 in this vault (parents by their
+/// own natural keys, a host's effective port and username), built once per
+/// page and kind after the page is read, so a first pull of thousands of
+/// records stays linear.
 fn duplicates(
     session: &Session,
-    keys: &mut KeyCache,
     effects: &mut Effects,
-    kind: RecordKind,
-    payload: &Payload,
-    row: &RecordRow,
+    inserted: &[(RecordKind, Map<String, Value>, Uuid)],
+    vault_id: Uuid,
     now_text: &str,
 ) {
-    let Some(data) = payload.data.as_ref() else {
+    if inserted.is_empty() {
         return;
-    };
-    let Some(key) = natural::key(kind, data) else {
-        return;
-    };
-    let by_key = keys.entry(kind).or_insert_with(|| {
-        let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
-        for other in session.index.of_kind(kind) {
-            if let Some(key) = natural::key(kind, other.data()) {
-                map.entry(key).or_default().push(other.record_id);
+    }
+    let keys = natural::Keys::new(&session.index);
+    let mut cache: HashMap<RecordKind, HashMap<String, Vec<Uuid>>> = HashMap::new();
+    for (kind, data, record_id) in inserted {
+        let Some(key) = keys.key(*kind, data) else {
+            continue;
+        };
+        let by_key = cache.entry(*kind).or_insert_with(|| {
+            let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
+            for other in session.index.of_kind(*kind) {
+                if let Some(key) = keys.key(*kind, other.data()) {
+                    map.entry(key).or_default().push(other.record_id);
+                }
             }
-        }
-        map
-    });
-    for other in by_key.get(&key).into_iter().flatten() {
-        if *other != row.record_id {
-            effects.duplicates.push(DuplicatePairRow {
-                vault_id: row.vault_id,
-                record_id: *other,
-                other_record_id: row.record_id,
-                found_at: now_text.to_owned(),
-                kept: false,
-            });
+            map
+        });
+        for other in by_key.get(&key).into_iter().flatten() {
+            if other != record_id {
+                effects.duplicates.push(DuplicatePairRow {
+                    vault_id,
+                    record_id: *other,
+                    other_record_id: *record_id,
+                    found_at: now_text.to_owned(),
+                    kept: false,
+                });
+            }
         }
     }
 }

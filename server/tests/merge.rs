@@ -8,10 +8,12 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use secrecy::SecretString;
+use serde_json::json;
 use shellpp_core::recording::{self, Header};
 use shellpp_core::service::SignInOutcome;
-use shellpp_core::service::dto::ConnectionLogView;
+use shellpp_core::service::dto::{ConnectionLogView, RecordType};
 use shellpp_core::service::host_api::ConnectionLogStart;
+use shellpp_core::service::snippets::RecordInput;
 use support::*;
 use uuid::Uuid;
 
@@ -209,4 +211,143 @@ fn a_recording_written_during_the_sign_in_is_re_encrypted_later() {
     assert_eq!(rekey_files(&l), 0);
     let (text, events, complete, _) = contents(&l, "open.example.com");
     assert_eq!((text.as_str(), events, complete), (expected, 2, true));
+}
+
+fn package(client: &Client, name: &str) -> Uuid {
+    client
+        .core
+        .snippet_package_save(RecordInput {
+            vault_id: client.vault_id(),
+            record_id: None,
+            data: json!({ "name": name })
+                .as_object()
+                .cloned()
+                .expect("object"),
+        })
+        .expect("package")
+        .record
+        .record_id
+}
+
+fn snippet(client: &Client, package_id: Uuid, label: &str) {
+    client
+        .core
+        .snippet_save(RecordInput {
+            vault_id: client.vault_id(),
+            record_id: None,
+            data: json!({
+                "package_id": package_id.to_string(),
+                "label": label,
+                "script": "systemctl restart app",
+            })
+            .as_object()
+            .cloned()
+            .expect("object"),
+        })
+        .expect("snippet");
+}
+
+fn count(client: &Client, record_type: RecordType) -> usize {
+    client.views(&[record_type]).len()
+}
+
+/// Run 7 finding 6: a local record compared before the record it names was
+/// matched (here a host whose row comes before its group's) is still found
+/// equal once its reference is rewritten: the merge leaves no extra pair.
+#[test]
+fn the_merge_compares_after_the_references_are_rewritten() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let prod = a.save(None, RecordType::Group, json!({"name": "Prod"}));
+    a.save(
+        None,
+        RecordType::Host,
+        json!({"address": "db.example.com", "group_id": prod.to_string()}),
+    );
+    a.sync();
+
+    let l = Client::local("L", &new_password());
+    // The host first, so its row comes before the group's.
+    let host = l.host("db.example.com");
+    let group = l.save(None, RecordType::Group, json!({"name": "Prod"}));
+    let mut data = l.data(host);
+    data["group_id"] = json!(group.to_string());
+    l.save(Some(host), RecordType::Host, data);
+    done(l.sign_in(&server, &email, &password));
+
+    assert_eq!(count(&l, RecordType::Group), 1, "the same group once");
+    assert_eq!(count(&l, RecordType::Host), 1, "the same host once");
+    assert!(
+        l.core.sync_duplicates().expect("pairs").is_empty(),
+        "no extra pair"
+    );
+}
+
+/// Run 7 finding 16 (data-model 18.6): natural keys compare a host's
+/// effective port (inherited from its group) and parents by their natural
+/// keys, not by record ids: a nested group, a snippet in a package and a
+/// host that only share the key with the account's are matched.
+#[test]
+fn natural_keys_follow_inheritance_and_parents() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let prod = a.save(
+        None,
+        RecordType::Group,
+        json!({"name": "Prod", "ssh": {"port": 2222}}),
+    );
+    a.save(
+        None,
+        RecordType::Group,
+        json!({"name": "Web", "parent_id": prod.to_string()}),
+    );
+    a.save(
+        None,
+        RecordType::Host,
+        json!({"address": "db.example.com", "label": "Account", "group_id": prod.to_string()}),
+    );
+    let ops = package(&a, "Ops");
+    snippet(&a, ops, "restart");
+    a.sync();
+
+    let l = Client::local("L", &new_password());
+    let local_prod = l.save(
+        None,
+        RecordType::Group,
+        json!({"name": "Prod", "ssh": {"port": 2222}}),
+    );
+    l.save(
+        None,
+        RecordType::Group,
+        json!({"name": "Web", "parent_id": local_prod.to_string()}),
+    );
+    // The same host by its effective port, here set on the host itself.
+    l.save(
+        None,
+        RecordType::Host,
+        json!({"address": "db.example.com", "label": "Local", "ssh": {"port": 2222}}),
+    );
+    let local_ops = package(&l, "Ops");
+    snippet(&l, local_ops, "restart");
+    done(l.sign_in(&server, &email, &password));
+
+    assert_eq!(count(&l, RecordType::Group), 2, "Prod and Web once each");
+    let packages = l
+        .core
+        .snippet_packages_list(l.vault_id())
+        .expect("packages");
+    assert_eq!(packages.len(), 1, "the same package once");
+    let snippets = l.core.snippets_list(l.vault_id()).expect("snippets");
+    assert_eq!(snippets.len(), 1, "the same snippet once");
+    // The two hosts differ (labels): both kept, raised as one pair.
+    assert_eq!(count(&l, RecordType::Host), 2);
+    let pairs = l.core.sync_duplicates().expect("pairs");
+    assert_eq!(pairs.len(), 1, "{pairs:?}");
+    assert_eq!(pairs[0].type_name, "host");
 }

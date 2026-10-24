@@ -1684,75 +1684,111 @@ impl Core {
         let now_text = format_timestamp(now);
         let old_vault = old.ring.vault_id();
         let new_vault = new.ring.vault_id();
-        // Natural keys of the account's live records.
+        // Natural keys of the account's live records (data-model 18.6, in
+        // the account vault).
         let mut account_keys: HashMap<(RecordKind, String), Uuid> = HashMap::new();
-        for record in new.index.iter() {
-            if let Some(key) = natural::key(record.kind, record.data()) {
-                account_keys
-                    .entry((record.kind, key))
-                    .or_insert(record.record_id);
+        {
+            let keys = natural::Keys::new(&new.index);
+            for record in new.index.iter() {
+                if let Some(key) = keys.key(record.kind, record.data()) {
+                    account_keys
+                        .entry((record.kind, key))
+                        .or_insert(record.record_id);
+                }
             }
         }
         struct Item {
+            old_id: Uuid,
             new_id: Uuid,
             class: u8,
             type_name: String,
             v: u32,
             data: Map<String, Value>,
+            /// The account record with the same natural key.
+            twin: Option<Uuid>,
+            /// Dropped in favour of `twin` (equal data).
+            dropped: bool,
         }
+        // Pass 1: every local record that moves, with a new id and the
+        // account record of its natural key (in the local vault: parents by
+        // their natural keys, a host's effective port and username).
         let mut map: HashMap<String, String> = HashMap::new();
         let mut items = Vec::new();
-        let mut pairs = Vec::new();
-        for row in inner.store.records(&old_vault, None)? {
-            if row.tombstone {
-                continue;
-            }
-            let Some(payload) = open_payload(&mut old.ring, &row) else {
-                continue; // Damaged rows stay in the backup.
-            };
-            if NOT_MERGED.contains(&payload.type_name.as_str()) || payload.deleted {
-                continue;
-            }
-            let Some(data) = payload.data.clone() else {
-                continue;
-            };
-            let mut twin = None;
-            if let Some(kind) = RecordKind::from_name(&payload.type_name)
-                && let Some(key) = natural::key(kind, &data)
-                && let Some(existing) = account_keys.get(&(kind, key))
-            {
-                // Dropped only when nothing but references differs; a record
-                // that only shares the natural key (another group, other
-                // settings) is kept beside it as a duplicate pair (UI 13.7):
-                // principle 3 before tidiness.
-                let same = new.index.get(existing).is_some_and(|record| {
-                    engine::data_equal(Some(record.data()), Some(&remap_data(&data, &map)))
-                });
-                if same {
-                    map.insert(row.record_id.to_string(), existing.to_string());
+        {
+            let local_keys = natural::Keys::new(&old.index);
+            for row in inner.store.records(&old_vault, None)? {
+                if row.tombstone {
                     continue;
                 }
-                twin = Some(*existing);
+                let Some(payload) = open_payload(&mut old.ring, &row) else {
+                    continue; // Damaged rows stay in the backup.
+                };
+                if NOT_MERGED.contains(&payload.type_name.as_str()) || payload.deleted {
+                    continue;
+                }
+                let Some(data) = payload.data.clone() else {
+                    continue;
+                };
+                let twin = RecordKind::from_name(&payload.type_name)
+                    .and_then(|kind| {
+                        local_keys
+                            .key(kind, &data)
+                            .and_then(|key| account_keys.get(&(kind, key)))
+                    })
+                    .copied();
+                let new_id = inner.ids.next(now);
+                map.insert(row.record_id.to_string(), new_id.to_string());
+                items.push(Item {
+                    old_id: row.record_id,
+                    new_id,
+                    class: row.class,
+                    type_name: payload.type_name.clone(),
+                    v: payload.v,
+                    data,
+                    twin,
+                    dropped: false,
+                });
             }
-            let new_id = inner.ids.next(now);
-            map.insert(row.record_id.to_string(), new_id.to_string());
-            if let Some(existing) = twin {
+        }
+        // Pass 2, until nothing changes: a record is dropped only when its
+        // data, with the references rewritten to the records they now map
+        // to, equals the account record's; its references then map to the
+        // account record, which can make a record that names it equal too
+        // (run 7 finding 6: the order of the rows never leaves a pair). A
+        // record that only shares the natural key stays beside it as a
+        // duplicate pair (UI 13.7): principle 3 before tidiness.
+        loop {
+            let mut changed = false;
+            for item in items.iter_mut().filter(|item| !item.dropped) {
+                let Some(existing) = item.twin else {
+                    continue;
+                };
+                let same = new.index.get(&existing).is_some_and(|record| {
+                    engine::data_equal(Some(record.data()), Some(&remap_data(&item.data, &map)))
+                });
+                if same {
+                    map.insert(item.old_id.to_string(), existing.to_string());
+                    item.dropped = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut pairs = Vec::new();
+        for item in items.iter().filter(|item| !item.dropped) {
+            if let Some(existing) = item.twin {
                 pairs.push(DuplicatePairRow {
                     vault_id: new_vault,
                     record_id: existing,
-                    other_record_id: new_id,
+                    other_record_id: item.new_id,
                     found_at: now_text.clone(),
                     kept: false,
                 });
             }
-            items.push(Item {
-                new_id,
-                class: row.class,
-                type_name: payload.type_name.clone(),
-                v: payload.v,
-                data,
-            });
         }
+        items.retain(|item| !item.dropped);
         let mut rows = Vec::with_capacity(items.len());
         for item in &items {
             let data = remap_data(&item.data, &map);
@@ -3782,8 +3818,9 @@ impl Core {
                 })
                 .collect();
             let mut by_key: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
+            let keys = natural::Keys::new(&session.index);
             for record in session.index.iter() {
-                if let Some(key) = natural::key(record.kind, record.data()) {
+                if let Some(key) = keys.key(record.kind, record.data()) {
                     by_key
                         .entry((record.kind, key))
                         .or_default()
