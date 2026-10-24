@@ -279,12 +279,28 @@ async fn argon2<T: Send + 'static>(
     state: &AppState,
     check: impl FnOnce(&Shared) -> ApiResult<T> + Send + 'static,
 ) -> ApiResult<T> {
-    let slot = state
-        .argon2_slots
-        .clone()
-        .acquire_owned()
+    // A bounded queue, for a bounded time (cross review of D174): a flood
+    // beyond it is answered `429` at once instead of holding its body in
+    // memory while it waits.
+    struct Waiting<'a>(&'a std::sync::atomic::AtomicUsize);
+    impl Drop for Waiting<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let busy = || ApiError::rate_limited(ARGON2_RETRY_AFTER);
+    let before = state
+        .argon2_waiting
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let waiting = Waiting(&state.argon2_waiting);
+    if before >= ARGON2_MAX_WAITING {
+        return Err(busy());
+    }
+    let slot = tokio::time::timeout(ARGON2_MAX_WAIT, state.argon2_slots.clone().acquire_owned())
         .await
+        .map_err(|_| busy())?
         .map_err(|_| ApiError::internal())?;
+    drop(waiting);
     let shared = state.clone();
     tokio::task::spawn_blocking(move || {
         let result = check(&shared);
@@ -295,6 +311,13 @@ async fn argon2<T: Send + 'static>(
     .map_err(|_| ApiError::internal())?
 }
 
+/// How many requests wait for an Argon2id slot at most; more are `429`.
+pub const ARGON2_MAX_WAITING: usize = 64;
+/// How long a request waits for a slot at most; then `429`.
+pub const ARGON2_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+/// The `Retry-After` of a request turned away by the queue.
+const ARGON2_RETRY_AFTER: u64 = 5;
+
 /// A signed-in request's `current_auth_key`, checked before the write
 /// transaction that acts on it, which takes the user with
 /// [`CheckedKey::user`] (D174).
@@ -302,10 +325,11 @@ async fn current_auth_key(
     state: &AppState,
     principal: Principal,
     key: &B64,
+    ip: IpAddr,
 ) -> ApiResult<CheckedKey> {
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
-        accounts::check_current_auth_key(shared, &principal, &key)
+        accounts::check_current_auth_key(shared, &principal, &key, ip)
     })
     .await
 }
@@ -317,11 +341,13 @@ async fn sign_in_key(
     email: &str,
     kind: KeyKind,
     key: &B64,
+    ip: IpAddr,
+    device_id: Uuid,
 ) -> ApiResult<CheckedKey> {
     let email = email.to_owned();
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
-        accounts::check_sign_in(shared, &email, kind, &key)
+        accounts::check_sign_in(shared, &email, kind, &key, ip, device_id)
     })
     .await
 }
@@ -341,11 +367,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/recover/complete", post(recover_complete))
         .route_layer(middleware::from_fn_with_state(state.clone(), limit_auth))
         .layer(DefaultBodyLimit::max(limits::MAX_AUTH_BODY_BYTES as usize));
-    Router::new()
-        .merge(auth)
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/v1/server", get(server_info))
+    // The account endpoints and key epochs: the body limit of the auth
+    // endpoints too (section 10.2), so the bounded Argon2id queue also
+    // bounds the memory it holds (review finding).
+    let account_routes = Router::new()
         .route("/v1/account", get(account))
         .route("/v1/account/password", post(password))
         .route("/v1/account/recovery-key", post(recovery_key))
@@ -357,11 +382,18 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/account/totp/disable", post(totp_disable))
         .route("/v1/account/ssh-id", put(ssh_id))
         .route("/v1/account/delete", post(account_delete))
+        .route("/v1/vaults/{vault_id}/key-epochs", post(key_epochs))
+        .layer(DefaultBodyLimit::max(limits::MAX_AUTH_BODY_BYTES as usize));
+    Router::new()
+        .merge(auth)
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/v1/server", get(server_info))
+        .merge(account_routes)
         .route("/v1/devices", get(devices))
         .route("/v1/devices/{device_id}", delete(device_revoke))
         .route("/v1/vaults", get(vaults))
         .route("/v1/vaults/{vault_id}/keys", get(vault_keys))
-        .route("/v1/vaults/{vault_id}/key-epochs", post(key_epochs))
         .route("/v1/vaults/{vault_id}/changes", get(pull).post(push))
         // The push body limit (section 10.2) with room for the JSON around
         // the base64 envelopes; a larger body is `413`.
@@ -461,9 +493,18 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<LoginRequest>,
 ) -> ApiResult<Response> {
-    let checked = sign_in_key(&state, &request.email, KeyKind::Auth, &request.auth_key).await?;
+    let checked = sign_in_key(
+        &state,
+        &request.email,
+        KeyKind::Auth,
+        &request.auth_key,
+        ip,
+        request.device_id,
+    )
+    .await?;
     let shared = state.clone();
     let response = state
         .db
@@ -519,6 +560,7 @@ async fn revoke(
 
 async fn recover_begin(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverBeginRequest>,
 ) -> ApiResult<Response> {
     let checked = sign_in_key(
@@ -526,6 +568,8 @@ async fn recover_begin(
         &request.email,
         KeyKind::Recovery,
         &request.recovery_auth_key,
+        ip,
+        request.device_id,
     )
     .await?;
     let response = state
@@ -589,10 +633,11 @@ async fn account(State(state): State<AppState>, Auth(principal): Auth) -> ApiRes
 
 async fn password(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<PasswordChangeRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let tokens = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -604,10 +649,11 @@ async fn password(
 
 async fn recovery_key(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<RecoveryKeyReissueRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -619,10 +665,11 @@ async fn recovery_key(
 
 async fn credentials(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<CredentialsChangeRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -634,10 +681,11 @@ async fn credentials(
 
 async fn email(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<EmailChangeRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -654,10 +702,11 @@ async fn email_verify(Auth(_principal): Auth) -> ApiError {
 
 async fn totp_setup(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<CurrentAuth>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     let response = state
         .db
@@ -690,7 +739,7 @@ async fn totp_disable(
     Auth(principal): Auth,
     Body(request): Body<TotpDisableRequest>,
 ) -> ApiResult<StatusCode> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     state
         .db
@@ -721,7 +770,7 @@ async fn account_delete(
     Auth(principal): Auth,
     Body(request): Body<AccountDeleteRequest>,
 ) -> ApiResult<StatusCode> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     state
         .db
@@ -778,6 +827,7 @@ async fn vault_keys(
 
 async fn key_epochs(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PersonalKeyEpochRequest>,
@@ -785,7 +835,7 @@ async fn key_epochs(
     // An unknown or foreign vault answers before the key is checked.
     let key = Zeroizing::new(request.current_auth_key.as_bytes().to_vec());
     let checked = argon2(&state, move |shared| {
-        accounts::check_current_auth_key_after(shared, &principal, &key, |user| {
+        accounts::check_current_auth_key_after(shared, &principal, &key, ip, |user| {
             if user.personal_vault_id == vault_id {
                 Ok(())
             } else {
@@ -873,6 +923,50 @@ mod tests {
         })
         .unwrap();
         Shared::new(crate::db::Db::open("sqlite::memory:").unwrap(), config)
+    }
+
+    /// Cross review (D174): with every slot busy, at most
+    /// `ARGON2_MAX_WAITING` requests wait, for at most `ARGON2_MAX_WAIT`;
+    /// one more is turned away at once with `429` and a `Retry-After`.
+    #[tokio::test(start_paused = true)]
+    async fn the_argon2_queue_is_bounded_in_length_and_time() {
+        let state = state();
+        let slots = state.argon2_slots.available_permits() as u32;
+        let _all = state
+            .argon2_slots
+            .clone()
+            .acquire_many_owned(slots)
+            .await
+            .unwrap();
+        let waiters: Vec<_> = (0..ARGON2_MAX_WAITING)
+            .map(|_| {
+                let state = state.clone();
+                tokio::spawn(async move { argon2(&state, |_| Ok(())).await })
+            })
+            .collect();
+        // Let them all queue.
+        while state
+            .argon2_waiting
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < ARGON2_MAX_WAITING
+        {
+            tokio::task::yield_now().await;
+        }
+        let refused = argon2(&state, |_| Ok(())).await.unwrap_err();
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.retry_after.is_some());
+        // The queued ones give up after the longest wait.
+        tokio::time::advance(ARGON2_MAX_WAIT + std::time::Duration::from_secs(1)).await;
+        for waiter in waiters {
+            let error = waiter.await.unwrap().unwrap_err();
+            assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+        }
+        assert_eq!(
+            state
+                .argon2_waiting
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
     }
 
     /// Review finding (D174): a check keeps its Argon2id slot until it ends,

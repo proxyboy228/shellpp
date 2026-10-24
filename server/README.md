@@ -182,10 +182,16 @@ with no question at all.
 
 ### Client addresses
 
-The rate limits (failed sign-ins, the delays of two-step codes) count per
-client address. Behind a proxy every request reaches the server from the
-proxy, which names the client in `X-Forwarded-For`; the server believes
-that header only from `SHELLPP_TRUSTED_PROXIES`, and from nobody else.
+The rate limits use the client's address: the requests of the sign-in
+endpoints per address, failed sign-ins per email and address (with a delay
+of at most 4 minutes per email over all addresses, which never holds the
+account's own devices, its signed-in requests or an address it signed in
+from in the last 30 days), and the delays of two-step codes per account and
+address (`docs/sync-protocol.md`, section 10.1). These counts are in
+memory: a restart of the server forgets them. Behind a proxy
+every request reaches the server from the proxy, which names the client in
+`X-Forwarded-For`; the server believes that header only from
+`SHELLPP_TRUSTED_PROXIES`, and from nobody else.
 
 - A proxy on the host (Caddy, `cloudflared`) connects to `127.0.0.1:8080`;
   Docker hands the connection to the server from the gateway of the compose
