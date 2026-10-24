@@ -1240,8 +1240,8 @@ impl Core {
 
     /// Removes the account vaults an interrupted merge at sign-in left
     /// (data-model 18.5): personal vaults that are neither the local
-    /// personal vault nor bound nor archived, with their records and rows,
-    /// and the `.rekey` files of recordings that name them. The local
+    /// personal vault nor bound nor archived, with their records and rows
+    /// (never a `.rekey` file: it may be another store's key). The local
     /// vault's data is never touched: the merge copies it, and only its
     /// last transaction switches the personal vault. Runs only when no
     /// sign-in or sync is talking to the server (the guard is free).
@@ -1284,9 +1284,10 @@ impl Core {
                 }
                 Ok(())
             })?;
-            for vault_id in &leftovers {
-                recordings::remove_rekeys_for(&guard.store, *vault_id);
-            }
+            // `.rekey` files are not touched: one naming this vault may be
+            // another store's (set aside with "Also delete the local copy",
+            // D190) only key of a recording; the re-encryption deletes
+            // them once their recording is done or gone.
             Ok(leftovers)
         })();
         match removed {

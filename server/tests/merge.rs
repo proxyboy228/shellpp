@@ -449,3 +449,82 @@ fn an_abandoned_merge_leaves_no_extra_vault() {
     );
     assert_eq!(l.core.vault_rows_for_test().expect("vaults").len(), 1);
 }
+
+/// Cross review of run 9: a `.rekey` file may be the only key of a
+/// recording of a store set aside by "Also delete the local copy" (D190).
+/// A merge into the same account vault that is given up later removes its
+/// begun vault, never that file.
+#[test]
+fn giving_up_a_merge_keeps_the_rekey_of_a_store_set_aside() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+
+    let l = Client::local("L", &new_password());
+    let file_id = record(&l, "kept.example.com", &["output\r\n"]);
+    recording::fail_rekey::once(file_id);
+    done(l.sign_in(&server, &email, &password));
+    let account_vault = l.vault_id();
+    let rekey = recordings_dir(&l).join(format!("{file_id}.{account_vault}.rekey"));
+    assert!(rekey.exists(), "the recording still waits for its key");
+    l.core
+        .sync_sign_out(true)
+        .expect("signed out, copy set aside");
+
+    // A new store on the same directory merges into the same account vault
+    // and gives up half-way.
+    l.core.first_run_setup(new_password()).expect("first run");
+    l.core.sync_merge_fail_once_for_test();
+    assert!(
+        l.core
+            .sync_sign_in(shellpp_core::service::SignInInput {
+                origin: server.origin.clone(),
+                email: email.clone(),
+                password: password.clone(),
+                registration_code: None,
+            })
+            .is_err()
+    );
+    l.core.sync_sign_in_cancel();
+    assert_eq!(l.core.vault_rows_for_test().expect("vaults").len(), 1);
+    assert!(rekey.exists(), "the set-aside store's key is kept");
+}
+
+/// Cross review of run 9: a recording that cannot be read when the merge
+/// writes its `.rekey` (here held open by another program without sharing)
+/// stops the sign-in before anything changed, instead of leaving it under
+/// a key the merge deletes.
+#[cfg(windows)]
+#[test]
+fn an_unreadable_recording_stops_the_merge_with_nothing_changed() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+
+    let l = Client::local("L", &new_password());
+    l.host("local.example.com");
+    let file_id = record(&l, "held.example.com", &["output\r\n"]);
+    let local_vault = l.vault_id();
+    let before = contents(&l, "held.example.com");
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(recording_path(&l, file_id))
+        .expect("held open");
+    let result = l.core.sync_sign_in(shellpp_core::service::SignInInput {
+        origin: server.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    });
+    assert!(result.is_err(), "the merge stopped");
+    drop(held);
+    assert_eq!(l.vault_id(), local_vault, "still the local vault");
+    assert_eq!(l.addresses(), vec!["local.example.com"]);
+    assert_eq!(contents(&l, "held.example.com"), before);
+}
