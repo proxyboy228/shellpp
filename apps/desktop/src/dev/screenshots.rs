@@ -378,6 +378,17 @@ pub enum ShotState {
     SyncDuplicates,
     /// The comparison of a sync conflict over the host card's badge.
     SyncConflict,
+    // Run 9, plan 3.2 (D173, D178): `run9_keys_shot`.
+    /// Settings ▸ Security ▸ Recovery key ▸ Show, the key on screen.
+    RecoveryKeyShow,
+    /// Reissue: the new key with "I saved the recovery key".
+    RecoveryKeyReissue,
+    /// Change master password with "My old password may be compromised".
+    PasswordChange,
+    /// The same dialog after Devices ▸ Revoke ▸ "Lost or stolen".
+    LostOrStolen,
+    /// The connect wizard's key step after a registration (UI 13.5, 4).
+    SyncRegisteredKey,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -527,7 +538,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 108] = [
+    pub const ALL: [Self; 113] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -603,6 +614,11 @@ impl ShotState {
         Self::HostsDuplicates,
         Self::SyncDuplicates,
         Self::SyncConflict,
+        Self::RecoveryKeyShow,
+        Self::RecoveryKeyReissue,
+        Self::PasswordChange,
+        Self::LostOrStolen,
+        Self::SyncRegisteredKey,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -778,6 +794,11 @@ impl ShotState {
             Self::HostsDuplicates => "hosts-duplicates",
             Self::SyncDuplicates => "sync-duplicates",
             Self::SyncConflict => "sync-conflict",
+            Self::RecoveryKeyShow => "recovery-key-show",
+            Self::RecoveryKeyReissue => "recovery-key-reissue",
+            Self::PasswordChange => "password-change",
+            Self::LostOrStolen => "lost-or-stolen",
+            Self::SyncRegisteredKey => "sync-registered-key",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1933,6 +1954,13 @@ pub async fn reach_state(
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
+        ShotState::RecoveryKeyShow
+        | ShotState::RecoveryKeyReissue
+        | ShotState::PasswordChange
+        | ShotState::LostOrStolen
+        | ShotState::SyncRegisteredKey => {
+            run9_keys_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2005,6 +2033,9 @@ pub fn check_state(
     }
     if run7_shot::STATES.contains(&shot_state) {
         return run7_shot::check(cx, handle, shot_state);
+    }
+    if run9_keys_shot::STATES.contains(&shot_state) {
+        return run9_keys_shot::check(cx, handle, shot_state);
     }
     if run6_shot::STATES.contains(&shot_state) {
         let state = cx.update(|cx| root.read(cx).state().clone());
@@ -2196,6 +2227,11 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::HostsDuplicates
             | ShotState::SyncConflict
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
+            ShotState::RecoveryKeyShow
+            | ShotState::RecoveryKeyReissue
+            | ShotState::PasswordChange
+            | ShotState::LostOrStolen
+            | ShotState::SyncRegisteredKey => Err("checked with the run 9 key screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -2495,6 +2531,7 @@ mod known_hosts_shot;
 mod logs_shot;
 mod run6_shot;
 mod run7_shot;
+mod run9_keys_shot;
 mod sftp_shot;
 mod snippets_shot;
 mod stage9_shot;

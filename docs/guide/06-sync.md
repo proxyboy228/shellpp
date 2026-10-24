@@ -178,8 +178,12 @@ On the device whose data should start the account:
 3. Choose **Create account**: your email, **this device's master
    password** (it becomes the account's password), and the invitation
    code.
-4. Shell++ shows **Connected** and sends the vault, encrypted, in the
-   first sync.
+4. Shell++ shows your account's **recovery key**. With it you can set a
+   new master password if you forget yours. Save it outside this device
+   (**Copy** clears the clipboard after 30 seconds), tick **I saved the
+   recovery key** and click **Finish**. You can see it again later in
+   Settings > **Security** > **Recovery key** > **Show…**.
+5. Sync starts and sends the vault, encrypted, in the first sync.
 
 ![Connecting a sync server](images/sync-connect.png)
 
@@ -238,11 +242,15 @@ with **Sync now**.
   server (**Keep** or **Delete again**).
 - **Recently deleted…** opens the Recently deleted screen (below).
 - **Devices…** lists the account's devices. **Sign out** next to another
-  device asks whether it was lost or stolen. **Lost or stolen** also leads
-  you to change the master password with **My old password may be
-  compromised**, so the old password stops opening your data on the
-  server. Nothing is wiped on the lost device itself: change the passwords
-  of your important servers too.
+  device asks whether it was lost or stolen. **Lost or stolen** leads you
+  to change the master password with **My old password may be
+  compromised** fixed on: the new recovery key is shown first; after **I
+  saved the recovery key**, **Change password** signs the device out and
+  changes the password, the vault key and the recovery key at once, so
+  the old password and the old recovery key the device holds stop
+  working. **Cancel** only signs the device out. Nothing is wiped on the
+  lost device itself: change the passwords of your important servers
+  too.
 - **Two-step sign-in…** adds a one-time code (TOTP) to every new sign-in:
   enter the master password, scan the QR code with an authenticator app
   and enter its code. It cannot be turned off from the app in this
@@ -288,12 +296,25 @@ password becomes the account's password; other devices sign in again with
 it. If the server cannot be reached, **Recover only this device** sets the
 new password for the local copy only.
 
-> **Limitation of this version:** the recovery key is created with your
-> vault, but the app does not show it anywhere yet, so this path cannot be
-> used. Until it can, keep **Remember on this device** on for at least one
-> device you trust (it opens without the password, see
-> [First run](01-first-run.md#if-you-forgot-the-master-password)), and keep
-> the master password in a password manager.
+## The recovery key
+
+The recovery key is shown when you create the account. Later, Settings >
+**Security** > **Recovery key** (on any device of the account) offers:
+
+- **Show…**: after the master password, the key, with **Copy**.
+- **Reissue…**: a new key replaces the current one (if someone else may
+  know it). The new key is shown first; nothing changes until you tick **I
+  saved the recovery key** and click **Reissue**. The old key then stops
+  working, and your other devices sign in again.
+
+If the change does not go through, the dialog says what is in effect.
+When another device changed the recovery key at the same time, sign in
+again on this device and use **Show…** to see the valid key.
+
+When your vault gets a new key on another device, a device with
+**Remember on this device** keeps the option on after it signs in again.
+If its key is no longer in the system's credential store, the option goes
+off, and Settings > **Security** says so; turn it on again there.
 
 ## Backups
 

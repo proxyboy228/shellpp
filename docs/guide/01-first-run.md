@@ -52,10 +52,14 @@ on this device** on.
 ## Changing the master password
 
 Settings (Ctrl+,) > **Security** > **Change master password…**: enter the
-current password and the new one twice. If you think someone may know the
-old password, tick **My old password may be compromised**: the vault then
-also gets a new key, so the old password stops opening your data on a sync
-server and in its backups.
+current password and the new one twice. **My old password may be
+compromised** is ticked by default: the vault then also gets a new key and
+a new recovery key, so the old password and the old recovery key stop
+opening your data on a sync server and in its backups. With a sync account
+the new recovery key is shown before anything changes: save it, tick **I
+saved the recovery key** and click **Change password**. Without an account
+the new recovery key stays inside the vault, unseen, until you connect a
+sync server. Untick the option to change only the password.
 
 ## If you forgot the master password
 

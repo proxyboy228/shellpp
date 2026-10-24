@@ -221,6 +221,10 @@ $allStates = @('root', 'group', 'host-panel', 'context-menu', 'search-address', 
     'serial-dialog-manual-port', 'settings-updates', 'top-bar-update',
     'sync-connect', 'sync-trust', 'sync-account', 'recently-deleted', 'sync-review', 'hosts-duplicates',
     'sync-duplicates', 'sync-conflict')
+# Run 9: the recovery key and the password change (ShotState::RecoveryKey*,
+# PasswordChange, LostOrStolen, SyncRegisteredKey).
+$allStates += @('recovery-key-show', 'recovery-key-reissue', 'password-change', 'lost-or-stolen',
+    'sync-registered-key')
 # Stage 3, the data transfer dialogs (ShotState::ExportData and the
 # imports, captured after new-host; the PuTTY and CSV ones from run 8).
 $allStates += @('export-data', 'export-data-plain', 'export-openssh', 'import-data', 'import-ssh-config',

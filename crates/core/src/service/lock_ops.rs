@@ -881,12 +881,8 @@ impl Core {
         // item and the `device` row must stay a pair.
         let _remember = self.remember_lock();
         let db_id = {
-            let mut inner = self.inner();
+            let inner = self.inner();
             let db_id = Self::require_session(&inner)?.db_id;
-            // The user chose again: the note of a lost device key goes.
-            if let Err(error) = inner.store.write(|tx| tx.meta_set(META_REMEMBER_LOST, "0")) {
-                tracing::warn!(code = error.code(), "remember note not cleared");
-            }
             if enabled && device_row_exists(&inner) {
                 // Already on (a window with a stale toggle): keep the key.
                 return Ok(self.status(&inner, available));
@@ -917,7 +913,11 @@ impl Core {
                     &wrapping_key,
                     session.ring.current_key(),
                 )?;
-                inner.store.write(|tx| tx.key_wrap_put(&row))?;
+                // The user chose again: the note of a lost device key goes.
+                inner.store.write(|tx| {
+                    tx.key_wrap_put(&row)?;
+                    tx.meta_set(META_REMEMBER_LOST, "0")
+                })?;
                 tracing::info!("remember on this device turned on");
                 self.remember_changed(&mut inner, vault_id);
                 Ok(self.status(&inner, available))
@@ -947,9 +947,10 @@ impl Core {
             let session = Self::require_session(&inner)?;
             let vault_id = session.ring.vault_id();
             let epoch = session.ring.current_epoch();
-            inner
-                .store
-                .write(|tx| tx.key_wrap_delete(&vault_id, epoch, WrapKind::Device))?;
+            inner.store.write(|tx| {
+                tx.key_wrap_delete(&vault_id, epoch, WrapKind::Device)?;
+                tx.meta_set(META_REMEMBER_LOST, "0")
+            })?;
             // The deleted `device` row opens the vault key with the device key.
             checkpoint(&inner.store);
             tracing::info!("remember on this device turned off");

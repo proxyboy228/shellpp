@@ -57,6 +57,13 @@ impl AppState {
             .is_some_and(|status| status.remember_device_enabled)
     }
 
+    /// "Remember on this device" went off at a rotation because the device
+    /// key was gone from the keychain (D179): Settings says so.
+    pub fn remember_lost(&self) -> bool {
+        self.lock_status()
+            .is_some_and(|status| status.remember_device_lost)
+    }
+
     /// First run as the first-run screen runs it (UI 13.1): the master
     /// password and "Remember on this device". Argon2id and the keychain
     /// write run on the background executor. The recovery key is created

@@ -217,3 +217,4 @@ pub const HL_OK: &str = "OK";
 pub const HL_INFO: &str = "Info";
 pub const HL_DEBUG: &str = "Debug";
 pub const HL_ADDRESS: &str = "IP and MAC addresses";
+pub const REMEMBER_DEVICE_LOST: &str = "Remember on this device was turned off: your vault got a new key on another device, and this device's key was no longer in the system's credential store. Turn it on again to unlock at launch without the password.";

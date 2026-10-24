@@ -323,6 +323,165 @@ fn two_concurrent_recovery_key_reissues_commit_exactly_one() {
     assert_eq!(ok, 1, "exactly one reissue commits: {results:?}");
 }
 
+/// `POST /v1/account/credentials` (section 5.9) with the material of an
+/// account made by [`register`] and a `recovery_key` record of revision 1.
+fn credentials(vault: Uuid, record: Uuid, i: u8) -> wire::CredentialsChangeRequest {
+    wire::CredentialsChangeRequest {
+        current_auth_key: key(2),
+        kdf: wire::Kdf::desktop(),
+        kdf_salt: B64(vec![20 + i; 16]),
+        auth_key: key(30 + i),
+        kek_wrap: B64(vec![8; 73]),
+        recovery_auth_key: key(40 + i),
+        rotation: wire::Rotation {
+            epoch: 2,
+            prev_key_wrap: B64(vec![9; 73]),
+            recovery_wrap: B64(vec![10; 73]),
+        },
+        record: write(1, envelope(vault, record, 1, 2, 2)),
+    }
+}
+
+/// Every refusal of the combined request changes nothing: the old auth key
+/// still signs in, the old recovery key still passes `recover/begin`, the
+/// epoch stays; then the valid request replaces both at once.
+#[test]
+fn credentials_change_refusals_change_nothing() {
+    let server = Server::start();
+    let api = api(&server);
+    let email = email();
+    let device_id = Uuid::now_v7();
+    let vault = Uuid::now_v7();
+    let account = api
+        .register(&wire::RegisterRequest {
+            email: email.clone(),
+            registration_code: None,
+            kdf: wire::Kdf::desktop(),
+            kdf_salt: B64(vec![1; 16]),
+            auth_key: key(2),
+            recovery_auth_key: key(3),
+            personal_vault: wire::PersonalVaultRegistration {
+                vault_id: vault,
+                epoch: 1,
+                kek_wrap: B64(vec![4; 73]),
+                recovery_wrap: B64(vec![5; 73]),
+                epoch_chain: Vec::new(),
+            },
+            x25519_public_key: B64(vec![6; 32]),
+            ssh_id_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK0 shellpp:x".into(),
+            device_id,
+        })
+        .expect("registered");
+    let token = account.tokens.access_token.0.clone();
+    let record = Uuid::now_v7();
+    api.push(
+        &token,
+        vault,
+        vec![write(0, envelope(vault, record, 1, 1, 1))],
+    )
+    .expect("the recovery_key record");
+    let login = |auth: u8| {
+        api.login(&wire::LoginRequest {
+            email: email.clone(),
+            auth_key: key(auth),
+            device_id,
+        })
+    };
+    let begin = |recovery: u8| {
+        api.recover_begin(&wire::RecoverBeginRequest {
+            email: email.clone(),
+            recovery_auth_key: key(recovery),
+            device_id,
+        })
+    };
+    let unchanged = || {
+        let vaults = api.vaults(&token).expect("vaults");
+        assert_eq!(vaults.vaults[0].current_epoch, 1, "no rotation");
+        begin(3).expect("the old recovery key still passes");
+    };
+
+    let mut wrong_password = credentials(vault, record, 0);
+    wrong_password.current_auth_key = key(99);
+    let mut weak = credentials(vault, record, 0);
+    weak.kdf.m_kib = 1024;
+    let mut short_wrap = credentials(vault, record, 0);
+    short_wrap.rotation.recovery_wrap = B64(vec![10; 72]);
+    let mut epoch = credentials(vault, record, 0);
+    epoch.rotation.epoch = 3;
+    epoch.record = write(1, envelope(vault, record, 1, 2, 3));
+    let mut stale = credentials(vault, record, 0);
+    stale.record = write(0, envelope(vault, record, 1, 2, 2));
+    let mut other_epoch_record = credentials(vault, record, 0);
+    other_epoch_record.record = write(1, envelope(vault, record, 1, 2, 1));
+    for (request, expected) in [
+        (wrong_password, (401, "invalid_credentials")),
+        (weak, (400, "weak_kdf_params")),
+        (short_wrap, (400, "bad_request")),
+        (epoch, (409, "epoch_conflict")),
+        (stale, (409, "revision_conflict")),
+        (other_epoch_record, (400, "invalid_envelope")),
+    ] {
+        let error = api.credentials_change(&token, &request).unwrap_err();
+        assert_eq!(status_of(&error), (expected.0, expected.1.to_owned()));
+        unchanged();
+    }
+    // The refusals did not sign this device out.
+    api.account(&token).expect("the token still works");
+
+    let done = api
+        .credentials_change(&token, &credentials(vault, record, 0))
+        .expect("the combined change");
+    assert_eq!(status_of(&login(2).unwrap_err()).0, 401, "old password");
+    login(30).expect("the new auth key signs in");
+    assert_eq!(status_of(&begin(3).unwrap_err()).0, 401, "old recovery key");
+    begin(40).expect("the new recovery key passes");
+    assert!(api.account(&token).is_err(), "every old token is revoked");
+    let vaults = api
+        .vaults(&done.tokens.access_token.0)
+        .expect("the caller's new tokens");
+    assert_eq!(vaults.vaults[0].current_epoch, 2);
+}
+
+/// Two combined changes at once with the same token: exactly one commits
+/// (the other meets the revoked token or the new epoch, section 5.3, step 7).
+#[test]
+fn two_concurrent_credentials_changes_commit_exactly_one() {
+    let server = Server::start();
+    let shared = Arc::new(api(&server));
+    let account = register(&shared, 2);
+    let token = account.tokens.access_token.0.clone();
+    let vault = account.vault_id;
+    let record = Uuid::now_v7();
+    shared
+        .push(
+            &token,
+            vault,
+            vec![write(0, envelope(vault, record, 1, 1, 1))],
+        )
+        .expect("the recovery_key record");
+    let handles: Vec<_> = (0..2u8)
+        .map(|i| {
+            let api = shared.clone();
+            let token = token.clone();
+            std::thread::spawn(move || {
+                api.credentials_change(&token, &credentials(vault, record, i))
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|h| h.join().expect("thread"))
+        .collect();
+    let ok = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(ok, 1, "exactly one change commits: {results:?}");
+    for result in &results {
+        if let Err(error) = result {
+            let status = error.status().unwrap_or(0);
+            assert!(status == 401 || status == 409, "SP 5.3, step 7: {status}");
+        }
+    }
+}
+
 /// Behind a trusted proxy, the auth rate limit is keyed by the client of
 /// `X-Forwarded-For`, also when the proxy writes it with a port
 /// (`ip:port`, `[ipv6]:port`); a spoofed element on its left changes

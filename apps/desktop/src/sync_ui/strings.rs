@@ -195,16 +195,22 @@ pub const CURRENT_PASSWORD: &str = "Current master password";
 pub const NEW_PASSWORD: &str = "New master password";
 pub const REPEAT_PASSWORD: &str = "Repeat the new password";
 pub const COMPROMISED: &str = "My old password may be compromised";
-pub const COMPROMISED_HINT: &str = "Also gives your personal vault a new key, so the old password stops opening current data on the server and in its backups.";
+pub const COMPROMISED_HINT: &str = "Recommended. Also gives your personal vault a new key and replaces your recovery key, so the old password and the old recovery key stop working, on the server and in its backups.";
+pub const COMPROMISED_HINT_LOCAL: &str = "Recommended. Also gives your vault a new key, so older copies of it no longer open new data with the old password.";
+pub const COMPROMISED_OFF_HINT: &str =
+    "Only the password changes: your vault key and your recovery key stay as they are.";
+pub const SIGNED_OUT_WARNING: &str =
+    "Your other devices will be signed out and will ask for the new password.";
 pub const PASSWORDS_DIFFER: &str = "The new passwords do not match.";
 pub const PASSWORD_SHORT: &str = "Use at least 8 characters.";
 pub const PASSWORD_CHANGED: &str =
     "The master password is changed. Other devices sign in again with it.";
 pub const PASSWORD_CHANGED_ROTATED: &str = "The master password is changed and your personal vault has a new key. Other devices sign in again with the new password.";
+pub const PASSWORD_CHANGED_REISSUED: &str = "The master password is changed, your personal vault has a new key, and the recovery key you saved is now the only one that works. Your other devices sign in again with the new password.";
 pub const LOST_QUESTION: &str = "Was this device lost or stolen?";
 pub const REVOKE_ONLY: &str = "Revoke only";
 pub const LOST_OR_STOLEN: &str = "Lost or stolen";
-pub const LOST_TEXT: &str = "The device is signed out. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too. A new master password and a new vault key stop the old ones from opening your data.";
+pub const LOST_TEXT: &str = "Changing the password here revokes the device first, then gives you a new master password, a new vault key and a new recovery key, so the ones the device holds stop working. Cancel only revokes the device. Nothing is wiped on it: if it was unlocked, change the passwords of your important hosts too.";
 
 pub const RECOVERY_TEXT: &str = "Enter your account's recovery key and a new master password. The new password also becomes the account password; your other devices sign in again with it.";
 pub const RECOVERY_KEY: &str = "Recovery key";
@@ -215,3 +221,30 @@ pub const RECOVERY_REFUSED: &str = "The server did not accept the recovery: the 
 pub const RECOVER_LOCAL: &str = "Recover only this device";
 pub const RECOVER_LOCAL_HINT: &str = "You can recover the data on this device only: the new password then opens the local copy, and this device is signed out of the account until you sign in with the account password or recover through the server.";
 pub const RESTORE_FROM_SYNC_BOUND_HINT: &str = "With the recovery key of your account.";
+
+pub const COPY: &str = "Copy";
+pub const CONTINUE: &str = "Continue";
+pub const FINISH: &str = "Finish";
+pub const KEY_COPIED: &str = "Copied. The clipboard is cleared in 30 seconds.";
+pub const KEY_SAVED: &str = "I saved the recovery key";
+pub const RECOVERY_KEY_SECTION: &str = "Recovery key";
+pub const RECOVERY_KEY_HINT: &str = "With the recovery key you can set a new master password if you forget yours. Show it to make a copy; reissue it if someone else may know it. Both ask for the master password.";
+pub const KEY_SHOW: &str = "Show…";
+pub const KEY_REISSUE: &str = "Reissue…";
+pub const KEY_SHOW_TITLE: &str = "Recovery key";
+pub const KEY_REISSUE_TITLE: &str = "Reissue recovery key";
+pub const KEY_SHOW_RUN: &str = "Show";
+pub const KEY_REISSUE_RUN: &str = "Reissue";
+pub const KEY_SHOW_TEXT: &str = "Enter your master password to see the recovery key.";
+pub const KEY_REISSUE_TEXT: &str = "A new recovery key replaces the current one, and your personal vault gets a new key; your other devices sign in again. Enter your master password to continue.";
+pub const KEY_SHOWN_TEXT: &str =
+    "Keep a copy of this key outside this device, for example on paper.";
+pub const KEY_NEW_TEXT: &str = "This is your new recovery key. Save it now: once you click Reissue, the old key stops working. Nothing changes before that.";
+pub const KEY_NEW_WITH_PASSWORD_TEXT: &str = "The change also replaces your recovery key with this new one. Save it now: once you click Change password, the old key stops working. Nothing changes before that.";
+pub const KEY_REISSUED: &str = "The new recovery key is in effect; the old one no longer works. Your other devices sign in again.";
+pub const KEY_NOT_ACCEPTED: &str = "The server did not accept the change, so nothing changed: your password and recovery key are the ones from before. Discard the recovery key shown here: it is not valid. If another device changed the recovery key at the same time, use Show to see the valid one.";
+pub const KEY_SIGNED_OUT: &str = "This device was signed out before the change was sent: the account was changed on another device. Keep the recovery key shown here for now and sign in again; then Show tells you which recovery key is valid.";
+pub const KEY_UNKNOWN: &str = "The server did not answer, so it is not known whether the change was made. Keep the recovery key shown here, and remember both passwords, until this device signs in again; then Show tells you which recovery key is valid.";
+pub const KEY_NOT_STORED: &str = "The server made the change, but this device could not store it. The recovery key shown here is now your account's: keep it, and sign in again with the new password.";
+pub const KEY_REGISTERED_TITLE: &str = "Recovery key";
+pub const KEY_REGISTERED_TEXT: &str = "This is the recovery key of your account. With it you can set a new master password if you forget yours. Save it now, outside this device; you can see it again in Settings ▸ Security.";

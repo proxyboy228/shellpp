@@ -79,7 +79,7 @@ use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
     HostKeyStatus, SessionConfig,
 };
-pub use key_change::KeyChangeFailure;
+pub use key_change::{KeyChangeFailure, PreparedKey};
 use session::Session;
 pub use sync_ops::{
     BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
@@ -604,9 +604,11 @@ impl Core {
         let Some(shown) = self.password_change_prepare(current, new)? else {
             return Ok(None);
         };
-        self.key_change_confirm()
+        self.key_change_confirm(shown.id)
             .map_err(key_change::KeyChangeFailure::into_error)?;
-        Ok(Some(shown))
+        Ok(Some(RecoveryKeyResult {
+            recovery_key: shown.recovery_key,
+        }))
     }
 
     /// UI 13.4 "Show": needs the master password even while unlocked.
@@ -626,9 +628,11 @@ impl Core {
         password: SecretString,
     ) -> Result<RecoveryKeyResult, CoreError> {
         let shown = self.recovery_key_reissue_prepare(password)?;
-        self.key_change_confirm()
+        self.key_change_confirm(shown.id)
             .map_err(key_change::KeyChangeFailure::into_error)?;
-        Ok(shown)
+        Ok(RecoveryKeyResult {
+            recovery_key: shown.recovery_key,
+        })
     }
 
     /// UI 13.4 "Remember on this device". `unavailable` without an OS keychain.

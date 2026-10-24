@@ -95,7 +95,7 @@ impl From<HttpError> for CoreError {
 /// Memory-only sync state; wiped on lock.
 #[derive(Default)]
 pub(super) struct SyncRuntime {
-    access: Option<Zeroizing<String>>,
+    pub(super) access: Option<Zeroizing<String>>,
     pending: Option<PendingSignIn>,
     /// Items the server refused; not retried automatically (section 6.5).
     failed: HashSet<Uuid>,
@@ -1378,6 +1378,18 @@ impl Core {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let local_epoch = session.ring.current_epoch();
             let epoch = ring.current_epoch();
+            // Made from the account's ring before the local one moves on, so
+            // a failure here leaves the local ring as it was.
+            let device_row = match &device_wrap_key {
+                Some(key) if epoch > local_epoch => Some(vault::wrap_row(
+                    WrapKind::Device,
+                    ring.vault_id(),
+                    epoch,
+                    key,
+                    ring.current_key(),
+                )?),
+                _ => None,
+            };
             // Epochs never go back, and a held epoch keeps its key (storage
             // 6.2): the server's chain must reach this device's key.
             if epoch < local_epoch {
@@ -1451,16 +1463,6 @@ impl Core {
             state.cursor = 0;
             state.resync_classes = sel.classes.clone();
             vault_row.current_epoch = epoch;
-            let device_row = match &device_wrap_key {
-                Some(key) if epoch > local_epoch => Some(vault::wrap_row(
-                    WrapKind::Device,
-                    vault_id,
-                    epoch,
-                    key,
-                    session.ring.current_key(),
-                )?),
-                _ => None,
-            };
             // Without the device key the option goes off, with a note.
             let remember_lost = epoch > local_epoch && remembered.is_some() && device_row.is_none();
             let written = inner.store.write(|tx| {
@@ -1944,7 +1946,7 @@ impl Core {
 
     /// A new access token with the stored refresh token; the rotated
     /// refresh token is stored. A refused refresh signs this device out.
-    fn refresh(&self, link: &Link) -> Result<Zeroizing<String>, CoreError> {
+    pub(super) fn refresh(&self, link: &Link) -> Result<Zeroizing<String>, CoreError> {
         // The wrapping key of the successor is taken now: a lock during the
         // request must not lose the rotated token (the old one stops working
         // 60 s later, D93).
@@ -2023,7 +2025,7 @@ impl Core {
         }
     }
 
-    fn on_call_error(&self, error: HttpError) -> CoreError {
+    pub(super) fn on_call_error(&self, error: HttpError) -> CoreError {
         if error.api_code() == Some(code::ACCOUNT_DELETED)
             && let Err(local) = self.account_deleted_locally()
         {
@@ -2860,8 +2862,18 @@ impl Core {
                 .ring
                 .push_epoch(rotation.new_epoch, rotation.new_key());
         }
-        let (blob, epoch) = wrap_refresh(&session.ring, device_id, &tokens.refresh_token.0)?;
-        let account = store.server_account()?;
+        let prepared = wrap_refresh(&session.ring, device_id, &tokens.refresh_token.0)
+            .and_then(|wrapped| Ok((wrapped, store.server_account()?)));
+        let ((blob, epoch), account) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // Nothing was written: the ring goes back to the stored epoch.
+                if let Some(rotation) = rotation {
+                    session.ring.pop_epoch(rotation.old_epoch);
+                }
+                return Err(error);
+            }
+        };
         let written = store.write(|tx| {
             if let Some(rotation) = rotation {
                 rotation.write(tx)?;

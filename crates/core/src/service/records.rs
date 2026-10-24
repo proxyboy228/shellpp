@@ -839,8 +839,8 @@ impl Core {
                 }
                 crypto::encode_recovery_key(&super::lock_ops::recovery_key_of(session)?)
             }
-            SecretCopyTarget::PendingRecoveryKey => {
-                Self::pending_recovery_key(&inner).ok_or(CoreError::WrongState)?
+            SecretCopyTarget::PendingRecoveryKey { id } => {
+                Self::pending_recovery_key(&inner, id).ok_or(CoreError::WrongState)?
             }
         };
         self.platform

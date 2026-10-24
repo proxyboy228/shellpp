@@ -488,8 +488,9 @@ pub enum SecretCopyTarget {
     /// `recovery_key_show` or `recovery_key_reissue`, and never after a lock.
     RecoveryKey,
     /// The new key of a prepared reissue or password change, before "I
-    /// saved it" (`recovery_key_reissue_prepare`, `password_change_prepare`).
-    PendingRecoveryKey,
+    /// saved it" (`recovery_key_reissue_prepare`, `password_change_prepare`),
+    /// by the id they returned.
+    PendingRecoveryKey { id: u64 },
 }
 
 redacted_debug!(SecretValue);

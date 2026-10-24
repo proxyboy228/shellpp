@@ -181,6 +181,7 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
         .recovery_key;
     a.host("before.example.com");
     a.register(&server, &email, &password);
+    remembering(&a);
     let vault_id = a.vault_id();
     let b = Client::empty("B");
     done(b.sign_in(&server, &email, &password));
@@ -196,23 +197,37 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
     remembering(&c);
     assert_eq!(server_epochs(&server, vault_id), (1, 1));
 
-    // Devices в–ё Revoke в–ё "Lost or stolen" for B, then the change with the
-    // option fixed on, its new key shown before anything is sent.
-    a.core.sync_device_revoke(b_id).expect("revoked");
+    // Devices ▸ Revoke ▸ "Lost or stolen" for B: the change with the option
+    // fixed on shows its new key first; "I saved it" revokes B and sends
+    // the change right after.
     let new = new_password();
-    let shown = a
+    let prepared = a
         .core
         .password_change_prepare(password.clone(), new.clone())
         .expect("prepared")
-        .expect("bound: a key to show")
-        .recovery_key;
+        .expect("bound: a key to show");
     assert_eq!(
         server_epochs(&server, vault_id),
         (1, 1),
         "nothing is sent before \"I saved it\""
     );
-    a.core.key_change_confirm().expect("committed");
+    assert_eq!(recover_begin_status(&server, &email, &old_key), 200);
+    // B is not revoked yet: its sync still works.
+    b.sync();
+    a.core
+        .key_change_confirm_lost(prepared.id, b_id)
+        .expect("revoked and committed");
+    let shown = prepared.recovery_key;
     assert_eq!(server_epochs(&server, vault_id), (2, 2), "one rotation");
+    let listed = a.core.sync_devices().expect("devices");
+    assert!(
+        listed
+            .iter()
+            .any(|device| device.device_id == b_id && device.revoked),
+        "B is revoked"
+    );
+    // A's own "Remember on this device" follows the rotation (D102).
+    assert!(a.core.lock_status().remember_device_enabled);
 
     // The old password and recovery key are dead; the new key recovers.
     let d = Client::empty("D");
@@ -278,6 +293,11 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
         "C unlocks at launch with its device key"
     );
     assert_eq!(c.addresses().len(), 3);
+    let a = a.reopen("A");
+    assert!(
+        a.core.try_device_unlock().expect("device unlock"),
+        "A unlocks at launch with the new epoch's device wrap"
+    );
 }
 
 /// "My old password may be compromised" on (D173): the old key fails
@@ -361,7 +381,8 @@ fn a_failed_combined_request_changes_nothing_on_the_server() {
     a.register(&server, &email, &password);
     let vault_id = a.vault_id();
     let new = new_password();
-    a.core
+    let prepared = a
+        .core
         .password_change_prepare(password.clone(), new.clone())
         .expect("prepared")
         .expect("a key to show");
@@ -378,7 +399,7 @@ fn a_failed_combined_request_changes_nothing_on_the_server() {
         })
         .expect("records moved on");
     let before = server_state(&server, vault_id);
-    let failure = a.core.key_change_confirm().expect_err("refused");
+    let failure = a.core.key_change_confirm(prepared.id).expect_err("refused");
     match &failure {
         KeyChangeFailure::NotAccepted(CoreError::Sync(error)) => {
             assert_eq!(error.code(), "revision_conflict")
@@ -388,11 +409,15 @@ fn a_failed_combined_request_changes_nothing_on_the_server() {
     assert_eq!(server_state(&server, vault_id), before, "rolled back");
     assert_eq!(recover_begin_status(&server, &email, &key), 200);
     assert!(
-        a.core.key_change_confirm().is_err(),
+        a.core.key_change_confirm(prepared.id).is_err(),
         "the key shown was discarded"
     );
+    // Still signed in, on the old epoch: a new host syncs and opens later.
+    a.host("after-refusal.example.com");
+    a.sync();
     let a = a.reopen("A");
     a.core.unlock(password.clone()).expect("the old password");
+    assert_eq!(a.addresses(), vec!["after-refusal.example.com"]);
     let held = a.core.recovery_key_show(password).expect("shown");
     assert_eq!(text(&held.recovery_key), text(&key));
 }
@@ -413,23 +438,24 @@ fn two_devices_reissuing_at_once_keep_one_key() {
     let on_a = a
         .core
         .recovery_key_reissue_prepare(password.clone())
-        .expect("A prepared")
-        .recovery_key;
+        .expect("A prepared");
     let on_b = b
         .core
         .recovery_key_reissue_prepare(password.clone())
-        .expect("B prepared")
-        .recovery_key;
-    a.core.key_change_confirm().expect("A's reissue passes");
-    let failure = b.core.key_change_confirm().expect_err("B's is refused");
-    let KeyChangeFailure::NotAccepted(CoreError::Sync(error)) = &failure else {
-        panic!("expected a refusal, got {failure:?}");
+        .expect("B prepared");
+    a.core
+        .key_change_confirm(on_a.id)
+        .expect("A's reissue passes");
+    let failure = b
+        .core
+        .key_change_confirm(on_b.id)
+        .expect_err("B's is refused");
+    // A's reissue revoked B's tokens: B's refresh is refused (`401`).
+    let KeyChangeFailure::SignedOut(CoreError::Sync(error)) = &failure else {
+        panic!("expected B to be signed out, got {failure:?}");
     };
-    let status = match error {
-        shellpp_core::sync::HttpError::Api { status, .. } => *status,
-        other => panic!("expected an answer of the server, got {other:?}"),
-    };
-    assert!(status == 401 || status == 409, "SP 5.3, step 7: {status}");
+    assert_eq!(error.status(), Some(401), "SP 5.3, step 7");
+    let (on_a, on_b) = (on_a.recovery_key, on_b.recovery_key);
     assert_eq!(recover_begin_status(&server, &email, &on_b), 401);
     assert_eq!(recover_begin_status(&server, &email, &on_a), 200);
 
@@ -453,9 +479,7 @@ fn a_local_compromised_change_replaces_the_recovery_key() {
         .expect("first run")
         .recovery_key;
     a.host("local.example.com");
-    // A lock ends the first run's grant to copy the key.
-    a.core.lock().expect("locked");
-    a.core.unlock(password.clone()).expect("unlocked");
+    // The first run's grant to copy the key is still running here.
     let new = new_password();
     let shown = a
         .core
@@ -466,8 +490,9 @@ fn a_local_compromised_change_replaces_the_recovery_key() {
         a.core
             .secret_copy(shellpp_core::service::dto::SecretCopyTarget::RecoveryKey)
             .is_err(),
-        "and grants no copy of it"
+        "and ends the grant to copy it"
     );
+    assert!(a.core.recovery_key_granted().is_err());
     let held = a.core.recovery_key_show(new.clone()).expect("held");
     assert_ne!(text(&held.recovery_key), text(&old_key));
 
@@ -506,12 +531,16 @@ fn a_cancelled_reissue_sends_nothing() {
     a.register(&server, &email, &password);
     let vault_id = a.vault_id();
     let before = server_state(&server, vault_id);
-    a.core
+    let prepared = a
+        .core
         .recovery_key_reissue_prepare(password)
         .expect("prepared");
     assert_eq!(server_state(&server, vault_id), before);
-    a.core.key_change_cancel();
-    assert!(a.core.key_change_confirm().is_err(), "nothing to confirm");
+    a.core.key_change_cancel(prepared.id);
+    assert!(
+        a.core.key_change_confirm(prepared.id).is_err(),
+        "nothing to confirm"
+    );
     assert_eq!(server_state(&server, vault_id), before);
     assert_eq!(recover_begin_status(&server, &email, &key), 200);
 }
@@ -529,17 +558,77 @@ fn remember_goes_off_with_a_note_when_the_device_key_is_gone() {
     let b = Client::empty("B");
     done(b.sign_in(&server, &email, &password));
     remembering(&b);
+    let c = Client::empty("C");
+    done(c.sign_in(&server, &email, &password));
+    remembering(&c);
     let new = new_password();
     a.core
         .password_change_rotating(password, new.clone())
         .expect("rotated");
-    b.mem.secret_store.set_available(false);
-    assert!(b.core.sync_now().is_err(), "B was signed out");
-    done(b.sign_in(&server, &email, &new));
-    let status = b.core.lock_status();
-    assert!(!status.remember_device_enabled, "no wrap without the key");
-    assert!(status.remember_device_lost, "and the note says why");
-    b.mem.secret_store.set_available(true);
-    let status = b.core.remember_device_set(true).expect("on again");
-    assert!(status.remember_device_enabled && !status.remember_device_lost);
+    // B's keychain item is deleted; C's keychain cannot be read.
+    for account in b.mem.secret_store.accounts() {
+        shellpp_core::platform::SecretStore::delete(&*b.mem.secret_store, &account)
+            .expect("deleted");
+    }
+    c.mem.secret_store.set_available(false);
+    for device in [&b, &c] {
+        assert!(device.core.sync_now().is_err(), "signed out");
+        done(device.sign_in(&server, &email, &new));
+        let status = device.core.lock_status();
+        assert!(!status.remember_device_enabled, "no wrap without the key");
+        assert!(status.remember_device_lost, "and the note says why");
+    }
+    c.mem.secret_store.set_available(true);
+    for device in [&b, &c] {
+        let status = device.core.remember_device_set(true).expect("on again");
+        assert!(status.remember_device_enabled && !status.remember_device_lost);
+    }
+}
+
+/// Two prepared changes (two windows): the newer replaces the older, whose
+/// confirmation and copy are refused instead of committing the other key;
+/// a lock drops the newer one. The server never sees either.
+#[test]
+fn a_second_prepare_or_a_lock_drops_the_first() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::empty("A");
+    let key = a
+        .core
+        .first_run_setup(password.clone())
+        .expect("first run")
+        .recovery_key;
+    a.register(&server, &email, &password);
+    let vault_id = a.vault_id();
+    let before = server_state(&server, vault_id);
+    let first = a
+        .core
+        .recovery_key_reissue_prepare(password.clone())
+        .expect("first");
+    let second = a
+        .core
+        .password_change_prepare(password.clone(), new_password())
+        .expect("second")
+        .expect("a key to show");
+    assert_ne!(text(&first.recovery_key), text(&second.recovery_key));
+    let copy = |id| {
+        a.core
+            .secret_copy(shellpp_core::service::dto::SecretCopyTarget::PendingRecoveryKey { id })
+    };
+    assert!(copy(first.id).is_err(), "the older key is not copied");
+    copy(second.id).expect("the newer key is copied");
+    assert!(matches!(
+        a.core.key_change_confirm(first.id),
+        Err(KeyChangeFailure::NotAccepted(CoreError::WrongState))
+    ));
+    a.core.lock().expect("locked");
+    a.core.unlock(password.clone()).expect("unlocked");
+    assert!(copy(second.id).is_err(), "a lock drops the prepared key");
+    assert!(matches!(
+        a.core.key_change_confirm(second.id),
+        Err(KeyChangeFailure::NotAccepted(CoreError::WrongState))
+    ));
+    assert_eq!(server_state(&server, vault_id), before);
+    assert_eq!(recover_begin_status(&server, &email, &key), 200);
 }

@@ -925,9 +925,9 @@ pub fn recovery_key_reissue(
 
 /// `POST /v1/account/credentials` (section 5.9): the password change of
 /// section 5.1 with its rotation and the recovery key reissue of section
-/// 5.3 in this one transaction. Every check runs before the first write
-/// that a later check could leave behind, and any failure rolls back the
-/// whole request: the old password and recovery key keep working.
+/// 5.3 in this one transaction, checked in the order of section 5.9. The
+/// record is checked after the rotation's writes; any failure rolls back
+/// the whole request, so the old password and recovery key keep working.
 pub fn credentials_change(
     tx: &mut dyn Tx,
     shared: &Shared,
@@ -944,6 +944,9 @@ pub fn credentials_change(
     exact_len(request.auth_key.as_bytes(), 32)?;
     exact_len(request.kek_wrap.as_bytes(), WRAP_LEN)?;
     exact_len(request.recovery_auth_key.as_bytes(), 32)?;
+    // Field sizes before the epoch (`400` before `409`, section 5.9).
+    exact_len(request.rotation.prev_key_wrap.as_bytes(), WRAP_LEN)?;
+    exact_len(request.rotation.recovery_wrap.as_bytes(), WRAP_LEN)?;
     apply_rotation(tx, &user, &request.rotation, now)?;
     let seq = records::write_reissue_record(
         tx,
