@@ -251,7 +251,7 @@ pub struct ConnectDialog {
     pub key_saved: bool,
     key_copied: Option<bool>,
     busy: bool,
-    error: Option<&'static str>,
+    pub(crate) error: Option<&'static str>,
     task: Option<Task<()>>,
     /// The server's key derivation settings differ from this device's (SP
     /// 4.2): the next sign-in carries the current password the user typed
@@ -330,6 +330,8 @@ impl ConnectDialog {
         let Some(core) = self.state.read(cx).core().cloned() else {
             return;
         };
+        self.accepted_kdf = None;
+        self.kdf_changed = false;
         let address = input_text(&self.server, cx);
         if address.trim().is_empty() {
             self.error = Some(strings::ERROR_ADDRESS);
@@ -524,6 +526,10 @@ impl ConnectDialog {
     pub fn back(&mut self, cx: &mut Context<Self>) {
         self.error = None;
         self.trust = None;
+        // What the user confirmed or was told belongs to that server and
+        // email (D189, D200; review of run 10).
+        self.accepted_kdf = None;
+        self.kdf_changed = false;
         self.step = match self.step {
             ConnectStep::Totp => ConnectStep::Account,
             _ => ConnectStep::Server,
@@ -1787,7 +1793,7 @@ impl Render for SignOutDialog {
             .when(self.delete_local, |this| {
                 this.child(widgets::caption(strings::DELETE_LOCAL_HINT, cx))
             })
-            // What is not on the server stays only in the set-aside file.
+            // What is not on the server is deleted with the local copy.
             .when_some(
                 self.delete_local
                     .then(|| self.state.read(cx).sync_status().cloned())
@@ -1853,8 +1859,15 @@ pub fn open_sign_out(
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
+                        // The second step's button is another one (D197): a
+                        // double-click on "Sign out" does not reach it with
+                        // its second click (review of run 10).
                         ControlButton::new(
-                            "sync-sign-out-run",
+                            if confirming {
+                                "sync-delete-local-run"
+                            } else {
+                                "sync-sign-out-run"
+                            },
                             if delete_local {
                                 ControlKind::Danger
                             } else {
@@ -1867,7 +1880,10 @@ pub fn open_sign_out(
                             strings::SIGN_OUT_RUN
                         })
                         .disabled(busy)
-                        .on_click(move |_, window, cx| {
+                        .on_click(move |event: &ClickEvent, window, cx| {
+                            if confirming && event.click_count() > 1 {
+                                return;
+                            }
                             let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));
                         }),
                     ),

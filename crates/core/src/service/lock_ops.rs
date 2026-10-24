@@ -608,13 +608,22 @@ impl Core {
                 .data_dir()
                 .map(std::path::Path::to_path_buf)
                 .ok_or(CoreError::Unavailable)?;
+            // This database's own device key goes too, whatever its
+            // `device` row says (a key the keychain once refused to delete
+            // would still open a copy of this file; review of run 10).
+            let own = inner
+                .store
+                .meta_get(crate::store::META_DB_ID)
+                .ok()
+                .flatten()
+                .and_then(|id| Uuid::parse_str(&id).ok());
             checkpoint(&inner.store);
             let _dir_lock = inner.store.dir_lock();
             drop(std::mem::replace(
                 &mut inner.store,
                 Store::open_in_memory()?,
             ));
-            let set_aside = lock::erase::set_aside_db_ids(&data_dir);
+            let mut set_aside = lock::erase::set_aside_db_ids(&data_dir);
             let left = match lock::erase::erase_data_files(&data_dir) {
                 Ok(left) => left,
                 Err(error) => {
@@ -622,22 +631,34 @@ impl Core {
                     return Err(CoreError::Store(error.into()));
                 }
             };
-            let result = match Store::open(&data_dir, &self.config.app_version) {
+            set_aside.extend(own);
+            // The database is gone: the session never goes on over an empty
+            // new one (review of run 10). The new store is tried twice;
+            // without one the session closes, and the next start begins at
+            // first run.
+            let opened = Store::open(&data_dir, &self.config.app_version)
+                .or_else(|_| Store::open(&data_dir, &self.config.app_version));
+            let result = match opened {
                 Ok((store, _)) => {
                     tracing::info!(left = left.len(), "local copy deleted; first run");
                     self.enter_first_run(inner, store, self.now());
                     Ok(left)
                 }
-                // The database is gone: what `reopen_store` does when the
-                // old one does not open (the next start begins at first run).
                 Err(error) => {
-                    self.reopen_store(inner, &data_dir);
+                    tracing::error!(code = error.code(), "no new database after the deletion");
+                    if inner.session.take().is_some() {
+                        inner.sync.wipe();
+                        self.clear_clipboard_if_ours(inner);
+                    }
+                    inner.personal_vault_id = None;
+                    inner.state = LockState::Locked;
+                    self.lock_changed(inner);
                     Err(open_error(error))
                 }
             };
             (result, set_aside)
         };
-        // The set-aside copies are gone either way.
+        // The deleted copies' keys go either way.
         for db_id in set_aside {
             self.delete_device_key(&db_id);
         }

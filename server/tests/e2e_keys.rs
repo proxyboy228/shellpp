@@ -279,7 +279,7 @@ fn a_stolen_device_is_locked_out_and_the_other_devices_go_on() {
     // C: an offline edit, then the sign-in with the new password.
     c.host("c-offline.example.com");
     assert!(c.core.sync_now().is_err(), "C was signed out");
-    done(c.sign_in(&server, &email, &new));
+    done(c.sign_in_after_change(&server, &email, &new));
     c.sync();
     a.sync();
     assert_eq!(
@@ -342,7 +342,7 @@ fn a_compromised_password_change_retires_the_old_recovery_key() {
 
     b.host("b-local.example.com");
     assert!(b.core.sync_now().is_err(), "B was signed out");
-    done(b.sign_in(&server, &email, &new));
+    done(b.sign_in_after_change(&server, &email, &new));
     b.sync();
     a.sync();
     assert_eq!(a.addresses(), vec!["b-local.example.com"]);
@@ -583,7 +583,7 @@ fn remember_goes_off_with_a_note_when_the_device_key_is_gone() {
     c.mem.secret_store.set_available(false);
     for device in [&b, &c] {
         assert!(device.core.sync_now().is_err(), "signed out");
-        done(device.sign_in(&server, &email, &new));
+        done(device.sign_in_after_change(&server, &email, &new));
         let status = device.core.lock_status();
         assert!(!status.remember_device_enabled, "no wrap without the key");
         assert!(status.remember_device_lost, "and the note says why");

@@ -145,11 +145,21 @@ fn deleting_the_local_copy_asks_twice_and_lists_what_the_server_lacks(cx: &mut T
     assert_eq!(ui.state_of_core(cx), LockState::Unlocked);
     assert!(data.join("shellpp.db").is_file() && data.join(SET_ASIDE).is_file());
 
-    // Confirmed: the local copy goes, the set-aside copy with it.
+    // A double-click on "Sign out" does not confirm (review of run 10).
     ui.open_sign_out(cx);
     ui.click("sync-delete-local", cx);
-    ui.click("sync-sign-out-run", cx);
-    ui.click("sync-sign-out-run", cx);
+    cx.update_window(ui.handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.double_click("sync-sign-out-run", cx);
+    })
+    .unwrap();
+    ui.settle(cx);
+    assert!(ui.visible("sync-delete-local-confirm", cx));
+    assert_eq!(ui.state_of_core(cx), LockState::Unlocked);
+    assert!(data.join("shellpp.db").is_file() && data.join(SET_ASIDE).is_file());
+
+    // Confirmed: the local copy goes, the set-aside copy with it.
+    ui.click("sync-delete-local-run", cx);
     assert_eq!(ui.state_of_core(cx), LockState::FirstRun);
     assert!(!data.join(SET_ASIDE).exists());
     ui.finish(cx);

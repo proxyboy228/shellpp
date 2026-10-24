@@ -327,7 +327,7 @@ fn password_change_signs_the_other_device_out() {
     assert!(!b.status().signed_in);
     assert!(b.status().bound, "still bound, signed out");
 
-    done(b.sign_in(&server, &email, &new));
+    done(b.sign_in_after_change(&server, &email, &new));
     assert_eq!(b.addresses(), vec!["after.example.com", "p.example.com"]);
     // A opens with the new password.
     let a = a.reopen("A");
@@ -720,7 +720,7 @@ fn password_change_with_rotation_reaches_the_other_device() {
     a.host("r2.example.com");
     a.sync();
     assert!(b.core.sync_now().is_err(), "B was signed out");
-    done(b.sign_in(&server, &email, &new));
+    done(b.sign_in_after_change(&server, &email, &new));
     assert_eq!(b.addresses(), vec!["r1.example.com", "r2.example.com"]);
     b.host("r3.example.com");
     b.sync();
@@ -1013,7 +1013,7 @@ fn recovery_through_the_server_resets_the_account_password() {
     a.host("after-recovery.example.com");
     a.sync();
     assert!(b.core.sync_now().is_err(), "B was signed out");
-    done(b.sign_in(&server, &email, &new));
+    done(b.sign_in_after_change(&server, &email, &new));
     assert_eq!(
         b.addresses(),
         vec!["after-recovery.example.com", "rec.example.com"]

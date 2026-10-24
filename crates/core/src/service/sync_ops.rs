@@ -1276,7 +1276,10 @@ impl Core {
         if let Some((local, local_salt)) = &bound_kdf
             && (kdf != *local || kdf_salt != *local_salt)
         {
-            let seen = self.inner().sync.kdf_changed.take();
+            // The settings seen stay until a sign-in with them goes through,
+            // so a mistyped current password does not ask again (review of
+            // run 10).
+            let seen = self.inner().sync.kdf_changed.clone();
             if !(change_told && seen.as_ref() == Some(&(kdf.clone(), kdf_salt))) {
                 self.inner().sync.kdf_changed = Some((kdf, kdf_salt));
                 return Err(refused("kdf_changed"));
@@ -1289,6 +1292,7 @@ impl Core {
             auth_key: key_b64(&derived.auth_key),
             device_id,
         })?;
+        self.inner().sync.kdf_changed = None;
         if response.status.as_deref() == Some("totp_required") {
             let ticket = response.login_ticket.ok_or(HttpError::Malformed)?;
             self.inner().sync.pending = Some(PendingSignIn {
@@ -1374,9 +1378,9 @@ impl Core {
                 Ok(())
             })?;
             // `.rekey` files are not touched: one naming this vault may be
-            // another store's (set aside with "Also delete the local copy",
-            // D190) only key of a recording; the re-encryption deletes
-            // them once their recording is done or gone.
+            // another store's (set aside with "Start with a new vault") only
+            // key of a recording; the re-encryption deletes them once their
+            // recording is done or gone.
             Ok(leftovers)
         })();
         match removed {
@@ -3332,21 +3336,22 @@ impl Core {
                 let vault = inner.store.vault(&vault_id)?;
                 // The generation this device synced with, for the rebind's
                 // check of a restore made while it is out (D197).
-                let kept = inner
-                    .store
-                    .server_account()?
-                    .and_then(|row| {
-                        row.server_generation.map(|generation| {
-                            format!(
-                                "{} {}",
-                                row.user_id,
-                                data_encoding::HEXLOWER.encode(&generation)
-                            )
-                        })
+                let kept = inner.store.server_account()?.and_then(|row| {
+                    row.server_generation.map(|generation| {
+                        format!(
+                            "{} {}",
+                            row.user_id,
+                            data_encoding::HEXLOWER.encode(&generation)
+                        )
                     })
-                    .unwrap_or_default();
+                });
                 inner.store.write(|tx| {
-                    tx.meta_set(META_LAST_GENERATION, &kept)?;
+                    // Kept only from a binding: a retried sign-out (the
+                    // account row already gone) keeps what the first one
+                    // kept (review of run 10).
+                    if let Some(kept) = &kept {
+                        tx.meta_set(META_LAST_GENERATION, kept)?;
+                    }
                     tx.server_account_delete()?;
                     if let Some(mut vault) = vault {
                         vault.bound = false;
@@ -6263,6 +6268,20 @@ mod tests {
             secrets: std::collections::BTreeMap::new(),
         });
         assert!(saved.is_err(), "no edit goes to a store in memory");
+    }
+
+    #[test]
+    fn a_new_database_that_opens_late_still_ends_the_session() {
+        // Review of run 10: the deletion went through, the first try at the
+        // new store fails and the second works. The deleted vault's session
+        // must not go on over it: the app is at first run.
+        let (_dir, core) = unlocked_core();
+        save_host(&core, "Gone", &random_text());
+        crate::store::fail_open::next(1);
+        core.sync_sign_out(true).expect("deleted");
+        crate::store::fail_open::next(0);
+        assert_eq!(core.lock_status().state, LockState::FirstRun);
+        assert!(core.vaults().is_err() || core.vaults().unwrap().is_empty());
     }
 
     #[test]

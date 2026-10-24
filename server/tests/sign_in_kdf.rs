@@ -121,8 +121,8 @@ fn weaker_kdf_parameters_are_refused_until_the_user_confirms_them() {
         .expect("the local copy opens with the new password");
 }
 
-/// The same or stronger parameters ask nothing: a device whose account
-/// kept its KDF signs in again as before.
+/// The same parameters and salt ask nothing: a device whose account kept
+/// its KDF signs in again as before.
 #[test]
 fn the_same_kdf_parameters_sign_in_without_a_question() {
     let server = Server::start();
@@ -188,6 +188,15 @@ fn changed_kdf_settings_ask_for_the_current_password_first() {
             other => panic!("expected the changed settings, got {other:?}"),
         }
     }
+    // A mistyped current password is refused by the server, and the next
+    // try does not ask again (review of run 10).
+    match laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&server, &email, &first), None)
+    {
+        Err(CoreError::Sync(HttpError::Api { status: 401, .. })) => {}
+        other => panic!("expected the server's refusal, got {other:?}"),
+    }
     let outcome = laptop
         .core
         .sync_sign_in_after_kdf_change(input(&server, &email, &second), None)
@@ -239,6 +248,44 @@ fn changed_kdf_settings_send_nothing_before_the_user_is_told() {
     assert_eq!(seen.lock().unwrap().len(), 3, "pre-login, pre-login, login");
 }
 
+/// Review of run 10: the acknowledgement covers only the settings and salt
+/// the user was told about. Another salt at the next try asks again, and
+/// nothing is sent to that server either.
+#[test]
+fn the_acknowledgement_covers_only_the_settings_seen() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let laptop = Client::local("laptop", &password);
+    laptop.register(&server, &email, &password);
+    laptop.core.sync_sign_out(false).expect("logged out");
+    let (first, _) = prelogin_server(DESKTOP_PRELOGIN);
+    let (second, seen) = prelogin_server(OTHER_SALT_PRELOGIN);
+    let input = |origin: &str| SignInInput {
+        origin: origin.to_owned(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    };
+    match laptop.core.sync_sign_in(input(&first)) {
+        Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+        other => panic!("expected the changed settings, got {other:?}"),
+    }
+    match laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&second), None)
+    {
+        Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+        other => panic!("expected the changed settings again, got {other:?}"),
+    }
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["/v1/auth/prelogin"],
+        "no auth key was sent"
+    );
+}
+
+const OTHER_SALT_PRELOGIN: &str = r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":65536,"t":3,"p":4},"kdf_salt":"BBBBBBBBBBBBBBBBBBBBBA"}"#;
 const MOBILE_PRELOGIN: &str = r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":32768,"t":4,"p":2},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#;
 const DESKTOP_PRELOGIN: &str = r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":65536,"t":3,"p":4},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#;
 
