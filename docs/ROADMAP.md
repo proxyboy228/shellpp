@@ -64,6 +64,15 @@ None loses data as built.
   window remains between its check that the file still exists and the rename.
 - **Sign-in merge**: a merge that meets a forged epoch only stops (there is no
   reset before binding); the fixed-point matching is O(n·d).
+- **Deleting the local copy** (D197): files that could not be deleted (a
+  recording a running session holds open on Windows) reach only the log, as
+  a count; the app is already at first run.
+- **Sign-in to another account** (D200): its email differs in salt, so the
+  device first says the settings changed; after the user types the password
+  the auth key goes to the server and the login succeeds before
+  `previous_account` refuses, and the tokens issued are not revoked.
+  Comparing the email with `local_auth.kdf_email` before deriving would
+  avoid it.
 - **Keys**: the core still allows Show and Reissue of the recovery key in
   local mode (only the interface hides them; forbidding it needs a test hook
   for some 15 tests that read the key); after "Start with a new vault" the
