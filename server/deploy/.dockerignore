@@ -1,0 +1,4 @@
+# The backup image needs only its script (backup.Dockerfile): never the
+# deployment's .env, secrets, backups or a restore dump.
+*
+!backup.sh

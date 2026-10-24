@@ -14,11 +14,14 @@ RUN sed -i '/^members = \[/,/^\]/c\members = ["crates/sync-api"]' Cargo.toml \
     && sed -i '/^\[patch\.crates-io\]/,/^$/d' Cargo.toml
 COPY crates/sync-api crates/sync-api
 COPY server server
+# The parallel jobs of the build, when given (`--build-arg BUILD_JOBS=3` on a
+# shared machine); cargo's default otherwise.
+ARG BUILD_JOBS
 # The dev-dependencies (the client core, for the end-to-end tests) are not
 # in the image; the lock file still pins every other version.
 RUN awk '/^\[dev-dependencies\]/{skip=1;next} /^\[/{skip=0} !skip' server/Cargo.toml > /tmp/Cargo.toml \
     && mv /tmp/Cargo.toml server/Cargo.toml \
-    && cargo build --manifest-path server/Cargo.toml --release \
+    && cargo build --manifest-path server/Cargo.toml --release ${BUILD_JOBS:+--jobs "$BUILD_JOBS"} \
     && strip server/target/release/shellpp-server
 
 FROM alpine:3.22

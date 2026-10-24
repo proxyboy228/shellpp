@@ -3,7 +3,10 @@
 //! `tls internal` (access over a VPN) and two real clients sync through it,
 //! trusting Caddy's root CA for that origin; the Let's Encrypt Caddyfile and
 //! the cloudflared configuration get a syntax check; the backup script
-//! deletes files older than its retention.
+//! deletes files older than its retention. Run 9: the encrypted backup
+//! recipe of the README end to end (docs/sync-protocol.md, section 12),
+//! a failing dump that leaves no backup, and the compose file's trusted
+//! proxy, server secret and backup image (D176, D177).
 //!
 //! Runs with `SHELLPP_TEST_DEPLOY=docker` (Docker running, network for the
 //! images); otherwise it returns at once. Every container and network it
@@ -13,6 +16,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use data_encoding::BASE64;
 use shellpp_core::service::{SignInOutcome, TrustChoice};
@@ -52,7 +56,8 @@ struct Cleanup(Vec<String>, Option<String>);
 impl Drop for Cleanup {
     fn drop(&mut self) {
         for id in &self.0 {
-            let _ = docker(&["rm", "-f", id]);
+            // With their anonymous volumes (PostgreSQL's, Caddy's).
+            let _ = docker(&["rm", "-f", "-v", id]);
         }
         if let Some(network) = &self.1 {
             let _ = docker(&["network", "rm", network]);
@@ -150,20 +155,7 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
     if !enabled() {
         return;
     }
-    let root = repo_root();
-    let (ok, text) = docker(&[
-        "build",
-        "-f",
-        &root.join("server").join("Dockerfile").display().to_string(),
-        "-t",
-        "shellpp-server:test",
-        &root.display().to_string(),
-    ]);
-    assert!(
-        ok,
-        "the image builds: {}",
-        &text[text.len().saturating_sub(2000)..]
-    );
+    server_image();
 
     let network = format!("shellpp-test-{}", random_hex(4));
     let mut cleanup = Cleanup(Vec::new(), None);
@@ -326,4 +318,513 @@ fn two_clients_sync_through_caddy_with_its_internal_ca() {
     assert_eq!(b.addresses(), vec!["behind-caddy.example.com"]);
     drop(cleanup);
     let _ = docker(&["volume", "rm", &volume]);
+}
+
+// ---------------------------------------------------------------------------
+// Run 9: images, the backup recipe and the compose file
+// ---------------------------------------------------------------------------
+
+/// Builds `tag` from `dockerfile` in `context`; on a shared machine with
+/// `CARGO_BUILD_JOBS` set, the server's build uses that many jobs.
+fn build(tag: &str, dockerfile: &Path, context: &Path) {
+    let jobs = std::env::var("CARGO_BUILD_JOBS").ok();
+    let mut args = vec!["build".to_owned()];
+    if let Some(jobs) = jobs {
+        args.extend(["--build-arg".to_owned(), format!("BUILD_JOBS={jobs}")]);
+    }
+    args.extend([
+        "-f".to_owned(),
+        dockerfile.display().to_string(),
+        "-t".to_owned(),
+        tag.to_owned(),
+        context.display().to_string(),
+    ]);
+    let (ok, text) = docker(&args.iter().map(String::as_str).collect::<Vec<_>>());
+    assert!(
+        ok,
+        "{tag} builds: {}",
+        &text[text.len().saturating_sub(2000)..]
+    );
+}
+
+/// The server image, built once per test process.
+fn server_image() -> &'static str {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let root = repo_root();
+        build(
+            "shellpp-server:test",
+            &root.join("server").join("Dockerfile"),
+            &root,
+        );
+    });
+    "shellpp-server:test"
+}
+
+/// The backup image of the compose file (D176), built once per process.
+fn backup_image() -> &'static str {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let dir = deploy_dir();
+        build("shellpp-backup:test", &dir.join("backup.Dockerfile"), &dir);
+    });
+    "shellpp-backup:test"
+}
+
+/// `docker` with the arguments, asserting success: its standard output.
+fn docker_ok(args: &[&str]) -> String {
+    let output = Command::new("docker")
+        .args(args)
+        .output()
+        .expect("docker runs");
+    assert!(
+        output.status.success(),
+        "docker {}: {}{}",
+        args.first().copied().unwrap_or(""),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// An age key pair made by `age-keygen` of the backup image: the identity
+/// file's text and the public key.
+fn age_key() -> (String, String) {
+    let identity = docker_ok(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--entrypoint",
+        "age-keygen",
+        backup_image(),
+    ]);
+    let public = identity
+        .lines()
+        .find_map(|line| line.strip_prefix("# public key: "))
+        .expect("a public key")
+        .trim()
+        .to_owned();
+    (identity, public)
+}
+
+fn backups_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("dir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("shellpp-"))
+        .collect();
+    names.sort();
+    names
+}
+
+/// D176 (run 8's agent C, S7): with `pipefail`, a dump that fails makes
+/// the backup fail and leaves no file that looks like a backup (no
+/// `.sql.age`, no `.part`), and nothing is pruned, so an old backup stays.
+/// Before, age encrypted the empty output of the failed dump and the script
+/// reported a backup.
+#[test]
+fn a_failed_dump_fails_the_backup_and_leaves_no_backup_file() {
+    if !enabled() {
+        return;
+    }
+    let (_, public) = age_key();
+    let dir = tempfile::tempdir().expect("dir");
+    let old = dir.path().join("shellpp-20200101T000000Z.sql.age");
+    std::fs::write(&old, b"an old backup").expect("old");
+    let file = std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .expect("old");
+    file.set_modified(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800),
+    )
+    .expect("mtime");
+    drop(file);
+    // No database at that address: pg_dump fails at once.
+    let (ok, text) = docker(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "-v",
+        &format!("{}:/backups", dir.path().display()),
+        "-e",
+        &format!("AGE_RECIPIENT={public}"),
+        "-e",
+        "BACKUP_ONCE=1",
+        "-e",
+        "BACKUP_RETENTION_DAYS=30",
+        "-e",
+        "PGHOST=127.0.0.1",
+        "-e",
+        "PGPORT=1",
+        "-e",
+        "PGUSER=shellpp",
+        "-e",
+        "PGDATABASE=shellpp",
+        "-e",
+        "PGCONNECT_TIMEOUT=5",
+        backup_image(),
+    ]);
+    assert!(!ok, "the backup failed: {text}");
+    assert!(text.contains("backup failed"), "{text}");
+    assert_eq!(
+        backups_in(dir.path()),
+        vec!["shellpp-20200101T000000Z.sql.age"],
+        "no new file, no .part, and the old backup was not pruned"
+    );
+}
+
+/// The README's backup and restore (docs/sync-protocol.md, section 12: "the
+/// encrypted backup recipe and a restore from it"): the backup image dumps
+/// the server's PostgreSQL through age; the dump is decrypted and loaded
+/// into a clean PostgreSQL; `admin restored`; the server comes back on it
+/// at the same address. Two clients keep their earlier data, notice the
+/// restore (a new `server_generation`, section 6.9), and the record made
+/// after the backup comes back from the device that has it. The server
+/// reads its secret from a file, as with Docker secrets (D177).
+#[test]
+fn the_encrypted_backup_restores_into_a_clean_postgres() {
+    if !enabled() {
+        return;
+    }
+    let image = server_image();
+    let backup = backup_image();
+    let network = format!("shellpp-test-{}", random_hex(4));
+    let mut cleanup = Cleanup(Vec::new(), None);
+    docker_ok(&[
+        "network",
+        "create",
+        "--label",
+        "shellpp-test=deploy",
+        &network,
+    ]);
+    cleanup.1 = Some(network.clone());
+    let password = random_hex(16);
+    let postgres = |alias: &str, cleanup: &mut Cleanup| {
+        let id = docker_ok(&[
+            "run",
+            "-d",
+            "--label",
+            "shellpp-test=deploy",
+            "--network",
+            &network,
+            "--network-alias",
+            alias,
+            "-e",
+            "POSTGRES_DB=shellpp",
+            "-e",
+            "POSTGRES_USER=shellpp",
+            "-e",
+            &format!("POSTGRES_PASSWORD={password}"),
+            "postgres:17-alpine",
+        ]);
+        let id = id.trim().to_owned();
+        cleanup.0.push(id.clone());
+        let mut ready = false;
+        for _ in 0..120 {
+            // Over TCP: the entrypoint's first, temporary server listens
+            // only on its socket.
+            let (ok, _) = docker(&[
+                "exec",
+                &id,
+                "pg_isready",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "shellpp",
+                "-d",
+                "shellpp",
+            ]);
+            if ok {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        assert!(ready, "{alias} is ready");
+    };
+    postgres("pg-old", &mut cleanup);
+    postgres("pg-new", &mut cleanup);
+
+    let secrets = tempfile::tempdir().expect("dir");
+    let mut secret = vec![0u8; 48];
+    getrandom::fill(&mut secret).expect("random");
+    std::fs::write(
+        secrets.path().join("server_secret"),
+        format!("{}\n", BASE64.encode(&secret)),
+    )
+    .expect("secret file");
+    // The image's user 10001 reads it (a temporary folder is 0700 on Unix).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let open = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("mode")
+        };
+        open(secrets.path(), 0o755);
+        open(&secrets.path().join("server_secret"), 0o644);
+    }
+    // One address for both servers: the clients' keys are bound to it.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("a free port")
+        .port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let start_server = |database: &str, cleanup: &mut Cleanup| -> String {
+        let url = format!("postgres://shellpp:{password}@{database}:5432/shellpp");
+        let id = docker_ok(&[
+            "run",
+            "-d",
+            "--label",
+            "shellpp-test=deploy",
+            "--network",
+            &network,
+            "-p",
+            &format!("127.0.0.1:{port}:8080"),
+            "-v",
+            &format!("{}:/run/secrets:ro", secrets.path().display()),
+            "-e",
+            &format!("SHELLPP_DATABASE_URL={url}"),
+            "-e",
+            &format!("SHELLPP_PUBLIC_URL={origin}"),
+            "-e",
+            "SHELLPP_SERVER_SECRET_FILE=/run/secrets/server_secret",
+            "-e",
+            "SHELLPP_REGISTRATION=open",
+            "--entrypoint",
+            "sh",
+            image,
+            "-c",
+            "shellpp-server migrate && exec shellpp-server serve",
+        ]);
+        let id = id.trim().to_owned();
+        cleanup.0.push(id.clone());
+        let addr = format!("127.0.0.1:{port}");
+        let mut ready = false;
+        for _ in 0..120 {
+            if raw_http_at(&addr, "GET", "/readyz", &[], b"")
+                .is_some_and(|answer| answer.status == 200)
+            {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let (_, logs) = docker(&["logs", &id]);
+        assert!(ready, "the server answers on {database}: {logs}");
+        assert!(!logs.contains("read from the environment"), "{logs}");
+        id
+    };
+    let first = start_server("pg-old", &mut cleanup);
+
+    let user_password = new_password();
+    let email = email();
+    let input = || shellpp_core::service::SignInInput {
+        origin: origin.clone(),
+        email: email.clone(),
+        password: user_password.clone(),
+        registration_code: None,
+    };
+    let sign_in = |client: &Client| {
+        let outcome = client.core.sync_sign_in(input()).expect("signed in");
+        assert!(matches!(outcome, SignInOutcome::Done(_)));
+    };
+    let a = Client::local("A", &user_password);
+    a.host("before-backup.example.com");
+    a.core.sync_register(input()).expect("registered");
+    let b = Client::empty("B");
+    sign_in(&b);
+    assert_eq!(b.addresses(), vec!["before-backup.example.com"]);
+
+    // The backup, as the compose file's service makes it.
+    let (identity, public) = age_key();
+    let backups = tempfile::tempdir().expect("dir");
+    let out = docker_ok(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--network",
+        &network,
+        "-v",
+        &format!("{}:/backups", backups.path().display()),
+        "-e",
+        "PGHOST=pg-old",
+        "-e",
+        "PGUSER=shellpp",
+        "-e",
+        "PGDATABASE=shellpp",
+        "-e",
+        &format!("PGPASSWORD={password}"),
+        "-e",
+        &format!("AGE_RECIPIENT={public}"),
+        "-e",
+        "BACKUP_ONCE=1",
+        backup,
+    ]);
+    assert!(out.contains("backup written"), "{out}");
+    let files = backups_in(backups.path());
+    assert_eq!(files.len(), 1, "one backup, no .part: {files:?}");
+    assert!(files[0].ends_with(".sql.age"));
+    let bytes = std::fs::read(backups.path().join(&files[0])).expect("backup");
+    assert!(bytes.starts_with(b"age-encryption.org/v1"), "encrypted");
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("CREATE TABLE"),
+        "no plaintext dump"
+    );
+
+    // A record made after the backup.
+    a.host("after-backup.example.com");
+    a.sync();
+
+    // The restore: the server stops; the dump is decrypted with the key
+    // kept elsewhere and loaded into a clean PostgreSQL; `admin restored`.
+    docker_ok(&["rm", "-f", &first]);
+    let keys = tempfile::tempdir().expect("dir");
+    std::fs::write(keys.path().join("backup.key"), &identity).expect("identity");
+    let load = format!(
+        "set -eu -o pipefail; age -d -i /key/backup.key /backups/{} | psql -h pg-new -U shellpp -d shellpp -v ON_ERROR_STOP=1 -q",
+        files[0]
+    );
+    docker_ok(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--network",
+        &network,
+        "-v",
+        &format!("{}:/backups:ro", backups.path().display()),
+        "-v",
+        &format!("{}:/key:ro", keys.path().display()),
+        "-e",
+        &format!("PGPASSWORD={password}"),
+        "--entrypoint",
+        "sh",
+        backup,
+        "-c",
+        &load,
+    ]);
+    let restored = docker_ok(&[
+        "run",
+        "--rm",
+        "--label",
+        "shellpp-test=deploy",
+        "--network",
+        &network,
+        "-e",
+        &format!("SHELLPP_DATABASE_URL=postgres://shellpp:{password}@pg-new:5432/shellpp"),
+        image,
+        "admin",
+        "restored",
+    ]);
+    assert!(
+        restored.contains("server generation replaced"),
+        "{restored}"
+    );
+    start_server("pg-new", &mut cleanup);
+
+    // Both devices notice the restore and keep their data; the record the
+    // backup lacked comes back from A.
+    let report = a.sync();
+    assert!(report.restored, "A ran the restore procedure");
+    assert_eq!(report.conflicts, 0);
+    assert_eq!(
+        a.addresses(),
+        vec!["after-backup.example.com", "before-backup.example.com"]
+    );
+    let report = b.sync();
+    assert!(report.restored, "B ran the restore procedure");
+    assert_eq!(
+        b.addresses(),
+        vec!["after-backup.example.com", "before-backup.example.com"]
+    );
+    // A new device sees everything on the restored server.
+    let c = Client::empty("C");
+    sign_in(&c);
+    assert_eq!(
+        c.addresses(),
+        vec!["after-backup.example.com", "before-backup.example.com"]
+    );
+    drop(cleanup);
+}
+
+/// The compose file as Compose reads it (D176, D177): the server
+/// trusts exactly the gateway of the project's network, the same value as
+/// `.env.example`; the server secret comes from the Docker secret and only
+/// `server` gets it; the backup service runs the image built from
+/// `backup.Dockerfile`, not a stock Alpine that installs its tools.
+#[test]
+fn the_compose_file_trusts_its_gateway_and_hands_over_the_secret() {
+    if !enabled() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("dir");
+    let env = dir.path().join("test.env");
+    std::fs::write(
+        &env,
+        "POSTGRES_PASSWORD=x\nSHELLPP_PUBLIC_URL=https://sync.example.com\nBACKUP_AGE_RECIPIENT=age1x\n",
+    )
+    .expect("env");
+    let json = docker_ok(&[
+        "compose",
+        "-f",
+        &deploy_dir()
+            .join("docker-compose.yml")
+            .display()
+            .to_string(),
+        "--env-file",
+        &env.display().to_string(),
+        "-p",
+        "shellpp-config-check",
+        "config",
+        "--format",
+        "json",
+    ]);
+    let config: serde_json::Value = serde_json::from_str(&json).expect("compose config");
+    let gateway = config["networks"]["default"]["ipam"]["config"][0]["gateway"]
+        .as_str()
+        .expect("a fixed gateway");
+    let services = &config["services"];
+    let trusted = services["server"]["environment"]["SHELLPP_TRUSTED_PROXIES"]
+        .as_str()
+        .expect("trusted proxies");
+    assert_eq!(trusted, format!("{gateway}/32"));
+    let example = std::fs::read_to_string(deploy_dir().join(".env.example")).expect("example");
+    assert!(
+        example
+            .lines()
+            .any(|line| line == format!("SHELLPP_TRUSTED_PROXIES={trusted}")),
+        ".env.example names the same address"
+    );
+    assert_eq!(
+        services["server"]["environment"]["SHELLPP_SERVER_SECRET_FILE"],
+        "/run/secrets/server_secret"
+    );
+    assert!(services["server"]["environment"]["SHELLPP_SERVER_SECRET"].is_null());
+    assert_eq!(services["server"]["secrets"][0]["source"], "server_secret");
+    assert!(
+        config["secrets"]["server_secret"]["file"]
+            .as_str()
+            .is_some_and(|file| file.replace('\\', "/").ends_with("secrets/server_secret"))
+    );
+    assert!(services["migrate"]["environment"]["SHELLPP_SERVER_SECRET_FILE"].is_null());
+    assert_eq!(
+        services["backup"]["build"]["dockerfile"],
+        "backup.Dockerfile"
+    );
+    assert!(
+        services["backup"]["volumes"]
+            .as_array()
+            .is_some_and(|volumes| volumes
+                .iter()
+                .all(|volume| volume["target"] != "/backup.sh"))
+    );
+    assert!(
+        !example.contains("SHELLPP_SERVER_SECRET="),
+        "no secret in .env"
+    );
 }

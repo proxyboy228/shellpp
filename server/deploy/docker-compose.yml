@@ -1,7 +1,8 @@
 # Shell++ sync server for a homelab (server/README.md): the server, its
 # PostgreSQL, the schema migration and an encrypted daily backup.
 #
-# Before the first start, create deploy/.env from deploy/.env.example.
+# Before the first start, create deploy/.env from deploy/.env.example and
+# the server secret in deploy/secrets/server_secret (README, "Install").
 # The server listens on 127.0.0.1:8080 only: put Caddy, a Cloudflare Tunnel
 # or your VPN in front of it (README, "Access").
 name: shellpp
@@ -28,9 +29,12 @@ services:
     environment: &server-env
       SHELLPP_DATABASE_URL: postgres://shellpp:${POSTGRES_PASSWORD}@postgres:5432/shellpp
       SHELLPP_PUBLIC_URL: ${SHELLPP_PUBLIC_URL:?set SHELLPP_PUBLIC_URL in .env}
-      SHELLPP_SERVER_SECRET: ${SHELLPP_SERVER_SECRET:?set SHELLPP_SERVER_SECRET in .env}
       SHELLPP_REGISTRATION: ${SHELLPP_REGISTRATION:-invite}
-      SHELLPP_TRUSTED_PROXIES: ${SHELLPP_TRUSTED_PROXIES:-}
+      # The gateway of the network below: a proxy on the host reaches the
+      # server through the port published on 127.0.0.1 from there (README,
+      # "Client addresses"). Nothing else is believed in X-Forwarded-For;
+      # safe only while the port is published on 127.0.0.1 alone.
+      SHELLPP_TRUSTED_PROXIES: ${SHELLPP_TRUSTED_PROXIES:-172.16.88.1/32}
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,7 +43,12 @@ services:
     image: ${SHELLPP_IMAGE:-shellpp-server:latest}
     restart: unless-stopped
     command: ["serve"]
-    environment: *server-env
+    environment:
+      <<: *server-env
+      # A Docker secret, not the environment, which `docker inspect` shows.
+      SHELLPP_SERVER_SECRET_FILE: /run/secrets/server_secret
+    secrets:
+      - server_secret
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -47,7 +56,14 @@ services:
         condition: service_completed_successfully
 
   backup:
-    image: alpine:3.22
+    # Built once from backup.Dockerfile (PostgreSQL client and age inside),
+    # so a backup needs no network (README, "Backups").
+    build:
+      context: .
+      dockerfile: backup.Dockerfile
+    image: shellpp-backup:latest
+    # A small init, so `docker compose stop` ends a running dump at once.
+    init: true
     restart: unless-stopped
     environment:
       PGHOST: postgres
@@ -57,13 +73,25 @@ services:
       AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?set BACKUP_AGE_RECIPIENT (an age public key) in .env}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-    entrypoint: ["/bin/sh", "/backup.sh"]
     volumes:
-      - ./backup.sh:/backup.sh:ro
       - ${BACKUP_DIR:-./backups}:/backups
     depends_on:
       postgres:
         condition: service_healthy
+
+secrets:
+  server_secret:
+    file: ./secrets/server_secret
+
+networks:
+  default:
+    # A fixed subnet, so the gateway SHELLPP_TRUSTED_PROXIES names is known.
+    # If it is taken on your machine, set SHELLPP_SUBNET, SHELLPP_GATEWAY and
+    # SHELLPP_TRUSTED_PROXIES in .env together.
+    ipam:
+      config:
+        - subnet: ${SHELLPP_SUBNET:-172.16.88.0/24}
+          gateway: ${SHELLPP_GATEWAY:-172.16.88.1}
 
 volumes:
   postgres:
