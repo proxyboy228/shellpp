@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-24, after run 11. What each stage is comes from
+State of the project on 2026-10-25, after run 12. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -17,10 +17,10 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 4 | SFTP | done | names that are not UTF-8 on the server are a known limitation (D50, item 12) |
 | 5 | Port forwarding, jump hosts, proxy, snippets | done | |
 | 6 | Logs, settings, shortcuts, highlighting | done | interface scale (run 6) |
-| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; what is left is in section 2; team parts belong to stage 8 |
+| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
-| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; mobile apps, shared sessions, cloud provider import and Mosh are not started (Mosh's toggle only saves its value, D29) |
+| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, D204; section 3.1), shared sessions, cloud provider import and Mosh are not started (Mosh comes with the mobile client; its toggle is hidden and a saved value kept, D204) |
 
 ## 2. Stage 7: what is left
 
@@ -67,12 +67,11 @@ None loses data as built.
 - **Deleting the local copy** (D197): files that could not be deleted (a
   recording a running session holds open on Windows) reach only the log, as
   a count; the app is already at first run.
-- **Sign-in to another account** (D200): its email differs in salt, so the
-  device first says the settings changed; after the user types the password
-  the auth key goes to the server and the login succeeds before
-  `previous_account` refuses, and the tokens issued are not revoked.
-  Comparing the email with `local_auth.kdf_email` before deriving would
-  avoid it.
+- **Sessions after a refused sign-in** (D209): a login the merge refuses as
+  another account's revokes its session; the other refusals after a login
+  (a rebind's `rolled_back` or `integrity`, a merge's `forged_epoch` or
+  `newer_epoch`) still leave theirs live, and the login's device row stays
+  in that account's list.
 - **Keys**: the core still allows Show and Reissue of the recovery key in
   local mode (only the interface hides them; forbidding it needs a test hook
   for some 15 tests that read the key); after "Start with a new vault" the
@@ -87,15 +86,20 @@ None loses data as built.
 ### 2.3 Checks
 
 Run 11, the verification run, obtained these on a quiet machine; its report
-has the numbers.
+has the numbers. Run 12 added the soak of the memory finding (D207).
 
 - The 120-minute test against OpenSSH in Docker under all three loads at
   once: a clean 120 minutes, no errors (34 733 HTTP downloads, 34 723 through
   SOCKS, 54 620 SFTP files), no growth: the lowest private bytes of each ten
   minutes 197 MB at the start and 195 MB at the end, handles 744–752, threads
-  80. Private bytes go up by 30–110 MB for a few seconds at a time under the
-  SFTP load (section 2.4); a five-minute sample that met one was the
-  "320 MB peak at minute 15" of runs 6 and 7.
+  80. Private bytes go up by 30–110 MB for a few seconds at a time; a
+  five-minute sample that met one was the "320 MB peak at minute 15" of runs
+  6 and 7.
+- Run 12 (D207): 25 minutes of the SFTP load alone (11 494 files) keep
+  private bytes at 177.7–180.5 MB and the Rust heap at 35–36 MB; under the
+  whole load the swings are the heap's: tabs that flood output keep
+  full-width rows for up to 2 seconds before the compact journal takes them
+  (D85, D99), up to the 10 000 lines of the scrollback. Nothing grows.
 - The flaky test search: 8 runs in run 11, none failed (7 more in run 8).
   `hosts_screen::quick_connect_opens_a_session_without_saving` (run 9) failed
   17 times in 4 756 runs on a CPU loaded on purpose: the terminal's parser
@@ -112,48 +116,40 @@ Not obtained:
 - The owner's own install, the server in the homelab (`server/README.md`,
   `docs/guide/06-sync.md`) and two devices; it is step 3 of section 3.
 - A run of the server's own tests in CI: run 11 set up `server.yml` (SQLite
-  and PostgreSQL in Docker, on the changes the deployment tests run on,
-  D202); its first run on GitHub comes with the owner's next push.
+  and PostgreSQL in Docker, D202), but GitHub Actions are off (D204); the
+  same tests run in the full criterion.
 
-### 2.4 Findings of run 11
+### 2.4 Findings of run 12
 
-None loses data or weakens protection; the run changed no code for them
-(its plan, rule 1.2).
+The findings of run 11 are fixed or explained (D205–D208). What is left:
 
-- **SFTP memory saw-tooth**: under the soak's SFTP load (files of 16 KB, 1 MB
-  and 8 MB up and down, about 8 a second) private bytes swing between about
-  198 and 265 MB, at times 310 MB, for 5–15 seconds; without SFTP (the russh
-  soak) they stay within 195–208 MB. `crates/ssh/src/sftp.rs` keeps about
-  2 MiB in flight per direction, so the source is elsewhere (russh's channel
-  buffers, russh-sftp); a measurement of SFTP alone with a heap profiler is
-  the next step.
-- **A spike at the start of the load**: one sample of 498 MB 26 seconds into
-  the russh soak, 309 MB at minutes 2–3 of the OpenSSH one; once per run.
-- **`scripts\soak.ps1` reports growth that is not there**: it compares one
-  sample at minute 15 with the last one and fails (exit 2) when the last
-  meets a saw-tooth peak; it should compare the lowest values or medians of
-  windows.
-- **A warning in builds of the desktop alone**:
-  `crates/core/src/service/sync_trust.rs:12` imports `Arc`, which only code
-  under `cfg(any(test, feature = "test-hooks"))` uses; `cargo build -p
-  shellpp-desktop` (release, dist, CI's "Build the app") warns, and the
-  criterion's workspace clippy misses it because feature unification turns
-  `test-hooks` on.
-- **Screens**: on first run at 960x600 "Restore from sync…" beside the
-  subtitle breaks it into two lines and lines up with the subtitle, not the
-  title; flags (regional indicator pairs) are drawn as letters in the
-  terminal; the CSV import's column list is cut mid-row without a sign of
-  scrolling; `scripts\ui-screens.ps1` says 244 files for the default sizes,
-  a run makes 266.
-
+- **Flags on Windows** are drawn as two letters: Windows has no flag glyphs,
+  and shipping a color font with them is the owner's choice (D206).
+- **Flood rows** (D207): a tab that floods output holds up to 2 seconds of
+  full-width rows, up to about 36 MB, before the journal takes them; seven
+  such tabs swing the heap by 100–190 MB. Not a growth; a bound costs
+  throughput (D99).
+- **Dates outside Windows** are shown in UTC: the local zone is read on
+  Windows only (`apps/desktop/src/dates.rs`).
+- **CI** (D208): the causes of the red workflow are fixed, but GitHub Actions
+  are off; `cargo deny` (licenses, advisories) runs only there. One session
+  test (`a_lock_cancels_prompts_and_a_dropped_session_waits_for_unlock`) got
+  `Cancelled` instead of `Locked` once on CI's Linux runner and never since.
 ## 3. The path to release 1.0
 
-Release 1.0 ships without team vaults (D197).
+Release 1.0 ships without team vaults (D197), for Windows and Linux (D204);
+macOS is decided in the release preparation run (there is no Mac to check
+on). Checks are local: GitHub Actions are off (D204), and the full criterion
+of `CLAUDE.md` scans for secrets too (D205).
 
 1. **Run 10** — interface and small things.
-2. **The verification run** (run 11, this state) — the checks of 2.3: the
-   long test, the flaky test search, the large property run, the full
-   screenshot set at every size; no new features.
+2. **The verification run** (run 11) — the checks of 2.3: the long test, the
+   flaky test search, the large property run, the full screenshot set at
+   every size; no new features.
+   **Run 12** (this state) — the findings of run 11, the terminal's emoji
+   (D206), the memory finding explained (D207), the red CI's causes (D208),
+   Linux in Docker: the client builds and every test passes (D208), the git history checked for private data
+   (none to remove), and the Android study (section 3.1).
 3. **The owner uses it** day to day and writes down the differences from
    Termius that matter.
 4. **1–2 parity runs** — the list of step 3.
@@ -166,6 +162,16 @@ Release 1.0 ships without team vaults (D197).
 After the release: the previous account's archive (its keys then wrapped under
 the personal vault key, storage-format 6.2 changes with it; D197), then
 stage 8 (section 4).
+
+### 3.1 The mobile client (Android), a line of its own
+
+The owner's case (D204): now and then, away from home, SSH to one's own
+servers, with full sync of the personal vault from day one; Android only
+(a Samsung S25), Mosh with it. Run 12 studied the Rust core
+(`docs/android-feasibility.md`): `shellpp-ssh`, `shellpp-sync-api` and `shellpp-private-file` build for `aarch64-linux-android` as they are; `shellpp-core` after one change (`crates/core/src/sync/tls.rs`: an added CA beside the platform verifier, which takes no extra roots on Android); the desktop app does not (clipboard, GPUI). Stripped test executables weigh about 7 MB (core) and 6 MB (SSH). The session layer and the terminal model are Rust without GPUI and the next crates to split out; Android needs the Keystore behind `SecretStore`, the platform verifier's JNI setup and a foreground service for long sessions. Next: the design run (the
+interface stack, the binding between Kotlin and Rust, the split of the
+session layer and the terminal model out of the desktop app), then the
+mobile runs.
 
 ## 4. Stage 8: what is left (after release 1.0)
 
@@ -191,10 +197,25 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-Both questions after run 10 are answered (D202): the server's tests run in
-CI, and the superfluous copies after a sign-out before run 10 are accepted.
-None is open; the run 11 report lists what to look at in the first run of
-`server.yml` on GitHub.
+After run 12 (its report has the details):
+
+1. **Flags on Windows**: ship a color font with flag glyphs (OFL, in a
+   format Windows 10 draws in color), and which one; the run did not
+   download one (D206).
+2. **Flood rows** (D207): keep the 2-second compaction of a flooding tab, or
+   bound its full rows (by count or by memory) and measure the throughput
+   with `scripts\measure-terminal.ps1`.
+3. **Licenses and advisories** (`cargo deny`, CI's job) are not in the local
+   criterion: add them now that GitHub Actions are off? A new advisory would
+   then stop main until it is handled.
+4. **Dates on Linux** are shown in UTC (the local zone is read on Windows
+   only): read the zone on Linux before release 1.0?
+5. **Linux on a desktop**: the client was built and tested in Docker only;
+   the window, Wayland or X11, the Secret Service keychain and the fonts
+   want a check on a real Linux desktop before release 1.0.
+6. **VS16 emoji take two cells** (D206), as the plan asked: readline counts
+   one, so the cursor can be one column off on a command line that holds
+   such an emoji. Keep it?
 
 ## 6. Technical debt
 
@@ -203,8 +224,17 @@ None is open; the run 11 report lists what to look at in the first run of
 - **Known limitations of secrets** (security.md): copies inside serde_json,
   reqwest, hyper and axum, and inside `totp-rs` on the server.
 - **Sync engine leftovers**: section 2.2.
-- **Terminal compatibility** (`docs/compatibility.md`): VS16 emoji drawn two
-  cells wide in one cell, ZWJ sequences, vttest 80/132 columns.
+- **Terminal compatibility** (`docs/compatibility.md`): flags are drawn as
+  two letters on Windows (no flag glyphs; a font is the owner's choice,
+  D206); the blank cells after an emoji sequence stay (D92).
+- **The core for Android** (`docs/android-feasibility.md`):
+  `crates/core/src/sync/tls.rs` calls a verifier constructor that
+  `rustls-platform-verifier` lacks on Android, so the "mobile-ready" check of
+  `docs/architecture.md` 2.3 fails today; the fix belongs to the mobile
+  runs.
+- **Flood rows of the scrollback** (D207): a tab that floods output holds up
+  to 2 seconds of full-width rows (up to about 36 MB) before the journal
+  takes them; a bound by row count costs throughput (D99).
 - **One target folder per worktree** (a rule, no code): cargo copies
   `shellpp.exe` and `shellpp-test-sshd.exe` to the top of the target folder,
   so two worktrees sharing one target folder replace each other's binaries
@@ -224,7 +254,10 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    `-Deploy` after changes the deployment tests cover). main moves
    fast-forward only. The criterion runs cargo with `--locked` and the tests
    with `--no-fail-fast`, and starts with `cargo metadata --locked` for both
-   workspaces.
+   workspaces and the secret scan of the whole history (gitleaks in Docker);
+   clippy also runs without `--all-targets`, as a release build sees the
+   code (D205). `scripts\verify-linux.ps1` repeats the build and the tests on
+   Linux in Docker, outside the criterion.
 2. **No `git push` and no remote changes** without the owner's explicit request.
 3. **Branches.** One branch per run or agent (`run<N>/<name>`). What cannot be
    finished in about 45 minutes or 3 attempts goes to `wip/<topic>`, and main
@@ -247,7 +280,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D204;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D210;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.
