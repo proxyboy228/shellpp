@@ -317,6 +317,11 @@ impl HttpApi {
                 });
             }
         };
+        // Tests: the server handled the request, its answer is lost.
+        #[cfg(any(test, feature = "test-hooks"))]
+        if lose_answer::take(path) {
+            return Err(HttpError::Network);
+        }
         let status = response.status();
         let retry_after = response
             .headers()
@@ -580,6 +585,44 @@ impl HttpApi {
             limit,
         )?
         .ok_or(HttpError::Malformed)
+    }
+}
+
+/// Tests: the next answer to `path` on this thread is lost after the
+/// server handled the request, as a dropped connection would lose it
+/// (`test-hooks`; never in a release build).
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod lose_answer {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static PATH: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// The next answer to a path that starts with `prefix` (`/v1/...`) on
+    /// this thread is lost.
+    pub fn once(prefix: &str) {
+        PATH.with(|next| *next.borrow_mut() = Some(prefix.to_owned()));
+    }
+
+    /// Whether the answer is still to be lost (no request matched yet).
+    pub fn armed() -> bool {
+        PATH.with(|next| next.borrow().is_some())
+    }
+
+    pub(super) fn take(path: &str) -> bool {
+        PATH.with(|next| {
+            let mut next = next.borrow_mut();
+            if next
+                .as_deref()
+                .is_some_and(|prefix| path.starts_with(prefix))
+            {
+                *next = None;
+                true
+            } else {
+                false
+            }
+        })
     }
 }
 

@@ -80,6 +80,9 @@ use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
     HostKeyStatus, SessionConfig,
 };
+/// Tests: a key change the server accepted is not stored (`test-hooks`).
+#[cfg(any(test, feature = "test-hooks"))]
+pub use key_change::fail_store as key_change_fail_store;
 pub use key_change::{KeyChangeFailure, PreparedKey};
 use session::Session;
 pub use sync_ops::{

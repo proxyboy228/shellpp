@@ -75,6 +75,26 @@ struct ServerKeys {
     origin: String,
 }
 
+/// Tests: the next key change on this thread that the server accepted
+/// is not stored on the device, as a failing write would leave it
+/// (`test-hooks`; never in a release build).
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod fail_store {
+    use std::cell::Cell;
+
+    thread_local! {
+        static NEXT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn once() {
+        NEXT.with(|next| next.set(true));
+    }
+
+    pub(super) fn take() -> bool {
+        NEXT.with(|next| next.replace(false))
+    }
+}
+
 /// Why a confirmed key change did not finish. The new key's fate differs,
 /// so the interface tells the user which (section 5.3, step 7).
 #[derive(Debug)]
@@ -579,6 +599,10 @@ impl Core {
             .as_ref()
             .map(|material| material.to_row(link.vault_id, format_timestamp(now)));
         self.with_session(|inner| {
+            #[cfg(any(test, feature = "test-hooks"))]
+            if fail_store::take() {
+                return Err(CoreError::Internal("key change not stored (test hook)"));
+            }
             let ids = Self::commit_new_keys(
                 inner,
                 &link.device_id,

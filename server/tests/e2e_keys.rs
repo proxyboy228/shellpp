@@ -783,3 +783,136 @@ fn a_merge_at_sign_in_keeps_remember_with_a_new_device_key() {
     assert!(b.core.try_device_unlock().expect("device unlock"));
     assert!(b.addresses().contains(&"b-local.example.com".to_owned()));
 }
+
+/// Run 10 (ROADMAP 2.2, run 9's review): the server took the change but
+/// its answer was lost. The device cannot tell; the user keeps the new key
+/// (`Unknown`), and a sign-in with the new password tells which one holds.
+#[test]
+fn a_lost_answer_leaves_the_key_change_unknown_until_a_sign_in() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let a = Client::empty("A");
+    let old_key = a
+        .core
+        .first_run_setup(password.clone())
+        .expect("first run")
+        .recovery_key;
+    a.host("kept.example.com");
+    a.register(&server, &email, &password);
+    let new = new_password();
+    let prepared = a
+        .core
+        .password_change_prepare(password.clone(), new.clone())
+        .expect("prepared")
+        .expect("a key to show");
+    shellpp_core::sync::http::lose_answer::once("/v1/account/credentials");
+    match a.core.key_change_confirm(prepared.id) {
+        Err(KeyChangeFailure::Unknown(_)) => {}
+        other => panic!("expected an unknown outcome, got {other:?}"),
+    }
+    assert!(!shellpp_core::sync::http::lose_answer::armed());
+    // The server holds the change: the new recovery key, not the old one.
+    assert_eq!(
+        recover_begin_status(&server, &email, &prepared.recovery_key),
+        200
+    );
+    assert_ne!(recover_begin_status(&server, &email, &old_key), 200);
+    // This device learns it at its next sign-in, with the new password.
+    let _ = a.core.sync_now();
+    done(a.sign_in_after_change(&server, &email, &new));
+    a.sync();
+    assert_eq!(a.addresses(), vec!["kept.example.com"]);
+    let a = a.reopen("A");
+    a.core
+        .unlock(new.clone())
+        .expect("the local copy opens with the new password");
+}
+
+/// Run 10 (ROADMAP 2.2, run 9's review): the server took the change and
+/// answered, but the device could not store it (`NotStoredHere`). The new
+/// key and password are the account's; a sign-in repairs this device.
+#[test]
+fn a_change_the_device_could_not_store_is_repaired_by_a_sign_in() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let a = Client::empty("A");
+    let old_key = a
+        .core
+        .first_run_setup(password.clone())
+        .expect("first run")
+        .recovery_key;
+    a.host("kept.example.com");
+    a.register(&server, &email, &password);
+    let new = new_password();
+    let prepared = a
+        .core
+        .password_change_prepare(password.clone(), new.clone())
+        .expect("prepared")
+        .expect("a key to show");
+    shellpp_core::service::key_change_fail_store::once();
+    match a.core.key_change_confirm(prepared.id) {
+        Err(KeyChangeFailure::NotStoredHere(_)) => {}
+        other => panic!("expected the change not stored here, got {other:?}"),
+    }
+    assert_eq!(
+        recover_begin_status(&server, &email, &prepared.recovery_key),
+        200
+    );
+    assert_ne!(recover_begin_status(&server, &email, &old_key), 200);
+    let _ = a.core.sync_now();
+    done(a.sign_in_after_change(&server, &email, &new));
+    a.sync();
+    assert_eq!(a.addresses(), vec!["kept.example.com"]);
+    let a = a.reopen("A");
+    a.core
+        .unlock(new.clone())
+        .expect("the local copy opens with the new password");
+}
+
+/// Run 10 (ROADMAP 2.2, run 9's review; D196): the recovery key was
+/// reissued on another device while this one was out of the account. Its
+/// rebind's first cycle fails, so the recovery row waits: it is built from
+/// the pulled record by a later cycle, never from the stale one, and the
+/// copy opens offline with the new key only.
+#[test]
+fn a_rebind_whose_first_cycle_fails_builds_the_recovery_row_later() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let a = Client::local("A", &password);
+    a.host("kept.example.com");
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    let old_key = b
+        .core
+        .recovery_key_show(password.clone())
+        .expect("the key B holds")
+        .recovery_key;
+    b.core.sync_sign_out(false).expect("B out of the account");
+    let new_key = a
+        .core
+        .recovery_key_reissue(password.clone())
+        .expect("reissued on A")
+        .recovery_key;
+    // B's rebind: its first pull's answer is lost.
+    let vault = a.vault_id();
+    shellpp_core::sync::http::lose_answer::once(&format!("/v1/vaults/{vault}/changes"));
+    done(b.sign_in(&server, &email, &password));
+    assert!(
+        !shellpp_core::sync::http::lose_answer::armed(),
+        "the rebind's first pull lost its answer"
+    );
+    b.sync();
+    b.core.lock().expect("locked");
+    assert!(
+        b.core.recovery_unlock(old_key, new_password()).is_err(),
+        "the reissued key no longer opens B"
+    );
+    b.core
+        .recovery_unlock(new_key, new_password())
+        .expect("the new key opens B offline");
+    assert_eq!(b.addresses(), vec!["kept.example.com"]);
+}
