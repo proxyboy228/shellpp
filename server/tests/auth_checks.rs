@@ -184,6 +184,7 @@ impl Fixture {
             kind,
             key,
             IP,
+            Uuid::now_v7(),
         )
     }
 

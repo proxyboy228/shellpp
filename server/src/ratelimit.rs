@@ -504,8 +504,20 @@ impl SigninSoft {
                 !networks.is_empty()
             });
         }
-        if known.len() > TOTP_MAX_ENTRIES && !known.contains_key(email) {
-            return;
+        if known.len() > TOTP_MAX_ENTRIES {
+            // The emails seen longest ago go, down to half (review finding:
+            // refusing new ones left every other email without known
+            // networks).
+            let mut latest: Vec<Instant> = known
+                .values()
+                .map(|networks| networks.iter().map(|(_, seen)| *seen).max().unwrap_or(now))
+                .collect();
+            let keep = TOTP_MAX_ENTRIES / 2;
+            let last = latest.len() - 1;
+            let dropped = latest.len().saturating_sub(keep).min(last);
+            let (_, cutoff, _) = latest.select_nth_unstable(dropped);
+            let cutoff = *cutoff;
+            known.retain(|_, networks| networks.iter().any(|(_, seen)| *seen >= cutoff));
         }
         let networks = known.entry(*email).or_default();
         networks.retain(|(other, seen)| {
@@ -638,18 +650,21 @@ impl Limiters {
     /// the soft delay of the email, then the window of the email on that
     /// network, which counts the try as a failure until
     /// [`Self::signin_succeeded`] takes it back (D174).
-    pub fn signin_attempt(&self, email: &str, ip: IpAddr) -> Result<(), u64> {
+    pub fn signin_attempt(&self, email: &str, ip: IpAddr, soft_applies: bool) -> Result<(), u64> {
         let key = email_key(email);
         let now = Instant::now();
         let pair = (key, network_of(ip));
         let max = self.limits.failures_per_window;
         // The longer of the two waits, so the answer is never early.
         let window = self.failures.check(&pair, max, now).err().unwrap_or(0);
-        let soft = self
-            .signin_soft
-            .check(&key, ip, max, now)
-            .err()
-            .unwrap_or(0);
+        let soft = if soft_applies {
+            self.signin_soft
+                .check(&key, ip, max, now)
+                .err()
+                .unwrap_or(0)
+        } else {
+            0
+        };
         if window.max(soft) > 0 {
             return Err(window.max(soft));
         }
@@ -989,7 +1004,7 @@ mod tests {
         let limiters = Limiters::new(RateLimits::default());
         let long = "x".repeat(1 << 20);
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
-        limiters.signin_attempt(&long, ip).unwrap();
+        limiters.signin_attempt(&long, ip, true).unwrap();
         assert_eq!(limiters.failures.len(), 1);
         assert!(
             limiters

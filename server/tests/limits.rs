@@ -559,3 +559,87 @@ fn wrong_keys_from_one_network_do_not_lock_the_owner_out() {
     let ok = login_from(&server, &email, &auth_key, fresh);
     assert_eq!(ok.status, 200, "{}", ok.body);
 }
+
+/// Review finding (D178): an attacker who takes every turn of the soft
+/// limit holds new networks, but never the account's own devices (a
+/// sign-in with the id of one of its devices) nor its signed-in requests.
+#[test]
+fn the_soft_signin_limit_never_holds_the_accounts_devices_or_sessions() {
+    let server = proxied(RateLimits::generous());
+    let (email, auth_key, token) = register(&server);
+    // The owner's device signs in once (its id is the account's now).
+    let device = uuid::Uuid::now_v7();
+    let body = |key: &[u8]| {
+        json!({"email": email, "auth_key": b64(key), "device_id": device})
+            .to_string()
+            .into_bytes()
+    };
+    let headers = |ip: &'static str| {
+        [
+            ("content-type", "application/json"),
+            ("x-forwarded-for", ip),
+        ]
+    };
+    let ok = raw_http(
+        &server,
+        "POST",
+        "/v1/auth/login",
+        &headers(USER),
+        &body(&auth_key),
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    for _ in 0..10 {
+        login_from(&server, &email, &[7; 32], ATTACKER);
+    }
+    // A new network: held by the soft delay...
+    assert_delayed(
+        &login_from(&server, &email, &auth_key, "203.0.113.60"),
+        1..=2,
+    );
+    // ...but not the owner's device there, nor a signed-in request.
+    let ok = raw_http(
+        &server,
+        "POST",
+        "/v1/auth/login",
+        &headers("203.0.113.61"),
+        &body(&auth_key),
+    );
+    assert_eq!(ok.status, 200, "the account's device: {}", ok.body);
+    let setup = post(
+        &server,
+        "/v1/account/totp/setup",
+        &[
+            ("authorization", &format!("Bearer {token}")),
+            ("x-forwarded-for", "203.0.113.62"),
+        ],
+        json!({"current_auth_key": b64(&auth_key)}),
+    );
+    assert_eq!(setup.status, 200, "a signed-in request: {}", setup.body);
+}
+
+/// Review finding (D174): the account endpoints take at most the 1 MiB
+/// body of the auth endpoints, so the requests waiting for an Argon2id
+/// slot hold at most that much each.
+#[test]
+fn account_endpoints_refuse_bodies_over_1_mib() {
+    let server = Server::start();
+    let (_, _, token) = register(&server);
+    let big = json!({"current_auth_key": "A".repeat(2 << 20)}).to_string();
+    for path in [
+        "/v1/account/totp/setup",
+        "/v1/account/email",
+        "/v1/account/password",
+    ] {
+        let answer = raw_http(
+            &server,
+            "POST",
+            path,
+            &[
+                ("content-type", "application/json"),
+                ("authorization", &format!("Bearer {token}")),
+            ],
+            big.as_bytes(),
+        );
+        assert_eq!(answer.status, 413, "{path}: {}", answer.body);
+    }
+}

@@ -50,15 +50,18 @@ fn rate_limited(seconds: u64) -> ApiError {
 /// failure for the email (section 10.1; D174, D178). Called by
 /// [`check_current_auth_key`], outside any transaction.
 fn check_auth_key(shared: &Shared, user: &User, key: &[u8], ip: IpAddr) -> ApiResult<()> {
+    // A signed-in request is past the sign-in: the soft limit of the email,
+    // which someone who knows only the email feeds, does not hold it, and
+    // its failures (a holder of a token) count in its own network's window
+    // only (D178, review finding).
     shared
         .limiters
-        .signin_attempt(&user.email, ip)
+        .signin_attempt(&user.email, ip, false)
         .map_err(rate_limited)?;
     if key.len() == 32 && secrets::check_verifier(&user.auth_verifier, key) {
         shared.limiters.signin_succeeded(&user.email, ip);
         Ok(())
     } else {
-        shared.limiters.signin_failed(&user.email);
         Err(ApiError::invalid_credentials())
     }
 }
@@ -177,6 +180,7 @@ pub fn check_sign_in(
     kind: KeyKind,
     key: &[u8],
     ip: IpAddr,
+    device_id: Uuid,
 ) -> ApiResult<CheckedKey> {
     // No account has an email longer than registration allows: such a one
     // is refused like an unknown email, without being counted or kept
@@ -185,11 +189,29 @@ pub fn check_sign_in(
         let _ = secrets::check_verifier(&shared.dummy_verifier, key);
         return Err(ApiError::invalid_credentials());
     };
+    // A device of the account (its id, which only the account's devices
+    // know, not revoked) is not held by the soft limit of the email, so
+    // the owner's devices sign in again whatever someone who knows only
+    // the email does (D178, review finding).
+    let (user, own_device) = shared.db.tx(TxKind::Read, |tx| -> ApiResult<_> {
+        let user = user_by_email(tx, &email)?;
+        let own_device = match &user {
+            Some(user) => tx
+                .query_one(
+                    "SELECT device_id FROM devices WHERE device_id = ? AND user_id = ? \
+                     AND revoked_at IS NULL",
+                    &[device_id.into(), user.user_id.into()],
+                    &[Ty::Uuid],
+                )?
+                .is_some(),
+            None => false,
+        };
+        Ok((user, own_device))
+    })?;
     shared
         .limiters
-        .signin_attempt(&email, ip)
+        .signin_attempt(&email, ip, !own_device)
         .map_err(rate_limited)?;
-    let user = shared.db.tx(TxKind::Read, |tx| user_by_email(tx, &email))?;
     let verifier = user
         .as_ref()
         .filter(|_| key.len() == 32)

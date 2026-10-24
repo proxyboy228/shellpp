@@ -341,11 +341,12 @@ async fn sign_in_key(
     kind: KeyKind,
     key: &B64,
     ip: IpAddr,
+    device_id: Uuid,
 ) -> ApiResult<CheckedKey> {
     let email = email.to_owned();
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
-        accounts::check_sign_in(shared, &email, kind, &key, ip)
+        accounts::check_sign_in(shared, &email, kind, &key, ip, device_id)
     })
     .await
 }
@@ -365,11 +366,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/recover/complete", post(recover_complete))
         .route_layer(middleware::from_fn_with_state(state.clone(), limit_auth))
         .layer(DefaultBodyLimit::max(limits::MAX_AUTH_BODY_BYTES as usize));
-    Router::new()
-        .merge(auth)
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/v1/server", get(server_info))
+    // The account endpoints and key epochs: the body limit of the auth
+    // endpoints too (section 10.2), so the bounded Argon2id queue also
+    // bounds the memory it holds (review finding).
+    let account_routes = Router::new()
         .route("/v1/account", get(account))
         .route("/v1/account/password", post(password))
         .route("/v1/account/recovery-key", post(recovery_key))
@@ -380,11 +380,18 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/account/totp/disable", post(totp_disable))
         .route("/v1/account/ssh-id", put(ssh_id))
         .route("/v1/account/delete", post(account_delete))
+        .route("/v1/vaults/{vault_id}/key-epochs", post(key_epochs))
+        .layer(DefaultBodyLimit::max(limits::MAX_AUTH_BODY_BYTES as usize));
+    Router::new()
+        .merge(auth)
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/v1/server", get(server_info))
+        .merge(account_routes)
         .route("/v1/devices", get(devices))
         .route("/v1/devices/{device_id}", delete(device_revoke))
         .route("/v1/vaults", get(vaults))
         .route("/v1/vaults/{vault_id}/keys", get(vault_keys))
-        .route("/v1/vaults/{vault_id}/key-epochs", post(key_epochs))
         .route("/v1/vaults/{vault_id}/changes", get(pull).post(push))
         // The push body limit (section 10.2) with room for the JSON around
         // the base64 envelopes; a larger body is `413`.
@@ -487,7 +494,15 @@ async fn login(
     ClientIp(ip): ClientIp,
     Body(request): Body<LoginRequest>,
 ) -> ApiResult<Response> {
-    let checked = sign_in_key(&state, &request.email, KeyKind::Auth, &request.auth_key, ip).await?;
+    let checked = sign_in_key(
+        &state,
+        &request.email,
+        KeyKind::Auth,
+        &request.auth_key,
+        ip,
+        request.device_id,
+    )
+    .await?;
     let shared = state.clone();
     let response = state
         .db
@@ -552,6 +567,7 @@ async fn recover_begin(
         KeyKind::Recovery,
         &request.recovery_auth_key,
         ip,
+        request.device_id,
     )
     .await?;
     let response = state
