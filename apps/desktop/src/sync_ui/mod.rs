@@ -480,7 +480,13 @@ impl Render for ConnectDialog {
 
 fn connect_footer(dialog: &Entity<ConnectDialog>, cx: &App) -> AnyElement {
     let this = dialog.read(cx);
-    let busy = this.busy;
+    // The certificate panel's check counts too: closing or going back
+    // during it would keep a choice behind a closed step (D187).
+    let (trust_busy, ca_shown) = this.trust.as_ref().map_or((false, false), |panel| {
+        let panel = panel.read(cx);
+        (panel.busy(), panel.ca.is_some())
+    });
+    let busy = this.busy || trust_busy;
     let step = this.step.clone();
     let register = this.register && !this.first_run;
     let handle = dialog.downgrade();
@@ -497,6 +503,7 @@ fn connect_footer(dialog: &Entity<ConnectDialog>, cx: &App) -> AnyElement {
     let row = row.child(
         ControlButton::new("sync-cancel", ControlKind::Neutral)
             .label(strings::CANCEL)
+            .disabled(trust_busy)
             .on_click({
                 let handle = handle.clone();
                 move |_, window, cx| {
@@ -510,7 +517,8 @@ fn connect_footer(dialog: &Entity<ConnectDialog>, cx: &App) -> AnyElement {
                 }
             }),
     );
-    let row = if matches!(step, ConnectStep::Server) {
+    // The CA confirmation has its own Back (to the choice).
+    let row = if matches!(step, ConnectStep::Server) || ca_shown {
         row
     } else {
         let back = handle.clone();
@@ -581,7 +589,14 @@ pub fn open_connect(
     let dialog = cx.new(|cx| ConnectDialog::new(state, first_run, window, cx));
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
+        let checking = shown
+            .read(cx)
+            .trust
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).busy());
         modal
+            .keyboard(!checking)
+            .overlay_closable(!checking)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -729,7 +744,7 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                 .child(
                     h_flex().child(
                         ControlButton::new("sync-certificate-review", ControlKind::Neutral)
-                            .label(strings::REVIEW)
+                            .label(strings::CERTIFICATE_REVIEW)
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
                                 trust::review(review.clone(), origin.clone(), window, cx);
@@ -2067,6 +2082,10 @@ impl RecoveryDialog {
                     // its dialog comes first; the recovery waits for it and
                     // runs again with Restore.
                     Err(CoreError::Sync(HttpError::Tls(problem))) => {
+                        // Local recovery stays on offer, as for a server that
+                        // does not answer.
+                        dialog.error = Some(strings::RECOVERY_CERTIFICATE);
+                        dialog.offer_local = true;
                         let origin = dialog
                             .state
                             .read(cx)

@@ -58,6 +58,9 @@ pub struct TrustPanel {
     pub ca: Option<CaCandidate>,
     busy: bool,
     pub error: Option<&'static str>,
+    /// The origin was trusted until now (a bound device's review): an
+    /// unknown issuer then says so, as a changed pin does.
+    pub previously_trusted: bool,
     on_trusted: Trusted,
     task: Option<Task<()>>,
 }
@@ -82,9 +85,16 @@ impl TrustPanel {
             ca: None,
             busy: false,
             error: None,
+            previously_trusted: false,
             on_trusted,
             task: None,
         }
+    }
+
+    /// A check is running: the dialog's Cancel and Back wait for it, so a
+    /// choice the server then accepts is never kept behind a closed dialog.
+    pub fn busy(&self) -> bool {
+        self.busy
     }
 
     /// The certificate the server shows.
@@ -120,12 +130,37 @@ impl TrustPanel {
         self.busy = true;
         self.error = None;
         cx.notify();
-        let checked =
-            cx.background_spawn(async move { core.sync_server_trust_verified(&origin, choice) });
+        let checked = cx.background_spawn(async move {
+            let verified = core.sync_server_trust_verified(&origin, choice);
+            // A pin or the system's trust that was not kept: the server
+            // shows something else than the dialog did; what it shows now
+            // under the stored trust replaces it.
+            let current = match &verified {
+                Ok(ServerCheck::Certificate { .. }) if !was_ca => {
+                    Some(core.sync_server_check(&origin))
+                }
+                _ => None,
+            };
+            (verified, current)
+        });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = checked.await;
+            let (result, current) = checked.await;
             let _ = this.update_in(cx, |panel, window, cx| {
                 panel.busy = false;
+                let result = match (result, current) {
+                    (Ok(ServerCheck::Certificate { .. }), Some(current)) => {
+                        // Not kept; the stored trust may work again (the
+                        // server shows the pinned certificate again).
+                        if let Ok(ServerCheck::Certificate { problem, .. }) = &current {
+                            panel.problem = problem.clone();
+                            panel.error = Some(strings::TRUST_NOT_KEPT);
+                            cx.notify();
+                            return;
+                        }
+                        current
+                    }
+                    (result, _) => result,
+                };
                 match result {
                     Ok(check @ ServerCheck::Ready { .. }) => {
                         let on_trusted = panel.on_trusted.clone();
@@ -134,23 +169,18 @@ impl TrustPanel {
                         return;
                     }
                     Ok(ServerCheck::Certificate { problem, .. }) => {
-                        // Nothing was kept.
+                        // A CA that was not kept.
                         panel.ca = None;
-                        match (was_ca, problem) {
-                            // A CA that did not issue the server's
-                            // certificate (or one of the same name whose
-                            // signature does not verify): back to the choice.
-                            (true, TlsProblem::UnknownIssuer(_) | TlsProblem::Other(_)) => {
+                        match problem {
+                            // It did not issue the server's certificate (or
+                            // has the same name and a signature that does
+                            // not verify): back to the choice.
+                            TlsProblem::UnknownIssuer(_) | TlsProblem::Other(_) => {
                                 panel.error = Some(strings::TRUST_CA_NOT_ISSUER);
                             }
                             // Another name or out of its dates: refused with
-                            // the reason, under the CA as under a pin.
-                            (true, problem) => panel.problem = problem,
-                            // The server shows something else now: that.
-                            (false, problem) => {
-                                panel.problem = problem;
-                                panel.error = Some(strings::TRUST_NOT_KEPT);
-                            }
+                            // the reason.
+                            problem => panel.problem = problem,
                         }
                     }
                     Err(error) => panel.fail(&error),
@@ -328,8 +358,17 @@ impl TrustPanel {
         v_flex()
             .gap(metrics::SPACE_3)
             .child(row(strings::TRUST_SERVER, self.origin.clone(), cx))
-            .child(row(strings::TRUST_SUBJECT, info.subject.clone(), cx))
-            .child(row(strings::TRUST_ISSUER, info.issuer.clone(), cx))
+            // Text from the server: control and bidi characters shown.
+            .child(row(
+                strings::TRUST_SUBJECT,
+                crate::sftp::display_name(&info.subject),
+                cx,
+            ))
+            .child(row(
+                strings::TRUST_ISSUER,
+                crate::sftp::display_name(&info.issuer),
+                cx,
+            ))
             .child(row(
                 strings::TRUST_VALID,
                 format!("{} – {}", when(&info.not_before), when(&info.not_after)),
@@ -383,7 +422,7 @@ impl Render for TrustPanel {
                                     .test_support()
                                     .text_size(metrics::FONT_SIZE_BODY)
                                     .text_color(cx.theme().popover_foreground)
-                                    .child(ca.info.subject.clone()),
+                                    .child(crate::sftp::display_name(&ca.info.subject)),
                             ),
                     )
                     .child(fingerprint(
@@ -403,6 +442,27 @@ impl Render for TrustPanel {
             TlsProblem::Other(_) => strings::TRUST_REFUSED_OTHER,
         };
         body = body.child(widgets::caption(text, cx));
+        if self.previously_trusted && matches!(self.problem, TlsProblem::UnknownIssuer(_)) {
+            body = body.child(
+                div()
+                    .id("sync-trust-was-trusted")
+                    .test_support()
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(cx.theme().warning)
+                    .child(strings::TRUST_WAS_TRUSTED),
+            );
+        }
+        if let TlsProblem::Other(reason) = &self.problem {
+            // The reason the system gives (SP 2.1).
+            body = body.child(
+                div()
+                    .id("sync-trust-reason")
+                    .test_support()
+                    .text_size(metrics::FONT_SIZE_CAPTION)
+                    .text_color(cx.theme().popover_foreground)
+                    .child(crate::sftp::display_name(reason)),
+            );
+        }
         if let TlsProblem::PinChanged {
             pinned,
             new,
@@ -481,7 +541,10 @@ pub fn open_trust(
     let panel = cx.new(|_| TrustPanel::new(state, origin, problem, close));
     let shown = panel.clone();
     window.open_dialog(cx, move |modal, _, cx| {
-        let can_trust = shown.read(cx).can_trust();
+        let (can_trust, busy) = {
+            let panel = shown.read(cx);
+            (panel.can_trust(), panel.busy())
+        };
         let footer = h_flex()
             .w_full()
             .justify_end()
@@ -493,10 +556,13 @@ pub fn open_trust(
                     } else {
                         strings::CLOSE
                     })
+                    .disabled(busy)
                     .on_click(|_, window, cx| window.close_dialog(cx)),
             )
             .children(TrustPanel::actions(&shown, cx));
         modal
+            .keyboard(!busy)
+            .overlay_closable(!busy)
             .w(metrics::scaled(super::DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -530,13 +596,18 @@ pub fn review(state: Entity<AppState>, origin: String, window: &mut Window, cx: 
                         let on_trusted: Trusted = Rc::new(move |_, _, cx| {
                             kick.update(cx, |state, cx| state.sync_now(cx));
                         });
-                        open_trust(state, origin, problem, on_trusted, window, cx);
+                        let panel = open_trust(state, origin, problem, on_trusted, window, cx);
+                        panel.update(cx, |panel, cx| {
+                            panel.previously_trusted = true;
+                            cx.notify();
+                        });
                     }
                     Ok(ServerCheck::Ready { .. }) => {
                         kick.update(cx, |state, cx| state.sync_now(cx));
                     }
                     Err(error) => {
                         tracing::info!(code = error.code(), "certificate review failed");
+                        crate::shell::show_toast(super::error_text(&error), window, cx);
                         kick.update(cx, |state, cx| state.refresh_sync_status(cx));
                     }
                 }
@@ -554,9 +625,14 @@ pub fn trust_row(state: &Entity<AppState>, origin: &str, cx: &App) -> Option<Any
         shellpp_core::service::ServerTrust::Pinned { sha256 } => {
             (strings::TRUST_ROW_PINNED.to_owned(), Some(sha256))
         }
-        shellpp_core::service::ServerTrust::Ca { name, sha256 } => {
-            (format!("{}: {name}", strings::TRUST_ROW_CA), Some(sha256))
-        }
+        shellpp_core::service::ServerTrust::Ca { name, sha256 } => (
+            format!(
+                "{}: {}",
+                strings::TRUST_ROW_CA,
+                crate::sftp::display_name(&name)
+            ),
+            Some(sha256),
+        ),
     };
     Some(
         v_flex()

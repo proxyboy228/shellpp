@@ -559,3 +559,62 @@ fn a_changed_pin_is_confirmed_by_a_new_pin_or_the_systems_trust() {
         ServerTrust::System
     );
 }
+
+/// An unknown issuer is offered for trust only when the certificate's own
+/// name and dates hold: a self-signed certificate for another name, or
+/// out of its dates, is refused with that reason, so the dialog never
+/// offers a pin the check would refuse (review of D187).
+#[test]
+fn an_unknown_issuer_with_another_name_or_bad_dates_is_refused_not_offered() {
+    let (_env, core) = core();
+    let wrong = serve(&leaf(&["sync.example.com"], None, (-1, 30)));
+    assert!(matches!(
+        checked_problem(core.sync_server_check(&wrong.origin()).expect("check")),
+        TlsProblem::WrongName(_)
+    ));
+    let expired = serve(&leaf(&["localhost"], None, (-30, -1)));
+    assert!(matches!(
+        checked_problem(core.sync_server_check(&expired.origin()).expect("check")),
+        TlsProblem::Expired(_)
+    ));
+}
+
+/// A pinned origin that shows a new certificate for another name or out of
+/// its dates is refused with that reason, never offered as a changed pin.
+#[test]
+fn a_changed_pin_to_a_bad_certificate_is_refused_not_offered() {
+    let pinned = leaf(&["localhost"], None, (-1, 30));
+    let server = serve(&pinned);
+    let (_env, core) = core();
+    core.sync_server_trust(&server.origin(), TrustChoice::Pin(sha256(&pinned.der)))
+        .expect("pinned");
+    server.swap(&leaf(&["localhost"], None, (-30, -1)));
+    assert!(matches!(
+        checked_problem(core.sync_server_check(&server.origin()).expect("check")),
+        TlsProblem::Expired(_)
+    ));
+    server.swap(&leaf(&["sync.example.com"], None, (-1, 30)));
+    assert!(matches!(
+        checked_problem(core.sync_server_check(&server.origin()).expect("check")),
+        TlsProblem::WrongName(_)
+    ));
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+}
+
+/// A CA file is read as PEM or as DER.
+#[test]
+fn ca_files_are_read_as_pem_or_der() {
+    let (der, _) = ca();
+    let pem = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        data_encoding::BASE64.encode(&der)
+    );
+    assert_eq!(
+        shellpp_core::sync::tls::ca_der_from_file(pem.as_bytes()).as_deref(),
+        Some(der.as_ref())
+    );
+    assert_eq!(
+        shellpp_core::sync::tls::ca_der_from_file(&der).as_deref(),
+        Some(der.as_ref())
+    );
+}

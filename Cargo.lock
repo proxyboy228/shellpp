@@ -8018,6 +8018,7 @@ dependencies = [
  "qrcode",
  "rcgen",
  "regex",
+ "rustls",
  "secrecy",
  "semver",
  "serde",

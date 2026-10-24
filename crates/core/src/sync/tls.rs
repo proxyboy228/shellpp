@@ -7,9 +7,10 @@
 //! another name.
 //!
 //! The system's trust is the OS verifier, or for tests a fixed set of roots
-//! ([`SystemRoots::Fixed`]): no test reads or changes the machine's
-//! certificate store. An added CA lives only in the verifier of its origin;
-//! nothing here writes to the OS store.
+//! ([`SystemRoots::Fixed`]): no test changes the machine's certificate
+//! store, and the tests of the trust choices do not read it either. An
+//! added CA lives only in the verifier of its origin; nothing here writes
+//! to the OS store.
 
 use std::sync::{Arc, Mutex};
 
@@ -262,10 +263,24 @@ impl TrustVerifier {
     }
 
     /// Classifies a refusal of the system (or CA) verifier for the dialog.
-    fn refused(&self, error: &TlsError, info: Option<CertInfo>) {
+    /// An unknown issuer is offered for trust only when the certificate's
+    /// name and dates hold (D187): webpki reports the issuer first, and a
+    /// certificate for another name or out of its dates is refused, pinned
+    /// or not.
+    fn refused(
+        &self,
+        error: &TlsError,
+        info: Option<CertInfo>,
+        end_entity: &CertificateDer<'_>,
+        server_name: &ServerName<'_>,
+        now: UnixTime,
+    ) {
         let problem = match (error, info) {
             (TlsError::InvalidCertificate(CertificateError::UnknownIssuer), Some(info)) => {
-                TlsProblem::UnknownIssuer(info)
+                match name_and_dates(end_entity, server_name, now) {
+                    Ok(()) => TlsProblem::UnknownIssuer(info),
+                    Err(refusal) => refusal.problem(info),
+                }
             }
             (
                 TlsError::InvalidCertificate(
@@ -296,26 +311,63 @@ impl TrustVerifier {
         now: UnixTime,
         info: CertInfo,
     ) -> Result<(), TlsError> {
-        let cert = webpki::EndEntityCert::try_from(end_entity)
-            .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
-        if cert.verify_is_valid_for_subject_name(server_name).is_err() {
-            self.note(TlsProblem::WrongName(info));
-            return Err(TlsError::InvalidCertificate(
-                CertificateError::NotValidForName,
-            ));
-        }
-        let parsed = x509_cert::Certificate::from_der(end_entity.as_ref())
-            .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
-        let validity = &parsed.tbs_certificate.validity;
-        let now = now.as_secs();
-        if now < validity.not_before.to_unix_duration().as_secs()
-            || now > validity.not_after.to_unix_duration().as_secs()
-        {
-            self.note(TlsProblem::Expired(info));
-            return Err(TlsError::InvalidCertificate(CertificateError::Expired));
-        }
-        Ok(())
+        name_and_dates(end_entity, server_name, now).map_err(|refusal| {
+            let error = refusal.error();
+            if !matches!(refusal, Refusal::Encoding) {
+                self.note(refusal.problem(info));
+            }
+            error
+        })
     }
+}
+
+/// Why a certificate's own name or dates refuse it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refusal {
+    Encoding,
+    WrongName,
+    Dates,
+}
+
+impl Refusal {
+    fn problem(self, info: CertInfo) -> TlsProblem {
+        match self {
+            Refusal::WrongName => TlsProblem::WrongName(info),
+            Refusal::Dates => TlsProblem::Expired(info),
+            Refusal::Encoding => TlsProblem::Other("the certificate does not parse".to_owned()),
+        }
+    }
+
+    fn error(self) -> TlsError {
+        TlsError::InvalidCertificate(match self {
+            Refusal::Encoding => CertificateError::BadEncoding,
+            Refusal::WrongName => CertificateError::NotValidForName,
+            Refusal::Dates => CertificateError::Expired,
+        })
+    }
+}
+
+/// The host name and the validity dates of an end-entity certificate,
+/// whatever its issuer.
+fn name_and_dates(
+    end_entity: &CertificateDer<'_>,
+    server_name: &ServerName<'_>,
+    now: UnixTime,
+) -> Result<(), Refusal> {
+    let cert = webpki::EndEntityCert::try_from(end_entity).map_err(|_| Refusal::Encoding)?;
+    if cert.verify_is_valid_for_subject_name(server_name).is_err() {
+        return Err(Refusal::WrongName);
+    }
+    let parsed =
+        x509_cert::Certificate::from_der(end_entity.as_ref()).map_err(|_| Refusal::Encoding)?;
+    let validity = &parsed.tbs_certificate.validity;
+    let now = now.as_secs();
+    if now < validity.not_before.to_unix_duration().as_secs()
+        || now > validity.not_after.to_unix_duration().as_secs()
+    {
+        return Err(Refusal::Dates);
+    }
+    Ok(())
 }
 
 impl ServerCertVerifier for TrustVerifier {
@@ -332,13 +384,20 @@ impl ServerCertVerifier for TrustVerifier {
             TrustMode::System | TrustMode::Ca(_) => self
                 .system
                 .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-                .inspect_err(|error| self.refused(error, info)),
+                .inspect_err(|error| self.refused(error, info, end_entity, server_name, now)),
             TrustMode::Pinned(pin) => {
                 let presented = sha256(end_entity.as_ref());
                 let Some(info) = info else {
                     return Err(TlsError::InvalidCertificate(CertificateError::BadEncoding));
                 };
                 if presented != *pin {
+                    // A new certificate for another name or out of its
+                    // dates is refused with that reason: never offered.
+                    if let Err(refusal) = name_and_dates(end_entity, server_name, now) {
+                        let error = refusal.error();
+                        self.note(refusal.problem(info));
+                        return Err(error);
+                    }
                     let system_trusts = self
                         .system
                         .verify_server_cert(

@@ -287,3 +287,167 @@ fn a_ca_file_is_shown_for_confirmation(cx: &mut TestAppContext) {
     assert!(ui.visible("sync-pin", cx));
     ui.finish(cx);
 }
+
+/// A TLS server on 127.0.0.1 that shows a self-signed certificate for
+/// `localhost` and answers `GET /v1/server`; returns its port and the
+/// certificate's DER.
+fn tls_server() -> (u16, Vec<u8>) {
+    use std::io::{Read, Write};
+    const INFO: &str = r#"{"version":"0.7.0","api_versions":["v1"],"registration":"open","smtp":false,"limits":{"max_envelope_bytes":1,"max_push_items":1,"max_push_body_bytes":1,"default_pull_limit":1,"max_pull_limit":1,"tombstone_retention_days":90},"server_generation":null}"#;
+    let key = rcgen::KeyPair::generate().expect("key");
+    let params = rcgen::CertificateParams::new(vec!["localhost".to_owned()]).expect("params");
+    let cert = params.self_signed(&key).expect("cert");
+    let der = cert.der().to_vec();
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let config = std::sync::Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("versions")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::pki_types::CertificateDer::from(der.clone())],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(
+                    rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()),
+                ),
+            )
+            .expect("tls config"),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let config = config.clone();
+            std::thread::spawn(move || {
+                let Ok(mut conn) = rustls::ServerConnection::new(config) else {
+                    return;
+                };
+                let mut tls = rustls::Stream::new(&mut conn, &mut stream);
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match tls.read(&mut chunk) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{INFO}",
+                    INFO.len()
+                );
+                let _ = tls.write_all(answer.as_bytes());
+                let _ = tls.flush();
+                tls.conn.send_close_notify();
+                let _ = tls.flush();
+            });
+        }
+    });
+    (port, der)
+}
+
+/// The dialog of an unknown issuer against a real TLS server: "Trust this
+/// certificate" pins the certificate the server shows, closes the dialog
+/// and runs its follow-up (Account & Sync: sync now; the wizard: the
+/// account step).
+#[gpui::test]
+fn a_kept_pin_closes_the_dialog_and_goes_on(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let core = ui.core(cx);
+    core.sync_set_system_roots_for_test(Vec::new());
+    let (port, der) = tls_server();
+    let origin = format!("https://localhost:{port}");
+    let problem = match core.sync_server_check(&origin).expect("check") {
+        shellpp_core::service::ServerCheck::Certificate { problem, .. } => problem,
+        other => panic!("expected the trust choice, got {other:?}"),
+    };
+    let went_on = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = went_on.clone();
+    let state = ui.state.clone();
+    let shown = origin.clone();
+    cx.update_window(ui.handle, move |_, window, cx| {
+        let done: trust::Trusted = std::rc::Rc::new(move |_, _, _| flag.set(true));
+        trust::open_trust(state, shown, problem, done, window, cx)
+    })
+    .unwrap();
+    ui.settle(cx);
+    ui.click("sync-pin", cx);
+    ui.settle(cx);
+    assert!(went_on.get(), "the follow-up ran");
+    assert!(!ui.visible("sync-trust", cx), "the dialog closed");
+    assert_eq!(
+        core.sync_server_trust_info(&origin).expect("info"),
+        ServerTrust::Pinned {
+            sha256: shellpp_core::sync::tls::sha256(&der)
+        }
+    );
+
+    // The wizard's step goes on to the account step.
+    let other = tls_server();
+    let origin = format!("https://localhost:{}", other.0);
+    let problem = match core.sync_server_check(&origin).expect("check") {
+        shellpp_core::service::ServerCheck::Certificate { problem, .. } => problem,
+        other => panic!("expected the trust choice, got {other:?}"),
+    };
+    let state = ui.state.clone();
+    let dialog = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_connect(state, false, window, cx)
+        })
+        .unwrap();
+    dialog.update(cx, |dialog, cx| dialog.show_trust(origin, problem, cx));
+    ui.settle(cx);
+    ui.click("sync-pin", cx);
+    ui.settle(cx);
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step.clone()),
+        super::ConnectStep::Account
+    );
+    ui.finish(cx);
+}
+
+/// A pin of another certificate than the one the server shows now (it
+/// changed after the dialog opened) is not kept: the dialog stays open on
+/// what the server shows now, says so, and the follow-up does not run.
+#[gpui::test]
+fn a_choice_the_server_refuses_keeps_nothing(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let core = ui.core(cx);
+    core.sync_set_system_roots_for_test(Vec::new());
+    let (port, der) = tls_server();
+    let origin = format!("https://localhost:{port}");
+    let went_on = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = went_on.clone();
+    let state = ui.state.clone();
+    let shown = origin.clone();
+    let panel = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            let done: trust::Trusted = std::rc::Rc::new(move |_, _, _| flag.set(true));
+            trust::open_trust(
+                state,
+                shown,
+                TlsProblem::UnknownIssuer(info(9)),
+                done,
+                window,
+                cx,
+            )
+        })
+        .unwrap();
+    ui.settle(cx);
+    ui.click("sync-pin", cx);
+    ui.settle(cx);
+    assert!(!went_on.get());
+    assert!(ui.visible("sync-trust", cx) && ui.visible("sync-error", cx));
+    let now = panel.read_with(cx, |panel, _| panel.problem.clone());
+    match now {
+        TlsProblem::UnknownIssuer(info) => {
+            assert_eq!(info.sha256, shellpp_core::sync::tls::sha256(&der));
+        }
+        other => panic!("expected what the server shows now, got {other:?}"),
+    }
+    assert_eq!(
+        core.sync_server_trust_info(&origin).expect("info"),
+        ServerTrust::System,
+        "nothing kept"
+    );
+    ui.finish(cx);
+}

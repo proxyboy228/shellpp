@@ -38,6 +38,9 @@ pub const TRUST_ROW_PINNED: &str = "Pinned certificate";
 pub const TRUST_ROW_CA: &str = "Your CA";
 pub const CERTIFICATE_CHANGED_ROW: &str =
     "The server's certificate changed. Sync is stopped until you review it.";
+pub const CERTIFICATE_REVIEW: &str = "Review certificate…";
+pub const TRUST_WAS_TRUSTED: &str = "Until now this server's certificate was trusted. An unannounced change can mean an attack: if you did not change the certificate, do not continue.";
+pub const RECOVERY_CERTIFICATE: &str = "The server's certificate is not accepted. Check it and press Restore again, or recover only this device.";
 pub const CERTIFICATE_REFUSED_ROW: &str =
     "The server's certificate is not trusted. Sync is stopped until you review it.";
 pub const TRUST_REFUSED_EXPIRED: &str = "The certificate has expired or is not valid yet. Shell++ does not connect to it, even when trusted.";
