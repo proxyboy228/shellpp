@@ -430,6 +430,12 @@ pre-commit run --all-files
   file path or one specific pattern, and explain in the pull request
   description why the finding is not a secret. Do not add broad allowlist
   entries such as whole directories or generic patterns.
+- **False positive in a commit already pushed** (CI flags history that can
+  no longer change): add the finding's fingerprint
+  (`<commit>:<file>:<rule>:<line>`, printed by
+  `gitleaks git --redact --verbose`) to `.gitleaksignore`, under a comment
+  that says what the value is, never the value itself (docs/decisions.md,
+  D203).
 
 Never use `git commit --no-verify` to skip the hook.
 

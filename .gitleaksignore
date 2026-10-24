@@ -1,0 +1,28 @@
+# gitleaks findings reviewed as false positives (docs/decisions.md, D203).
+# Each entry is the fingerprint <commit>:<file>:<rule>:<line> of a finding in
+# a commit already in main, whose history does not change. It covers that
+# commit's line only: the same text added again later is a new finding and is
+# reviewed again. Comments say what the value is, never the value.
+
+# The line-break test of the recovery key dialog: a random key in the format
+# of a real one, made like the screenshots' keys (run 9), bound to no account.
+53ac243cdbea53234e47ecf1e00c1650bbf5e9af:apps/desktop/src/sync_ui/key_tests.rs:generic-api-key:453
+
+# The autocomplete tests that a token is never suggested: "ghp_" and a run of
+# the alphabet, whose GitHub checksum does not hold.
+0aafa82febe510ad59f0cb4c01a492dfc129223d:apps/desktop/src/terminal/autocomplete.rs:github-pat:263
+0aafa82febe510ad59f0cb4c01a492dfc129223d:apps/desktop/src/terminal/tests.rs:github-pat:1524
+
+# SHELLPP_SERVER_SECRET in the configuration unit test: the base64 of a run of
+# ASCII digits and letters.
+73870cfc2fb8fb4f230d17d18e2eb894f086b3f6:server/src/config.rs:generic-api-key:239
+
+# The parser fuzzing seeds: the dictionary of PEM armor lines, and a PEM block
+# of 48 bytes cut from the start of an RSA key (the version and part of the
+# modulus, which is public; no private part).
+0a3557120d549cf9e2f6a5913a762a97d3062db7:crates/core/tests/fuzz_parsers.rs:private-key:76
+0a3557120d549cf9e2f6a5913a762a97d3062db7:crates/core/tests/fuzz_parsers.rs:private-key:183
+
+# Doc comments naming the PEM armor lines of the key formats.
+3d4df05924b472fe0551c7cdc12b13c00989a0e3:crates/core/src/keys/convert.rs:private-key:31
+3d4df05924b472fe0551c7cdc12b13c00989a0e3:crates/core/src/keys/convert.rs:private-key:35

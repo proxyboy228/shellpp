@@ -2243,3 +2243,26 @@ Status: owner decision, 2026-10-24 (plan of run 11, section 2; ROADMAP 5, the tw
 - The superfluous copies of (2) are accepted: the owner has no bound devices yet, so no device signed out before this version.
 
 **Spec impact:** docs/architecture.md, sections 9.1 and 9.2; docs/security.md, section 14.4; ROADMAP 5.
+
+### 203. False positives of the secret scan in pushed commits are ignored by fingerprint
+
+Status: owner request, 2026-10-24 (the Secret scan workflow red on GitHub since the push of f92b48e).
+
+**Context.** The Secret scan workflow (gitleaks 8.30.1, `.gitleaks.toml`, the full history) passed last on 5425f9c and failed on every push since f92b48e. gitleaks 8.30.1 in Docker with the same configuration finds the same 9 findings (8 fingerprints) in commits after 5425f9c, over 5425f9c..main and over the whole history alike, and nothing before. None is a secret:
+
+| File | Commit | Rule | What it is |
+|---|---|---|---|
+| `apps/desktop/src/sync_ui/key_tests.rs` | 53ac243 | generic-api-key | the line-break test of the recovery key dialog: a random key in the format of a real one, made like the screenshots' keys (run 9), bound to no account |
+| `apps/desktop/src/terminal/autocomplete.rs`, `apps/desktop/src/terminal/tests.rs` | 0aafa82 | github-pat | the tests that a token is never suggested: `ghp_` and a run of the alphabet, whose GitHub checksum does not hold |
+| `server/src/config.rs` | 73870cf | generic-api-key (twice, one line) | `SHELLPP_SERVER_SECRET` in the configuration unit test: the base64 of a run of ASCII digits and letters |
+| `crates/core/tests/fuzz_parsers.rs` | 0a35571 | private-key (2) | parser fuzzing seeds: the dictionary of PEM armor lines, and a PEM block of 48 bytes cut from the start of an RSA key (the version and part of the public modulus) |
+| `crates/core/src/keys/convert.rs` | 3d4df05 | private-key (2) | doc comments naming the PEM armor lines of the key formats |
+
+The commits are in main, which moves fast-forward only, so they stay in the history the release scans. An allowlist entry in `.gitleaks.toml` would need either the values themselves in its regexes or a path alone, which allows every future finding in the file.
+
+**Decision:**
+
+- The 8 fingerprints (`<commit>:<file>:<rule>:<line>`) go to `.gitleaksignore` at the root, which gitleaks reads by itself, each group under a comment saying what the value is; the values are written nowhere. A fingerprint covers that commit's line only: the same text added again in a later commit is a new finding and is reviewed again.
+- `.gitleaksignore` is for false positives in commits already pushed. A finding in a change not yet pushed is fixed in the change (a test secret made at run time, ROADMAP 7.11) or gets a narrow allowlist entry in `.gitleaks.toml`, as before. A real secret is never ignored: it is removed and rotated.
+
+**Spec impact:** CONTRIBUTING.md, "If the hook flags something"; docs/security.md, section 16.
