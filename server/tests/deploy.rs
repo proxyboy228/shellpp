@@ -6,7 +6,7 @@
 //! deletes files older than its retention. Run 9: the encrypted backup
 //! recipe of the README end to end (docs/sync-protocol.md, section 12),
 //! a failing dump that leaves no backup, and the compose file's trusted
-//! proxy, server secret and backup image (D176, D177, D178).
+//! proxy, server secret and backup image (D176, D177).
 //!
 //! Runs with `SHELLPP_TEST_DEPLOY=docker` (Docker running, network for the
 //! images); otherwise it returns at once. Every container and network it
@@ -361,7 +361,7 @@ fn server_image() -> &'static str {
     "shellpp-server:test"
 }
 
-/// The backup image of the compose file (D178), built once per process.
+/// The backup image of the compose file (D176), built once per process.
 fn backup_image() -> &'static str {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
@@ -419,7 +419,7 @@ fn backups_in(dir: &Path) -> Vec<String> {
     names
 }
 
-/// D178 (run 8's agent C, S7): with `pipefail`, a dump that fails makes
+/// D176 (run 8's agent C, S7): with `pipefail`, a dump that fails makes
 /// the backup fail and leaves no file that looks like a backup (no
 /// `.sql.age`, no `.part`), and nothing is pruned, so an old backup stays.
 /// Before, age encrypted the empty output of the failed dump and the script
@@ -752,7 +752,7 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
     drop(cleanup);
 }
 
-/// The compose file as Compose reads it (D176, D177, D178): the server
+/// The compose file as Compose reads it (D176, D177): the server
 /// trusts exactly the gateway of the project's network, the same value as
 /// `.env.example`; the server secret comes from the Docker secret and only
 /// `server` gets it; the backup service runs the image built from
