@@ -146,11 +146,21 @@ fn print_line(line: &str) {
     println!("{line}");
 }
 
+/// The heap count of soak runs (dev-tools; `shellpp_desktop::dev::heap`).
+#[cfg(feature = "dev-tools")]
+#[global_allocator]
+static ALLOCATOR: shellpp_desktop::dev::heap::Counting = shellpp_desktop::dev::heap::Counting;
+
 fn main() -> ExitCode {
     // The start of the cold start measurement (dev-tools,
     // `SHELLPP_BENCH_STARTUP=1`, scripts/measure-startup.ps1).
     #[cfg(feature = "dev-tools")]
     shellpp_desktop::dev::startup::mark_start();
+    // A soak run counts the heap from here; other runs leave the count off.
+    #[cfg(feature = "dev-tools")]
+    if std::env::args_os().any(|arg| arg == "--soak") {
+        shellpp_desktop::dev::heap::enable();
+    }
     // `--bench-sessions N`, `--bench-output`, `--bench-latency` (dev-tools):
     // their own arguments and run, see `shellpp_desktop::dev::bench`.
     #[cfg(feature = "dev-tools")]

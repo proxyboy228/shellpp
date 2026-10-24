@@ -46,6 +46,8 @@ const BLOB_BYTES: usize = 1024 * 1024;
 const SFTP_SIZES: [usize; 3] = [16 * 1024, 1024 * 1024, 8 * 1024 * 1024];
 /// On russh, each tab gets `seq` again this often.
 const RUSSH_SEQ_EVERY: Duration = Duration::from_secs(3);
+/// The heap line (`bench: soak heap ...`) comes this often.
+const HEAP_EVERY: Duration = Duration::from_secs(5);
 
 /// What the load threads count.
 #[derive(Default)]
@@ -95,26 +97,32 @@ pub async fn run(
     let stop = Arc::new(AtomicBool::new(false));
     let counts = Arc::new(Counts::default());
     let mut threads = Vec::new();
-    // `SHELLPP_SOAK_LOAD=tabs` or `forward`: that part of the load only, to
-    // find what grows; all of it by default. `direct`: the downloads go to
-    // the run's own server without the forwards (russh only): what the run
-    // itself costs.
+    // `SHELLPP_SOAK_LOAD=tabs`, `forward` or `sftp` (OpenSSH): that part of
+    // the load only, to find what grows; all of it by default. `direct`: the
+    // downloads go to the run's own server without the forwards (russh
+    // only): what the run itself costs.
     let only = std::env::var("SHELLPP_SOAK_LOAD").unwrap_or_default();
     let direct = only == "direct" && !real_shell;
-    let tabs_load = only != "forward" && !direct;
-    let forward_load = only != "tabs";
+    let tabs_load = matches!(only.as_str(), "" | "tabs");
+    let forward_load = !matches!(only.as_str(), "tabs" | "sftp");
+    let sftp_load = matches!(only.as_str(), "" | "sftp");
 
     // The HTTP server behind the forwards, then the output of every tab.
     let http_port = if real_shell {
-        type_line(
-            &handles[0],
-            &format!(
-                "mkdir -p ~/soak-www && head -c {BLOB_BYTES} /dev/urandom > ~/soak-www/blob && \
-                 busybox httpd -p 127.0.0.1:{HTTP_PORT} -h ~/soak-www && echo httpd-started"
-            ),
-        );
-        sleep(cx, Duration::from_secs(2)).await;
+        if forward_load {
+            type_line(
+                &handles[0],
+                &format!(
+                    "mkdir -p ~/soak-www && head -c {BLOB_BYTES} /dev/urandom > ~/soak-www/blob && \
+                     busybox httpd -p 127.0.0.1:{HTTP_PORT} -h ~/soak-www && echo httpd-started"
+                ),
+            );
+            sleep(cx, Duration::from_secs(2)).await;
+        }
         for (index, handle) in handles.iter().enumerate() {
+            if !tabs_load {
+                break;
+            }
             if index >= TABS - HTOP_TABS {
                 type_line(handle, "htop -d 10");
             } else {
@@ -171,7 +179,7 @@ pub async fn run(
 
     // The SFTP connection (OpenSSH only).
     let mut sftp_session = None;
-    if real_shell {
+    if real_shell && sftp_load {
         let opened = cx
             .update(|cx| {
                 crate::sessions::ui::manager(cx).map(|manager| manager.open_sftp(target.clone()))
@@ -190,7 +198,7 @@ pub async fn run(
         };
         threads.push(sftp_thread(sftp, stop.clone(), counts.clone())?);
         sftp_session = Some(opened);
-    } else {
+    } else if !real_shell {
         say("soak sftp skipped: the russh test server has no SFTP");
     }
 
@@ -224,7 +232,18 @@ pub async fn run(
     let end = started + Duration::from_secs(minutes * 60);
     let mut minute = 0;
     let mut next_seq = Instant::now();
+    let mut next_heap = Instant::now();
     while Instant::now() < end {
+        // The Rust heap beside the process's numbers the script reads
+        // (`dev::heap`): live bytes now and their peak since the last line.
+        if Instant::now() >= next_heap {
+            say(&format!(
+                "soak heap live {} peak {}",
+                super::heap::live(),
+                super::heap::take_peak()
+            ));
+            next_heap += HEAP_EVERY;
+        }
         if !real_shell && tabs_load && Instant::now() >= next_seq {
             for handle in &handles {
                 type_line(handle, "seq 1 20000");
@@ -262,6 +281,12 @@ pub async fn run(
     }
     if let Some(opened) = sftp_session {
         opened.handle.close();
+    }
+    // With SHELLPP_HEAP_TRACE=1: where the large allocations were made.
+    for (count, largest, frames) in super::heap::sites().into_iter().take(20) {
+        say(&format!(
+            "soak heap site {count} x up to {largest} bytes: {frames}"
+        ));
     }
     say("ready");
     Ok(())

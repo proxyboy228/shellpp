@@ -2309,3 +2309,19 @@ Status: run 12 (plan, section 3.1). Amends D90 for VS16; D92 (no mode 2027, blan
 - **vttest at 132 columns** gets its screenshot state, `terminal-vttest-132`: test 1 again after Return, at 132 columns.
 
 **Spec impact:** docs/compatibility.md, section 2.
+
+### 207. The soak compares windows and counts the Rust heap; the SFTP engine holds little memory (run 12)
+
+Status: run 12 (plan, section 3.2; ROADMAP 2.4).
+
+**Context.** Run 11 saw private bytes swing by 30–110 MB for 5–15 seconds under the soak's full load on OpenSSH, not on the russh soak (no SFTP there), took SFTP for the cause, and `scripts\soak.ps1` read such a swing in its last sample as growth (minute 15 against the last sample: 199.8 → 251 MB, +26 %). A spike of 498 MB came once at the start of a russh soak.
+
+**Decision:**
+
+- `crates/ssh/tests/sftp_memory.rs` measures the heap an SFTP transfer holds with a counting allocator, against OpenSSH: files of the soak's sizes (16 KB, 1 MB, 8 MB) up and down hold at most 2.5 MiB above what was live before (the 2 MiB in flight and the copy buffer); the test fails above 16 MiB. With `SHELLPP_SFTP_MEMORY=1` it prints where allocations of 512 KiB and more are made.
+- Builds with `dev-tools` count the Rust heap through their global allocator (`apps/desktop/src/dev/heap.rs`), switched on only for `--soak`; the soak prints the live bytes and their peak every 5 seconds, and `scripts\soak.ps1` records them beside the process's numbers (`-SampleSeconds`), so a swing can be told to be the heap's or not. `SHELLPP_HEAP_TRACE=1` notes the places of allocations of 1 MiB and more. `-Load` runs one part of the load (`tabs`, `forward`, `sftp`).
+- The summary compares windows, not samples: the first window after the warm-up with the last window of the run; memory by each window's lowest value, handles and threads by the median. On run 11's samples it reports −1.2 % (no false alarm); a real growth of 15 % is caught.
+- What the soak of run 12 found (25 minutes of the SFTP load alone, then 5 minutes of the whole load, samples every 5 seconds): with SFTP alone private bytes stay at 177.7–180.5 MB and the heap at 35–36 MB, so SFTP is not the saw-tooth's source (run 11 concluded it by elimination). Under the whole load the swings of private bytes (219 → 423, 260–316, 328–349 MB) are the heap's own (57 → 249, 91–130, 167 MB live), and no allocation of 1 MiB or more makes them. They are the scrollback design of D85 and D99: while output floods a tab, its grid keeps full-width rows (24 bytes a cell, about 3.6 KB a row at 150 columns) and gives them to the compact journal only after a pause of 100 ms or every 2 seconds, up to the 10 000 lines of the scrollback (about 36 MB a tab). Seven tabs running `seq 1 20000` in a loop reach +100–190 MB for seconds, which goes back at each compaction; nothing grows. The spike at the start of a russh soak (498 MB) is the same, larger: that run types `seq 1 20000` into all ten tabs at once. Not changed: compacting by row count during a flood brings back the churn that made a flood a quarter slower (D99); a bound on the full rows, measured with `scripts\measure-terminal.ps1`, is for the owner to weigh (run 12 report).
+
+**Spec impact:** none (test and measurement tools); ROADMAP 2.4.
+

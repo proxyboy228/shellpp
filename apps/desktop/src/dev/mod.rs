@@ -26,6 +26,7 @@ pub mod bench;
 mod bench_pty;
 mod bench_run;
 pub mod demo;
+pub mod heap;
 #[cfg(feature = "screenshots")]
 pub mod screenshots;
 mod soak;

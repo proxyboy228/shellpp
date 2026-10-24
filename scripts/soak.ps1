@@ -13,18 +13,35 @@
   and again, the forwards to an HTTP server of the run, no SFTP and no htop
   (that server has neither).
 
-  Every -SampleMinutes, from the moment the load runs: the app's working
-  set and private bytes, its handle and thread counts, whether its window
-  is minimized (D53: a minimized window draws no frames), and the run's own
-  counts, into target\soak\soak.csv. At the end: target\soak\soak.png (a
-  chart of the four values) and target\soak\soak-summary.txt (the growth of
-  each value from the 15-minute sample to the last one; above 10 % is
-  marked).
+  Every -SampleMinutes (or -SampleSeconds), from the moment the load runs:
+  the app's working set and private bytes, its handle and thread counts,
+  whether its window is minimized (D53: a minimized window draws no
+  frames), the Rust heap the app counts (live bytes and their peak since
+  the sample before, `bench: soak heap`, run 12) and the run's own counts,
+  into target\soak\soak.csv. At the end: target\soak\soak.png (a chart of
+  four values) and target\soak\soak-summary.txt.
+
+  The summary compares windows, not single samples (run 12: under the SFTP
+  load private bytes swing by up to 110 MB for seconds, and one sample
+  that met a swing read as growth): the first window after the warm-up
+  (-WarmupMinutes) with the last window of the run, each -WindowMinutes
+  long. Memory (working set, private bytes, heap) is compared by the lowest
+  value of each window, handles and threads by the median. Growth above
+  10 % is marked and the script exits with 2.
+
+  -Analyze <soak.csv> only writes the summary of an earlier run's samples.
+
+  -Load passes SHELLPP_SOAK_LOAD to the app: tabs, forward or sftp
+  (OpenSSH) runs that part of the load only.
 
   The container is removed at the end. Docker Desktop must be running.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\soak.ps1 -Minutes 120
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\soak.ps1 -Minutes 30 -SampleSeconds 5 -Load sftp
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\soak.ps1 -Analyze docs\overnight\run11-soak\soak.csv
 #>
 param(
     # Length of the load.
@@ -33,6 +50,20 @@ param(
     # A sample every so many minutes (and at the start and the end).
     [ValidateRange(1, 60)]
     [int] $SampleMinutes = 5,
+    # A sample every so many seconds instead (0: -SampleMinutes).
+    [ValidateRange(0, 3600)]
+    [int] $SampleSeconds = 0,
+    # The minutes before the first window of the summary.
+    [ValidateRange(0, 600)]
+    [int] $WarmupMinutes = 15,
+    # The length of the summary's windows.
+    [ValidateRange(1, 600)]
+    [int] $WindowMinutes = 10,
+    # One part of the load only (SHELLPP_SOAK_LOAD): tabs, forward, sftp.
+    [ValidateSet('', 'tabs', 'forward', 'sftp', 'direct')]
+    [string] $Load = '',
+    # Only the summary of this soak.csv of an earlier run.
+    [string] $Analyze,
     # Output folder; default <repo>\target\soak.
     [string] $OutDir,
     # The SSH server: OpenSSH in Docker, the russh test server, or OpenSSH
@@ -57,6 +88,69 @@ $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 function Fail([string] $message) {
     Write-Host "soak: $message" -ForegroundColor Red
     exit 1
+}
+
+# A number of soak.csv, written with this machine's decimal comma or point.
+function ConvertTo-Number($value) {
+    if ($null -eq $value -or "$value" -eq '') { return $null }
+    return [double]::Parse(("$value" -replace ',', '.'), [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+# The lowest value or the median of a window's samples.
+function Get-WindowValue([double[]] $values, [string] $how) {
+    $sorted = @($values | Sort-Object)
+    if ($sorted.Count -eq 0) { return $null }
+    if ($how -eq 'min') { return $sorted[0] }
+    $middle = [math]::Floor($sorted.Count / 2)
+    if ($sorted.Count % 2 -eq 1) { return $sorted[$middle] }
+    return ($sorted[$middle - 1] + $sorted[$middle]) / 2
+}
+
+# The window comparison of the summary: lines, and the values that grew
+# above 10 %.
+function Get-Growth($samples) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    $grew = @()
+    $lastMinute = (ConvertTo-Number $samples[$samples.Count - 1].Minute)
+    $warmup = [math]::Min([double]$WarmupMinutes, $lastMinute / 4)
+    $window = [math]::Min([double]$WindowMinutes, ($lastMinute - $warmup) / 2)
+    if ($window -le 0) {
+        $lines.Add('The run is too short for two windows: no growth to compare.')
+        return @{ Lines = $lines; Grew = $grew }
+    }
+    $first = @($samples | Where-Object { $m = ConvertTo-Number $_.Minute; $m -ge $warmup -and $m -lt $warmup + $window })
+    $last = @($samples | Where-Object { (ConvertTo-Number $_.Minute) -ge $lastMinute - $window })
+    $lines.Add(("Windows: minutes {0:0.#}-{1:0.#} ({2} samples) and {3:0.#}-{4:0.#} ({5} samples); memory by the lowest value of each window, handles and threads by the median." -f
+        $warmup, ($warmup + $window), $first.Count, ($lastMinute - $window), $lastMinute, $last.Count))
+    $names = @('WorkingSetMB', 'PrivateMB', 'Handles', 'Threads')
+    if ($samples[0].PSObject.Properties.Name -contains 'HeapLiveMB') { $names += 'HeapLiveMB' }
+    foreach ($name in $names) {
+        $how = if ($name -in 'Handles', 'Threads') { 'median' } else { 'min' }
+        $fromValues = @($first | ForEach-Object { ConvertTo-Number $_.$name } | Where-Object { $null -ne $_ })
+        $toValues = @($last | ForEach-Object { ConvertTo-Number $_.$name } | Where-Object { $null -ne $_ })
+        if ($fromValues.Count -eq 0 -or $toValues.Count -eq 0) { continue }
+        $from = Get-WindowValue $fromValues $how
+        $to = Get-WindowValue $toValues $how
+        $percent = if ($from -gt 0) { ($to - $from) / $from * 100 } else { 0 }
+        $mark = if ($percent -gt 10) { ' ABOVE 10 %' } else { '' }
+        if ($percent -gt 10) { $grew += $name }
+        $lines.Add(("- {0} ({1}): {2} -> {3} ({4:+0.0;-0.0;0.0} %){5}" -f $name, $how, $from, $to, $percent, $mark))
+    }
+    return @{ Lines = $lines; Grew = $grew }
+}
+
+if ($Analyze) {
+    if (-not (Test-Path -LiteralPath $Analyze)) { Fail "no $Analyze" }
+    $old = @(Import-Csv -LiteralPath $Analyze)
+    if ($old.Count -lt 2) { Fail "$Analyze has fewer than two samples" }
+    $growth = Get-Growth $old
+    Write-Host "soak: $Analyze, $($old.Count) samples"
+    $growth.Lines | ForEach-Object { Write-Host $_ }
+    if ($growth.Grew.Count -gt 0) {
+        Write-Host "soak: grew above 10 %: $($growth.Grew -join ', ')" -ForegroundColor Yellow
+        exit 2
+    }
+    exit 0
 }
 
 function Find-GitBash {
@@ -151,11 +245,15 @@ try {
     $info.EnvironmentVariables['APPDATA'] = (Join-Path $runDir 'appdata')
     $info.EnvironmentVariables['LOCALAPPDATA'] = (Join-Path $runDir 'localappdata')
     $info.EnvironmentVariables['SHELLPP_TEST_SSHD_EXE'] = $sshdExe
+    if ($Load) { $info.EnvironmentVariables['SHELLPP_SOAK_LOAD'] = $Load }
     $process = [System.Diagnostics.Process]::Start($info)
     $stderr = $process.StandardError.ReadToEndAsync()
     Write-Host "soak: app pid $($process.Id)"
 
     $counts = 'http 0 socks 0 http-failed 0 sftp 0 sftp-failed 0'
+    $heapLive = $null
+    $heapPeak = $null
+    $sampleEvery = if ($SampleSeconds -gt 0) { $SampleSeconds } else { $SampleMinutes * 60 }
     $loadStart = $null
     $nextSample = $null
     $nextCheck = Get-Date
@@ -179,6 +277,8 @@ try {
             Handles      = $process.HandleCount
             Threads      = $process.Threads.Count
             Minimized    = $minimized
+            HeapLiveMB   = $(if ($null -ne $heapLive) { [math]::Round($heapLive / 1MB, 1) })
+            HeapPeakMB   = $(if ($null -ne $heapPeak) { [math]::Round($heapPeak / 1MB, 1) })
             Http         = $values['Http']
             Socks        = $values['Socks']
             HttpFailed   = $values['HttpFailed']
@@ -186,6 +286,8 @@ try {
             SftpFailed   = $values['SftpFailed']
         }
         $samples.Add($row)
+        # The next sample's peak starts from the heap of now.
+        $script:heapPeak = $heapLive
         $samples | Export-Csv -LiteralPath $csv -NoTypeInformation -Encoding UTF8
         Write-Host ("soak: sample {0} min: working set {1} MB, private {2} MB, handles {3}, threads {4}{5}" -f
             $row.Minute, $row.WorkingSetMB, $row.PrivateMB, $row.Handles, $row.Threads, $(if ($minimized) { ', MINIMIZED' } else { '' }))
@@ -195,7 +297,11 @@ try {
         if ($pending.Wait(1000)) {
             $line = $pending.Result
             if ($null -eq $line) { $problem = "the app ended (code $(if ($process.HasExited) { $process.ExitCode } else { '?' }))"; break }
-            if ($line.StartsWith('bench: ')) { Write-Host "  $line" }
+            if ($line -match '^bench: soak heap live (\d+) peak (\d+)$') {
+                $heapLive = [double]$Matches[1]
+                $heapPeak = [math]::Max([double]$Matches[2], $(if ($null -ne $heapPeak) { $heapPeak } else { 0 }))
+            }
+            elseif ($line.StartsWith('bench: ')) { Write-Host "  $line" }
             if ($line -match '^bench: soak minute \d+ (.+)$') { $counts = $Matches[1] }
             if ($line -eq 'bench: soak load') {
                 $loadStart = Get-Date
@@ -218,7 +324,7 @@ try {
         }
         if ($loadStart -and (Get-Date) -ge $nextSample -and -not $ready) {
             Add-Sample ((Get-Date) - $loadStart).TotalMinutes
-            $nextSample = $nextSample.AddMinutes($SampleMinutes)
+            $nextSample = $nextSample.AddSeconds($sampleEvery)
         }
         if ($ready) {
             Add-Sample ((Get-Date) - $loadStart).TotalMinutes
@@ -256,34 +362,24 @@ finally {
 
 if ($samples.Count -eq 0) { Fail "no sample$(if ($problem) { ": $problem" })" }
 
-# The growth of each value from the 15-minute sample to the last one.
-$base = $samples | Where-Object { $_.Minute -ge 15 } | Select-Object -First 1
+# The growth: windows, not single samples (see the help).
+$base = $null
 $last = $samples[$samples.Count - 1]
 $lines = New-Object System.Collections.Generic.List[string]
 $serverName = if ($useOpenSsh) { 'OpenSSH in Docker' } else { 'russh test server (no SFTP, no htop)' }
-$lines.Add("Soak run: $Minutes min on $serverName, a sample every $SampleMinutes min, $($samples.Count) samples.")
+$every = if ($SampleSeconds -gt 0) { "$SampleSeconds s" } else { "$SampleMinutes min" }
+$loadName = if ($Load) { ", load: $Load only" } else { '' }
+$lines.Add("Soak run: $Minutes min on $serverName$loadName, a sample every $every, $($samples.Count) samples.")
 $lines.Add("Last counts: $counts")
 $lines.Add("The window was found minimized and shown again $restored times.")
 $lines.Add('')
-$lines.Add('| Minute | Working set, MB | Private, MB | Handles | Threads | Minimized |')
-$lines.Add('|---|---|---|---|---|---|')
-foreach ($s in $samples) { $lines.Add("| $($s.Minute) | $($s.WorkingSetMB) | $($s.PrivateMB) | $($s.Handles) | $($s.Threads) | $($s.Minimized) |") }
+$lines.Add('| Minute | Working set, MB | Private, MB | Handles | Threads | Minimized | Heap live, MB | Heap peak, MB |')
+$lines.Add('|---|---|---|---|---|---|---|---|')
+foreach ($s in $samples) { $lines.Add("| $($s.Minute) | $($s.WorkingSetMB) | $($s.PrivateMB) | $($s.Handles) | $($s.Threads) | $($s.Minimized) | $($s.HeapLiveMB) | $($s.HeapPeakMB) |") }
 $lines.Add('')
-$grew = @()
-if ($base -and $base -ne $last) {
-    $lines.Add("Growth from minute $($base.Minute) to minute $($last.Minute):")
-    foreach ($name in @('WorkingSetMB', 'PrivateMB', 'Handles', 'Threads')) {
-        $from = [double]$base.$name
-        $to = [double]$last.$name
-        $percent = if ($from -gt 0) { ($to - $from) / $from * 100 } else { 0 }
-        $mark = if ($percent -gt 10) { ' ABOVE 10 %' } else { '' }
-        if ($percent -gt 10) { $grew += $name }
-        $lines.Add(("- {0}: {1} -> {2} ({3:+0.0;-0.0;0.0} %){4}" -f $name, $from, $to, $percent, $mark))
-    }
-}
-else {
-    $lines.Add('No sample at 15 minutes or later: no growth to compare.')
-}
+$growth = Get-Growth $samples
+$growth.Lines | ForEach-Object { $lines.Add($_) }
+$grew = $growth.Grew
 if ($problem) { $lines.Add(''); $lines.Add("Problem: $problem") }
 $lines | Set-Content -LiteralPath $summary -Encoding UTF8
 $lines | ForEach-Object { Write-Host $_ }
