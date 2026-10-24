@@ -427,3 +427,19 @@ fn snippets_show_their_own_hint(cx: &mut TestAppContext) {
     assert!(!ui.visible("snippet-duplicates", cx));
     ui.finish(cx);
 }
+
+/// A delay of the server (`429`, D175) has its own text, not "Something
+/// went wrong": the user waits and tries again.
+#[test]
+fn a_rate_limited_answer_says_to_wait() {
+    let error = shellpp_core::CoreError::Sync(shellpp_core::sync::HttpError::Api {
+        status: 429,
+        code: "rate_limited".to_owned(),
+        details: serde_json::Map::new(),
+        retry_after: Some(2),
+    });
+    assert_eq!(
+        super::error_text(&error),
+        super::strings::ERROR_RATE_LIMITED
+    );
+}

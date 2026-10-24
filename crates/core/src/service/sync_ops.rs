@@ -1245,8 +1245,11 @@ impl Core {
         let response = match result {
             Ok(response) => response,
             Err(error) => {
-                // A wrong code keeps the ticket for another try.
-                if error.api_code() == Some(code::INVALID_TOTP) {
+                // A wrong code keeps the ticket for another try, and so does
+                // an answer to retry later (a TOTP delay, `429` with
+                // `Retry-After`, D175; a `5xx`; no answer): the ticket is
+                // still good, and the password need not be derived again.
+                if error.api_code() == Some(code::INVALID_TOTP) || error.retryable() {
                     self.inner().sync.pending = Some(pending);
                 }
                 return Err(error.into());

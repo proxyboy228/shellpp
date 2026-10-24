@@ -225,6 +225,7 @@ pub const ERROR_NETWORK: &str = "The server did not answer.";
 pub const ERROR_CREDENTIALS: &str = "Wrong email or password.";
 pub const ERROR_TOTP: &str = "Wrong code.";
 pub const ERROR_TICKET: &str = "The sign-in expired. Start again.";
+pub const ERROR_RATE_LIMITED: &str = "Too many attempts. Wait a little, then try again.";
 pub const ERROR_CLOSED: &str = "This server needs a valid invitation code.";
 pub const ERROR_TAKEN: &str = "An account with this email exists: sign in instead.";
 pub const ERROR_PASSWORD: &str = "This is not the master password of this device.";

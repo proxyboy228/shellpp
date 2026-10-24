@@ -69,6 +69,7 @@ pub fn error_text(error: &CoreError) -> &'static str {
             "invalid_credentials" => strings::ERROR_CREDENTIALS,
             "invalid_totp" => strings::ERROR_TOTP,
             "ticket_expired" => strings::ERROR_TICKET,
+            "rate_limited" => strings::ERROR_RATE_LIMITED,
             "registration_closed" => strings::ERROR_CLOSED,
             "email_taken" => strings::ERROR_TAKEN,
             "unsafe_kdf" | "weak_kdf_params" => strings::ERROR_KDF,
