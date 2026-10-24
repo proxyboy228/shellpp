@@ -759,7 +759,7 @@ Environment variables:
 | `SHELLPP_REGISTRATION` | `invite` | `open` or `invite`. Invitations only by default; open registration is the operator's choice (D93) |
 | `SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES` | unset (no limit) | storage limits per account: live records and their envelope bytes; `admin user quota` sets them per account. Off by default; set them on an open server. [decision] (D93) |
 | `SHELLPP_SMTP_URL`, `SHELLPP_SMTP_FROM` | unset | optional SMTP; without it only invitation links work and "verified" is hidden (D14) |
-| `SHELLPP_TRUSTED_PROXIES` | unset | CIDR list whose `X-Forwarded-For` header is trusted: the proxy that talks to the server (Caddy, or the `cloudflared` container) |
+| `SHELLPP_TRUSTED_PROXIES` | unset (compose: `172.16.88.1/32`) | CIDR list whose `X-Forwarded-For` header is trusted: the one address the proxy that talks to the server reaches it from; with the compose file and a proxy on the host, the gateway of the compose network ([decision] (D176)) |
 | `SHELLPP_TOMBSTONE_RETENTION_DAYS` | `90` | tombstone retention |
 | `SHELLPP_RATE_LIMIT_*` | see [sync-protocol.md](sync-protocol.md) | rate limit overrides |
 | `SHELLPP_LOG` | `info` | log level; logs carry user ids, never emails, keys, tokens or envelopes |

@@ -30,7 +30,10 @@ services:
       SHELLPP_PUBLIC_URL: ${SHELLPP_PUBLIC_URL:?set SHELLPP_PUBLIC_URL in .env}
       SHELLPP_SERVER_SECRET: ${SHELLPP_SERVER_SECRET:?set SHELLPP_SERVER_SECRET in .env}
       SHELLPP_REGISTRATION: ${SHELLPP_REGISTRATION:-invite}
-      SHELLPP_TRUSTED_PROXIES: ${SHELLPP_TRUSTED_PROXIES:-}
+      # The gateway of the network below: a proxy on the host reaches the
+      # server through the published port from there (README, "Client
+      # addresses"). Nothing else is believed in X-Forwarded-For.
+      SHELLPP_TRUSTED_PROXIES: ${SHELLPP_TRUSTED_PROXIES:-172.16.88.1/32}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +67,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+networks:
+  default:
+    # A fixed subnet, so the gateway SHELLPP_TRUSTED_PROXIES names is known.
+    # If it is taken on your machine, change both here and in .env.
+    ipam:
+      config:
+        - subnet: 172.16.88.0/24
+          gateway: 172.16.88.1
 
 volumes:
   postgres:

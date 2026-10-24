@@ -1866,3 +1866,17 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.2; the run 7 report, section 10
 - What it gives: from one network 4 codes an hour; from many networks without a recent right code, at most 15 an hour once the soft limit is at its cap (about 33 % success in a year of a lasting attack with the password known, against 65 %), while no try waits longer than 4 minutes because of failures elsewhere. Every TOTP check runs inside the transaction that locks the user row (SQLite: one writer; PostgreSQL: `FOR UPDATE`, also in the recovery now), so two codes of one account are not checked against the counters at the same moment.
 
 **Spec impact:** docs/sync-protocol.md, section 10.1 (the TOTP row and the paragraph after the table).
+
+### 176. The compose file trusts exactly the gateway of its own network (run 9)
+
+Status: run 9 decision, 2026-10-24 (the plan of run 9, section 3.4; run 8's agent C, finding S6). Uses the client address rules of D103.
+
+**Context.** The server README told a homelab with the compose file to set `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` for a proxy on the host. Docker hands a connection to a published port to the container from the gateway of the container's network (checked on Docker Desktop: the peer is the gateway, as an IPv4-mapped address), so `127.0.0.1` never matched: the server ignored `X-Forwarded-For` and put every client into the gateway's one bucket of the sign-in limits (20 a minute for everyone) and, with D175, of the TOTP delays. `.env.example` had `172.16.0.0/12` instead, which works but believes the header from anything in a /12.
+
+**Decision:**
+
+- The compose file gives its default network a fixed subnet, `172.16.88.0/24` with the gateway `172.16.88.1` (outside the pools Docker hands out by default, 172.17–172.31 and 192.168), and the server's default `SHELLPP_TRUSTED_PROXIES` is `172.16.88.1/32`, as in `.env.example`: exactly the address a proxy on the host (Caddy, `cloudflared`) reaches the server from, and only that. Containers of the project (PostgreSQL, the backup) reach the server from their own addresses and are not believed. A proxy container in the project gets a fixed address on that network and is trusted instead. Both addresses change together when the subnet is taken.
+- The README explains this in a section of its own ("Client addresses"), and its Access sections point to it instead of naming `127.0.0.1/32`; the guide (EN and RU), security.md, section 14.4, and architecture.md say the same.
+- The server keeps the rules of D103: the header is read only when the peer is trusted, from the right, past trusted hops; from any other peer it is ignored, so neither the sign-in limits nor the TOTP delays can be dodged by naming another address.
+
+**Spec impact:** none in the protocol (docs/sync-protocol.md, section 10.1 already says it); server/README.md, server/deploy/docker-compose.yml and .env.example, docs/security.md, section 14.4, docs/architecture.md (environment variables), docs/guide/06-sync.md and docs/guide/ru/06-sync.md.

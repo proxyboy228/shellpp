@@ -438,3 +438,74 @@ fn another_client_waits_at_most_the_soft_delay_of_the_account() {
     );
     assert_delayed(&disable, 1..=8);
 }
+
+// ---------------------------------------------------------------------------
+// Client addresses behind a proxy (D103, D176)
+// ---------------------------------------------------------------------------
+
+/// `X-Forwarded-For` names the client only when the peer is a trusted
+/// proxy. From any other peer the header is ignored, so a client cannot
+/// dodge its TOTP delay by naming another address in it.
+#[test]
+fn a_forged_forwarded_address_does_not_dodge_the_totp_delay() {
+    let limits = RateLimits {
+        totp_free_failures: 1,
+        totp_soft_failures: 1_000,
+        ..RateLimits::generous()
+    };
+    // The tests connect from 127.0.0.1; only 10.0.0.0/8 is trusted here.
+    let server = Server::with(Options {
+        trusted_proxies: vec![Cidr::parse("10.0.0.0/8").unwrap()],
+        rate_limits: limits,
+        ..Options::default()
+    });
+    let (email, auth_key, secret) = with_totp(&server);
+    let ticket = login_ticket(&server, &email, &auth_key);
+    assert_wrong(&totp(&server, &ticket, &wrong(&secret), ATTACKER));
+    // Another address in the header: the same client, still delayed.
+    for forged in [USER, "203.0.113.9, 192.0.2.77", "10.0.0.1"] {
+        assert_delayed(&totp(&server, &ticket, &wrong(&secret), forged), 1..=2);
+    }
+    // With the peer trusted, the header names the client (and the same
+    // forged header would now be believed, which is why only the proxy in
+    // front of the server may be trusted).
+    let trusting = proxied(limits);
+    let (email, auth_key, secret) = with_totp(&trusting);
+    let ticket = login_ticket(&trusting, &email, &auth_key);
+    assert_wrong(&totp(&trusting, &ticket, &wrong(&secret), ATTACKER));
+    assert_wrong(&totp(&trusting, &ticket, &wrong(&secret), USER));
+}
+
+/// The per-address limit of the auth endpoints (20 a minute, burst 10,
+/// here a burst of 3) keys an untrusted peer by its own address whatever
+/// `X-Forwarded-For` says, and a trusted proxy's clients each by theirs.
+#[test]
+fn the_auth_limit_keys_clients_by_the_trusted_forwarded_address_only() {
+    let limits = RateLimits {
+        auth_burst: 3,
+        auth_per_minute: 1,
+        ..RateLimits::generous()
+    };
+    let prelogin = |server: &Server, forwarded: &str| {
+        post(
+            server,
+            "/v1/auth/prelogin",
+            &[("x-forwarded-for", forwarded)],
+            json!({"email": "someone@example.com"}),
+        )
+        .status
+    };
+    let untrusted = Server::with(Options {
+        rate_limits: limits,
+        ..Options::default()
+    });
+    let statuses: Vec<u16> = (0..4)
+        .map(|i| prelogin(&untrusted, &format!("198.51.100.{i}")))
+        .collect();
+    assert_eq!(statuses, [200, 200, 200, 429], "one bucket: the peer");
+    let trusting = proxied(limits);
+    let statuses: Vec<u16> = (0..4)
+        .map(|i| prelogin(&trusting, &format!("198.51.100.{i}")))
+        .collect();
+    assert_eq!(statuses, [200, 200, 200, 200], "a bucket per client");
+}

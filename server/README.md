@@ -37,6 +37,8 @@ Fill in `.env`:
   another machine with `age-keygen -o shellpp-backup.key`. Keep the private
   key away from the server.
 - `SHELLPP_REGISTRATION`: `invite` (default) or `open`.
+- `SHELLPP_TRUSTED_PROXIES`: keep `172.16.88.1/32` (see "Client addresses"
+  below).
 
 Start it:
 
@@ -105,8 +107,8 @@ caddy run --config server/deploy/Caddyfile.example --adapter caddyfile
 ```
 
 Caddy gets and renews the certificate; the app trusts it through your
-system's roots, nothing to confirm. Set `SHELLPP_TRUSTED_PROXIES` to the
-address Caddy connects from (`127.0.0.1/32` on the host).
+system's roots, nothing to confirm. `SHELLPP_TRUSTED_PROXIES`: see
+"Client addresses" below.
 
 ### 2. Cloudflare Tunnel
 
@@ -121,7 +123,8 @@ Put the tunnel's id and credentials file into
 `deploy/cloudflared.example.yml` and run
 `cloudflared tunnel --config deploy/cloudflared.example.yml run`.
 Cloudflare terminates TLS (it sees the encrypted envelopes and your
-devices' metadata, never plaintext). `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32`.
+devices' metadata, never plaintext). `SHELLPP_TRUSTED_PROXIES`: see
+"Client addresses" below.
 
 ### 3. Only over your VPN, with an internal CA
 
@@ -139,6 +142,27 @@ fingerprint until you confirm it. To avoid that, trust Caddy's root
 instead: the root is in Caddy's data directory
 (`pki/authorities/local/root.crt`); the app accepts it as a CA added for
 this one address.
+
+### Client addresses
+
+The rate limits (failed sign-ins, the delays of two-step codes) count per
+client address. Behind a proxy every request reaches the server from the
+proxy, which names the client in `X-Forwarded-For`; the server believes
+that header only from `SHELLPP_TRUSTED_PROXIES`, and from nobody else.
+
+- A proxy on the host (Caddy, `cloudflared`) connects to `127.0.0.1:8080`;
+  Docker hands the connection to the server from the gateway of the compose
+  network, `172.16.88.1`, not from `127.0.0.1`. Keep
+  `SHELLPP_TRUSTED_PROXIES=172.16.88.1/32`. With `127.0.0.1/32` every client
+  would share the proxy's address and one budget of sign-ins.
+- A proxy container in the compose project: give it a fixed address on the
+  `default` network (`ipv4_address: 172.16.88.10`) and trust that address
+  instead.
+- If `172.16.88.0/24` is taken on your machine, change the subnet in
+  `docker-compose.yml` and the address in `.env` together.
+
+Never trust a whole range such as `172.16.0.0/12`: anything inside it could
+name any client address and step around the limits.
 
 ## Backups
 
@@ -200,7 +224,8 @@ server refuses to run on a schema older than itself.
 | `SHELLPP_SERVER_SECRET` | required | base64, at least 32 bytes |
 | `SHELLPP_BIND` | `127.0.0.1:8080` (image: `0.0.0.0:8080`) | |
 | `SHELLPP_REGISTRATION` | `invite` | or `open` |
-| `SHELLPP_TRUSTED_PROXIES` | none | CIDRs whose `X-Forwarded-For` is believed |
+| `SHELLPP_TRUSTED_PROXIES` | none (compose: `172.16.88.1/32`) | CIDRs whose `X-Forwarded-For` is believed ("Client addresses") |
+| `SHELLPP_RATE_LIMIT_*` | see `docs/sync-protocol.md`, section 10.1 | rate limit overrides |
 | `SHELLPP_QUOTA_MAX_RECORDS`, `SHELLPP_QUOTA_MAX_BYTES` | no limit | per account |
 | `SHELLPP_TOMBSTONE_RETENTION_DAYS` | 90 | |
 

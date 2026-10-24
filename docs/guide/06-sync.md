@@ -56,7 +56,7 @@ Fill in `.env` (all commands below run in `server/deploy`):
 | `SHELLPP_SERVER_SECRET` | `openssl rand -base64 48`. Keep a copy with your backup key: a restored server needs the same secret, or two-step sign-in has to be set up again for every account |
 | `BACKUP_AGE_RECIPIENT` | the public key of an `age` key pair made **on another machine** with `age-keygen -o shellpp-backup.key`; the private key never goes on the server |
 | `SHELLPP_REGISTRATION` | `invite` (the default: new accounts need a code from you) or `open` |
-| `SHELLPP_TRUSTED_PROXIES` | keep the value from `.env.example` (`172.16.0.0/12`): with the compose file, your proxy's connections reach the server from Docker's network. (`server/README.md` says `127.0.0.1/32` in its Access section; it only affects which client addresses the rate limits see.) |
+| `SHELLPP_TRUSTED_PROXIES` | keep the value from `.env.example` (`172.16.88.1/32`): with the compose file, a proxy on the host reaches the server from the gateway of the compose network, and only that address may name the client to the rate limits (`server/README.md`, "Client addresses") |
 
 Decide the server's address (`SHELLPP_PUBLIC_URL`) before you create the
 account, and type it the same way on every device (the same name and
