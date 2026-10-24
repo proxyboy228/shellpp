@@ -86,6 +86,13 @@ impl Rekey {
         head
     }
 
+    /// The wrapping key: HKDF of the file's `recording_key` in the new
+    /// vault, so that key itself seals only the file's chunks.
+    fn wrapping(vault_key: &crypto::Key32, file_id: Uuid) -> crypto::Key32 {
+        let recording_key = crypto::derive_recording_key(vault_key, &file_id);
+        crypto::hkdf32(&recording_key, crypto::labels::WRAP_RECORDING_REKEY, &[])
+    }
+
     fn aad(head: &[u8; REKEY_HEAD]) -> Vec<u8> {
         let mut aad = crypto::labels::WRAP_RECORDING_REKEY.to_vec();
         aad.extend_from_slice(head);
@@ -96,7 +103,7 @@ impl Rekey {
     /// current epoch.
     fn seal(file_id: Uuid, ring: &KeyRing, key: &crypto::Key32) -> Result<Vec<u8>, CoreError> {
         let head = Self::head(file_id, ring.vault_id(), ring.current_epoch());
-        let wrapping = crypto::derive_recording_key(ring.current_key(), &file_id);
+        let wrapping = Self::wrapping(ring.current_key(), file_id);
         let wrap = crypto::wrap_key(&wrapping, &Self::aad(&head), key)
             .map_err(|_| CoreError::Internal("recording rekey"))?;
         let mut bytes = head.to_vec();
@@ -128,7 +135,7 @@ impl Rekey {
         if self.vault_id != ring.vault_id() {
             return None;
         }
-        let wrapping = crypto::derive_recording_key(ring.key(self.epoch)?, &self.file_id);
+        let wrapping = Self::wrapping(ring.key(self.epoch)?, self.file_id);
         crypto::unwrap_key(&wrapping, &Self::aad(&self.head), &self.wrap).ok()
     }
 }
@@ -171,7 +178,11 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temp, path)
+        std::fs::rename(&temp, path)?;
+        match path.parent() {
+            Some(dir) => recording::sync_dir(dir),
+            None => Ok(()),
+        }
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
@@ -242,7 +253,15 @@ fn rekey_jobs(dir: &Path, ring: &KeyRing) -> (Vec<Job>, Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let rekey_file = entry.path();
-        if rekey_file.extension().and_then(|ext| ext.to_str()) != Some(REKEY_EXTENSION) {
+        let extension = rekey_file.extension().and_then(|ext| ext.to_str());
+        if extension.is_some_and(|ext| {
+            ext == "rekey-new" || ext.starts_with(&format!("{}-", recording::TEMP_EXTENSION))
+        }) {
+            // A temporary file a crash left (no other re-encryption runs).
+            stale.push(rekey_file);
+            continue;
+        }
+        if extension != Some(REKEY_EXTENSION) {
             continue;
         }
         let Some(rekey) = std::fs::read(&rekey_file)
@@ -257,7 +276,7 @@ fn rekey_jobs(dir: &Path, ring: &KeyRing) -> (Vec<Job>, Vec<PathBuf>) {
             Some(header) => header.vault_id == ring.vault_id(),
             // Gone (deleted with its log entry); a file that is there but
             // does not parse keeps its key.
-            None => !path.exists(),
+            None => matches!(path.try_exists(), Ok(false)),
         };
         if done {
             stale.push(rekey_file);
@@ -313,9 +332,13 @@ impl Core {
     /// Re-encrypts the recordings that a merge at sign-in left under an
     /// earlier personal vault's key (storage-format.md 8.4): after the merge
     /// and at every unlock, so an interrupted re-encryption continues.
-    /// Files still being written are left for the next run. The files are
-    /// read and written without the core's lock.
+    /// Files still being written are left for the next run. Only the list
+    /// of jobs is made under the core's lock; the files are re-encrypted
+    /// without it, one run at a time, and a lock stops the run.
     pub(super) fn recordings_resume(&self) {
+        let Ok(_running) = self.rekeying.try_lock() else {
+            return; // Another run goes through the same files.
+        };
         let (jobs, stale) = {
             let mut guard = self.inner();
             let Ok(parts) = parts(&mut guard) else {
@@ -331,6 +354,9 @@ impl Core {
         }
         let mut done = 0usize;
         for job in jobs {
+            if self.inner().session.is_none() {
+                break; // Locked: the keys are gone from the session too.
+            }
             if self.open_recordings.contains(&job.header.file_id) {
                 continue;
             }

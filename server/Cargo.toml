@@ -70,7 +70,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 [dev-dependencies]
 # The end-to-end tests: two clients of the real sync client against this
 # server in the same process (docs/architecture.md, section 9.1).
-shellpp-core = { path = "../crates/core" }
+shellpp-core = { path = "../crates/core", features = ["test-hooks"] }
 tempfile = "3.27.0"
 secrecy = { version = "0.10.3", features = ["serde"] }
 # Requests to the router in-process (`ServiceExt::oneshot`): the body limit

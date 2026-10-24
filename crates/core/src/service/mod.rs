@@ -138,6 +138,8 @@ pub struct Core {
     sync_guard: Mutex<()>,
     /// The recordings being written now (`recordings.rs`).
     open_recordings: crate::recording::OpenFiles,
+    /// One re-encryption of recordings at a time (`recordings.rs`).
+    rekeying: Mutex<()>,
 }
 
 impl fmt::Debug for Core {
@@ -198,6 +200,7 @@ impl Core {
             remember: Mutex::new(()),
             sync_guard: Mutex::new(()),
             open_recordings: crate::recording::OpenFiles::default(),
+            rekeying: Mutex::new(()),
         })
     }
 

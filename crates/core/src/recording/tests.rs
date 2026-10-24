@@ -208,3 +208,81 @@ fn a_recording_stops_at_its_size_limit() {
     assert!(written < 4 * CHUNK, "{written}");
     assert!(written >= 2 * CHUNK - 4096, "{written}");
 }
+
+/// Storage-format 8.4: a re-encryption keeps the plaintext and the chunk
+/// boundaries, a closed file whose final chunk is empty, an unclosed file
+/// (no final chunk) and a torn last fragment alike.
+#[test]
+fn a_re_encryption_keeps_every_chunk_and_what_was_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let new_key = Key32::from_bytes([9u8; 32]);
+    let line = "y".repeat(CHUNK);
+    let cases: [(&str, bool, u64); 4] = [
+        ("closed", true, 0),
+        ("one line per chunk", true, 0),
+        ("unclosed", false, 0),
+        ("torn", false, 40),
+    ];
+    for (name, finish, torn) in cases {
+        let header = header();
+        let text = if name == "one line per chunk" {
+            &line[..CHUNK - 1]
+        } else {
+            &line[..1000]
+        };
+        let events: Vec<(f64, &[u8])> = (0..70).map(|i| (f64::from(i), text.as_bytes())).collect();
+        let mut bytes = write(dir.path(), &header, &events, finish);
+        let path = dir.path().join(format!("{}.{EXTENSION}", header.file_id));
+        if torn > 0 {
+            bytes.extend(std::iter::repeat_n(0xA5, torn as usize));
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        let before = read(&bytes, |_| Some(key())).unwrap();
+        let target = Header::new(header.file_id, Uuid::now_v7(), 1).unwrap();
+        rekey_file(&path, &key(), &target, &new_key).unwrap();
+        let after_bytes = std::fs::read(&path).unwrap();
+        assert!(
+            read(&after_bytes, |_| Some(key())).is_err(),
+            "{name}: old key"
+        );
+        let after = read(&after_bytes, |_| Some(new_key.duplicate())).unwrap();
+        assert_eq!(after.header, target, "{name}");
+        assert_eq!(
+            (after.size, &after.events, after.complete),
+            (before.size, &before.events, before.complete),
+            "{name}"
+        );
+        assert_eq!(
+            after_bytes.len() as u64,
+            bytes.len() as u64 - torn,
+            "{name}"
+        );
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) != Some(EXTENSION))
+            .collect();
+        assert!(left.is_empty(), "{name}: temporary files");
+    }
+}
+
+/// A whole chunk that does not open leaves the file as it was.
+#[test]
+fn a_re_encryption_never_touches_a_damaged_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let header = header();
+    let text = "z".repeat(1000);
+    let events: Vec<(f64, &[u8])> = (0..70).map(|i| (f64::from(i), text.as_bytes())).collect();
+    let mut bytes = write(dir.path(), &header, &events, true);
+    bytes[HEADER_LEN + 10] ^= 1;
+    let path = dir.path().join(format!("{}.{EXTENSION}", header.file_id));
+    std::fs::write(&path, &bytes).unwrap();
+    let target = Header::new(header.file_id, Uuid::now_v7(), 1).unwrap();
+    let new_key = Key32::from_bytes([9u8; 32]);
+    assert!(matches!(
+        rekey_file(&path, &key(), &target, &new_key),
+        Err(RecordingError::Damaged)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}

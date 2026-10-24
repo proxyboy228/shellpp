@@ -108,8 +108,8 @@ fn recordings_survive_a_failed_re_encryption_and_finish_at_the_next_start() {
     let local_password: SecretString = new_password();
     let l = Client::local("L", &local_password);
     l.host("local.example.com");
-    // One recording of more than one chunk, cut after its first chunk as a
-    // crash leaves it (no final chunk: "incomplete").
+    // One recording of more than one chunk, cut inside its second chunk as
+    // a full disk leaves it (a torn fragment, no final chunk: "incomplete").
     let long_line = "x".repeat(1000);
     let long: Vec<&str> = (0..100).map(|_| long_line.as_str()).collect();
     let cut = record(&l, "cut.example.com", &long);
@@ -119,7 +119,7 @@ fn recordings_survive_a_failed_re_encryption_and_finish_at_the_next_start() {
         .write(true)
         .open(&cut_path)
         .expect("open");
-    file.set_len(recording::HEADER_LEN as u64 + frame)
+    file.set_len(recording::HEADER_LEN as u64 + frame + 100)
         .expect("cut");
     drop(file);
     let small = record(
@@ -133,10 +133,9 @@ fn recordings_survive_a_failed_re_encryption_and_finish_at_the_next_start() {
     assert!(before_small.2);
     let old_vault = header_of(&cut_path).vault_id;
 
-    // A failure in the middle: the cut recording cannot be written beside
-    // itself (a directory holds its temporary name).
-    let obstacle = cut_path.with_extension("reencrypt");
-    std::fs::create_dir(&obstacle).expect("obstacle");
+    // A failure in the middle: the cut recording cannot be written (as with
+    // a full disk), the other one can.
+    recording::fail_rekey::once(cut);
     done(l.sign_in(&server, &email, &password));
     let account_vault = l.vault_id();
     assert_ne!(account_vault, old_vault);
@@ -155,7 +154,6 @@ fn recordings_survive_a_failed_re_encryption_and_finish_at_the_next_start() {
     assert_eq!(rekey_files(&l), 1);
 
     // The next start finishes it.
-    std::fs::remove_dir(&obstacle).expect("obstacle removed");
     let l = l.reopen("L");
     l.core.unlock(password.clone()).expect("unlocked");
     assert_eq!(header_of(&cut_path).vault_id, account_vault);
