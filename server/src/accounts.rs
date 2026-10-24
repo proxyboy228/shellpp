@@ -47,13 +47,13 @@ fn rate_limited(seconds: u64) -> ApiError {
 
 /// Checks `current_auth_key` of a known user from the client at `ip`,
 /// counting the attempt for the email and network until it passed and a
-/// failure for the email (section 10.1; D174, D178). Called by
+/// failure for the email (section 10.1; D174, D185). Called by
 /// [`check_current_auth_key`], outside any transaction.
 fn check_auth_key(shared: &Shared, user: &User, key: &[u8], ip: IpAddr) -> ApiResult<()> {
     // A signed-in request is past the sign-in: the soft limit of the email,
     // which someone who knows only the email feeds, does not hold it, and
     // its failures (a holder of a token) count in its own network's window
-    // only (D178, review finding).
+    // only (D185, review finding).
     shared
         .limiters
         .signin_attempt(&user.email, ip, false)
@@ -192,7 +192,7 @@ pub fn check_sign_in(
     // A device of the account (its id, which only the account's devices
     // know, not revoked) is not held by the soft limit of the email, so
     // the owner's devices sign in again whatever someone who knows only
-    // the email does (D178, review finding).
+    // the email does (D185, review finding).
     let (user, own_device) = shared.db.tx(TxKind::Read, |tx| -> ApiResult<_> {
         let user = user_by_email(tx, &email)?;
         let own_device = match &user {

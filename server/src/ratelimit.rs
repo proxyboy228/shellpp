@@ -441,7 +441,7 @@ impl TotpDelays {
     }
 }
 
-/// The longest soft delay of failed sign-ins of one email (D178): the
+/// The longest soft delay of failed sign-ins of one email (D185): the
 /// longest one try waits because of failures from other networks.
 pub const SIGNIN_SOFT_MAX_DELAY: Duration = Duration::from_secs(4 * 60);
 /// A network a successful sign-in of the email came from stays known this
@@ -451,7 +451,7 @@ pub const SIGNIN_KNOWN_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const SIGNIN_KNOWN_MAX: usize = 8;
 
 /// The soft limit of failed sign-ins (and `current_auth_key` checks and
-/// recoveries) of one email from every network together (D178): after
+/// recoveries) of one email from every network together (D185): after
 /// the free failures, 2 seconds doubling up to [`SIGNIN_SOFT_MAX_DELAY`];
 /// it never holds a network a successful sign-in of the email came from in
 /// the last 30 days. Keyed by the email's SHA-256; in memory only.
@@ -561,7 +561,7 @@ pub struct Limiters {
     push_device: DefaultKeyedRateLimiter<Uuid>,
     /// Keyed by normalized email, known or not (section 10.1).
     pub failures: FailureWindows<([u8; 32], IpAddr)>,
-    /// The soft limit of failed sign-ins per email (D178).
+    /// The soft limit of failed sign-ins per email (D185).
     pub signin_soft: SigninSoft,
     /// The TOTP delays, per account and client network and per account.
     pub totp: TotpDelays,
@@ -646,7 +646,7 @@ impl Limiters {
         self.push_device.check_key(&device).map_err(wait_seconds)
     }
 
-    /// Before a sign-in or an auth key check for `email` from `ip` (D178):
+    /// Before a sign-in or an auth key check for `email` from `ip` (D185):
     /// the soft delay of the email, then the window of the email on that
     /// network, which counts the try as a failure until
     /// [`Self::signin_succeeded`] takes it back (D174).
@@ -1042,7 +1042,7 @@ mod tests {
         limiters.auth("2001:db8:0:2::1".parse().unwrap()).unwrap();
     }
 
-    /// D178: the soft delay of an email holds every network but the ones
+    /// D185: the soft delay of an email holds every network but the ones
     /// a successful sign-in came from, and never passes 4 minutes.
     #[test]
     fn the_soft_signin_limit_spares_known_networks_and_stays_below_4_minutes() {

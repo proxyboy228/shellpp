@@ -1851,7 +1851,7 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.1; the run 7 report, section 10
   - The failure windows keep an email as its SHA-256 (32 bytes, and no email in memory) and hold at most 100,000 keys: past that, ended windows go first, then the oldest down to half. The per-address limit of the auth endpoints keys an IPv6 client by its /64, as the bearer-token window does.
   - At most 64 requests wait for an Argon2id slot, each at most 20 seconds; one more, or one that waited too long, is answered `429 rate_limited` with `Retry-After: 5` instead of holding its body in memory while it waits.
   - The write of a signed-in request checks its session again: an access token of its family on its device, the device not revoked and the account not disabled; else `401 unauthenticated` and nothing changes. A device revoked or an account disabled between the check and the write no longer lets the request through.
-- `/account/password` and `/account/recovery-key` kept their check inside the transaction until the merge of the run; then they moved to the same helper (D178). The new verifiers of password changes, email changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
+- `/account/password` and `/account/recovery-key` kept their check inside the transaction until the merge of the run; then they moved to the same helper (D185). The new verifiers of password changes, email changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
 
 **Spec impact:** docs/sync-protocol.md, section 4.4 (server rules).
 
@@ -2027,7 +2027,7 @@ Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5; run 8 agent
 
 **Spec impact:** docs/security.md, sections 8 and 11.2; docs/ui-behavior-spec.md, sections 3.1, 13.3 and 13.4 (and `docs/ru`); docs/data-model.md, section 16.1; the user guide, chapter 3 (and `docs/guide/ru`).
 
-### 178. Failed sign-ins: a window per email and network, and a soft limit per email (run 9)
+### 185. Failed sign-ins: a window per email and network, and a soft limit per email (run 9)
 
 Status: run 9 decision, 2026-10-24 (the cross review of run 9, theme 2, finding 3; D173, item 1.2, which rules full lockouts out for TOTP). Replaces the key of the failed sign-in row of docs/sync-protocol.md, section 10.1 (stage 0 decision: 10 failures per 15 minutes per email). Amends D174.
 

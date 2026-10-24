@@ -511,7 +511,7 @@ fn the_auth_limit_keys_clients_by_the_trusted_forwarded_address_only() {
 }
 
 // ---------------------------------------------------------------------------
-// Failed sign-ins per email and network (D178)
+// Failed sign-ins per email and network (D185)
 // ---------------------------------------------------------------------------
 
 fn login_from(server: &Server, email: &str, key: &[u8], ip: &str) -> RawAnswer {
@@ -527,7 +527,7 @@ fn login_from(server: &Server, email: &str, key: &[u8], ip: &str) -> RawAnswer {
     )
 }
 
-/// Cross review (D178): someone who knows only the email cannot lock the
+/// Cross review (D185): someone who knows only the email cannot lock the
 /// owner out. Ten wrong keys from one network close that network's window
 /// (15 minutes); the network the owner signed in from before still signs
 /// in at once, and a network never seen waits at most the soft delay of
@@ -560,7 +560,7 @@ fn wrong_keys_from_one_network_do_not_lock_the_owner_out() {
     assert_eq!(ok.status, 200, "{}", ok.body);
 }
 
-/// Review finding (D178): an attacker who takes every turn of the soft
+/// Review finding (D185): an attacker who takes every turn of the soft
 /// limit holds new networks, but never the account's own devices (a
 /// sign-in with the id of one of its devices) nor its signed-in requests.
 #[test]
