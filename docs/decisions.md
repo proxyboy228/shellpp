@@ -1833,3 +1833,21 @@ Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the 
    - The `wip/salvage-*` branches are kept.
 
 **Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
+
+### 187. The certificate dialogs of the sync server (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.3; D173, item 3). Implements the interface of docs/sync-protocol.md, section 2.1, and UI 12.2, 13.2 and 13.5, step 1, over the trust modes of D93.
+
+**Context.** The core had all three trust modes, but the app only pinned: the trust dialog existed only in the connect wizard, which a bound, signed-in device never opens, so a changed pin (every renewal of a pinned certificate) showed "Last error: certificate_changed" and was confirmed only by Sign out → Connect → Trust → Sign in (run 8, agent C, finding 6). "Add a CA" and "Use the system's trust" had no callers. The core itself never needed a new sign-in: the end-to-end test of this run passed on the unchanged core.
+
+**Decision:**
+
+- One certificate panel (`apps/desktop/src/sync_ui/trust.rs`) is the wizard's certificate step and a dialog of its own: the trust choice of an unknown issuer (server, subject, issuer, dates, the reason, the fingerprint as openssl prints it with the command that prints it on the server; "Trust this certificate", "Add a CA certificate…", Cancel), the changed certificate (the pinned and the new fingerprint side by side, whether the system trusts the new one, "Trust the new certificate", "Use the system's trust" only when it does, Cancel) and a refusal (expired, another name, any other TLS failure: the reason, Close).
+- "Add a CA certificate…" reads a PEM or DER file of at most 256 KiB and shows the CA's subject and fingerprint for confirmation ("Add this CA", Back).
+- Every choice goes through `Core::sync_server_trust_verified`: `GET /v1/server` under the new pin, CA or system trust, and the `server_tls` row is written only after that answer. A CA that did not issue the server's certificate (or one of the same name whose signature does not verify) leaves the choice open with "not issued by this CA"; a certificate for another name or out of its dates under the CA is refused with the reason; a pin of another certificate than the one the server shows is not kept. A kept choice changes only that row: account, tokens and records stay, so sync goes on without a new sign-in.
+- Account & Sync: a bound device whose last cycle ended with `certificate_changed` or `certificate_refused` (an added CA no longer validates) shows a warning row with "Review…", which asks the server again and opens the dialog with what it shows now (a problem that went away just syncs). Under the server address, a row shows the current trust ("Trusted by the system", "Pinned certificate" or "Your CA: <the CA's common name>", with the fingerprint); it only shows it (UI 12.2).
+- "Restore from sync" of the unlock screen (UI 13.2) opens the same dialog when the recovery stops at the certificate; the recovery runs again with Restore.
+- Cancel keeps sync stopped: the automatic cycles keep trying the handshake, which sends no request, so a server that shows the pinned certificate again syncs again by itself.
+- An added CA lives only in the verifier of its origin; nothing is written to the OS store, and SSH host keys never consult it. The system's trust of sync connections is the OS verifier, or a fixed root set in tests (`Core::sync_set_system_roots_for_test`, behind the `test-hooks` feature), so no test reads or changes the machine's store.
+
+**Spec impact:** docs/sync-protocol.md, section 2.1 (a choice is kept only after the server answers; a kept choice keeps the account signed in); docs/ui-behavior-spec.md, section 12.2 (the trust row only shows the trust; the refused certificate of an added CA; confirming goes on without signing in), and `docs/ru`; the user guide, chapter 6 (en, ru); `server/README.md`, access 3.

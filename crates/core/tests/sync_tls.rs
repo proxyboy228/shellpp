@@ -7,8 +7,8 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
@@ -61,13 +61,25 @@ fn sha256(der: &[u8]) -> [u8; 32] {
 }
 
 /// A TLS server on 127.0.0.1 answering `GET /v1/server`; counts the HTTP
-/// requests it actually received.
+/// requests it actually received. [`TlsServer::swap`] changes the
+/// certificate it shows (the same origin).
 struct TlsServer {
     port: u16,
     requests: Arc<AtomicUsize>,
+    config: Arc<Mutex<Arc<rustls::ServerConfig>>>,
 }
 
-fn serve(cert: &Cert) -> TlsServer {
+impl TlsServer {
+    fn origin(&self) -> String {
+        format!("https://localhost:{}", self.port)
+    }
+
+    fn swap(&self, cert: &Cert) {
+        *self.config.lock().unwrap() = server_config(cert);
+    }
+}
+
+fn server_config(cert: &Cert) -> Arc<rustls::ServerConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -78,7 +90,12 @@ fn serve(cert: &Cert) -> TlsServer {
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key.clone())),
         )
         .expect("server config");
-    let config = Arc::new(config);
+    Arc::new(config)
+}
+
+fn serve(cert: &Cert) -> TlsServer {
+    let config = Arc::new(Mutex::new(server_config(cert)));
+    let shown = config.clone();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let requests = Arc::new(AtomicUsize::new(0));
@@ -86,7 +103,7 @@ fn serve(cert: &Cert) -> TlsServer {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let config = config.clone();
+            let config = shown.lock().unwrap().clone();
             let counter = counter.clone();
             thread::spawn(move || {
                 let Ok(mut conn) = rustls::ServerConnection::new(config) else {
@@ -117,7 +134,11 @@ fn serve(cert: &Cert) -> TlsServer {
             });
         }
     });
-    TlsServer { port, requests }
+    TlsServer {
+        port,
+        requests,
+        config,
+    }
 }
 
 /// The TLS problem of a failed check, unboxed for matching.
@@ -285,4 +306,256 @@ fn plain_http_is_refused_for_any_host_but_loopback() {
             "{origin}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The trust dialogs' choices through the core (SP 2.1; UI 12.2, 13.5; D187)
+// ---------------------------------------------------------------------------
+
+mod common;
+
+use shellpp_core::service::{ServerCheck, ServerTrust, TrustChoice};
+use shellpp_core::sync::SystemRoots;
+
+/// A core of its own (nothing local needed for the server step) whose
+/// system's trust is an empty root set: the machine's store has no part.
+fn core() -> (common::Env, shellpp_core::Core) {
+    let env = common::Env::new();
+    let core = env.open();
+    core.sync_set_system_roots_for_test(Vec::new());
+    (env, core)
+}
+
+fn checked_problem(check: ServerCheck) -> TlsProblem {
+    match check {
+        ServerCheck::Certificate { problem, .. } => problem,
+        ServerCheck::Ready { .. } => panic!("expected a certificate problem"),
+    }
+}
+
+/// "Add a CA certificate…" in the refusal dialog: the server's certificate
+/// validates against the CA, so the CA is stored for the origin and the
+/// next check is ready; Account & Sync names the CA.
+#[test]
+fn a_ca_added_in_the_refusal_dialog_is_accepted() {
+    let (ca_der, issuer) = ca();
+    let server = serve(&leaf(&["localhost"], Some(&issuer), (-1, 30)));
+    let (_env, core) = core();
+    match checked_problem(core.sync_server_check(&server.origin()).expect("check")) {
+        TlsProblem::UnknownIssuer(_) => {}
+        other => panic!("expected an unknown issuer, got {other:?}"),
+    }
+    let check = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::Ca(ca_der.to_vec()))
+        .expect("verified");
+    assert!(matches!(check, ServerCheck::Ready { .. }), "{check:?}");
+    assert_eq!(
+        core.sync_server_trust_info(&server.origin()).expect("info"),
+        ServerTrust::Ca {
+            name: "Shell++ test CA".to_owned(),
+            sha256: sha256(&ca_der),
+        }
+    );
+    assert!(matches!(
+        core.sync_server_check(&server.origin()).expect("check"),
+        ServerCheck::Ready { .. }
+    ));
+}
+
+/// A CA whose chain names another host, or holds an expired certificate,
+/// or that did not issue the server's certificate, is not stored: the
+/// answer is the problem under that CA, and the origin keeps its trust.
+#[test]
+fn a_ca_is_not_stored_for_another_name_an_expired_chain_or_another_issuer() {
+    let (ca_der, issuer) = ca();
+    let (_, other_issuer) = ca();
+    let (_env, core) = core();
+    type Expected = fn(&TlsProblem) -> bool;
+    let cases: [(Cert, Expected); 3] = [
+        (leaf(&["sync.example.com"], Some(&issuer), (-1, 30)), |p| {
+            matches!(p, TlsProblem::WrongName(_))
+        }),
+        (leaf(&["localhost"], Some(&issuer), (-30, -1)), |p| {
+            matches!(p, TlsProblem::Expired(_))
+        }),
+        // Another CA of the same name: its signature does not verify.
+        (leaf(&["localhost"], Some(&other_issuer), (-1, 30)), |p| {
+            matches!(p, TlsProblem::Other(_))
+        }),
+    ];
+    for (cert, expected) in cases {
+        let server = serve(&cert);
+        let problem = checked_problem(
+            core.sync_server_trust_verified(&server.origin(), TrustChoice::Ca(ca_der.to_vec()))
+                .expect("verified"),
+        );
+        assert!(expected(&problem), "{problem:?}");
+        assert_eq!(
+            core.sync_server_trust_info(&server.origin()).expect("info"),
+            ServerTrust::System,
+            "nothing stored"
+        );
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    }
+    // A file that is no certificate is refused before any connection.
+    let server = serve(&leaf(&["localhost"], Some(&issuer), (-1, 30)));
+    let error = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::Ca(b"not a cert".to_vec()))
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            shellpp_core::CoreError::Sync(HttpError::Refused("not_a_certificate"))
+        ),
+        "{error:?}"
+    );
+}
+
+/// An added CA counts for its origin only: another origin served under the
+/// same CA is still an unknown issuer, and an SSH host key is still new to
+/// the app (TOFU): the CA has no part in it.
+#[test]
+fn an_added_ca_counts_for_its_origin_only_and_not_for_ssh() {
+    let (ca_der, issuer) = ca();
+    let first = serve(&leaf(&["localhost"], Some(&issuer), (-1, 30)));
+    let second = serve(&leaf(&["localhost"], Some(&issuer), (-1, 30)));
+    let unlocked = common::first_run();
+    let core = &unlocked.core;
+    core.sync_set_system_roots_for_test(Vec::new());
+    let check = core
+        .sync_server_trust_verified(&first.origin(), TrustChoice::Ca(ca_der.to_vec()))
+        .expect("verified");
+    assert!(matches!(check, ServerCheck::Ready { .. }));
+    match checked_problem(core.sync_server_check(&second.origin()).expect("check")) {
+        TlsProblem::UnknownIssuer(_) => {}
+        other => panic!("the CA reached another origin: {other:?}"),
+    }
+    let mut blob = [0u8; 51];
+    blob[..4].copy_from_slice(&11u32.to_be_bytes());
+    blob[4..15].copy_from_slice(b"ssh-ed25519");
+    blob[15..19].copy_from_slice(&32u32.to_be_bytes());
+    blob[19..].copy_from_slice(&shellpp_core::crypto::random_array::<32>().expect("random"));
+    let status = core
+        .known_host_check(&shellpp_core::service::host_api::HostKeyCheck {
+            address: "localhost".to_owned(),
+            port: first.port,
+            key_type: "ssh-ed25519".to_owned(),
+            public_key: data_encoding::BASE64.encode(&blob),
+        })
+        .expect("host key check");
+    assert_eq!(
+        status,
+        shellpp_core::service::host_api::HostKeyStatus::Unknown,
+        "an SSH host key is asked about as before"
+    );
+}
+
+/// The system's trust comes from the injected roots, never from the
+/// machine's store: a certificate under the injected CA is trusted, a
+/// self-signed one is not, and an empty set trusts nothing.
+#[test]
+fn the_systems_trust_comes_from_the_injected_roots() {
+    let (system_ca, system_issuer) = ca();
+    let trusted = serve(&leaf(&["localhost"], Some(&system_issuer), (-1, 30)));
+    let self_signed = serve(&leaf(&["localhost"], None, (-1, 30)));
+    let (_env, core) = core();
+    core.sync_set_system_roots_for_test(vec![system_ca.to_vec()]);
+    assert!(matches!(
+        core.sync_server_check(&trusted.origin()).expect("check"),
+        ServerCheck::Ready { .. }
+    ));
+    assert!(matches!(
+        checked_problem(
+            core.sync_server_check(&self_signed.origin())
+                .expect("check")
+        ),
+        TlsProblem::UnknownIssuer(_)
+    ));
+    let empty = SystemRoots::Fixed(Arc::new(Vec::new()));
+    let api =
+        HttpApi::with_roots(&trusted.origin(), TrustMode::System, &empty, "0.7.0").expect("api");
+    assert!(matches!(
+        problem(api.server_info().map(|_| ())),
+        Some(TlsProblem::UnknownIssuer(_))
+    ));
+}
+
+/// The changed-certificate dialog (UI 12.2): "Trust the new certificate"
+/// pins the certificate the server shows, never another one; "Use the
+/// system's trust" removes the pin only when the system trusts the new
+/// certificate. A refused choice keeps the old pin and sends nothing.
+#[test]
+fn a_changed_pin_is_confirmed_by_a_new_pin_or_the_systems_trust() {
+    let (system_ca, system_issuer) = ca();
+    let pinned = leaf(&["localhost"], None, (-1, 30));
+    let server = serve(&pinned);
+    let (_env, core) = core();
+    core.sync_set_system_roots_for_test(vec![system_ca.to_vec()]);
+    core.sync_server_trust(&server.origin(), TrustChoice::Pin(sha256(&pinned.der)))
+        .expect("pinned");
+
+    // Another self-signed certificate: the system does not trust it.
+    let swapped = leaf(&["localhost"], None, (-1, 30));
+    server.swap(&swapped);
+    match checked_problem(core.sync_server_check(&server.origin()).expect("check")) {
+        TlsProblem::PinChanged {
+            pinned: old,
+            new,
+            system_trusts,
+        } => {
+            assert_eq!(old, sha256(&pinned.der));
+            assert_eq!(new.sha256, sha256(&swapped.der));
+            assert!(!system_trusts);
+        }
+        other => panic!("expected a changed pin, got {other:?}"),
+    }
+    let refused = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::System)
+        .expect("verified");
+    assert!(matches!(
+        checked_problem(refused),
+        TlsProblem::UnknownIssuer(_)
+    ));
+    let third = leaf(&["localhost"], None, (-1, 30));
+    let other_pin = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::Pin(sha256(&third.der)))
+        .expect("verified");
+    assert!(matches!(
+        checked_problem(other_pin),
+        TlsProblem::PinChanged { .. }
+    ));
+    assert_eq!(
+        core.sync_server_trust_info(&server.origin()).expect("info"),
+        ServerTrust::Pinned {
+            sha256: sha256(&pinned.der)
+        },
+        "a refused choice keeps the old pin"
+    );
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    let check = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::Pin(sha256(&swapped.der)))
+        .expect("verified");
+    assert!(matches!(check, ServerCheck::Ready { .. }));
+    assert_eq!(
+        core.sync_server_trust_info(&server.origin()).expect("info"),
+        ServerTrust::Pinned {
+            sha256: sha256(&swapped.der)
+        }
+    );
+
+    // A certificate the system trusts: "Use the system's trust".
+    let public = leaf(&["localhost"], Some(&system_issuer), (-1, 30));
+    server.swap(&public);
+    match checked_problem(core.sync_server_check(&server.origin()).expect("check")) {
+        TlsProblem::PinChanged { system_trusts, .. } => assert!(system_trusts),
+        other => panic!("expected a changed pin, got {other:?}"),
+    }
+    let check = core
+        .sync_server_trust_verified(&server.origin(), TrustChoice::System)
+        .expect("verified");
+    assert!(matches!(check, ServerCheck::Ready { .. }));
+    assert_eq!(
+        core.sync_server_trust_info(&server.origin()).expect("info"),
+        ServerTrust::System
+    );
 }

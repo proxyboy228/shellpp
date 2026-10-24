@@ -5,13 +5,21 @@
 //! roots). A refused certificate is described for the trust dialog; only an
 //! unknown issuer can be trusted, never an expired certificate or one for
 //! another name.
+//!
+//! The system's trust is the OS verifier, or for tests a fixed set of roots
+//! ([`SystemRoots::Fixed`]): no test reads or changes the machine's
+//! certificate store. An added CA lives only in the verifier of its origin;
+//! nothing here writes to the OS store.
 
 use std::sync::{Arc, Mutex};
 
+use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{CertificateError, DigitallySignedStruct, Error as TlsError, SignatureScheme};
+use rustls::{
+    CertificateError, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme,
+};
 use sha2::{Digest, Sha256};
 use x509_cert::der::Decode as _;
 
@@ -121,6 +129,98 @@ pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
 
+/// What stands for "the system's trust".
+#[derive(Clone, Debug, Default)]
+pub enum SystemRoots {
+    /// The OS verifier and its root store (the app).
+    #[default]
+    Platform,
+    /// These roots only, checked by webpki (tests: a throwaway CA stands for
+    /// a publicly trusted one, and the machine's store is never involved).
+    Fixed(Arc<Vec<CertificateDer<'static>>>),
+}
+
+/// A verifier that trusts nothing: a fixed set without roots.
+#[derive(Debug)]
+struct NoRoots(Arc<CryptoProvider>);
+
+impl ServerCertVerifier for NoRoots {
+    fn verify_server_cert(
+        &self,
+        _: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        Err(TlsError::InvalidCertificate(
+            CertificateError::UnknownIssuer,
+        ))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// The chain verifier of `roots`, plus `extra` (an added CA) when given.
+fn chain_verifier(
+    roots: &SystemRoots,
+    extra: Option<&[u8]>,
+    provider: &Arc<CryptoProvider>,
+) -> Result<Arc<dyn ServerCertVerifier>, TlsError> {
+    let extra = extra.map(|der| CertificateDer::from(der.to_vec()));
+    Ok(match roots {
+        SystemRoots::Platform => match extra {
+            Some(ca) => Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
+                [ca],
+                provider.clone(),
+            )?),
+            None => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
+        },
+        SystemRoots::Fixed(list) => {
+            let mut store = RootCertStore::empty();
+            for cert in list.iter().cloned().chain(extra) {
+                store.add(cert)?;
+            }
+            if store.is_empty() {
+                return Ok(Arc::new(NoRoots(provider.clone())));
+            }
+            WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone())
+                .build()
+                .map_err(|error| TlsError::General(error.to_string()))?
+        }
+    })
+}
+
 /// Shared between the verifier and the caller of a request: the last
 /// problem the verifier found.
 pub type Observation = Arc<Mutex<Option<TlsProblem>>>;
@@ -135,17 +235,17 @@ pub struct TrustVerifier {
 }
 
 impl TrustVerifier {
-    pub fn new(mode: TrustMode, observed: Observation) -> Result<Self, TlsError> {
+    pub fn new(
+        mode: TrustMode,
+        roots: &SystemRoots,
+        observed: Observation,
+    ) -> Result<Self, TlsError> {
         let provider = provider();
-        let system: Arc<dyn ServerCertVerifier> = match &mode {
-            TrustMode::Ca(der) => {
-                Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
-                    [CertificateDer::from(der.clone())],
-                    provider.clone(),
-                )?)
-            }
-            _ => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
+        let extra = match &mode {
+            TrustMode::Ca(der) => Some(der.as_slice()),
+            _ => None,
         };
+        let system = chain_verifier(roots, extra, &provider)?;
         Ok(Self {
             mode,
             system,
@@ -302,9 +402,10 @@ impl ServerCertVerifier for TrustVerifier {
 /// The rustls client configuration of one origin.
 pub fn client_config(
     mode: TrustMode,
+    roots: &SystemRoots,
     observed: Observation,
 ) -> Result<rustls::ClientConfig, TlsError> {
-    let verifier = Arc::new(TrustVerifier::new(mode, observed)?);
+    let verifier = Arc::new(TrustVerifier::new(mode, roots, observed)?);
     Ok(rustls::ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()?
         .dangerous()

@@ -139,6 +139,9 @@ getrandom.workspace = true
 shellpp-test-sshd.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "sync", "macros"] }
 tempfile.workspace = true
+# The certificate dialog tests read a CA made at run time (already in the
+# tree through the tests of shellpp-core).
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
 
 [lints]
 workspace = true

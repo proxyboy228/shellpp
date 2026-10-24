@@ -25,6 +25,9 @@ pub mod duplicates;
 pub mod strings;
 #[cfg(test)]
 mod tests;
+pub mod trust;
+#[cfg(test)]
+mod trust_tests;
 
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
@@ -41,9 +44,10 @@ use serde_json::{Map, Value};
 use shellpp_core::CoreError;
 use shellpp_core::service::{
     BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, ServerCheck, SignInInput,
-    SignInOutcome, SyncStatus, TrustChoice,
+    SignInOutcome, SyncStatus,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
+use trust::TrustPanel;
 
 use crate::hosts::controls::{ControlButton, ControlKind};
 use crate::panels::widgets;
@@ -146,6 +150,8 @@ pub struct ConnectDialog {
     invite: Entity<InputState>,
     totp: Entity<InputState>,
     pub step: ConnectStep,
+    /// The certificate step's panel (`ConnectStep::Trust`).
+    pub trust: Option<Entity<TrustPanel>>,
     origin: Option<String>,
     invite_only: bool,
     /// Create an account (else sign in); never at first run.
@@ -171,6 +177,7 @@ impl ConnectDialog {
             invite: cx.new(|cx| InputState::new(window, cx)),
             totp: cx.new(|cx| InputState::new(window, cx).placeholder("123456")),
             step: ConnectStep::Server,
+            trust: None,
             origin: None,
             invite_only: false,
             register: false,
@@ -218,8 +225,7 @@ impl ConnectDialog {
                         dialog.step = ConnectStep::Account;
                     }
                     Ok(ServerCheck::Certificate { origin, problem }) => {
-                        dialog.origin = Some(origin);
-                        dialog.step = ConnectStep::Trust(problem);
+                        return dialog.show_trust(origin, problem, cx);
                     }
                     Err(error) => return dialog.fail(&error, cx),
                 }
@@ -228,24 +234,32 @@ impl ConnectDialog {
         }));
     }
 
-    /// The trust dialog's "Trust this certificate": pin it, check again.
-    pub fn pin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(core), Some(origin)) = (self.state.read(cx).core().cloned(), self.origin.clone())
-        else {
-            return;
-        };
-        let sha256 = match &self.step {
-            ConnectStep::Trust(TlsProblem::UnknownIssuer(info)) => info.sha256,
-            ConnectStep::Trust(TlsProblem::PinChanged { new, .. }) => new.sha256,
-            _ => return,
-        };
-        if let Err(error) = core.sync_server_trust(&origin, TrustChoice::Pin(sha256)) {
-            return self.fail(&error, cx);
-        }
-        self.server
-            .update(cx, |input, cx| input.set_value(origin, window, cx));
-        self.step = ConnectStep::Server;
-        self.check(window, cx);
+    /// The certificate step (UI 13.5, step 1; SP 2.1): the trust choice or
+    /// the changed certificate. A kept choice goes on to the account step.
+    pub fn show_trust(&mut self, origin: String, problem: TlsProblem, cx: &mut Context<Self>) {
+        let wizard = cx.entity().downgrade();
+        let on_trusted: trust::Trusted = std::rc::Rc::new(move |check, _, cx| {
+            let _ = wizard.update(cx, |dialog, cx| {
+                if let ServerCheck::Ready {
+                    origin,
+                    invite_only,
+                    ..
+                } = check
+                {
+                    dialog.origin = Some(origin);
+                    dialog.invite_only = invite_only;
+                    dialog.trust = None;
+                    dialog.error = None;
+                    dialog.step = ConnectStep::Account;
+                    cx.notify();
+                }
+            });
+        });
+        let state = self.state.clone();
+        self.origin = Some(origin.clone());
+        self.trust = Some(cx.new(|_| TrustPanel::new(state, origin, problem.clone(), on_trusted)));
+        self.step = ConnectStep::Trust(problem);
+        cx.notify();
     }
 
     /// Step 2: sign in or register.
@@ -310,64 +324,12 @@ impl ConnectDialog {
 
     pub fn back(&mut self, cx: &mut Context<Self>) {
         self.error = None;
+        self.trust = None;
         self.step = match self.step {
             ConnectStep::Totp => ConnectStep::Account,
             _ => ConnectStep::Server,
         };
         cx.notify();
-    }
-
-    fn render_trust(&self, problem: &TlsProblem, cx: &mut Context<Self>) -> AnyElement {
-        let (text, info) = match problem {
-            TlsProblem::UnknownIssuer(info) => (strings::TRUST_UNKNOWN, Some(info)),
-            TlsProblem::PinChanged { new, .. } => (strings::TRUST_CHANGED, Some(new)),
-            TlsProblem::Expired(info) => (strings::TRUST_REFUSED_EXPIRED, Some(info)),
-            TlsProblem::WrongName(info) => (strings::TRUST_REFUSED_NAME, Some(info)),
-            TlsProblem::Other(_) => (strings::ERROR_NETWORK, None),
-        };
-        let mut body = v_flex()
-            .id("sync-trust")
-            .test_support()
-            .gap(metrics::SPACE_3)
-            .child(label(strings::TRUST_TITLE, cx))
-            .child(widgets::caption(text, cx));
-        if let Some(info) = info {
-            let row = |name: &'static str, value: String, cx: &App| {
-                v_flex()
-                    .gap(metrics::SPACE_1)
-                    .child(widgets::caption(name, cx))
-                    .child(
-                        div()
-                            .text_size(metrics::FONT_SIZE_BODY)
-                            .text_color(cx.theme().popover_foreground)
-                            .child(value),
-                    )
-            };
-            body = body
-                .child(row(strings::TRUST_SUBJECT, info.subject.clone(), cx))
-                .child(row(strings::TRUST_ISSUER, info.issuer.clone(), cx))
-                .child(row(
-                    strings::TRUST_VALID,
-                    format!("{} – {}", when(&info.not_before), when(&info.not_after)),
-                    cx,
-                ))
-                .child(
-                    v_flex()
-                        .id("sync-fingerprint")
-                        .test_support()
-                        .gap(metrics::SPACE_1)
-                        .child(widgets::caption(strings::TRUST_FINGERPRINT, cx))
-                        .child(
-                            div()
-                                .font_family(crate::terminal::fonts::JETBRAINS_MONO)
-                                .text_size(metrics::FONT_SIZE_CAPTION)
-                                .text_color(cx.theme().popover_foreground)
-                                // Two lines of 16 pairs: a pair never breaks.
-                                .children(fingerprint_lines(&info.sha256)),
-                        ),
-                );
-        }
-        body.into_any_element()
     }
 
     fn render_account(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -475,7 +437,10 @@ impl Render for ConnectDialog {
                 ))
                 .child(widgets::caption(strings::SERVER_HINT, cx))
                 .into_any_element(),
-            ConnectStep::Trust(problem) => self.render_trust(&problem, cx),
+            ConnectStep::Trust(_) => match &self.trust {
+                Some(panel) => panel.clone().into_any_element(),
+                None => div().into_any_element(),
+            },
             ConnectStep::Account => self.render_account(window, cx),
             ConnectStep::Totp => v_flex()
                 .id("sync-totp")
@@ -567,10 +532,15 @@ fn connect_footer(dialog: &Entity<ConnectDialog>, cx: &App) -> AnyElement {
                 strings::CHECK
             },
         ),
-        ConnectStep::Trust(TlsProblem::UnknownIssuer(_) | TlsProblem::PinChanged { .. }) => {
-            ("sync-pin", strings::TRUST_PIN)
+        // The certificate panel's own choices (none for a refusal).
+        ConnectStep::Trust(_) => {
+            let actions = this
+                .trust
+                .as_ref()
+                .map(|panel| TrustPanel::actions(panel, cx))
+                .unwrap_or_default();
+            return row.children(actions).into_any_element();
         }
-        ConnectStep::Trust(_) => return row.into_any_element(),
         ConnectStep::Account => (
             "sync-run",
             if busy {
@@ -591,7 +561,7 @@ fn connect_footer(dialog: &Entity<ConnectDialog>, cx: &App) -> AnyElement {
             .on_click(move |_, window, cx| {
                 let _ = handle.update(cx, |dialog, cx| match dialog.step {
                     ConnectStep::Server => dialog.check(window, cx),
-                    ConnectStep::Trust(_) => dialog.pin(window, cx),
+                    ConnectStep::Trust(_) => {}
                     ConnectStep::Account => dialog.run(window, cx),
                     ConnectStep::Totp => dialog.verify(window, cx),
                     ConnectStep::Done => {}
@@ -714,7 +684,14 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
                 .child(widgets::caption(
                     status.server_url.clone().unwrap_or_default(),
                     cx,
-                )),
+                ))
+                // How the certificate is trusted (UI 12.2; D187).
+                .children(
+                    status
+                        .server_url
+                        .as_deref()
+                        .and_then(|origin| trust::trust_row(state, origin, cx)),
+                ),
         )
         .child(
             div()
@@ -737,7 +714,30 @@ pub fn account_block(state: &Entity<AppState>, cx: &App) -> AnyElement {
             .child(text)
     };
     let rolled_back = status.last_error.as_deref() == Some("rolled_back");
-    if rolled_back {
+    // A changed or refused certificate stops sync (SP 2.1): its dialog.
+    let certificate = match status.last_error.as_deref() {
+        Some("certificate_changed") => Some(strings::CERTIFICATE_CHANGED_ROW),
+        Some("certificate_refused") => Some(strings::CERTIFICATE_REFUSED_ROW),
+        _ => None,
+    };
+    if let (Some(text), Some(origin)) = (certificate, status.server_url.clone()) {
+        let review = state.clone();
+        block = block.child(
+            v_flex()
+                .gap(metrics::SPACE_2)
+                .child(warning("sync-certificate-warning", text, cx))
+                .child(
+                    h_flex().child(
+                        ControlButton::new("sync-certificate-review", ControlKind::Neutral)
+                            .label(strings::REVIEW)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                trust::review(review.clone(), origin.clone(), window, cx);
+                            }),
+                    ),
+                ),
+        );
+    } else if rolled_back {
         block = block.child(warning("sync-rolled-back", strings::ROLLED_BACK, cx));
     } else if let Some(error) = &status.last_error
         && status.signed_in
@@ -2063,6 +2063,28 @@ impl RecoveryDialog {
                 dialog.busy = false;
                 match result {
                     Ok(_) => window.close_dialog(cx),
+                    // The certificate is checked as in the wizard (UI 13.2):
+                    // its dialog comes first; the recovery waits for it and
+                    // runs again with Restore.
+                    Err(CoreError::Sync(HttpError::Tls(problem))) => {
+                        let origin = dialog
+                            .state
+                            .read(cx)
+                            .core()
+                            .and_then(|core| core.sync_status().ok())
+                            .and_then(|status| status.server_url);
+                        if let Some(origin) = origin {
+                            let on_trusted: trust::Trusted = std::rc::Rc::new(|_, _, _| {});
+                            trust::open_trust(
+                                dialog.state.clone(),
+                                origin,
+                                *problem,
+                                on_trusted,
+                                window,
+                                cx,
+                            );
+                        }
+                    }
                     Err(error) => {
                         dialog.error = Some(match &error {
                             CoreError::InvalidRecoveryKey => strings::RECOVERY_KEY_WRONG,

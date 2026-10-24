@@ -536,7 +536,7 @@ fn secret(text: &str) -> Secret {
 }
 
 /// The trust mode stored for an origin.
-fn trust_of(store: &Store, origin: &str) -> Result<TrustMode, CoreError> {
+pub(super) fn trust_of(store: &Store, origin: &str) -> Result<TrustMode, CoreError> {
     Ok(match store.server_tls(origin)? {
         Some(row) if row.kind == TlsTrustKind::Pinned => TrustMode::Pinned(row.cert_sha256),
         Some(row) => match row.ca_der {
@@ -755,10 +755,17 @@ impl Core {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn api(&self, store: &Store, origin: &str) -> Result<HttpApi, CoreError> {
-        Ok(HttpApi::new(
+    pub(super) fn api(&self, store: &Store, origin: &str) -> Result<HttpApi, CoreError> {
+        self.api_with(origin, trust_of(store, origin)?)
+    }
+
+    /// A client of `origin` with `trust` (the trust dialog checks a choice
+    /// with it before storing it, `sync_trust.rs`).
+    pub(super) fn api_with(&self, origin: &str, trust: TrustMode) -> Result<HttpApi, CoreError> {
+        Ok(HttpApi::with_roots(
             origin,
-            trust_of(store, origin)?,
+            trust,
+            &self.system_roots(),
             &self.config.app_version,
         )?)
     }
@@ -789,6 +796,14 @@ impl Core {
     pub fn sync_server_check(&self, origin: &str) -> Result<ServerCheck, CoreError> {
         let origin = normalize_origin(origin).map_err(HttpError::from)?;
         let api = self.api(&self.inner().store, &origin)?;
+        Self::server_check_with(&api, origin)
+    }
+
+    /// `GET /v1/server` through `api`: ready, or the certificate problem.
+    pub(super) fn server_check_with(
+        api: &HttpApi,
+        origin: String,
+    ) -> Result<ServerCheck, CoreError> {
         match api.server_info() {
             Ok(info) => {
                 if !info.api_versions.iter().any(|version| version == "v1") {

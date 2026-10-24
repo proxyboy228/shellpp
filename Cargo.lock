@@ -8016,6 +8016,7 @@ dependencies = [
  "keyring",
  "libc",
  "qrcode",
+ "rcgen",
  "regex",
  "secrecy",
  "semver",

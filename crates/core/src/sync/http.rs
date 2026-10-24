@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use shellpp_sync_api::api::{self as wire, ErrorBody};
 use uuid::Uuid;
 
-use super::tls::{self, Observation, TlsProblem, TrustMode};
+use super::tls::{self, Observation, SystemRoots, TlsProblem, TrustMode};
 
 /// Connect timeout and whole-request timeout (section 2).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -175,9 +175,20 @@ impl std::fmt::Debug for HttpApi {
 impl HttpApi {
     /// A client for `origin` (normalized) with the given trust.
     pub fn new(origin: &str, trust: TrustMode, app_version: &str) -> Result<HttpApi, HttpError> {
+        Self::with_roots(origin, trust, &SystemRoots::Platform, app_version)
+    }
+
+    /// A client for `origin` whose "system's trust" is `roots` (tests use a
+    /// fixed set instead of the OS store).
+    pub fn with_roots(
+        origin: &str,
+        trust: TrustMode,
+        roots: &SystemRoots,
+        app_version: &str,
+    ) -> Result<HttpApi, HttpError> {
         let origin = normalize_origin(origin)?;
         let observed: Observation = Arc::new(Mutex::new(None));
-        let config = tls::client_config(trust, observed.clone())
+        let config = tls::client_config(trust, roots, observed.clone())
             .map_err(|error| HttpError::Tls(Box::new(TlsProblem::Other(error.to_string()))))?;
         let client = Client::builder()
             .use_preconfigured_tls(config)

@@ -378,6 +378,11 @@ pub enum ShotState {
     SyncDuplicates,
     /// The comparison of a sync conflict over the host card's badge.
     SyncConflict,
+    // Run 9, plan 3.3 (D187): `sync_trust_shot`.
+    /// The dialog of a changed pinned certificate the system trusts.
+    SyncCertificateChanged,
+    /// The confirmation of a CA file in the wizard's certificate step.
+    SyncTrustCa,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -527,7 +532,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 108] = [
+    pub const ALL: [Self; 110] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -603,6 +608,8 @@ impl ShotState {
         Self::HostsDuplicates,
         Self::SyncDuplicates,
         Self::SyncConflict,
+        Self::SyncCertificateChanged,
+        Self::SyncTrustCa,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -778,6 +785,8 @@ impl ShotState {
             Self::HostsDuplicates => "hosts-duplicates",
             Self::SyncDuplicates => "sync-duplicates",
             Self::SyncConflict => "sync-conflict",
+            Self::SyncCertificateChanged => "sync-certificate-changed",
+            Self::SyncTrustCa => "sync-trust-ca",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1933,6 +1942,9 @@ pub async fn reach_state(
         | ShotState::HostsDuplicates
         | ShotState::SyncConflict
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
+        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa => {
+            sync_trust_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2005,6 +2017,9 @@ pub fn check_state(
     }
     if run7_shot::STATES.contains(&shot_state) {
         return run7_shot::check(cx, handle, shot_state);
+    }
+    if sync_trust_shot::STATES.contains(&shot_state) {
+        return sync_trust_shot::check(cx, handle, shot_state);
     }
     if run6_shot::STATES.contains(&shot_state) {
         let state = cx.update(|cx| root.read(cx).state().clone());
@@ -2196,6 +2211,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::HostsDuplicates
             | ShotState::SyncConflict
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
+            ShotState::SyncCertificateChanged | ShotState::SyncTrustCa => {
+                Err("checked with the certificate screens")
+            }
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -2498,6 +2516,7 @@ mod run7_shot;
 mod sftp_shot;
 mod snippets_shot;
 mod stage9_shot;
+mod sync_trust_shot;
 mod terminal;
 mod transfer_shot;
 

@@ -11,7 +11,35 @@ pub const CLOSE: &str = "Close";
 
 pub const TRUST_TITLE: &str = "Check the server's certificate";
 pub const TRUST_UNKNOWN: &str = "This certificate is not issued by an authority your system trusts. Trust it only if the fingerprint matches your server's certificate (server/README.md shows how to read it).";
-pub const TRUST_CHANGED: &str = "The server shows another certificate than the one you trusted. Sync is stopped until you confirm the new one. If you did not renew the certificate, do not continue.";
+pub const TRUST_CHANGED: &str = "The server shows another certificate than the one you trusted. Sync is stopped until you confirm the new one; nothing on this device is changed. An unannounced change can mean an attack: if you did not renew the certificate, do not continue.";
+pub const TRUST_CHANGED_TITLE: &str = "The server's certificate changed";
+pub const TRUST_REFUSED_OTHER: &str =
+    "The secure connection to the server failed. Shell++ does not connect to it.";
+pub const TRUST_SERVER: &str = "Server";
+pub const TRUST_PINNED: &str = "Trusted until now";
+pub const TRUST_NEW: &str = "Shown now";
+pub const TRUST_SYSTEM_TRUSTS: &str = "Your system trusts the new certificate.";
+pub const TRUST_SYSTEM_DISTRUSTS: &str = "Your system does not trust the new certificate.";
+pub const TRUST_OPENSSL: &str = "On the server, openssl x509 -noout -fingerprint -sha256 -in <certificate file> prints the fingerprint to compare.";
+pub const TRUST_PIN_NEW: &str = "Trust the new certificate";
+pub const TRUST_USE_SYSTEM: &str = "Use the system's trust";
+pub const TRUST_CA_BROWSE: &str = "Add a CA certificate…";
+pub const TRUST_CA_TITLE: &str = "Add this CA certificate?";
+pub const TRUST_CA_TEXT: &str = "Shell++ trusts it for this server only, never for other servers, SSH or your system. The server's certificate must be issued by it.";
+pub const TRUST_CA_ADD: &str = "Add this CA";
+pub const TRUST_CA_INVALID: &str =
+    "This file holds no certificate. Choose a CA certificate in PEM or DER form.";
+pub const TRUST_CA_NOT_ISSUER: &str =
+    "The server's certificate is not issued by this CA. Nothing was added.";
+pub const TRUST_NOT_KEPT: &str =
+    "The server shows another certificate now. Nothing was trusted: check it again.";
+pub const TRUST_ROW_SYSTEM: &str = "Trusted by the system";
+pub const TRUST_ROW_PINNED: &str = "Pinned certificate";
+pub const TRUST_ROW_CA: &str = "Your CA";
+pub const CERTIFICATE_CHANGED_ROW: &str =
+    "The server's certificate changed. Sync is stopped until you review it.";
+pub const CERTIFICATE_REFUSED_ROW: &str =
+    "The server's certificate is not trusted. Sync is stopped until you review it.";
 pub const TRUST_REFUSED_EXPIRED: &str = "The certificate has expired or is not valid yet. Shell++ does not connect to it, even when trusted.";
 pub const TRUST_REFUSED_NAME: &str = "The certificate is not issued for this address. Shell++ does not connect to it, even when trusted.";
 pub const TRUST_SUBJECT: &str = "Issued to";

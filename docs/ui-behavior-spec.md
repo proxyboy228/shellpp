@@ -1568,7 +1568,9 @@ With a connected server:
   email change. The mark is hidden when the server has no email (SMTP) set up; [decision]
 - under the address, how the server's certificate is trusted: "Trusted by the system",
   "Pinned certificate" with its SHA-256 fingerprint, or "Your CA" with the CA's name and
-  fingerprint (`docs/sync-protocol.md`, 2.1); [decision] (D93)
+  fingerprint (`docs/sync-protocol.md`, 2.1). The row only shows the trust; it changes
+  through the dialogs of 2.1 (13.5, step 1, and the changed certificate below); [decision]
+  (D93, D187)
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
@@ -1646,7 +1648,12 @@ Messages of this section [decision] (D93):
   attack. "Trust the new certificate" pins it; "Use the system's trust" (only when the
   system trusts the new one) removes the pin; Cancel keeps sync stopped. Nothing is
   deleted. An expired certificate or one for another name is refused with the reason,
-  with no option to trust it.
+  with no option to trust it. A confirmed choice changes only the trust: the device stays
+  signed in and sync goes on, with nothing to sign in again. A certificate that no longer
+  validates against an added CA stops sync the same way, with the row "The server's
+  certificate is not trusted" and "Review", which opens the choice of 13.5, step 1. The
+  dialog shows what the server shows when it opens, and a choice is kept only when the
+  server answers under it (`docs/sync-protocol.md`, 2.1). [decision] (D187)
 - **Account deleted**: when the server says that the account was deleted from another
   device, this device keeps its data as the deleting device does (the personal vault
   without sync, team vaults as archives), and the section says "This account was deleted
