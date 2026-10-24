@@ -176,10 +176,22 @@ Before it starts, the owner answers 4.1 items 1 and 2 (now or with stage 8).
 
 ### 4.5 The cleanup
 
-- Three local branches `worktree-agent-a4cba5b8fd4d8ea93`,
-  `worktree-agent-a5fe74c8fd03d303e`, `worktree-agent-af46f228698138305` hold
-  commits that reached main in a changed form (same subjects, different
-  patches): delete them or keep them?
+- Three branches of run 7's subagents hold commits that are not in main
+  (`git log main..<branch>` is not empty). Each commit has a counterpart in
+  main with the same subject and an adapted patch; nothing from them was
+  merged. They are renamed to `wip/salvage-<old name>`:
+  - `wip/salvage-worktree-agent-a4cba5b8fd4d8ea93` (7bd7331): the first
+    version of the duplicates side by side (UI 13.7); main has 91ff5ce;
+  - `wip/salvage-worktree-agent-a5fe74c8fd03d303e` (cb5f06f, 289303e): the
+    first version of the conflict comparison, the Conflicts list and the host
+    badge (UI 13.6); main has e1d3bc3 and 119e38a;
+  - `wip/salvage-worktree-agent-af46f228698138305` (05f1150, 5702f2b): review
+    fixes of Keep other (UI 13.6); main has 9a7209b and dd68bab, but not the
+    `user_deletable` helper that 05f1150 adds to
+    `crates/core/src/service/records.rs`.
+
+  Compare them with main (first of all `user_deletable`) and then delete
+  them, or keep them?
 - main has not been pushed since `5425f9c` (`origin/main`): push it, and when?
 
 ## 5. Technical debt
