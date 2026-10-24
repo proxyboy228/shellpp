@@ -79,8 +79,9 @@ cargo test -p shellpp-desktop --test sessions -- --test-threads=1
     поднимают контейнер `postgres:17-alpine` и удаляют его; без
     переменной — на SQLite;
   - `SHELLPP_SFTP_BENCH=1` — замер SFTP (release-сборка).
-- Диск C почти заполнен: перед сборкой проверять свободное место; при
-  нехватке — удалить `target\debug\incremental`, потом `cargo clean`.
+- Перед сборкой проверять свободное место на диске C (пороги — ROADMAP,
+  раздел 6.5): при нехватке — удалить `target\debug\incremental`, потом
+  `cargo clean`.
 - Полный запуск `scripts\ui-screens.ps1` идёт дольше 10 минут. Прежний
   сторож в 600 с считал от начала всего запуска и срабатывал там, где
   запуск оказывался к этому времени (в прогоне 3 — на `new-tab-search`):
