@@ -38,9 +38,14 @@ chmod 0400 secrets/server_secret
 sudo chown 10001 secrets/server_secret   # the server's user in the image
 ```
 
-(On Docker Desktop the `chown` is not needed.) The server also still reads
-`SHELLPP_SERVER_SECRET` from the environment, with a warning in its log;
-both at once is refused.
+The image runs as user 10001, which must be able to read the file. If the
+server stops with "SHELLPP_SERVER_SECRET_FILE cannot be read: permission
+denied" (rootless Docker, user namespaces, Podman, SELinux), give that user
+read access the way your setup maps it, or relabel the folder (`:z`).
+The server also still reads `SHELLPP_SERVER_SECRET` from the environment,
+with a warning in its log; both at once is refused. It refuses to start
+when the secret opens none of the TOTP secrets stored in the database, so
+a wrong secret never runs.
 
 Fill in `.env`:
 
@@ -228,6 +233,21 @@ confirmation, because a hostile server could claim the same.
 
 ## Update
 
+From a version with `SHELLPP_SERVER_SECRET` in `.env`, first, while the
+old server still runs, move the value it runs with into the file, never a
+new one (a new secret makes every TOTP unreadable; the server refuses to
+start with one):
+
+```bash
+cd server/deploy
+mkdir -p secrets
+docker compose exec -T server printenv SHELLPP_SERVER_SECRET > secrets/server_secret
+chmod 0400 secrets/server_secret && sudo chown 10001 secrets/server_secret
+```
+
+then delete the `SHELLPP_SERVER_SECRET=` line from `.env`. Compose refuses
+to start while the file is missing. Then:
+
 ```bash
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
@@ -238,18 +258,6 @@ docker compose up -d
 
 The `migrate` service applies schema changes before `server` starts; the
 server refuses to run on a schema older than itself.
-
-From a version with `SHELLPP_SERVER_SECRET` in `.env`: move the same value
-into the file, never a new one (a new secret makes every TOTP unreadable):
-
-```bash
-mkdir -p secrets
-grep '^SHELLPP_SERVER_SECRET=' .env | cut -d= -f2- > secrets/server_secret
-chmod 0400 secrets/server_secret && sudo chown 10001 secrets/server_secret
-```
-
-then delete the `SHELLPP_SERVER_SECRET=` line from `.env`. Compose refuses
-to start while the file is missing.
 
 From a version before the fixed network (an `.env` with
 `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` or `172.16.0.0/12`): set it to

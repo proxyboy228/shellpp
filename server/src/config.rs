@@ -193,16 +193,17 @@ fn read_secret_file(path: &str) -> Result<Zeroizing<String>, ConfigError> {
     use std::io::Read as _;
     let unreadable =
         |what: &str| ConfigError(format!("SHELLPP_SERVER_SECRET_FILE cannot be read: {what}"));
-    let mut file = std::fs::File::open(path).map_err(|e| unreadable(&e.kind().to_string()))?;
-    let len = file
-        .metadata()
-        .map_err(|e| unreadable(&e.kind().to_string()))?
-        .len();
-    if len > SECRET_FILE_MAX {
+    // A regular file only: opening a FIFO would block the start for ever.
+    let metadata = std::fs::metadata(path).map_err(|e| unreadable(&e.kind().to_string()))?;
+    if !metadata.is_file() {
+        return Err(unreadable("not a regular file"));
+    }
+    if metadata.len() > SECRET_FILE_MAX {
         return Err(unreadable("larger than 4 KiB"));
     }
-    // Allocated once at its final size: a buffer that grows leaves unwiped
-    // copies behind (security.md, section 9.5).
+    let mut file = std::fs::File::open(path).map_err(|e| unreadable(&e.kind().to_string()))?;
+    // Allocated once at its largest size: a buffer that grows leaves
+    // unwiped copies behind (security.md, section 9.5).
     let mut bytes = Zeroizing::new(Vec::with_capacity(SECRET_FILE_MAX as usize + 1));
     (&mut file)
         .take(SECRET_FILE_MAX + 1)
@@ -212,6 +213,8 @@ fn read_secret_file(path: &str) -> Result<Zeroizing<String>, ConfigError> {
         return Err(unreadable("larger than 4 KiB"));
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| unreadable("not text"))?;
+    // A byte order mark, as some editors and PowerShell 5 write one.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut secret = Zeroizing::new(String::with_capacity(text.len()));
     secret.push_str(text);
     Ok(secret)
@@ -364,7 +367,12 @@ mod tests {
                     .map(|(_, value)| value.clone())
             })
         };
-        for content in [text.clone(), format!("{text}\n"), format!("  {text}\r\n")] {
+        for content in [
+            text.clone(),
+            format!("{text}\n"),
+            format!("  {text}\r\n"),
+            format!("\u{feff}{text}\r\n"),
+        ] {
             std::fs::write(&path, content).unwrap();
             let config =
                 config_with(vec![("SHELLPP_SERVER_SECRET_FILE", path_text.clone())]).unwrap();
@@ -389,7 +397,11 @@ mod tests {
             "{}",
             neither.0
         );
-        // A missing file, an empty one, a short secret, an oversized file.
+        // A missing file, a folder, an empty one, a short secret, an
+        // oversized file.
+        let folder = dir.path().display().to_string();
+        let error = config_with(vec![("SHELLPP_SERVER_SECRET_FILE", folder)]).unwrap_err();
+        assert!(error.0.contains("not a regular file"), "{}", error.0);
         let missing = dir.path().join("absent").display().to_string();
         let error = config_with(vec![("SHELLPP_SERVER_SECRET_FILE", missing)]).unwrap_err();
         assert!(

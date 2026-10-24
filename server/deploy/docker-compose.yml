@@ -29,8 +29,6 @@ services:
     environment: &server-env
       SHELLPP_DATABASE_URL: postgres://shellpp:${POSTGRES_PASSWORD}@postgres:5432/shellpp
       SHELLPP_PUBLIC_URL: ${SHELLPP_PUBLIC_URL:?set SHELLPP_PUBLIC_URL in .env}
-      # A Docker secret, not the environment, which `docker inspect` shows.
-      SHELLPP_SERVER_SECRET_FILE: /run/secrets/server_secret
       SHELLPP_REGISTRATION: ${SHELLPP_REGISTRATION:-invite}
       # The gateway of the network below: a proxy on the host reaches the
       # server through the port published on 127.0.0.1 from there (README,
@@ -45,7 +43,10 @@ services:
     image: ${SHELLPP_IMAGE:-shellpp-server:latest}
     restart: unless-stopped
     command: ["serve"]
-    environment: *server-env
+    environment:
+      <<: *server-env
+      # A Docker secret, not the environment, which `docker inspect` shows.
+      SHELLPP_SERVER_SECRET_FILE: /run/secrets/server_secret
     secrets:
       - server_secret
     ports:

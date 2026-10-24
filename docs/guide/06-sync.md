@@ -341,6 +341,12 @@ before a sign-in merges its data into an account. For a backup you control, use
 
 ### Updating the server
 
+From a version that kept `SHELLPP_SERVER_SECRET` in `.env`, first move the
+value the running server uses into the secret file (`server/README.md`,
+"Update"): never make a new one, or two-step sign-in stops working for
+every account (the server refuses to start with a secret that does not
+open them).
+
 From the repository root:
 
 ```bash

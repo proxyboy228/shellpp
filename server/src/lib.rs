@@ -41,6 +41,37 @@ pub enum StartError {
     OldSchema { found: i64, needed: i64 },
     #[error("cannot listen: {0}")]
     Listen(std::io::Error),
+    #[error(
+        "the server secret opens none of the TOTP secrets in this database: is it the secret \
+         this database was made with? (server README, \"Update\"); to go on with a new secret, \
+         reset TOTP of each account first with `admin user reset-totp`"
+    )]
+    WrongSecret,
+}
+
+/// Refuses a server secret that opens none of the TOTP secrets at rest of
+/// this database (D177): started with another secret, the server would
+/// answer every sign-in with TOTP with an error and change the fake salts.
+/// A few rows are tried; one that opens is enough (a damaged row elsewhere
+/// does not stop the server). A database without TOTP secrets passes.
+pub fn check_server_secret(db: &Db, keys: &secrets::ServerKeys) -> Result<(), StartError> {
+    let rows = db.tx(db::TxKind::Read, |tx| {
+        tx.query(
+            "SELECT user_id, totp_secret_enc FROM users WHERE totp_secret_enc IS NOT NULL \
+             ORDER BY user_id LIMIT 5",
+            &[],
+            &[db::Ty::Uuid, db::Ty::Bytes],
+        )
+    })?;
+    let opens = |row: &Vec<db::Val>| match (row[0].uuid(), row[1].bytes()) {
+        (Some(user_id), Some(blob)) => keys.open_totp(user_id, blob).is_some(),
+        _ => false,
+    };
+    if rows.is_empty() || rows.iter().any(opens) {
+        Ok(())
+    } else {
+        Err(StartError::WrongSecret)
+    }
 }
 
 /// Opens the database and checks that its schema is current (`serve`
@@ -104,6 +135,7 @@ pub async fn serve(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartError> {
     let db = open_checked(&config)?;
+    check_server_secret(&db, &secrets::ServerKeys::derive(&config.server_secret))?;
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(StartError::Listen)?;
