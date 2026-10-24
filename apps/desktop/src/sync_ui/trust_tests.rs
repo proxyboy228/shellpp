@@ -516,3 +516,105 @@ fn the_sign_out_warning_counts_what_is_not_on_the_server() {
             .starts_with("3 changes are not on the server yet and 2 conflicts are kept only here:")
     );
 }
+
+/// A plain-HTTP server that answers pre-login with the mobile preset and
+/// every other request with `401 invalid_credentials`; it records the
+/// paths it is asked for.
+fn weak_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let log = log.clone();
+            std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(300)));
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let text = String::from_utf8_lossy(&buffer).into_owned();
+                let path = text
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                log.lock().unwrap().push(path.clone());
+                let (status, body) = if path == "/v1/auth/prelogin" {
+                    (
+                        "200 OK",
+                        r#"{"kdf":{"alg":"argon2id","v":1,"m_kib":32768,"t":4,"p":2},"kdf_salt":"AAAAAAAAAAAAAAAAAAAAAA"}"#,
+                    )
+                } else {
+                    (
+                        "401 Unauthorized",
+                        r#"{"error":{"code":"invalid_credentials","message":"x"}}"#,
+                    )
+                };
+                let answer = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(answer.as_bytes());
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+/// "Sign in with weaker settings" signs in through the wizard with the
+/// parameters shown (a pre-login and a login reach the server); Cancel
+/// sends nothing.
+#[gpui::test]
+fn sign_in_with_weaker_settings_runs_the_sign_in(cx: &mut TestAppContext) {
+    use shellpp_core::crypto::{KdfParams, PlatformClass};
+    let ui = Ui::open(cx);
+    let (origin, seen) = weak_server();
+    let state = ui.state.clone();
+    let wizard = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_connect(state, false, window, cx)
+        })
+        .unwrap();
+    wizard.update(cx, |wizard, cx| {
+        wizard.origin = Some(origin);
+        wizard.step = super::ConnectStep::Account;
+        cx.notify();
+    });
+    let offer = shellpp_core::service::WeakerKdf {
+        local: KdfParams::preset(PlatformClass::Desktop),
+        server: KdfParams::preset(PlatformClass::Mobile),
+    };
+    let open = |cx: &mut TestAppContext| {
+        let wizard = wizard.clone();
+        let offer = offer.clone();
+        cx.update_window(ui.handle, move |_, window, cx| {
+            super::kdf::open_weaker_kdf(wizard, offer, window, cx)
+        })
+        .unwrap();
+        ui.settle(cx);
+    };
+    open(cx);
+    ui.click("sync-kdf-cancel", cx);
+    assert!(seen.lock().unwrap().is_empty(), "Cancel sends nothing");
+    open(cx);
+    ui.click("sync-kdf-continue", cx);
+    ui.settle(cx);
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["/v1/auth/prelogin", "/v1/auth/login"],
+        "the confirmed sign-in ran"
+    );
+    assert!(
+        ui.visible("sync-error", cx),
+        "the server's refusal is shown"
+    );
+    ui.finish(cx);
+}
