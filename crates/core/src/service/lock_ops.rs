@@ -533,25 +533,18 @@ impl Core {
     }
 
     pub(super) fn start_new_vault_impl(&self) -> Result<String, CoreError> {
-        self.set_aside_store(false)
+        self.set_aside_store()
     }
 
     /// Sets the database aside and starts at first run: "Start with a new
-    /// vault" from the unlock screen (Locked), or log out with "delete local
-    /// copy" (`from_unlocked`, D190) in one step under the mutex, so no
-    /// unlock or lock comes between; the session is wiped only once the new
-    /// store holds the directory, and a failure leaves the vault as it was.
-    pub(super) fn set_aside_store(&self, from_unlocked: bool) -> Result<String, CoreError> {
+    /// vault" from the unlock screen, in one step under the mutex, so no
+    /// unlock comes between; a failure leaves the vault as it was.
+    pub(super) fn set_aside_store(&self) -> Result<String, CoreError> {
         // No keychain or rotation work may run while the database changes.
         let _remember = self.remember_lock();
         let mut guard = self.inner();
         let inner = &mut *guard;
-        let allowed = match inner.state {
-            LockState::Locked => true,
-            LockState::Unlocked => from_unlocked,
-            LockState::FirstRun => false,
-        };
-        if !allowed {
+        if inner.state != LockState::Locked {
             return Err(CoreError::WrongState);
         }
         let data_dir = inner
@@ -569,28 +562,11 @@ impl Core {
             &mut inner.store,
             Store::open_in_memory()?,
         ));
-        let app_version = self.config.app_version.clone();
-        let reopen_old = |inner: &mut Inner| match Store::open(&data_dir, &app_version) {
-            Ok((store, _)) => inner.store = store,
-            Err(error) => {
-                // No database to write to: an open session would keep
-                // edits in memory only and lose them. It is closed; the app
-                // opens the database again at its next start (cross review
-                // of run 9).
-                tracing::error!(code = error.code(), "database not reopened");
-                if inner.session.take().is_some() {
-                    inner.sync.wipe();
-                    self.clear_clipboard_if_ours(inner);
-                }
-                inner.state = LockState::Locked;
-                self.lock_changed(inner);
-            }
-        };
         let now = self.now();
         let archived = match lock::new_vault::archive_data_file(&data_dir, now) {
             Ok(name) => name,
             Err(error) => {
-                reopen_old(inner);
+                self.reopen_store(inner, &data_dir);
                 return Err(CoreError::Store(error.into()));
             }
         };
@@ -602,10 +578,91 @@ impl Core {
                 if lock::new_vault::restore_archived(&data_dir, &archived, now).is_err() {
                     tracing::error!("archived database not put back");
                 }
-                reopen_old(inner);
+                self.reopen_store(inner, &data_dir);
                 return Err(open_error(error));
             }
         };
+        // The old device key (if any) stays in the OS keychain under the old
+        // database id: it opens only the archived file, which is kept too.
+        tracing::info!("data file archived; first run");
+        self.enter_first_run(inner, store, now);
+        Ok(archived)
+    }
+
+    /// Log out with "delete local copy" (D197): the local copy is deleted
+    /// for real ([`lock::erase`]) and the app starts at first run, in one
+    /// step under the mutex. The device keys of the set-aside copies leave
+    /// the OS keychain with them (the caller removed the current one). When
+    /// the database itself cannot be deleted nothing has changed and the
+    /// vault stays open; the names of other files that stayed are returned.
+    pub(super) fn erase_store(&self) -> Result<Vec<String>, CoreError> {
+        let _remember = self.remember_lock();
+        let (left, set_aside) = {
+            let mut guard = self.inner();
+            let inner = &mut *guard;
+            if inner.state != LockState::Unlocked {
+                return Err(CoreError::WrongState);
+            }
+            let data_dir = inner
+                .store
+                .data_dir()
+                .map(std::path::Path::to_path_buf)
+                .ok_or(CoreError::Unavailable)?;
+            checkpoint(&inner.store);
+            let _dir_lock = inner.store.dir_lock();
+            drop(std::mem::replace(
+                &mut inner.store,
+                Store::open_in_memory()?,
+            ));
+            let set_aside = lock::erase::set_aside_db_ids(&data_dir);
+            let left = match lock::erase::erase_data_files(&data_dir) {
+                Ok(left) => left,
+                Err(error) => {
+                    self.reopen_store(inner, &data_dir);
+                    return Err(CoreError::Store(error.into()));
+                }
+            };
+            match Store::open(&data_dir, &self.config.app_version) {
+                Ok((store, _)) => {
+                    tracing::info!(left = left.len(), "local copy deleted; first run");
+                    self.enter_first_run(inner, store, self.now());
+                }
+                // The database is gone: what `reopen_store` does when the
+                // old one does not open (the next start begins at first run).
+                Err(_) => self.reopen_store(inner, &data_dir),
+            }
+            (left, set_aside)
+        };
+        for db_id in set_aside {
+            self.delete_device_key(&db_id);
+        }
+        Ok(left)
+    }
+
+    /// Opens the database of `data_dir` again after a failed set-aside or
+    /// erase. When it does not open, no database is there to write to: an
+    /// open session would keep edits in memory only and lose them, so it is
+    /// closed; the app opens the database again at its next start (cross
+    /// review of run 9).
+    fn reopen_store(&self, inner: &mut Inner, data_dir: &std::path::Path) {
+        match Store::open(data_dir, &self.config.app_version) {
+            Ok((store, _)) => inner.store = store,
+            Err(error) => {
+                tracing::error!(code = error.code(), "database not reopened");
+                if inner.session.take().is_some() {
+                    inner.sync.wipe();
+                    self.clear_clipboard_if_ours(inner);
+                }
+                inner.state = LockState::Locked;
+                self.lock_changed(inner);
+            }
+        }
+    }
+
+    /// The new, empty `store` holds the directory: the session is wiped
+    /// (what a lock wipes: keys, sync tokens, clipboard) and the app is at
+    /// first run.
+    fn enter_first_run(&self, inner: &mut Inner, store: Store, now: std::time::SystemTime) {
         let settings = match store.settings() {
             Ok(rows) => Settings::new(self.platform.os, &rows),
             Err(_) => Settings::new(self.platform.os, &[]),
@@ -613,7 +670,6 @@ impl Core {
         inner.store = store;
         inner.settings = settings;
         if inner.session.is_some() {
-            // From Unlocked: what a lock wipes (keys, sync tokens, clipboard).
             inner.sync.wipe();
             self.clear_clipboard_if_ours(inner);
         }
@@ -625,13 +681,9 @@ impl Core {
         inner.auto_lock = AutoLock::new(now);
         inner.device_unlock_allowed = true;
         inner.state = LockState::FirstRun;
-        // The old device key (if any) stays in the OS keychain under the old
-        // database id: it opens only the archived file, which is kept too.
-        tracing::info!("data file archived; first run");
         self.lock_changed(inner);
         let keys: Vec<String> = inner.settings.keys().map(str::to_owned).collect();
         self.emit(inner, CoreEventKind::SettingsChanged { keys });
-        Ok(archived)
     }
 
     pub(super) fn try_device_unlock_impl(&self) -> Result<bool, CoreError> {

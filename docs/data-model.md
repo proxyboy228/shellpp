@@ -1076,7 +1076,7 @@ Rules:
 - Export writes the chosen entries as a native JSON export, plain or encrypted, with the warnings of Export Data (UI 1.4).
 - Delete forever removes the chosen entries on this device; "Empty trash" removes all of them. Other devices keep theirs.
 - Entries older than 90 days are removed when the app starts and every 24 hours after.
-- Sign-in on a device with local data re-encrypts the entries of the old personal vault together with its records, under the new record ids (section 18.5). "Delete local copy" at log out sets them aside with everything else in the database ([decision] (D190)).
+- Sign-in on a device with local data re-encrypts the entries of the old personal vault together with its records, under the new record ids (section 18.5). "Delete local copy" at log out deletes them with everything else in the database ([decision] (D197)).
 - Export Data does not include them.
 
 ### 16.7 Brought back

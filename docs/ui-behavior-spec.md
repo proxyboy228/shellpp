@@ -1580,10 +1580,16 @@ With a connected server:
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
-  (principle 3 in SPEC.md). Deleting it starts the app over with an empty vault at first
-  run; the old data file is set aside as "Start with a new vault" (13.2) does and opens
-  only with the master password, and the data stays on the server; a caption under the
-  option says so; [decision] (D190)
+  (principle 3 in SPEC.md). Deleting it deletes everything the app keeps on this device:
+  the database, the copies set aside earlier, the backups, the recordings, the temporary
+  files and the device keys in the OS keychain (storage-format, "Backup and restore");
+  the app starts over with an empty vault at first run, and the data stays on the server.
+  A caption under the option says so, and a warning counts the changes and conflicts that
+  are not on the server. Log out with the option checked asks a second time in the same
+  dialog: "Delete the local copy? This cannot be undone." and, when there are any, the
+  set-aside copies and backups by name, date and size ("These files are only on this
+  device, not on the server, and are deleted too"); the button becomes "Delete and sign
+  out". Cancel at either step deletes nothing; [decision] (D197, which revokes D190)
 - master password change is in Settings → Security (see 13.4), because it exists without
   a server too. The recovery key of the account is there as well; [decision]
 - deleting the account on the server. The local copy is kept in that case.

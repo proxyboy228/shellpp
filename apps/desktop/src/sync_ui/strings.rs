@@ -183,10 +183,27 @@ pub const SIGN_OUT_TITLE: &str = "Sign out of the account";
 pub const SIGN_OUT_TEXT: &str =
     "Sync stops on this device. The local copy stays and opens with the same password.";
 pub const DELETE_LOCAL: &str = "Also delete the local copy on this device";
-pub const DELETE_LOCAL_HINT: &str = "Shell++ starts over with an empty vault. The data stays on the server; the old data file is set aside in the data folder and opens only with this master password (or the recovery key).";
+pub const DELETE_LOCAL_HINT: &str = "Everything Shell++ keeps on this device is deleted: the vault, its backups and recordings, and the device key in the system keychain. Shell++ starts over with an empty vault; the data on the server stays.";
+pub const DELETE_CONFIRM_TEXT: &str = "Delete the local copy? This cannot be undone. The data on the server stays, and signing in on this device brings it back.";
+pub const DELETE_CONFIRM_FILES: &str =
+    "These files are only on this device, not on the server, and are deleted too:";
+pub const DELETE_CONFIRM_RUN: &str = "Delete and sign out";
+
+/// A line of the confirmation's list (D197): a set-aside copy or a backup.
+pub fn local_file_line(name: &str, set_aside: bool, when: Option<&str>, size: &str) -> String {
+    let what = if set_aside {
+        "a copy set aside"
+    } else {
+        "a backup"
+    };
+    match when {
+        Some(when) => format!("{name}: {what}, {when}, {size}"),
+        None => format!("{name}: {what}, {size}"),
+    }
+}
 
 /// The warning of the sign-out dialog when not everything is on the server
-/// (D190); `None` when everything is.
+/// (D190, D197); `None` when everything is.
 pub fn delete_local_unsynced(changes: usize, conflicts: usize) -> Option<String> {
     let changes = match changes {
         0 => None,
@@ -201,7 +218,7 @@ pub fn delete_local_unsynced(changes: usize, conflicts: usize) -> Option<String>
     let parts: Vec<String> = changes.into_iter().chain(conflicts).collect();
     (!parts.is_empty()).then(|| {
         format!(
-            "{}: they stay only in the set-aside file. Sync first to keep them in the account.",
+            "{}: they are deleted with the local copy. Sync first to keep them in the account.",
             parts.join(" and ")
         )
     })

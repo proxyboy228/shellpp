@@ -235,6 +235,18 @@ pub enum SignInOutcome {
     TotpRequired,
 }
 
+/// A file of the local copy that the server does not have (D197).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalCopyFile {
+    /// Relative to the data directory, with `/`.
+    pub name: String,
+    /// A set-aside database (`shellpp.db.<stamp>.old`); otherwise a backup.
+    pub set_aside: bool,
+    /// When it was last written, as a timestamp of the store.
+    pub modified: Option<String>,
+    pub bytes: u64,
+}
+
 /// Settings → Account & Sync (UI 12.2) and the status line.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SyncStatus {
@@ -3217,14 +3229,14 @@ impl Core {
 
     /// Log out (section 5.7): the refresh token is revoked and the account
     /// row removed; the local copy stays and opens with the same password.
-    /// With `delete_local` the data file is archived and the app returns to
-    /// the first run (UI 12.2).
+    /// With `delete_local` the local copy is deleted (the data directory's
+    /// files and the device keys in the OS keychain; D197) and the app
+    /// returns to the first run (UI 12.2).
     pub fn sync_sign_out(&self, delete_local: bool) -> Result<(), CoreError> {
         let _sync = self.sync_lock();
         if delete_local {
-            // Nothing may open the copy set aside below without the master
-            // password (D190): the device key and its `device` row go first,
-            // and when the OS keychain refuses, nothing has changed yet.
+            // The device key and its `device` row go first: when the OS
+            // keychain refuses, nothing has changed yet.
             let remembered = {
                 let guard = self.inner();
                 Self::require_session(&guard)?;
@@ -3284,12 +3296,36 @@ impl Core {
             self.emit_sync(inner);
         }
         if delete_local {
-            // The local copy is set aside as "Start with a new vault" does
-            // (D190): renamed next to the new store, never deleted. One step
-            // from Unlocked: a failure keeps the vault open, signed out.
-            self.set_aside_store(true)?;
+            // One step from Unlocked: a failure to delete the database keeps
+            // the vault open, signed out.
+            let left = self.erase_store()?;
+            if !left.is_empty() {
+                tracing::warn!(
+                    left = left.len(),
+                    "parts of the local copy were not deleted"
+                );
+            }
         }
         Ok(())
+    }
+
+    /// The set-aside copies and backups on this device, which the server
+    /// does not have: the confirmation of "Also delete the local copy"
+    /// lists them (UI 12.2; D197).
+    pub fn local_copy_files(&self) -> Result<Vec<LocalCopyFile>, CoreError> {
+        let guard = self.inner();
+        let Some(data_dir) = guard.store.data_dir() else {
+            return Ok(Vec::new());
+        };
+        Ok(crate::lock::erase::files_not_on_server(data_dir)
+            .into_iter()
+            .map(|file| LocalCopyFile {
+                name: file.name,
+                set_aside: file.kind == crate::lock::erase::LocalFileKind::SetAside,
+                modified: file.modified.map(format_timestamp),
+                bytes: file.bytes,
+            })
+            .collect())
     }
 
     /// The current password's auth key for a sensitive operation (4.8).

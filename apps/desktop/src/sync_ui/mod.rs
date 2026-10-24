@@ -28,6 +28,8 @@ pub mod kdf;
 #[cfg(test)]
 mod key_tests;
 pub mod keys;
+#[cfg(test)]
+mod sign_out_tests;
 pub mod strings;
 #[cfg(test)]
 mod tests;
@@ -49,8 +51,8 @@ use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::CoreError;
 use shellpp_core::service::{
-    BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, ServerCheck, SignInInput,
-    SignInOutcome, SyncStatus,
+    BroughtBackItem, ConflictItem, DeviceItem, DuplicateItem, LocalCopyFile, ServerCheck,
+    SignInInput, SignInOutcome, SyncStatus,
 };
 use shellpp_core::sync::{HttpError, OriginError, TlsProblem, fingerprint_text};
 use trust::TrustPanel;
@@ -1546,6 +1548,9 @@ pub fn open_devices(
 pub struct SignOutDialog {
     state: Entity<AppState>,
     pub delete_local: bool,
+    /// "Also delete the local copy" asks a second time (D197), listing the
+    /// set-aside copies and backups the server does not have.
+    pub confirming: Option<Vec<LocalCopyFile>>,
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
@@ -1557,6 +1562,15 @@ impl SignOutDialog {
             return;
         };
         let delete_local = self.delete_local;
+        if delete_local && self.confirming.is_none() {
+            // The first click only asks again: nothing is deleted yet.
+            match core.local_copy_files() {
+                Ok(files) => self.confirming = Some(files),
+                Err(error) => self.error = Some(error_text(&error)),
+            }
+            cx.notify();
+            return;
+        }
         self.busy = true;
         cx.notify();
         let done = cx.background_spawn(async move { core.sync_sign_out(delete_local) });
@@ -1581,6 +1595,43 @@ impl SignOutDialog {
 
 impl Render for SignOutDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(files) = &self.confirming {
+            let lines: Vec<String> = files
+                .iter()
+                .map(|file| {
+                    strings::local_file_line(
+                        &file.name,
+                        file.set_aside,
+                        file.modified.as_deref().map(when).as_deref(),
+                        &crate::sftp::listing::human_size(file.bytes),
+                    )
+                })
+                .collect();
+            return v_flex()
+                .id("sync-delete-local-confirm")
+                .test_support()
+                .w_full()
+                .gap(metrics::SPACE_3)
+                .child(widgets::caption(strings::DELETE_CONFIRM_TEXT, cx))
+                .when(!lines.is_empty(), |this| {
+                    this.child(widgets::caption(strings::DELETE_CONFIRM_FILES, cx))
+                        .child(
+                            v_flex()
+                                .id("sync-delete-local-files")
+                                .test_support()
+                                .gap(metrics::SPACE_1)
+                                .children(lines.into_iter().enumerate().map(|(n, line)| {
+                                    div()
+                                        .id(("sync-delete-local-file", n))
+                                        .text_size(metrics::FONT_SIZE_CAPTION)
+                                        .text_color(cx.theme().warning)
+                                        .child(line)
+                                })),
+                        )
+                })
+                .children(error_line(self.error, cx))
+                .into_any_element();
+        }
         v_flex()
             .id("sync-sign-out-dialog")
             .test_support()
@@ -1596,7 +1647,7 @@ impl Render for SignOutDialog {
                         cx.notify();
                     })),
             )
-            // What "delete" does (D190): set aside, never erased silently.
+            // What "delete" does (D197): everything on this device goes.
             .when(self.delete_local, |this| {
                 this.child(widgets::caption(strings::DELETE_LOCAL_HINT, cx))
             })
@@ -1623,6 +1674,7 @@ impl Render for SignOutDialog {
                 },
             )
             .children(error_line(self.error, cx))
+            .into_any_element()
     }
 }
 
@@ -1634,6 +1686,7 @@ pub fn open_sign_out(
     let dialog = cx.new(|_| SignOutDialog {
         state,
         delete_local: false,
+        confirming: None,
         busy: false,
         error: None,
         task: None,
@@ -1643,6 +1696,7 @@ pub fn open_sign_out(
         let run = shown.downgrade();
         let busy = shown.read(cx).busy;
         let delete_local = shown.read(cx).delete_local;
+        let confirming = shown.read(cx).confirming.is_some();
         modal
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
@@ -1669,7 +1723,11 @@ pub fn open_sign_out(
                                 ControlKind::Accent
                             },
                         )
-                        .label(strings::SIGN_OUT_RUN)
+                        .label(if confirming {
+                            strings::DELETE_CONFIRM_RUN
+                        } else {
+                            strings::SIGN_OUT_RUN
+                        })
                         .disabled(busy)
                         .on_click(move |_, window, cx| {
                             let _ = run.update(cx, |dialog, cx| dialog.run(window, cx));

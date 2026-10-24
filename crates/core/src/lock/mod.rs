@@ -27,6 +27,7 @@
 //!
 //! Owner: W2.
 
+pub mod erase;
 pub mod lockout;
 pub mod new_vault;
 
