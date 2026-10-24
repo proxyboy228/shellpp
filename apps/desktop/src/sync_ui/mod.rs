@@ -154,7 +154,8 @@ pub struct ConnectDialog {
     pub step: ConnectStep,
     /// The certificate step's panel (`ConnectStep::Trust`).
     pub trust: Option<Entity<TrustPanel>>,
-    origin: Option<String>,
+    /// The checked server origin (step 1).
+    pub origin: Option<String>,
     invite_only: bool,
     /// Create an account (else sign in); never at first run.
     pub register: bool,

@@ -1116,12 +1116,20 @@ impl Core {
                     {
                         return Err(refused("already_bound"));
                     }
-                    // Its KDF parameters are the account's as last known.
-                    if account.is_some_and(|row| row.server_url == origin) {
-                        bound_kdf = guard
-                            .store
-                            .local_auth()?
-                            .and_then(|row| KdfParams::from_json(&row.kdf_json).ok());
+                    // A device bound now or before (an account row, or the
+                    // personal vault's binding, which neither Log out nor
+                    // an `account_deleted` answer clears) compares with its
+                    // own parameters, whatever the origin (D189): a server
+                    // must not turn the check off by unbinding the device.
+                    let vault_bound = match guard.personal_vault_id {
+                        Some(vault_id) => guard.store.vault_binding(&vault_id)?.0.is_some(),
+                        None => false,
+                    };
+                    if account.is_some() || vault_bound {
+                        let row = guard.store.local_auth()?.ok_or(CoreError::Damaged)?;
+                        bound_kdf = Some(
+                            KdfParams::from_json(&row.kdf_json).map_err(|_| CoreError::Damaged)?,
+                        );
                     }
                 }
                 _ => return Err(CoreError::Locked),
