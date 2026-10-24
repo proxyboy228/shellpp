@@ -97,8 +97,10 @@ impl From<HttpError> for CoreError {
 pub(super) struct SyncRuntime {
     access: Option<Zeroizing<String>>,
     pending: Option<PendingSignIn>,
-    /// Items the server refused; not retried automatically (section 6.5).
-    failed: HashSet<Uuid>,
+    /// Items the server refused, with the status; not retried
+    /// automatically (section 6.5): "Sync now" retries them all, a pushed
+    /// deletion those refused for the quota.
+    failed: HashMap<Uuid, String>,
     failures: u32,
     backoff_until: Option<SystemTime>,
     integrity_warnings: usize,
@@ -2439,8 +2441,9 @@ impl Core {
             // Batches continue while records wait; rounds that only re-push
             // after conflicts are capped (section 6.11).
             let mut repush_rounds = 0;
+            let mut stale_rounds = 0;
             for _ in 0..MAX_PUSH_BATCHES {
-                let skip = self.inner().sync.failed.clone();
+                let skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
                     engine::build_push(&mut inner.store, session, &selection, &skip, self.now())
@@ -2474,18 +2477,50 @@ impl Core {
                 report.newer_epoch |= effects.newer_epoch;
                 changed.extend(effects.changed.iter().copied());
                 changed_classes.extend(effects.classes.iter().copied());
+                // Section 6.5: a pushed deletion frees room, so the items
+                // refused for the quota go again (in this cycle).
+                let mut retry = false;
                 {
                     let mut guard = self.inner();
-                    guard
-                        .sync
-                        .failed
-                        .extend(effects.failed.iter().map(|(id, _)| *id));
+                    let failed = &mut guard.sync.failed;
+                    if effects.pushed_deletion {
+                        let before = failed.len();
+                        failed.retain(|_, status| status != "quota_exceeded");
+                        retry = failed.len() != before;
+                    }
+                    failed.extend(effects.failed.iter().cloned());
+                }
+                // `stale_key_epoch`: the keys, then the push again in this
+                // cycle (section 6.5). The personal vault's newer key comes
+                // only with a sign-in (section 5.1): the records stay
+                // pending, not refused.
+                if effects.stale_key_epoch {
+                    let keys =
+                        self.authed(link, |api, token| api.vault_keys(token, link.vault_id))?;
+                    let local = self.with_session(|inner| {
+                        Ok(inner
+                            .session
+                            .as_ref()
+                            .map_or(0, |session| session.ring.current_epoch()))
+                    })?;
+                    match keys.current_epoch.cmp(&local) {
+                        std::cmp::Ordering::Greater => report.newer_epoch = true,
+                        std::cmp::Ordering::Less => return Err(refused("rolled_back")),
+                        std::cmp::Ordering::Equal if stale_rounds == 0 => {
+                            // Re-sealed under the current epoch by the next
+                            // batch; once per cycle.
+                            stale_rounds += 1;
+                            retry = true;
+                        }
+                        std::cmp::Ordering::Equal => {}
+                    }
                 }
                 if effects.repush && !batch.more {
                     repush_rounds += 1;
                 }
-                if !(effects.repush || batch.more)
+                if !(effects.repush || batch.more || retry)
                     || effects.newer_epoch
+                    || report.newer_epoch
                     || repush_rounds >= MAX_PUSH_ROUNDS
                 {
                     break;
@@ -5449,6 +5484,68 @@ mod tests {
         // This device's own record names the current version.
         assert_eq!(item.current_device_name.as_deref(), Some("TEST"));
         assert!(item.current_this_device);
+    }
+
+    #[test]
+    fn stale_key_epoch_keeps_the_item_pending_and_not_refused() {
+        // Run 7 finding 19 (section 6.5): `stale_key_epoch` asks for the
+        // keys and another push, it does not park the item; an accepted
+        // deletion is reported, so the quota's refusals go again.
+        let (_dir, core) = unlocked_core();
+        let host = save_host(&core, "Stale", &random_text());
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let now = core.now();
+        let batch = engine::build_push(
+            &mut inner.store,
+            session,
+            &Selection::all(),
+            &HashSet::new(),
+            now,
+        )
+        .unwrap();
+        assert!(batch.sent.iter().any(|row| row.record_id == host));
+        let results: Vec<wire::PushResult> = batch
+            .sent
+            .iter()
+            .map(|row| wire::PushResult {
+                record_id: row.record_id,
+                status: if row.record_id == host {
+                    wire::ItemStatus::StaleKeyEpoch
+                } else {
+                    wire::ItemStatus::QuotaExceeded
+                },
+                seq: None,
+                current: None,
+            })
+            .collect();
+        let effects = engine::apply_push_results(
+            &mut inner.store,
+            session,
+            &batch.sent,
+            &results,
+            &Selection::all(),
+            now,
+        )
+        .unwrap();
+        assert!(effects.stale_key_epoch);
+        assert!(!effects.newer_epoch, "the keys decide, not the answer");
+        assert!(
+            effects
+                .failed
+                .iter()
+                .all(|(id, status)| *id != host && status == "quota_exceeded"),
+            "{:?}",
+            effects.failed
+        );
+        assert!(!effects.pushed_deletion);
+        let row = inner
+            .store
+            .record(&session.ring.vault_id(), &host)
+            .unwrap()
+            .unwrap();
+        assert_ne!(row.revision, row.synced_revision, "still pending");
     }
 
     #[test]

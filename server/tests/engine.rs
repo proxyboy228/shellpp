@@ -80,3 +80,50 @@ fn the_recovery_wrap_is_checked_until_it_is_right() {
         "checked again after the unlock"
     );
 }
+
+fn live_records(server: &Server) -> u64 {
+    server
+        .db
+        .tx(TxKind::Read, |tx| -> Result<u64, DbError> {
+            let rows = tx.query(
+                "SELECT record_id FROM records WHERE NOT tombstone",
+                &[],
+                &[Ty::Bytes],
+            )?;
+            Ok(rows.len() as u64)
+        })
+        .expect("records counted")
+}
+
+/// Run 7 finding 19 (section 6.5): an item refused for the quota is not
+/// retried by the automatic cycle, but is pushed in the cycle in which this
+/// device's deletion frees room.
+#[test]
+fn quota_refusals_go_again_after_a_pushed_deletion() {
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let old = a.host("old.example.com");
+    a.sync();
+    // The quota is what the account holds now.
+    let used = live_records(&server);
+    server.stop();
+    server.config.quota_max_records = Some(used);
+    server.resume();
+
+    a.host("new.example.com");
+    let report = a.sync();
+    assert_eq!(report.failed, 1, "refused for the quota");
+    assert_eq!(a.status().pending, 1);
+    let report = a.core.sync_auto().expect("automatic cycle");
+    assert_eq!(report.pushed, 0, "not retried in every cycle");
+    assert_eq!(a.status().failed, 1);
+
+    a.delete(old);
+    let report = a.core.sync_auto().expect("automatic cycle");
+    assert_eq!(report.pushed, 2, "the deletion, then the refused host");
+    let status = a.status();
+    assert_eq!((status.pending, status.failed), (0, 0));
+}
