@@ -109,6 +109,9 @@ pub(super) struct SyncRuntime {
     /// every cycle until then, and again when either changes (D173, 1.17).
     recovery_checked: Option<(Uuid, u64, u32)>,
     newer_epoch: bool,
+    /// Tests: the next merge at sign-in stops after its pull.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fail_merge: bool,
 }
 
 impl SyncRuntime {
@@ -1127,9 +1130,64 @@ impl Core {
         Ok(SignInOutcome::Done(self.sync_status()?))
     }
 
-    /// The wizard's Cancel at the TOTP step: the derived key goes.
+    /// The wizard's Cancel: the derived key of a TOTP step goes, and so
+    /// does the vault an abandoned merge at sign-in left (run 7 finding 18).
+    /// While a sign-in still runs nothing is removed; the next unlock does
+    /// it.
     pub fn sync_sign_in_cancel(&self) {
         self.inner().sync.pending = None;
+        self.abandoned_merge_cleanup();
+    }
+
+    /// Removes the account vaults an interrupted merge at sign-in left
+    /// (data-model 18.5): personal vaults that are neither the local
+    /// personal vault nor bound nor archived, with their records and rows,
+    /// and the `.rekey` files of recordings that name them. The local
+    /// vault's data is never touched: the merge copies it, and only its
+    /// last transaction switches the personal vault. Runs only when no
+    /// sign-in or sync is talking to the server (the guard is free).
+    pub(super) fn abandoned_merge_cleanup(&self) {
+        let Ok(_sync) = self.sync_guard.try_lock() else {
+            return;
+        };
+        let removed = (|| -> Result<Vec<Uuid>, CoreError> {
+            let mut guard = self.inner();
+            let Some(personal) = guard.personal_vault_id else {
+                return Ok(Vec::new());
+            };
+            let leftovers: Vec<Uuid> = guard
+                .store
+                .vaults()?
+                .into_iter()
+                .filter(|vault| {
+                    vault.kind == crate::service::dto::VaultKind::Personal
+                        && vault.status == crate::service::dto::VaultStatus::Active
+                        && !vault.bound
+                        && vault.vault_id != personal
+                })
+                .map(|vault| vault.vault_id)
+                .collect();
+            if leftovers.is_empty() {
+                return Ok(leftovers);
+            }
+            guard.store.write(|tx| {
+                for vault_id in &leftovers {
+                    tx.vault_purge(vault_id)?;
+                }
+                Ok(())
+            })?;
+            for vault_id in &leftovers {
+                recordings::remove_rekeys_for(&guard.store, *vault_id);
+            }
+            Ok(leftovers)
+        })();
+        match removed {
+            Ok(removed) if !removed.is_empty() => {
+                tracing::info!(count = removed.len(), "abandoned sign-in merge removed");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(code = error.code(), "abandoned merge not removed"),
+        }
     }
 
     /// The TOTP step of a sign-in.
@@ -1586,6 +1644,10 @@ impl Core {
         let inner = &mut *guard;
         if inner.state != LockState::Unlocked {
             return Err(CoreError::Locked);
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        if std::mem::take(&mut inner.sync.fail_merge) {
+            return Err(CoreError::Internal("injected merge failure"));
         }
         let mut old_session = inner.session.take().ok_or(CoreError::Locked)?;
         let outcome = self.merge_records(inner, &mut old_session, &mut new_session, now);
@@ -3963,6 +4025,33 @@ impl Core {
             self.emit_sync(inner);
             Ok(pairs.len())
         })
+    }
+
+    /// Test support (feature `test-hooks`): the next merge at sign-in stops
+    /// after it pulled the account vault, as a lost connection would.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn sync_merge_fail_once_for_test(&self) {
+        self.inner().sync.fail_merge = true;
+    }
+
+    /// Test support (feature `test-hooks`): every vault row as (id, kind,
+    /// status, bound).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn vault_rows_for_test(&self) -> Result<Vec<(Uuid, String, String, bool)>, CoreError> {
+        Ok(self
+            .inner()
+            .store
+            .vaults()?
+            .into_iter()
+            .map(|vault| {
+                (
+                    vault.vault_id,
+                    format!("{:?}", vault.kind).to_lowercase(),
+                    format!("{:?}", vault.status).to_lowercase(),
+                    vault.bound,
+                )
+            })
+            .collect())
     }
 
     /// Test support (feature `test-hooks`): writes a copy of a live

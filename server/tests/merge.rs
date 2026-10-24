@@ -404,3 +404,48 @@ fn the_merge_matches_cycles_and_every_account_twin() {
     pairs.dedup();
     assert_eq!(pairs, vec![account_db]);
 }
+
+/// Run 7 finding 18 (data-model 18.5): a merge that stops half-way leaves
+/// the account vault it began; giving up the sign-in removes it and only
+/// it, and a later sign-in merges as usual.
+#[test]
+fn an_abandoned_merge_leaves_no_extra_vault() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.host("account.example.com");
+    a.register(&server, &email, &password);
+
+    let l = Client::local("L", &new_password());
+    l.host("local.example.com");
+    let local_vault = l.vault_id();
+    l.core.sync_merge_fail_once_for_test();
+    let failed = l.core.sync_sign_in(shellpp_core::service::SignInInput {
+        origin: server.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    });
+    assert!(failed.is_err(), "the merge stopped");
+    let rows = l.core.vault_rows_for_test().expect("vaults");
+    assert_eq!(rows.len(), 2, "the begun account vault: {rows:?}");
+    assert_eq!(l.vault_id(), local_vault);
+
+    l.core.sync_sign_in_cancel();
+    let rows = l.core.vault_rows_for_test().expect("vaults");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, local_vault);
+    assert_eq!(
+        l.addresses(),
+        vec!["local.example.com"],
+        "local data intact"
+    );
+
+    done(l.sign_in(&server, &email, &password));
+    assert_eq!(
+        l.addresses(),
+        vec!["account.example.com", "local.example.com"]
+    );
+    assert_eq!(l.core.vault_rows_for_test().expect("vaults").len(), 1);
+}

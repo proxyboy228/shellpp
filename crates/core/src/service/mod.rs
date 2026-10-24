@@ -511,6 +511,7 @@ impl Core {
         let unlocked = self.try_device_unlock_impl()?;
         if unlocked {
             self.recordings_resume();
+            self.abandoned_merge_cleanup();
         }
         Ok(unlocked)
     }
@@ -541,8 +542,10 @@ impl Core {
     /// (D29), checked before any key derivation.
     pub fn unlock(&self, password: SecretString) -> Result<LockStatus, CoreError> {
         let status = self.unlock_impl(password)?;
-        // Upkeep after the session opened (storage-format.md 8.4).
+        // Upkeep after the session opened (storage-format.md 8.4;
+        // data-model 18.5).
         self.recordings_resume();
+        self.abandoned_merge_cleanup();
         Ok(status)
     }
 

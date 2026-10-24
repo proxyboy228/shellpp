@@ -232,6 +232,31 @@ pub(super) fn prepare_rekeys(store: &Store, old: &KeyRing, new: &KeyRing) -> Res
     Ok(())
 }
 
+/// Removes the `.rekey` files for `vault_id` (an account vault an
+/// abandoned sign-in left); the recordings keep opening with the vault
+/// they name.
+pub(super) fn remove_rekeys_for(store: &Store, vault_id: Uuid) {
+    let Some(dir) = recordings_dir(store) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some(REKEY_EXTENSION) {
+            continue;
+        }
+        let names_vault = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| Rekey::parse(&bytes))
+            .is_some_and(|rekey| rekey.vault_id == vault_id);
+        if names_vault {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// One recording to re-encrypt.
 struct Job {
     path: PathBuf,
