@@ -14,7 +14,11 @@ Shell++ is a self-hosted, local-first SSH client. Desktop platforms (Windows, ma
 
 ## Status
 
-Shell++ is approaching release 1.0. The desktop app works: hosts and groups, the keychain, an SSH terminal with tabs and split panes, a local terminal, Telnet and serial, SFTP, port forwarding, snippets, export and import. So does sync of a personal vault through a server you host yourself (`server/README.md`). Team vaults come after 1.0 (`docs/ROADMAP.md`).
+Shell++ is approaching release 1.0. The desktop app works: hosts and groups, the keychain (FIDO2 security keys on Windows), an SSH terminal with tabs and split panes, a local terminal, Telnet and serial, SFTP, port forwarding, jump hosts and proxies, snippets, logs, export and import (ssh config, PuTTY sessions, CSV). So does sync of a personal vault through a server you host yourself (`server/README.md`).
+
+Not there yet (`docs/ROADMAP.md`): team vaults (after 1.0), the mobile client (Android, after 1.0; Mosh comes with it), and the archive of a previous account. Known limits of the terminal are in `docs/compatibility.md` (on Windows, flags are drawn as two letters).
+
+Platforms of release 1.0: Windows (checked) and Linux (it builds and passes its tests in Docker, `scripts\verify-linux.ps1`; not yet tried on a Linux desktop, and dates are shown in UTC there). macOS builds are not checked: there is no Mac to test on.
 
 - There are no published releases yet: build it yourself (below). Releases need the owner's signing key (`docs/release.md`).
 - Data formats may still change before 1.0.
@@ -55,7 +59,7 @@ The variable stays set until the PowerShell session ends; `Remove-Item Env:SHELL
 
 ## Installing on Windows
 
-There are no published releases yet. CI builds the Windows artifact on pushes to main (job "Windows release artifact"); locally:
+There are no published releases yet. The CI workflow has a job that builds the Windows artifact ("Windows release artifact"), but GitHub Actions are turned off for now and checks run locally (D204); locally:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
