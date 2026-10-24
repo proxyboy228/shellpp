@@ -33,7 +33,9 @@
 #>
 param(
     # Also the deployment tests (CLAUDE.md, "Проверка развёртывания").
-    [switch] $Deploy
+    [switch] $Deploy,
+    # Only list the steps with their environment and command.
+    [switch] $List
 )
 
 $ErrorActionPreference = 'Continue'
@@ -53,49 +55,72 @@ foreach ($name in 'SHELLPP_TEST', 'SHELLPP_TEST_POSTGRES', 'SHELLPP_TEST_DEPLOY'
 }
 
 $server = @('--manifest-path', 'server/Cargo.toml')
-# (name, environment, cargo arguments)
+
+# One step: its name, its environment, its cargo arguments. A function, not
+# nested array literals: in PowerShell the comma binds tighter than `+`, so
+# `@('a', @{}, @('x') + $y)` is not three elements (run 10).
+function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments) {
+    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments }
+}
+$russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $steps = @(
-    @('metadata', @{}, @('metadata', '--locked', '--format-version', '1')),
-    @('metadata-server', @{}, @('metadata') + $server + @('--locked', '--format-version', '1')),
-    @('fmt', @{}, @('fmt', '--all', '--', '--check')),
-    @('clippy', @{}, @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
-    @('clippy-all-features', @{}, @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
-    @('test', @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }, @('test', '--locked', '--no-fail-fast', '--workspace')),
-    @('test-desktop-all-features', @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }, @('test', '--locked', '--no-fail-fast', '-p', 'shellpp-desktop', '--all-features')),
-    @('fmt-server', @{}, @('fmt') + $server + @('--all', '--', '--check')),
-    @('clippy-server', @{}, @('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--', '-D', 'warnings')),
-    @('clippy-server-all-features', @{}, @('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
-    @('test-server', @{ SHELLPP_TEST = '1' }, @('test', '--locked', '--no-fail-fast') + $server + @('--workspace')),
-    @('test-server-postgres', @{ SHELLPP_TEST = '1'; SHELLPP_TEST_POSTGRES = 'docker' }, @('test', '--locked', '--no-fail-fast') + $server + @('--workspace'))
+    (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
+    (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
+    (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
+    (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
+    (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
+    (Step 'test' $russh @('test', '--locked', '--no-fail-fast', '--workspace')),
+    (Step 'test-desktop-all-features' $russh @('test', '--locked', '--no-fail-fast', '-p', 'shellpp-desktop', '--all-features')),
+    (Step 'fmt-server' @{} (@('fmt') + $server + @('--all', '--', '--check'))),
+    (Step 'clippy-server' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--', '-D', 'warnings'))),
+    (Step 'clippy-server-all-features' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings'))),
+    (Step 'test-server' @{ SHELLPP_TEST = '1' } (@('test', '--locked', '--no-fail-fast') + $server + @('--workspace'))),
+    (Step 'test-server-postgres' @{ SHELLPP_TEST = '1'; SHELLPP_TEST_POSTGRES = 'docker' } (@('test', '--locked', '--no-fail-fast') + $server + @('--workspace')))
 )
 if ($Deploy) {
-    $steps += , @('test-deploy', @{ SHELLPP_TEST = '1'; SHELLPP_TEST_DEPLOY = 'docker' }, @('test', '--locked', '--no-fail-fast') + $server + @('--test', 'deploy', '--', '--test-threads=1'))
+    $steps += Step 'test-deploy' @{ SHELLPP_TEST = '1'; SHELLPP_TEST_DEPLOY = 'docker' } (@('test', '--locked', '--no-fail-fast') + $server + @('--test', 'deploy', '--', '--test-threads=1'))
+}
+
+if ($List) {
+    foreach ($step in $steps) {
+        $environment = ($step.Environment.Keys | Sort-Object | ForEach-Object { "$_=$($step.Environment[$_])" }) -join ' '
+        Write-Host ("{0,-28} {1,-50} cargo {2}" -f $step.Name, $environment, ($step.Arguments -join ' '))
+    }
+    exit 0
 }
 
 $failed = @()
+$passed = 0
 Push-Location $repo
 try {
     foreach ($step in $steps) {
-        $name, $environment, $arguments = $step
+        $name = $step.Name
         $log = Join-Path $logDir "$name.log"
         $saved = @{}
-        foreach ($key in $environment.Keys) {
+        foreach ($key in $step.Environment.Keys) {
             $saved[$key] = [Environment]::GetEnvironmentVariable($key)
-            [Environment]::SetEnvironmentVariable($key, $environment[$key])
+            [Environment]::SetEnvironmentVariable($key, $step.Environment[$key])
         }
         $started = Get-Date
         Write-Host ("{0,-28}" -f $name) -NoNewline
         # Start-Process keeps cargo's output as it is (UTF-8, no error
-        # records around the lines of stderr) and gives its exit code.
-        $process = Start-Process -FilePath 'cargo' -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logDir "$name.err.log")
-        $code = $process.ExitCode
+        # records around the lines of stderr) and gives its exit code. A
+        # step that does not even start is a failure.
+        $code = -1
+        try {
+            $process = Start-Process -FilePath 'cargo' -ArgumentList $step.Arguments -NoNewWindow -Wait -PassThru `
+                -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logDir "$name.err.log") -ErrorAction Stop
+            $code = $process.ExitCode
+        } catch {
+            Write-Host "could not start: $($_.Exception.Message)" -NoNewline
+        }
         foreach ($key in $saved.Keys) {
             [Environment]::SetEnvironmentVariable($key, $saved[$key])
         }
         $minutes = ((Get-Date) - $started).TotalMinutes.ToString('0.0')
         if ($code -eq 0) {
             Write-Host "ok      ($minutes min)" -ForegroundColor Green
+            $passed += 1
         } else {
             Write-Host "FAILED  ($minutes min, exit $code; $log)" -ForegroundColor Red
             $failed += $name
@@ -105,6 +130,9 @@ try {
     Pop-Location
 }
 
+if ($passed -ne $steps.Count -and $failed.Count -eq 0) {
+    $failed += 'the step count'
+}
 if ($failed.Count -gt 0) {
     Write-Host "verify: failed: $($failed -join ', ')" -ForegroundColor Red
     exit 1
