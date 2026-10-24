@@ -5781,6 +5781,31 @@ mod tests {
     }
 
     #[test]
+    fn a_set_aside_that_cannot_reopen_the_database_closes_the_session() {
+        // Cross review of run 9 (D190): "Also delete the local copy" fails
+        // to open the new database, and the old one does not open again
+        // either. The session must not go on writing to memory only.
+        let (_dir, core) = unlocked_core();
+        save_host(&core, "Kept", &random_text());
+        let vault_id = core.vaults().unwrap()[0].vault_id;
+        crate::store::fail_open::next(2);
+        assert!(core.sync_sign_out(true).is_err());
+        crate::store::fail_open::next(0);
+        assert_eq!(core.lock_status().state, LockState::Locked);
+        let saved = core.record_save(crate::service::dto::RecordSaveInput {
+            vault_id,
+            record_id: None,
+            record_type: crate::service::dto::RecordType::Host,
+            data: json!({"address": "lost.example.com"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            secrets: std::collections::BTreeMap::new(),
+        });
+        assert!(saved.is_err(), "no edit goes to a store in memory");
+    }
+
+    #[test]
     fn stale_key_epoch_keeps_the_item_pending_and_not_refused() {
         // Run 7 finding 19 (section 6.5): `stale_key_epoch` asks for the
         // keys and another push, it does not park the item; an accepted
