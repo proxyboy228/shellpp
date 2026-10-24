@@ -1,0 +1,83 @@
+name: Server deployment
+
+# The deployment tests of the sync server (server/tests/deploy.rs; D176,
+# D199; run 10): the server image from server/Dockerfile behind Caddy, two
+# real clients syncing through it, the encrypted backup recipe of
+# server/README.md end to end (back up, restore into a clean PostgreSQL,
+# `admin restored`), the backup rotation in the backup image's busybox, and
+# the compose file's settings. docs/security.md, section 14.4, says the
+# server's CI runs these recipes.
+#
+# They build images and need the network (base images, apk, crates.io), so
+# they run only when something they test changes: the server workspace
+# (its code, Dockerfile, deploy/ with the compose file and backup.sh), the
+# sync API and the core the server image and the test clients are built
+# from. Every container, network and volume carries the labels
+# shellpp-test=deploy and shellpp-run=<this run>; the last step removes
+# whatever a failed test left.
+
+on:
+  push:
+    paths:
+      - "server/**"
+      - "crates/sync-api/**"
+      - "crates/core/**"
+      - ".github/workflows/server-deploy.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - "crates/sync-api/**"
+      - "crates/core/**"
+      - ".github/workflows/server-deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: Deployment tests (Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SHELLPP_TEST: "1"
+      SHELLPP_TEST_DEPLOY: docker
+      SHELLPP_TEST_RUN: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: server
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # One test at a time: they share the Docker daemon and its ports.
+      - name: Deployment tests
+        run: cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --test deploy -- --test-threads=1
+
+      - name: Remove what the tests left
+        if: always()
+        run: |
+          label="label=shellpp-run=$SHELLPP_TEST_RUN"
+          docker ps --all --quiet --filter "$label" | xargs -r docker rm --force --volumes
+          docker network ls --quiet --filter "$label" | xargs -r docker network rm
+          docker volume ls --quiet --filter "$label" | xargs -r docker volume rm

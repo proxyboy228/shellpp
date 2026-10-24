@@ -697,6 +697,7 @@ Stage 0 has one Linux job for the frontend (D1). From stage 1 (stage 0 decision)
 | windows | Windows | Rust tests, russh integration, UI e2e, NSIS package (stage 9) |
 | macos | macOS | build, Rust tests, russh integration, iOS check, `.dmg` (stage 9) |
 | secret-scan | Linux | existing gitleaks workflow |
+| server-deploy | Linux | the sync server's deployment tests in Docker (`server/tests/deploy.rs`: the image behind Caddy with two clients, the encrypted backup recipe end to end, the backup rotation, the compose file), only on changes to `server/`, `crates/sync-api` and `crates/core`; its own workflow, `server-deploy.yml` (run 10) |
 
 ### 9.3 Test servers
 
