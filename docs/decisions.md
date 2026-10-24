@@ -2230,3 +2230,16 @@ Status: run 10 decision, 2026-10-24 (plan of run 10, section 3.5; ROADMAP 5, "FI
 **Decision:** A FIDO2 key is linked through "Key"; the "+" has no FIDO2 entry, and the FIDO2 form opens the key form. A `fido2_key_id` written by an older version still shows as its own row and can be unlinked. The field stays in the data model for compatibility.
 
 **Spec impact:** docs/ui-behavior-spec.md, section 3.1 (and `docs/ru`).
+
+### 202. The server's tests run in CI; superfluous copies after a sign-out before run 10 are accepted (run 11)
+
+Status: owner decision, 2026-10-24 (plan of run 11, section 2; ROADMAP 5, the two questions after run 10). One decision for both answers, as the plan asks.
+
+**Context.** (1) Section 9.2 placed "sync end-to-end with PostgreSQL" in the Linux job, but no workflow ran the server workspace's tests: CI ran only the deployment tests (`server-deploy.yml`, run 10), and the end-to-end, hostile server, property, fuzzing, load and fault tests ran only in the local full criterion. (2) A device that signed out before run 10 keeps no server generation (D197), so its next rebind keeps a conflict copy of every version a newer server version replaces, once: copies it may not need.
+
+**Decision:**
+
+- A workflow of its own, `server.yml`, runs the server workspace's tests on SQLite and then on PostgreSQL in Docker (`SHELLPP_TEST_POSTGRES=docker`), with `--locked` and `--no-fail-fast` as in the full criterion. It runs on the changes `server-deploy.yml` runs on: `server/`, `crates/sync-api`, `crates/core`, the root `Cargo.toml`, `rust-toolchain.toml` and the workflow itself. The plan named `server/` and `crates/sync-api` only; `crates/core` is in because the end-to-end tests drive the client's sync engine (a dev-dependency of the server), so a change to it must run them (owner's answer before run 11). The deployment tests stay in `server-deploy.yml`.
+- The superfluous copies of (2) are accepted: the owner has no bound devices yet, so no device signed out before this version.
+
+**Spec impact:** docs/architecture.md, sections 9.1 and 9.2; ROADMAP 5.

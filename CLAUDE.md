@@ -27,7 +27,8 @@ $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --
 
 Сервер (`server/`) — отдельный workspace, корневые команды его не видят;
 строки с `server/Cargo.toml` — его критерий: тесты на SQLite и они же на
-PostgreSQL в Docker.
+PostgreSQL в Docker. В CI эти тесты идут в workflow `server.yml` при тех же
+изменениях, что и тесты развёртывания (D202).
 
 Отдельно:
 

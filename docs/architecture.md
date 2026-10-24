@@ -676,7 +676,7 @@ npm: `pnpm licenses:check` (root `package.json`) checks production dependencies 
 | known-answer tests for envelopes, wraps, KDF and HKDF labels, using the vectors of [storage-format.md](storage-format.md) and [security.md](security.md) | `cargo test` | `crates/core/tests` | Linux, Windows, macOS | 1 |
 | SSH, SFTP and forwarding integration | `cargo test` with `SHELLPP_TEST_SSHD=openssh` | `crates/ssh/tests` | Linux (Docker) | 2 |
 | the same suite against the russh test server | `cargo test` with `SHELLPP_TEST_SSHD=russh` | `crates/ssh/tests` | Windows, macOS, Linux | 2 |
-| sync end-to-end: two clients and a server | `cargo test`; SQLite always, PostgreSQL as a CI service | `server/tests` | Linux | 7 |
+| sync end-to-end: two clients and a server | `cargo test`; SQLite always, PostgreSQL in Docker with `SHELLPP_TEST_POSTGRES=docker` | `server/tests` | Linux (CI), Windows (the full criterion of `CLAUDE.md`) | 7 |
 | UI e2e | WebdriverIO + tauri-driver, `e2e-mocks` build | `apps/desktop/e2e` | Linux (xvfb, WebKitWebDriver), Windows (msedgedriver matching the installed WebView2) | 1 |
 | macOS acceptance | build, unit and Rust integration tests, manual checklist | `docs/testing/macos-checklist.md` (from stage 1) | macOS | 1 |
 | mobile build check | `cargo check` of `shellpp-core` and `shellpp-ssh` | section 2.3 | Linux (Android), macOS (iOS) | 1 |
@@ -693,11 +693,12 @@ Stage 0 has one Linux job for the frontend (D1). From stage 1 (stage 0 decision)
 |---|---|---|
 | lint | Linux | rustfmt, clippy (both workspaces), `tsc`, eslint |
 | licenses | Linux | cargo-deny (both workspaces), npm license check |
-| linux | Linux | Rust tests, OpenSSH integration in Docker, sync end-to-end with PostgreSQL, UI e2e, Android check, packages (stage 9) |
+| linux | Linux | Rust tests, OpenSSH integration in Docker, UI e2e, Android check, packages (stage 9) |
 | windows | Windows | Rust tests, russh integration, UI e2e, NSIS package (stage 9) |
 | macos | macOS | build, Rust tests, russh integration, iOS check, `.dmg` (stage 9) |
 | secret-scan | Linux | existing gitleaks workflow |
 | server-deploy | Linux | the sync server's deployment tests in Docker (`server/tests/deploy.rs`: the image behind Caddy with two clients, the encrypted backup recipe end to end, the backup rotation, the compose file), only on changes to `server/`, `crates/sync-api`, `crates/core`, the root `Cargo.toml` and `rust-toolchain.toml`; its own workflow, `server-deploy.yml` (run 10) |
+| server | Linux | the sync server's own tests (the server workspace, the sync end-to-end tests with two clients included) on SQLite, then on PostgreSQL in Docker (`SHELLPP_TEST_POSTGRES=docker`, a `postgres:17-alpine` container per test binary), on the same changes as server-deploy; its own workflow, `server.yml` (D202, run 11) |
 
 ### 9.3 Test servers
 

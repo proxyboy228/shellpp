@@ -14,8 +14,9 @@ name: CI
 # test run uses the russh test server (tests/sshd, SHELLPP_TEST_SSHD=russh);
 # the integration job runs the shellpp-ssh suite and the desktop app's
 # session tests against OpenSSH in Docker (tests/openssh,
-# SHELLPP_TEST_SSHD=openssh). The sync server and packages join in later
-# stages.
+# SHELLPP_TEST_SSHD=openssh). The sync server's tests run in server.yml and
+# its deployment tests in server-deploy.yml, both only on the changes they
+# test; packages join in later stages.
 
 on:
   push:

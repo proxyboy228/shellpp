@@ -1,0 +1,91 @@
+name: Server tests
+
+# The sync server's own tests (docs/architecture.md, section 9.2; D202, run
+# 11): the whole server workspace, the sync end-to-end tests with real
+# clients included (server/tests: two clients and a server, the hostile
+# server, the "no data is lost" property, fuzzing, load, injected faults),
+# once on SQLite and once on PostgreSQL in Docker. With
+# SHELLPP_TEST_POSTGRES=docker every test binary starts its own
+# postgres:17-alpine container (labels shellpp-test=postgres and
+# shellpp-run=<this run>), which goes with the binary's process however it
+# ends. The deployment tests have their own workflow, server-deploy.yml;
+# without SHELLPP_TEST_DEPLOY they skip here.
+#
+# They run on the changes the deployment tests run on: the server
+# workspace, the sync API, the core the end-to-end tests' clients are built
+# from (a dev-dependency of the server), the root Cargo.toml they inherit
+# dependencies from and the toolchain.
+
+on:
+  push:
+    paths:
+      - "server/**"
+      - "crates/sync-api/**"
+      - "crates/core/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/server.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - "crates/sync-api/**"
+      - "crates/core/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/server.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    name: Server tests (SQLite, PostgreSQL in Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SHELLPP_TEST: "1"
+      SHELLPP_TEST_RUN: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: server
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Server tests (SQLite)
+        run: cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
+
+      # The same build, every server on PostgreSQL.
+      - name: Server tests (PostgreSQL in Docker)
+        if: ${{ !cancelled() }}
+        env:
+          SHELLPP_TEST_POSTGRES: docker
+        run: cargo test --locked --no-fail-fast --manifest-path server/Cargo.toml --workspace
+
+      - name: Remove what the tests left
+        if: always()
+        run: |
+          label="label=shellpp-run=$SHELLPP_TEST_RUN"
+          docker ps --all --quiet --filter "$label" | xargs -r docker rm --force --volumes
+          docker volume ls --quiet --filter "$label" | xargs -r docker volume rm
