@@ -69,6 +69,10 @@ pub(super) struct PendingKeyChange {
 struct ServerKeys {
     current_auth_key: Key32,
     auth_key: Option<Key32>,
+    /// The origin the auth keys were derived for (they are bound to it,
+    /// section 4.1): the confirmation goes only there (run 9 review
+    /// finding; D188's token binding stops it too).
+    origin: String,
 }
 
 /// Why a confirmed key change did not finish. The new key's fate differs,
@@ -193,12 +197,13 @@ impl Core {
         let context = self.unlocked_key_context()?;
         let (kek, server) = if self.bound()? {
             self.require_signed_in()?;
-            let (_, keys) = self.current_keys(&password)?;
+            let (link, keys) = self.current_keys(&password)?;
             (
                 keys.kek,
                 Some(ServerKeys {
                     current_auth_key: keys.auth_key,
                     auth_key: None,
+                    origin: link.api.origin().to_owned(),
                 }),
             )
         } else {
@@ -272,6 +277,7 @@ impl Core {
             server: Some(ServerKeys {
                 current_auth_key: current_keys.auth_key,
                 auth_key: Some(derived.auth_key),
+                origin: origin.clone(),
             }),
             recovery_key: Key32::generate()?,
         })
@@ -466,6 +472,9 @@ impl Core {
             .ok_or(NotAccepted(CoreError::Internal("server keys")))?;
         let link = self.link().map_err(NotAccepted)?;
         let origin = link.api.origin().to_owned();
+        if origin != server.origin {
+            return Err(NotAccepted(CoreError::WrongState));
+        }
         // The `device` row as it is now (the option may have changed while
         // the key was shown); the other key rows must be the prepared ones.
         let context = {
