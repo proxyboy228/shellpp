@@ -45,19 +45,20 @@ fn rate_limited(seconds: u64) -> ApiError {
     ApiError::rate_limited(seconds)
 }
 
-/// Checks `current_auth_key` of a known user, counting the attempt for the
-/// email until it passed (section 10.1; D174). [`check_current_auth_key`]
-/// runs it outside any transaction; only `/account/password` and
-/// `/account/recovery-key` still call it inside theirs (D174).
-fn check_auth_key(shared: &Shared, user: &User, key: &[u8]) -> ApiResult<()> {
+/// Checks `current_auth_key` of a known user from the client at `ip`,
+/// counting the attempt for the email and network until it passed and a
+/// failure for the email (section 10.1; D174, D178). Called by
+/// [`check_current_auth_key`], outside any transaction.
+fn check_auth_key(shared: &Shared, user: &User, key: &[u8], ip: IpAddr) -> ApiResult<()> {
     shared
         .limiters
-        .signin_attempt(&user.email)
+        .signin_attempt(&user.email, ip)
         .map_err(rate_limited)?;
     if key.len() == 32 && secrets::check_verifier(&user.auth_verifier, key) {
-        shared.limiters.signin_succeeded(&user.email);
+        shared.limiters.signin_succeeded(&user.email, ip);
         Ok(())
     } else {
+        shared.limiters.signin_failed(&user.email);
         Err(ApiError::invalid_credentials())
     }
 }
@@ -175,6 +176,7 @@ pub fn check_sign_in(
     email: &str,
     kind: KeyKind,
     key: &[u8],
+    ip: IpAddr,
 ) -> ApiResult<CheckedKey> {
     // No account has an email longer than registration allows: such a one
     // is refused like an unknown email, without being counted or kept
@@ -185,7 +187,7 @@ pub fn check_sign_in(
     };
     shared
         .limiters
-        .signin_attempt(&email)
+        .signin_attempt(&email, ip)
         .map_err(rate_limited)?;
     let user = shared.db.tx(TxKind::Read, |tx| user_by_email(tx, &email))?;
     let verifier = user
@@ -197,7 +199,7 @@ pub fn check_sign_in(
         });
     match (user, verifier) {
         (Some(user), Some(verifier)) if secrets::check_verifier(&verifier, key) => {
-            shared.limiters.signin_succeeded(&email);
+            shared.limiters.signin_succeeded(&email, ip);
             Ok(CheckedKey {
                 user_id: user.user_id,
                 kind,
@@ -209,6 +211,7 @@ pub fn check_sign_in(
             if verifier.is_none() {
                 let _ = secrets::check_verifier(&shared.dummy_verifier, key);
             }
+            shared.limiters.signin_failed(&email);
             Err(ApiError::invalid_credentials())
         }
     }
@@ -222,8 +225,9 @@ pub fn check_current_auth_key(
     shared: &Shared,
     principal: &Principal,
     key: &[u8],
+    ip: IpAddr,
 ) -> ApiResult<CheckedKey> {
-    check_current_auth_key_after(shared, principal, key, |_| Ok(()))
+    check_current_auth_key_after(shared, principal, key, ip, |_| Ok(()))
 }
 
 /// [`check_current_auth_key`] after `first`, a check of the request against
@@ -233,11 +237,12 @@ pub fn check_current_auth_key_after(
     shared: &Shared,
     principal: &Principal,
     key: &[u8],
+    ip: IpAddr,
     first: impl FnOnce(&User) -> ApiResult<()>,
 ) -> ApiResult<CheckedKey> {
     let user = shared.db.tx(TxKind::Read, |tx| me(tx, principal))?;
     first(&user)?;
-    check_auth_key(shared, &user, key)?;
+    check_auth_key(shared, &user, key, ip)?;
     Ok(CheckedKey {
         user_id: user.user_id,
         kind: KeyKind::Auth,
@@ -973,11 +978,12 @@ pub fn password_change(
     tx: &mut dyn Tx,
     shared: &Shared,
     principal: &Principal,
+    checked: &CheckedKey,
     request: PasswordChangeRequest,
     now: OffsetDateTime,
 ) -> ApiResult<Tokens> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    let _ = shared;
+    let user = checked.user(tx)?;
     if !request.kdf.server_acceptable() {
         return Err(ApiError::weak_kdf());
     }
@@ -1112,11 +1118,12 @@ pub fn recovery_key_reissue(
     tx: &mut dyn Tx,
     shared: &Shared,
     principal: &Principal,
+    checked: &CheckedKey,
     request: RecoveryKeyReissueRequest,
     now: OffsetDateTime,
 ) -> ApiResult<RecoveryKeyReissueResponse> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    let _ = shared;
+    let user = checked.user(tx)?;
     exact_len(request.recovery_auth_key.as_bytes(), 32)?;
     exact_len(request.kek_wrap.as_bytes(), WRAP_LEN)?;
     apply_rotation(tx, &user, &request.rotation, now)?;

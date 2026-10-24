@@ -441,6 +441,92 @@ impl TotpDelays {
     }
 }
 
+/// The longest soft delay of failed sign-ins of one email (D178): the
+/// longest one try waits because of failures from other networks.
+pub const SIGNIN_SOFT_MAX_DELAY: Duration = Duration::from_secs(4 * 60);
+/// A network a successful sign-in of the email came from stays known this
+/// long after the last one.
+pub const SIGNIN_KNOWN_FOR: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// The known networks kept per email, the most recent.
+const SIGNIN_KNOWN_MAX: usize = 8;
+
+/// The soft limit of failed sign-ins (and `current_auth_key` checks and
+/// recoveries) of one email from every network together (D178): after
+/// the free failures, 2 seconds doubling up to [`SIGNIN_SOFT_MAX_DELAY`];
+/// it never holds a network a successful sign-in of the email came from in
+/// the last 30 days. Keyed by the email's SHA-256; in memory only.
+#[derive(Debug, Default)]
+pub struct SigninSoft {
+    emails: Mutex<HashMap<[u8; 32], Strikes>>,
+    known: Mutex<HashMap<[u8; 32], KnownNetworks>>,
+}
+
+/// Networks and the time each was last seen.
+type KnownNetworks = Vec<(IpAddr, Instant)>;
+
+impl SigninSoft {
+    /// `Err(seconds)` while `email` must wait before a try from `ip`.
+    pub fn check(&self, email: &[u8; 32], ip: IpAddr, free: u32, now: Instant) -> Result<(), u64> {
+        let network = network_of(ip);
+        let known = lock(&self.known).get(email).is_some_and(|networks| {
+            networks.iter().any(|(other, seen)| {
+                *other == network && now.saturating_duration_since(*seen) < SIGNIN_KNOWN_FOR
+            })
+        });
+        if known {
+            return Ok(());
+        }
+        let wait = lock(&self.emails)
+            .get(email)
+            .map_or(Duration::ZERO, |strikes| {
+                strikes.wait(now, free, SIGNIN_SOFT_MAX_DELAY)
+            });
+        if wait.is_zero() {
+            Ok(())
+        } else {
+            Err(wait.as_secs() + u64::from(wait.subsec_nanos() > 0))
+        }
+    }
+
+    /// A failed try for `email`.
+    pub fn fail(&self, email: &[u8; 32], now: Instant) {
+        add_strike(&mut lock(&self.emails), *email, now);
+    }
+
+    /// A successful sign-in of `email` from `ip`: that network is known.
+    pub fn succeed(&self, email: &[u8; 32], ip: IpAddr, now: Instant) {
+        let network = network_of(ip);
+        let mut known = lock(&self.known);
+        if known.len() > TOTP_MAX_ENTRIES {
+            known.retain(|_, networks| {
+                networks
+                    .retain(|(_, seen)| now.saturating_duration_since(*seen) < SIGNIN_KNOWN_FOR);
+                !networks.is_empty()
+            });
+        }
+        if known.len() > TOTP_MAX_ENTRIES && !known.contains_key(email) {
+            return;
+        }
+        let networks = known.entry(*email).or_default();
+        networks.retain(|(other, seen)| {
+            *other != network && now.saturating_duration_since(*seen) < SIGNIN_KNOWN_FOR
+        });
+        if networks.len() >= SIGNIN_KNOWN_MAX {
+            networks.remove(0);
+        }
+        networks.push((network, now));
+    }
+
+    /// Drops what is forgotten.
+    pub fn prune(&self, now: Instant) {
+        lock(&self.emails).retain(|_, strikes| strikes.at(now) > 0);
+        lock(&self.known).retain(|_, networks| {
+            networks.retain(|(_, seen)| now.saturating_duration_since(*seen) < SIGNIN_KNOWN_FOR);
+            !networks.is_empty()
+        });
+    }
+}
+
 /// The key of the bearer-token window: an IPv4 address, or the /64 of an
 /// IPv6 one (one host usually holds a whole /64, so rotating addresses
 /// inside it must not reset the window; review finding).
@@ -462,7 +548,9 @@ pub struct Limiters {
     api_device: DefaultKeyedRateLimiter<Uuid>,
     push_device: DefaultKeyedRateLimiter<Uuid>,
     /// Keyed by normalized email, known or not (section 10.1).
-    pub failures: FailureWindows<[u8; 32]>,
+    pub failures: FailureWindows<([u8; 32], IpAddr)>,
+    /// The soft limit of failed sign-ins per email (D178).
+    pub signin_soft: SigninSoft,
     /// The TOTP delays, per account and client network and per account.
     pub totp: TotpDelays,
     /// Bearer tokens that did not authenticate, keyed by client IP.
@@ -503,6 +591,7 @@ impl Limiters {
         self.api_device.shrink_to_fit();
         self.push_device.shrink_to_fit();
         self.totp.prune(Instant::now());
+        self.signin_soft.prune(Instant::now());
     }
 
     pub fn new(limits: RateLimits) -> Self {
@@ -521,6 +610,7 @@ impl Limiters {
                 limits.push_per_minute,
             )),
             failures: FailureWindows::default(),
+            signin_soft: SigninSoft::default(),
             totp: TotpDelays::default(),
             token_failures: FailureWindows::default(),
         }
@@ -544,19 +634,39 @@ impl Limiters {
         self.push_device.check_key(&device).map_err(wait_seconds)
     }
 
-    /// Before a sign-in or an auth key check for `email`: counts it as a
-    /// failure until [`Self::signin_succeeded`] takes it back (D174).
-    pub fn signin_attempt(&self, email: &str) -> Result<(), u64> {
-        self.failures.charge(
-            &email_key(email),
-            self.limits.failures_per_window,
-            Instant::now(),
-        )
+    /// Before a sign-in or an auth key check for `email` from `ip` (D178):
+    /// the soft delay of the email, then the window of the email on that
+    /// network, which counts the try as a failure until
+    /// [`Self::signin_succeeded`] takes it back (D174).
+    pub fn signin_attempt(&self, email: &str, ip: IpAddr) -> Result<(), u64> {
+        let key = email_key(email);
+        let now = Instant::now();
+        let pair = (key, network_of(ip));
+        let max = self.limits.failures_per_window;
+        // The longer of the two waits, so the answer is never early.
+        let window = self.failures.check(&pair, max, now).err().unwrap_or(0);
+        let soft = self
+            .signin_soft
+            .check(&key, ip, max, now)
+            .err()
+            .unwrap_or(0);
+        if window.max(soft) > 0 {
+            return Err(window.max(soft));
+        }
+        self.failures.charge(&pair, max, now)
     }
 
-    /// The check that [`Self::signin_attempt`] counted passed.
-    pub fn signin_succeeded(&self, email: &str) {
-        self.failures.refund(&email_key(email));
+    /// The check that [`Self::signin_attempt`] counted passed: the try is
+    /// taken back and the network is known for the email.
+    pub fn signin_succeeded(&self, email: &str, ip: IpAddr) {
+        let key = email_key(email);
+        self.failures.refund(&(key, network_of(ip)));
+        self.signin_soft.succeed(&key, ip, Instant::now());
+    }
+
+    /// The check that [`Self::signin_attempt`] counted failed.
+    pub fn signin_failed(&self, email: &str) {
+        self.signin_soft.fail(&email_key(email), Instant::now());
     }
 
     /// Before a TOTP code of `user` from `ip` is checked (D175): at sign-in
@@ -878,12 +988,13 @@ mod tests {
     fn failure_windows_keep_hashed_keys_and_stay_at_their_cap() {
         let limiters = Limiters::new(RateLimits::default());
         let long = "x".repeat(1 << 20);
-        limiters.signin_attempt(&long).unwrap();
+        let ip: IpAddr = "192.0.2.1".parse().unwrap();
+        limiters.signin_attempt(&long, ip).unwrap();
         assert_eq!(limiters.failures.len(), 1);
         assert!(
             limiters
                 .failures
-                .check(&email_key(&long), 1, Instant::now())
+                .check(&(email_key(&long), ip), 1, Instant::now())
                 .is_err(),
             "counted under its 32-byte hash"
         );
@@ -914,6 +1025,38 @@ mod tests {
                 .is_err()
         );
         limiters.auth("2001:db8:0:2::1".parse().unwrap()).unwrap();
+    }
+
+    /// D178: the soft delay of an email holds every network but the ones
+    /// a successful sign-in came from, and never passes 4 minutes.
+    #[test]
+    fn the_soft_signin_limit_spares_known_networks_and_stays_below_4_minutes() {
+        let soft = SigninSoft::default();
+        let email = email_key("alice@example.com");
+        let home: IpAddr = "192.0.2.1".parse().unwrap();
+        let fresh: IpAddr = "198.51.100.1".parse().unwrap();
+        let mut now = Instant::now();
+        soft.succeed(&email, home, now);
+        for i in 0..40u8 {
+            let ip = IpAddr::from([203, 0, 113, i]);
+            if let Err(wait) = soft.check(&email, ip, 10, now) {
+                assert!(wait <= 240, "{wait}");
+                now += secs(wait);
+            }
+            soft.fail(&email, now);
+        }
+        assert_eq!(soft.check(&email, fresh, 10, now), Err(240));
+        soft.check(&email, home, 10, now).expect("a known network");
+        // Known for 30 days after the last success.
+        assert!(
+            soft.check(&email, home, 10, now + SIGNIN_KNOWN_FOR).is_ok(),
+            "forgotten too"
+        );
+        soft.fail(&email, now + SIGNIN_KNOWN_FOR);
+        assert!(
+            soft.check(&email, home, 10, now + SIGNIN_KNOWN_FOR).is_ok(),
+            "counted from one"
+        );
     }
 
     #[test]

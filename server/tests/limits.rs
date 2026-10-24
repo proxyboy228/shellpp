@@ -509,3 +509,53 @@ fn the_auth_limit_keys_clients_by_the_trusted_forwarded_address_only() {
         .collect();
     assert_eq!(statuses, [200, 200, 200, 200], "a bucket per client");
 }
+
+// ---------------------------------------------------------------------------
+// Failed sign-ins per email and network (D178)
+// ---------------------------------------------------------------------------
+
+fn login_from(server: &Server, email: &str, key: &[u8], ip: &str) -> RawAnswer {
+    raw_http(
+        server,
+        "POST",
+        "/v1/auth/login",
+        &[
+            ("content-type", "application/json"),
+            ("x-forwarded-for", ip),
+        ],
+        &login_body(email, key),
+    )
+}
+
+/// Cross review (D178): someone who knows only the email cannot lock the
+/// owner out. Ten wrong keys from one network close that network's window
+/// (15 minutes); the network the owner signed in from before still signs
+/// in at once, and a network never seen waits at most the soft delay of
+/// the email (here 2 s), then signs in.
+#[test]
+fn wrong_keys_from_one_network_do_not_lock_the_owner_out() {
+    let server = proxied(RateLimits::generous());
+    let (email, auth_key, _) = register(&server);
+    let ok = login_from(&server, &email, &auth_key, USER);
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    for _ in 0..10 {
+        let answer = login_from(&server, &email, &[7; 32], ATTACKER);
+        assert_eq!(
+            answer.code(),
+            Some("invalid_credentials"),
+            "{}",
+            answer.body
+        );
+    }
+    let closed = login_from(&server, &email, &auth_key, ATTACKER);
+    assert_delayed(&closed, 800..=900);
+    // The owner's network: no wait at all.
+    let ok = login_from(&server, &email, &auth_key, USER);
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    // A new network: the soft delay of the email, never more.
+    let fresh = "203.0.113.50";
+    let wait = assert_delayed(&login_from(&server, &email, &auth_key, fresh), 1..=2);
+    wait_out(wait);
+    let ok = login_from(&server, &email, &auth_key, fresh);
+    assert_eq!(ok.status, 200, "{}", ok.body);
+}

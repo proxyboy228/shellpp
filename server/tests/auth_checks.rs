@@ -178,7 +178,13 @@ impl Fixture {
     /// The key of a login or `recover/begin`, checked outside any
     /// transaction (D174).
     fn sign_in_key(&self, email: &str, kind: KeyKind, key: &[u8]) -> ApiResult<CheckedKey> {
-        accounts::check_sign_in(&self.shared, &secrets::normalize_email(email), kind, key)
+        accounts::check_sign_in(
+            &self.shared,
+            &secrets::normalize_email(email),
+            kind,
+            key,
+            IP,
+        )
     }
 
     /// `f` with `key` checked as the `current_auth_key` of `principal`
@@ -189,7 +195,7 @@ impl Fixture {
         key: &[u8],
         f: impl FnOnce(&mut dyn Tx, &Shared, &CheckedKey) -> ApiResult<T>,
     ) -> ApiResult<T> {
-        let checked = accounts::check_current_auth_key(&self.shared, principal, key)?;
+        let checked = accounts::check_current_auth_key(&self.shared, principal, key, IP)?;
         self.write(|tx, shared| f(tx, shared, &checked))
     }
 
@@ -696,7 +702,10 @@ fn auth_keys_are_checked_against_their_verifiers() {
             kek_wrap: B64(vec![4; 73]),
             rotation: None,
         };
-        fx.write(|tx, shared| accounts::password_change(tx, shared, &principal, request, t0))
+        let key = request.current_auth_key.as_bytes().to_vec();
+        fx.signed_in(&principal, &key, |tx, shared, checked| {
+            accounts::password_change(tx, shared, &principal, checked, request, t0)
+        })
     };
     refused(change(&wrong[0]), 401, code::INVALID_CREDENTIALS);
     fx.login(&a.email, &a.auth_key, a.device_id)
@@ -727,7 +736,7 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
     let recovery = fx
         .sign_in_key(&a.email, KeyKind::Recovery, &a.recovery_auth_key)
         .expect("the recovery key");
-    let current = accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key)
+    let current = accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key, IP)
         .expect("the current auth key");
     let set = |column: &str| {
         fx.exec(
@@ -772,7 +781,7 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
             .limiters
             .failures
             .check(
-                &shellpp_server::ratelimit::email_key(&a.email),
+                &(shellpp_server::ratelimit::email_key(&a.email), IP),
                 1,
                 std::time::Instant::now()
             )
@@ -796,7 +805,7 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
     // The account deleted in between: a signed-in check is `unauthenticated`.
     let b = fx.register(t0);
     let principal = fx.authenticate(&b.tokens.access_token.0, t0).unwrap();
-    let current = accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key)
+    let current = accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key, IP)
         .expect("the current auth key");
     fx.write(|tx, _| accounts::delete_user(tx, b.user_id))
         .unwrap();
@@ -836,7 +845,8 @@ fn a_session_ended_after_the_key_check_changes_nothing() {
     // A device revoked after the check.
     let a = fx.register(t0);
     let principal = fx.authenticate(&a.tokens.access_token.0, t0).unwrap();
-    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key).unwrap();
+    let checked =
+        accounts::check_current_auth_key(&fx.shared, &principal, &a.auth_key, IP).unwrap();
     fx.write(|tx, _| accounts::device_revoke(tx, &principal, a.device_id, t0))
         .unwrap();
     refused(
@@ -848,7 +858,8 @@ fn a_session_ended_after_the_key_check_changes_nothing() {
     // An account disabled after the check.
     let b = fx.register(t0);
     let principal = fx.authenticate(&b.tokens.access_token.0, t0).unwrap();
-    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key).unwrap();
+    let checked =
+        accounts::check_current_auth_key(&fx.shared, &principal, &b.auth_key, IP).unwrap();
     admin::user_disable(&fx.server.db, &b.email, true).unwrap();
     refused(
         email_change(&checked, &principal),
@@ -867,7 +878,8 @@ fn a_session_ended_after_the_key_check_changes_nothing() {
     // A session alive goes through.
     let c = fx.register(t0);
     let principal = fx.authenticate(&c.tokens.access_token.0, t0).unwrap();
-    let checked = accounts::check_current_auth_key(&fx.shared, &principal, &c.auth_key).unwrap();
+    let checked =
+        accounts::check_current_auth_key(&fx.shared, &principal, &c.auth_key, IP).unwrap();
     email_change(&checked, &principal).expect("changed");
 }
 

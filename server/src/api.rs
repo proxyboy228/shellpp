@@ -324,10 +324,11 @@ async fn current_auth_key(
     state: &AppState,
     principal: Principal,
     key: &B64,
+    ip: IpAddr,
 ) -> ApiResult<CheckedKey> {
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
-        accounts::check_current_auth_key(shared, &principal, &key)
+        accounts::check_current_auth_key(shared, &principal, &key, ip)
     })
     .await
 }
@@ -339,11 +340,12 @@ async fn sign_in_key(
     email: &str,
     kind: KeyKind,
     key: &B64,
+    ip: IpAddr,
 ) -> ApiResult<CheckedKey> {
     let email = email.to_owned();
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
-        accounts::check_sign_in(shared, &email, kind, &key)
+        accounts::check_sign_in(shared, &email, kind, &key, ip)
     })
     .await
 }
@@ -482,9 +484,10 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<LoginRequest>,
 ) -> ApiResult<Response> {
-    let checked = sign_in_key(&state, &request.email, KeyKind::Auth, &request.auth_key).await?;
+    let checked = sign_in_key(&state, &request.email, KeyKind::Auth, &request.auth_key, ip).await?;
     let shared = state.clone();
     let response = state
         .db
@@ -540,6 +543,7 @@ async fn revoke(
 
 async fn recover_begin(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Body(request): Body<RecoverBeginRequest>,
 ) -> ApiResult<Response> {
     let checked = sign_in_key(
@@ -547,6 +551,7 @@ async fn recover_begin(
         &request.email,
         KeyKind::Recovery,
         &request.recovery_auth_key,
+        ip,
     )
     .await?;
     let response = state
@@ -610,14 +615,16 @@ async fn account(State(state): State<AppState>, Auth(principal): Auth) -> ApiRes
 
 async fn password(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<PasswordChangeRequest>,
 ) -> ApiResult<Response> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     let tokens = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::password_change(tx, &shared, &principal, request, model::now())
+            accounts::password_change(tx, &shared, &principal, &checked, request, model::now())
         })
         .await?;
     Ok(Json(TokensResponse { tokens }).into_response())
@@ -625,14 +632,16 @@ async fn password(
 
 async fn recovery_key(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<RecoveryKeyReissueRequest>,
 ) -> ApiResult<Response> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::recovery_key_reissue(tx, &shared, &principal, request, model::now())
+            accounts::recovery_key_reissue(tx, &shared, &principal, &checked, request, model::now())
         })
         .await?;
     Ok(Json(response).into_response())
@@ -640,10 +649,11 @@ async fn recovery_key(
 
 async fn email(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<EmailChangeRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -660,10 +670,11 @@ async fn email_verify(Auth(_principal): Auth) -> ApiError {
 
 async fn totp_setup(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     Body(request): Body<CurrentAuth>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     let response = state
         .db
@@ -696,7 +707,7 @@ async fn totp_disable(
     Auth(principal): Auth,
     Body(request): Body<TotpDisableRequest>,
 ) -> ApiResult<StatusCode> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     state
         .db
@@ -727,7 +738,7 @@ async fn account_delete(
     Auth(principal): Auth,
     Body(request): Body<AccountDeleteRequest>,
 ) -> ApiResult<StatusCode> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let checked = current_auth_key(&state, principal, &request.current_auth_key, ip).await?;
     let shared = state.clone();
     state
         .db
@@ -784,6 +795,7 @@ async fn vault_keys(
 
 async fn key_epochs(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     Auth(principal): Auth,
     PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PersonalKeyEpochRequest>,
@@ -791,7 +803,7 @@ async fn key_epochs(
     // An unknown or foreign vault answers before the key is checked.
     let key = Zeroizing::new(request.current_auth_key.as_bytes().to_vec());
     let checked = argon2(&state, move |shared| {
-        accounts::check_current_auth_key_after(shared, &principal, &key, |user| {
+        accounts::check_current_auth_key_after(shared, &principal, &key, ip, |user| {
             if user.personal_vault_id == vault_id {
                 Ok(())
             } else {

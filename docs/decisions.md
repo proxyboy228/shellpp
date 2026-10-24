@@ -1851,7 +1851,7 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.1; the run 7 report, section 10
   - The failure windows keep an email as its SHA-256 (32 bytes, and no email in memory) and hold at most 100,000 keys: past that, ended windows go first, then the oldest down to half. The per-address limit of the auth endpoints keys an IPv6 client by its /64, as the bearer-token window does.
   - At most 64 requests wait for an Argon2id slot, each at most 20 seconds; one more, or one that waited too long, is answered `429 rate_limited` with `Retry-After: 5` instead of holding its body in memory while it waits.
   - The write of a signed-in request checks its session again: an access token of its family on its device, the device not revoked and the account not disabled; else `401 unauthenticated` and nothing changes. A device revoked or an account disabled between the check and the write no longer lets the request through.
-- `/account/password` and `/account/recovery-key` keep their check inside the transaction in this run (another agent extends them and the combined request of D173, item 2); at the merge they move to the same helper: the handler calls `current_auth_key` and the operation takes the user with `CheckedKey::user`. The new verifiers of password changes, email changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
+- `/account/password` and `/account/recovery-key` kept their check inside the transaction until the merge of the run; then they moved to the same helper (D178). The new verifiers of password changes, email changes, recoveries and reissues are still made inside their transactions: those requests need a valid token or ticket.
 
 **Spec impact:** docs/sync-protocol.md, section 4.4 (server rules).
 
@@ -2026,3 +2026,18 @@ Status: run 9 decision, 2026-10-24 (plan, 2.5 and 3.6; D173, item 5; run 8 agent
 - Tests: a russh server written for the test asks the forwarded agent for identities and for a signature by a key it learned earlier: while the app refuses, nothing is listed or signed and the system agent receives no request; allowed, it lists and signs; refused again, it stops at once (the test fails when the check is removed). A lock that lands after the request was checked (during a confirmation) keeps the system agent from signing, and one that lands while the system agent signs keeps the signature from the host. The desktop reads the setting at each lock; the Security switch is off by default and stores the choice; an export leaves the setting out and no import, a full restore included, takes it.
 
 **Spec impact:** docs/security.md, sections 8 and 11.2; docs/ui-behavior-spec.md, sections 3.1, 13.3 and 13.4 (and `docs/ru`); docs/data-model.md, section 16.1; the user guide, chapter 3 (and `docs/guide/ru`).
+
+### 178. Failed sign-ins: a window per email and network, and a soft limit per email (run 9)
+
+Status: run 9 decision, 2026-10-24 (the cross review of run 9, theme 2, finding 3; D173, item 1.2, which rules full lockouts out for TOTP). Replaces the key of the failed sign-in row of docs/sync-protocol.md, section 10.1 (stage 0 decision: 10 failures per 15 minutes per email). Amends D174.
+
+**Context.** The failure window was keyed by the email alone: ten wrong keys in 15 minutes from one address made `login`, `recover/begin` and every `current_auth_key` check (email change, TOTP, deletion, key epochs, password change, reissue) answer `429` for the owner from any network, for as long as someone who knows only the email keeps going. D175 had removed the same kind of lockout from TOTP.
+
+**Decision:**
+
+- The window counts per email and client network (an IPv4 address, the /64 of an IPv6 one): 10 failures per 15 minutes (`SHELLPP_RATE_LIMIT_FAILED_SIGNINS`), then `429` with `Retry-After` until the window ends, for that network only. An attempt still counts from before its Argon2id check until it passes (D174).
+- A soft limit per email over every network: after 10 failures (the same setting), 2 seconds doubling up to 4 minutes, from the last failure. It does not hold a network a successful sign-in or `current_auth_key` check of the email came from in the last 30 days (8 networks per email). Failures are forgotten 24 hours after the last one. The answer is the longer of the two waits.
+- Everything is in memory and keyed by the email's SHA-256 (D174). Every check of an auth key outside the transaction now takes the client network, including `/account/password` and `/account/recovery-key`, which moved to `CheckedKey` (the merge of D174, item 4, done).
+- What it gives: from one network 40 wrong keys an hour as before (with Argon2id, the 64 MiB client KDF and the email-bound salt behind each); the owner's usual networks are never held, and a new network waits at most 4 minutes per try. A spread attack from many networks takes at most 15 wrong keys an hour from networks the email has not signed in from, once the soft limit is at its cap.
+
+**Spec impact:** docs/sync-protocol.md, section 10.1 (the failed sign-in row and the paragraph after the table); server/README.md ("Client addresses").
