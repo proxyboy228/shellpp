@@ -1912,8 +1912,10 @@ impl Core {
         // login went through before that could be known (the email may
         // have changed, SP 5.4), so its session is revoked rather than left
         // open on that account (D209). Best effort: the refusal stands.
-        if let Err(CoreError::Sync(HttpError::Refused("previous_account"))) = &step {
-            let _ = api.revoke(&tokens.refresh_token.0);
+        if let Err(CoreError::Sync(HttpError::Refused("previous_account"))) = &step
+            && let Err(error) = api.revoke(&tokens.refresh_token.0)
+        {
+            tracing::warn!(?error, "the refused sign-in's session was not revoked");
         }
         let (db_id, device_id, old_vault) = step?;
         // Step 2: pull the account vault into a session of its own. Rows

@@ -45,14 +45,33 @@ function Fail([string] $message) {
     exit 1
 }
 
-& docker info --format '{{.OSType}}' 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail 'Docker (Linux containers) is not running' }
+# Docker with Linux containers, or nothing runs. Every docker call goes
+# through Start-Process (as verify.ps1 does): the output stays as it is, and
+# a step that does not even start is a failure, never a pass (review of run
+# 12: with no docker on the PATH the script read as green).
+function Invoke-Docker([string[]] $Arguments, [string] $Log) {
+    $quoted = $Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
+    try {
+        $process = Start-Process -FilePath 'docker' -ArgumentList $quoted -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -ErrorAction Stop
+        return $process.ExitCode
+    } catch {
+        Add-Content -LiteralPath "$Log.err" -Value "could not start docker: $($_.Exception.Message)"
+        return -1
+    }
+}
+
+$infoLog = Join-Path $logDir 'docker-info.log'
+$code = Invoke-Docker @('info', '--format', '{{.OSType}}') $infoLog
+$osType = if (Test-Path -LiteralPath $infoLog) { "$(Get-Content -LiteralPath $infoLog -Raw)".Trim() } else { '' }
+if ($code -ne 0 -or $osType -ne 'linux') { Fail "Docker with Linux containers is not running (see $infoLog.err)" }
 if ($Clean) {
-    & docker volume rm shellpp-linux-target shellpp-linux-cargo 2>$null | Out-Null
+    $null = Invoke-Docker @('volume', 'rm', 'shellpp-linux-target', 'shellpp-linux-cargo') (Join-Path $logDir 'clean.log')
 }
 Write-Host 'verify-linux: building the image'
-& docker build -q -t $image -f (Join-Path $repo 'tests\linux\Dockerfile') (Join-Path $repo 'tests\linux') *> (Join-Path $logDir 'image.log')
-if ($LASTEXITCODE -ne 0) { Fail "the image did not build (see $(Join-Path $logDir 'image.log'))" }
+$imageLog = Join-Path $logDir 'image.log'
+$code = Invoke-Docker @('build', '-q', '-t', $image, '-f', (Join-Path $repo 'tests\linux\Dockerfile'), (Join-Path $repo 'tests\linux')) $imageLog
+if ($code -ne 0) { Fail "the image did not build (see $imageLog and $imageLog.err)" }
 
 $steps = @(
     @{ Name = 'build'; Command = 'cargo build --locked -p shellpp-desktop' },
@@ -63,23 +82,24 @@ if ($AllFeatures) {
 }
 
 $failed = @()
+$passed = 0
 foreach ($step in $steps) {
     $log = Join-Path $logDir "$($step.Name).log"
     $started = Get-Date
     Write-Host ("{0,-28}" -f $step.Name) -NoNewline
-    & docker run --rm --label shellpp-test=linux --label "shellpp-run=$run" `
-        -v "${repo}:/src:ro" -v shellpp-linux-target:/target -v shellpp-linux-cargo:/usr/local/cargo/registry `
-        $image bash -c $step.Command *> $log
-    $code = $LASTEXITCODE
+    $code = Invoke-Docker @('run', '--rm', '--label', 'shellpp-test=linux', '--label', "shellpp-run=$run",
+        '-v', "${repo}:/src:ro", '-v', 'shellpp-linux-target:/target', '-v', 'shellpp-linux-cargo:/usr/local/cargo/registry',
+        $image, 'bash', '-c', $step.Command) $log
     $minutes = ((Get-Date) - $started).TotalMinutes.ToString('0.0')
     if ($code -eq 0) {
         Write-Host "ok      ($minutes min)" -ForegroundColor Green
+        $passed += 1
     } else {
         Write-Host "FAILED  ($minutes min, exit $code; $log)" -ForegroundColor Red
         $failed += $step.Name
     }
 }
-if ($failed.Count -gt 0) {
+if ($failed.Count -gt 0 -or $passed -ne $steps.Count) {
     Write-Host "verify-linux: failed: $($failed -join ', ')" -ForegroundColor Red
     exit 1
 }

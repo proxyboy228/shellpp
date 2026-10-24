@@ -2331,7 +2331,7 @@ Status: run 12 (plan, section 3.4). GitHub Actions are off (D204); the causes co
 
 **Context.** The workflow "CI" failed on every push since f92b48e (run 40093211710 on 560ea7b read):
 
-- Licenses and advisories: RUSTSEC-2026-0387 (`crypto-bigint` 0.7.5: branches in operations meant to be constant-time) and RUSTSEC-2026-0385 (`ctutils` 0.4.3: non-constant-time mask generation and `u128` comparisons). Both are in the path of RSA, ECDSA and the SSH keys (`rsa`, `elliptic-curve`, `russh`, `ssh-key`).
+- Licenses and advisories: RUSTSEC-2026-0387 (`crypto-bigint` 0.7.5: branches in operations meant to be constant-time) and RUSTSEC-2026-0385 (`ctutils` 0.4.3 in the root lock file, 0.4.4 in the server's: non-constant-time mask generation and `u128` comparisons). Both are in the path of RSA, ECDSA and the SSH keys (`rsa`, `elliptic-curve`, `russh`, `ssh-key`).
 - Lint: shellcheck SC2015 in `tests/openssh/lab.sh`.
 - macOS: `openssl rsa -traditional` does not exist in macOS's LibreSSL.
 - Windows: the runner has PowerShell 7, so the local tab is "PowerShell 7", and the test expected "PowerShell".
@@ -2340,7 +2340,7 @@ Status: run 12 (plan, section 3.4). GitHub Actions are off (D204); the causes co
 
 **Decision:**
 
-- `crypto-bigint` 0.7.7 and `ctutils` 0.4.5 in both lock files (semver-compatible); `cargo deny check advisories` is clean in both workspaces.
+- `crypto-bigint` 0.7.7 and `ctutils` 0.4.5 in both lock files (semver-compatible); `cargo deny check advisories` is clean in both workspaces. The update moved one more edge in the root lock file: `tempfile` now uses `getrandom` 0.3.4, which was in the tree already, instead of 0.4.3.
 - The script, the tests and the puttygen image are fixed as listed: an `if` in `lab.sh`; the OpenSSL test runs with OpenSSL 3 or later only; the local tab test expects the name of the machine's default shell; the PuTTY error is visible on Windows only and the date says UTC outside Windows; `generate.sh` gives its files to the owner of the mounted folder.
 - `scripts\verify-linux.ps1` builds the client and runs the workspace's tests on Linux in Docker (`tests/linux/Dockerfile`, the CI's GPUI packages), outside the full criterion.
 - On Linux in Docker (run 12) the client builds (`cargo build -p shellpp-desktop`, 2 minutes) and the workspace's 1 666 tests pass (the desktop's 780, 2 ignored), with the fixes above.
@@ -2353,6 +2353,6 @@ Status: run 12 (plan, section 3.6; ROADMAP 2.2, "Sign-in to another account", D2
 
 **Context.** A device bound to an account, signed out, that signs in to another account goes through pre-login (the other salt reads as changed settings, SP 4.2), the user types the password and the login succeeds; only the merge then refuses (`previous_account`, D197), and the session the login opened stayed live. On the same server the login itself is refused, because the device id belongs to the first account's user (SP 4.7); the case is another server.
 
-**Decision:** When the merge refuses `previous_account`, the client revokes the refresh token of the login it just made (`POST /v1/auth/token/revoke`) before it reports the refusal; a failed revocation does not change the refusal. The access token runs out on its own. The email is not compared before pre-login: a changed email and another account look the same until the account bundle comes back.
+**Decision:** When the merge refuses `previous_account`, the client revokes the refresh token of the login it just made (`POST /v1/auth/token/revoke`) before it reports the refusal; revoking the token family deletes its access tokens too (`server/src/model.rs`). A failed revocation is logged and does not change the refusal. The email is not compared before pre-login: a changed email and another account look the same until the account bundle comes back. Not covered (review of run 12): the other refusals after a login (a rebind's `rolled_back` or `integrity`, a merge's `forged_epoch` or `newer_epoch`) still leave their session live, and the login's `devices` row stays under the other account; ROADMAP 2.2.
 
 **Spec impact:** docs/sync-protocol.md, section 4.4 (sign-in); ROADMAP 2.2.

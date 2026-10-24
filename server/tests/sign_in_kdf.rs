@@ -391,7 +391,7 @@ fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
     let other_password = new_password();
     let desk = Client::local("desk", &other_password);
     desk.register(&other, &other_email, &other_password);
-    assert_eq!(live_refresh_tokens(&other, &other_email), 1);
+    assert_eq!(refresh_tokens(&other, &other_email, true), 1);
 
     match laptop
         .core
@@ -407,11 +407,11 @@ fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
         Err(CoreError::Sync(HttpError::Refused("previous_account"))) => {}
         other => panic!("expected the refusal, got {other:?}"),
     }
-    assert_eq!(
-        live_refresh_tokens(&other, &other_email),
-        1,
-        "only the desk's session stays"
-    );
+    // The laptop's login issued a token (two in all) and that one is the
+    // one revoked: the desk's session still works.
+    assert_eq!(refresh_tokens(&other, &other_email, false), 2);
+    assert_eq!(refresh_tokens(&other, &other_email, true), 1);
+    desk.core.sync_now().expect("the desk still syncs");
     assert!(!laptop.status().signed_in);
 
     let outcome = laptop
@@ -421,17 +421,20 @@ fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
     assert!(matches!(outcome, SignInOutcome::Done(_)));
 }
 
-/// The refresh tokens of the account with `email` that are not revoked.
-fn live_refresh_tokens(server: &Server, email: &str) -> i64 {
+/// The refresh tokens of the account with `email`; with `live_only`, those
+/// not revoked.
+fn refresh_tokens(server: &Server, email: &str, live_only: bool) -> i64 {
+    let sql = if live_only {
+        "SELECT COUNT(*) FROM refresh_tokens t JOIN users u ON u.user_id = t.user_id \
+         WHERE u.email = ? AND t.revoked_at IS NULL"
+    } else {
+        "SELECT COUNT(*) FROM refresh_tokens t JOIN users u ON u.user_id = t.user_id \
+         WHERE u.email = ?"
+    };
     server
         .db
         .tx(TxKind::Read, |tx| {
-            let rows = tx.query(
-                "SELECT COUNT(*) FROM refresh_tokens t JOIN users u ON u.user_id = t.user_id \
-                 WHERE u.email = ? AND t.revoked_at IS NULL",
-                &[Val::from(email)],
-                &[Ty::Int],
-            )?;
+            let rows = tx.query(sql, &[Val::from(email)], &[Ty::Int])?;
             Ok::<_, DbError>(rows[0][0].int().unwrap_or(0))
         })
         .expect("count")

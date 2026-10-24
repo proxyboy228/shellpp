@@ -3,7 +3,7 @@
 # CI workflow installs them (LINUX_GPUI_PACKAGES of .github/workflows/ci.yml),
 # on the Rust image of the toolchain rust-toolchain.toml pins. The source is
 # mounted read-only and the target folder and cargo's registry are volumes.
-FROM rust:1.99.1-bookworm
+FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

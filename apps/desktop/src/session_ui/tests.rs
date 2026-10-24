@@ -1567,7 +1567,8 @@ fn real_session_runs_in_the_tab(cx: &mut TestAppContext) {
 
 /// The local terminal through the tab (lead decision 9): Ctrl+L outside a
 /// terminal opens it on the real session layer with this machine's default
-/// shell (Windows PowerShell on Windows, through ConPTY, whose start-up
+/// shell (on Windows PowerShell 7 where it is installed, else Windows
+/// PowerShell, through ConPTY, whose start-up
 /// query the terminal view answers); the tab takes the shell's name, typed
 /// input runs, and `exit` closes the tab.
 #[gpui_kit::test]
