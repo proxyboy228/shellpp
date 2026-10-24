@@ -508,7 +508,7 @@ pub fn apply_page(
     let now_text = format_timestamp(now);
     let mut result = PageResult::default();
     // New live records, checked for duplicates once the page is read.
-    let mut inserted: Vec<(RecordKind, Map<String, Value>, Uuid)> = Vec::new();
+    let mut inserted: Vec<(RecordKind, Uuid)> = Vec::new();
     for record in records {
         let bytes = record.envelope.as_bytes();
         // Step 1: the vault, and an id that belongs to no other vault here.
@@ -560,8 +560,8 @@ pub fn apply_page(
             if let Opened::Live(kind, payload) = &opened
                 && selection.type_name(kind.name())
             {
-                if let Some(data) = &payload.data {
-                    inserted.push((*kind, data.clone(), row.record_id));
+                if payload.data.is_some() {
+                    inserted.push((*kind, row.record_id));
                 }
             }
             adopt_version(
@@ -625,13 +625,24 @@ pub fn apply_page(
             )?;
         }
     }
-    duplicates(session, &mut result.effects, &inserted, vault_id, &now_text);
     let mut state = state.clone();
     if !result.stopped {
         state.cursor = next_cursor;
     }
     let effects = std::mem::take(&mut result.effects);
     result.effects = effects.commit(store, session, Some(&state))?;
+    // The pairs are raised against the index with the page in it, so a
+    // parent that came in the same page counts (its natural key, a host's
+    // inherited port). They are hints the scan raises again (UI 13.7).
+    let pairs = duplicates(session, &inserted, vault_id, &now_text);
+    if !pairs.is_empty() {
+        store.write(|tx| {
+            for pair in &pairs {
+                tx.duplicate_pair_put(pair)?;
+            }
+            Ok(())
+        })?;
+    }
     Ok(result)
 }
 
@@ -639,36 +650,43 @@ pub fn apply_page(
 /// live record of the same type (data-model 18.3; not history or logs).
 /// The keys are those of data-model 18.6 in this vault (parents by their
 /// own natural keys, a host's effective port and username), built once per
-/// page and kind after the page is read, so a first pull of thousands of
-/// records stays linear.
+/// page and kind after the page is stored, so a first pull of thousands of
+/// records stays linear. A record the page also removed again is skipped.
 fn duplicates(
     session: &Session,
-    effects: &mut Effects,
-    inserted: &[(RecordKind, Map<String, Value>, Uuid)],
+    inserted: &[(RecordKind, Uuid)],
     vault_id: Uuid,
     now_text: &str,
-) {
+) -> Vec<DuplicatePairRow> {
+    let mut pairs = Vec::new();
     if inserted.is_empty() {
-        return;
+        return pairs;
     }
     let keys = natural::Keys::new(&session.index);
     let mut cache: HashMap<RecordKind, HashMap<String, Vec<Uuid>>> = HashMap::new();
-    for (kind, data, record_id) in inserted {
-        let Some(key) = keys.key(*kind, data) else {
+    for (kind, record_id) in inserted {
+        let Some(record) = session.index.get_kind(record_id, *kind) else {
+            continue;
+        };
+        let Some(key) = keys.key_of(record) else {
             continue;
         };
         let by_key = cache.entry(*kind).or_insert_with(|| {
             let mut map: HashMap<String, Vec<Uuid>> = HashMap::new();
             for other in session.index.of_kind(*kind) {
-                if let Some(key) = keys.key(*kind, other.data()) {
+                if let Some(key) = keys.key_of(other) {
                     map.entry(key).or_default().push(other.record_id);
                 }
             }
             map
         });
         for other in by_key.get(&key).into_iter().flatten() {
-            if other != record_id {
-                effects.duplicates.push(DuplicatePairRow {
+            // Pairs among the page's own records are raised once, from the
+            // later one.
+            let earlier = inserted.iter().position(|entry| entry.1 == *other);
+            let this = inserted.iter().position(|entry| entry.1 == *record_id);
+            if other != record_id && earlier.is_none_or(|earlier| Some(earlier) < this) {
+                pairs.push(DuplicatePairRow {
                     vault_id,
                     record_id: *other,
                     other_record_id: *record_id,
@@ -678,6 +696,7 @@ fn duplicates(
             }
         }
     }
+    pairs
 }
 
 /// A push batch: the items and the rows they were built from.

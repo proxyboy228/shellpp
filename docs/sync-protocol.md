@@ -768,7 +768,7 @@ Key epoch check ([decision] (D93)): a received version with `revision > synced_r
 Also, in the transaction of step 7 ([decision] (D93)):
 
 - applying a tombstone to a live local record keeps the record's last live envelope in Recently deleted on this device ([data-model.md](data-model.md), section 16.6);
-- inserting a record whose natural key equals that of another live record of the same type in the same vault raises a duplicate pair for the user to merge or keep ([data-model.md](data-model.md), section 18.3).
+- inserting a record whose natural key equals that of another live record of the same type in the same vault raises a duplicate pair for the user to merge or keep ([data-model.md](data-model.md), section 18.3). The pairs of a page are written right after its transaction, with the page's records already in place, so a parent that came in the same page counts in a natural key ([data-model.md](data-model.md), section 18.6). A pair is a hint the duplicate scan raises again, so a crash between the two writes loses nothing. (run 9)
 
 ### 6.5 Push
 

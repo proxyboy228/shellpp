@@ -1686,14 +1686,15 @@ impl Core {
         let new_vault = new.ring.vault_id();
         // Natural keys of the account's live records (data-model 18.6, in
         // the account vault).
-        let mut account_keys: HashMap<(RecordKind, String), Uuid> = HashMap::new();
+        let mut account_keys: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
         {
             let keys = natural::Keys::new(&new.index);
             for record in new.index.iter() {
-                if let Some(key) = keys.key(record.kind, record.data()) {
+                if let Some(key) = keys.key_of(record) {
                     account_keys
                         .entry((record.kind, key))
-                        .or_insert(record.record_id);
+                        .or_default()
+                        .push(record.record_id);
                 }
             }
         }
@@ -1704,15 +1705,14 @@ impl Core {
             type_name: String,
             v: u32,
             data: Map<String, Value>,
-            /// The account record with the same natural key.
-            twin: Option<Uuid>,
-            /// Dropped in favour of `twin` (equal data).
-            dropped: bool,
+            /// The account records with the same natural key.
+            twins: Vec<Uuid>,
+            /// The account record it is dropped for (equal data).
+            dropped: Option<Uuid>,
         }
-        // Pass 1: every local record that moves, with a new id and the
-        // account record of its natural key (in the local vault: parents by
-        // their natural keys, a host's effective port and username).
-        let mut map: HashMap<String, String> = HashMap::new();
+        // Every local record that moves, with a new id and the account
+        // records of its natural key (computed in the local vault: parents
+        // by their natural keys, a host's effective port and username).
         let mut items = Vec::new();
         {
             let local_keys = natural::Keys::new(&old.index);
@@ -1729,46 +1729,89 @@ impl Core {
                 let Some(data) = payload.data.clone() else {
                     continue;
                 };
-                let twin = RecordKind::from_name(&payload.type_name)
+                let twins = RecordKind::from_name(&payload.type_name)
                     .and_then(|kind| {
-                        local_keys
-                            .key(kind, &data)
-                            .and_then(|key| account_keys.get(&(kind, key)))
+                        let key = match old.index.get(&row.record_id) {
+                            Some(record) if record.kind == kind => local_keys.key_of(record),
+                            _ => local_keys.key(kind, &data),
+                        };
+                        key.and_then(|key| account_keys.get(&(kind, key)))
                     })
-                    .copied();
-                let new_id = inner.ids.next(now);
-                map.insert(row.record_id.to_string(), new_id.to_string());
+                    .cloned()
+                    .unwrap_or_default();
                 items.push(Item {
                     old_id: row.record_id,
-                    new_id,
+                    new_id: inner.ids.next(now),
                     class: row.class,
                     type_name: payload.type_name.clone(),
                     v: payload.v,
                     data,
-                    twin,
-                    dropped: false,
+                    twins,
+                    dropped: None,
                 });
             }
         }
-        // Pass 2, until nothing changes: a record is dropped only when its
-        // data, with the references rewritten to the records they now map
-        // to, equals the account record's; its references then map to the
-        // account record, which can make a record that names it equal too
-        // (run 7 finding 6: the order of the rows never leaves a pair). A
-        // record that only shares the natural key stays beside it as a
-        // duplicate pair (UI 13.7): principle 3 before tidiness.
-        loop {
+        // A record is dropped only when its data, with the references
+        // rewritten to the records they map to, equals an account record of
+        // its natural key. The references are compared after rewriting (run
+        // 7 finding 6), as the greatest set of drops that holds: every
+        // record with an account twin starts as dropped, and a record whose
+        // rewritten data matches no twin is kept, until nothing changes. So
+        // neither the order of the rows nor references in a cycle (a group
+        // whose jump host is in the group) leave an extra pair, and every
+        // drop is checked against the final map. A record that only shares
+        // the natural key stays beside it as a duplicate pair (UI 13.7):
+        // principle 3 before tidiness.
+        let account_data: HashMap<Uuid, &Map<String, Value>> = items
+            .iter()
+            .flat_map(|item| item.twins.iter())
+            .filter_map(|id| new.index.get(id).map(|record| (*id, record.data())))
+            .collect();
+        for item in &mut items {
+            item.dropped = item.twins.first().copied();
+        }
+        let map_of = |items: &[Item]| -> HashMap<String, String> {
+            items
+                .iter()
+                .map(|item| {
+                    let to = item.dropped.unwrap_or(item.new_id);
+                    (item.old_id.to_string(), to.to_string())
+                })
+                .collect()
+        };
+        let equal = |id: &Uuid, data: &Map<String, Value>| {
+            account_data
+                .get(id)
+                .is_some_and(|account| engine::data_equal(Some(account), Some(data)))
+        };
+        // Choosing among several twins may change other records' choices;
+        // the rounds are bounded, and the last loop below only keeps.
+        for _ in 0..=items.len() {
+            let map = map_of(&items);
             let mut changed = false;
-            for item in items.iter_mut().filter(|item| !item.dropped) {
-                let Some(existing) = item.twin else {
+            for item in items.iter_mut() {
+                let Some(current) = item.dropped else {
                     continue;
                 };
-                let same = new.index.get(&existing).is_some_and(|record| {
-                    engine::data_equal(Some(record.data()), Some(&remap_data(&item.data, &map)))
-                });
-                if same {
-                    map.insert(item.old_id.to_string(), existing.to_string());
-                    item.dropped = true;
+                let data = remap_data(&item.data, &map);
+                if equal(&current, &data) {
+                    continue;
+                }
+                item.dropped = item.twins.iter().copied().find(|twin| equal(twin, &data));
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+        loop {
+            let map = map_of(&items);
+            let mut changed = false;
+            for item in items.iter_mut() {
+                if let Some(current) = item.dropped
+                    && !equal(&current, &remap_data(&item.data, &map))
+                {
+                    item.dropped = None;
                     changed = true;
                 }
             }
@@ -1776,19 +1819,20 @@ impl Core {
                 break;
             }
         }
+        let map = map_of(&items);
         let mut pairs = Vec::new();
-        for item in items.iter().filter(|item| !item.dropped) {
-            if let Some(existing) = item.twin {
+        for item in items.iter().filter(|item| item.dropped.is_none()) {
+            if let Some(existing) = item.twins.first() {
                 pairs.push(DuplicatePairRow {
                     vault_id: new_vault,
-                    record_id: existing,
+                    record_id: *existing,
                     other_record_id: item.new_id,
                     found_at: now_text.clone(),
                     kept: false,
                 });
             }
         }
-        items.retain(|item| !item.dropped);
+        items.retain(|item| item.dropped.is_none());
         let mut rows = Vec::with_capacity(items.len());
         for item in &items {
             let data = remap_data(&item.data, &map);
@@ -3820,7 +3864,7 @@ impl Core {
             let mut by_key: HashMap<(RecordKind, String), Vec<Uuid>> = HashMap::new();
             let keys = natural::Keys::new(&session.index);
             for record in session.index.iter() {
-                if let Some(key) = keys.key(record.kind, record.data()) {
+                if let Some(key) = keys.key_of(record) {
                     by_key
                         .entry((record.kind, key))
                         .or_default()

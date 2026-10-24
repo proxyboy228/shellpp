@@ -100,6 +100,20 @@ impl<'a> Keys<'a> {
         self.group_path(parent)
     }
 
+    /// The key of a record of the index: a group by the parent the tree
+    /// gives it (the cycle rule may make it top level).
+    pub fn key_of(&self, record: &crate::index::IndexedRecord) -> Option<String> {
+        if record.kind == RecordKind::Group {
+            let parent = self
+                .tree
+                .parent(&record.record_id)
+                .map(|parent| self.group_path(parent))
+                .unwrap_or_default();
+            return joined(vec![parent, text(record.data(), "name")]);
+        }
+        self.key(record.kind, record.data())
+    }
+
     fn group_path(&self, id: Uuid) -> String {
         if let Some(known) = self.groups.borrow().get(&id) {
             return known.clone();
@@ -135,9 +149,12 @@ impl<'a> Keys<'a> {
             .and_then(|id| id.parse::<Uuid>().ok())
             .and_then(|id| self.index.get_kind(&id, RecordKind::Identity))
             .and_then(|identity| identity.data().get("username").and_then(Value::as_str))
+            .filter(|name| !name.is_empty())
             .map(str::to_owned);
+        // An empty username is unset, as at connect time.
         let username = own("username")
             .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .or(identity_user)
             .or(inherited.username.map(|user| user.value))

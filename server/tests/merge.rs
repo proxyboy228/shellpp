@@ -351,3 +351,56 @@ fn natural_keys_follow_inheritance_and_parents() {
     assert_eq!(pairs.len(), 1, "{pairs:?}");
     assert_eq!(pairs[0].type_name, "host");
 }
+
+/// Review of run 9: references in a cycle (a group whose jump host is in
+/// the group) and two account records with one natural key (the same host
+/// in two groups) still leave no extra copy.
+#[test]
+fn the_merge_matches_cycles_and_every_account_twin() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let build = |client: &Client| {
+        let prod = client.save(None, RecordType::Group, json!({"name": "Prod"}));
+        let old = client.save(None, RecordType::Group, json!({"name": "Old"}));
+        let bastion = client.save(
+            None,
+            RecordType::Host,
+            json!({"address": "bastion.example.com", "group_id": prod.to_string()}),
+        );
+        let mut data = client.data(prod);
+        data["ssh"] = json!({"jump_chain": [bastion.to_string()]});
+        client.save(Some(prod), RecordType::Group, data);
+        [prod, old].map(|group| {
+            client.save(
+                None,
+                RecordType::Host,
+                json!({"address": "db.example.com", "group_id": group.to_string()}),
+            )
+        })
+    };
+    let mut account_db = build(&a);
+    a.sync();
+    let l = Client::local("L", &new_password());
+    build(&l);
+    done(l.sign_in(&server, &email, &password));
+    assert_eq!(count(&l, RecordType::Group), 2);
+    assert_eq!(count(&l, RecordType::Host), 3);
+    // Only the account's own pair (one host in two groups) is listed.
+    let mut pairs: Vec<[Uuid; 2]> = l
+        .core
+        .sync_duplicates()
+        .expect("pairs")
+        .iter()
+        .map(|pair| {
+            let mut ids = [pair.record_id, pair.other_record_id];
+            ids.sort();
+            ids
+        })
+        .collect();
+    account_db.sort();
+    pairs.dedup();
+    assert_eq!(pairs, vec![account_db]);
+}
