@@ -2290,7 +2290,7 @@ Status: run 12 (plan, section 3.0).
 
 **Decision:**
 
-- `scripts\verify.ps1` runs gitleaks with the workflow's version (the Docker image `ghcr.io/gitleaks/gitleaks:v8.30.1`), `.gitleaks.toml` and `.gitleaksignore`, `--redact`, over the whole history of every branch of the repository; a finding fails the step. The git directory is mounted on its own, because in a worktree `.git` is a file with a Windows path the container cannot follow. The step needs Docker, as the PostgreSQL tests already do.
+- `scripts\verify.ps1` runs gitleaks with the workflow's version (the Docker image `ghcr.io/gitleaks/gitleaks:v8.30.1`, pinned by digest, with no network), `.gitleaks.toml` and `.gitleaksignore`, `--redact`, over the whole committed history of every ref of the repository; a finding fails the step. The git directory is mounted on its own, because in a worktree `.git` is a file with a Windows path the container cannot follow; the script finds it from the files git writes, not from git's output, which Windows PowerShell decodes with the console's code page. A step that cannot run (no git directory) fails, and a script that ran no step is never green (review of run 12). The step needs Docker, as the PostgreSQL tests already do.
 - Both workspaces also run `cargo clippy --locked --workspace -- -D warnings`, without `--all-targets`: the libraries and binaries with the features a release build has. On a warm build it takes seconds.
 
 **Spec impact:** CLAUDE.md ("Тесты"); CONTRIBUTING.md, "Secret scanning"; docs/security.md, section 16.

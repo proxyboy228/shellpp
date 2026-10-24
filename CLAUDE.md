@@ -7,7 +7,7 @@ git push и изменения remote — только по явной прос�
 ```
 cargo metadata --locked --format-version 1
 cargo metadata --manifest-path server/Cargo.toml --locked --format-version 1
-docker run --rm -v "${PWD}:/src:ro" -v "$(git rev-parse --path-format=absolute --git-common-dir):/git:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 git --config /src/.gitleaks.toml --gitleaks-ignore-path /src/.gitleaksignore --redact --verbose --exit-code 1 /git
+docker run --rm --network none -v "${PWD}:/src:ro" -v "$(git rev-parse --path-format=absolute --git-common-dir):/git:ro" ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git --config /src/.gitleaks.toml --gitleaks-ignore-path /src/.gitleaksignore --redact --verbose --exit-code 1 /git
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -28,11 +28,13 @@ $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --
 `Cargo.lock` вместо того, чтобы его переписать; `--no-fail-fast`
 показывает падения всех тестовых бинарников, а не только первого.
 
-Скан секретов (gitleaks) — тот же образ, конфиг и `.gitleaksignore`, что
-в workflow `secret-scan.yml`, по всей истории всех веток; любая находка
-роняет шаг (что с ней делать — D203, CONTRIBUTING). Каталог git
-монтируется отдельно: в worktree `.git` — файл с путём Windows, который
-контейнер не видит. Нужен запущенный Docker.
+Скан секретов (gitleaks) — та же версия 8.30.1, конфиг и `.gitleaksignore`,
+что в workflow `secret-scan.yml` (там — архив релиза, здесь — образ,
+закреплённый по дайджесту, без сети), по всей закоммиченной истории всех
+ссылок (ветки, теги, stash); любая находка роняет шаг (что с ней делать —
+D203, CONTRIBUTING). Каталог git монтируется отдельно: в worktree `.git` —
+файл с путём Windows, который контейнер не видит; `verify.ps1` находит его
+по файлам git, без вызова git. Нужен запущенный Docker.
 
 clippy без `--all-targets` видит код как release-сборка: с тестами
 dev-зависимости включают `test-hooks` в `shellpp-core` для всего workspace

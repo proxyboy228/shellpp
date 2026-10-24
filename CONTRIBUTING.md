@@ -369,9 +369,9 @@ against a known input. In that case:
 
 CI runs [gitleaks](https://github.com/gitleaks/gitleaks) on every push and
 pull request. Run the same check locally before each commit with a
-pre-commit hook. `scripts\verify.ps1` also scans the whole history of every
-local branch with the workflow's gitleaks version in Docker, and any finding
-fails it.
+pre-commit hook. `scripts\verify.ps1` also scans the whole committed history of every ref
+(branches, tags, stash) with the workflow's gitleaks version in Docker
+(the image pinned by digest, no network), and any finding fails it.
 
 ### Set up the pre-commit hook
 

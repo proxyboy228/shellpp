@@ -69,17 +69,45 @@ $server = @('--manifest-path', 'server/Cargo.toml')
 # -Program, another program's). A function, not nested array literals: in
 # PowerShell the comma binds tighter than `+`, so `@('a', @{}, @('x') + $y)`
 # is not three elements (run 10).
-function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo') {
-    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program }
+function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo', [string] $Problem = '') {
+    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program; Problem = $Problem }
 }
 
-# The secret scan of the Secret scan workflow (.github/workflows/secret-scan.yml)
-# in its Docker image of the same version. The git directory is mounted on
-# its own: in a worktree `.git` is a file naming a Windows path the
-# container cannot follow. The scan covers every branch of the repository.
-$gitleaksImage = 'ghcr.io/gitleaks/gitleaks:v8.30.1'
-$gitDir = (Resolve-Path (git -C $repo rev-parse --path-format=absolute --git-common-dir)).Path
-$gitleaks = @('run', '--rm', '-v', "${repo}:/src:ro", '-v', "${gitDir}:/git:ro", $gitleaksImage,
+# The repository's git directory (the common one of a worktree), read from
+# the files git writes, without running git: its output would be decoded
+# with the console's code page and lose a path's non-ASCII letters (review
+# of run 12). $null when the working copy has none.
+function Get-GitCommonDir([string] $root) {
+    $dotGit = Join-Path $root '.git'
+    if (Test-Path -LiteralPath $dotGit -PathType Container) {
+        return (Resolve-Path -LiteralPath $dotGit).Path
+    }
+    if (-not (Test-Path -LiteralPath $dotGit -PathType Leaf)) { return $null }
+    $line = Get-Content -LiteralPath $dotGit -Encoding UTF8 -TotalCount 1
+    if ("$line" -notmatch '^gitdir:\s*(.+)$') { return $null }
+    $gitDir = $Matches[1].Trim()
+    if (-not [System.IO.Path]::IsPathRooted($gitDir)) { $gitDir = Join-Path $root $gitDir }
+    $commonFile = Join-Path $gitDir 'commondir'
+    if (Test-Path -LiteralPath $commonFile -PathType Leaf) {
+        $common = (Get-Content -LiteralPath $commonFile -Encoding UTF8 -TotalCount 1).Trim()
+        if (-not [System.IO.Path]::IsPathRooted($common)) { $common = Join-Path $gitDir $common }
+        $gitDir = $common
+    }
+    if (-not (Test-Path -LiteralPath $gitDir -PathType Container)) { return $null }
+    return (Resolve-Path -LiteralPath $gitDir).Path
+}
+
+# The secret scan of the Secret scan workflow (.github/workflows/secret-scan.yml):
+# gitleaks of the same version, here its Docker image pinned by digest, with
+# no network. The git directory is mounted on its own: in a worktree `.git`
+# is a file naming a Windows path the container cannot follow. The scan
+# covers every ref of the repository (branches, tags, stash, remote-tracking
+# refs), that is the committed history, not uncommitted changes.
+$gitleaksImage = 'ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f'
+$gitDir = $null
+try { $gitDir = Get-GitCommonDir $repo } catch { $gitDir = $null }
+$gitleaksProblem = if ($gitDir) { '' } else { "no git directory found for $repo" }
+$gitleaks = @('run', '--rm', '--network', 'none', '-v', "${repo}:/src:ro", '-v', "${gitDir}:/git:ro", $gitleaksImage,
     'git', '--config', '/src/.gitleaks.toml', '--gitleaks-ignore-path', '/src/.gitleaksignore',
     '--redact', '--verbose', '--exit-code', '1', '/git')
 
@@ -87,7 +115,7 @@ $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
     (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
-    (Step 'gitleaks' @{} $gitleaks 'docker'),
+    (Step 'gitleaks' @{} $gitleaks 'docker' $gitleaksProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
@@ -127,6 +155,15 @@ try {
         }
         $started = Get-Date
         Write-Host ("{0,-28}" -f $name) -NoNewline
+        if ($step.Problem) {
+            # A step that cannot run is a failure, never a skip.
+            Write-Host "FAILED  ($($step.Problem))" -ForegroundColor Red
+            $failed += $name
+            foreach ($key in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $saved[$key])
+            }
+            continue
+        }
         # Start-Process keeps the output as it is (UTF-8, no error records
         # around the lines of stderr) and gives the exit code. It joins the
         # arguments with spaces, so one with a space (a path) is quoted. A
@@ -156,7 +193,10 @@ try {
     Pop-Location
 }
 
-if ($passed -ne $steps.Count -and $failed.Count -eq 0) {
+# Every step passed, and there were steps: a script that broke before its
+# steps (a variable never set under StrictMode) must not read as green.
+$stepCount = if (Get-Variable -Name steps -Scope Script -ErrorAction SilentlyContinue) { @($steps).Count } else { 0 }
+if (($stepCount -eq 0 -or $passed -ne $stepCount) -and $failed.Count -eq 0) {
     $failed += 'the step count'
 }
 if ($failed.Count -gt 0) {
