@@ -311,6 +311,13 @@ impl TerminalView {
         let palette =
             Palette::from_theme(options.theme.as_ref().unwrap_or(&settings.default_theme));
         let (wake, woken) = async_channel::bounded(1);
+        // The pump keeps a sender of its own, so the channel never closes
+        // while the pump waits on it. Otherwise the parser thread, which
+        // holds the other sender through the `Outbox`, can drop it last
+        // while the view is dropped, before the pump's task is gone, and
+        // wake the pump from that thread: harmless in the app, a "test is
+        // not deterministic" panic in GPUI tests (run 11).
+        let keep_open = wake.clone();
         let handle = TerminalHandle::spawn(
             ModelOptions {
                 size: options.size,
@@ -321,6 +328,7 @@ impl TerminalView {
             wake,
         );
         let pump = cx.spawn(async move |this, cx| {
+            let _keep_open = keep_open;
             while woken.recv().await.is_ok() {
                 if this.update(cx, |view, cx| view.on_wake(cx)).is_err() {
                     break;
