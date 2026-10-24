@@ -1946,9 +1946,9 @@ Status: run 9 decision, 2026-10-24 (D173, item 1.5; run 7 report, section 10.1, 
 
 **Decision:**
 
-- "Weaker" is less memory, or less memory × passes, than `local_auth.kdf` (lanes change neither); the check runs for a device whose `server_account` row names the origin and has no refresh token (signed out), after the floor check and before anything is derived or sent. It refuses with `weaker_kdf` and keeps both parameters for the dialog (`Core::sync_weaker_kdf`).
+- "Weaker" is less memory, or less memory × passes, than `local_auth.kdf` (lanes change neither); the check runs for every device that is bound to an account or was bound before (a `server_account` row, or a personal vault that keeps its binding in `vaults.account_user_id`, also after Log out or `account_deleted`), whatever address is typed, after the floor check and before anything is derived or sent. It refuses with `weaker_kdf` and keeps both parameters for the dialog (`Core::sync_weaker_kdf`).
 - The wizard opens "Weaker key derivation", a dialog of its own: this device's and the server's settings side by side (memory, passes, lanes), why this is expected after a password change on a phone and what else it can mean. Cancel keeps the device signed out; "Sign in with weaker settings", a danger button, signs in through `Core::sync_sign_in_accepting_kdf`, which goes on only when the pre-login answers exactly the parameters the user confirmed.
-- Not covered: a device that signed out with Log out (it is no longer bound: its sign-in is a rebind or a merge, and the account password may differ from the local one), and the first sign-in of an empty device (nothing to compare with).
+- Not covered: the first sign-in of a device that was never bound to an account (nothing to compare with).
 
 **Spec impact:** docs/sync-protocol.md, section 4.2; docs/ui-behavior-spec.md, section 13.5, step 2, and `docs/ru`.
 
