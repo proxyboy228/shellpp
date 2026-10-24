@@ -2033,8 +2033,18 @@ impl Core {
                 if equal(&current, &data) {
                     continue;
                 }
-                item.dropped = item.twins.iter().copied().find(|twin| equal(twin, &data));
-                changed = true;
+                // Only a switch to another twin here: what a record names
+                // may still move to its own twin this round (cross review
+                // of run 9). Keeping is the last loop's.
+                if let Some(twin) = item
+                    .twins
+                    .iter()
+                    .copied()
+                    .find(|twin| *twin != current && equal(twin, &data))
+                {
+                    item.dropped = Some(twin);
+                    changed = true;
+                }
             }
             if !changed {
                 break;

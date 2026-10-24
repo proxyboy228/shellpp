@@ -528,3 +528,72 @@ fn an_unreadable_recording_stops_the_merge_with_nothing_changed() {
     assert_eq!(l.addresses(), vec!["local.example.com"]);
     assert_eq!(contents(&l, "held.example.com"), before);
 }
+
+/// Cross review of run 9: two account groups share one natural key, and
+/// the device holds the same two. Whichever comes first among the twins,
+/// each local group and the host in one of them are matched to their
+/// equals: no extra copy, no extra pair.
+#[test]
+fn a_record_matches_the_right_one_of_several_twins() {
+    for equal_first in [false, true] {
+        let server = Server::start();
+        let password = new_password();
+        let email = email();
+        let a = Client::local("A", &password);
+        a.register(&server, &email, &password);
+        let make = |notes: &str| {
+            a.save(
+                None,
+                RecordType::Group,
+                json!({"name": "Prod", "notes": notes}),
+            )
+        };
+        let (first, second) = if equal_first {
+            (make("two"), make("one"))
+        } else {
+            (make("one"), make("two"))
+        };
+        let two = if equal_first { first } else { second };
+        a.save(
+            None,
+            RecordType::Host,
+            json!({"address": "db.example.com", "group_id": two.to_string()}),
+        );
+        a.sync();
+
+        // The device holds the same two groups, made in the same order (so
+        // with the same order keys), and the host in "two".
+        let l = Client::local("L", &new_password());
+        let make_local = |notes: &str| {
+            l.save(
+                None,
+                RecordType::Group,
+                json!({"name": "Prod", "notes": notes}),
+            )
+        };
+        let local_prod = if equal_first {
+            let two = make_local("two");
+            make_local("one");
+            two
+        } else {
+            make_local("one");
+            make_local("two")
+        };
+        assert_eq!(l.data(local_prod)["order_key"], a.data(two)["order_key"]);
+        l.save(
+            None,
+            RecordType::Host,
+            json!({"address": "db.example.com", "group_id": local_prod.to_string()}),
+        );
+        done(l.sign_in(&server, &email, &password));
+        assert_eq!(count(&l, RecordType::Group), 2, "{equal_first}");
+        assert_eq!(count(&l, RecordType::Host), 1, "{equal_first}");
+        let mut account_pair = [first, second];
+        account_pair.sort();
+        for pair in l.core.sync_duplicates().expect("pairs") {
+            let mut ids = [pair.record_id, pair.other_record_id];
+            ids.sort();
+            assert_eq!(ids, account_pair, "only the account's own pair");
+        }
+    }
+}
