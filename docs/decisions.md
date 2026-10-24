@@ -1833,3 +1833,13 @@ Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the 
    - The `wip/salvage-*` branches are kept.
 
 **Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
+
+### 191. A second russh patch: empty channel data is not the end of a stream (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.10). Extends D100 (item 3: russh is built from `third_party/russh` with one patch) to two patches.
+
+**Context.** The run 7 review (its report, section 10.1, finding 10) found that russh 0.64.1's `ChannelRx`, the reader behind `Channel::into_stream`, hands an empty `CHANNEL_DATA` to the reader as a read of 0 bytes, which every `AsyncRead` user takes for the end of the stream. RFC 4254 allows empty data, so a server may send it; an SFTP session then closed as if the server had ended it, and a forwarded connection read through the same type (`direct-tcpip`, a forwarded agent channel) would end the same way. Reproduced before the fix: all three tests below failed on 0.64.1.
+
+**Decision:** a second patch in `third_party/russh`, the smallest that fixes it: in `ChannelRx::poll_read` an empty `Data` (or `ExtendedData` of the stream being read) takes the arm that already skips messages the reader does not want, so the next poll reads the next message (two `!data.is_empty()` guards, marked "Shell++ patch"). `PATCHES.md` lists both patches and how to remove each one alone when a russh release fixes it (CLAUDE.md says the same); the text for the upstream issue and pull request is `docs/upstream/russh-empty-data.md`. Tests (`crates/ssh/tests/empty_channel_data.rs`): a russh server behind a proxy that adds an empty data packet for the same channel (both ends negotiate the `none` cipher and MAC, test only, since russh never sends empty data itself): an SFTP session answers requests after the empty packet, an exec channel's stream reads all of its output, a stderr reader all of its stream.
+
+**Spec impact:** none (a library fix); `third_party/russh/PATCHES.md`, `THIRD_PARTY_NOTICES.md`, CLAUDE.md ("Подводные камни").

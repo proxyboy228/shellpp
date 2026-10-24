@@ -65,7 +65,7 @@ regexes = [
 ]
 
 # The published russh 0.64.1 source, kept under third_party/russh for its
-# one-line patch (D100): its own unit tests carry the upstream's sample keys,
+# patches (D100, D191): its own unit tests carry the upstream's sample keys,
 # which protect nothing. Only that directory.
 [[allowlists]]
 description = "upstream russh test keys in the patched copy"
