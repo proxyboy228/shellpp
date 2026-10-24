@@ -128,7 +128,8 @@ impl FromRequestParts<AppState> for Auth {
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::trim)
             .filter(|token| token.starts_with(token_prefix::ACCESS))
-            .map(str::to_owned);
+            // Wiped on drop (the header map's own copy is hyper's).
+            .map(|token| Zeroizing::new(token.to_owned()));
         let Some(token) = token else {
             state.limiters.token_failed(ip);
             return Err(ApiError::unauthenticated());
