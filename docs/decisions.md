@@ -1891,7 +1891,8 @@ Status: run 9 decision, 2026-10-24 (plan, section 3.6; run 8, agent C, finding 3
 **Decision:**
 
 - The variant that loses no data and keeps the protection: after the account is unbound, the device key leaves the OS keychain together with its `device` row (so nothing opens the old file without the master password), the vault locks, and the database is set aside exactly as "Start with a new vault" sets it aside (`shellpp.db.<stamp>.old` next to the new empty store, never deleted); the app starts at first run, where "Restore from sync" brings the account back. The data on the server is untouched. `backups/` and `recordings/` stay.
-- The dialog says so under the option when it is ticked; the user guide says that wiping a device means deleting the data folder by hand.
+- Order (after the review): the device key and its `device` row go first, before the revoke and the unbinding; when the OS keychain refuses, the sign-out stops with nothing changed. Setting the store aside is one step under the mutex from the unlocked state (no lock or unlock in between); the session is wiped only once the new store holds the directory, so a failed rename keeps the vault open and the error in the dialog (the device is signed out, the copy in place).
+- The dialog says so under the option when it is ticked, and how many changes are not on the server yet and how many conflicts are kept only here ("Sync first to keep them in the account"); the user guide says that wiping a device means deleting the data folder by hand.
 - For the owner: whether "delete" should really erase the files (the old text) is open; the code now follows this entry.
 
 **Spec impact:** docs/storage-format.md, "Backup and restore"; docs/security.md (the log out row of the key lifecycle stays, the paragraph on deletion changes); docs/data-format.md, section 1, and `docs/ru/data-format.md`; docs/ui-behavior-spec.md, section 12.2 (Log out), and `docs/ru`; the user guide, chapter 6 (en, ru).

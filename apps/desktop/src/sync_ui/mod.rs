@@ -1447,6 +1447,28 @@ impl Render for SignOutDialog {
             .when(self.delete_local, |this| {
                 this.child(widgets::caption(strings::DELETE_LOCAL_HINT, cx))
             })
+            // What is not on the server stays only in the set-aside file.
+            .when_some(
+                self.delete_local
+                    .then(|| self.state.read(cx).sync_status().cloned())
+                    .flatten()
+                    .and_then(|status| {
+                        strings::delete_local_unsynced(
+                            status.pending + status.failed,
+                            status.conflicts,
+                        )
+                    }),
+                |this, text| {
+                    this.child(
+                        div()
+                            .id("sync-delete-local-unsynced")
+                            .test_support()
+                            .text_size(metrics::FONT_SIZE_CAPTION)
+                            .text_color(cx.theme().warning)
+                            .child(text),
+                    )
+                },
+            )
             .children(error_line(self.error, cx))
     }
 }

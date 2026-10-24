@@ -499,3 +499,20 @@ fn the_weaker_kdf_dialog_shows_both_settings_and_cancel_keeps_the_device_out(
     );
     ui.finish(cx);
 }
+
+/// The sign-out warning counts what is not on the server (D190).
+#[test]
+fn the_sign_out_warning_counts_what_is_not_on_the_server() {
+    use super::strings::delete_local_unsynced;
+    assert_eq!(delete_local_unsynced(0, 0), None);
+    assert!(
+        delete_local_unsynced(1, 0)
+            .unwrap()
+            .starts_with("1 change is not on the server yet:")
+    );
+    assert!(
+        delete_local_unsynced(3, 2)
+            .unwrap()
+            .starts_with("3 changes are not on the server yet and 2 conflicts are kept only here:")
+    );
+}

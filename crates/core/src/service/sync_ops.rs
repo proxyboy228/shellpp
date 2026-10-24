@@ -2653,6 +2653,19 @@ impl Core {
     /// the first run (UI 12.2).
     pub fn sync_sign_out(&self, delete_local: bool) -> Result<(), CoreError> {
         let _sync = self.sync_lock();
+        if delete_local {
+            // Nothing may open the copy set aside below without the master
+            // password (D190): the device key and its `device` row go first,
+            // and when the OS keychain refuses, nothing has changed yet.
+            let remembered = {
+                let guard = self.inner();
+                Self::require_session(&guard)?;
+                super::device_row_exists(&guard)
+            };
+            if remembered {
+                self.remember_device_set_impl(false)?;
+            }
+        }
         if let Ok(link) = self.link() {
             let token = {
                 let guard = self.inner();
@@ -2688,15 +2701,9 @@ impl Core {
         }
         if delete_local {
             // The local copy is set aside as "Start with a new vault" does
-            // (D190): the data file is renamed next to the new store, never
-            // deleted, and it opens only with the master password, so the
-            // device key leaves the OS keychain first. The new store needs
-            // the vault closed: lock, then start over.
-            if let Err(error) = self.remember_device_set_impl(false) {
-                tracing::warn!(code = error.code(), "device key not removed");
-            }
-            self.lock_impl()?;
-            self.start_new_vault()?;
+            // (D190): renamed next to the new store, never deleted. One step
+            // from Unlocked: a failure keeps the vault open, signed out.
+            self.set_aside_store(true)?;
         }
         Ok(())
     }

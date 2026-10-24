@@ -183,7 +183,29 @@ pub const SIGN_OUT_TITLE: &str = "Sign out of the account";
 pub const SIGN_OUT_TEXT: &str =
     "Sync stops on this device. The local copy stays and opens with the same password.";
 pub const DELETE_LOCAL: &str = "Also delete the local copy on this device";
-pub const DELETE_LOCAL_HINT: &str = "Shell++ starts over with an empty vault. The data stays on the server; the old data file is set aside in the data folder and opens only with this master password.";
+pub const DELETE_LOCAL_HINT: &str = "Shell++ starts over with an empty vault. The data stays on the server; the old data file is set aside in the data folder and opens only with this master password (or the recovery key).";
+
+/// The warning of the sign-out dialog when not everything is on the server
+/// (D190); `None` when everything is.
+pub fn delete_local_unsynced(changes: usize, conflicts: usize) -> Option<String> {
+    let changes = match changes {
+        0 => None,
+        1 => Some("1 change is not on the server yet".to_owned()),
+        n => Some(format!("{n} changes are not on the server yet")),
+    };
+    let conflicts = match conflicts {
+        0 => None,
+        1 => Some("1 conflict is kept only here".to_owned()),
+        n => Some(format!("{n} conflicts are kept only here")),
+    };
+    let parts: Vec<String> = changes.into_iter().chain(conflicts).collect();
+    (!parts.is_empty()).then(|| {
+        format!(
+            "{}: they stay only in the set-aside file. Sync first to keep them in the account.",
+            parts.join(" and ")
+        )
+    })
+}
 pub const SIGN_OUT_RUN: &str = "Sign out";
 
 pub const DELETE_TITLE: &str = "Delete the account";
