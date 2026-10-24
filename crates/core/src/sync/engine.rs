@@ -739,8 +739,16 @@ pub fn apply_page(
             {
                 // A version at the synced revision is never one this device
                 // made (a write always raises the revision), so a fork is
-                // kept whatever its stamp.
-                let synced = if fork {
+                // kept whatever its stamp. So is a version whose server
+                // sequence is above that of the version this device synced:
+                // a server gives a sequence only to a later write, so it was
+                // written after a restore, even by a device whose clock is
+                // behind (D198; D184, residual 1).
+                let later_seq = matches!(
+                    (row.server_seq, local.server_seq),
+                    (Some(server), Some(synced)) if server > synced
+                );
+                let synced = if fork || later_seq {
                     None
                 } else {
                     synced_stamp(session, &local, &now_text)

@@ -385,7 +385,9 @@ To restore a backup:
 
 4. **Always** run `docker compose run --rm server admin restored`. Devices
    then compare their data with the server and send back what the backup
-   lost.
+   lost. A device that was signed out meanwhile does the same when it signs
+   in again. Where another device's newer edit replaces a version the
+   backup lost, the lost version is kept as a conflict copy.
 5. `docker compose start server`
 
 If a device holds newer keys than the backup (after a password change with

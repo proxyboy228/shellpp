@@ -54,6 +54,40 @@ use crate::vault::{self, KeyRing, Rotation};
 /// yet (D183); empty when none.
 const META_SYNC_RESET: &str = "sync_reset_vault";
 
+/// `meta` key: the account and the server generation this device synced
+/// with when it signed out (`<user id> <hex>`), for the next rebind
+/// (D197); empty when none.
+const META_LAST_GENERATION: &str = "sync_last_generation";
+
+/// `meta` key: the vault whose rebind did not know the server generation
+/// of before (D197): its next cycle keeps every version a newer server
+/// version replaces as a conflict copy, as a restore does; empty when none.
+const META_REBIND_UNSURE: &str = "sync_rebind_unsure";
+
+/// The server generation a rebind of `user_id` compares with the server's
+/// (D197; D184, residual 2): the binding's own while it still exists (a
+/// refused refresh token keeps it), else the one kept at sign-out.
+fn rebind_generation(
+    row: Option<&ServerAccountRow>,
+    kept: Option<&str>,
+    user_id: Uuid,
+) -> Option<Vec<u8>> {
+    if let Some(row) = row
+        && row.user_id == user_id
+        && row.server_generation.is_some()
+    {
+        return row.server_generation.clone();
+    }
+    let (user, hex) = kept?.split_once(' ')?;
+    if Uuid::parse_str(user).ok()? != user_id {
+        return None;
+    }
+    data_encoding::HEXLOWER
+        .decode(hex.as_bytes())
+        .ok()
+        .filter(|generation| !generation.is_empty())
+}
+
 /// Pull rounds of one cycle before it yields (a large first pull continues
 /// in the next cycle).
 const MAX_PULL_PAGES: usize = 10_000;
@@ -1558,6 +1592,20 @@ impl Core {
             self.fetch_device_key(&db_id)
                 .map(|key| crypto::derive_device_wrap_key(&key, &db_id))
         });
+        // D184, residual 2 (D197): the generation this device synced with
+        // before. The first cycle runs the restore of section 6.9 when the
+        // server's differs (a restore while the device was out of the
+        // account); without one it keeps every replaced version as a copy.
+        let known_generation = {
+            let guard = self.inner();
+            let row = guard.store.server_account()?;
+            let kept = guard.store.meta_get(META_LAST_GENERATION)?;
+            rebind_generation(row.as_ref(), kept.as_deref(), account.user_id)
+        };
+        let unsure = |vault_id: &Uuid| match known_generation {
+            Some(_) => String::new(),
+            None => vault_id.to_string(),
+        };
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let local_epoch = session.ring.current_epoch();
@@ -1594,7 +1642,7 @@ impl Core {
                     pending,
                     tokens,
                     account,
-                    None,
+                    known_generation.clone(),
                     &now_text,
                 )?;
                 let vault_id = session.ring.vault_id();
@@ -1603,6 +1651,8 @@ impl Core {
                 inner.store.write(|tx| {
                     tx.vault_put(&vault_row)?;
                     tx.vault_binding_set(&vault_id, Some(&account.user_id), Some(&pending.origin))?;
+                    tx.meta_set(META_LAST_GENERATION, "")?;
+                    tx.meta_set(META_REBIND_UNSURE, &unsure(&vault_id))?;
                     tx.server_account_put(&account_row)
                 })?;
                 inner.sync.hold_access(
@@ -1638,7 +1688,7 @@ impl Core {
                 pending,
                 tokens,
                 account,
-                None,
+                known_generation.clone(),
                 &now_text,
             )?;
             let vault_id = session.ring.vault_id();
@@ -1671,6 +1721,8 @@ impl Core {
                 tx.key_wrap_put(&kek_row)?;
                 tx.vault_put(&vault_row)?;
                 tx.vault_binding_set(&vault_id, Some(&account.user_id), Some(&pending.origin))?;
+                tx.meta_set(META_LAST_GENERATION, "")?;
+                tx.meta_set(META_REBIND_UNSURE, &unsure(&vault_id))?;
                 tx.server_account_put(&account_row)?;
                 tx.sync_state_put(&state)?;
                 Ok(())
@@ -1695,8 +1747,9 @@ impl Core {
             Ok(())
         })?;
         drop(remember);
-        // The generation is learnt by the first cycle (a restore check
-        // against nothing would push everything back for no reason).
+        // Without a known generation, the server's is stored now: the first
+        // cycle keeps its copies (above) without a restore check against
+        // nothing, which would push everything back for no reason.
         self.store_generation_if_unset()?;
         // A new `recovery_key` revision or epoch: rebuild the recovery row,
         // only from a completed pull. Before it the record may still hold
@@ -2583,8 +2636,21 @@ impl Core {
             .store
             .server_account()?
             .and_then(|row| row.server_generation);
-        if !first && generation.is_some() && stored.is_some() && generation != stored {
+        let restored = !first && generation.is_some() && stored.is_some() && generation != stored;
+        // A rebind that did not know the generation of before (D197): not
+        // sure whether the server was restored meanwhile, so the restore's
+        // rule keeps every version a newer server version replaces as a
+        // conflict copy; no "Server restored" row for it.
+        let unsure = self.inner().store.meta_get(META_REBIND_UNSURE)?.as_deref()
+            == Some(link.vault_id.to_string().as_str());
+        if restored || unsure {
             self.restore(link, &mut report, &mut changed, refuse_newer)?;
+            report.restored = restored;
+        }
+        if unsure {
+            self.inner()
+                .store
+                .write(|tx| tx.meta_set(META_REBIND_UNSURE, ""))?;
         }
         if generation.is_some() && generation != stored {
             let mut guard = self.inner();
@@ -2719,8 +2785,8 @@ impl Core {
                     self.now(),
                 )?;
                 // A version older than the one this device synced (a server
-                // restored while the device was out of the account: the
-                // rebind has no generation to compare) is skipped by the
+                // restored while the device was out of the account, also when
+                // the rebind's generation check missed it) is skipped by the
                 // pull; the restore's mark pushes the newer local version,
                 // an edit or a deletion, again (section 6.9, step 2).
                 engine::restore_mark(&mut inner.store, session, &held_by_server, &resync)?;
@@ -3189,7 +3255,23 @@ impl Core {
             inner.sync = SyncRuntime::default();
             if let Some(vault_id) = inner.personal_vault_id {
                 let vault = inner.store.vault(&vault_id)?;
+                // The generation this device synced with, for the rebind's
+                // check of a restore made while it is out (D197).
+                let kept = inner
+                    .store
+                    .server_account()?
+                    .and_then(|row| {
+                        row.server_generation.map(|generation| {
+                            format!(
+                                "{} {}",
+                                row.user_id,
+                                data_encoding::HEXLOWER.encode(&generation)
+                            )
+                        })
+                    })
+                    .unwrap_or_default();
                 inner.store.write(|tx| {
+                    tx.meta_set(META_LAST_GENERATION, &kept)?;
                     tx.server_account_delete()?;
                     if let Some(mut vault) = vault {
                         vault.bound = false;
@@ -5106,6 +5188,51 @@ mod tests {
             "L"
         );
         assert_eq!(title_of("key", None), "key");
+    }
+
+    #[test]
+    fn a_rebind_knows_the_generation_of_its_own_account_only() {
+        let user = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        let row = |user_id: Uuid, generation: Option<Vec<u8>>| ServerAccountRow {
+            server_url: "https://x".into(),
+            user_id,
+            email: "a@b".into(),
+            refresh_token: None,
+            secrets_epoch: 1,
+            bound_at: String::new(),
+            server_generation: generation,
+        };
+        let kept = format!("{user} 0a0b");
+        // A binding that is still there (a refused refresh token) wins.
+        assert_eq!(
+            rebind_generation(Some(&row(user, Some(vec![1]))), Some(&kept), user),
+            Some(vec![1])
+        );
+        // Signed out: the generation kept at sign-out.
+        assert_eq!(
+            rebind_generation(None, Some(&kept), user),
+            Some(vec![10, 11])
+        );
+        assert_eq!(
+            rebind_generation(Some(&row(user, None)), Some(&kept), user),
+            Some(vec![10, 11])
+        );
+        // Another account's, nothing, or something unreadable: not known.
+        assert_eq!(
+            rebind_generation(Some(&row(other, Some(vec![1]))), None, user),
+            None
+        );
+        assert_eq!(rebind_generation(None, Some(&kept), other), None);
+        for kept in [
+            "",
+            "0a0b",
+            "not-a-uuid 0a0b",
+            &format!("{user} zz"),
+            &format!("{user} "),
+        ] {
+            assert_eq!(rebind_generation(None, Some(kept), user), None, "{kept}");
+        }
     }
 
     #[test]
