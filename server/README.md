@@ -151,16 +151,34 @@ The server is reachable only inside your WireGuard or Tailscale network,
 for example as `sync.home.arpa`. Caddy issues the certificate from its own
 CA (`deploy/Caddyfile.internal.example`, `tls internal`).
 
-The first time a device connects, the app shows the certificate's
-fingerprint: compare it with the server's
-(`openssl s_client -connect sync.home.arpa:443 </dev/null | openssl x509 -noout -fingerprint -sha256`)
-and choose "Trust this certificate". The app pins it for this address
-only. When Caddy renews the certificate (internal certificates live
-12 hours, its root 10 years), the app stops syncing and shows the new
-fingerprint until you confirm it. To avoid that, trust Caddy's root
-instead: the root is in Caddy's data directory
-(`pki/authorities/local/root.crt`); the app accepts it as a CA added for
-this one address.
+The first time a device connects, the app shows the certificate (subject,
+issuer, dates, SHA-256 fingerprint) and offers two ways to trust it, for
+this server address only (never for other servers, SSH or the system):
+
+- **Add a CA certificate…** with Caddy's root, the way for `tls internal`:
+  `pki/authorities/local/root.crt` in Caddy's data directory
+  (`~/.local/share/caddy/` for Caddy run by a user on Linux,
+  `/var/lib/caddy/.local/share/caddy/` for the packaged service,
+  `/data/caddy/` in the Docker image, `%AppData%\Caddy\` on Windows,
+  `~/Library/Application Support/Caddy/` on macOS). The app shows the
+  CA's name and fingerprint for confirmation
+  (`openssl x509 -noout -fingerprint -sha256 -in root.crt` prints the same)
+  and keeps it only when the server's certificate is issued by it. Caddy
+  renews its 12-hour certificates by itself, and the app accepts each new
+  one of that CA without a question (its root lives 10 years).
+- **Trust this certificate** pins the one certificate; compare its
+  fingerprint first
+  (`openssl s_client -connect sync.home.arpa:443 </dev/null | openssl x509 -noout -fingerprint -sha256`).
+  A pin suits a long-lived certificate: when the server shows another one,
+  sync stops before any request and Account & Sync offers **Review certificate…**:
+  "Trust the new certificate", "Use the system's trust" (only when the
+  system trusts the new one) or Cancel. Confirming keeps the device signed
+  in.
+
+An expired certificate or one for another name is refused, pinned or not.
+With Tailscale, the machine's `ts.net` name and Tailscale's HTTPS
+certificates instead of `tls internal` give a publicly trusted certificate,
+with no question at all.
 
 ### Client addresses
 

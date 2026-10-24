@@ -528,11 +528,25 @@ impl Core {
     }
 
     pub(super) fn start_new_vault_impl(&self) -> Result<String, CoreError> {
+        self.set_aside_store(false)
+    }
+
+    /// Sets the database aside and starts at first run: "Start with a new
+    /// vault" from the unlock screen (Locked), or log out with "delete local
+    /// copy" (`from_unlocked`, D190) in one step under the mutex, so no
+    /// unlock or lock comes between; the session is wiped only once the new
+    /// store holds the directory, and a failure leaves the vault as it was.
+    pub(super) fn set_aside_store(&self, from_unlocked: bool) -> Result<String, CoreError> {
         // No keychain or rotation work may run while the database changes.
         let _remember = self.remember_lock();
         let mut guard = self.inner();
         let inner = &mut *guard;
-        if inner.state != LockState::Locked {
+        let allowed = match inner.state {
+            LockState::Locked => true,
+            LockState::Unlocked => from_unlocked,
+            LockState::FirstRun => false,
+        };
+        if !allowed {
             return Err(CoreError::WrongState);
         }
         let data_dir = inner
@@ -581,6 +595,11 @@ impl Core {
         };
         inner.store = store;
         inner.settings = settings;
+        if inner.session.is_some() {
+            // From Unlocked: what a lock wipes (keys, sync tokens, clipboard).
+            inner.sync.wipe();
+            self.clear_clipboard_if_ours(inner);
+        }
         inner.session = None;
         inner.personal_vault_id = None;
         inner.lockout = Lockout::default();

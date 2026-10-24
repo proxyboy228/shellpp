@@ -5,13 +5,22 @@
 //! roots). A refused certificate is described for the trust dialog; only an
 //! unknown issuer can be trusted, never an expired certificate or one for
 //! another name.
+//!
+//! The system's trust is the OS verifier, or for tests a fixed set of roots
+//! ([`SystemRoots::Fixed`]): no test changes the machine's certificate
+//! store, and the tests of the trust choices do not read it either. An
+//! added CA lives only in the verifier of its origin; nothing here writes
+//! to the OS store.
 
 use std::sync::{Arc, Mutex};
 
+use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{CertificateError, DigitallySignedStruct, Error as TlsError, SignatureScheme};
+use rustls::{
+    CertificateError, DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme,
+};
 use sha2::{Digest, Sha256};
 use x509_cert::der::Decode as _;
 
@@ -121,6 +130,98 @@ pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
 
+/// What stands for "the system's trust".
+#[derive(Clone, Debug, Default)]
+pub enum SystemRoots {
+    /// The OS verifier and its root store (the app).
+    #[default]
+    Platform,
+    /// These roots only, checked by webpki (tests: a throwaway CA stands for
+    /// a publicly trusted one, and the machine's store is never involved).
+    Fixed(Arc<Vec<CertificateDer<'static>>>),
+}
+
+/// A verifier that trusts nothing: a fixed set without roots.
+#[derive(Debug)]
+struct NoRoots(Arc<CryptoProvider>);
+
+impl ServerCertVerifier for NoRoots {
+    fn verify_server_cert(
+        &self,
+        _: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        Err(TlsError::InvalidCertificate(
+            CertificateError::UnknownIssuer,
+        ))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// The chain verifier of `roots`, plus `extra` (an added CA) when given.
+fn chain_verifier(
+    roots: &SystemRoots,
+    extra: Option<&[u8]>,
+    provider: &Arc<CryptoProvider>,
+) -> Result<Arc<dyn ServerCertVerifier>, TlsError> {
+    let extra = extra.map(|der| CertificateDer::from(der.to_vec()));
+    Ok(match roots {
+        SystemRoots::Platform => match extra {
+            Some(ca) => Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
+                [ca],
+                provider.clone(),
+            )?),
+            None => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
+        },
+        SystemRoots::Fixed(list) => {
+            let mut store = RootCertStore::empty();
+            for cert in list.iter().cloned().chain(extra) {
+                store.add(cert)?;
+            }
+            if store.is_empty() {
+                return Ok(Arc::new(NoRoots(provider.clone())));
+            }
+            WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone())
+                .build()
+                .map_err(|error| TlsError::General(error.to_string()))?
+        }
+    })
+}
+
 /// Shared between the verifier and the caller of a request: the last
 /// problem the verifier found.
 pub type Observation = Arc<Mutex<Option<TlsProblem>>>;
@@ -135,17 +236,17 @@ pub struct TrustVerifier {
 }
 
 impl TrustVerifier {
-    pub fn new(mode: TrustMode, observed: Observation) -> Result<Self, TlsError> {
+    pub fn new(
+        mode: TrustMode,
+        roots: &SystemRoots,
+        observed: Observation,
+    ) -> Result<Self, TlsError> {
         let provider = provider();
-        let system: Arc<dyn ServerCertVerifier> = match &mode {
-            TrustMode::Ca(der) => {
-                Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
-                    [CertificateDer::from(der.clone())],
-                    provider.clone(),
-                )?)
-            }
-            _ => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
+        let extra = match &mode {
+            TrustMode::Ca(der) => Some(der.as_slice()),
+            _ => None,
         };
+        let system = chain_verifier(roots, extra, &provider)?;
         Ok(Self {
             mode,
             system,
@@ -162,10 +263,24 @@ impl TrustVerifier {
     }
 
     /// Classifies a refusal of the system (or CA) verifier for the dialog.
-    fn refused(&self, error: &TlsError, info: Option<CertInfo>) {
+    /// An unknown issuer is offered for trust only when the certificate's
+    /// name and dates hold (D187): webpki reports the issuer first, and a
+    /// certificate for another name or out of its dates is refused, pinned
+    /// or not.
+    fn refused(
+        &self,
+        error: &TlsError,
+        info: Option<CertInfo>,
+        end_entity: &CertificateDer<'_>,
+        server_name: &ServerName<'_>,
+        now: UnixTime,
+    ) {
         let problem = match (error, info) {
             (TlsError::InvalidCertificate(CertificateError::UnknownIssuer), Some(info)) => {
-                TlsProblem::UnknownIssuer(info)
+                match name_and_dates(end_entity, server_name, now) {
+                    Ok(()) => TlsProblem::UnknownIssuer(info),
+                    Err(refusal) => refusal.problem(info),
+                }
             }
             (
                 TlsError::InvalidCertificate(
@@ -196,26 +311,63 @@ impl TrustVerifier {
         now: UnixTime,
         info: CertInfo,
     ) -> Result<(), TlsError> {
-        let cert = webpki::EndEntityCert::try_from(end_entity)
-            .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
-        if cert.verify_is_valid_for_subject_name(server_name).is_err() {
-            self.note(TlsProblem::WrongName(info));
-            return Err(TlsError::InvalidCertificate(
-                CertificateError::NotValidForName,
-            ));
-        }
-        let parsed = x509_cert::Certificate::from_der(end_entity.as_ref())
-            .map_err(|_| TlsError::InvalidCertificate(CertificateError::BadEncoding))?;
-        let validity = &parsed.tbs_certificate.validity;
-        let now = now.as_secs();
-        if now < validity.not_before.to_unix_duration().as_secs()
-            || now > validity.not_after.to_unix_duration().as_secs()
-        {
-            self.note(TlsProblem::Expired(info));
-            return Err(TlsError::InvalidCertificate(CertificateError::Expired));
-        }
-        Ok(())
+        name_and_dates(end_entity, server_name, now).map_err(|refusal| {
+            let error = refusal.error();
+            if !matches!(refusal, Refusal::Encoding) {
+                self.note(refusal.problem(info));
+            }
+            error
+        })
     }
+}
+
+/// Why a certificate's own name or dates refuse it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refusal {
+    Encoding,
+    WrongName,
+    Dates,
+}
+
+impl Refusal {
+    fn problem(self, info: CertInfo) -> TlsProblem {
+        match self {
+            Refusal::WrongName => TlsProblem::WrongName(info),
+            Refusal::Dates => TlsProblem::Expired(info),
+            Refusal::Encoding => TlsProblem::Other("the certificate does not parse".to_owned()),
+        }
+    }
+
+    fn error(self) -> TlsError {
+        TlsError::InvalidCertificate(match self {
+            Refusal::Encoding => CertificateError::BadEncoding,
+            Refusal::WrongName => CertificateError::NotValidForName,
+            Refusal::Dates => CertificateError::Expired,
+        })
+    }
+}
+
+/// The host name and the validity dates of an end-entity certificate,
+/// whatever its issuer.
+fn name_and_dates(
+    end_entity: &CertificateDer<'_>,
+    server_name: &ServerName<'_>,
+    now: UnixTime,
+) -> Result<(), Refusal> {
+    let cert = webpki::EndEntityCert::try_from(end_entity).map_err(|_| Refusal::Encoding)?;
+    if cert.verify_is_valid_for_subject_name(server_name).is_err() {
+        return Err(Refusal::WrongName);
+    }
+    let parsed =
+        x509_cert::Certificate::from_der(end_entity.as_ref()).map_err(|_| Refusal::Encoding)?;
+    let validity = &parsed.tbs_certificate.validity;
+    let now = now.as_secs();
+    if now < validity.not_before.to_unix_duration().as_secs()
+        || now > validity.not_after.to_unix_duration().as_secs()
+    {
+        return Err(Refusal::Dates);
+    }
+    Ok(())
 }
 
 impl ServerCertVerifier for TrustVerifier {
@@ -232,13 +384,20 @@ impl ServerCertVerifier for TrustVerifier {
             TrustMode::System | TrustMode::Ca(_) => self
                 .system
                 .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-                .inspect_err(|error| self.refused(error, info)),
+                .inspect_err(|error| self.refused(error, info, end_entity, server_name, now)),
             TrustMode::Pinned(pin) => {
                 let presented = sha256(end_entity.as_ref());
                 let Some(info) = info else {
                     return Err(TlsError::InvalidCertificate(CertificateError::BadEncoding));
                 };
                 if presented != *pin {
+                    // A new certificate for another name or out of its
+                    // dates is refused with that reason: never offered.
+                    if let Err(refusal) = name_and_dates(end_entity, server_name, now) {
+                        let error = refusal.error();
+                        self.note(refusal.problem(info));
+                        return Err(error);
+                    }
                     let system_trusts = self
                         .system
                         .verify_server_cert(
@@ -302,9 +461,10 @@ impl ServerCertVerifier for TrustVerifier {
 /// The rustls client configuration of one origin.
 pub fn client_config(
     mode: TrustMode,
+    roots: &SystemRoots,
     observed: Observation,
 ) -> Result<rustls::ClientConfig, TlsError> {
-    let verifier = Arc::new(TrustVerifier::new(mode, observed)?);
+    let verifier = Arc::new(TrustVerifier::new(mode, roots, observed)?);
     Ok(rustls::ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()?
         .dangerous()

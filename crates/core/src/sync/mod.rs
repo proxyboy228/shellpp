@@ -14,4 +14,4 @@ pub mod tls;
 pub mod trash;
 
 pub use http::{HttpApi, HttpError, OriginError, normalize_origin};
-pub use tls::{CertInfo, TlsProblem, TrustMode, fingerprint_text};
+pub use tls::{CertInfo, SystemRoots, TlsProblem, TrustMode, fingerprint_text};

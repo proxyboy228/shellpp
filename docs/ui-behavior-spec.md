@@ -1574,11 +1574,16 @@ With a connected server:
   email change. The mark is hidden when the server has no email (SMTP) set up; [decision]
 - under the address, how the server's certificate is trusted: "Trusted by the system",
   "Pinned certificate" with its SHA-256 fingerprint, or "Your CA" with the CA's name and
-  fingerprint (`docs/sync-protocol.md`, 2.1); [decision] (D93)
+  fingerprint (`docs/sync-protocol.md`, 2.1). The row only shows the trust; it changes
+  through the dialogs of 2.1 (13.5, step 1, and the changed certificate below); [decision]
+  (D93, D187)
 - two-factor authentication (TOTP) on the server: toggle;
 - **Log out**: sign out on this device. The user chooses whether to keep
   the local copy or delete it from the device. By default the copy is kept
-  (principle 3 in SPEC.md);
+  (principle 3 in SPEC.md). Deleting it starts the app over with an empty vault at first
+  run; the old data file is set aside as "Start with a new vault" (13.2) does and opens
+  only with the master password, and the data stays on the server; a caption under the
+  option says so; [decision] (D190)
 - master password change is in Settings → Security (see 13.4), because it exists without
   a server too. The recovery key of the account is there as well; [decision]
 - deleting the account on the server. The local copy is kept in that case.
@@ -1656,7 +1661,12 @@ Messages of this section [decision] (D93):
   attack. "Trust the new certificate" pins it; "Use the system's trust" (only when the
   system trusts the new one) removes the pin; Cancel keeps sync stopped. Nothing is
   deleted. An expired certificate or one for another name is refused with the reason,
-  with no option to trust it.
+  with no option to trust it. A confirmed choice changes only the trust: the device stays
+  signed in and sync goes on, with nothing to sign in again. A certificate that no longer
+  validates against an added CA stops sync the same way, with the row "The server's
+  certificate is not trusted" and "Review", which opens the choice of 13.5, step 1. The
+  dialog shows what the server shows when it opens, and a choice is kept only when the
+  server answers under it (`docs/sync-protocol.md`, 2.1). [decision] (D187)
 - **Account deleted**: when the server says that the account was deleted from another
   device, this device keeps its data as the deleting device does (the personal vault
   without sync, team vaults as archives), and the section says "This account was deleted
@@ -2114,13 +2124,24 @@ Settings → Security (see 12.1):
        the reason, with no option to trust it. [decision] (D93)
   2. **Sign in or register**:
      - Sign in: the email and the account's master password;
+     - signing in again on a device bound to the account: when the server asks for weaker
+       key derivation settings than this device holds for the account
+       (`docs/sync-protocol.md`, 4.2), nothing is derived or sent, and a dialog of its own,
+       "Weaker key derivation", shows this device's and the server's settings (memory,
+       passes, lanes) and says that this is expected after the password was changed on a
+       device with weaker settings, such as a phone, and can otherwise mean that someone
+       poses as the server to make the password easier to guess. Cancel keeps the device
+       signed out; "Sign in with weaker settings" (a danger button) signs in with exactly
+       these settings; [decision] (D189)
      - Register: the email and the current master password, entered again to confirm. If
        the server allows registration only by invitation, an "Invite code" field is shown
        and is required.
   3. **TOTP**:
      - sign in: a one-time code, if TOTP is enabled for the account;
      - register: an offer to enable TOTP now (a QR code, the secret as text, and a code to
-       confirm). It can be skipped and enabled later (see 12.2).
+       confirm). It can be skipped and enabled later (see 12.2). The QR code's
+       `otpauth://totp/` URI is made by the app from the secret and the account email, never
+       taken from the server (`docs/sync-protocol.md`, 5.5). [decision] (D188)
   4. **Recovery key** (registration only): the recovery key that protects the account is
      shown as text in a monospace font with a "Copy" button; the clipboard is cleared after
      30 seconds, as for private keys (see 7.3). The "I saved the recovery key" checkbox is

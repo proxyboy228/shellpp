@@ -25,7 +25,7 @@ Files in the data directory:
 | `shellpp.db-wal`, `shellpp.db-shm` | the SQLite write-ahead log and its index; part of the database |
 | `shellpp.lock` | empty. The running app holds an exclusive OS file lock on it; a second process waits up to 3 seconds and then fails with a storage error |
 | `backups/shellpp-<UTC yyyymmddThhmmssZ>.db` | a copy (`VACUUM INTO`) taken before a schema migration, the 3 newest kept. Schema 1 has no migrations, so none exist yet |
-| `shellpp.db.<UTC yyyymmddThhmmssZ>.old`, with `-wal` and `-shm` | the database archived by "Start with a new vault" (section 6) |
+| `shellpp.db.<UTC yyyymmddThhmmssZ>.old`, with `-wal` and `-shm` | the database archived by "Start with a new vault" (section 6), or by log out with "delete local copy" (D190) |
 | `shellpp.db.<UTC yyyymmddThhmmssZ>-failed.old`, with `-wal` and `-shm` | a new database set aside when "Start with a new vault" could not complete it (section 6); rare |
 | `logs/shellpp.log`, `shellpp.log.1` … `.4` | diagnostic log, rotated at 5 MiB, when the logs directory is inside the data directory (Windows, `SHELLPP_DATA_DIR`). No secrets, addresses, usernames or paths |
 | `tmp/` | temporary files of explicit user actions, emptied at start (no writer yet) |
@@ -71,7 +71,7 @@ Migration 1 → 2 runs at the first start of a version with sync, after the back
 | `duplicate_pairs` | `vault_id`, `record_id`, `other_record_id`, `found_at`, `kept` | possible duplicates raised by sync or the merge at sign-in |
 | `server_tls` | `server_url`, `kind` (`pinned`, `ca`), `cert_sha256`, `ca_der`, `created_at` | the trust choice for a sync server (public data, readable while locked) |
 
-With a bound account: `server_account.refresh_token` is a wrap blob of the refresh token under `local_secrets_key` (HKDF of the vault key with the device id and `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`; `local_auth.kdf_email` holds the account email; synced records keep `synced_revision`, `server_seq` and, while a local change is pending, `base_envelope`; deletions write tombstones. The setting `sync.toggles` (object: toggle → bool) chooses what the personal vault syncs on this device.
+With a bound account: `server_account.refresh_token` is a wrap blob of the refresh token under `local_secrets_key` (HKDF of the vault key with the device id and `secrets_epoch`), AAD `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(origin))` ‖ origin (the server that issued it, D188); `local_auth.kdf_email` holds the account email; synced records keep `synced_revision`, `server_seq` and, while a local change is pending, `base_envelope`; deletions write tombstones. The setting `sync.toggles` (object: toggle → bool) chooses what the personal vault syncs on this device.
 
 ## 3. Records
 

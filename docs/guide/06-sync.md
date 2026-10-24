@@ -136,36 +136,71 @@ never your data.
 The server is reachable only inside your WireGuard or Tailscale network,
 for example as `sync.home.arpa`, with a certificate from Caddy's own CA
 (`Caddyfile.internal.example`, `tls internal`). The app does not know that
-CA, so the first connection shows the certificate: compare its SHA-256
-fingerprint with the server's
+CA, so the first connection shows the certificate (the server, whom it is
+issued to and by, its dates and its SHA-256 fingerprint) and asks how to
+trust it:
 
-```bash
-openssl s_client -connect sync.home.arpa:443 </dev/null | openssl x509 -noout -fingerprint -sha256
-```
+- **Add a CA certificate…** (the way for `tls internal`): choose Caddy's
+  root certificate, `pki/authorities/local/root.crt` in Caddy's data
+  folder. That folder is `~/.local/share/caddy/` when you run Caddy
+  yourself on Linux (`/var/lib/caddy/.local/share/caddy/` for the packaged
+  service), `~/Library/Application Support/Caddy/` on macOS,
+  `%AppData%\Caddy\` on Windows and `/data/caddy/` in Caddy's Docker image.
+  Copy the file to the device; it holds no secret. The app shows the CA's
+  name and fingerprint: compare them with the server's
+  (`openssl x509 -noout -fingerprint -sha256 -in root.crt`), then click
+  **Add this CA**. The server's certificate must be issued by it. The app
+  trusts this CA for this server address only, never for other servers,
+  SSH or the rest of your system. Caddy's certificates last 12 hours and
+  renew by themselves; a renewed certificate of the same CA is accepted
+  without a question.
+- **Trust this certificate** pins this one certificate, like the key of an
+  SSH host at the first connection. Compare its fingerprint with the
+  server's first:
 
-and click **Trust this certificate**. The app then trusts this certificate
-for this address only.
+  ```bash
+  openssl s_client -connect sync.home.arpa:443 </dev/null | openssl x509 -noout -fingerprint -sha256
+  ```
 
-Caddy's internal certificates last 12 hours and are renewed before they
-expire, and a renewed certificate no longer matches the one you trusted:
-sync stops with "Last error: certificate_changed". In this version the only
-way to trust the new certificate is **Sign out…**, then **Connect sync
-server** again (it shows the new certificate), **Trust this certificate**
-and **Sign in**. So with a VPN, set things up **before you create the
-account** so that the app trusts the certificate by itself, with either:
+  A pin suits a certificate that lives long. Every new certificate stops
+  sync until you confirm it (below), so do not pin Caddy's 12-hour
+  certificates.
 
-- Tailscale: use the machine's Tailscale name
-  (`<machine>.<tailnet>.ts.net`, with HTTPS certificates turned on for the
-  tailnet) in the Caddyfile instead of `tls internal`, and as
-  `SHELLPP_PUBLIC_URL`. Caddy then gets a publicly trusted certificate for
-  it from Tailscale;
-- or add Caddy's root certificate (`pki/authorities/local/root.crt` in
-  Caddy's data folder) to the trusted root certificates of each device's
-  operating system **before the device first connects**: the app then
-  accepts the server through the system's trust store and asks nothing. (A
-  device that already trusted a single certificate keeps comparing with
-  it.) Every program on that device then trusts certificates from this
-  CA.
+With Tailscale there is a third way, without a question: use the
+machine's Tailscale name (`<machine>.<tailnet>.ts.net`, with HTTPS
+certificates turned on for the tailnet) in the Caddyfile instead of
+`tls internal`, and as `SHELLPP_PUBLIC_URL`. Caddy then gets a publicly
+trusted certificate for it from Tailscale.
+
+A certificate that has expired, is issued for another name, or fails in
+any other way is refused with the reason and cannot be trusted: fix the
+certificate on the server.
+
+### When the certificate changes
+
+When the server shows another certificate than the one you pinned, sync
+stops before anything is sent, nothing on the device changes, and
+Settings > **Account & Sync** says "The server's certificate changed" with
+**Review certificate…**. The dialog shows the pinned and the new fingerprint side by
+side and whether your system trusts the new certificate:
+
+- **Trust the new certificate** pins the new one, and sync goes on: you
+  stay signed in.
+- **Use the system's trust** (only when your system trusts the new
+  certificate, for example after a move to Let's Encrypt) removes the pin.
+- **Cancel** keeps sync stopped. If you did not change the certificate
+  yourself, cancel: an unannounced change can mean that someone is in the
+  middle.
+
+With an added CA, a certificate that no longer comes from that CA stops
+sync the same way ("The server's certificate is not trusted"), and
+**Review certificate…** offers the choice again. Signing in again on a signed-out
+device and **Restore from sync** check the certificate with the same
+dialogs.
+
+Account & Sync shows under the server address how its certificate is
+trusted: **Trusted by the system**, **Pinned certificate** or **Your CA**
+with the CA's name, with the fingerprint.
 
 ## Connecting the first device
 
@@ -278,9 +313,12 @@ without a sync server. They stay there for 90 days, on this device only.
 ## Signing out and deleting the account
 
 - **Sign out…** stops sync on this device. The local copy stays and opens
-  with the same password. (In this version, leave **Also delete the local
-  copy on this device** off: with it, the device is signed out but the
-  copy is not deleted, and the dialog says "Something went wrong".)
+  with the same password. With **Also delete the local copy on this
+  device**, Shell++ starts over with an empty vault (the first-run screen;
+  **Restore from sync…** brings the account back). The data stays on the
+  server, and the old data file is set aside in the data folder
+  (`shellpp.db.<date>.old`), not erased: it opens only with the master
+  password. To wipe the device, delete the data folder yourself.
 - **Delete account…** deletes the account and its data on the server
   (after the master password, and the two-step code if it is on). Every
   device keeps its local copy; **Export data…** first if you want a file.

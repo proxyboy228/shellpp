@@ -45,6 +45,7 @@ pub mod ssh_export;
 #[cfg(test)]
 mod sync_duplicates_tests;
 mod sync_ops;
+mod sync_trust;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -86,6 +87,7 @@ pub use sync_ops::{
     DuplicateSide, FieldDifference, KeepOther, PairField, ServerCheck, SignInInput, SignInOutcome,
     SyncReport, SyncStatus, TotpSetup, TrustChoice,
 };
+pub use sync_trust::{ServerTrust, WeakerKdf};
 
 /// Startup configuration resolved by the host (the core never looks up OS directories).
 #[derive(Clone, Debug)]
@@ -140,6 +142,9 @@ pub struct Core {
     /// Serializes the operations that talk to the sync server; never taken
     /// while holding `inner`.
     sync_guard: Mutex<()>,
+    /// What stands for the system's certificate trust of sync connections
+    /// (the OS store; a fixed set in tests, `sync_trust.rs`).
+    sync_roots: Mutex<crate::sync::SystemRoots>,
 }
 
 impl fmt::Debug for Core {
@@ -200,6 +205,7 @@ impl Core {
             inner: Mutex::new(inner),
             remember: Mutex::new(()),
             sync_guard: Mutex::new(()),
+            sync_roots: Mutex::new(crate::sync::SystemRoots::Platform),
         })
     }
 

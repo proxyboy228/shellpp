@@ -220,7 +220,7 @@ fn write_conflict(state: &Entity<AppState>, id: uuid::Uuid, cx: &mut gpui::App) 
 }
 
 /// The bound account the Account & Sync state shows.
-fn bound_status() -> shellpp_core::service::SyncStatus {
+pub(super) fn bound_status() -> shellpp_core::service::SyncStatus {
     shellpp_core::service::SyncStatus {
         bound: true,
         signed_in: true,
@@ -234,7 +234,7 @@ fn bound_status() -> shellpp_core::service::SyncStatus {
 }
 
 /// A made-up certificate for the trust dialog.
-fn certificate() -> shellpp_core::sync::TlsProblem {
+pub(super) fn certificate() -> shellpp_core::sync::TlsProblem {
     let der = vec![0x30, 0x82, 0x01, 0x0a];
     shellpp_core::sync::TlsProblem::UnknownIssuer(shellpp_core::sync::CertInfo {
         subject: "CN=sync.home.arpa".into(),
@@ -272,8 +272,7 @@ pub async fn reach(
                 let dialog = crate::sync_ui::open_connect(state, false, window, cx);
                 if trust {
                     dialog.update(cx, |dialog, cx| {
-                        dialog.step = crate::sync_ui::ConnectStep::Trust(certificate());
-                        cx.notify();
+                        dialog.show_trust("https://sync.home.arpa".to_owned(), certificate(), cx);
                     });
                 }
             })

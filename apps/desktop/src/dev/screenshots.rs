@@ -389,6 +389,14 @@ pub enum ShotState {
     LostOrStolen,
     /// The connect wizard's key step after a registration (UI 13.5, 4).
     SyncRegisteredKey,
+    // Run 9, plan 3.3 (D187): `sync_trust_shot`.
+    /// The dialog of a changed pinned certificate the system trusts.
+    SyncCertificateChanged,
+    /// The confirmation of a CA file in the wizard's certificate step.
+    SyncTrustCa,
+    // Run 9, plan 3.6 (D189): `sync_trust_shot`.
+    /// The confirmation of weaker KDF parameters at a sign-in.
+    SyncWeakerKdf,
     /// Export Data with the format "OpenSSH files" (D43): key files and
     /// their passphrase.
     ExportOpenSsh,
@@ -538,7 +546,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 113] = [
+    pub const ALL: [Self; 116] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -619,6 +627,9 @@ impl ShotState {
         Self::PasswordChange,
         Self::LostOrStolen,
         Self::SyncRegisteredKey,
+        Self::SyncCertificateChanged,
+        Self::SyncTrustCa,
+        Self::SyncWeakerKdf,
         Self::TerminalTofu,
         Self::TerminalLsColor,
         Self::TerminalHtop,
@@ -799,6 +810,9 @@ impl ShotState {
             Self::PasswordChange => "password-change",
             Self::LostOrStolen => "lost-or-stolen",
             Self::SyncRegisteredKey => "sync-registered-key",
+            Self::SyncCertificateChanged => "sync-certificate-changed",
+            Self::SyncTrustCa => "sync-trust-ca",
+            Self::SyncWeakerKdf => "sync-weaker-kdf",
             Self::ExportOpenSsh => "export-openssh",
             Self::ImportData => "import-data",
             Self::ImportSshConfig => "import-ssh-config",
@@ -1961,6 +1975,9 @@ pub async fn reach_state(
         | ShotState::SyncRegisteredKey => {
             run9_keys_shot::reach(cx, handle, root, state, shot_state).await
         }
+        ShotState::SyncCertificateChanged | ShotState::SyncTrustCa | ShotState::SyncWeakerKdf => {
+            sync_trust_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::Empty | ShotState::FirstRun | ShotState::Unlock | ShotState::KeychainEmpty => {
             Err(not_reached("shown on a fresh profile, not on the demo"))
         }
@@ -2036,6 +2053,9 @@ pub fn check_state(
     }
     if run9_keys_shot::STATES.contains(&shot_state) {
         return run9_keys_shot::check(cx, handle, shot_state);
+    }
+    if sync_trust_shot::STATES.contains(&shot_state) {
+        return sync_trust_shot::check(cx, handle, shot_state);
     }
     if run6_shot::STATES.contains(&shot_state) {
         let state = cx.update(|cx| root.read(cx).state().clone());
@@ -2232,6 +2252,9 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::PasswordChange
             | ShotState::LostOrStolen
             | ShotState::SyncRegisteredKey => Err("checked with the run 9 key screens"),
+            ShotState::SyncCertificateChanged
+            | ShotState::SyncTrustCa
+            | ShotState::SyncWeakerKdf => Err("checked with the certificate screens"),
             // Checked with their session (`terminal::check`).
             ShotState::TerminalTofu
             | ShotState::TerminalLsColor
@@ -2535,6 +2558,7 @@ mod run9_keys_shot;
 mod sftp_shot;
 mod snippets_shot;
 mod stage9_shot;
+mod sync_trust_shot;
 mod terminal;
 mod transfer_shot;
 

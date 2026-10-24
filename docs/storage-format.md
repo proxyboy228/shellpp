@@ -449,7 +449,7 @@ For a 32-byte key, n = 32 and the blob is 73 bytes.
 
 - `server_account.refresh_token` = wrap blob (n = 54, 95 bytes) of the UTF-8 token text (`shellpp_rt_` followed by 43 base64url characters).
 - Key: `local_secrets_key` = HKDF(`vault_key[personal, secrets_epoch]`, `"shellpp/v1/local-secrets"` ‖ `device_id` ‖ `be32(secrets_epoch)`).
-- AAD: `"shellpp/v1/wrap/refresh-token"` ‖ `device_id`.
+- AAD: `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(o))` ‖ `o`, where `o` is the ASCII of `server_account.server_url`, the normalized origin that issued the token (the encoding of the auth keys, [security.md](security.md), section 5.5). The token therefore opens only for that origin: a `server_url` changed in the database never receives it, and the device signs in again. A token wrapped before run 9 (without the origin) no longer opens: such a device signs in once more. [decision] (D188)
 - After a rotation of the personal vault, the token is rewrapped under the new epoch and `secrets_epoch` is updated.
 - An offline recovery of the local copy on a bound device sets the column to `NULL`: the account is signed out on this device until the next sign-in or recovery through the server writes a new token ([sync-protocol.md](sync-protocol.md), section 5.2). (stage 0 decision)
 
@@ -612,7 +612,7 @@ After a restore:
 - A restored copy keeps its `device_id` and wrapped refresh token. Running it alongside the installation it came from is not supported: the shared refresh token is detected as reused and both are signed out ([sync-protocol.md](sync-protocol.md)). To set up a second device, sign in on a fresh installation or import an export.
 - When the account password changed after the copy was taken, the copy unlocks with the old password and then needs a sign-in with the new one.
 
-Removing the local copy (log out with "delete local copy", UI 12.2) deletes everything in the data directory, including `backups/` and `recordings/`, the temporary directory and the keychain item; the app then starts at first run. Recently deleted and the trust choices for sync servers are tables of the database and go with it ([decision] (D93)).
+Removing the local copy (log out with "delete local copy", UI 12.2) sets the database aside as "Start with a new vault" does (UI 13.2; docs/data-format.md): `shellpp.db` is renamed to `shellpp.db.<stamp>.old` next to the new empty one, never deleted, and the keychain item and the `device` row go first, so the old file opens only with the master password or the recovery key; the app then starts at first run. `backups/` and `recordings/` stay in the data directory (the new store lists no recording of the old one, and its own backups rotate the old copies out as for "Start with a new vault"). Recently deleted and the trust choices for sync servers are tables of the database and go with it ([decision] (D93)). Before run 9 the text said everything in the data directory is deleted; the set-aside file keeps unsynced data and the types that do not sync (history and the connection log unless turned on, and the keys of the recordings) that a deletion would lose. [decision] (D190)
 
 ## 13. Export formats
 

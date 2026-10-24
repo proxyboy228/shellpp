@@ -115,11 +115,16 @@ pub fn vault_wrap_aad(purpose: WrapPurpose, vault_id: &Uuid, epoch: u32) -> Vec<
     aad
 }
 
-/// AAD of the wrapped refresh token: `"shellpp/v1/wrap/refresh-token"` ‖ device_id (stage 7).
-pub fn refresh_token_aad(device_id: &Uuid) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(labels::WRAP_REFRESH_TOKEN.len() + 16);
+/// AAD of the wrapped refresh token: `"shellpp/v1/wrap/refresh-token"` ‖
+/// device_id ‖ be16(len(origin)) ‖ origin (stage 7; the origin since run 9,
+/// D188): the token opens only for the normalized server origin that issued
+/// it, so a changed server address never receives it.
+pub fn refresh_token_aad(device_id: &Uuid, origin: &str) -> Vec<u8> {
+    let origin = super::hkdf::origin_context(origin);
+    let mut aad = Vec::with_capacity(labels::WRAP_REFRESH_TOKEN.len() + 16 + origin.len());
     aad.extend_from_slice(labels::WRAP_REFRESH_TOKEN);
     aad.extend_from_slice(device_id.as_bytes());
+    aad.extend_from_slice(&origin);
     aad
 }
 
@@ -197,7 +202,7 @@ mod tests {
     #[test]
     fn small_secrets() {
         let k = Key32::generate().unwrap();
-        let aad = refresh_token_aad(&Uuid::from_u128(7));
+        let aad = refresh_token_aad(&Uuid::from_u128(7), "https://sync.example.com");
         let token = b"shellpp_rt_0123456789abcdefghijABCDEFGHIJ0123456789-_x";
         assert_eq!(token.len(), 54);
         let blob = wrap_seal(&k, &aad, token).unwrap();

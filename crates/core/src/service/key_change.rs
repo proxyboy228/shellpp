@@ -371,7 +371,15 @@ impl Core {
         link: &Link,
         call: impl Fn(&HttpApi, &str) -> Result<T, HttpError>,
     ) -> Result<T, KeyChangeFailure> {
-        let held = self.inner().sync.access.clone();
+        // Only a token of this client's origin (D188).
+        let held = {
+            let inner = self.inner();
+            inner
+                .sync
+                .access
+                .clone()
+                .filter(|_| inner.sync.access_origin.as_deref() == Some(link.api.origin()))
+        };
         let token = match held {
             Some(token) => token,
             None => self.refresh(link).map_err(refresh_failure)?,

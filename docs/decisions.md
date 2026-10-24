@@ -1959,6 +1959,69 @@ Status: run 9 decision, 2026-10-24 (plan, section 2.5; run 8, agent C, report se
 
 **Spec impact:** none (the user guide already describes the ways out).
 
+### 187. The certificate dialogs of the sync server (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.3; D173, item 3). Implements the interface of docs/sync-protocol.md, section 2.1, and UI 12.2, 13.2 and 13.5, step 1, over the trust modes of D93.
+
+**Context.** The core had all three trust modes, but the app only pinned: the trust dialog existed only in the connect wizard, which a bound, signed-in device never opens, so a changed pin (every renewal of a pinned certificate) showed "Last error: certificate_changed" and was confirmed only by Sign out → Connect → Trust → Sign in (run 8, agent C, finding 6). "Add a CA" and "Use the system's trust" had no callers. The core itself never needed a new sign-in: the end-to-end test of this run passed on the unchanged core.
+
+**Decision:**
+
+- One certificate panel (`apps/desktop/src/sync_ui/trust.rs`) is the wizard's certificate step and a dialog of its own: the trust choice of an unknown issuer (server, subject, issuer, dates, the reason, the fingerprint as openssl prints it with the command that prints it on the server; "Trust this certificate", "Add a CA certificate…", Cancel), the changed certificate (the pinned and the new fingerprint side by side, whether the system trusts the new one, "Trust the new certificate", "Use the system's trust" only when it does, Cancel) and a refusal (expired, another name, any other TLS failure: the reason, Close).
+- "Add a CA certificate…" reads a PEM or DER file of at most 256 KiB and shows the CA's subject and fingerprint for confirmation ("Add this CA", Back).
+- Every choice goes through `Core::sync_server_trust_verified`: `GET /v1/server` under the new pin, CA or system trust, and the `server_tls` row is written only after that answer. A CA that did not issue the server's certificate (or one of the same name whose signature does not verify) leaves the choice open with "not issued by this CA"; a certificate for another name or out of its dates under the CA is refused with the reason; a pin of another certificate than the one the server shows is not kept. A kept choice changes only that row: account, tokens and records stay, so sync goes on without a new sign-in.
+- Account & Sync: a bound device whose last cycle ended with `certificate_changed` or `certificate_refused` (an added CA no longer validates) shows a warning row with "Review…", which asks the server again and opens the dialog with what it shows now (a problem that went away just syncs). Under the server address, a row shows the current trust ("Trusted by the system", "Pinned certificate" or "Your CA: <the CA's common name>", with the fingerprint); it only shows it (UI 12.2).
+- "Restore from sync" of the unlock screen (UI 13.2) opens the same dialog when the recovery stops at the certificate; the recovery runs again with Restore.
+- Cancel keeps sync stopped: the automatic cycles keep trying the handshake, which sends no request, so a server that shows the pinned certificate again syncs again by itself. While a choice is being checked, Cancel, Back, Escape and a click outside wait for it, so no choice is kept behind a closed dialog.
+- A certificate for another name or out of its dates is refused with that reason before any trust is offered, also when its issuer is unknown (webpki reports the issuer first) and when it replaces a pin: the dialogs never offer a pin the check would refuse. A pin or "the system's trust" the server does not answer under (it changed its certificate after the dialog opened) leaves the dialog on what the server shows now, under the stored trust, with "Nothing was trusted".
+- A bound device's review of an unknown issuer (a server trusted by the system or an added CA until now) warns that an unannounced change can mean an attack, as the changed pin does. A review that cannot reach the server says so in a toast. The certificate's subject, issuer and the reason of another failure are shown with control and bidirectional characters made visible (security.md 11.4). Restore from sync stopped at the certificate keeps the local recovery on offer.
+- An added CA lives only in the verifier of its origin; nothing is written to the OS store, and SSH host keys never consult it. The system's trust of sync connections is the OS verifier, or a fixed root set in tests (`Core::sync_set_system_roots_for_test`, behind the `test-hooks` feature): no test changes the machine's store, and the tests of the trust choices do not read it (the run 7 tests of the verifier still check one origin through the OS verifier, the path the app takes).
+
+**Spec impact:** docs/sync-protocol.md, section 2.1 (a choice is kept only after the server answers; a kept choice keeps the account signed in); docs/ui-behavior-spec.md, section 12.2 (the trust row only shows the trust; the refused certificate of an added CA; confirming goes on without signing in), and `docs/ru`; the user guide, chapter 6 (en, ru); `server/README.md`, access 3.
+
+### 188. A hostile server: answer sizes, the refresh token's origin, the TOTP URI (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.6; run 8, agent C, findings S3, S4 and S5). Adds to docs/sync-protocol.md, sections 5.5 and 10.2, and docs/storage-format.md, section 6.4.
+
+**Context.** Three ways a server, or someone who can change the local database, could reach further than the protocol allows: the client read any answer whole into memory (a server could send gigabytes); the wrapped refresh token was bound only to the device id, so a `server_account.server_url` changed in the database (with a pin or a CA for the new address) sent the token to another server on the next refresh; the QR code of the TOTP setup encoded whatever URI the server returned, a web link included, for the phone that scans it to open.
+
+**Decision:**
+
+- **Answer size.** Every answer is read through a limit: 16 MiB (`http::MAX_ANSWER_BYTES`), chosen from section 10.2: the largest legitimate answer is a pull page, 8 MiB of envelopes plus the one that crossed it (262 232 bytes), which is under 12 MiB as base64url in JSON with the records' other fields; account bundles, device and vault lists and key epochs are far smaller. A push answer may carry the server's envelope for every item (a conflict's `current`), so its limit is 16 MiB plus 350 155 bytes per item (349 643 base64url characters and its id, seq and status). An announced `Content-Length` above the limit is refused before reading; a body read past it is refused as soon as it crosses it (`answer_too_large`; the automatic cycle tries again a minute later, with no backoff, as for other refusals).
+- **Refresh token origin.** The AAD of the refresh token's wrap is `"shellpp/v1/wrap/refresh-token"` ‖ `device_id` ‖ `be16(len(o))` ‖ `o`, with `o` the normalized origin that issued it (the encoding of the auth keys). A token that does not open for the stored `server_url` is never sent: the device is signed out locally (the refresh token column cleared) and signs in again with the master password. The access token kept in memory is used only with a client of the origin that issued it, and a refresh whose client was made for another address than the stored one sends nothing (review of this entry). The test vectors (`crates/core/tests/vectors`) are regenerated by their independent generator. Behaviour change: a device bound before this change cannot open its stored token and signs in once more after the update; no data is lost.
+- **TOTP URI.** The client never shows or encodes the server's `otpauth_uri`: it checks the secret (base32 of 16 to 128 characters, padding aside; otherwise the setup is refused with `totp_secret`) and makes the URI itself, `otpauth://totp/Shell%2B%2B:<the account email, percent-encoded>?secret=<secret>&issuer=Shell%2B%2B`. A first version checked the server's URI instead; its review found parameters and fragments that authenticator apps read differently, so nothing of the server's text reaches the code.
+
+**Spec impact:** docs/sync-protocol.md, sections 5.5 and 10.2; docs/storage-format.md, section 6.4; docs/ui-behavior-spec.md, section 13.5, step 3, and `docs/ru`.
+
+### 189. Weaker KDF parameters at pre-login are a possible downgrade (run 9)
+
+Status: run 9 decision, 2026-10-24 (D173, item 1.5; run 7 report, section 10.1, finding 5). Adds to docs/sync-protocol.md, section 4.2.
+
+**Context.** On a bound, signed-out device, a server could answer pre-login with weaker KDF parameters than the ones the device holds for the account, still within the floor; the client derived the auth key under them, sent it, and the rebind stored them. A hostile server, or one that took over the address, then gets an auth key that is cheaper to attack offline than the device's own. A weaker answer is also what an honest server sends after the password was changed on a phone (the mobile preset, 32 MiB × 4 passes, against the desktop's 64 MiB × 3).
+
+**Decision:**
+
+- "Weaker" is less memory, or less memory × passes, than `local_auth.kdf` (lanes change neither); the check runs for a device whose `server_account` row names the origin and has no refresh token (signed out), after the floor check and before anything is derived or sent. It refuses with `weaker_kdf` and keeps both parameters for the dialog (`Core::sync_weaker_kdf`).
+- The wizard opens "Weaker key derivation", a dialog of its own: this device's and the server's settings side by side (memory, passes, lanes), why this is expected after a password change on a phone and what else it can mean. Cancel keeps the device signed out; "Sign in with weaker settings", a danger button, signs in through `Core::sync_sign_in_accepting_kdf`, which goes on only when the pre-login answers exactly the parameters the user confirmed.
+- Not covered: a device that signed out with Log out (it is no longer bound: its sign-in is a rebind or a merge, and the account password may differ from the local one), and the first sign-in of an empty device (nothing to compare with).
+
+**Spec impact:** docs/sync-protocol.md, section 4.2; docs/ui-behavior-spec.md, section 13.5, step 2, and `docs/ru`.
+
+### 190. Log out with "delete local copy" sets the copy aside (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.6; run 8, agent C, finding 3). Amends docs/storage-format.md, "Backup and restore", and docs/security.md, which had the whole data directory deleted.
+
+**Context.** Sign out with "Also delete the local copy on this device" failed: the device was signed out, then `start_new_vault` refused with `WrongState` because it needs the Locked state, and the dialog said "Something went wrong" (reproduced by `server/tests/sign_out_local.rs` before the fix). The code meant to set the database aside as "Start with a new vault" does, while the specifications said that everything in the data directory, `backups/` and `recordings/` included, is deleted. A deletion would lose what is not on the server: edits not pushed yet, the types that do not sync (command history and the connection log unless turned on, session recordings never), Recently deleted and kept conflict copies.
+
+**Decision:**
+
+- The variant that loses no data and keeps the protection: after the account is unbound, the device key leaves the OS keychain together with its `device` row (so nothing opens the old file without the master password), the vault locks, and the database is set aside exactly as "Start with a new vault" sets it aside (`shellpp.db.<stamp>.old` next to the new empty store, never deleted); the app starts at first run, where "Restore from sync" brings the account back. The data on the server is untouched. `backups/` and `recordings/` stay.
+- Order (after the review): the device key and its `device` row go first, before the revoke and the unbinding; when the OS keychain refuses, the sign-out stops with nothing changed. Setting the store aside is one step under the mutex from the unlocked state (no lock or unlock in between); the session is wiped only once the new store holds the directory, so a failed rename keeps the vault open and the error in the dialog (the device is signed out, the copy in place).
+- The dialog says so under the option when it is ticked, and how many changes are not on the server yet and how many conflicts are kept only here ("Sync first to keep them in the account"); the user guide says that wiping a device means deleting the data folder by hand.
+- For the owner: whether "delete" should really erase the files (the old text) is open; the code now follows this entry.
+
+**Spec impact:** docs/storage-format.md, "Backup and restore"; docs/security.md (the log out row of the key lifecycle stays, the paragraph on deletion changes); docs/data-format.md, section 1, and `docs/ru/data-format.md`; docs/ui-behavior-spec.md, section 12.2 (Log out), and `docs/ru`; the user guide, chapter 6 (en, ru).
+
 ### 191. A second russh patch: empty channel data is not the end of a stream (run 9)
 
 Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.10). Extends D100 (item 3: russh is built from `third_party/russh` with one patch) to two patches.
