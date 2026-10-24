@@ -1645,6 +1645,10 @@ impl Core {
                 false,
                 now,
             )?;
+            if result.stopped && page.current_epoch <= new_session.ring.current_epoch() {
+                // An epoch the server does not hold (D183): never accepted.
+                return Err(refused("forged_epoch"));
+            }
             if result.stopped {
                 return Err(refused("newer_epoch"));
             }
@@ -2350,7 +2354,7 @@ impl Core {
             .server_account()?
             .and_then(|row| row.server_generation);
         if !first && generation.is_some() && stored.is_some() && generation != stored {
-            self.restore(link, &mut report, &mut changed)?;
+            self.restore(link, &mut report, &mut changed, refuse_newer)?;
         }
         if generation.is_some() && generation != stored {
             let mut guard = self.inner();
@@ -2403,7 +2407,7 @@ impl Core {
                         .and_then(Value::as_str)
                         .unwrap_or("purged");
                     if reason == "ahead" {
-                        self.restore(link, &mut report, &mut changed)?;
+                        self.restore(link, &mut report, &mut changed, refuse_newer)?;
                         report.restored = true;
                         continue;
                     }
@@ -2746,6 +2750,7 @@ impl Core {
         link: &Link,
         report: &mut SyncReport,
         changed: &mut Vec<Uuid>,
+        refuse_newer: bool,
     ) -> Result<(), CoreError> {
         let selection = selection(&self.inner().store);
         let mut pages = Vec::new();
@@ -2801,7 +2806,7 @@ impl Core {
                     &state,
                     &selection,
                     &held,
-                    false,
+                    refuse_newer && page.current_epoch <= session.ring.current_epoch(),
                     self.now(),
                 )?;
                 report.integrity_warnings += result.effects.integrity_warnings;
@@ -2810,6 +2815,10 @@ impl Core {
                 for (id, revision) in &result.received {
                     let entry = server.entry(*id).or_insert(0);
                     *entry = (*entry).max(*revision);
+                }
+                if result.stopped && page.current_epoch <= session.ring.current_epoch() {
+                    // An epoch the server does not hold (D183).
+                    return Err(refused("forged_epoch"));
                 }
                 if result.stopped {
                     // A newer epoch: the device signs in again first; the
@@ -3427,7 +3436,7 @@ impl Core {
         }
         let mut report = SyncReport::default();
         let mut changed = Vec::new();
-        self.restore(&link, &mut report, &mut changed)?;
+        self.restore(&link, &mut report, &mut changed, false)?;
         let pushed = self.cycle(false)?;
         report.pushed = pushed.pushed;
         tracing::info!(epochs = steps.len(), "personal epochs re-posted");

@@ -409,6 +409,45 @@ fn keep_overwritten(
     Ok(())
 }
 
+/// A conflict copy of `losing` (by its record, stamp and deletion) is held
+/// here already: a repeated resync or restore, or a replay, makes none.
+fn has_copy(
+    store: &Store,
+    session: &mut Session,
+    local: &RecordRow,
+    losing: &Payload,
+) -> Result<bool, CoreError> {
+    let original = local.record_id.to_string();
+    let hlc = losing.hlc.to_text();
+    let device = losing.device_id.to_string();
+    for row in store.records(&local.vault_id, Some(&[local.class]))? {
+        if row.tombstone || session.index.get(&row.record_id).is_some() {
+            continue;
+        }
+        let Some(payload) = payload_of(session, &row) else {
+            continue;
+        };
+        if payload.type_name != "conflict" {
+            continue;
+        }
+        let field = |name: &str| {
+            payload
+                .data
+                .as_ref()
+                .and_then(|data| data.get(name))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        if field("original_record_id").as_deref() == Some(original.as_str())
+            && field("losing_hlc").as_deref() == Some(hlc.as_str())
+            && field("losing_device_id").as_deref() == Some(device.as_str())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Resolves a conflict between the local pending version and the server's
 /// (section 6.7). `server` is `None` when the record is absent there.
 /// `no_copy` suppresses the copy of rule 5 (a server restore's stale copy).
@@ -677,21 +716,36 @@ pub fn apply_page(
             };
             let fork = row.revision == local.synced_revision
                 && synced_envelope.is_some_and(|envelope| *envelope != row.envelope);
+            // Below the epoch this device synced (D93): refused, no copy.
+            let old_epoch = synced_epoch(&local).is_some_and(|epoch| row.key_epoch < epoch);
+            if (row.revision < local.synced_revision || fork) && old_epoch {
+                result.effects.integrity_warnings += 1;
+                continue;
+            }
             if (row.revision < local.synced_revision || fork)
                 && let (Some(server_payload), Some(local_payload)) =
                     (payload_of(session, &row), payload_of(session, &local))
             {
-                let synced = synced_stamp(session, &local, &now_text);
-                keep_overwritten(
-                    session,
-                    &mut result.effects,
-                    &local,
-                    &local_payload,
-                    synced,
-                    &row,
-                    &server_payload,
-                    now,
-                )?;
+                // A version at the synced revision is never one this device
+                // made (a write always raises the revision), so a fork is
+                // kept whatever its stamp.
+                let synced = if fork {
+                    None
+                } else {
+                    synced_stamp(session, &local, &now_text)
+                };
+                if !has_copy(store, session, &local, &server_payload)? {
+                    keep_overwritten(
+                        session,
+                        &mut result.effects,
+                        &local,
+                        &local_payload,
+                        synced,
+                        &row,
+                        &server_payload,
+                        now,
+                    )?;
+                }
                 if fork {
                     let previous = RecordRow {
                         revision: local.revision.max(row.revision),
@@ -994,11 +1048,16 @@ pub fn apply_push_results(
                     effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
+                // A `current` above this device's epoch: the cycle pushes
+                // only after a pull whose `current_epoch` is not above it,
+                // so the server holds no such key (D183): refused like a
+                // damaged version, not retried automatically.
                 if current
                     .as_ref()
                     .is_some_and(|row| row.key_epoch > session.ring.current_epoch())
                 {
-                    effects.newer_epoch = true;
+                    effects.integrity_warnings += 1;
+                    effects.failed.push((local.record_id, "integrity".into()));
                     continue;
                 }
                 resolve(

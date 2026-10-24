@@ -234,3 +234,56 @@ fn edits_on_a_restored_server_are_kept_as_conflicts() {
     assert_eq!(label_of(&b, twice), "A after the backup");
     assert_eq!(losing_labels(&b), vec!["B on the restored server"]);
 }
+
+/// Review of run 9: an edit made earlier but pushed only after the restore
+/// lands at the revision the returning device synced. Its stamp is lower,
+/// yet it is another device's write at that revision: kept as a copy too,
+/// and only once however often the device resyncs.
+#[test]
+fn an_older_offline_edit_pushed_after_a_restore_is_kept() {
+    if on_postgres() {
+        return; // The backup here is a file copy of the SQLite database.
+    }
+    let mut server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    let host = a.save(
+        None,
+        shellpp_core::service::dto::RecordType::Host,
+        serde_json::json!({"address": "early.example.com", "label": "first"}),
+    );
+    a.register(&server, &email, &password);
+    let b = Client::empty("B");
+    done(b.sign_in(&server, &email, &password));
+    let backup = server.dir.path().join("backup.db");
+    server
+        .db
+        .batch(&format!("VACUUM INTO '{}'", backup.display()))
+        .expect("backup");
+    let edit = |client: &Client, label: &str| {
+        let mut data = client.data(host);
+        data["label"] = serde_json::Value::String(label.into());
+        client.save(
+            Some(host),
+            shellpp_core::service::dto::RecordType::Host,
+            data,
+        );
+    };
+    // B edits first, offline; A edits later and syncs.
+    edit(&b, "B offline, earlier");
+    edit(&a, "A after the backup");
+    a.sync();
+    a.core.sync_sign_out(false).expect("signed out");
+    restore(&mut server, &backup);
+    // B learns the restore and pushes its older edit at the same revision.
+    b.sync();
+    done(a.sign_in(&server, &email, &password));
+    a.sync();
+    a.sync();
+    assert_eq!(label_of(&a, host), "A after the backup");
+    assert_eq!(losing_labels(&a), vec!["B offline, earlier"]);
+    assert_eq!(a.core.sync_conflicts().expect("conflicts").len(), 1, "once");
+    b.sync();
+    assert!(losing_labels(&b).contains(&"B offline, earlier".to_owned()));
+}
