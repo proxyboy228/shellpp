@@ -1169,6 +1169,15 @@ impl Core {
                 })
                 .map(|vault| vault.vault_id)
                 .collect();
+            // A merge names its account vault's account only in its last
+            // transaction: a vault that names one was bound and is kept.
+            let mut unbound = Vec::new();
+            for vault_id in leftovers {
+                if guard.store.vault_binding(&vault_id)?.0.is_none() {
+                    unbound.push(vault_id);
+                }
+            }
+            let leftovers = unbound;
             if leftovers.is_empty() {
                 return Ok(leftovers);
             }
@@ -1987,6 +1996,9 @@ impl Core {
                     account.personal_vault.epoch == epoch && key.ct_eq(session.ring.current_key())
                 });
                 inner.sync.recovery_mismatch = !matches;
+                // The bundle may predate the record pulled after it (a
+                // reissue in between): the next cycle checks again.
+                inner.sync.recovery_checked = None;
                 if !matches {
                     tracing::warn!("the server's recovery wrap does not hold the vault key");
                 }
@@ -2436,14 +2448,23 @@ impl Core {
             })?;
             report.brought_back += back.len();
         }
+        // The server's `recovery_wrap`, until it is found right (after the
+        // pull, so a failing push does not skip it).
+        if let Err(error) = self.check_recovery_wrap(link) {
+            tracing::warn!(code = error.code(), "recovery wrap not checked");
+        }
         // Push.
         if !report.newer_epoch {
             // Batches continue while records wait; rounds that only re-push
             // after conflicts are capped (section 6.11).
             let mut repush_rounds = 0;
             let mut stale_rounds = 0;
+            // Items still answered `stale_key_epoch` after the one retry:
+            // left out for the rest of this cycle (pending, not refused).
+            let mut stale_skip: HashSet<Uuid> = HashSet::new();
             for _ in 0..MAX_PUSH_BATCHES {
-                let skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
+                let mut skip: HashSet<Uuid> = self.inner().sync.failed.keys().copied().collect();
+                skip.extend(stale_skip.iter().copied());
                 let batch = self.with_session(|inner| {
                     let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
                     engine::build_push(&mut inner.store, session, &selection, &skip, self.now())
@@ -2483,18 +2504,21 @@ impl Core {
                 {
                     let mut guard = self.inner();
                     let failed = &mut guard.sync.failed;
+                    failed.extend(effects.failed.iter().cloned());
                     if effects.pushed_deletion {
                         let before = failed.len();
                         failed.retain(|_, status| status != "quota_exceeded");
                         retry = failed.len() != before;
                     }
-                    failed.extend(effects.failed.iter().cloned());
                 }
                 // `stale_key_epoch`: the keys, then the push again in this
                 // cycle (section 6.5). The personal vault's newer key comes
                 // only with a sign-in (section 5.1): the records stay
                 // pending, not refused.
-                if effects.stale_key_epoch {
+                if !effects.stale_key_epoch.is_empty() && stale_rounds > 0 {
+                    stale_skip.extend(effects.stale_key_epoch.iter().copied());
+                    retry = true;
+                } else if !effects.stale_key_epoch.is_empty() {
                     let keys =
                         self.authed(link, |api, token| api.vault_keys(token, link.vault_id))?;
                     let local = self.with_session(|inner| {
@@ -2506,13 +2530,12 @@ impl Core {
                     match keys.current_epoch.cmp(&local) {
                         std::cmp::Ordering::Greater => report.newer_epoch = true,
                         std::cmp::Ordering::Less => return Err(refused("rolled_back")),
-                        std::cmp::Ordering::Equal if stale_rounds == 0 => {
+                        std::cmp::Ordering::Equal => {
                             // Re-sealed under the current epoch by the next
                             // batch; once per cycle.
                             stale_rounds += 1;
                             retry = true;
                         }
-                        std::cmp::Ordering::Equal => {}
                     }
                 }
                 if effects.repush && !batch.more {
@@ -2531,10 +2554,6 @@ impl Core {
         // (section 4.4): built when missing, rebuilt on a new revision.
         if let Err(error) = self.ensure_recovery_row(&changed) {
             tracing::warn!(code = error.code(), "recovery row not rebuilt");
-        }
-        // The server's `recovery_wrap`, until it is found right.
-        if let Err(error) = self.check_recovery_wrap(link) {
-            tracing::warn!(code = error.code(), "recovery wrap not checked");
         }
         if !changed.is_empty() {
             changed.sort_unstable();
@@ -2618,10 +2637,13 @@ impl Core {
                 .index
                 .singleton(RecordKind::RecoveryKey)
                 .map(|record| (record.record_id, record.revision, epoch));
-            if current != Some(mark)
-                || account.personal_vault.vault_id != vault_id
-                || account.personal_vault.epoch != epoch
-            {
+            if account.personal_vault.vault_id != vault_id {
+                // Another personal vault: not this device's wrap at all.
+                inner.sync.recovery_mismatch = true;
+                tracing::warn!("the server names another personal vault");
+                return Ok(());
+            }
+            if current != Some(mark) || account.personal_vault.epoch != epoch {
                 // Changed meanwhile, or an epoch this device does not hold
                 // yet: the next cycle checks again.
                 return Ok(());
@@ -5529,7 +5551,7 @@ mod tests {
             now,
         )
         .unwrap();
-        assert!(effects.stale_key_epoch);
+        assert_eq!(effects.stale_key_epoch, vec![host]);
         assert!(!effects.newer_epoch, "the keys decide, not the answer");
         assert!(
             effects

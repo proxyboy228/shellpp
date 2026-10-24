@@ -92,9 +92,9 @@ pub struct Effects {
     pub failed: Vec<(Uuid, String)>,
     /// Items that need another push round in this cycle.
     pub repush: bool,
-    /// The server answered `stale_key_epoch`: the keys, then the push
-    /// again (section 6.5); the items stay pending.
-    pub stale_key_epoch: bool,
+    /// Items the server answered `stale_key_epoch` for: the keys, then the
+    /// push again (section 6.5); they stay pending.
+    pub stale_key_epoch: Vec<Uuid>,
     /// A deletion was accepted: items refused for the quota go again
     /// (section 6.5).
     pub pushed_deletion: bool,
@@ -883,7 +883,7 @@ pub fn apply_push_results(
             }
             ItemStatus::StaleKeyEpoch => {
                 // Not refused for good: the keys, then the push again.
-                effects.stale_key_epoch = true;
+                effects.stale_key_epoch.push(local.record_id);
             }
             ItemStatus::QuotaExceeded => {
                 effects
