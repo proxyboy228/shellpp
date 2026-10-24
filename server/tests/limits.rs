@@ -126,3 +126,96 @@ fn a_burst_of_sign_ins_does_not_hold_the_database() {
         "the requests waited for {done} of {BURST} sign-ins"
     );
 }
+
+/// Review finding (D174): checks of one email that run at once never pass
+/// the failure limit together (10 per 15 minutes, section 10.1). Each
+/// attempt counts before its Argon2id check; a passing check takes it back.
+#[test]
+fn concurrent_failures_of_one_email_stop_at_the_limit() {
+    const TRIES: usize = 30;
+    let server = Arc::new(Server::start());
+    let (email, auth_key, _) = register(&server);
+    let start = Arc::new(Barrier::new(TRIES));
+    let threads: Vec<_> = (0..TRIES)
+        .map(|_| {
+            let server = server.clone();
+            let start = start.clone();
+            let body = login_body(&email, &shellpp_server::secrets::random_bytes::<32>());
+            std::thread::spawn(move || {
+                start.wait();
+                let answer = raw_http(
+                    &server,
+                    "POST",
+                    "/v1/auth/login",
+                    &[("content-type", "application/json")],
+                    &body,
+                );
+                (answer.status, answer.code().map(str::to_owned))
+            })
+        })
+        .collect();
+    let mut wrong = 0;
+    let mut limited = 0;
+    for thread in threads {
+        match thread.join().expect("a sign-in") {
+            (401, Some(code)) if code == "invalid_credentials" => wrong += 1,
+            (429, Some(code)) if code == "rate_limited" => limited += 1,
+            other => panic!("unexpected answer {other:?}"),
+        }
+    }
+    assert_eq!((wrong, limited), (10, TRIES - 10));
+    // The right key is limited too until the window ends.
+    let answer = raw_http(
+        &server,
+        "POST",
+        "/v1/auth/login",
+        &[("content-type", "application/json")],
+        &login_body(&email, &auth_key),
+    );
+    assert_eq!(answer.status, 429);
+}
+
+/// Review finding (D174): a personal key epoch for a vault that is not the
+/// account's personal vault answers `403 not_member` before the key is
+/// checked, as before the check moved out of the transaction: no Argon2id,
+/// no failure counted.
+#[test]
+fn a_key_epoch_for_another_vault_is_refused_before_the_key_is_checked() {
+    let server = Server::start();
+    let (email, auth_key, token) = register(&server);
+    let bearer = format!("Bearer {token}");
+    let body = json!({
+        "current_auth_key": b64(&shellpp_server::secrets::random_bytes::<32>()),
+        "epoch": 2,
+        "prev_key_wrap": b64(&[1; 73]),
+        "account_wraps": {"kek_wrap": b64(&[1; 73]), "recovery_wrap": b64(&[1; 73])},
+    })
+    .to_string();
+    for _ in 0..12 {
+        let answer = raw_http(
+            &server,
+            "POST",
+            &format!("/v1/vaults/{}/key-epochs", uuid::Uuid::now_v7()),
+            &[
+                ("authorization", &bearer),
+                ("content-type", "application/json"),
+            ],
+            body.as_bytes(),
+        );
+        assert_eq!(
+            (answer.status, answer.code()),
+            (403, Some("not_member")),
+            "{}",
+            answer.body
+        );
+    }
+    // Twelve refusals counted no failure: the right key still signs in.
+    let answer = raw_http(
+        &server,
+        "POST",
+        "/v1/auth/login",
+        &[("content-type", "application/json")],
+        &login_body(&email, &auth_key),
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+}

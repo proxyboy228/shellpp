@@ -761,6 +761,29 @@ fn a_key_checked_before_a_credential_change_is_refused_after_it() {
         401,
         code::INVALID_CREDENTIALS,
     );
+    // The keys were right: no failure counts for the email.
+    assert!(
+        fx.shared
+            .limiters
+            .failures
+            .check(&a.email, 1, std::time::Instant::now())
+            .is_ok(),
+        "no failure counted"
+    );
+    // A registration that will be refused is refused before its hashes.
+    let taken = register_request(
+        &a.email,
+        &secrets::random_bytes::<32>(),
+        &secrets::random_bytes::<32>(),
+        &secrets::random_bytes::<16>(),
+        Uuid::now_v7(),
+        None,
+    );
+    refused(
+        accounts::register_verifiers(&fx.shared, &taken, t0).map(|_| ()),
+        409,
+        code::EMAIL_TAKEN,
+    );
     // The account deleted in between: a signed-in check is `unauthenticated`.
     let b = fx.register(t0);
     let principal = fx.authenticate(&b.tokens.access_token.0, t0).unwrap();

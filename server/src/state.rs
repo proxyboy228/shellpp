@@ -22,7 +22,8 @@ pub struct Shared {
     pub dummy_verifier: String,
     /// The Argon2id checks and hashes of requests run outside the database
     /// transaction (D174), at most this many at once: each holds 19 MiB.
-    pub argon2_slots: Semaphore,
+    /// A check holds its slot until it ends, also when its request is gone.
+    pub argon2_slots: Arc<Semaphore>,
 }
 
 /// How many Argon2id checks run at once: half the CPUs, from 1 to 8, so a
@@ -51,7 +52,7 @@ impl Shared {
             keys,
             limiters,
             dummy_verifier,
-            argon2_slots: Semaphore::new(argon2_slot_count()),
+            argon2_slots: Arc::new(Semaphore::new(argon2_slot_count())),
         })
     }
 }

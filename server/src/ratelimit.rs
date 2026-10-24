@@ -141,6 +141,40 @@ impl<K: std::hash::Hash + Eq + Clone> FailureWindows<K> {
         }
     }
 
+    /// Counts an attempt for `key` before it is checked: `Err(seconds)`
+    /// when `key` already has `max` in its window. [`Self::refund`] takes
+    /// an attempt that succeeded back, so checks of one key that run at
+    /// once never pass the limit together (D174).
+    pub fn charge(&self, key: &K, max: u32, now: Instant) -> Result<(), u64> {
+        let mut windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if windows.len() > 100_000 {
+            windows.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
+        }
+        let entry = windows.entry(key.clone()).or_insert((now, 0));
+        if now.duration_since(entry.0) >= WINDOW {
+            *entry = (now, 0);
+        }
+        if entry.1 >= max {
+            return Err((WINDOW - now.duration_since(entry.0)).as_secs().max(1));
+        }
+        entry.1 += 1;
+        Ok(())
+    }
+
+    /// Takes back an attempt [`Self::charge`] counted, once it succeeded.
+    pub fn refund(&self, key: &K) {
+        let mut windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = windows.get_mut(key) {
+            entry.1 = entry.1.saturating_sub(1);
+        }
+    }
+
     /// Records a failure.
     pub fn fail(&self, key: &K, now: Instant) {
         let mut windows = self
@@ -257,17 +291,19 @@ impl Limiters {
         self.push_device.check_key(&device).map_err(wait_seconds)
     }
 
-    /// Before a sign-in or an auth key check for `email`.
-    pub fn signin_allowed(&self, email: &str) -> Result<(), u64> {
-        self.failures.check(
+    /// Before a sign-in or an auth key check for `email`: counts it as a
+    /// failure until [`Self::signin_succeeded`] takes it back (D174).
+    pub fn signin_attempt(&self, email: &str) -> Result<(), u64> {
+        self.failures.charge(
             &email.to_owned(),
             self.limits.failures_per_window,
             Instant::now(),
         )
     }
 
-    pub fn signin_failed(&self, email: &str) {
-        self.failures.fail(&email.to_owned(), Instant::now());
+    /// The check that [`Self::signin_attempt`] counted passed.
+    pub fn signin_succeeded(&self, email: &str) {
+        self.failures.refund(&email.to_owned());
     }
 
     pub fn totp_allowed(&self, user: Uuid) -> Result<(), u64> {
@@ -319,6 +355,39 @@ mod tests {
         assert!(windows.check(&key, 10, start + WINDOW).is_ok());
         windows.fail(&key, start + WINDOW);
         assert!(windows.check(&key, 10, start + WINDOW).is_ok());
+    }
+
+    /// D174: an attempt counts before its check, so checks that run at
+    /// once never pass the limit together; a success is taken back.
+    #[test]
+    fn attempts_are_charged_before_the_check_and_refunded_after_a_success() {
+        let windows = FailureWindows::<String>::default();
+        let start = Instant::now();
+        let key = "alice@example.com".to_owned();
+        for _ in 0..3 {
+            windows.charge(&key, 3, start).expect("within the limit");
+        }
+        // Three checks in flight: a fourth is refused before it runs.
+        assert!(windows.charge(&key, 3, start).is_err());
+        // One of them succeeded: its attempt comes back.
+        windows.refund(&key);
+        windows
+            .charge(&key, 3, start)
+            .expect("the refunded attempt");
+        assert!(windows.charge(&key, 3, start).is_err());
+        assert!(windows.check(&key, 3, start).is_err(), "the same counter");
+        // A new window starts after the old one.
+        windows
+            .charge(&key, 3, start + WINDOW)
+            .expect("a new window");
+        // A refund never goes below zero.
+        let other = "bob@example.com".to_owned();
+        windows.refund(&other);
+        windows.refund(&other);
+        for _ in 0..3 {
+            windows.charge(&other, 3, start).expect("within the limit");
+        }
+        assert!(windows.charge(&other, 3, start).is_err());
     }
 
     #[test]

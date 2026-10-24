@@ -252,20 +252,27 @@ async fn limit_auth(
 
 /// Runs `check` (an Argon2id check or hash of `accounts`) on a blocking
 /// thread, outside any database transaction, in one of the slots of
-/// `Shared::argon2_slots` (run 7 finding 1; D174).
+/// `Shared::argon2_slots` (run 7 finding 1; D174). The blocking task holds
+/// the slot: a request dropped while its check runs (the client closed the
+/// connection) does not free it early.
 async fn argon2<T: Send + 'static>(
     state: &AppState,
     check: impl FnOnce(&Shared) -> ApiResult<T> + Send + 'static,
 ) -> ApiResult<T> {
-    let _slot = state
+    let slot = state
         .argon2_slots
-        .acquire()
+        .clone()
+        .acquire_owned()
         .await
         .map_err(|_| ApiError::internal())?;
     let shared = state.clone();
-    tokio::task::spawn_blocking(move || check(&shared))
-        .await
-        .map_err(|_| ApiError::internal())?
+    tokio::task::spawn_blocking(move || {
+        let result = check(&shared);
+        drop(slot);
+        result
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
 }
 
 /// A signed-in request's `current_auth_key`, checked before the write
@@ -291,7 +298,7 @@ async fn sign_in_key(
     kind: KeyKind,
     key: &B64,
 ) -> ApiResult<CheckedKey> {
-    let email = crate::secrets::normalize_email(email);
+    let email = email.to_owned();
     let key = Zeroizing::new(key.as_bytes().to_vec());
     argon2(state, move |shared| {
         accounts::check_sign_in(shared, &email, kind, &key)
@@ -733,7 +740,18 @@ async fn key_epochs(
     PathParam(vault_id): PathParam<Uuid>,
     Body(request): Body<PersonalKeyEpochRequest>,
 ) -> ApiResult<Response> {
-    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    // An unknown or foreign vault answers before the key is checked.
+    let key = Zeroizing::new(request.current_auth_key.as_bytes().to_vec());
+    let checked = argon2(&state, move |shared| {
+        accounts::check_current_auth_key_after(shared, &principal, &key, |user| {
+            if user.personal_vault_id == vault_id {
+                Ok(())
+            } else {
+                Err(ApiError::not_member())
+            }
+        })
+    })
+    .await?;
     let current_epoch = state
         .db
         .run(TxKind::Write, move |tx| {
@@ -801,6 +819,56 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
+    }
+
+    fn state() -> AppState {
+        let secret = data_encoding::BASE64.encode(&crate::secrets::random_bytes::<32>());
+        let config = crate::config::Config::from_env(|name: &str| match name {
+            "SHELLPP_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SHELLPP_PUBLIC_URL" => Some("https://sync.example.com".to_owned()),
+            "SHELLPP_SERVER_SECRET" => Some(secret.clone()),
+            _ => None,
+        })
+        .unwrap();
+        Shared::new(crate::db::Db::open("sqlite::memory:").unwrap(), config)
+    }
+
+    /// Review finding (D174): a check keeps its Argon2id slot until it ends,
+    /// also when its request is dropped meanwhile (the client closed the
+    /// connection); else closing connections would run any number at once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_request_keeps_its_argon2_slot_until_the_check_ends() {
+        let state = state();
+        let slots = state.argon2_slots.available_permits();
+        let (started, has_started) = std::sync::mpsc::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let request = tokio::spawn({
+            let state = state.clone();
+            async move {
+                argon2(&state, move |_| {
+                    started.send(()).unwrap();
+                    let _ = released.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        tokio::task::spawn_blocking(move || has_started.recv().unwrap())
+            .await
+            .unwrap();
+        request.abort();
+        let _ = request.await;
+        assert_eq!(
+            state.argon2_slots.available_permits(),
+            slots - 1,
+            "the check still runs"
+        );
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while state.argon2_slots.available_permits() != slots {
+            assert!(std::time::Instant::now() < deadline, "the slot came back");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     /// An IPv4 client reaching a server bound to `[::]` arrives as
