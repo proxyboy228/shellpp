@@ -7,7 +7,7 @@
 //!   DER file whose subject and fingerprint are shown for confirmation) and
 //!   Cancel;
 //! - the changed certificate of a pinned origin: the pinned and the new
-//!   fingerprint side by side, whether the system trusts the new one, "Trust
+//!   fingerprint one above the other, whether the system trusts the new one, "Trust
 //!   the new certificate", "Use the system's trust" (only when the system
 //!   trusts it) and Cancel, which keeps sync stopped;
 //! - a refusal (expired, another name, another TLS failure) with the reason
@@ -471,24 +471,26 @@ impl Render for TrustPanel {
         {
             body = body
                 .child(
-                    h_flex()
+                    // One above the other: two blocks of 16 pairs a line do
+                    // not fit side by side in the dialog, and stacked their
+                    // pairs line up for the comparison.
+                    v_flex()
                         .id("sync-pin-changed")
                         .test_support()
                         .w_full()
-                        .gap(metrics::SPACE_4)
-                        .items_start()
-                        .child(div().flex_1().child(fingerprint(
+                        .gap(metrics::SPACE_3)
+                        .child(fingerprint(
                             "sync-fingerprint-pinned",
                             strings::TRUST_PINNED,
                             pinned,
                             cx,
-                        )))
-                        .child(div().flex_1().child(fingerprint(
+                        ))
+                        .child(fingerprint(
                             "sync-fingerprint",
                             strings::TRUST_NEW,
                             &new.sha256,
                             cx,
-                        ))),
+                        )),
                 )
                 .child(
                     div()
