@@ -1843,3 +1843,18 @@ Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.10). Extends D100 (i
 **Decision:** a second patch in `third_party/russh`, the smallest that fixes it: in `ChannelRx::poll_read` an empty `Data` (or `ExtendedData` of the stream being read) takes the arm that already skips messages the reader does not want, so the next poll reads the next message (two `!data.is_empty()` guards, marked "Shell++ patch"). `PATCHES.md` lists both patches and how to remove each one alone when a russh release fixes it (CLAUDE.md says the same); the text for the upstream issue and pull request is `docs/upstream/russh-empty-data.md`. Tests (`crates/ssh/tests/empty_channel_data.rs`): a russh server behind a proxy that adds an empty data packet for the same channel (both ends negotiate the `none` cipher and MAC, test only, since russh never sends empty data itself): an SFTP session answers requests after the empty packet, an exec channel's stream reads all of its output, a stderr reader all of its stream.
 
 **Spec impact:** none (a library fix); `third_party/russh/PATCHES.md`, `THIRD_PARTY_NOTICES.md`, CLAUDE.md ("Подводные камни").
+
+### 192. The values of the sync API are wiped on drop (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, 3.6; D173, item 1.4). `crates/sync-api` gets one dependency, `zeroize`, which only wipes memory: the crate stays without cryptography and I/O (docs/architecture.md, section 2.3).
+
+**Context.** The run 7 reviews (its report, section 10.1, finding 4) found that `B64` and `Secret`, through which `auth_key`, `recovery_auth_key`, tokens, tickets, TOTP codes and the TOTP setup answer travel on both sides, kept their bytes in freed memory, and that the client copied the access token into plain `String`s on the way.
+
+**Decision:**
+
+- `B64` and `Secret` derive `Zeroize` and `ZeroizeOnDrop` (`zeroize`, already in both lock files, MIT OR Apache-2.0); the base64 text a `B64` is decoded from or encoded to is held in `Zeroizing`. Their fields stay public, so building and reading a value does not change; moving the contents out, which a `Drop` type forbids, goes through the new `into_inner()`, which moves the buffer without a copy (the client puts tickets and the TOTP setup answer straight into `Zeroizing` and `SecretString`; the server hands salts and wraps to the database).
+- The client: the access token is borrowed or held in `Zeroizing` on the sign-in paths (it was copied into plain `String`s for the first requests of a sign-in and of the merge), and the decrypted refresh token is turned into text without an unwiped intermediate copy.
+- Copies outside these values stay a known limitation (security.md, section 9.5): the JSON text that serde_json writes and reads, and what reqwest, hyper and, on the server, axum keep of the bodies and of the `Authorization` header. Wiping them needs an allocator that wipes freed memory, which D83 left out.
+- Tests: both types are `ZeroizeOnDrop` (the compile-time check used for the other wiping types), `zeroize()` empties them, and `Debug` of the types and of bodies made of them shows neither the value nor its base64.
+
+**Spec impact:** docs/security.md, section 9.5 (the wiped values; the limitation) and RR11.

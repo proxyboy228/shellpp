@@ -12,12 +12,15 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// The API version this crate describes.
 pub const API_VERSION: &str = "v1";
 
-/// Binary data, base64url without padding on the wire.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// Binary data, base64url without padding on the wire. Wiped on drop, with
+/// the base64 text it is read from and written to (D173, item 1.4; D192):
+/// wraps, auth keys and recovery values pass through it.
+#[derive(Clone, Default, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct B64(pub Vec<u8>);
 
 impl B64 {
@@ -33,6 +36,12 @@ impl B64 {
     pub fn exact<const N: usize>(&self) -> Option<[u8; N]> {
         self.0.as_slice().try_into().ok()
     }
+
+    /// The bytes, moved out without a copy: the caller wipes them (or keeps
+    /// them in a type that does) once they are secret.
+    pub fn into_inner(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0)
+    }
 }
 
 impl fmt::Debug for B64 {
@@ -44,13 +53,14 @@ impl fmt::Debug for B64 {
 
 impl Serialize for B64 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&data_encoding::BASE64URL_NOPAD.encode(&self.0))
+        let text = Zeroizing::new(data_encoding::BASE64URL_NOPAD.encode(&self.0));
+        serializer.serialize_str(&text)
     }
 }
 
 impl<'de> Deserialize<'de> for B64 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
+        let text = Zeroizing::new(String::deserialize(deserializer)?);
         data_encoding::BASE64URL_NOPAD
             .decode(text.as_bytes())
             .map(B64)
@@ -58,14 +68,23 @@ impl<'de> Deserialize<'de> for B64 {
     }
 }
 
-/// A secret string (auth keys, tokens, codes): `Debug` never shows it.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A secret string (auth keys, tokens, codes): `Debug` never shows it, and
+/// it is wiped on drop (D173, item 1.4; D192).
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct Secret(pub String);
 
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Secret(..)")
+    }
+}
+
+impl Secret {
+    /// The text, moved out without a copy: the caller keeps it in a type
+    /// that wipes it (`Zeroizing`, `SecretString`).
+    pub fn into_inner(mut self) -> String {
+        std::mem::take(&mut self.0)
     }
 }
 
@@ -660,6 +679,42 @@ mod tests {
     fn secrets_never_show_in_debug() {
         let token = Secret("shellpp_rt_abc".to_owned());
         assert_eq!(format!("{token:?}"), "Secret(..)");
+    }
+
+    /// D192: both types wipe what they hold when they are dropped (so the
+    /// bodies made of them do too), and neither shows its value in `Debug`,
+    /// also inside a body.
+    #[test]
+    fn b64_and_secret_are_wiped_on_drop_and_never_shown() {
+        fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+        wiped_on_drop::<B64>();
+        wiped_on_drop::<Secret>();
+
+        let canary = "canary-7f3a9c";
+        let mut secret = Secret(canary.to_owned());
+        let mut bytes = B64(canary.as_bytes().to_vec());
+        let refresh = RefreshRequest {
+            refresh_token: secret.clone(),
+        };
+        let totp = LoginTotpRequest {
+            login_ticket: secret.clone(),
+            code: secret.clone(),
+        };
+        let encoded = data_encoding::BASE64URL_NOPAD.encode(canary.as_bytes());
+        for shown in [
+            format!("{secret:?}"),
+            format!("{bytes:?}"),
+            format!("{refresh:?}"),
+            format!("{totp:?}"),
+        ] {
+            assert!(!shown.contains(canary), "{shown}");
+            assert!(!shown.contains(&encoded), "{shown}");
+        }
+        // What drop runs: the bytes are overwritten, then the value is empty.
+        secret.zeroize();
+        bytes.zeroize();
+        assert!(secret.0.is_empty());
+        assert!(bytes.0.is_empty());
     }
 
     #[test]

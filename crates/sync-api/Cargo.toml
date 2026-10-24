@@ -11,12 +11,14 @@ publish.workspace = true
 
 # Shared with the AGPL server (docs/architecture.md, section 2.3): keep this crate
 # free of cryptography, I/O and client-only dependencies. The API bodies (stage 7)
-# need only serde, uuid and base64url.
+# need only serde, uuid and base64url, and zeroize, which wipes the secrets they
+# carry on drop (D192).
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
