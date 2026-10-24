@@ -1833,3 +1833,56 @@ Status: accepted, 2026-10-24 (owner's choice; the plan of run 9, section 2: the 
    - The `wip/salvage-*` branches are kept.
 
 **Spec impact:** with the implementation (run 9): docs/sync-protocol.md, sections 2.1, 5.1, 5.3, 6.5, 6.7 and 10.1; docs/security.md; docs/data-model.md, sections 18.5 and 18.6; docs/ui-behavior-spec.md, sections 12.2, 13.4 and 13.5; `docs/ru`.
+
+### 178. One request for a password change with a recovery key reissue (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.2; D173, item 2). Adds docs/sync-protocol.md, section 5.9.
+
+**Context.** D173 asks for the password change, the rotation of the personal vault key and the recovery key reissue in one server request applied in one transaction, with everything SP 5.1 and 5.3 list for them, and leaves the request's design to the run. Run 8's agent C found that "Lost or stolen" rotated without a reissue, so the stolen device's copy of the old recovery key still passed `recover/begin` and could set a new account password (reproduced by `lost_or_stolen_retires_the_old_recovery_key`, `server/tests/e2e_keys.rs`).
+
+**Decision:**
+
+- `POST /v1/account/credentials` (access token; a sensitive operation of SP 4.8) carries the fields of `/v1/account/password` (`current_auth_key`, `kdf`, `kdf_salt`, `auth_key`, `kek_wrap`), the required `rotation` and those of `/v1/account/recovery-key` (`recovery_auth_key`, `record`). The answer is the reissue's `{"tokens", "seq"}`.
+- The server checks in the order of SP 5.9 (the proof of password, the KDF bounds and field sizes, the epoch, the record and its `base_revision`) and writes everything in the one transaction; any failure rolls it back, so the old password and recovery key keep working. `current_auth_key` is verified as `/v1/account/password` verifies it (the run's `server` work that moves Argon2 out of the transaction applies to this endpoint as well).
+- `/v1/account/password` is sent only with the option off and never with a `rotation` any more (the server still takes one); `/v1/account/recovery-key` is the reissue alone.
+- The client prepares the change in memory (`password_change_prepare`, `recovery_key_reissue_prepare`), shows the new key, and sends only after "I saved it" (`key_change_confirm`); "Cancel" (`key_change_cancel`) and a lock drop it. The one-call `password_change_rotating` and `recovery_key_reissue` stay for callers that show the key themselves (tests).
+
+**Spec impact:** docs/sync-protocol.md, sections 3.2, 4.7, 4.8, 5.1, 5.3 and 5.9 (new); docs/security.md, sections 5.9 (key table and key events) and RR6, RR16; docs/ui-behavior-spec.md and docs/ru/ui-behavior-spec.md, sections 12.2 and 13.4.
+
+### 179. "Remember on this device" after a rotation on another device (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.2; D173, item 2; ROADMAP 2.1, run 7 question 3). Extends D102 (rotations made on this device rewrap the `device` row).
+
+**Context.** A device that learnt a new personal epoch at sign-in (a rotation made elsewhere) deleted the old epoch's `device` row and made no new one, so "Remember on this device" went off without a word and its keychain item stayed behind.
+
+**Decision:**
+
+- In the transaction of the rebind that writes the new epochs, the device key read from the OS keychain (before the transaction, under the `remember` lock) wraps the new current key: the new `device` row.
+- Without the key (no keychain item, or the keychain cannot be read) the option is off, and a `meta` flag `remember_device_lost` (not secret) makes Settings ▸ Security say why, until the user sets the option again. The same note follows a rotation made on this device without the key.
+- A revoked device never makes the wrap: it learns a new epoch only by signing in with the new password, which a lost or stolen device does not have.
+
+**Spec impact:** docs/sync-protocol.md, section 5.1 (effects); docs/security.md, section 5.9 (key events); docs/ui-behavior-spec.md and docs/ru/ui-behavior-spec.md, section 13.4.
+
+### 180. What a failed reissue tells the user (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 3.2; SP 5.3, step 7). Details of the client's answer to a failed `/v1/account/recovery-key` or `/v1/account/credentials`.
+
+**Context.** SP 5.3, step 7 says the client discards the new key and tells the user it is not valid, and D173 that the user is told the old password and key still work. Both hold only when the server answered: a request whose answer was lost may have committed, and then the key shown is the only valid one; telling the user to discard it could lose the account's recovery (principle 3).
+
+**Decision:**
+
+- An error answer of the server (`4xx`), or a refusal before anything was sent: "not accepted". The key is discarded, and the dialog says that nothing changed, that the key shown is not valid, and that after a concurrent change on another device "Show" gives the valid key once this device signs in again.
+- No answer (a network error, a timeout, a `5xx`, a malformed answer): "not known". The key is not used again by this device, but the dialog tells the user to keep it, and both passwords, until this device signs in again; "Show" then gives the valid key.
+- The server accepted the change but this device could not store it (locked meanwhile, a failed write): "in effect". The user keeps the key and signs in again with the new password, as SP 5.1 says for a crash after the commit.
+
+**Spec impact:** docs/sync-protocol.md, section 5.3 (step 8, new); docs/ui-behavior-spec.md and docs/ru/ui-behavior-spec.md, section 13.4.
+
+### 181. A forgotten password with "Remember on this device" (run 9)
+
+Status: run 9 decision, 2026-10-24 (plan, section 2.5; run 8, agent C, report section 8). Decided by "the safest default; the user can turn it on explicitly" (D173, item 5).
+
+**Context.** With "Remember on this device" on, the app opens at launch without the password, so a user who forgot it can still work but cannot change it: the change asks for the current password. Agent C asked whether the change should work without it.
+
+**Decision:** no. A change of the master password keeps asking for the current one, also when the vault was opened with the device key: otherwise anyone who starts the app on an unattended computer could replace the password, and with it the lock screen's protection, in seconds; with an account the server would refuse the change anyway, since it needs the proof of the current password (SP 4.8). The ways out stay: with an account, "Restore from sync" with the recovery key (shown at registration and in Settings ▸ Security, SP 5.2); in local mode, Export while the app is open, "Start with a new vault" and Import, as the user guide already says (chapter 1, "If you forgot the master password"). Nothing in the code changes.
+
+**Spec impact:** none (the user guide already describes the ways out).

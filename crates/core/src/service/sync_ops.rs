@@ -466,14 +466,14 @@ impl std::fmt::Debug for TotpSetup {
 }
 
 /// Keys derived from the master password for one origin.
-struct Derived {
-    kek: Key32,
-    auth_key: Key32,
+pub(super) struct Derived {
+    pub(super) kek: Key32,
+    pub(super) auth_key: Key32,
 }
 
 /// The account password's keys with the email bound into the salt
 /// (section 4.1). Refuses parameters outside the floor or the ceiling.
-fn derive(
+pub(super) fn derive(
     kdf: &KdfParams,
     kdf_salt: &[u8; 16],
     email: &str,
@@ -492,7 +492,7 @@ fn derive(
     })
 }
 
-fn wire_kdf(kdf: &KdfParams) -> wire::Kdf {
+pub(super) fn wire_kdf(kdf: &KdfParams) -> wire::Kdf {
     wire::Kdf {
         alg: kdf.alg.clone(),
         v: kdf.v,
@@ -513,7 +513,7 @@ fn local_kdf(kdf: &wire::Kdf) -> KdfParams {
 }
 
 /// The `rotation` object of a request (section 5.1, step 5).
-fn wire_rotation(rotation: &Rotation) -> Result<wire::Rotation, CoreError> {
+pub(super) fn wire_rotation(rotation: &Rotation) -> Result<wire::Rotation, CoreError> {
     let row = |kind| {
         rotation
             .row(kind)
@@ -527,7 +527,7 @@ fn wire_rotation(rotation: &Rotation) -> Result<wire::Rotation, CoreError> {
     })
 }
 
-fn key_b64(key: &Key32) -> B64 {
+pub(super) fn key_b64(key: &Key32) -> B64 {
     B64(key.expose().to_vec())
 }
 
@@ -742,14 +742,14 @@ fn open_refresh(
 }
 
 /// What an authenticated call needs, read under the lock.
-struct Link {
-    api: HttpApi,
-    vault_id: Uuid,
-    device_id: Uuid,
+pub(super) struct Link {
+    pub(super) api: HttpApi,
+    pub(super) vault_id: Uuid,
+    pub(super) device_id: Uuid,
 }
 
 impl Core {
-    fn sync_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+    pub(super) fn sync_lock(&self) -> std::sync::MutexGuard<'_, ()> {
         self.sync_guard
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -768,7 +768,7 @@ impl Core {
     }
 
     /// Runs `f` on the unlocked store and session.
-    fn with_session<T>(
+    pub(super) fn with_session<T>(
         &self,
         f: impl FnOnce(&mut Inner) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
@@ -1027,6 +1027,9 @@ impl Core {
                 Ok(())
             })?;
             inner.sync.access = Some(Zeroizing::new(response.tokens.access_token.0.clone()));
+            // The wizard shows the account's recovery key next (UI 13.5,
+            // step 4): the first time the user sees it (D29).
+            inner.recovery_grant.grant(now);
             tracing::info!("account registered");
             super::checkpoint(&inner.store);
             self.emit_sync(inner);
@@ -1355,6 +1358,22 @@ impl Core {
     ) -> Result<(), CoreError> {
         let now = self.now();
         let now_text = format_timestamp(now);
+        // "Remember on this device" after a rotation made on another device
+        // (D173): the device key from the OS key store wraps the new key.
+        // Held over the write only: the keychain item and the `device` row
+        // stay a pair.
+        let remember = self.remember_lock();
+        let remembered = {
+            let guard = self.inner();
+            lock_ops::key_context(&guard.store)
+                .ok()
+                .filter(|context| context.device_row.is_some())
+                .map(|context| context.db_id)
+        };
+        let device_wrap_key = remembered.and_then(|db_id| {
+            self.fetch_device_key(&db_id)
+                .map(|key| crypto::derive_device_wrap_key(&key, &db_id))
+        });
         self.with_session(|inner| {
             let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
             let local_epoch = session.ring.current_epoch();
@@ -1432,6 +1451,18 @@ impl Core {
             state.cursor = 0;
             state.resync_classes = sel.classes.clone();
             vault_row.current_epoch = epoch;
+            let device_row = match &device_wrap_key {
+                Some(key) if epoch > local_epoch => Some(vault::wrap_row(
+                    WrapKind::Device,
+                    vault_id,
+                    epoch,
+                    key,
+                    session.ring.current_key(),
+                )?),
+                _ => None,
+            };
+            // Without the device key the option goes off, with a note.
+            let remember_lost = epoch > local_epoch && remembered.is_some() && device_row.is_none();
             let written = inner.store.write(|tx| {
                 for row in &new_rows {
                     tx.key_wrap_put(row)?;
@@ -1440,6 +1471,12 @@ impl Core {
                     for kind in [WrapKind::Kek, WrapKind::Recovery, WrapKind::Device] {
                         tx.key_wrap_delete(&vault_id, local_epoch, kind)?;
                     }
+                }
+                if let Some(row) = &device_row {
+                    tx.key_wrap_put(row)?;
+                }
+                if remember_lost {
+                    tx.meta_set(lock_ops::META_REMEMBER_LOST, "1")?;
                 }
                 tx.local_auth_put(&local_auth)?;
                 tx.key_wrap_put(&kek_row)?;
@@ -1457,9 +1494,15 @@ impl Core {
             }
             inner.sync.access = Some(Zeroizing::new(tokens.access_token.0.clone()));
             super::checkpoint(&inner.store);
-            tracing::info!(epoch, "personal vault bound again");
+            tracing::info!(
+                epoch,
+                remembered = device_row.is_some(),
+                remember_lost,
+                "personal vault bound again"
+            );
             Ok(())
         })?;
+        drop(remember);
         // The generation is learnt by the first cycle (a restore check
         // against nothing would push everything back for no reason).
         self.store_generation_if_unset()?;
@@ -1888,7 +1931,7 @@ impl Core {
     // Tokens
     // -----------------------------------------------------------------
 
-    fn link(&self) -> Result<Link, CoreError> {
+    pub(super) fn link(&self) -> Result<Link, CoreError> {
         let guard = self.inner();
         let session = Self::require_session(&guard)?;
         let account = guard.store.server_account()?.ok_or(CoreError::WrongState)?;
@@ -1960,7 +2003,7 @@ impl Core {
 
     /// Runs an authenticated call, refreshing the access token once when it
     /// is missing or refused.
-    fn authed<T>(
+    pub(super) fn authed<T>(
         &self,
         link: &Link,
         call: impl Fn(&HttpApi, &str) -> Result<T, HttpError>,
@@ -2605,7 +2648,10 @@ impl Core {
     }
 
     /// The current password's auth key for a sensitive operation (4.8).
-    fn current_keys(&self, password: &SecretString) -> Result<(Link, Derived), CoreError> {
+    pub(super) fn current_keys(
+        &self,
+        password: &SecretString,
+    ) -> Result<(Link, Derived), CoreError> {
         let link = self.link()?;
         let (context, origin) = {
             let guard = self.inner();
@@ -2711,26 +2757,17 @@ impl Core {
         self.authed(&link, |api, token| api.totp_disable(token, &request))
     }
 
-    /// The password change of a bound vault (section 5.1): the server takes
-    /// the new verifier and `kek_wrap` first, then the local rows change.
-    /// With `rotate` ("my old password may be compromised") the personal
-    /// vault also gets a new epoch, written locally only after the server
-    /// accepted it; records are re-sealed afterwards.
+    /// The password change of a bound vault without a rotation (section
+    /// 5.1, the option off): the server takes the new verifier and
+    /// `kek_wrap` first, then the local rows change. With the option on the
+    /// change goes through `POST /v1/account/credentials` (`key_change.rs`).
     pub(super) fn password_change_bound(
         &self,
         context: &KeyContext,
         current: SecretString,
         new: SecretString,
-        rotate: bool,
     ) -> Result<(), CoreError> {
         let _sync = self.sync_lock();
-        // A rotation rewraps the `device` row too ("remember on this device").
-        let _remember = self.remember_lock();
-        let device_wrap_key = if rotate {
-            self.rotation_device_key(context)
-        } else {
-            None
-        };
         let class = self.platform.class;
         let (link, current_keys) = self.current_keys(&current)?;
         drop(current);
@@ -2746,28 +2783,12 @@ impl Core {
             class,
         )?;
         drop(new);
-        let (kek_row, rotation, vault_id) = self.with_session(|inner| {
+        let (kek_row, vault_id) = self.with_session(|inner| {
             if !lock_ops::key_rows_unchanged(&inner.store, context)? {
                 return Err(CoreError::WrongState);
             }
             let session = inner.session.as_ref().ok_or(CoreError::Locked)?;
             let vault_id = session.ring.vault_id();
-            if rotate {
-                let recovery_key = lock_ops::recovery_key_of(session)?;
-                let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
-                let rotation = Rotation::prepare(
-                    &session.ring,
-                    &context.vault,
-                    &derived.kek,
-                    &recovery_kek,
-                    device_wrap_key.as_ref(),
-                )?;
-                let kek_row = rotation
-                    .row(WrapKind::Kek)
-                    .cloned()
-                    .ok_or(CoreError::Internal("rotation"))?;
-                return Ok((kek_row, Some(rotation), vault_id));
-            }
             let row = vault::wrap_row(
                 WrapKind::Kek,
                 vault_id,
@@ -2775,7 +2796,7 @@ impl Core {
                 &derived.kek,
                 session.ring.current_key(),
             )?;
-            Ok((row, None, vault_id))
+            Ok((row, vault_id))
         })?;
         let request = wire::PasswordChangeRequest {
             current_auth_key: key_b64(&current_keys.auth_key),
@@ -2783,7 +2804,7 @@ impl Core {
             kdf_salt: B64(material.kdf_salt.to_vec()),
             auth_key: key_b64(&derived.auth_key),
             kek_wrap: B64(kek_row.wrap.clone()),
-            rotation: rotation.as_ref().map(wire_rotation).transpose()?,
+            rotation: None,
         };
         let tokens = self.authed(&link, |api, token| api.password_change(token, &request))?;
         let now = self.now();
@@ -2792,82 +2813,14 @@ impl Core {
             let ids = Self::commit_new_keys(
                 inner,
                 &link.device_id,
-                rotation.as_ref(),
+                None,
                 Some(&kek_row),
                 Some(&local_auth),
                 None,
                 &tokens,
                 now,
             )?;
-            tracing::info!(
-                rotated = rotate,
-                "master password changed on the server and here"
-            );
-            self.records_rewritten(inner, ids);
-            Ok(())
-        })
-    }
-
-    /// A password change with a personal vault rotation: through the server
-    /// when bound, locally otherwise (section 5.1, "In local mode").
-    pub(super) fn password_change_rotating_impl(
-        &self,
-        current: SecretString,
-        new: SecretString,
-    ) -> Result<(), CoreError> {
-        let context = {
-            let guard = self.inner();
-            Self::require_session(&guard)?;
-            lock_ops::key_context(&guard.store)?
-        };
-        crate::lock::check_new_password(&new, "new_password")?;
-        if self.bound()? {
-            return self.password_change_bound(&context, current, new, true);
-        }
-        let _remember = self.remember_lock();
-        let device_wrap_key = self.rotation_device_key(&context);
-        let class = self.platform.class;
-        let old = PasswordMaterial::from_row(&context.local_auth)?;
-        let old_kek = old.derive_kek(&current, class)?;
-        vault::open_wrap(&context.kek_row, &old_kek).map_err(|_| CoreError::InvalidPassword)?;
-        drop(current);
-        let material = PasswordMaterial::fresh(class, context.local_auth.kdf_email.clone())?;
-        let new_kek = material.derive_kek(&new, class)?;
-        drop(new);
-        let now = self.now();
-        self.with_session(|inner| {
-            if !lock_ops::key_rows_unchanged(&inner.store, &context)? {
-                return Err(CoreError::WrongState);
-            }
-            let Inner { store, session, .. } = &mut *inner;
-            let session = session.as_mut().ok_or(CoreError::Locked)?;
-            let recovery_key = lock_ops::recovery_key_of(session)?;
-            let recovery_kek = crypto::derive_recovery_kek(&recovery_key);
-            let rotation = Rotation::prepare(
-                &session.ring,
-                &context.vault,
-                &new_kek,
-                &recovery_kek,
-                device_wrap_key.as_ref(),
-            )?;
-            let vault_id = session.ring.vault_id();
-            let local_auth = material.to_row(vault_id, format_timestamp(now));
-            session
-                .ring
-                .push_epoch(rotation.new_epoch, rotation.new_key());
-            if let Err(error) = store.write(|tx| {
-                rotation.write(tx)?;
-                tx.local_auth_put(&local_auth)
-            }) {
-                session.ring.pop_epoch(rotation.old_epoch);
-                return Err(error.into());
-            }
-            let ids = lock_ops::reseal_or_defer(session, store, now);
-            super::checkpoint(store);
-            tracing::info!(
-                epoch = rotation.new_epoch,
-                "master password changed; vault rotated"
-            );
+            tracing::info!("master password changed on the server and here");
             self.records_rewritten(inner, ids);
             Ok(())
         })
@@ -2875,7 +2828,7 @@ impl Core {
 
     /// The device wrap key for a rotation while "remember on this device" is
     /// on (the keychain is read without the core mutex; `remember` is held).
-    fn rotation_device_key(&self, context: &KeyContext) -> Option<Key32> {
+    pub(super) fn rotation_device_key(&self, context: &KeyContext) -> Option<Key32> {
         context.device_row.as_ref()?;
         self.fetch_device_key(&context.db_id)
             .map(|key| crypto::derive_device_wrap_key(&key, &context.db_id))
@@ -2885,7 +2838,7 @@ impl Core {
     /// the rotation (or a single `kek` row), `local_auth`, an extra record
     /// row and the new refresh token; then re-seals older records.
     #[allow(clippy::too_many_arguments)]
-    fn commit_new_keys(
+    pub(super) fn commit_new_keys(
         inner: &mut Inner,
         device_id: &Uuid,
         rotation: Option<&Rotation>,
@@ -2947,7 +2900,7 @@ impl Core {
         Ok(ids)
     }
 
-    fn records_rewritten(&self, inner: &mut Inner, ids: Vec<Uuid>) {
+    pub(super) fn records_rewritten(&self, inner: &mut Inner, ids: Vec<Uuid>) {
         if ids.is_empty() {
             return;
         }
@@ -2962,95 +2915,6 @@ impl Core {
                 classes: classes::ALL.to_vec(),
             },
         );
-    }
-
-    /// The recovery key reissue of a bound vault (section 5.3): a new
-    /// recovery key and a new personal epoch, committed by the server
-    /// together with the new `recovery_key` record; written here after.
-    pub(super) fn recovery_key_reissue_bound(
-        &self,
-        password: SecretString,
-    ) -> Result<crate::service::dto::RecoveryKeyResult, CoreError> {
-        let _sync = self.sync_lock();
-        let _remember = self.remember_lock();
-        let (link, keys) = self.current_keys(&password)?;
-        drop(password);
-        let context = lock_ops::key_context(&self.inner().store)?;
-        let origin = link.api.origin().to_owned();
-        let new_recovery_key = Key32::generate()?;
-        let device_wrap_key = self.rotation_device_key(&context);
-        let recovery_kek = crypto::derive_recovery_kek(&new_recovery_key);
-        let recovery_auth_key = crypto::derive_recovery_auth_key(&new_recovery_key, &origin);
-        let now = self.now();
-        let (rotation, write) = self.with_session(|inner| {
-            if !lock_ops::key_rows_unchanged(&inner.store, &context)? {
-                return Err(CoreError::WrongState);
-            }
-            let session = inner.session.as_mut().ok_or(CoreError::Locked)?;
-            let record_id = session
-                .index
-                .singleton(RecordKind::RecoveryKey)
-                .map(|record| record.record_id)
-                .ok_or(CoreError::Damaged)?;
-            let rotation = Rotation::prepare(
-                &session.ring,
-                &context.vault,
-                &keys.kek,
-                &recovery_kek,
-                device_wrap_key.as_ref(),
-            )?;
-            session
-                .ring
-                .push_epoch(rotation.new_epoch, rotation.new_key());
-            let data = lock_ops::recovery_record_data(&new_recovery_key, &format_timestamp(now));
-            let write =
-                session.prepare_write(&inner.store, RecordKind::RecoveryKey, record_id, data, now);
-            session.ring.pop_epoch(rotation.old_epoch);
-            Ok((rotation, write?))
-        })?;
-        let request = wire::RecoveryKeyReissueRequest {
-            current_auth_key: key_b64(&keys.auth_key),
-            recovery_auth_key: key_b64(&recovery_auth_key),
-            kek_wrap: B64(rotation
-                .row(WrapKind::Kek)
-                .ok_or(CoreError::Internal("rotation"))?
-                .wrap
-                .clone()),
-            rotation: wire_rotation(&rotation)?,
-            record: wire::RecordWrite {
-                base_revision: write.row.synced_revision,
-                envelope: B64(write.row.envelope.clone()),
-            },
-        };
-        let response = self.authed(&link, |api, token| {
-            api.recovery_key_reissue(token, &request)
-        })?;
-        let mut write = write;
-        write.row.synced_revision = write.row.revision;
-        write.row.base_envelope = None;
-        write.row.server_seq = Some(response.seq as i64);
-        self.with_session(|inner| {
-            let ids = Self::commit_new_keys(
-                inner,
-                &link.device_id,
-                Some(&rotation),
-                None,
-                None,
-                Some(write),
-                &response.tokens,
-                now,
-            )?;
-            inner.recovery_grant.grant(now);
-            tracing::info!(
-                epoch = rotation.new_epoch,
-                "recovery key reissued on the server"
-            );
-            self.records_rewritten(inner, ids);
-            Ok(())
-        })?;
-        Ok(crate::service::dto::RecoveryKeyResult {
-            recovery_key: crypto::encode_recovery_key(&new_recovery_key),
-        })
     }
 
     /// "Bring the server up to date…" (section 5.1, re-post; D93): after

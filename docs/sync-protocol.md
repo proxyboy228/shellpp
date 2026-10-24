@@ -124,6 +124,7 @@ Auth column: `none`; `access` (bearer access token); `refresh` and `ticket` (the
 | GET | `/v1/account` | access | account bundle | 4.4 |
 | POST | `/v1/account/password` | access | password change | 5.1 |
 | POST | `/v1/account/recovery-key` | access | recovery key reissue | 5.3 |
+| POST | `/v1/account/credentials` | access | password change with a rotation and a recovery key reissue, in one transaction [decision] (D178) | 5.9 |
 | POST | `/v1/account/email` | access | change the email or resend the verification code | 5.4 |
 | POST | `/v1/account/email/verify` | access | verify the email with a code | 5.4 |
 | POST | `/v1/account/totp/setup` | access | create a pending TOTP secret | 5.5 |
@@ -463,7 +464,7 @@ A device is one installation with its own `device_id` (UUIDv7 generated locally)
 
 A lost or stolen device (client flow; [decision] (D93)): Revoke for another device (UI 12.2, Devices) asks whether the device was lost or stolen. "Revoke only" sends the `DELETE` alone. "Lost or stolen" sends it and continues:
 
-1. A password change with "my old password may be compromised" turned on and fixed (section 5.1): the personal vault rotates, so the stolen device's keys open nothing written later, and the new password stops the thief from signing in again, which would clear the revocation (above).
+1. A password change with "my old password may be compromised" turned on and fixed (section 5.1), which is the combined request of section 5.9: the personal vault rotates, so the stolen device's keys open nothing written later; the new password stops the thief from signing in again, which would clear the revocation (above); and the recovery key is reissued, because the stolen device holds the old one in its `recovery_key` record and could otherwise set a new password through `recover/begin` and `recover/complete` (section 5.2). The new key is shown and confirmed before the request is sent (section 5.3, step 4). (D173)
 2. A list of the team vaults where the user is an owner, all ticked, each rotated with an explicit rotation and no removal (section 7.7, interactive recipient rules).
 3. For the team vaults the user does not own, the dialog names their owners (from the member lists) and says to ask one of them to rotate the vault's key.
 
@@ -477,6 +478,7 @@ These requests repeat the proof of password as `current_auth_key` in the body. A
 |---|---|
 | `POST /v1/account/password` | none |
 | `POST /v1/account/recovery-key` | none |
+| `POST /v1/account/credentials` | none |
 | `POST /v1/account/email` | none |
 | `POST /v1/account/email/verify` | only when it completes an email change (section 5.4) |
 | `POST /v1/account/totp/setup` | none |
@@ -488,15 +490,15 @@ These requests repeat the proof of password as `current_auth_key` in the body. A
 
 ### 5.1 Password change
 
-The change rewraps the personal vault key and atomically replaces the auth key, salt and KDF parameters; records are not re-encrypted (D11). With the option "my old password may be compromised" (off by default) the change also rotates the personal vault key, so the old `kek_wrap` that the server and its backups keep stops opening current and future data ([security.md](security.md), RR6). (stage 0 decision for the option)
+The change rewraps the personal vault key and atomically replaces the auth key, salt and KDF parameters; records are not re-encrypted (D11). With the option "my old password may be compromised", which is on by default, the change also rotates the personal vault key, so the old `kek_wrap` that the server and its backups keep stops opening current and future data ([security.md](security.md), RR6), and reissues the recovery key, because whoever knew the old password could read the old key in the `recovery_key` record ([security.md](security.md), RR16). With the option the client sends the combined request of section 5.9 instead of the one below; turned off, the change keeps the epoch and the recovery key. (D173: the option and its default; the stage 0 default was off)
 
 Client steps:
 
-1. Ask for the current and the new password and the option (minimum length and the rest of the UI: UI 13.4, [security.md](security.md)).
+1. Ask for the current and the new password and the option (minimum length and the rest of the UI: UI 13.4, [security.md](security.md)). With the option on, continue with section 5.9.
 2. Derive `current_auth_key` from the current password with the stored parameters.
 3. Generate a new 16-byte `kdf_salt`; use the platform preset as the new `kdf` ([security.md](security.md)).
 4. Derive the new `master_key`, `kek` and `auth_key` (the Argon2id salt binds the new `kdf_salt` to `local_auth.kdf_email`); wrap `vault_key[personal, current]` under the new `kek` → `kek_wrap`.
-5. With the option: generate `vault_key[personal, e + 1]`, wrap `vault_key[personal, e]` under `chain_key[personal, e + 1]` → `prev_key_wrap`, and wrap the new key under the new `kek` → `kek_wrap` and under `recovery_kek` from the `recovery_key` record → `recovery_wrap`.
+5. A rotation (section 5.9, a recovery, a reissue): generate `vault_key[personal, e + 1]`, wrap `vault_key[personal, e]` under `chain_key[personal, e + 1]` → `prev_key_wrap`, and wrap the new key under the new `kek` → `kek_wrap` and under `recovery_kek` → `recovery_wrap`. In a password change `recovery_kek` comes from the new recovery key of section 5.9; a recovery keeps the key it was made with (section 5.2).
 6. `POST /v1/account/password`.
 7. On success, in one local transaction: replace the local `kek` wrap and `local_auth` (`kdf`, `kdf_salt`), and store the new refresh token. With a rotation, also write the new epoch: `vaults.current_epoch`, the `chain` row and the `kek`, `recovery` and (when "remember on this device" is on) `device` rows of the new epoch, the refresh token wrapped under the new `local_secrets_key`; background re-encryption then starts (section 7.9). The new epoch is always above the local current epoch: a rotation never writes an epoch this device already holds (below).
 
@@ -515,16 +517,17 @@ Request:
 
 Response `200`: `{"tokens": {…}}` for the calling device.
 
-`rotation` (stage 0 decision) is optional here and required in a recovery (section 5.2) and a recovery key reissue (section 5.3). When it is present, `kek_wrap` and `rotation.recovery_wrap` wrap `vault_key[personal, epoch]`, and the server, in the same transaction as the rest of the request, checks `epoch = current_epoch + 1` (`409 epoch_conflict`) and the wrap sizes, inserts the epoch row with `prev_key_wrap`, replaces `recovery_wrap` and sets `current_epoch = epoch`, as step 5 of section 7.7 does for the personal vault.
+`rotation` (stage 0 decision) is optional here and required in a recovery (section 5.2), a recovery key reissue (section 5.3) and the combined request (section 5.9). Since D173 the client never sends it here, because a rotation that keeps the recovery key leaves the old key working (section 5.9); the server still accepts it. When it is present, `kek_wrap` and `rotation.recovery_wrap` wrap `vault_key[personal, epoch]`, and the server, in the same transaction as the rest of the request, checks `epoch = current_epoch + 1` (`409 epoch_conflict`) and the wrap sizes, inserts the epoch row with `prev_key_wrap`, replaces `recovery_wrap` and sets `current_epoch = epoch`, as step 5 of section 7.7 does for the personal vault.
 
 Server, in one transaction: verify `current_auth_key`; check KDF bounds (`400 weak_kdf_params`); replace `auth_verifier`, `kdf`, `kdf_salt` and `kek_wrap`; apply `rotation` when present; set `credentials_changed_at`; revoke every refresh family and delete every access token and ticket of the user, including the caller's; issue a new family for the caller.
 
 Effects:
 
 - Other devices get `401` on their next request and must sign in with the new password. Until then their old password still unlocks their local copy (accepted risk, [security.md](security.md)). After that sign-in they rewrap their local `kek` wrap; after a rotation they also learn the new epoch from `kek_wrap` and the epoch chain, rebuild their local `recovery` wrap and receive the re-encrypted records by normal pulls.
+- "Remember on this device" on such a device: in the transaction that writes the new epoch at that sign-in, the device key from the OS keychain wraps the new epoch's key, which gives the new `device` row. When the keychain item is missing or cannot be read, the old epoch's `device` row goes with the other old rows, so the option is off, and the device keeps a note (in `meta`; it is not secret) that Settings shows until the user sets the option again (UI 13.4). A revoked device never gets there: learning the new epoch needs a sign-in with the new password. [decision] (D179)
 - Without a rotation, the recovery wrap and any device wrap do not change.
 - If the client crashes after the server accepted the change but before step 7, the local copy still opens with the old password; the next sync fails with `401`, and signing in with the new password repairs the local wraps. An interrupted re-encryption is resumed by whichever device of the user syncs next (section 7.9).
-- In local mode the change is local only ([security.md](security.md)), with the same optional rotation.
+- In local mode the change is local only ([security.md](security.md)). The option is on by default here too and does the same without a server: the rotation of step 5, with the recovery wrap made from a new recovery key, and a new revision of the `recovery_key` record holding that key, in one local transaction. The new key is not shown (local mode never shows it, D29); at a later registration it is the account's key that step 4 of UI 13.5 shows. (D173)
 
 Personal epoch rollback (stage 0 decision): the client never lowers `vaults.current_epoch` of the personal vault and never replaces a `key_wraps` row of an epoch at or below the local current epoch with one whose wrapped key differs; a rewrap of the same key under another wrapping key stays allowed ([storage-format.md](storage-format.md), section 6.2). A server restored from a backup (section 6.9), or one that replays an older genuine `recovery_wrap` or `kek_wrap`, would otherwise make a device reuse an epoch number it already holds, overwrite that epoch's key rows and lose every record sealed under the newer local keys.
 
@@ -612,7 +615,7 @@ A reissue rotates the personal vault key, because the old key and the old `recov
 1. The user re-enters the master password (UI 13.4); the client derives `current_auth_key` and `kek`.
 2. The client generates a new `recovery_key` and derives `recovery_kek` and `recovery_auth_key`. It generates `vault_key[personal, e + 1]`, wraps `vault_key[personal, e]` under `chain_key[personal, e + 1]` → `prev_key_wrap`, and wraps the new key under `kek` → `kek_wrap` and under the new `recovery_kek` → `recovery_wrap`.
 3. It seals the new revision of the `recovery_key` record under the new epoch, with `base_revision` = its `synced_revision`.
-4. The client shows the new key and requires "I saved it" before anything is sent. (stage 0 decision)
+4. The client shows the new key and requires "I saved it" before anything is sent; "Cancel" there drops the new key and sends nothing. (stage 0 decision; D173 replaces the interim order of D102, which showed the key after the commit)
 5. `POST /v1/account/recovery-key`:
 
 ```json
@@ -630,7 +633,8 @@ Response `200`: `{"tokens": {…}, "seq": 1533}`.
 Server, in one transaction: verify `current_auth_key`; apply `rotation` as in section 5.1; check `record` with the push rules of section 6.6, where its header must name the personal vault, class `0x01` and the new epoch (`400 invalid_envelope` otherwise), and its `base_revision` must equal the stored revision (`409 revision_conflict` otherwise, with `details.current` = the stored `{seq, envelope}`); write the record with the next `seq`; replace `recovery_verifier`, `kek_wrap` and `recovery_wrap`; set `credentials_changed_at`; revoke every refresh family, including the caller's, and issue a new family for the caller. Any failure rolls back the whole request: the old key keeps working.
 
 6. On success, the client stores the record as synced and the new epoch as in step 7 of section 5.1, and starts background re-encryption (section 7.9). The old key stops working.
-7. If another device reissued the key first, this request fails as a whole: with `401`, because that reissue revoked this device's tokens, or with `409 revision_conflict`. The client discards its new key and tells the user that the key shown on this device is not valid; after signing in again it applies the winning record and offers to show the valid key.
+7. If another device reissued the key first, this request fails as a whole: with `401`, because that reissue revoked this device's tokens, or with `409 revision_conflict` (or `409 epoch_conflict`, when both requests passed authentication before either committed). The client discards its new key and tells the user that the key shown on this device is not valid; after signing in again it applies the winning record and offers to show the valid key.
+8. What the client says after a failed request depends on whether the server answered ([decision] (D180)): an error answer (`4xx`) means the transaction rolled back, so the key shown is not valid and the old password and key still work; no answer (a network error, a timeout, a `5xx` of a proxy) may have come after the commit, so the user keeps the new key (and, in section 5.9, both passwords) until this device signs in again, after which "Show" (UI 13.4) gives the valid key; a change the server accepted but this device could not store (locked meanwhile, a failed write) is in effect, so the user keeps the key and signs in again with the new password (section 5.1, "If the client crashes").
 
 Other devices are signed out. Until they sign in again, their local copy still opens with the old recovery key ([security.md](security.md), RR6); after signing in they rebuild their local `recovery` wrap from the new record (section 4.4).
 
@@ -678,6 +682,40 @@ Two devices that regenerate at the same time can leave the server with the key p
 - In the same transaction the server copies the hash of every refresh token of the user that is not expired or revoked into `deleted_account_tokens` with the time of the deletion, and keeps nothing else in the database: no email, no user id (the server log keeps the event "account deleted" with its `user_id`, section 10.3). For 30 days a refresh with one of them answers `401 account_deleted` with `details.deleted_at` (a date without time), so the account's other devices learn why they are signed out; the purge job then deletes the rows. [decision] (D93)
 - The deletion is immediate, with no grace period on the server ([decision] (D93)). Before it, the client's dialog offers Export and says what changes: the account cannot be restored, this device keeps its data, the members of team vaults lose the user's access while the user's records and published log entries stay with them, and the account's other devices are told at their next sync (UI 12.2). Server backups follow [security.md](security.md), section 14.4.
 - The local copy stays (UI 12.2): the personal vault becomes local-only and team vaults become archives. A device that gets `401 account_deleted` does the same in one local transaction (`server_account` row removed, `vaults.bound = 0`, team vaults `archived`, the `meta` keys of the last account kept) and says that the account was deleted from another device and that the data here is kept. [decision] (D93)
+
+### 5.9 Password change with a rotation and a recovery key reissue [decision] (D178)
+
+A password change with "my old password may be compromised" (section 5.1; "Lost or stolen", section 4.7) changes the password, rotates the personal vault and reissues the recovery key in one request, applied by the server in one transaction (D173). Two requests in a row (a password change, then a reissue) would rotate twice and leave a state between them where the new password is in effect while the old recovery key still passes `recover/begin`.
+
+Client steps:
+
+1. Steps 1–4 of section 5.1: the current and the new password, `current_auth_key`, a new `kdf_salt`, the platform preset as `kdf`, and the new `master_key`, `kek` and `auth_key`.
+2. A new `recovery_key`, with `recovery_kek` and `recovery_auth_key` derived from it (section 5.3, step 2).
+3. The rotation of section 5.1, step 5: `prev_key_wrap`, `kek_wrap` under the new `kek` and `recovery_wrap` under the new `recovery_kek`.
+4. The new revision of the `recovery_key` record sealed under the new epoch, with `base_revision` = its `synced_revision` (section 5.3, step 3).
+5. The new key is shown and "I saved it" is required before anything is sent (section 5.3, step 4).
+6. `POST /v1/account/credentials`:
+
+```json
+{
+  "current_auth_key": "<b64u 32 bytes>",
+  "kdf": {"alg": "argon2id", "v": 1, "m_kib": 65536, "t": 3, "p": 4},
+  "kdf_salt": "<b64u 16 bytes>",
+  "auth_key": "<b64u 32 bytes>",
+  "kek_wrap": "<b64u 73 bytes>",
+  "recovery_auth_key": "<b64u 32 bytes>",
+  "rotation": {"epoch": 3, "prev_key_wrap": "<b64u 73 bytes>", "recovery_wrap": "<b64u 73 bytes>"},
+  "record": {"base_revision": 2, "envelope": "<b64u 344 bytes>"}
+}
+```
+
+Response `200`: `{"tokens": {…}, "seq": 1533}`, as in section 5.3.
+
+Server, in one transaction, in this order: verify `current_auth_key` as section 4.8 says (`401 invalid_credentials`, counted as a failed sign-in); check the KDF bounds (`400 weak_kdf_params`) and the field sizes (`400 bad_request`); apply `rotation` as in section 5.1 (`409 epoch_conflict`); check and write `record` as in section 5.3 (`400 invalid_envelope`, `409 revision_conflict` with `details.current`); replace `auth_verifier`, `kdf`, `kdf_salt`, `kek_wrap` and `recovery_verifier` (the rotation replaced `recovery_wrap`); set `credentials_changed_at`; revoke every refresh family and delete every access token and ticket of the user, including the caller's; issue a new family for the caller. Any failure rolls back the whole request: the old password and the old recovery key keep working, and nothing of the new material is stored.
+
+7. On success, in one local transaction: the `kek` row and `local_auth` of section 5.1, step 7, the new epoch (`chain`, `kek`, `recovery` and, with "remember on this device", `device` rows), the record as synced and the new refresh token; then background re-encryption (section 7.9). After a failure the client discards the new key and says what is in effect (section 5.3, steps 7 and 8).
+
+Effects: those of sections 5.1 and 5.3 together. The old password no longer signs in, the old recovery key no longer passes `recover/begin`, and other devices are signed out; after signing in with the new password they learn the new epoch and the new `recovery_key` record. `/v1/account/password` (the option off) and `/v1/account/recovery-key` (a reissue alone) stay.
 
 ## 6. Record sync
 

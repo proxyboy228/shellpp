@@ -1864,7 +1864,7 @@ impl PasswordChangeDialog {
         cx.notify();
         let done = cx.background_spawn(async move {
             if rotate {
-                core.password_change_rotating(current, new)
+                core.password_change_rotating(current, new).map(drop)
             } else {
                 core.password_change(current, new)
             }

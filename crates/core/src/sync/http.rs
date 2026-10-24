@@ -390,6 +390,14 @@ impl HttpApi {
         self.post("/v1/account/recovery-key", request, Some(access))
     }
 
+    pub fn credentials_change(
+        &self,
+        access: &str,
+        request: &wire::CredentialsChangeRequest,
+    ) -> Result<wire::RecoveryKeyReissueResponse, HttpError> {
+        self.post("/v1/account/credentials", request, Some(access))
+    }
+
     pub fn totp_setup(
         &self,
         access: &str,
