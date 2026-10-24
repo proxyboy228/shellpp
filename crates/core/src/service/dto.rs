@@ -149,6 +149,9 @@ pub struct LockStatus {
     pub remember_device_available: bool,
     /// A `device` key wrap exists for the current personal epoch.
     pub remember_device_enabled: bool,
+    /// The option went off at a rotation because the device key was gone
+    /// from the OS keychain (D173); shown until the option is set again.
+    pub remember_device_lost: bool,
 }
 
 /// Input of `first_run_setup`. The UI checks that the confirmation matches.
@@ -484,6 +487,10 @@ pub enum SecretCopyTarget {
     /// Allowed only within 5 minutes after `first_run_setup`,
     /// `recovery_key_show` or `recovery_key_reissue`, and never after a lock.
     RecoveryKey,
+    /// The new key of a prepared reissue or password change, before "I
+    /// saved it" (`recovery_key_reissue_prepare`, `password_change_prepare`),
+    /// by the id they returned.
+    PendingRecoveryKey { id: u64 },
 }
 
 redacted_debug!(SecretValue);

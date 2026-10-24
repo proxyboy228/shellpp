@@ -696,7 +696,9 @@ fn auth_keys_are_checked_against_their_verifiers() {
             kek_wrap: B64(vec![4; 73]),
             rotation: None,
         };
-        fx.write(|tx, shared| accounts::password_change(tx, shared, &principal, request, t0))
+        fx.signed_in(&principal, current, |tx, _, checked| {
+            accounts::password_change(tx, &principal, checked, request, t0)
+        })
     };
     refused(change(&wrong[0]), 401, code::INVALID_CREDENTIALS);
     fx.login(&a.email, &a.auth_key, a.device_id)

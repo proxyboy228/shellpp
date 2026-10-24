@@ -411,6 +411,9 @@ impl SettingsView {
         let minutes = state.auto_lock_minutes();
         let available = state.remember_available();
         let remembered = state.remember_enabled();
+        let remember_lost = state.remember_lost() && !remembered;
+        // Show and Reissue only with a sync account (UI 13.4; D29).
+        let bound = state.sync_status().is_some_and(|status| status.bound);
         let system_agent = state.system_agent_while_locked();
         let trigger = widgets::select_trigger(
             "settings-auto-lock",
@@ -502,6 +505,63 @@ impl SettingsView {
                         ),
                 )
                 .child(explanation)
+                .when(remember_lost, |this| {
+                    this.child(notice(
+                        "settings-remember-lost",
+                        NoticeKind::Warning,
+                        strings::REMEMBER_DEVICE_LOST,
+                        cx,
+                    ))
+                })
+        });
+        let recovery = bound.then(|| {
+            let show = self.state.clone();
+            let reissue = self.state.clone();
+            v_flex()
+                .id("settings-recovery-key")
+                .test_support()
+                .gap(metrics::SPACE_2)
+                .child(label(crate::sync_ui::strings::RECOVERY_KEY_SECTION, cx))
+                .child(widgets::caption(
+                    crate::sync_ui::strings::RECOVERY_KEY_HINT,
+                    cx,
+                ))
+                .child(
+                    h_flex()
+                        .gap(metrics::SPACE_2)
+                        .child(
+                            crate::hosts::controls::ControlButton::new(
+                                "settings-recovery-show",
+                                crate::hosts::controls::ControlKind::Neutral,
+                            )
+                            .label(crate::sync_ui::strings::KEY_SHOW)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                crate::sync_ui::open_recovery_key(
+                                    show.clone(),
+                                    crate::sync_ui::RecoveryKeyMode::Show,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .child(
+                            crate::hosts::controls::ControlButton::new(
+                                "settings-recovery-reissue",
+                                crate::hosts::controls::ControlKind::Neutral,
+                            )
+                            .label(crate::sync_ui::strings::KEY_REISSUE)
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                crate::sync_ui::open_recovery_key(
+                                    reissue.clone(),
+                                    crate::sync_ui::RecoveryKeyMode::Reissue,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                )
         });
         v_flex()
             .id("settings-security")
@@ -534,11 +594,14 @@ impl SettingsView {
                         let state = self.state.clone();
                         move |_, window, cx| {
                             window.close_dialog(cx);
-                            crate::sync_ui::open_password_change(state.clone(), false, window, cx);
+                            crate::sync_ui::open_password_change(state.clone(), None, window, cx);
                         }
                     }),
                 ),
             )
+            .when_some(recovery, |this, recovery| {
+                this.child(widgets::divider(cx)).child(recovery)
+            })
             .children(self.error.clone().map(|error| {
                 div()
                     .id("settings-error")

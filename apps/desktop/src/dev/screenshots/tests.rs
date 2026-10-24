@@ -129,6 +129,12 @@ fn the_full_set_covers_every_state_in_both_themes() {
         "sync-conflict",
         // Run 9 (D173, item 1.7).
         "sync-reset",
+        // Run 9, plan 3.2 (D173).
+        "recovery-key-show",
+        "recovery-key-reissue",
+        "password-change",
+        "lost-or-stolen",
+        "sync-registered-key",
         // Run 9, plan 3.3 (D187).
         "sync-certificate-changed",
         "sync-trust-ca",
@@ -200,7 +206,7 @@ fn the_full_set_covers_every_state_in_both_themes() {
             assert!(files.contains(&name), "{name}");
         }
     }
-    assert_eq!(ShotState::ALL.len(), 112);
+    assert_eq!(ShotState::ALL.len(), 117);
     assert_eq!(files.len(), 6 + 2 * ShotState::ALL.len() + 22);
     for state in ShotState::STAGE_2B {
         assert!(ShotState::ALL.contains(&state), "{state:?}");

@@ -788,7 +788,7 @@ fn change_password_with_rotation_from_security(cx: &mut TestAppContext) {
     type_text("sync-current-password", &old, cx);
     type_text("sync-new-password", &new, cx);
     type_text("sync-repeat-password", &new, cx);
-    ui.click("sync-compromised", cx);
+    // On by default since D173: the change rotates without a click.
     ui.click("sync-password-run", cx);
     for _ in 0..50 {
         if ui.visible("sync-password-close", cx) {

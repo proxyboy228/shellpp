@@ -28,6 +28,7 @@ mod csv_io;
 pub mod dto;
 mod export;
 pub mod host_api;
+mod key_change;
 pub mod keychain;
 mod known_hosts_io;
 /// The last session of Restore (UI 6; stage 2b).
@@ -79,6 +80,7 @@ use host_api::{
     ConnectionEndReason, ConnectionLogStart, HistoryDecision, HistoryRecordInput, HostKeyCheck,
     HostKeyStatus, SessionConfig,
 };
+pub use key_change::{KeyChangeFailure, PreparedKey};
 use session::Session;
 pub use sync_ops::{
     BroughtBackItem, ConflictChoice, ConflictItem, DeletedItem, DeviceItem, DuplicateItem,
@@ -122,6 +124,8 @@ struct Inner {
     connlog: crate::connlog::Tracker,
     /// Stage 7: the access token and the retry state (`sync_ops.rs`).
     sync: sync_ops::SyncRuntime,
+    /// A key change waiting for "I saved it" (`key_change.rs`); wiped on lock.
+    key_change: Option<key_change::PendingKeyChange>,
 }
 
 /// The core facade.
@@ -192,6 +196,7 @@ impl Core {
             auto_lock: AutoLock::new(now),
             lockout,
             recovery_grant: RecoveryGrant::default(),
+            key_change: None,
             v: 0,
             device_unlock_allowed: true,
             ids: IdGenerator::new(),
@@ -251,6 +256,12 @@ impl Core {
             state: inner.state,
             remember_device_available: available,
             remember_device_enabled: device_row_exists(inner),
+            remember_device_lost: inner
+                .store
+                .meta_get(lock_ops::META_REMEMBER_LOST)
+                .ok()
+                .flatten()
+                .is_some_and(|value| value == "1"),
         }
     }
 
@@ -602,14 +613,24 @@ impl Core {
     }
 
     /// UI 13.4 with "My old password may be compromised" (and the "Lost or
-    /// stolen?" flow, UI 12.2): the change also rotates the personal vault
-    /// (docs/sync-protocol.md, section 5.1), through the server when bound.
+    /// stolen?" flow, UI 12.2) in one call: the change also rotates the
+    /// personal vault and reissues the recovery key (D173), through
+    /// `POST /v1/account/credentials` when bound, which returns the new key;
+    /// locally the new key is not shown (`None`). The app shows the key
+    /// before sending instead: [`Core::password_change_prepare`].
     pub fn password_change_rotating(
         &self,
         current: SecretString,
         new: SecretString,
-    ) -> Result<(), CoreError> {
-        self.password_change_rotating_impl(current, new)
+    ) -> Result<Option<RecoveryKeyResult>, CoreError> {
+        let Some(shown) = self.password_change_prepare(current, new)? else {
+            return Ok(None);
+        };
+        self.key_change_confirm(shown.id)
+            .map_err(key_change::KeyChangeFailure::into_error)?;
+        Ok(Some(RecoveryKeyResult {
+            recovery_key: shown.recovery_key,
+        }))
     }
 
     /// UI 13.4 "Show": needs the master password even while unlocked.
@@ -620,13 +641,20 @@ impl Core {
         self.recovery_key_show_impl(password)
     }
 
-    /// UI 13.4 "Reissue": new recovery key, personal vault rotation, new
-    /// revision of the `recovery_key` record. The old key stops working.
+    /// UI 13.4 "Reissue" in one call: new recovery key, personal vault
+    /// rotation, new revision of the `recovery_key` record. The old key
+    /// stops working. The app shows the key before it is sent instead:
+    /// [`Core::recovery_key_reissue_prepare`].
     pub fn recovery_key_reissue(
         &self,
         password: SecretString,
     ) -> Result<RecoveryKeyResult, CoreError> {
-        self.recovery_key_reissue_impl(password)
+        let shown = self.recovery_key_reissue_prepare(password)?;
+        self.key_change_confirm(shown.id)
+            .map_err(key_change::KeyChangeFailure::into_error)?;
+        Ok(RecoveryKeyResult {
+            recovery_key: shown.recovery_key,
+        })
     }
 
     /// UI 13.4 "Remember on this device". `unavailable` without an OS keychain.

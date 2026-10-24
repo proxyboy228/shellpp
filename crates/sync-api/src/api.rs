@@ -372,10 +372,25 @@ pub struct RecoveryKeyReissueRequest {
     pub record: RecordWrite,
 }
 
+/// The answer of a reissue, alone or together with a password change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryKeyReissueResponse {
     pub tokens: Tokens,
     pub seq: u64,
+}
+
+/// `POST /v1/account/credentials` (section 5.9): a password change, a
+/// personal vault rotation and a recovery key reissue in one transaction.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialsChangeRequest {
+    pub current_auth_key: B64,
+    pub kdf: Kdf,
+    pub kdf_salt: B64,
+    pub auth_key: B64,
+    pub kek_wrap: B64,
+    pub recovery_auth_key: B64,
+    pub rotation: Rotation,
+    pub record: RecordWrite,
 }
 
 /// `POST /v1/account/email` (without SMTP the change takes effect at once).

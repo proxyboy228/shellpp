@@ -5,12 +5,12 @@ use std::net::IpAddr;
 
 use axum::http::StatusCode;
 use shellpp_sync_api::api::{
-    AccountDeleteRequest, B64, Device, DeviceList, EmailChangeRequest, EmailChangeResponse,
-    LoginRequest, LoginResponse, LoginTotpRequest, PasswordChangeRequest, PersonalKeyEpochRequest,
-    PreloginRequest, PreloginResponse, RecoverBeginRequest, RecoverBeginResponse,
-    RecoverCompleteRequest, RecoveryKeyReissueRequest, RecoveryKeyReissueResponse, RegisterRequest,
-    RegisterResponse, Registration, Rotation, Secret, SshIdRequest, Tokens, TotpCode,
-    TotpDisableRequest, TotpSetupResponse, code, token_prefix,
+    AccountDeleteRequest, B64, CredentialsChangeRequest, Device, DeviceList, EmailChangeRequest,
+    EmailChangeResponse, LoginRequest, LoginResponse, LoginTotpRequest, PasswordChangeRequest,
+    PersonalKeyEpochRequest, PreloginRequest, PreloginResponse, RecoverBeginRequest,
+    RecoverBeginResponse, RecoverCompleteRequest, RecoveryKeyReissueRequest,
+    RecoveryKeyReissueResponse, RegisterRequest, RegisterResponse, Registration, Rotation, Secret,
+    SshIdRequest, Tokens, TotpCode, TotpDisableRequest, TotpSetupResponse, code, token_prefix,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -926,13 +926,16 @@ fn epoch_conflict(current: u32) -> ApiError {
 /// `POST /v1/account/password` (section 5.1).
 pub fn password_change(
     tx: &mut dyn Tx,
-    shared: &Shared,
     principal: &Principal,
+    checked: &CheckedKey,
     request: PasswordChangeRequest,
     now: OffsetDateTime,
 ) -> ApiResult<Tokens> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    // `current_auth_key` was checked before this transaction (D174).
+    if checked.user_id() != principal.user_id {
+        return Err(ApiError::unauthenticated());
+    }
+    let user = checked.user(tx)?;
     if !request.kdf.server_acceptable() {
         return Err(ApiError::weak_kdf());
     }
@@ -1065,13 +1068,16 @@ pub fn recover_complete(
 /// rotation and the new `recovery_key` record.
 pub fn recovery_key_reissue(
     tx: &mut dyn Tx,
-    shared: &Shared,
     principal: &Principal,
+    checked: &CheckedKey,
     request: RecoveryKeyReissueRequest,
     now: OffsetDateTime,
 ) -> ApiResult<RecoveryKeyReissueResponse> {
-    let user = me(tx, principal)?;
-    check_auth_key(shared, &user, request.current_auth_key.as_bytes())?;
+    // `current_auth_key` was checked before this transaction (D174).
+    if checked.user_id() != principal.user_id {
+        return Err(ApiError::unauthenticated());
+    }
+    let user = checked.user(tx)?;
     exact_len(request.recovery_auth_key.as_bytes(), 32)?;
     exact_len(request.kek_wrap.as_bytes(), WRAP_LEN)?;
     apply_rotation(tx, &user, &request.rotation, now)?;
@@ -1096,6 +1102,67 @@ pub fn recovery_key_reissue(
     revoke_all(tx, user.user_id, now)?;
     let tokens = issue_family(tx, user.user_id, principal.device_id, now)?;
     tracing::info!(user_id = %user.user_id, "recovery key reissued");
+    Ok(RecoveryKeyReissueResponse { tokens, seq })
+}
+
+/// `POST /v1/account/credentials` (section 5.9): the password change of
+/// section 5.1 with its rotation and the recovery key reissue of section
+/// 5.3 in this one transaction, checked in the order of section 5.9. The
+/// record is checked after the rotation's writes; any failure rolls back
+/// the whole request, so the old password and recovery key keep working.
+pub fn credentials_change(
+    tx: &mut dyn Tx,
+    principal: &Principal,
+    checked: &CheckedKey,
+    request: CredentialsChangeRequest,
+    now: OffsetDateTime,
+) -> ApiResult<RecoveryKeyReissueResponse> {
+    // `current_auth_key` was checked before this transaction (D174); a
+    // password change or reissue committed since answers `401`.
+    if checked.user_id() != principal.user_id {
+        return Err(ApiError::unauthenticated());
+    }
+    let user = checked.user(tx)?;
+    if !request.kdf.server_acceptable() {
+        return Err(ApiError::weak_kdf());
+    }
+    exact_len(request.kdf_salt.as_bytes(), 16)?;
+    exact_len(request.auth_key.as_bytes(), 32)?;
+    exact_len(request.kek_wrap.as_bytes(), WRAP_LEN)?;
+    exact_len(request.recovery_auth_key.as_bytes(), 32)?;
+    // Field sizes before the epoch (`400` before `409`, section 5.9).
+    exact_len(request.rotation.prev_key_wrap.as_bytes(), WRAP_LEN)?;
+    exact_len(request.rotation.recovery_wrap.as_bytes(), WRAP_LEN)?;
+    apply_rotation(tx, &user, &request.rotation, now)?;
+    let seq = records::write_reissue_record(
+        tx,
+        &user,
+        principal,
+        &request.record,
+        request.rotation.epoch,
+        now,
+    )?;
+    tx.exec(
+        "UPDATE users SET auth_verifier = ?, kdf = ?, kdf_salt = ?, kek_wrap = ?, \
+         recovery_verifier = ?, credentials_changed_at = ? WHERE user_id = ?",
+        &[
+            secrets::make_verifier(request.auth_key.as_bytes()).into(),
+            serde_json::to_value(&request.kdf)
+                .map_err(|_| ApiError::internal())?
+                .into(),
+            request.kdf_salt.into_inner().into(),
+            request.kek_wrap.into_inner().into(),
+            secrets::make_verifier(request.recovery_auth_key.as_bytes()).into(),
+            now.into(),
+            user.user_id.into(),
+        ],
+    )?;
+    revoke_all(tx, user.user_id, now)?;
+    let tokens = issue_family(tx, user.user_id, principal.device_id, now)?;
+    tracing::info!(
+        user_id = %user.user_id,
+        "password changed and recovery key reissued"
+    );
     Ok(RecoveryKeyReissueResponse { tokens, seq })
 }
 

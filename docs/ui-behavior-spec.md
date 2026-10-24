@@ -1607,7 +1607,11 @@ With a connected server:
   - "Revoke only": the device is signed out and stops syncing; its data stays on it;
   - "Lost or stolen": the device is revoked, then the password change of 13.4 opens with
     "My old password may be compromised" on and fixed, so the personal vault gets a new
-    key; then a list of the team vaults the user owns, all ticked, offers to give each a
+    key and the recovery key is reissued (the lost device holds the old one). The new
+    recovery key is shown with the required "I saved the recovery key"; "Change password"
+    revokes the device once more and sends the change right after it. When the change
+    fails, the dialog adds that the device stays signed out but still holds the old
+    password and recovery key. [decision] (D173, D178); then a list of the team vaults the user owns, all ticked, offers to give each a
     new key ("Rotate"); for the team vaults the user does not own, it names their owners and
     says to ask one of them to rotate the key. The dialog says that nothing is wiped on the
     lost device, and that changing the passwords of important hosts is the only guaranteed
@@ -2066,16 +2070,47 @@ Settings → Security (see 12.1):
   - Works without a server too. The change takes effect immediately.
   - With a sync server, the change needs a connection to the server. Before confirming, a
     warning says that other devices will be signed out and will ask for the new password.
-- **Recovery key**: only with a sync account (stage 7); in local mode the item is hidden
-  and the key is never shown (D29). "Show" and "Reissue", both after entering the master
-  password. "Reissue" creates a new key and shows it as in 13.5, with the required "I saved
-  it" checkbox; the old key stops working. [decision]
+  - **My old password may be compromised**: a checkbox, on by default (D173; it was off
+    before run 9), with a line under it that says what it does. On: the change also gives
+    the personal vault a new key and replaces the recovery key, so the old password and
+    the old recovery key stop working, on the server and in its backups. With a sync
+    account the new recovery key is shown next, as in 13.5 step 4 (monospaced, "Copy",
+    the required "I saved the recovery key"); nothing is sent until "Change password" is
+    clicked there, and "Cancel" changes nothing (docs/sync-protocol.md, sections 5.3
+    and 5.9). In local mode the new recovery key is not shown (D29): it is kept in the
+    vault and becomes the account's key at a later registration (13.5). Off: only the
+    password changes; the vault key and the recovery key stay. After "Lost or stolen"
+    (12.2) the checkbox is on and cannot be turned off.
+  - When a change with a new recovery key fails, the dialog hides the key and says what
+    is in effect [decision] (D180): the server refused it (nothing changed, the key shown
+    is not valid; after a change on another device at the same time, Show gives the valid
+    key once this device has signed in again); this device was signed out meanwhile, or
+    the server did not answer (keep the key shown and both passwords until this device
+    signs in again, then Show tells the valid key); or the server made the change but this
+    device could not store it (the key shown is the account's; sign in with the new
+    password). While a request runs, Escape and a click outside do not close the dialog;
+    closing it in any other way before the confirmation drops the new key, and nothing is
+    sent. A bound device that is signed out is told to sign in again before a key is
+    made.
+- **Recovery key**: only with a sync account (stage 7), on every device of the account; in
+  local mode the item is hidden and the key is never shown (D29). "Show…" and
+  "Reissue…", both after entering the master password. "Show" shows the key as in 13.5,
+  with "Copy". "Reissue" creates a new key and shows it as in 13.5, with the required "I
+  saved the recovery key" checkbox; "Reissue" stays disabled until it is checked, and
+  nothing is sent before (docs/sync-protocol.md, section 5.3, step 4). The old key stops
+  working. A failure says what is in effect, as for the password change above.
+  [decision]
 - **Remember on this device**: toggle, on by default; the first-run screen sets it (13.1).
   When it is on, a device key is stored in the OS keychain, and the app unlocks at launch
   without the password (see 13.2). [decision on the details below]
   - The explanation under the toggle says that any program running under this OS user can
     then unlock the data. Turning it on later shows the same text as a warning. Turning it
     off deletes the key from the keychain, and the next launch asks for the password.
+  - When the personal vault gets a new key on another device, this device wraps it with
+    its device key at its next sign-in, so the option stays on. When the device key is no
+    longer in the keychain, the option goes off, and a warning under it says why ("your
+    vault got a new key on another device, and this device's key was no longer in the
+    system's credential store") until the option is set again. [decision] (D179)
   - Hidden when the OS has no keychain (for example, Linux without Secret Service) and in
     unsigned macOS builds.
   - Biometric unlock is a later stage and is hidden until then.
@@ -2125,7 +2160,9 @@ Settings → Security (see 12.1):
      required: "Finish" is disabled until it is checked. In local mode no recovery key is
      shown (13.1), so this is the first time the user sees it. If the data on this device
      was connected to another account before, registration creates a new recovery key, and
-     this step shows the new one.
+     this step shows the new one. After a local password change with "My old password may
+     be compromised" (13.4) the key shown is the one that change put in the vault. The
+     account exists at this step, so it has only "Finish", no "Back".
 - The master password never leaves the device; the server receives only a key derived
   from it.
 - Signing in to an existing account on a device that already has local data merges the

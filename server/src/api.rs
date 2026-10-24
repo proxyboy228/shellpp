@@ -19,11 +19,12 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use shellpp_sync_api::api::{
-    API_VERSION, AccountDeleteRequest, B64, CurrentAuth, EmailChangeRequest, Health,
-    KeyEpochResponse, Limits, LoginRequest, LoginTotpRequest, PasswordChangeRequest,
-    PersonalKeyEpochRequest, PreloginRequest, PushRequest, RecoverBeginRequest,
-    RecoverCompleteRequest, RecoveryKeyReissueRequest, RefreshRequest, RegisterRequest, ServerInfo,
-    SshIdRequest, TokensResponse, TotpCode, TotpDisableRequest, code, limits, token_prefix,
+    API_VERSION, AccountDeleteRequest, B64, CredentialsChangeRequest, CurrentAuth,
+    EmailChangeRequest, Health, KeyEpochResponse, Limits, LoginRequest, LoginTotpRequest,
+    PasswordChangeRequest, PersonalKeyEpochRequest, PreloginRequest, PushRequest,
+    RecoverBeginRequest, RecoverCompleteRequest, RecoveryKeyReissueRequest, RefreshRequest,
+    RegisterRequest, ServerInfo, SshIdRequest, TokensResponse, TotpCode, TotpDisableRequest, code,
+    limits, token_prefix,
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -348,6 +349,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/account", get(account))
         .route("/v1/account/password", post(password))
         .route("/v1/account/recovery-key", post(recovery_key))
+        .route("/v1/account/credentials", post(credentials))
         .route("/v1/account/email", post(email))
         .route("/v1/account/email/verify", post(email_verify))
         .route("/v1/account/totp/setup", post(totp_setup))
@@ -590,11 +592,11 @@ async fn password(
     Auth(principal): Auth,
     Body(request): Body<PasswordChangeRequest>,
 ) -> ApiResult<Response> {
-    let shared = state.clone();
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let tokens = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::password_change(tx, &shared, &principal, request, model::now())
+            accounts::password_change(tx, &principal, &checked, request, model::now())
         })
         .await?;
     Ok(Json(TokensResponse { tokens }).into_response())
@@ -605,11 +607,26 @@ async fn recovery_key(
     Auth(principal): Auth,
     Body(request): Body<RecoveryKeyReissueRequest>,
 ) -> ApiResult<Response> {
-    let shared = state.clone();
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
     let response = state
         .db
         .run(TxKind::Write, move |tx| {
-            accounts::recovery_key_reissue(tx, &shared, &principal, request, model::now())
+            accounts::recovery_key_reissue(tx, &principal, &checked, request, model::now())
+        })
+        .await?;
+    Ok(Json(response).into_response())
+}
+
+async fn credentials(
+    State(state): State<AppState>,
+    Auth(principal): Auth,
+    Body(request): Body<CredentialsChangeRequest>,
+) -> ApiResult<Response> {
+    let checked = current_auth_key(&state, principal, &request.current_auth_key).await?;
+    let response = state
+        .db
+        .run(TxKind::Write, move |tx| {
+            accounts::credentials_change(tx, &principal, &checked, request, model::now())
         })
         .await?;
     Ok(Json(response).into_response())

@@ -381,6 +381,17 @@ pub enum ShotState {
     /// The confirmation of "Reset sync state of this vault" after a forged
     /// key epoch (run 9; D173, item 1.7).
     SyncReset,
+    // Run 9, plan 3.2 (D173, D178): `run9_keys_shot`.
+    /// Settings ▸ Security ▸ Recovery key ▸ Show, the key on screen.
+    RecoveryKeyShow,
+    /// Reissue: the new key with "I saved the recovery key".
+    RecoveryKeyReissue,
+    /// Change master password with "My old password may be compromised".
+    PasswordChange,
+    /// The same dialog after Devices ▸ Revoke ▸ "Lost or stolen".
+    LostOrStolen,
+    /// The connect wizard's key step after a registration (UI 13.5, 4).
+    SyncRegisteredKey,
     // Run 9, plan 3.3 (D187): `sync_trust_shot`.
     /// The dialog of a changed pinned certificate the system trusts.
     SyncCertificateChanged,
@@ -538,7 +549,7 @@ impl ShotState {
     pub const BASE: [Self; 3] = [Self::Root, Self::Group, Self::HostPanel];
     /// Every state, in capture order (the terminal states last: they run
     /// against the SSH test server, the host key change last of all).
-    pub const ALL: [Self; 112] = [
+    pub const ALL: [Self; 117] = [
         Self::Root,
         Self::Group,
         Self::HostPanel,
@@ -615,6 +626,11 @@ impl ShotState {
         Self::SyncDuplicates,
         Self::SyncConflict,
         Self::SyncReset,
+        Self::RecoveryKeyShow,
+        Self::RecoveryKeyReissue,
+        Self::PasswordChange,
+        Self::LostOrStolen,
+        Self::SyncRegisteredKey,
         Self::SyncCertificateChanged,
         Self::SyncTrustCa,
         Self::SyncWeakerKdf,
@@ -794,6 +810,11 @@ impl ShotState {
             Self::SyncDuplicates => "sync-duplicates",
             Self::SyncConflict => "sync-conflict",
             Self::SyncReset => "sync-reset",
+            Self::RecoveryKeyShow => "recovery-key-show",
+            Self::RecoveryKeyReissue => "recovery-key-reissue",
+            Self::PasswordChange => "password-change",
+            Self::LostOrStolen => "lost-or-stolen",
+            Self::SyncRegisteredKey => "sync-registered-key",
             Self::SyncCertificateChanged => "sync-certificate-changed",
             Self::SyncTrustCa => "sync-trust-ca",
             Self::SyncWeakerKdf => "sync-weaker-kdf",
@@ -1953,6 +1974,13 @@ pub async fn reach_state(
         | ShotState::SyncConflict
         | ShotState::SyncReset
         | ShotState::SyncDuplicates => run7_shot::reach(cx, handle, root, state, shot_state).await,
+        ShotState::RecoveryKeyShow
+        | ShotState::RecoveryKeyReissue
+        | ShotState::PasswordChange
+        | ShotState::LostOrStolen
+        | ShotState::SyncRegisteredKey => {
+            run9_keys_shot::reach(cx, handle, root, state, shot_state).await
+        }
         ShotState::SyncCertificateChanged | ShotState::SyncTrustCa | ShotState::SyncWeakerKdf => {
             sync_trust_shot::reach(cx, handle, root, state, shot_state).await
         }
@@ -2028,6 +2056,9 @@ pub fn check_state(
     }
     if run7_shot::STATES.contains(&shot_state) {
         return run7_shot::check(cx, handle, shot_state);
+    }
+    if run9_keys_shot::STATES.contains(&shot_state) {
+        return run9_keys_shot::check(cx, handle, shot_state);
     }
     if sync_trust_shot::STATES.contains(&shot_state) {
         return sync_trust_shot::check(cx, handle, shot_state);
@@ -2223,6 +2254,11 @@ impl<V: Fn(&str) -> bool> Facts<V> {
             | ShotState::SyncConflict
             | ShotState::SyncReset
             | ShotState::SyncDuplicates => Err("checked with the run 7 screens"),
+            ShotState::RecoveryKeyShow
+            | ShotState::RecoveryKeyReissue
+            | ShotState::PasswordChange
+            | ShotState::LostOrStolen
+            | ShotState::SyncRegisteredKey => Err("checked with the run 9 key screens"),
             ShotState::SyncCertificateChanged
             | ShotState::SyncTrustCa
             | ShotState::SyncWeakerKdf => Err("checked with the certificate screens"),
@@ -2525,6 +2561,7 @@ mod known_hosts_shot;
 mod logs_shot;
 mod run6_shot;
 mod run7_shot;
+mod run9_keys_shot;
 mod sftp_shot;
 mod snippets_shot;
 mod stage9_shot;
