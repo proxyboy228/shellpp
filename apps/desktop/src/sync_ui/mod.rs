@@ -23,13 +23,13 @@
 #[cfg(test)]
 mod badge_tests;
 pub mod compare;
+#[cfg(test)]
+mod dialog_tests;
 pub mod duplicates;
 pub mod kdf;
 #[cfg(test)]
 mod key_tests;
 pub mod keys;
-#[cfg(test)]
-mod sign_out_tests;
 pub mod strings;
 #[cfg(test)]
 mod tests;
@@ -40,11 +40,11 @@ mod trust_tests;
 use gpui::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Entity, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Task, Window, div, prelude::FluentBuilder as _,
+    Subscription, Task, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex};
 use secrecy::SecretString;
@@ -68,6 +68,46 @@ pub use keys::{
 };
 
 const DIALOG_WIDTH: f32 = 480.;
+
+/// Enter in one of `inputs` runs the dialog's step (UI 13.5; run 10): the
+/// subscriptions the dialog keeps.
+fn on_enter<T: 'static>(
+    inputs: &[&Entity<InputState>],
+    window: &mut Window,
+    cx: &mut Context<T>,
+    step: impl Fn(&mut T, &mut Window, &mut Context<T>) + Clone + 'static,
+) -> Vec<Subscription> {
+    inputs
+        .iter()
+        .map(|input| {
+            let step = step.clone();
+            cx.subscribe_in(
+                *input,
+                window,
+                move |this: &mut T, _, event: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = event {
+                        step(this, window, cx);
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+/// Gives `input` the focus once per `mark` (a step of a dialog): the field
+/// of a step has it when the step opens (run 10).
+fn focus_once(
+    focused: &mut Option<u8>,
+    mark: u8,
+    input: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if *focused != Some(mark) {
+        *focused = Some(mark);
+        input.update(cx, |input, cx| input.focus(window, cx));
+    }
+}
 
 /// The text for an error of a sync operation.
 pub fn error_text(error: &CoreError) -> &'static str {
@@ -193,6 +233,9 @@ pub struct ConnectDialog {
     pub kdf_changed: bool,
     /// The weaker settings the user accepted (D189), kept for that sign-in.
     accepted_kdf: Option<shellpp_core::crypto::KdfParams>,
+    /// The step whose field got the focus.
+    focused: Option<u8>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ConnectDialog {
@@ -202,13 +245,34 @@ impl ConnectDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let server = cx.new(|cx| InputState::new(window, cx).placeholder("sync.example.com"));
+        let email = cx.new(|cx| InputState::new(window, cx).placeholder("you@example.com"));
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let invite = cx.new(|cx| InputState::new(window, cx));
+        let totp = cx.new(|cx| InputState::new(window, cx).placeholder("123456"));
+        let subscriptions = on_enter(
+            &[&server, &email, &password, &invite, &totp],
+            window,
+            cx,
+            |this: &mut Self, window, cx| {
+                if this.busy {
+                    return;
+                }
+                match this.step {
+                    ConnectStep::Server => this.check(window, cx),
+                    ConnectStep::Account => this.run(window, cx),
+                    ConnectStep::Totp => this.verify(window, cx),
+                    _ => {}
+                }
+            },
+        );
         Self {
             state,
-            server: cx.new(|cx| InputState::new(window, cx).placeholder("sync.example.com")),
-            email: cx.new(|cx| InputState::new(window, cx).placeholder("you@example.com")),
-            password: cx.new(|cx| InputState::new(window, cx).masked(true)),
-            invite: cx.new(|cx| InputState::new(window, cx)),
-            totp: cx.new(|cx| InputState::new(window, cx).placeholder("123456")),
+            server,
+            email,
+            password,
+            invite,
+            totp,
             step: ConnectStep::Server,
             trust: None,
             origin: None,
@@ -223,6 +287,8 @@ impl ConnectDialog {
             task: None,
             kdf_changed: false,
             accepted_kdf: None,
+            focused: None,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -369,6 +435,7 @@ impl ConnectDialog {
                     dialog
                         .password
                         .update(cx, |input, cx| input.set_value("", window, cx));
+                    dialog.focused = None;
                 }
                 dialog.finish(result, cx);
                 if let Some(offer) = offer {
@@ -571,6 +638,19 @@ impl ConnectDialog {
 
 impl Render for ConnectDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The step's first field to fill has the focus when the step opens.
+        let target = match self.step {
+            ConnectStep::Server => Some((1, self.server.clone())),
+            ConnectStep::Account if input_text(&self.email, cx).trim().is_empty() => {
+                Some((2, self.email.clone()))
+            }
+            ConnectStep::Account => Some((2, self.password.clone())),
+            ConnectStep::Totp => Some((3, self.totp.clone())),
+            _ => None,
+        };
+        if let Some((mark, input)) = target {
+            focus_once(&mut self.focused, mark, &input, window, cx);
+        }
         let step = match self.step.clone() {
             ConnectStep::Server => v_flex()
                 .id("sync-server")
@@ -770,6 +850,8 @@ pub fn open_connect(
             .as_ref()
             .is_some_and(|panel| panel.read(cx).busy());
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .keyboard(!checking && closable)
             .overlay_closable(!checking && closable)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
@@ -1372,6 +1454,8 @@ fn open_simple<V: Render + 'static>(
 ) {
     window.open_dialog(cx, move |modal, _, cx| {
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -1724,6 +1808,8 @@ pub fn open_sign_out(
         let delete_local = shown.read(cx).delete_local;
         let confirming = shown.read(cx).confirming.is_some();
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -1829,6 +1915,8 @@ pub fn open_reset(
         let run = shown.downgrade();
         let busy = shown.read(cx).busy;
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -1873,6 +1961,9 @@ pub struct PasswordDialog {
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
+    /// Whether the first field got the focus.
+    focused: Option<u8>,
 }
 
 impl PasswordDialog {
@@ -1915,6 +2006,8 @@ impl PasswordDialog {
 
 impl Render for PasswordDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = self.password.clone();
+        focus_once(&mut self.focused, 1, &input, window, cx);
         let text = match self.action {
             PasswordAction::DeleteAccount => strings::DELETE_TEXT,
             PasswordAction::Repost => strings::REPOST_TEXT,
@@ -1968,14 +2061,31 @@ pub fn open_password_action(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<PasswordDialog> {
-    let dialog = cx.new(|cx| PasswordDialog {
-        state,
-        action,
-        password: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        code: cx.new(|cx| InputState::new(window, cx)),
-        busy: false,
-        error: None,
-        task: None,
+    let dialog = cx.new(|cx| {
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let code = cx.new(|cx| InputState::new(window, cx));
+        let subscriptions = on_enter(
+            &[&password, &code],
+            window,
+            cx,
+            |this: &mut PasswordDialog, window, cx| {
+                if !this.busy {
+                    this.run(window, cx);
+                }
+            },
+        );
+        password.update(cx, |input, cx| input.focus(window, cx));
+        PasswordDialog {
+            state,
+            action,
+            password,
+            code,
+            busy: false,
+            error: None,
+            task: None,
+            focused: None,
+            _subscriptions: subscriptions,
+        }
     });
     let shown = dialog.clone();
     let (heading, run_text, kind) = match action {
@@ -1994,6 +2104,8 @@ pub fn open_password_action(
         let run = shown.downgrade();
         let busy = shown.read(cx).busy;
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -2078,6 +2190,9 @@ pub struct TotpDialog {
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    /// The step whose field got the focus.
+    focused: Option<u8>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl TotpDialog {
@@ -2135,6 +2250,17 @@ impl TotpDialog {
 
 impl Render for TotpDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        match self.step {
+            TotpStep::Password => {
+                let input = self.password.clone();
+                focus_once(&mut self.focused, 1, &input, window, cx);
+            }
+            TotpStep::Code { .. } => {
+                let input = self.code.clone();
+                focus_once(&mut self.focused, 2, &input, window, cx);
+            }
+            _ => {}
+        }
         let body = match self.step.clone() {
             TotpStep::Password => v_flex()
                 .gap(metrics::SPACE_2)
@@ -2198,14 +2324,30 @@ impl Render for TotpDialog {
 debug_opaque!(TotpDialog);
 
 pub fn open_totp(state: Entity<AppState>, window: &mut Window, cx: &mut App) -> Entity<TotpDialog> {
-    let dialog = cx.new(|cx| TotpDialog {
-        state,
-        password: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        code: cx.new(|cx| InputState::new(window, cx).placeholder("123456")),
-        step: TotpStep::Password,
-        busy: false,
-        error: None,
-        task: None,
+    let dialog = cx.new(|cx| {
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let code = cx.new(|cx| InputState::new(window, cx).placeholder("123456"));
+        let subscriptions = on_enter(
+            &[&password, &code],
+            window,
+            cx,
+            |this: &mut TotpDialog, window, cx| {
+                if !this.busy && this.step != TotpStep::Done {
+                    this.next(window, cx);
+                }
+            },
+        );
+        TotpDialog {
+            state,
+            password,
+            code,
+            step: TotpStep::Password,
+            busy: false,
+            error: None,
+            task: None,
+            focused: None,
+            _subscriptions: subscriptions,
+        }
     });
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
@@ -2235,6 +2377,8 @@ pub fn open_totp(state: Entity<AppState>, window: &mut Window, cx: &mut App) -> 
             )
         };
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -2263,6 +2407,9 @@ pub struct RecoveryDialog {
     pub offer_local: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
+    /// Whether the first field got the focus.
+    focused: Option<u8>,
 }
 
 impl RecoveryDialog {
@@ -2376,6 +2523,8 @@ impl RecoveryDialog {
 
 impl Render for RecoveryDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = self.key.clone();
+        focus_once(&mut self.focused, 1, &input, window, cx);
         v_flex()
             .id("sync-recovery")
             .test_support()
@@ -2433,17 +2582,37 @@ pub fn open_recovery(
         .and_then(|core| core.sync_status().ok())
         .and_then(|status| status.email)
         .unwrap_or_default();
-    let dialog = cx.new(|cx| RecoveryDialog {
-        state,
-        key: cx.new(|cx| InputState::new(window, cx)),
-        email: cx.new(|cx| InputState::new(window, cx).default_value(email)),
-        new: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        repeat: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        totp: cx.new(|cx| InputState::new(window, cx)),
-        busy: false,
-        offer_local: false,
-        error: None,
-        task: None,
+    let dialog = cx.new(|cx| {
+        let key = cx.new(|cx| InputState::new(window, cx));
+        let email = cx.new(|cx| InputState::new(window, cx).default_value(email));
+        let new = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let repeat = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let totp = cx.new(|cx| InputState::new(window, cx));
+        let subscriptions = on_enter(
+            &[&key, &email, &new, &repeat, &totp],
+            window,
+            cx,
+            |this: &mut RecoveryDialog, window, cx| {
+                if !this.busy {
+                    this.run(window, cx);
+                }
+            },
+        );
+        key.update(cx, |input, cx| input.focus(window, cx));
+        RecoveryDialog {
+            state,
+            key,
+            email,
+            new,
+            repeat,
+            totp,
+            busy: false,
+            offer_local: false,
+            error: None,
+            task: None,
+            focused: None,
+            _subscriptions: subscriptions,
+        }
     });
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
@@ -2479,6 +2648,8 @@ pub fn open_recovery(
                     }),
             );
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)

@@ -10,7 +10,8 @@
 
 use gpui::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Task, Window, div, prelude::FluentBuilder as _,
+    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
+    prelude::FluentBuilder as _,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -170,6 +171,7 @@ pub struct RecoveryKeyDialog {
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl RecoveryKeyDialog {
@@ -356,17 +358,32 @@ pub fn open_recovery_key(
     cx: &mut App,
 ) -> Entity<RecoveryKeyDialog> {
     let core = state.read(cx).core().cloned();
-    let dialog = cx.new(|cx| RecoveryKeyDialog {
-        state,
-        core,
-        mode,
-        password: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        step: RecoveryStep::Password,
-        saved: false,
-        copied: None,
-        busy: false,
-        error: None,
-        task: None,
+    let dialog = cx.new(|cx| {
+        let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let subscriptions = super::on_enter(
+            &[&password],
+            window,
+            cx,
+            |this: &mut RecoveryKeyDialog, window, cx| {
+                if !this.busy && matches!(this.step, RecoveryStep::Password) {
+                    this.next(window, cx);
+                }
+            },
+        );
+        password.update(cx, |input, cx| input.focus(window, cx));
+        RecoveryKeyDialog {
+            state,
+            core,
+            mode,
+            password,
+            step: RecoveryStep::Password,
+            saved: false,
+            copied: None,
+            busy: false,
+            error: None,
+            task: None,
+            _subscriptions: subscriptions,
+        }
     });
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
@@ -423,6 +440,8 @@ pub fn open_recovery_key(
             )
         };
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)
@@ -481,6 +500,7 @@ pub struct PasswordChangeDialog {
     busy: bool,
     error: Option<&'static str>,
     task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl PasswordChangeDialog {
@@ -756,23 +776,40 @@ pub fn open_password_change(
     cx: &mut App,
 ) -> Entity<PasswordChangeDialog> {
     let core = state.read(cx).core().cloned();
-    let dialog = cx.new(|cx| PasswordChangeDialog {
-        state,
-        core,
-        current: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        new: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        repeat: cx.new(|cx| InputState::new(window, cx).masked(true)),
-        compromised: true,
-        fixed: lost.is_some(),
-        lost_device: lost,
-        step: PasswordStep::Form,
-        saved: false,
-        copied: None,
-        reissued: false,
-        rotated: false,
-        busy: false,
-        error: None,
-        task: None,
+    let dialog = cx.new(|cx| {
+        let current = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let new = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let repeat = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let subscriptions = super::on_enter(
+            &[&current, &new, &repeat],
+            window,
+            cx,
+            |this: &mut PasswordChangeDialog, window, cx| {
+                if !this.busy && matches!(this.step, PasswordStep::Form) {
+                    this.run(window, cx);
+                }
+            },
+        );
+        current.update(cx, |input, cx| input.focus(window, cx));
+        PasswordChangeDialog {
+            state,
+            core,
+            current,
+            new,
+            repeat,
+            compromised: true,
+            fixed: lost.is_some(),
+            lost_device: lost,
+            step: PasswordStep::Form,
+            saved: false,
+            copied: None,
+            reissued: false,
+            rotated: false,
+            busy: false,
+            error: None,
+            task: None,
+            _subscriptions: subscriptions,
+        }
     });
     let shown = dialog.clone();
     window.open_dialog(cx, move |modal, _, cx| {
@@ -814,6 +851,8 @@ pub fn open_password_change(
             )
         };
         modal
+            // Enter runs the step of a field (`on_enter`), it never closes.
+            .on_ok(|_, _, _| false)
             .w(metrics::scaled(DIALOG_WIDTH, cx))
             .bg(cx.theme().popover)
             .rounded(metrics::RADIUS_OVERLAY)

@@ -1,10 +1,15 @@
-//! Headless tests of "Also delete the local copy" (UI 12.2; D197): the first
-//! "Sign out" only asks again and lists the set-aside copies and backups
-//! the server does not have; nothing is deleted before the second click, and
-//! Cancel deletes nothing.
+//! Headless tests of the sync dialogs (run 10):
+//!
+//! - "Also delete the local copy" (UI 12.2; D197): the first "Sign out" only
+//!   asks again and lists the set-aside copies and backups the server does
+//!   not have; nothing is deleted before the second click, and Cancel
+//!   deletes nothing;
+//! - the field of a step has the focus when the step opens, and Enter in it
+//!   runs the step (UI 13.5).
 
 use gpui::{AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, TestAppContext, px, size};
 use gpui::{WindowBounds, WindowOptions};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
 use shellpp_core::service::dto::LockState;
 
@@ -72,6 +77,26 @@ impl Ui {
         self.settle(cx);
     }
 
+    fn focused(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> Option<bool> {
+        let id = id.into();
+        cx.update_window(self.handle, move |_, window, cx| {
+            window.render_frame(cx);
+            window.find(id.clone()).focused()
+        })
+        .unwrap()
+    }
+
+    /// Types `text` into the focused field and presses Enter.
+    fn type_and_enter(&self, text: &str, cx: &mut TestAppContext) {
+        let text = text.to_owned();
+        cx.update_window(self.handle, move |_, window, cx| {
+            window.input(&text, cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        self.settle(cx);
+    }
+
     fn state_of_core(&self, cx: &mut TestAppContext) -> LockState {
         self.state.read_with(cx, |state, _| {
             state.core().cloned().unwrap().lock_status().state
@@ -127,5 +152,83 @@ fn deleting_the_local_copy_asks_twice_and_lists_what_the_server_lacks(cx: &mut T
     ui.click("sync-sign-out-run", cx);
     assert_eq!(ui.state_of_core(cx), LockState::FirstRun);
     assert!(!data.join(SET_ASIDE).exists());
+    ui.finish(cx);
+}
+
+#[gpui::test]
+fn the_wizard_focuses_each_step_and_enter_runs_it(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new());
+    let state = ui.state.clone();
+    let wizard = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_connect(state, false, window, cx)
+        })
+        .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-server-address", cx), Some(true));
+    // Enter checks the address: plain HTTP to another machine is refused
+    // before anything is sent.
+    ui.type_and_enter("http://sync.example.com", cx);
+    assert_eq!(
+        wizard.read_with(cx, |wizard, _| wizard.error),
+        Some(super::strings::ERROR_HTTP)
+    );
+    // The account step: the email first.
+    wizard.update(cx, |wizard, cx| {
+        wizard.origin = Some("https://sync.example.com".to_owned());
+        wizard.step = super::ConnectStep::Account;
+        wizard.error = None;
+        cx.notify();
+    });
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-email", cx), Some(true));
+    ui.finish(cx);
+}
+
+#[gpui::test]
+fn the_password_dialogs_focus_their_field_and_enter_runs_them(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx, TestProfile::new());
+    // Enabling TOTP: the password first; Enter runs the step (refused: this
+    // device has no account).
+    let state = ui.state.clone();
+    let totp = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_totp(state, window, cx)
+        })
+        .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-totp-password", cx), Some(true));
+    ui.type_and_enter("not the password", cx);
+    assert!(totp.read_with(cx, |dialog, _| dialog.error.is_some()));
+    cx.update_window(ui.handle, |_, window, cx| window.close_dialog(cx))
+        .unwrap();
+    ui.settle(cx);
+
+    // The recovery: the key first; Enter checks the fields.
+    let state = ui.state.clone();
+    let recovery = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_recovery(state, window, cx)
+        })
+        .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-recovery-key", cx), Some(true));
+    ui.type_and_enter("x", cx);
+    assert!(recovery.read_with(cx, |dialog, _| dialog.error.is_some()));
+    cx.update_window(ui.handle, |_, window, cx| window.close_dialog(cx))
+        .unwrap();
+    ui.settle(cx);
+
+    // Delete the account: the password first.
+    let state = ui.state.clone();
+    let delete = cx
+        .update_window(ui.handle, move |_, window, cx| {
+            super::open_password_action(state, super::PasswordAction::DeleteAccount, window, cx)
+        })
+        .unwrap();
+    ui.settle(cx);
+    assert_eq!(ui.focused("sync-action-password", cx), Some(true));
+    ui.type_and_enter("not the password", cx);
+    assert!(delete.read_with(cx, |dialog, _| dialog.error.is_some()));
     ui.finish(cx);
 }

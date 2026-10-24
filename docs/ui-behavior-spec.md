@@ -2197,6 +2197,11 @@ Settings → Security (see 12.1):
   the account's master password. The wizard says this before the merge.
 - When the wizard finishes, sync starts, and Account & Sync (12.2) shows the connected
   server.
+- In the wizard and in every sync dialog with fields (the account's password and TOTP
+  dialogs, the recovery, the recovery key, the password change) the first field to fill
+  of a step has the focus when the step opens (the email, or the password when the email
+  is there), and Enter in a field runs the step, as its main button does. Enter never
+  closes such a dialog. [decision] (run 10)
 
 ### 13.6 Sync conflicts [decision]
 
