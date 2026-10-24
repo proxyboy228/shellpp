@@ -1875,7 +1875,7 @@ impl Core {
         // the old vault, so the option is made again below (D195).
         let remembered = super::device_row_exists(&self.inner());
         // Step 1: the account vault's rows, so the pull can write records.
-        let (db_id, device_id, old_vault) = self.with_session(|inner| {
+        let step = self.with_session(|inner| {
             let old_vault = inner
                 .session
                 .as_ref()
@@ -1907,7 +1907,15 @@ impl Core {
                 })
             })?;
             Ok((db_id, device_id, old_vault))
-        })?;
+        });
+        // Another account than the one this vault is bound to (D197): the
+        // login went through before that could be known (the email may
+        // have changed, SP 5.4), so its session is revoked rather than left
+        // open on that account (D209). Best effort: the refusal stands.
+        if let Err(CoreError::Sync(HttpError::Refused("previous_account"))) = &step {
+            let _ = api.revoke(&tokens.refresh_token.0);
+        }
+        let (db_id, device_id, old_vault) = step?;
         // Step 2: pull the account vault into a session of its own. Rows
         // left by an interrupted earlier attempt are loaded first, so the
         // natural-key dedupe below sees them.

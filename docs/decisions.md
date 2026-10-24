@@ -2347,3 +2347,12 @@ Status: run 12 (plan, section 3.4). GitHub Actions are off (D204); the causes co
 
 **Spec impact:** none; ROADMAP 3 and 6.
 
+### 209. A sign-in the merge refuses as another account's revokes its session (run 12)
+
+Status: run 12 (plan, section 3.6; ROADMAP 2.2, "Sign-in to another account", D200). Reviewed: an earlier version refused before pre-login whenever the email differed from `local_auth.kdf_email`, which also refused an account whose email changed on another device (the server has `POST /v1/account/email`, SP 5.4); it was dropped.
+
+**Context.** A device bound to an account, signed out, that signs in to another account goes through pre-login (the other salt reads as changed settings, SP 4.2), the user types the password and the login succeeds; only the merge then refuses (`previous_account`, D197), and the session the login opened stayed live. On the same server the login itself is refused, because the device id belongs to the first account's user (SP 4.7); the case is another server.
+
+**Decision:** When the merge refuses `previous_account`, the client revokes the refresh token of the login it just made (`POST /v1/auth/token/revoke`) before it reports the refusal; a failed revocation does not change the refusal. The access token runs out on its own. The email is not compared before pre-login: a changed email and another account look the same until the account bundle comes back.
+
+**Spec impact:** docs/sync-protocol.md, section 4.4 (sign-in); ROADMAP 2.2.

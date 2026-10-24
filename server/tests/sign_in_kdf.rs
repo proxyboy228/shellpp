@@ -17,6 +17,7 @@ use shellpp_core::platform::memory::MemoryPlatform;
 use shellpp_core::service::{SignInInput, SignInOutcome};
 use shellpp_core::sync::HttpError;
 use shellpp_core::{Core, CoreConfig, CoreError};
+use shellpp_server::db::{DbError, TxKind, Ty, Val};
 use support::*;
 
 /// A phone at first run: the mobile class writes the mobile preset.
@@ -367,4 +368,71 @@ fn a_device_bound_before_refuses_weaker_parameters_at_any_address() {
     }
     let paths = seen.lock().unwrap().clone();
     assert_eq!(paths, vec!["/v1/auth/prelogin"], "no auth key was sent");
+}
+
+/// A device bound to one account that signs in to another account on another
+/// server (D200, D209; on the same server the device id is already another
+/// user's and the login is refused, SP 4.7): the other salt reads as changed
+/// settings (the email may have changed, SP 5.4), the login goes through,
+/// the merge refuses `previous_account`, and the session that login opened
+/// is revoked: no refresh token of it stays live. The device's own account
+/// still signs in, its email in other letter case.
+#[test]
+fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let laptop = Client::local("laptop", &password);
+    laptop.register(&server, &email, &password);
+    laptop.core.sync_sign_out(false).expect("logged out");
+
+    let other = Server::start();
+    let other_email = support::email();
+    let other_password = new_password();
+    let desk = Client::local("desk", &other_password);
+    desk.register(&other, &other_email, &other_password);
+    assert_eq!(live_refresh_tokens(&other, &other_email), 1);
+
+    match laptop
+        .core
+        .sync_sign_in(input(&other, &other_email, &other_password))
+    {
+        Err(CoreError::Sync(HttpError::Refused("kdf_changed"))) => {}
+        other => panic!("expected the changed settings, got {other:?}"),
+    }
+    match laptop
+        .core
+        .sync_sign_in_after_kdf_change(input(&other, &other_email, &other_password), None)
+    {
+        Err(CoreError::Sync(HttpError::Refused("previous_account"))) => {}
+        other => panic!("expected the refusal, got {other:?}"),
+    }
+    assert_eq!(
+        live_refresh_tokens(&other, &other_email),
+        1,
+        "only the desk's session stays"
+    );
+    assert!(!laptop.status().signed_in);
+
+    let outcome = laptop
+        .core
+        .sync_sign_in(input(&server, &email.to_uppercase(), &password))
+        .expect("the own account signs in");
+    assert!(matches!(outcome, SignInOutcome::Done(_)));
+}
+
+/// The refresh tokens of the account with `email` that are not revoked.
+fn live_refresh_tokens(server: &Server, email: &str) -> i64 {
+    server
+        .db
+        .tx(TxKind::Read, |tx| {
+            let rows = tx.query(
+                "SELECT COUNT(*) FROM refresh_tokens t JOIN users u ON u.user_id = t.user_id \
+                 WHERE u.email = ? AND t.revoked_at IS NULL",
+                &[Val::from(email)],
+                &[Ty::Int],
+            )?;
+            Ok::<_, DbError>(rows[0][0].int().unwrap_or(0))
+        })
+        .expect("count")
 }
