@@ -158,11 +158,21 @@ that header only from `SHELLPP_TRUSTED_PROXIES`, and from nobody else.
 - A proxy container in the compose project: give it a fixed address on the
   `default` network (`ipv4_address: 172.16.88.10`) and trust that address
   instead.
-- If `172.16.88.0/24` is taken on your machine, change the subnet in
-  `docker-compose.yml` and the address in `.env` together.
+- If `172.16.88.0/24` is taken on your machine (`ip route` or `ipconfig`
+  shows it, or `docker compose up` answers "Pool overlaps"), set
+  `SHELLPP_SUBNET`, `SHELLPP_GATEWAY` and `SHELLPP_TRUSTED_PROXIES`
+  (the gateway with `/32`) in `.env` together.
 
-Never trust a whole range such as `172.16.0.0/12`: anything inside it could
-name any client address and step around the limits.
+This holds only while the port is published on `127.0.0.1` alone, as in
+the compose file: then only programs on this machine come from the
+gateway. Published on every address (`8080:8080`), outside clients would
+arrive from the gateway too and could name any address. Never trust a
+whole range such as `172.16.0.0/12` either: anything inside it could name
+any client address and step around the limits. The server logs once when a
+request carried `X-Forwarded-For` from a peer it does not trust.
+
+Check it: `docker network inspect shellpp_default -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`
+prints the address `SHELLPP_TRUSTED_PROXIES` names.
 
 ## Backups
 
@@ -214,6 +224,13 @@ docker compose up -d
 
 The `migrate` service applies schema changes before `server` starts; the
 server refuses to run on a schema older than itself.
+
+From a version before the fixed network (an `.env` with
+`SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` or `172.16.0.0/12`): set it to
+`172.16.88.1/32`, then `docker compose down` (never with `-v`, which would
+delete the database volume) and `docker compose up -d`, so the network is
+made again with its subnet, and check the gateway as in "Client
+addresses".
 
 ## Configuration reference
 

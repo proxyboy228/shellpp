@@ -31,8 +31,9 @@ services:
       SHELLPP_SERVER_SECRET: ${SHELLPP_SERVER_SECRET:?set SHELLPP_SERVER_SECRET in .env}
       SHELLPP_REGISTRATION: ${SHELLPP_REGISTRATION:-invite}
       # The gateway of the network below: a proxy on the host reaches the
-      # server through the published port from there (README, "Client
-      # addresses"). Nothing else is believed in X-Forwarded-For.
+      # server through the port published on 127.0.0.1 from there (README,
+      # "Client addresses"). Nothing else is believed in X-Forwarded-For;
+      # safe only while the port is published on 127.0.0.1 alone.
       SHELLPP_TRUSTED_PROXIES: ${SHELLPP_TRUSTED_PROXIES:-172.16.88.1/32}
     depends_on:
       postgres:
@@ -71,11 +72,12 @@ services:
 networks:
   default:
     # A fixed subnet, so the gateway SHELLPP_TRUSTED_PROXIES names is known.
-    # If it is taken on your machine, change both here and in .env.
+    # If it is taken on your machine, set SHELLPP_SUBNET, SHELLPP_GATEWAY and
+    # SHELLPP_TRUSTED_PROXIES in .env together.
     ipam:
       config:
-        - subnet: 172.16.88.0/24
-          gateway: 172.16.88.1
+        - subnet: ${SHELLPP_SUBNET:-172.16.88.0/24}
+          gateway: ${SHELLPP_GATEWAY:-172.16.88.1}
 
 volumes:
   postgres:

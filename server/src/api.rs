@@ -188,7 +188,25 @@ impl FromRequestParts<AppState> for ClientIp {
             .get_all("x-forwarded-for")
             .iter()
             .filter_map(|value| value.to_str().ok());
+        if !trusted(peer) && parts.headers.contains_key("x-forwarded-for") {
+            note_untrusted_forwarding();
+        }
         Ok(ClientIp(client_ip(peer, forwarded, trusted)))
+    }
+}
+
+/// Logs once per process that `X-Forwarded-For` came from a peer outside
+/// `SHELLPP_TRUSTED_PROXIES` and was ignored: behind a proxy that is not
+/// trusted, every client shares the proxy's address in the rate limits
+/// (D176). Neither address is logged.
+fn note_untrusted_forwarding() {
+    static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(
+            "X-Forwarded-For from a peer outside SHELLPP_TRUSTED_PROXIES was ignored; \
+             behind a proxy, trust the address it connects from (server README, \
+             \"Client addresses\")"
+        );
     }
 }
 
