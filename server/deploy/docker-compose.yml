@@ -62,6 +62,8 @@ services:
       context: .
       dockerfile: backup.Dockerfile
     image: shellpp-backup:latest
+    # A small init, so `docker compose stop` ends a running dump at once.
+    init: true
     restart: unless-stopped
     environment:
       PGHOST: postgres

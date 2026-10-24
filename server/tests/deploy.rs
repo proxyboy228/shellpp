@@ -56,7 +56,8 @@ struct Cleanup(Vec<String>, Option<String>);
 impl Drop for Cleanup {
     fn drop(&mut self) {
         for id in &self.0 {
-            let _ = docker(&["rm", "-f", id]);
+            // With their anonymous volumes (PostgreSQL's, Caddy's).
+            let _ = docker(&["rm", "-f", "-v", id]);
         }
         if let Some(network) = &self.1 {
             let _ = docker(&["network", "rm", network]);
@@ -524,7 +525,19 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         cleanup.0.push(id.clone());
         let mut ready = false;
         for _ in 0..120 {
-            let (ok, _) = docker(&["exec", &id, "pg_isready", "-U", "shellpp", "-d", "shellpp"]);
+            // Over TCP: the entrypoint's first, temporary server listens
+            // only on its socket.
+            let (ok, _) = docker(&[
+                "exec",
+                &id,
+                "pg_isready",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "shellpp",
+                "-d",
+                "shellpp",
+            ]);
             if ok {
                 ready = true;
                 break;
@@ -544,6 +557,16 @@ fn the_encrypted_backup_restores_into_a_clean_postgres() {
         format!("{}\n", BASE64.encode(&secret)),
     )
     .expect("secret file");
+    // The image's user 10001 reads it (a temporary folder is 0700 on Unix).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let open = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("mode")
+        };
+        open(secrets.path(), 0o755);
+        open(&secrets.path().join("server_secret"), 0o644);
+    }
     // One address for both servers: the clients' keys are bound to it.
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())

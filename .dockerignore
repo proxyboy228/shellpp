@@ -5,3 +5,9 @@
 !Cargo.toml
 server/target
 crates/sync-api/target
+# A deployment's own files never go into an image or its build cache: the
+# environment, the server secret, backups and a decrypted restore dump.
+server/deploy/.env
+server/deploy/secrets
+server/deploy/backups
+**/restore.sql

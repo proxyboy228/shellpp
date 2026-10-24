@@ -477,7 +477,7 @@ pub fn raw_http(
         headers,
         body,
     )
-    .expect("connect")
+    .expect("an HTTP answer from the test server")
 }
 
 /// [`raw_http`] to `addr` (`host:port`), for a server in a container;

@@ -201,9 +201,10 @@ than `BACKUP_RETENTION_DAYS` (30). Copy the directory off the machine.
 
 Its image is built once from `deploy/backup.Dockerfile` (Alpine with the
 PostgreSQL client and `age`) by the first `docker compose up`, so a backup
-needs no network. A dump or encryption that fails stops the service with an
-error in `docker compose logs backup` and leaves no `.sql.age` behind; old
-backups are not deleted after a failure.
+needs no network. A dump or encryption that fails ends the run with an
+error in `docker compose logs backup` (Docker starts it again, which tries
+again after 5 minutes) and leaves no `.sql.age` behind; old backups are not
+deleted after a failure.
 
 Make one now: `docker compose run --rm -e BACKUP_ONCE=1 backup`.
 
@@ -217,7 +218,7 @@ Make one now: `docker compose run --rm -e BACKUP_ONCE=1 backup`.
    ```bash
    docker compose exec postgres dropdb -U shellpp shellpp
    docker compose exec postgres createdb -U shellpp shellpp
-   docker compose exec -T postgres psql -U shellpp shellpp < restore.sql
+   docker compose exec -T postgres psql -U shellpp -v ON_ERROR_STOP=1 --single-transaction shellpp < restore.sql
    ```
 
 4. **Always** run `docker compose run --rm server admin restored`. It gives
@@ -258,14 +259,15 @@ to start while the file is missing. Then:
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
-docker compose build backup
+docker compose build --pull --no-cache backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```
 
 The `migrate` service applies schema changes before `server` starts; the
 server refuses to run on a schema older than itself. `docker compose build
-backup` rebuilds the backup image when its script changed.
+--pull --no-cache backup` rebuilds the backup image with its script and the
+current PostgreSQL client and `age`.
 
 From a version before the fixed network (an `.env` with
 `SHELLPP_TRUSTED_PROXIES=127.0.0.1/32` or `172.16.0.0/12`): set it to

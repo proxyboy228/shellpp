@@ -134,8 +134,18 @@ pub async fn serve(
     config: Config,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), StartError> {
-    let db = open_checked(&config)?;
-    check_server_secret(&db, &secrets::ServerKeys::derive(&config.server_secret))?;
+    // On a blocking thread, as every database access of the server: the
+    // synchronous PostgreSQL client starts a runtime of its own, which
+    // panics on a thread that drives this one (found by the backup recipe
+    // test of run 9: `serve` on PostgreSQL never started).
+    let checked = config.clone();
+    let db = tokio::task::spawn_blocking(move || {
+        let db = open_checked(&checked)?;
+        check_server_secret(&db, &secrets::ServerKeys::derive(&checked.server_secret))?;
+        Ok::<_, StartError>(db)
+    })
+    .await
+    .map_err(|_| StartError::Db(db::DbError::Failed("startup task failed".to_owned())))??;
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(StartError::Listen)?;

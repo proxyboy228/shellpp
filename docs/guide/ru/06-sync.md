@@ -336,7 +336,7 @@ docker compose run --rm -e BACKUP_ONCE=1 backup
    ```bash
    docker compose exec postgres dropdb -U shellpp shellpp
    docker compose exec postgres createdb -U shellpp shellpp
-   docker compose exec -T postgres psql -U shellpp shellpp < restore.sql
+   docker compose exec -T postgres psql -U shellpp -v ON_ERROR_STOP=1 --single-transaction shellpp < restore.sql
    ```
 
 4. **Всегда** выполняйте `docker compose run --rm server admin restored`.
@@ -371,7 +371,7 @@ rolled back" с кнопкой **Bring the server up to date…**; она зап
 git pull
 docker build -f server/Dockerfile -t shellpp-server .
 cd server/deploy
-docker compose build backup
+docker compose build --pull --no-cache backup
 docker compose run --rm -e BACKUP_ONCE=1 backup
 docker compose up -d
 ```

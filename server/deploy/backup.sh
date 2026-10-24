@@ -24,6 +24,16 @@ DIR=${BACKUP_DIR_IN_CONTAINER:-/backups}
 RETENTION=${BACKUP_RETENTION_DAYS:-30}
 INTERVAL=${BACKUP_INTERVAL_SECONDS:-86400}
 
+# What a run killed in the middle left behind (never a backup).
+rm -f "$DIR"/shellpp-*.sql.age.part
+
+fail() {
+    echo "backup failed: $1" >&2
+    # Restarted by Docker: wait a little before the next try.
+    [ "${BACKUP_ONCE:-0}" = "1" ] || sleep 300
+    exit 1
+}
+
 prune() {
     # Older than the retention (in days, by modification time).
     find "$DIR" -maxdepth 1 -type f -name 'shellpp-*.sql.age' -mtime +"$RETENTION" -print -delete
@@ -32,16 +42,14 @@ prune() {
 backup() {
     for tool in pg_dump age; do
         if ! command -v "$tool" >/dev/null 2>&1; then
-            echo "backup failed: $tool is missing; build the backup image (docker compose build backup)" >&2
-            exit 1
+            fail "$tool is missing; build the backup image (docker compose build backup)"
         fi
     done
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
     target="$DIR/shellpp-$stamp.sql.age"
     if ! pg_dump --no-owner --format=plain | age -r "$AGE_RECIPIENT" -o "$target.part"; then
         rm -f "$target.part"
-        echo "backup failed: pg_dump or age exited with an error; no file written" >&2
-        exit 1
+        fail "pg_dump or age exited with an error; no file written"
     fi
     mv "$target.part" "$target"
     echo "backup written: $(basename "$target")"
