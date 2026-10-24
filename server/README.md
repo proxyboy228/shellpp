@@ -231,6 +231,14 @@ A restore brings back what was deleted after the backup on the server's
 side: accounts deleted since (delete them again with `admin user delete`),
 devices revoked since (`admin device revoke`), vaults deleted since.
 
+A device whose sign-in was renewed after the backup (it renews every 15
+minutes while it syncs, so after a nightly backup that is most of them) is
+signed out by the restored server. Signing in again on it keeps its local
+data: it compares it with the server and pushes back what the backup
+lacks, as above. A load that fails half way stops at the first error
+(`ON_ERROR_STOP`) and changes nothing (`--single-transaction`): fix the
+cause and load again before `admin restored`.
+
 If a device holds newer keys than the backup (a password change with "my
 old password may be compromised" or a recovery key reissue after the
 backup), it stops with "Server state rolled back" and offers "Bring the
