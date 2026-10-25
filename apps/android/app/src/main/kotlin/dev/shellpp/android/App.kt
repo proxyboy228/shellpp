@@ -249,6 +249,7 @@ class App : Application() {
         sessions -= id
         sftpSessions -= id
         sessionHosts.remove(id)
+        TerminalView.colors.remove(id)
         // Its transfers are gone with it: the core reports the running ones
         // cancelled; failed ones kept their cache file and document for
         // Retry until now. A finished one is left to its "done" (review of

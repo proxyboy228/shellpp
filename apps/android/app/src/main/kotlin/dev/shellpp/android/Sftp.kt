@@ -290,9 +290,14 @@ fun SftpScreen(
         }
     }
 
+    // Upload goes to the folder it was pressed in, whatever is shown when
+    // the picker returns (second look at the review of 3.4).
+    var uploadTo by remember { mutableStateOf<String?>(null) }
     val pickUploads = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val folder = uploadTo ?: return@rememberLauncherForActivityResult
+        uploadTo = null
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        app.upload(session, path, uris) { problem -> listError = problem }
+        app.upload(session, folder, uris) { problem -> listError = problem }
         queueShown = true
     }
     val conflicts by app.conflicts.collectAsState()
@@ -347,7 +352,7 @@ fun SftpScreen(
                 }
                 if (state == "connected") {
                     OutlinedButton(
-                        onClick = { pickUploads.launch(arrayOf("*/*")) },
+                        onClick = { uploadTo = path; pickUploads.launch(arrayOf("*/*")) },
                         contentPadding = PaddingValues(horizontal = 12.dp),
                         modifier = Modifier.heightIn(min = 40.dp).testTag("sftp_add"),
                     ) {

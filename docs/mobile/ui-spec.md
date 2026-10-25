@@ -159,7 +159,7 @@ As the desktop's 13.2:
   right.
 - **OS tiles**: Shell++'s own simple glyphs: a detected Linux distribution
   or BSD shows its name's first letters on a tile of one of the design
-  system's tag colours (dark letters on the light ones); undetected hosts a
+  system's tag colours darkened by a quarter, in white letters; undetected hosts a
   generic server glyph [decision]. No distribution logos.
 - **A tap on a host connects** (the session screen, section 9); a tap on a
   group opens it. **A long press selects**: the bar becomes ×, "N selected",
