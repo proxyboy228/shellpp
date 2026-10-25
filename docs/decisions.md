@@ -2392,3 +2392,17 @@ Status: run 13 (plan, section 2.2). Supersedes the Mosh part of D204.
 - No iPhone app; Mosh comes later (not with the first version, as D204 had it); fingerprint unlock is an option, off by default [decision].
 
 **Spec impact:** `docs/mobile/owner-notes.md` (new), the mobile specifications of run 13 (`docs/mobile/`), ROADMAP 3.1.
+
+
+### 212. The Rust core for Android: an added CA beside the platform verifier, the "mobile-ready" check in the local criterion, the session layer and the terminal model as crates of their own (run 13)
+
+Status: run 13 (plan, section 3.3; `docs/android-feasibility.md`).
+
+**Context.** Run 12 found that `shellpp-core` does not build for Android: `crates/core/src/sync/tls.rs` gives the added CA of an origin (`TrustMode::Ca`, D187) to `rustls_platform_verifier::Verifier::new_with_extra_roots`, which the crate does not offer on Android, where the platform verifier asks the system's trust manager and takes no extra roots. The "mobile-ready" check of `docs/architecture.md` 2.3 ran only in CI, which is off (D204). The session layer and the terminal model, which a phone client needs, lived inside the desktop app.
+
+**Decision:**
+
+- **An added CA on Android** is checked beside the platform verifier (`CaBesideSystem` in `tls.rs`): the chain against the CA alone first (webpki, as the tests' fixed roots are), the platform verifier when the CA does not vouch for it. When both refuse, the CA's reason wins unless it is only "unknown issuer", so a certificate the CA issued for another name or out of its dates is refused for that, as with both roots in one store. Windows, Linux and macOS keep `new_with_extra_roots` (no change); the combination is unit-tested on every platform with a fixed "system" root.
+- **The "mobile-ready" check** is a step of `scripts\verify.ps1`: `cargo check --locked --target aarch64-linux-android` of the crates a phone client shares, with the NDK's clang (API level 26) for the C parts. The NDK is found from `ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT` or the newest one of the Android SDK; without one the step says SKIPPED with the reason and the summary names it, never a green mark; a missing Rust target fails the step with the command that adds it.
+
+**Spec impact:** docs/architecture.md 2.3 (the check), docs/android-feasibility.md, CLAUDE.md.

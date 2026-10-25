@@ -135,7 +135,7 @@ Enforcement (stage 0 decision):
 |---|---|
 | the server is outside the client build | `server/` has its own Cargo workspace and `Cargo.lock`; the root workspace sets `exclude = ["server"]` |
 | no client dependency on the server | the client `deny.toml` bans the crate `shellpp-server`, and its license allow-list has no AGPL |
-| `shellpp-core` and `shellpp-ssh` stay mobile-ready | from stage 1, CI runs `cargo check -p shellpp-core -p shellpp-ssh` for `aarch64-linux-android` (Linux job, with the runner's NDK) and `aarch64-apple-ios` (macOS job) |
+| `shellpp-core` and `shellpp-ssh` stay mobile-ready | from stage 1, CI runs `cargo check -p shellpp-core -p shellpp-ssh` for `aarch64-linux-android` (Linux job, with the runner's NDK) and `aarch64-apple-ios` (macOS job); since run 13 the local criterion (`scripts\verify.ps1`, step `mobile-ready`) checks every crate a phone client shares for `aarch64-linux-android` with the NDK's clang, and says SKIPPED when there is no NDK (D212) |
 
 | Artifact | Built from | License of project code | Distributed to |
 |---|---|---|---|

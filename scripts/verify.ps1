@@ -23,6 +23,10 @@
   - the server workspace: rustfmt, clippy (default and all features),
     clippy of the libraries and binaries alone, the tests on SQLite and on
     PostgreSQL in Docker;
+  - the "mobile-ready" check (docs/architecture.md, 2.3; run 13): cargo
+    check of the crates a phone client shares for aarch64-linux-android,
+    with the clang of the Android NDK. Without an NDK the step shows
+    SKIPPED (no NDK) and is named in the summary: never a green mark;
   - with -Deploy, the deployment tests in Docker (they need the network).
 
   Clippy of the libraries and binaries alone sees the code as a release
@@ -82,9 +86,32 @@ $server = @('--manifest-path', 'server/Cargo.toml')
 # -Program, another program's). A function, not nested array literals: in
 # PowerShell the comma binds tighter than `+`, so `@('a', @{}, @('x') + $y)`
 # is not three elements (run 10). A step with a -Warning only warns when it
-# fails, with that text.
-function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo', [string] $Problem = '', [string] $Warning = '') {
-    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program; Problem = $Problem; Warning = $Warning }
+# fails, with that text; a step with a -Skip does not run and says why.
+function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo', [string] $Problem = '', [string] $Warning = '', [string] $Skip = '') {
+    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program; Problem = $Problem; Warning = $Warning; Skip = $Skip }
+}
+
+# The Android NDK for the "mobile-ready" check: ANDROID_NDK_HOME or
+# ANDROID_NDK_ROOT, else the newest NDK of an Android SDK (ANDROID_HOME,
+# ANDROID_SDK_ROOT, or Android Studio's default under LOCALAPPDATA). $null
+# when there is none.
+function Find-Ndk {
+    foreach ($ndk in $env:ANDROID_NDK_HOME, $env:ANDROID_NDK_ROOT) {
+        if ($ndk -and (Test-Path -LiteralPath (Join-Path $ndk 'toolchains'))) { return $ndk }
+    }
+    $sdks = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT)
+    if ($env:LOCALAPPDATA) { $sdks += Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+    foreach ($sdk in $sdks) {
+        if (-not $sdk) { continue }
+        $root = Join-Path $sdk 'ndk'
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $newest = Get-ChildItem -LiteralPath $root -Directory |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'toolchains') } |
+            Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending |
+            Select-Object -First 1
+        if ($newest) { return $newest.FullName }
+    }
+    return $null
 }
 
 # The repository's git directory (the common one of a worktree), read from
@@ -133,6 +160,34 @@ $gitleaks = @('run', '--rm', '--network', 'none', '-v', "${repo}:/src:ro", '-v',
 $denyFetchWarning = 'could not fetch the advisory database (no network?): the deny steps use the copy already downloaded'
 $denyProblem = if (Get-Command cargo-deny -ErrorAction SilentlyContinue) { '' } else { 'cargo-deny is not installed (CI uses 0.20.2: cargo install --locked cargo-deny@0.20.2)' }
 
+# The "mobile-ready" check (docs/architecture.md, 2.3): the crates a phone
+# client shares build for the Samsung S25's target with the NDK's clang
+# (API level 26, docs/android-feasibility.md) for the C parts (SQLite,
+# ring). No NDK: skipped, said so; no Rust target: a failure with the fix.
+$androidTarget = 'aarch64-linux-android'
+$mobileCrates = @('shellpp-core', 'shellpp-ssh', 'shellpp-sync-api', 'shellpp-private-file')
+$mobileSkip = ''
+$mobileProblem = ''
+$mobileEnvironment = @{}
+$ndk = Find-Ndk
+if (-not $ndk) {
+    $mobileSkip = 'no NDK: set ANDROID_NDK_HOME or install one with the Android SDK'
+} else {
+    $llvm = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
+    $clang = Join-Path $llvm "${androidTarget}26-clang.cmd"
+    if (-not (Test-Path -LiteralPath $clang)) {
+        $mobileProblem = "the NDK at $ndk has no $clang"
+    } elseif (-not (@(& rustup target list --installed 2>$null) -contains $androidTarget)) {
+        $mobileProblem = "the Rust target is missing: rustup target add $androidTarget"
+    }
+    $mobileEnvironment = @{
+        'CC_aarch64_linux_android'                 = $clang
+        'AR_aarch64_linux_android'                 = Join-Path $llvm 'llvm-ar.exe'
+        'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER' = $clang
+    }
+}
+$mobileArguments = @('check', '--locked', '--target', $androidTarget) + @($mobileCrates | ForEach-Object { '-p'; $_ })
+
 $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
@@ -147,6 +202,7 @@ $steps = @(
     (Step 'clippy-lib-bin' @{} @('clippy', '--locked', '--workspace', '--', '-D', 'warnings')),
     (Step 'test' $russh @('test', '--locked', '--no-fail-fast', '--workspace')),
     (Step 'test-desktop-all-features' $russh @('test', '--locked', '--no-fail-fast', '-p', 'shellpp-desktop', '--all-features')),
+    (Step 'mobile-ready' $mobileEnvironment $mobileArguments -Problem $mobileProblem -Skip $mobileSkip),
     (Step 'fmt-server' @{} (@('fmt') + $server + @('--all', '--', '--check'))),
     (Step 'clippy-server' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--', '-D', 'warnings'))),
     (Step 'clippy-server-all-features' @{} (@('clippy', '--locked') + $server + @('--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings'))),
@@ -168,6 +224,7 @@ if ($List) {
 
 $failed = @()
 $warned = @()
+$skipped = @()
 $passed = 0
 Push-Location $repo
 try {
@@ -181,6 +238,14 @@ try {
         }
         $started = Get-Date
         Write-Host ("{0,-28}" -f $name) -NoNewline
+        if ($step.Skip -and -not $step.Problem) {
+            Write-Host "SKIPPED ($($step.Skip))" -ForegroundColor Yellow
+            $skipped += "$name ($($step.Skip))"
+            foreach ($key in $saved.Keys) {
+                [Environment]::SetEnvironmentVariable($key, $saved[$key])
+            }
+            continue
+        }
         if ($step.Problem) {
             # A step that cannot run is a failure, never a skip.
             Write-Host "FAILED  ($($step.Problem))" -ForegroundColor Red
@@ -217,15 +282,18 @@ try {
 # Every step passed, and there were steps: a script that broke before its
 # steps (a variable never set under StrictMode) must not read as green.
 $stepCount = if (Get-Variable -Name steps -Scope Script -ErrorAction SilentlyContinue) { @($steps).Count } else { 0 }
-if (($stepCount -eq 0 -or $passed -ne $stepCount) -and $failed.Count -eq 0) {
+if (($stepCount -eq 0 -or $passed + $skipped.Count -ne $stepCount) -and $failed.Count -eq 0) {
     $failed += 'the step count'
 }
 if ($failed.Count -gt 0) {
     Write-Host "verify: failed: $($failed -join ', ')" -ForegroundColor Red
     exit 1
 }
-if ($warned.Count -gt 0) {
-    Write-Host "verify: every step passed; warnings: $($warned -join ', ')" -ForegroundColor Yellow
+if ($warned.Count -gt 0 -or $skipped.Count -gt 0) {
+    $notes = @()
+    if ($warned.Count -gt 0) { $notes += "warnings: $($warned -join ', ')" }
+    if ($skipped.Count -gt 0) { $notes += "skipped: $($skipped -join ', ')" }
+    Write-Host "verify: every step that ran passed; $($notes -join '; ')" -ForegroundColor Yellow
     exit 0
 }
 Write-Host 'verify: every step passed' -ForegroundColor Green

@@ -17,6 +17,7 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo clippy --locked --workspace -- -D warnings
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --locked --no-fail-fast --workspace
 cargo test --locked --no-fail-fast -p shellpp-desktop --all-features
+cargo check --locked --target aarch64-linux-android -p shellpp-core -p shellpp-ssh -p shellpp-sync-api -p shellpp-private-file
 cargo fmt --manifest-path server/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings
@@ -49,6 +50,16 @@ advisories» workflow `ci.yml`; версия cargo-deny та же — 0.20.2
 в итоговой строке; если базы нет совсем, проверки провалены. Находка —
 обновить зависимость; нет обновления — исключение в конфиге с причиной
 и сроком пересмотра и решение в decisions.md (D210).
+
+Проверка «mobile-ready» (`docs/architecture.md`, 2.3) — `cargo check`
+крейтов, общих с телефонным клиентом, под `aarch64-linux-android` (Samsung
+S25): `verify.ps1` находит NDK (`ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT`, иначе
+новейший в `ndk\` SDK из `ANDROID_HOME`, `ANDROID_SDK_ROOT` или
+`%LOCALAPPDATA%\Android\Sdk`) и задаёт для шага `CC_aarch64_linux_android`
+и `AR_aarch64_linux_android` (clang NDK с API 26 и `llvm-ar`) — для C-части
+SQLite и ring. Без NDK шаг — SKIPPED с причиной в итоговой строке, а не
+зелёная отметка; без цели Rust (`rustup target add aarch64-linux-android`)
+— провал.
 
 clippy без `--all-targets` видит код как release-сборка: с тестами
 dev-зависимости включают `test-hooks` в `shellpp-core` для всего workspace

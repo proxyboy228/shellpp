@@ -192,6 +192,124 @@ impl ServerCertVerifier for NoRoots {
     }
 }
 
+/// An added CA beside a verifier of the system's trust that takes no extra
+/// roots: on Android the platform verifier asks the system's trust manager
+/// and cannot be given one (`docs/android-feasibility.md`, 2). The chain is
+/// checked against the CA alone first (webpki, as [`SystemRoots::Fixed`]
+/// does), and the system is asked when the CA does not vouch for it.
+#[derive(Debug)]
+struct CaBesideSystem {
+    ca: Arc<WebPkiServerVerifier>,
+    system: Arc<dyn ServerCertVerifier>,
+    provider: Arc<CryptoProvider>,
+}
+
+impl CaBesideSystem {
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    fn new(
+        ca: CertificateDer<'static>,
+        system: Arc<dyn ServerCertVerifier>,
+        provider: &Arc<CryptoProvider>,
+    ) -> Result<Self, TlsError> {
+        let mut store = RootCertStore::empty();
+        store.add(ca)?;
+        let ca = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone())
+            .build()
+            .map_err(|error| TlsError::General(error.to_string()))?;
+        Ok(Self {
+            ca,
+            system,
+            provider: provider.clone(),
+        })
+    }
+}
+
+impl ServerCertVerifier for CaBesideSystem {
+    /// The CA's answer when it vouches for the chain; else the system's. When
+    /// both refuse, the CA's reason wins unless it is only "unknown issuer"
+    /// (the chain does not lead to the CA): a certificate the CA issued for
+    /// another name or out of its dates is refused for that, as webpki
+    /// refuses it with both roots in one store.
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        let by_ca =
+            self.ca
+                .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+        let Err(ca_error) = by_ca else {
+            return by_ca;
+        };
+        self.system
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+            .map_err(|system_error| match ca_error {
+                TlsError::InvalidCertificate(CertificateError::UnknownIssuer) => system_error,
+                ca_error => ca_error,
+            })
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+/// The platform verifier with an added CA: on Windows, Linux and macOS the
+/// CA joins the system's roots in the platform verifier itself.
+#[cfg(not(target_os = "android"))]
+fn platform_with_ca(
+    ca: CertificateDer<'static>,
+    provider: &Arc<CryptoProvider>,
+) -> Result<Arc<dyn ServerCertVerifier>, TlsError> {
+    Ok(Arc::new(
+        rustls_platform_verifier::Verifier::new_with_extra_roots([ca], provider.clone())?,
+    ))
+}
+
+/// The platform verifier with an added CA: on Android the platform verifier
+/// takes no extra roots, so the CA is checked beside it ([`CaBesideSystem`]).
+#[cfg(target_os = "android")]
+fn platform_with_ca(
+    ca: CertificateDer<'static>,
+    provider: &Arc<CryptoProvider>,
+) -> Result<Arc<dyn ServerCertVerifier>, TlsError> {
+    let system = Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?);
+    Ok(Arc::new(CaBesideSystem::new(ca, system, provider)?))
+}
+
 /// The chain verifier of `roots`, plus `extra` (an added CA) when given.
 fn chain_verifier(
     roots: &SystemRoots,
@@ -201,10 +319,7 @@ fn chain_verifier(
     let extra = extra.map(|der| CertificateDer::from(der.to_vec()));
     Ok(match roots {
         SystemRoots::Platform => match extra {
-            Some(ca) => Arc::new(rustls_platform_verifier::Verifier::new_with_extra_roots(
-                [ca],
-                provider.clone(),
-            )?),
+            Some(ca) => platform_with_ca(ca, provider)?,
             None => Arc::new(rustls_platform_verifier::Verifier::new(provider.clone())?),
         },
         SystemRoots::Fixed(list) => {
@@ -494,5 +609,129 @@ mod tests {
             ca_der_from_file(b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
                 .is_none()
         );
+    }
+
+    mod ca_beside_system {
+        use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+
+        use super::*;
+
+        fn ca(name: &str) -> (CertificateDer<'static>, Issuer<'static, KeyPair>) {
+            let key = KeyPair::generate().expect("key");
+            let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            params.distinguished_name.push(DnType::CommonName, name);
+            let cert = params.self_signed(&key).expect("ca");
+            (cert.der().clone(), Issuer::new(params, key))
+        }
+
+        /// A certificate for `name` from `issuer`, valid from `from` to `to`
+        /// days from now.
+        fn leaf(
+            name: &str,
+            issuer: &Issuer<'static, KeyPair>,
+            (from, to): (i64, i64),
+        ) -> CertificateDer<'static> {
+            let key = KeyPair::generate().expect("key");
+            let mut params = CertificateParams::new(vec![name.to_owned()]).expect("params");
+            params.distinguished_name.push(DnType::CommonName, name);
+            let now = time::OffsetDateTime::now_utc();
+            params.not_before = now + time::Duration::days(from);
+            params.not_after = now + time::Duration::days(to);
+            params
+                .signed_by(&key, issuer)
+                .expect("signed")
+                .der()
+                .clone()
+        }
+
+        /// The CA beside a "system" whose only root is `public` (webpki, as
+        /// the platform verifier stands in no test).
+        fn verifier(
+            added: &CertificateDer<'static>,
+            public: &CertificateDer<'static>,
+        ) -> CaBesideSystem {
+            let provider = provider();
+            let system = chain_verifier(
+                &SystemRoots::Fixed(Arc::new(vec![public.clone()])),
+                None,
+                &provider,
+            )
+            .expect("system");
+            CaBesideSystem::new(added.clone(), system, &provider).expect("verifier")
+        }
+
+        fn verify(verifier: &CaBesideSystem, cert: &CertificateDer<'_>) -> Result<(), TlsError> {
+            let name = ServerName::try_from("sync.example.test").expect("name");
+            verifier
+                .verify_server_cert(cert, &[], &name, &[], UnixTime::now())
+                .map(|_| ())
+        }
+
+        fn refused(error: CertificateError) -> Result<(), TlsError> {
+            Err(TlsError::InvalidCertificate(error))
+        }
+
+        /// The Android way of an added CA (D187, run 13): a certificate of
+        /// the added CA and one the system trusts both pass; one of neither
+        /// is an unknown issuer (the trust dialog's case); one the added CA
+        /// issued for another name or out of its dates is refused for that
+        /// reason, as with both roots in one store.
+        #[test]
+        fn an_added_ca_counts_beside_the_systems_trust() {
+            let (added, added_issuer) = ca("added CA");
+            let (public, public_issuer) = ca("public CA");
+            let (_, stranger) = ca("unknown CA");
+            let verifier = verifier(&added, &public);
+            let name = "sync.example.test";
+            assert_eq!(
+                verify(&verifier, &leaf(name, &added_issuer, (-1, 30))),
+                Ok(())
+            );
+            assert_eq!(
+                verify(&verifier, &leaf(name, &public_issuer, (-1, 30))),
+                Ok(())
+            );
+            assert_eq!(
+                verify(&verifier, &leaf(name, &stranger, (-1, 30))),
+                refused(CertificateError::UnknownIssuer)
+            );
+            let expired = verify(&verifier, &leaf(name, &added_issuer, (-30, -1)));
+            assert!(
+                matches!(
+                    expired,
+                    Err(TlsError::InvalidCertificate(
+                        CertificateError::Expired | CertificateError::ExpiredContext { .. }
+                    ))
+                ),
+                "{expired:?}"
+            );
+            let other_name = verify(
+                &verifier,
+                &leaf("other.example.test", &added_issuer, (-1, 30)),
+            );
+            assert!(
+                matches!(
+                    other_name,
+                    Err(TlsError::InvalidCertificate(
+                        CertificateError::NotValidForName
+                            | CertificateError::NotValidForNameContext { .. }
+                    ))
+                ),
+                "{other_name:?}"
+            );
+            // A certificate of the system's CA out of its dates: the system's
+            // reason, not the added CA's "unknown issuer".
+            let public_expired = verify(&verifier, &leaf(name, &public_issuer, (-30, -1)));
+            assert!(
+                matches!(
+                    public_expired,
+                    Err(TlsError::InvalidCertificate(
+                        CertificateError::Expired | CertificateError::ExpiredContext { .. }
+                    ))
+                ),
+                "{public_expired:?}"
+            );
+        }
     }
 }
