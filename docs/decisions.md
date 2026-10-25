@@ -2436,3 +2436,20 @@ Status: run 13 (plan, section 3.5); `docs/mobile/ui-spec.md`.
 - Pinch zooms the font (8-28 sp); the size goes to the server when a change settles (150 ms); sessions live in a foreground service, and the desktop's reconnect policy handles a lost network.
 
 **Spec impact:** `docs/mobile/ui-spec.md` (new), ROADMAP 3.1.
+
+
+### 215. The Android prototype: quick connect on the real core, its terminal, and Android 17's local network permission (run 13)
+
+Status: run 13 (plan, sections 3.7 and 3.8); `apps/android`, `scripts\verify-android.ps1`.
+
+**Context.** The plan asked for an APK that connects over SSH and gives a terminal with the extra keys, cursor placement by tap and selection at least in a basic form, surviving the app going to the background; without the vault and sync.
+
+**Decision:**
+
+- **The core on a throwaway vault**: the prototype opens `shellpp-core` on a vault in the app's files that is made again at every start with a random password nobody knows, so a quick connect runs the real session layer (`shellpp-sessions`): the host key question, prompts, the reconnect policy. Known hosts last until the app restarts. The first version replaces it with the user's vault (M1).
+- **The binding** is the crate `shellpp-android` (`apps/android/native`): an engine (sessions and their terminals by handle), the screen snapshot of architecture 6.1, the input mapping (a copy of the desktop's sequences until it moves into `shellpp-terminal`), the cursor walk with feedback (ui-spec 9.3), the JNI exports inside `EnvUnowned::with_env`. It is a member of the client workspace and its logic and an end-to-end test against the russh test server run on the computer.
+- **The app is plain Android views without AndroidX** [decision for the prototype]: the quick connect form, the terminal view, two rows of extra keys, the foreground service. Compose comes with the first version's screens (architecture 1). Back closes the prototype's session (it has no Sessions screen yet); leaving the app keeps the session in the foreground service.
+- **Android 17's local network permission**: an app that targets API 37 reaches no address of the local network (10.x, 172.16.x, 192.168.x; the emulator's host at 10.0.2.2) without `android.permission.ACCESS_LOCAL_NETWORK`; the connection simply times out. The prototype declares it and asks for it with the notification permission. The owner's servers at home need it too; servers at public addresses do not.
+- **Checks**: `scripts\verify-android.ps1` runs the binding's Rust tests, builds the debug APK (both ABIs; Gradle runs cargo with the NDK's clang) and the Kotlin unit tests; `-Emulator` adds the end-to-end test on the emulator against OpenSSH in Docker. Outside the full criterion, which keeps its "mobile-ready" step.
+
+**Spec impact:** `docs/mobile/architecture.md` (the local network permission), `docs/mobile/README.md` (new), CLAUDE.md, ROADMAP 3.1.

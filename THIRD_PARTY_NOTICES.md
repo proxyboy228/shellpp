@@ -782,3 +782,15 @@ SOFTWARE.
 |---|---|---|---|
 | SQLite (bundled by libsqlite3-sys 0.38.2) | 3.53.2 | Public domain | <https://sqlite.org/copyright.html> |
 | Lucide icons (embedded by gpui-kit-assets 0.7.3) | as bundled | ISC (some icons derived from Feather, MIT) | <https://github.com/lucide-icons/lucide> |
+
+## The Android prototype (apps/android)
+
+The debug APK of the Android prototype (run 13; not distributed) ships the
+Rust crates of the shared core listed above that its library links, plus
+the `jni` crate and its dependencies (MIT OR Apache-2.0, checked by
+`cargo deny` with the client workspace), JetBrains Mono Regular with its
+license (`apps/android/app/src/main/assets/fonts/OFL.txt`), and the Kotlin
+standard library (Apache-2.0, <https://github.com/JetBrains/kotlin>). Its
+tests use JUnit 4 (EPL-1.0) and AndroidX Test (Apache-2.0), which never
+ship in the app. The full table of the Android app comes with its first
+release.

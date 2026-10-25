@@ -97,6 +97,30 @@ powershell -ExecutionPolicy Bypass -File scripts\test-process.ps1
 в PowerShell 5.1 ждёт и их, а линкер MSVC оставляет `vctip.exe`, который
 может висеть четверть часа (прогон 12).
 
+Android (`apps/android`, run 13; `docs/mobile/`): Gradle-проект
+с wrapper (дистрибутив Gradle с `distributionSha256Sum`), модуль `app`
+(Kotlin), Rust-связка — крейт `shellpp-android` (`apps/android/native`,
+член workspace: его тесты идут и в `cargo test --workspace`). Gradle сам
+собирает `.so` (`cargo build --profile android` под
+`aarch64-linux-android` и `x86_64-linux-android` с clang NDK). Проверка —
+в полный критерий не входит (в нём только «mobile-ready»):
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1
+powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator
+```
+
+Без `-Emulator`: тесты связки на компьютере, debug-APK, модульные тесты
+Kotlin. С `-Emulator` ещё сквозной тест на эмуляторе против OpenSSH
+в Docker (эмулятор видит компьютер как `10.0.2.2`): скрипт поднимает
+контейнер (`tests/openssh/start.sh`, нужен bash из Git for Windows), сам
+запускает AVD (`-Avd`, по умолчанию первый), если эмулятор не запущен,
+и после теста гасит то, что запустил. SDK и JDK находит сам
+(`ANDROID_HOME`, `JAVA_HOME`, иначе Android Studio) и задаёт их только
+своему процессу. Журналы — в `target\verify-android\`. Лицензии SDK за
+владельца не принимать; Gradle тянет зависимости только из Google Maven
+и Maven Central.
+
 Проверка развёртывания — после изменений в `server/`, `crates/sync-api`,
 `crates/core` и `crates/private-file` (из них собираются образ сервера
 и клиенты теста), в файлах

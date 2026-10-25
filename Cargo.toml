@@ -12,6 +12,7 @@ members = [
     "crates/terminal",
     "tests/sshd",
     "apps/desktop",
+    "apps/android/native",
 ]
 exclude = ["server", "third_party"]
 
@@ -194,6 +195,16 @@ debug = "line-tables-only"
 
 # Debug info costs most of target/ on a small disk: the workspace crates keep
 # line tables (backtraces with file and line), the dependencies none.
+# The Android app's native library (apps/android, run 13): release speed,
+# symbols stripped, many codegen units for quicker builds, and unwinding
+# kept so that a panic in a JNI call becomes a Java exception
+# (docs/mobile/architecture.md 2).
+[profile.android]
+inherits = "release"
+strip = "symbols"
+codegen-units = 16
+panic = "unwind"
+
 [profile.dev]
 debug = "line-tables-only"
 

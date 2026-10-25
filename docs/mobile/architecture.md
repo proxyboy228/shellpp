@@ -351,6 +351,11 @@ The owner's two pains (D211); the gestures are in `docs/mobile/ui-spec.md`
 - Minimum Android 8.0 (API 26, as the Rust check uses; the magnifier needs
   API 28 and is left out below it); target and compile SDK 37, the SDK
   installed here [decision].
+- **Android 17's local network permission**: an app that targets API 37
+  reaches no address of the local network (a server at home, the emulator's
+  host at 10.0.2.2) without `ACCESS_LOCAL_NETWORK`; the connection only
+  times out. The app declares it and asks for it before the first session
+  to such an address (the prototype asks at the first session) (D215).
 - Checks: `scripts\verify-android.ps1` (the debug APK, the Rust binding's
   tests on the computer, Kotlin unit tests; with `-Emulator` an end-to-end
   test on the emulator against OpenSSH in Docker). The desktop's full

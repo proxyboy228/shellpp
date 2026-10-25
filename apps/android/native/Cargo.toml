@@ -1,0 +1,42 @@
+[package]
+name = "shellpp-android"
+description = "Shell++ for Android: the JNI layer over the shared Rust core (docs/mobile/architecture.md; the run 13 prototype: quick connect and the terminal)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# A shared library for the app (cdylib, built for aarch64-linux-android and
+# x86_64-linux-android by the Gradle build of apps/android) and an rlib, so
+# the binding's logic builds and is tested on the computer as well (D213).
+[lib]
+name = "shellpp_android"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+shellpp-core.workspace = true
+shellpp-ssh.workspace = true
+shellpp-sessions.workspace = true
+shellpp-terminal.workspace = true
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
+futures.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+getrandom.workspace = true
+tracing.workspace = true
+# The JNI calls (the version rustls-platform-verifier already brings in).
+jni = "0.22.4"
+
+[dev-dependencies]
+shellpp-test-sshd.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

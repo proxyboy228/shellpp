@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The design system's tokens (docs/design-system.md 2), dark theme. -->
+<resources>
+    <color name="bg_base">#121211</color>
+    <color name="bg_surface">#1B1B19</color>
+    <color name="bg_raised">#242422</color>
+    <color name="bg_input">#1E1E1C</color>
+    <color name="bg_pressed">#343431</color>
+    <color name="border_strong">#3E3E3A</color>
+    <color name="text_primary">#EDEDE8</color>
+    <color name="text_secondary">#A6A59E</color>
+    <color name="text_muted">#76756F</color>
+    <color name="accent">#2EC4A6</color>
+    <color name="accent_subtle">#242EC4A6</color>
+    <color name="text_on_accent">#08201B</color>
+    <color name="danger">#F0665E</color>
+</resources>

@@ -7944,6 +7944,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "shellpp-android"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "async-channel",
+ "futures",
+ "getrandom 0.4.3",
+ "jni",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "shellpp-core",
+ "shellpp-sessions",
+ "shellpp-ssh",
+ "shellpp-terminal",
+ "shellpp-test-sshd",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "shellpp-core"
 version = "0.1.0"
 dependencies = [
