@@ -32,6 +32,8 @@ serde_json.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+# The TOTP QR code (the desktop's crate and settings).
+qrcode = { version = "0.14.1", default-features = false }
 # The JNI calls (the version rustls-platform-verifier already brings in).
 jni = "0.22.4"
 

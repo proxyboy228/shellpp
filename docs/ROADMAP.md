@@ -208,14 +208,17 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
    and the connect wizard (the three ways to trust a certificate, TOTP), the
    account screen, sync after unlock, on resume, after a change and on
    demand; checked on the emulator against the real server behind a TLS
-   front with a second device. Left: the system's trust with a real
-   certificate (the owner's server), the device name step and the TOTP QR
-   code of the wizard.
+   front with a second device, the TOTP QR code. Left: the system's trust
+   with a real certificate (the owner's server) and the device name step of
+   the wizard (the core has no way yet to rename a device after its first
+   run; the phone's model name is used).
 5. **M4, keys, known hosts, SFTP** (done, run 14): the Keychain (generate,
    import, share the public key), the known hosts screens and the host key
-   dialogs, SFTP (browse, download, upload through the cache, the queue).
+   dialogs, SFTP (browse, download, upload through the cache, the queue,
+   the progress in the notification).
 6. **M5, the first version** (1 run): the rest of Settings (appearance,
-   terminal, about), the host editor's terminal theme and identity name,
+   terminal, about), the host editor's terminal theme (the identity's name
+   shows read-only since run 14),
    both themes at the S25's size, a signed APK on the owner's phone and the
    owner's acceptance.
 

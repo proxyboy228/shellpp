@@ -2,12 +2,14 @@ package dev.shellpp.android
 
 import android.app.Activity
 import android.app.Application
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -317,6 +319,7 @@ class App : Application() {
                 val merged = transfers.value[transfer]?.let { JSONObject(it.toString()) } ?: JSONObject()
                 for (key in update.keys()) merged.put(key, update.get(key))
                 transfers.value = transfers.value + (transfer to merged)
+                transferNotification(transfer, merged.optString("state"))
             }
         }
         if (target == null || state !in setOf("done", "failed", "cancelled")) {
@@ -357,6 +360,30 @@ class App : Application() {
     }
 
     private val transferWorker = Executors.newSingleThreadExecutor()
+
+    private val notifiedStates = HashMap<Long, String>()
+    private var notifiedAt = 0L
+
+    /**
+     * The service's notification follows the transfers (UI spec 10): at once
+     * when one changes state, at most once a second for its bytes. Updated
+     * in place, not by starting the service again; on the main thread, so it
+     * never comes after the last session's close stopped the service.
+     */
+    private fun transferNotification(transfer: Long, state: String) {
+        val changed = notifiedStates.put(transfer, state) != state
+        if (state !in setOf("queued", "running")) notifiedStates.remove(transfer)
+        val now = SystemClock.elapsedRealtime()
+        if (!changed && now - notifiedAt < 1_000) return
+        notifiedAt = now
+        if (sessions.isEmpty()) return
+        try {
+            getSystemService(NotificationManager::class.java)
+                .notify(SessionService.NOTIFICATION, SessionService.notification(this, this))
+        } catch (error: Exception) {
+            // Notifications not allowed: the transfer sheet still shows it.
+        }
+    }
 
     private fun deleteDocument(target: TransferTarget) {
         if (!target.download || target.uri == null) return

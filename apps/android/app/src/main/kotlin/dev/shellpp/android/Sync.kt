@@ -4,6 +4,7 @@ import android.util.Base64
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +46,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -148,6 +153,7 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
     var code by remember { mutableStateOf("") }
     var recoveryKey by remember { mutableStateOf<String?>(null) }
     var totpSecret by remember { mutableStateOf<String?>(null) }
+    var totpQr by remember { mutableStateOf<JSONObject?>(null) }
     var weaker by remember { mutableStateOf<JSONObject?>(null) }
     var changed by remember { mutableStateOf(false) }
     // What the weaker-settings and changed-settings notices accepted: kept
@@ -418,6 +424,7 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
             "totp_offer" -> {
                 fun next() {
                     totpSecret = null
+                    totpQr = null
                     code = ""
                     step = if (recoveryKey != null) "recovery" else "done"
                 }
@@ -434,14 +441,16 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                                 Core.withPassword("sync_totp_setup", "password", password.toCharArray()) as JSONObject
                             }
                             totpSecret = setup.optString("secret")
+                            totpQr = setup.optJSONObject("qr")
                         }
                     }
                     TextButton(onClick = ::next, modifier = Modifier.testTag("totp_skip")) { Text("Skip") }
                 } else {
                     Text(
-                        "Add this key to your authenticator app (the QR code is on the desktop), then type the code it shows.",
+                        "Scan the QR code with your authenticator app or type the key under it, then type the code the app shows.",
                         color = Tokens.textSecondary,
                     )
+                    totpQr?.let { QrCode(it) }
                     Text(secret.chunked(4).joinToString(" "), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("totp_secret"))
                     OutlinedTextField(
                         value = code, onValueChange = { code = it.filter(Char::isDigit).take(8); error = null },
@@ -772,5 +781,37 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
             },
             dismissButton = { TextButton(onClick = { signingOut = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/** The quiet zone around a QR code, in modules: what scanners need. */
+private const val QR_QUIET = 4
+
+/**
+ * The TOTP QR code (UI spec 11.1) from the core's modules: dark on white
+ * whatever the theme, with its quiet zone, as on the desktop. Whole pixels
+ * a module, so no seams show between them.
+ */
+@Composable
+private fun QrCode(qr: JSONObject) {
+    val width = qr.optInt("width")
+    val dark = qr.optString("dark")
+    if (width <= 0 || dark.length != width * width) return
+    val side = width + 2 * QR_QUIET
+    Canvas(Modifier.size(240.dp).testTag("totp_qr")) {
+        val module = kotlin.math.floor(size.minDimension / side)
+        if (module < 1f) return@Canvas
+        val start = (size.minDimension - module * side) / 2
+        drawRect(Color.White, Offset(start, start), Size(module * side, module * side))
+        for (row in 0 until width) {
+            for (column in 0 until width) {
+                if (dark[row * width + column] != '1') continue
+                drawRect(
+                    Color.Black,
+                    Offset(start + (column + QR_QUIET) * module, start + (row + QR_QUIET) * module),
+                    Size(module, module),
+                )
+            }
+        }
     }
 }

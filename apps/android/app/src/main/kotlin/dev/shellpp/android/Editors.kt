@@ -212,6 +212,19 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
     var keyId by remember { mutableStateOf(ssh0.optString("key_id").takeIf { it.isNotBlank() && it != "null" }) }
     var backspace by remember { mutableStateOf(original.optString("backspace").ifBlank { "default" }) }
     var charset by remember { mutableStateOf(original.optString("charset").ifBlank { "utf-8" }) }
+    // A host that signs in with an identity shows its name, read-only (UI spec 6.2).
+    val identityId = ssh0.optString("identity_id").takeIf { it.isNotBlank() && it != "null" }
+    val identityName by produceState<String?>(null, identityId) {
+        if (identityId == null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            try {
+                Core.obj("record_get", JSONObject().put("vault_id", record?.vaultId ?: vaultId()).put("record_id", identityId))
+                    .optJSONObject("data")?.optString("label")?.takeIf { it.isNotBlank() }
+            } catch (error: Exception) {
+                null
+            }
+        }
+    }
     var passwordSaved by remember {
         mutableStateOf(record?.json?.optJSONArray("secrets_set")?.let { list -> (0 until list.length()).any { list.getString(it) == "ssh.password" } } == true)
     }
@@ -371,7 +384,15 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             ssh0.keys().asSequence().filter { it !in HOST_SSH_FIELDS && it != "password" && !ssh0.isNull(it) }.map { "ssh.$it" }.toList()
         if (others.isNotEmpty()) {
             Section("More settings (edit on the desktop)")
-            Text(others.joinToString(", ") { it.replace('_', ' ') }, color = Tokens.textSecondary)
+            if (identityId != null) {
+                Text(
+                    "Identity: ${identityName ?: "an identity"}",
+                    color = Tokens.textSecondary,
+                    modifier = Modifier.testTag("host_identity"),
+                )
+            }
+            val rest = others.filter { it != "ssh.identity_id" }
+            if (rest.isNotEmpty()) Text(rest.joinToString(", ") { it.replace('_', ' ') }, color = Tokens.textSecondary)
         }
     }
 

@@ -7953,6 +7953,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "jni",
+ "qrcode",
  "rustls-platform-verifier",
  "secrecy",
  "serde",

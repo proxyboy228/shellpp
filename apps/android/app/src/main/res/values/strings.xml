@@ -5,6 +5,9 @@
     <string name="sessions_open">%1$d SSH sessions open</string>
     <string name="session_open">1 SSH session open</string>
     <string name="disconnect_all">Disconnect all</string>
+    <string name="transfer_downloading">Downloading %1$s · %2$s</string>
+    <string name="transfer_uploading">Uploading %1$s · %2$s</string>
+    <string name="transfers_waiting">%1$d more waiting</string>
     <string name="copy">Copy</string>
     <string name="paste">Paste</string>
     <string name="select_line">Select line</string>

@@ -190,6 +190,25 @@ fn outcome_json(outcome: SignInOutcome) -> Result<Value, Failure> {
     }
 }
 
+/// The QR code of the `otpauth://` text (UI spec 11.1), as the desktop
+/// draws it: `width` modules a side and `dark`, one `1` or `0` a module, row
+/// by row; the app adds the quiet zone.
+fn qr_json(text: &str) -> Option<Value> {
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let dark: String = code
+        .to_colors()
+        .iter()
+        .map(|color| {
+            if *color == qrcode::Color::Dark {
+                '1'
+            } else {
+                '0'
+            }
+        })
+        .collect();
+    Some(json!({ "width": code.width(), "dark": dark }))
+}
+
 fn report_json(report: &SyncReport) -> Value {
     json!({
         "pulled": report.pulled,
@@ -451,6 +470,7 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
             Ok(json!({
                 "secret": setup.secret.expose_secret(),
                 "otpauth_uri": setup.otpauth_uri.as_ref().map(|uri| uri.expose_secret().to_owned()),
+                "qr": setup.otpauth_uri.as_ref().and_then(|uri| qr_json(uri.expose_secret())),
             }))
         }
         "sync_totp_enable" => {
@@ -479,5 +499,25 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
             ))
         }
         _ => Err(Failure::Unknown),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qr_json;
+
+    #[test]
+    fn qr_is_a_square_of_modules() {
+        let qr = qr_json(
+            "otpauth://totp/Shell%2B%2B:a%40b.example?secret=JBSWY3DPEHPK3PXP&issuer=Shell%2B%2B",
+        )
+        .expect("a QR code");
+        let width = qr["width"].as_u64().expect("width") as usize;
+        let dark = qr["dark"].as_str().expect("modules");
+        assert!(width >= 21, "a QR code is at least 21 modules wide");
+        assert_eq!(dark.len(), width * width);
+        assert!(dark.chars().all(|c| c == '0' || c == '1'));
+        // The finder pattern: the top left corner is dark.
+        assert!(dark.starts_with("1111111"));
     }
 }
