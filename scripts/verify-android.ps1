@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-  The Android app's checks (run 13; docs/mobile/architecture.md 7): the
-  Rust binding's tests on this computer, the debug APK and the Kotlin unit
-  tests; with -Emulator also the end-to-end test on the emulator against
-  OpenSSH in Docker.
+  The Android app's checks (runs 13 and 14; docs/mobile/architecture.md 7):
+  the Rust binding's tests on this computer, the debug APK and the Kotlin
+  unit tests; with -Emulator also the end-to-end tests on the emulator
+  against OpenSSH in Docker.
 
 .DESCRIPTION
   Finds the Android SDK (ANDROID_HOME, ANDROID_SDK_ROOT, else Android
@@ -17,10 +17,18 @@
   -Emulator: starts OpenSSH in Docker (tests/openssh/start.sh; its
   container carries shellpp-run=$env:SHELLPP_TEST_RUN), starts the emulator
   (-Avd, by default the first AVD) unless one already runs, waits until it
-  has booted, runs connectedDebugAndroidTest with the server's port and its
-  password user as instrumentation arguments (the emulator reaches the
-  computer's loopback at 10.0.2.2), then stops the emulator it started and
-  removes the container. Needs a running Docker and Git for Windows' bash.
+  has booted, installs the APKs afresh and runs the end-to-end classes one
+  by one with `am instrument`, each in a process of its own (so a class
+  finds what the one before left after a real restart), with the server's
+  port and password user and a master password made for the run as
+  instrumentation arguments (the emulator reaches the computer's loopback
+  at 10.0.2.2). For fingerprint unlock (D218) it gives the emulator the PIN
+  1111, enrolls fingers 1 and 2 through Settings
+  (tests/android/enroll-fingerprint.sh) and touches the sensor during
+  FingerprintOnTest (tests/android/touch-sensor.sh). Then it uninstalls the
+  app, clears the PIN (and with it the fingerprints), stops the emulator it
+  started and removes the container. Needs a running Docker and Git for
+  Windows' bash.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator
@@ -76,7 +84,9 @@ $appId = 'io.github.proxyboy228.shellpp'
 $EndToEndClasses = @(
     'dev.shellpp.android.VaultFirstRunTest',
     'dev.shellpp.android.VaultAfterRestartTest',
-    'dev.shellpp.android.ConnectTest'
+    'dev.shellpp.android.ConnectTest',
+    'dev.shellpp.android.FingerprintOnTest',
+    'dev.shellpp.android.FingerprintInvalidatedTest'
 )
 
 $failed = @()
@@ -120,6 +130,7 @@ if ($Emulator) {
     $work = Join-Path $logDir 'openssh'
     $startedEmulator = $false
     $containerStarted = $false
+    $pinSet = $false
     try {
         if (-not $bash -or -not (Test-Path -LiteralPath $bash)) { throw "no Git for Windows bash (set SHELLPP_BASH)" }
         if (Test-Path -LiteralPath $work) { Remove-Item -Recurse -Force -LiteralPath $work }
@@ -161,15 +172,45 @@ if ($Emulator) {
             '-e', 'sshPassword', "$($server.users.password.password)",
             '-e', 'vaultPassword', $vaultPassword
         )
+        # Fingerprint unlock (D218): the emulator gets the PIN 1111 and
+        # finger 1 before FingerprintOnTest, whose prompts pass by a finger
+        # touching the sensor meanwhile; finger 2 is added before
+        # FingerprintInvalidatedTest (the Keystore key becomes invalid).
+        $env:ADB = $adb
+        & $adb shell svc power stayon true 2>$null | Out-Null
+        & $adb shell locksettings clear --old 1111 2>$null | Out-Null
+        & $adb shell locksettings set-pin 1111 2>$null | Out-Null
+        $pinSet = $true
+        $stopTouch = Join-Path $logDir 'touch-sensor.stop'
         foreach ($class in $EndToEndClasses) {
             $short = $class.Split('.')[-1]
+            $toucher = $null
+            if ($short -eq 'FingerprintOnTest' -or $short -eq 'FingerprintInvalidatedTest') {
+                $finger = if ($short -eq 'FingerprintOnTest') { '1' } else { '2' }
+                $enrolled = Invoke-Logged $bash @((Join-Path $repo 'tests\android\enroll-fingerprint.sh'), $finger) (Join-Path $logDir "enroll-$finger.log") (Join-Path $logDir "enroll-$finger.err.log")
+                & $adb shell input keyevent KEYCODE_HOME 2>$null | Out-Null
+                if ($enrolled -ne 0) {
+                    Write-Host ("{0,-34}" -f "e2e-$short") -NoNewline
+                    Write-Host "FAILED  (fingerprint $finger not enrolled)" -ForegroundColor Red
+                    $script:failed += "e2e-$short"
+                    continue
+                }
+            }
+            if ($short -eq 'FingerprintOnTest') {
+                Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $stopTouch
+                $toucher = Start-Process -FilePath $bash -ArgumentList @((Join-Path $repo 'tests\android\touch-sensor.sh'), '1', ($stopTouch -replace '\\', '/')) -WindowStyle Hidden -PassThru
+            }
             $arguments = @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $class) + $instrumentArgs + @("$appId.test/androidx.test.runner.AndroidJUnitRunner")
-            Write-Host ("{0,-28}" -f "e2e-$short") -NoNewline
+            Write-Host ("{0,-34}" -f "e2e-$short") -NoNewline
             $log = Join-Path $logDir "e2e-$short.log"
             $code = Invoke-Logged $adb $arguments $log (Join-Path $logDir "e2e-$short.err.log")
             $text = if (Test-Path -LiteralPath $log) { Get-Content -Raw -LiteralPath $log } else { '' }
             # `am instrument` exits 0 even when tests fail: its report says.
             $ok = ($code -eq 0) -and ($text -match 'OK \(\d+ tests?\)') -and ($text -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed')
+            if ($toucher) {
+                New-Item -ItemType File -Force $stopTouch | Out-Null
+                $null = $toucher.WaitForExit(10000)
+            }
             if ($ok) {
                 Write-Host 'ok' -ForegroundColor Green
                 $script:passed += 1
@@ -183,6 +224,8 @@ if ($Emulator) {
         $failed += 'emulator'
     } finally {
         foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
+        # Clearing the PIN removes the test's fingerprints too.
+        if ($pinSet) { & $adb shell locksettings clear --old 1111 2>$null | Out-Null }
         if ($startedEmulator) { & $adb emu kill 2>$null | Out-Null }
         if ($containerStarted) {
             $null = Invoke-Logged $bash @((Join-Path $repo 'tests\openssh\stop.sh'), $work) (Join-Path $logDir 'openssh-stop.log') (Join-Path $logDir 'openssh-stop.err.log')

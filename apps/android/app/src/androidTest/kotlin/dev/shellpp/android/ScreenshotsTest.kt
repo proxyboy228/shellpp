@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * The prototype's screenshots (plan 3.7): quick connect, the terminal with
+ * The terminal's screenshots (run 13, plan 3.7): the terminal with
  * the keyboard and the extra keys, a selection, the cursor put by a tap
  * with its handle. Runs only with the instrumentation argument
  * `screenshots=<theme>` and the server arguments of [ConnectTest]; the PNGs
@@ -62,12 +62,13 @@ class ScreenshotsTest {
     }
 
     @Test
-    fun theScreensOfThePrototype() {
+    fun theScreensOfTheTerminal() {
         val theme = args.getString("screenshots")
         assumeTrue("screenshots only when asked", theme != null)
         val context = instrumentation.targetContext
 
-        ActivityScenario.launch(MainActivity::class.java).use { shot(theme!!, "quick-connect") }
+        // Sessions need the vault (M1).
+        E2e.ensureUnlocked()
 
         val intent = Intent(context, TerminalActivity::class.java)
             .putExtra(TerminalActivity.EXTRA_ADDRESS, args.getString("sshHost") ?: "10.0.2.2")

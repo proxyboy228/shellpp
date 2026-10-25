@@ -38,8 +38,12 @@ class DeviceKeys(private val context: Context) {
     fun available(): Boolean {
         if (Build.VERSION.SDK_INT < 30) return false
         val manager = context.getSystemService(BiometricManager::class.java) ?: return false
-        return manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
-            BiometricManager.BIOMETRIC_SUCCESS
+        return try {
+            manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+                BiometricManager.BIOMETRIC_SUCCESS
+        } catch (error: SecurityException) {
+            false
+        }
     }
 
     private fun file(account: String) = File(dir, account.replace(Regex("[^A-Za-z0-9-]"), "_") + ".bin")
