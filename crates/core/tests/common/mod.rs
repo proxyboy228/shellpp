@@ -177,6 +177,7 @@ pub fn save(
         .map(|(path, value)| ((*path).to_owned(), value.map(SecretString::from)))
         .collect();
     core.record_save(RecordSaveInput {
+        base: None,
         vault_id,
         record_id,
         record_type,

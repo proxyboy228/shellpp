@@ -315,6 +315,7 @@ impl DevServer {
         secrets.insert("ssh.password".to_owned(), Some(self.password.clone()));
         let view = core
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id,
                 record_id: None,
                 record_type: RecordType::Host,

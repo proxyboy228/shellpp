@@ -28,6 +28,7 @@ use gpui_kit::component::{
     ActiveTheme as _, FocusableExt as _, IconName, Sizable as _, h_flex, v_flex,
 };
 use shellpp_core::CoreError;
+use shellpp_core::service::dto::RecordBase;
 use uuid::Uuid;
 
 use super::autosave::Autosave;
@@ -51,6 +52,9 @@ pub struct GroupPanel {
     state: Entity<AppState>,
     record_id: Option<Uuid>,
     draft: GroupDraft,
+    /// The version the form's fields were read from, updated by each save:
+    /// a save writes only what the form changed against it (D220).
+    origin: Option<RecordBase>,
     errors: FieldErrors,
     dropdown: Option<Dropdown>,
     name: Entity<InputState>,
@@ -99,6 +103,10 @@ impl GroupPanel {
     ) -> Self {
         let group = record_id.and_then(|id| state.read(cx).group(id).cloned());
         let record_id = group.as_ref().map(|group| group.record_id);
+        let origin = group.as_ref().map(|group| RecordBase {
+            revision: group.revision,
+            data: group.data_map(),
+        });
         let draft = match &group {
             Some(group) => GroupDraft::from_group(group),
             None => GroupDraft {
@@ -147,6 +155,7 @@ impl GroupPanel {
             state,
             record_id,
             draft,
+            origin,
             errors: FieldErrors::new(),
             dropdown: None,
             name,
@@ -214,9 +223,13 @@ impl GroupPanel {
         self.read_inputs(cx);
         let record_id = self.record_id;
         let draft = self.draft.clone();
+        let origin = self.origin.clone();
         let report = self.state.update(cx, |state, cx| {
-            state.save_group_draft(record_id, &draft, cx)
+            state.save_group_draft(record_id, &draft, origin.as_ref(), cx)
         });
+        if report.origin.is_some() {
+            self.origin = report.origin;
+        }
         if let Some(group) = report.saved {
             self.record_id = Some(group.record_id);
         }

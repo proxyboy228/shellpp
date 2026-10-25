@@ -121,6 +121,7 @@ fn add_duplicate(state: &Entity<AppState>, cx: &mut gpui::App) {
         Some(secrecy::SecretString::from(password)),
     )]);
     let _ = core.record_save(RecordSaveInput {
+        base: None,
         vault_id: host.vault_id,
         record_id: None,
         record_type: RecordType::Host,

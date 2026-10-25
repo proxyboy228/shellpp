@@ -499,6 +499,7 @@ mod tests {
         assert!(duplicate > generated.record_id);
         let host = core
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id,
                 record_id: None,
                 record_type: RecordType::Host,

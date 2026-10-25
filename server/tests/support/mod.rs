@@ -21,7 +21,8 @@ use serde_json::Value;
 use shellpp_core::platform::OsKind;
 use shellpp_core::platform::memory::MemoryPlatform;
 use shellpp_core::service::dto::{
-    QueryScope, RecordSaveInput, RecordType, RecordView, RecordsQuery, SortMode,
+    QueryScope, RecordBase, RecordRef, RecordSaveInput, RecordType, RecordView, RecordsQuery,
+    SortMode,
 };
 use shellpp_core::service::{SignInInput, SignInOutcome, SyncStatus};
 use shellpp_core::{Core, CoreConfig};
@@ -403,6 +404,7 @@ impl Client {
         let view = self
             .core
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id: self.vault_id(),
                 record_id,
                 record_type,
@@ -411,6 +413,44 @@ impl Client {
             })
             .expect("saved");
         view.record_id()
+    }
+
+    /// The revision and data an editor starts from (`record_get`'s view).
+    pub fn base(&self, record_id: Uuid) -> RecordBase {
+        let view = self
+            .core
+            .record_get(RecordRef {
+                vault_id: self.vault_id(),
+                record_id,
+            })
+            .expect("record");
+        let (revision, data) = match view {
+            RecordView::Host(host) => (host.revision, host.data),
+            RecordView::Group(group) => (group.revision, group.data),
+        };
+        RecordBase {
+            revision,
+            data: data.as_object().cloned().expect("object"),
+        }
+    }
+
+    /// An editor's save (D220): `data` is the editor's form, and only the
+    /// members it changes against `base` are written.
+    pub fn save_from(
+        &self,
+        record_id: Uuid,
+        record_type: RecordType,
+        base: &RecordBase,
+        data: Value,
+    ) -> Result<RecordView, shellpp_core::CoreError> {
+        self.core.record_save(RecordSaveInput {
+            base: Some(base.clone()),
+            vault_id: self.vault_id(),
+            record_id: Some(record_id),
+            record_type,
+            data: data.as_object().cloned().expect("object"),
+            secrets: BTreeMap::new(),
+        })
     }
 
     pub fn host(&self, address: &str) -> Uuid {

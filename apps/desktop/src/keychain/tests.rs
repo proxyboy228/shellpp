@@ -628,6 +628,7 @@ fn remove_names_the_users_of_the_key_and_can_be_undone(cx: &mut TestAppContext) 
             .find(|key| key.label == "Deploy")
             .unwrap();
         core.record_save(shellpp_core::service::dto::RecordSaveInput {
+            base: None,
             vault_id,
             record_id: None,
             record_type: shellpp_core::service::dto::RecordType::Host,

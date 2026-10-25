@@ -12,7 +12,9 @@
 //! [`AppState::save_host_draft`] and [`AppState::save_group_draft`] implement
 //! the rule: client-side checks first, then the core's own validation; a
 //! member the core refuses is put back to its stored value and the save is
-//! retried once.
+//! retried once. A panel saves from the version it started from (its
+//! `origin`, D220): the core writes only the members the form changed, so a
+//! version that arrived meanwhile (a pull) keeps every other member.
 //!
 //! Inheritance ([`AppState::inherited_ssh`]): `port`, `username`,
 //! `identity_id`, `key_id` and `jump_chain` come from the nearest group up the
@@ -28,8 +30,8 @@ pub use shellpp_core::keys::generate::KeyKind;
 pub use shellpp_core::model::identity::PasswordChange;
 use shellpp_core::model::{fields, text};
 use shellpp_core::service::dto::{
-    KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView, RecordRef, RecordSaveInput,
-    RecordType, RecordView, SecretCopyTarget, SecretFieldRef, TagColor,
+    KeyGenerateInput, KeyImportInput, KeyImportResult, KeyView, RecordBase, RecordRef,
+    RecordSaveInput, RecordType, RecordView, SecretCopyTarget, SecretFieldRef, TagColor,
 };
 pub use shellpp_core::service::keychain::IdentityView;
 use shellpp_core::service::keychain::{IdentitySaveInput, KeyCertificateInput, KeyLabelInput};
@@ -910,6 +912,9 @@ pub struct SaveReport<T> {
     pub saved: Option<T>,
     /// Members that were refused (shown under their fields, not written).
     pub errors: FieldErrors,
+    /// The version the form's next save starts from (D220): the stored
+    /// revision and the data this save sent; `None` when nothing was written.
+    pub origin: Option<RecordBase>,
 }
 
 fn errors_from(fields: Vec<FieldError>) -> FieldErrors {
@@ -1031,16 +1036,19 @@ impl AppState {
 
     /// Creates or updates a host with secret members (`ssh.password`,
     /// `ssh.proxy.password`): `Some` sets a value, `None` clears it, a missing
-    /// path keeps the stored value.
+    /// path keeps the stored value. With `base`, only what `data` and
+    /// `secrets` change against it is written (D220).
     pub fn save_host_with_secrets(
         &mut self,
         record_id: Option<Uuid>,
         data: Map<String, Value>,
         secrets: BTreeMap<String, Option<SecretString>>,
+        base: Option<RecordBase>,
         cx: &mut Context<Self>,
     ) -> Result<HostItem, CoreError> {
         let vault_id = self.require_vault()?;
         let view = self.require_core()?.record_save(RecordSaveInput {
+            base,
             vault_id,
             record_id,
             record_type: RecordType::Host,
@@ -1067,12 +1075,14 @@ impl AppState {
 
     /// Saves the host panel form by the saving rule (module docs). `record_id`
     /// `None` creates the host once the address is valid; the new host is
-    /// selected so its card shows as selected (UI 3.2).
+    /// selected so its card shows as selected (UI 3.2). `origin` is the
+    /// version the form started from (the last report's `origin`).
     pub fn save_host_draft(
         &mut self,
         record_id: Option<Uuid>,
         draft: &HostDraft,
         secrets: &HostSecrets,
+        origin: Option<&RecordBase>,
         cx: &mut Context<Self>,
     ) -> SaveReport<HostItem> {
         let mut errors = draft.validate();
@@ -1084,13 +1094,18 @@ impl AppState {
             }
             return SaveReport {
                 saved: None,
+                origin: None,
                 errors,
             };
         }
-        let base = record_id
-            .and_then(|id| self.host(id))
-            .map(HostItem::data_map)
-            .unwrap_or_default();
+        let origin = origin.filter(|_| record_id.is_some());
+        let base = match origin {
+            Some(origin) => origin.data.clone(),
+            None => record_id
+                .and_then(|id| self.host(id))
+                .map(HostItem::data_map)
+                .unwrap_or_default(),
+        };
         let mut data = draft.apply(&base);
         for path in errors.keys() {
             restore_member(&mut data, &base, &member_of(path));
@@ -1119,12 +1134,22 @@ impl AppState {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.save_host_with_secrets(record_id, data.clone(), secrets.clone(), cx) {
+            match self.save_host_with_secrets(
+                record_id,
+                data.clone(),
+                secrets.clone(),
+                origin.cloned(),
+                cx,
+            ) {
                 Ok(host) => {
                     if record_id.is_none() {
                         self.select(host.record_id, SelectMode::Replace, &[], cx);
                     }
                     return SaveReport {
+                        origin: Some(RecordBase {
+                            revision: host.revision,
+                            data,
+                        }),
                         saved: Some(host),
                         errors,
                     };
@@ -1141,6 +1166,7 @@ impl AppState {
                     if attempt >= 2 || (record_id.is_none() && address_refused) {
                         return SaveReport {
                             saved: None,
+                            origin: None,
                             errors,
                         };
                     }
@@ -1149,6 +1175,7 @@ impl AppState {
                     tracing::warn!(code = error.code(), "host not saved");
                     return SaveReport {
                         saved: None,
+                        origin: None,
                         errors,
                     };
                 }
@@ -1422,11 +1449,13 @@ impl AppState {
     }
 
     /// Saves the group panel form by the saving rule. `record_id` `None`
-    /// creates the group once the name is valid.
+    /// creates the group once the name is valid. `origin` is the version the
+    /// form started from (the last report's `origin`).
     pub fn save_group_draft(
         &mut self,
         record_id: Option<Uuid>,
         draft: &GroupDraft,
+        origin: Option<&RecordBase>,
         cx: &mut Context<Self>,
     ) -> SaveReport<GroupItem> {
         let mut errors = draft.validate();
@@ -1436,13 +1465,18 @@ impl AppState {
             }
             return SaveReport {
                 saved: None,
+                origin: None,
                 errors,
             };
         }
-        let base = record_id
-            .and_then(|id| self.group(id))
-            .map(GroupItem::data_map)
-            .unwrap_or_default();
+        let origin = origin.filter(|_| record_id.is_some());
+        let base = match origin {
+            Some(origin) => origin.data.clone(),
+            None => record_id
+                .and_then(|id| self.group(id))
+                .map(GroupItem::data_map)
+                .unwrap_or_default(),
+        };
         let mut data = draft.apply(&base);
         for path in errors.keys() {
             restore_member(&mut data, &base, &member_of(path));
@@ -1450,9 +1484,13 @@ impl AppState {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.save_group(record_id, data.clone(), cx) {
+            match self.save_group_from(record_id, data.clone(), origin.cloned(), cx) {
                 Ok(group) => {
                     return SaveReport {
+                        origin: Some(RecordBase {
+                            revision: group.revision,
+                            data,
+                        }),
                         saved: Some(group),
                         errors,
                     };
@@ -1467,6 +1505,7 @@ impl AppState {
                     if attempt >= 2 || (record_id.is_none() && name_refused) {
                         return SaveReport {
                             saved: None,
+                            origin: None,
                             errors,
                         };
                     }
@@ -1475,6 +1514,7 @@ impl AppState {
                     tracing::warn!(code = error.code(), "group not saved");
                     return SaveReport {
                         saved: None,
+                        origin: None,
                         errors,
                     };
                 }
@@ -1656,8 +1696,13 @@ mod tests {
         let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
         state.update(cx, |state, cx| {
             // Empty address: still a draft, no error shown.
-            let report =
-                state.save_host_draft(None, &HostDraft::default(), &HostSecrets::default(), cx);
+            let report = state.save_host_draft(
+                None,
+                &HostDraft::default(),
+                &HostSecrets::default(),
+                None,
+                cx,
+            );
             assert!(report.saved.is_none());
             assert!(report.errors.is_empty());
             assert!(state.hosts().is_empty());
@@ -1667,7 +1712,7 @@ mod tests {
                 address: "a b".into(),
                 ..HostDraft::default()
             };
-            let report = state.save_host_draft(None, &draft, &HostSecrets::default(), cx);
+            let report = state.save_host_draft(None, &draft, &HostSecrets::default(), None, cx);
             assert!(report.saved.is_none());
             assert_eq!(
                 report.errors.get("address"),
@@ -1678,7 +1723,7 @@ mod tests {
             // Valid address: created and selected.
             draft.address = "192.0.2.10".into();
             draft.label = "Web".into();
-            let report = state.save_host_draft(None, &draft, &HostSecrets::default(), cx);
+            let report = state.save_host_draft(None, &draft, &HostSecrets::default(), None, cx);
             let host = report.saved.expect("created");
             assert_eq!(state.hosts().len(), 1);
             assert!(state.selection().contains(&host.record_id));
@@ -1686,8 +1731,13 @@ mod tests {
             // An invalid port is not written, the valid label change is.
             draft.label = "Web 2".into();
             draft.port = "70000".into();
-            let report =
-                state.save_host_draft(Some(host.record_id), &draft, &HostSecrets::default(), cx);
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                None,
+                cx,
+            );
             assert_eq!(
                 report.errors.get("ssh.port"),
                 Some(&ValidationReason::OutOfRange)
@@ -1699,8 +1749,13 @@ mod tests {
             // The address can never become invalid: the last valid one stays.
             draft.port = "2222".into();
             draft.address = "bad/address".into();
-            let report =
-                state.save_host_draft(Some(host.record_id), &draft, &HostSecrets::default(), cx);
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                None,
+                cx,
+            );
             assert!(report.errors.contains_key("address"));
             let stored = state.host(host.record_id).unwrap();
             assert_eq!(stored.address, "192.0.2.10");
@@ -1715,6 +1770,7 @@ mod tests {
                     password: SecretChange::Set(SecretString::from("hunter2-test")),
                     ..HostSecrets::default()
                 },
+                None,
                 cx,
             );
             assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -1729,10 +1785,93 @@ mod tests {
                     password: SecretChange::Clear,
                     ..HostSecrets::default()
                 },
+                None,
                 cx,
             );
             let stored = state.host(host.record_id).unwrap();
             assert!(stored.secrets_set.is_empty());
+            state.shutdown();
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_panel_save_keeps_what_a_newer_version_changed(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        state.update(cx, |state, cx| {
+            let host = state
+                .save_host(
+                    None,
+                    map(json!({"address": "192.0.2.10", "label": "web", "notes": "first"})),
+                    cx,
+                )
+                .unwrap();
+            // The panel reads the host; a newer version arrives (a pull).
+            let origin = RecordBase {
+                revision: host.revision,
+                data: host.data_map(),
+            };
+            let mut draft = HostDraft::from_host(&host);
+            let mut newer = host.data_map();
+            newer.insert("notes".into(), json!("pulled"));
+            newer.insert("label".into(), json!("pulled label"));
+            state.save_host(Some(host.record_id), newer, cx).unwrap();
+
+            // The panel saves its port: the newer notes and label stay.
+            draft.port = "2200".into();
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                Some(&origin),
+                cx,
+            );
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            let stored = state.host(host.record_id).unwrap();
+            assert_eq!(stored.data["notes"], "pulled");
+            assert_eq!(stored.data["label"], "pulled label");
+            assert_eq!(stored.data["ssh"]["port"], 2200);
+
+            // The next save starts from what this one sent: the old label
+            // the form still shows is not written back.
+            draft.username = "admin".into();
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                report.origin.as_ref(),
+                cx,
+            );
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            let stored = state.host(host.record_id).unwrap();
+            assert_eq!(stored.data["label"], "pulled label");
+            assert_eq!(stored.data["ssh"]["username"], "admin");
+            assert_eq!(stored.data["ssh"]["port"], 2200);
+            state.shutdown();
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_group_panel_save_keeps_a_newer_name(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        state.update(cx, |state, cx| {
+            let group = state
+                .save_group(None, map(json!({"name": "Production"})), cx)
+                .unwrap();
+            let origin = RecordBase {
+                revision: group.revision,
+                data: group.data_map(),
+            };
+            let mut draft = GroupDraft::from_group(&group);
+            let mut newer = group.data_map();
+            newer.insert("name".into(), json!("Renamed elsewhere"));
+            state.save_group(Some(group.record_id), newer, cx).unwrap();
+
+            draft.username = "ops".into();
+            let report = state.save_group_draft(Some(group.record_id), &draft, Some(&origin), cx);
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            let stored = state.group(group.record_id).unwrap();
+            assert_eq!(stored.name, "Renamed elsewhere");
+            assert_eq!(stored.data["ssh"]["username"], "ops");
             state.shutdown();
         });
     }
@@ -1796,14 +1935,14 @@ mod tests {
     fn group_draft_and_tags(cx: &mut TestAppContext) {
         let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
         state.update(cx, |state, cx| {
-            let report = state.save_group_draft(None, &GroupDraft::default(), cx);
+            let report = state.save_group_draft(None, &GroupDraft::default(), None, cx);
             assert!(report.saved.is_none() && report.errors.is_empty());
             let mut draft = GroupDraft {
                 name: "Lab".into(),
                 port: "0".into(),
                 ..GroupDraft::default()
             };
-            let report = state.save_group_draft(None, &draft, cx);
+            let report = state.save_group_draft(None, &draft, None, cx);
             let group = report.saved.expect("created");
             assert_eq!(
                 report.errors.get("ssh.port"),
@@ -1812,7 +1951,7 @@ mod tests {
             // An empty name is refused; the stored name stays.
             draft.name = " ".into();
             draft.port = "22".into();
-            let report = state.save_group_draft(Some(group.record_id), &draft, cx);
+            let report = state.save_group_draft(Some(group.record_id), &draft, None, cx);
             assert_eq!(report.errors.get("name"), Some(&ValidationReason::Required));
             let stored = state.group(group.record_id).unwrap();
             assert_eq!(stored.name, "Lab");

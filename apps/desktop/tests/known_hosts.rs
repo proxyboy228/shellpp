@@ -250,6 +250,7 @@ fn save_host(core: &Core, vault_id: Uuid, addr: SocketAddr, user: &servers::Acco
     secrets.insert("ssh.password".to_owned(), Some(user.secret.clone()));
     match core
         .record_save(RecordSaveInput {
+            base: None,
             vault_id,
             record_id: None,
             record_type: RecordType::Host,

@@ -600,6 +600,7 @@ impl Harness {
         let view = self
             .core
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id: self.vault_id,
                 record_id: None,
                 record_type: RecordType::Host,

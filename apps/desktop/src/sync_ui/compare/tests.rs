@@ -122,6 +122,7 @@ impl Ui {
                     None,
                     map(json!({"address": "192.0.2.10", "label": "web", "ssh": {"port": 22}})),
                     secrets,
+                    None,
                     cx,
                 )
                 .unwrap()

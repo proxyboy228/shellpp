@@ -415,6 +415,7 @@ impl AppState {
                 None => data.remove("group_id"),
             };
             if let Err(error) = core.record_save(RecordSaveInput {
+                base: None,
                 vault_id,
                 record_id: Some(copy.record_id),
                 record_type: RecordType::Host,

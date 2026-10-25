@@ -112,6 +112,7 @@ fn the_owner_sequences_through_the_core() {
     let vault_id = core.vaults().unwrap()[0].vault_id;
     let RecordView::Host(host) = core
         .record_save(RecordSaveInput {
+            base: None,
             vault_id,
             record_id: None,
             record_type: RecordType::Host,

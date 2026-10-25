@@ -250,6 +250,7 @@ fn copy_to_copies_fields_and_secrets(cx: &mut TestAppContext) {
             .core()
             .unwrap()
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id,
                 record_id: None,
                 record_type: RecordType::Host,

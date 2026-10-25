@@ -45,8 +45,8 @@ use secrecy::SecretString;
 use serde_json::{Map, Value};
 use shellpp_core::model::types::RecordKind;
 use shellpp_core::service::dto::{
-    CoreEvent, CoreEventKind, LockState, QueryScope, RecordDeleteResult, RecordMoveInput,
-    RecordRef, RecordSaveInput, RecordType, RecordView, RecordsQuery, RecordsRef,
+    CoreEvent, CoreEventKind, LockState, QueryScope, RecordBase, RecordDeleteResult,
+    RecordMoveInput, RecordRef, RecordSaveInput, RecordType, RecordView, RecordsQuery, RecordsRef,
     RecoveryKeyResult, SortMode, VaultKind,
 };
 use shellpp_core::{Core, CoreError};
@@ -627,7 +627,7 @@ impl AppState {
         data: Map<String, Value>,
         cx: &mut Context<Self>,
     ) -> Result<HostItem, CoreError> {
-        match self.save(record_id, RecordType::Host, data, cx)? {
+        match self.save(record_id, RecordType::Host, data, None, cx)? {
             RecordView::Host(view) => Ok(HostItem::from_view(&view)),
             RecordView::Group(_) => Err(CoreError::NotFound),
         }
@@ -640,7 +640,19 @@ impl AppState {
         data: Map<String, Value>,
         cx: &mut Context<Self>,
     ) -> Result<GroupItem, CoreError> {
-        match self.save(record_id, RecordType::Group, data, cx)? {
+        self.save_group_from(record_id, data, None, cx)
+    }
+
+    /// [`AppState::save_group`]; with `base`, only what `data` changes
+    /// against it is written (D220).
+    pub fn save_group_from(
+        &mut self,
+        record_id: Option<Uuid>,
+        data: Map<String, Value>,
+        base: Option<RecordBase>,
+        cx: &mut Context<Self>,
+    ) -> Result<GroupItem, CoreError> {
+        match self.save(record_id, RecordType::Group, data, base, cx)? {
             RecordView::Group(view) => Ok(GroupItem::from_view(&view)),
             RecordView::Host(_) => Err(CoreError::NotFound),
         }
@@ -651,10 +663,12 @@ impl AppState {
         record_id: Option<Uuid>,
         record_type: RecordType,
         data: Map<String, Value>,
+        base: Option<RecordBase>,
         cx: &mut Context<Self>,
     ) -> Result<RecordView, CoreError> {
         let vault_id = self.require_vault()?;
         let view = self.require_core()?.record_save(RecordSaveInput {
+            base,
             vault_id,
             record_id,
             record_type,

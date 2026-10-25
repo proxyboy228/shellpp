@@ -173,6 +173,7 @@ impl Screen {
         let vault_id = self.vault(cx);
         self.core(cx)
             .record_save(RecordSaveInput {
+                base: None,
                 vault_id,
                 record_id: None,
                 record_type,

@@ -93,7 +93,7 @@ async fn saved_data_is_encrypted_and_reopens_with_the_password(cx: &mut TestAppC
             password: SecretChange::Set(SecretString::from(secret.clone())),
             ..Default::default()
         };
-        let report = state.save_host_draft(None, &draft, &secrets, cx);
+        let report = state.save_host_draft(None, &draft, &secrets, None, cx);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         (group, report.saved.expect("host").record_id)
     });

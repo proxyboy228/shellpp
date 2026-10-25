@@ -57,6 +57,7 @@ use gpui_kit::component::{
     ActiveTheme as _, FocusableExt as _, IconName, Sizable as _, h_flex, v_flex,
 };
 use secrecy::{ExposeSecret as _, SecretString};
+use shellpp_core::service::dto::RecordBase;
 use uuid::Uuid;
 
 use self::credentials::Credentials;
@@ -100,6 +101,9 @@ pub struct HostPanel {
     /// `None` while the new host is a draft.
     record_id: Option<Uuid>,
     draft: HostDraft,
+    /// The version the form's fields were read from, updated by each save:
+    /// a save writes only what the form changed against it (D220).
+    origin: Option<RecordBase>,
     errors: FieldErrors,
     /// The stored host has a password (`ssh.password`).
     password_stored: bool,
@@ -177,6 +181,10 @@ impl HostPanel {
     ) -> Self {
         let host = record_id.and_then(|id| state.read(cx).host(id).cloned());
         let record_id = host.as_ref().map(|host| host.record_id);
+        let origin = host.as_ref().map(|host| RecordBase {
+            revision: host.revision,
+            data: host.data_map(),
+        });
         let draft = match &host {
             Some(host) => HostDraft::from_host(host),
             None => HostDraft {
@@ -246,6 +254,7 @@ impl HostPanel {
             state: state.clone(),
             record_id,
             draft,
+            origin,
             errors: FieldErrors::new(),
             password_stored,
             password_dirty: false,
@@ -458,9 +467,13 @@ impl HostPanel {
         let secrets = self.secrets(cx);
         let record_id = self.record_id;
         let draft = self.draft.clone();
+        let origin = self.origin.clone();
         let report = self.state.update(cx, |state, cx| {
-            state.save_host_draft(record_id, &draft, &secrets, cx)
+            state.save_host_draft(record_id, &draft, &secrets, origin.as_ref(), cx)
         });
+        if report.origin.is_some() {
+            self.origin = report.origin;
+        }
         if let Some(host) = report.saved {
             if self.record_id.is_none() {
                 tracing::info!("host created from the panel");

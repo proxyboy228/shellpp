@@ -125,7 +125,7 @@ impl Ui {
         let secrets = BTreeMap::from([("ssh.password".to_owned(), Some(password.clone()))]);
         self.state.update(cx, |state, cx| {
             state
-                .save_host_with_secrets(None, data, secrets, cx)
+                .save_host_with_secrets(None, data, secrets, None, cx)
                 .expect("host saved")
                 .record_id
         })

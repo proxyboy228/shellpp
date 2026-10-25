@@ -315,6 +315,7 @@ fn forwarding_cards_show_the_badge(cx: &mut TestAppContext) {
                 None,
                 map(json!({"address": "192.0.2.10", "label": "web"})),
                 Default::default(),
+                None,
                 cx,
             )
             .unwrap()

@@ -94,7 +94,7 @@ fn undo_brings_a_removed_host_back(cx: &mut TestAppContext) {
             ..Default::default()
         };
         let id = state
-            .save_host_draft(None, &draft, &secrets, cx)
+            .save_host_draft(None, &draft, &secrets, None, cx)
             .saved
             .expect("host")
             .record_id;

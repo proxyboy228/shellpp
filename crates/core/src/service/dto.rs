@@ -412,6 +412,13 @@ pub struct RecordSaveInput {
     /// it, a missing path keeps the stored value.
     #[serde(default)]
     pub secrets: BTreeMap<String, Option<SecretString>>,
+    /// The version an editor started from (D220). With it only the members
+    /// `data` and `secrets` change against `base` are written, onto the
+    /// stored record as it is now: a version that arrived meanwhile keeps
+    /// every other member, and one that changed the same members is kept as a
+    /// conflict copy (data-model 2.1). `None` writes `data` whole.
+    #[serde(default)]
+    pub base: Option<RecordBase>,
 }
 
 impl fmt::Debug for RecordSaveInput {
@@ -421,6 +428,26 @@ impl fmt::Debug for RecordSaveInput {
             .field("record_id", &self.record_id)
             .field("type", &self.record_type)
             .field("secret_paths", &self.secrets.keys().collect::<Vec<_>>())
+            .field(
+                "base_revision",
+                &self.base.as_ref().map(|base| base.revision),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// The view an edit started from: its `revision` and `data` (secret members
+/// left out, as in the view).
+#[derive(Clone, Deserialize)]
+pub struct RecordBase {
+    pub revision: u64,
+    pub data: Map<String, Value>,
+}
+
+impl fmt::Debug for RecordBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecordBase")
+            .field("revision", &self.revision)
             .finish_non_exhaustive()
     }
 }

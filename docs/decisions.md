@@ -2577,3 +2577,25 @@ Status: run 15 (plan, section 2; the plan and `docs/mobile/reference-2.md` call 
 - **Settings** follow the structure of `reference-1.md` 4, with only the rows whose setting works; volume keys and shake come after the first version.
 
 **Spec impact:** `docs/mobile/ui-spec.md` (rewritten for layout and navigation), `docs/mobile/reference-1.md` and `reference-2.md` (added), the specifications of the service API for the partial update, ROADMAP 3.1.
+
+
+### 221. The partial update in the core: how an editor's save keeps a version that arrived meanwhile (run 15)
+
+Status: run 15 (plan, section 3.1); `crates/core/src/model/partial.rs`, `crates/core/src/service/records.rs`, the desktop's host and group panels.
+
+**Context.** An editor read a record and wrote its whole form back, so a version that a pull brought between the read and the write lost the fields nobody touched (D219, left from run 14); on the desktop, whose panels stay open and keep showing what they read, the window was the whole time a panel is open. The owner asked for a write of the changed fields only, in one transaction, checked against the revision the edit started from, with the desktop on the same path (D220).
+
+**Decision:**
+
+- `record_save` takes an optional `base`: the revision and the data of the view the edit started from. With it, the core builds the form as before (validation and normalization, so an empty field and a missing one, or a port typed as text, compare as equal), compares the result with `base` member by member (objects down to their members; strings, numbers and arrays whole; `null` = missing), and writes only the changed members onto the record as it is now, in one transaction under the core's lock. Without `base` the save writes `data` whole, as imports, duplicates and moves do.
+- A member both sides changed to different values goes to the edit, which is the newer version; the version it overwrites is kept whole as a conflict copy, written in the same transaction, so a sync conflict and an editor's save keep data the same way (data-model 15).
+- Secrets are not in the view, so the core cannot tell whether a newer version changed a secret too: a secret the edit replaces after the revision moved on keeps that version as a copy (never a loss; a copy too many when the newer version did not touch the secret) [decision].
+- A record a pull deleted meanwhile comes back with the edit, from its last live data in Recently deleted, and the deletion is kept as a copy (`losing_deleted`), as sync-protocol 6.7 lets the newer version win. A vault never bound deletes a record without a tombstone row (storage-format 4.6): there the save is `not_found`, as before.
+- A save that changes nothing writes no version (no revision, no sync).
+- The desktop's host and group panels keep the version they read (`origin`); each save starts from it and moves it to the stored revision and the data it sent, so values a panel still shows from before a pull are never written back. The panels still do not refresh their fields from a pull (no change of the desktop's behaviour beyond the save, plan 1.11).
+- The phone's editors save the same way; they are rebuilt in 3.2 and use `base` from there (the editor of run 14 merged in Kotlin with a read and a write, the window D219 described).
+- Not covered: the Keychain's identity editor saves through `identity_save`, which still writes its form whole (label, username, password, key); key labels are written as one field.
+
+**Tested:** the change and conflict rules (`model::partial`), the core's save on a newer version in other members, in the same member, the same value, cleared members, nothing changed, secrets with and without a newer version, a group's parent and name, an invalid edit, a record deleted without a trace (`crates/core/tests/partial_save.rs`); through the server, a pull between the read and the save in other members, in the same member (a copy on both devices) and a pulled deletion (`server/tests/partial_save.rs`); the property "data is never lost" with editors that stay open across steps and pulls (`server/tests/property.rs`), 40 seeds × 500 steps green; the desktop's panels (`state::records_edit`). With the old whole write both server tests and the property fail.
+
+**Spec impact:** data-model 2.1 and 15, UI 1.3 (EN and RU).

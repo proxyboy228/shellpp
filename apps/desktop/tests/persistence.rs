@@ -182,7 +182,7 @@ fn everything_saved_survives_a_restart(cx: &mut TestAppContext) {
         proxy_password: SecretChange::Set(SecretString::from(proxy_password.clone())),
     };
     let full = ui.state.update(cx, |state, cx| {
-        let report = state.save_host_draft(None, &draft, &secrets, cx);
+        let report = state.save_host_draft(None, &draft, &secrets, None, cx);
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         report.saved.expect("the host was created").record_id
     });

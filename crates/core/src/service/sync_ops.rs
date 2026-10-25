@@ -721,14 +721,14 @@ pub(super) fn selection(store: &Store) -> Selection {
 }
 
 /// The payload of any row of the ring's vault, live or not, of any type.
-fn open_payload(ring: &mut KeyRing, row: &RecordRow) -> Option<Payload> {
+pub(super) fn open_payload(ring: &mut KeyRing, row: &RecordRow) -> Option<Payload> {
     let record_key = ring.record_key(row.key_epoch)?;
     let (_, bytes) = crypto::open_envelope(record_key, &row.envelope).ok()?;
     Payload::from_json_bytes(&bytes).ok()
 }
 
 /// The payload of a stored envelope (Recently deleted).
-fn open_envelope_payload(ring: &mut KeyRing, bytes: &[u8]) -> Option<Payload> {
+pub(super) fn open_envelope_payload(ring: &mut KeyRing, bytes: &[u8]) -> Option<Payload> {
     let header = envelope::split(bytes).ok()?.header;
     let record_key = ring.record_key(header.key_epoch)?;
     let (_, plain) = crypto::open_envelope(record_key, bytes).ok()?;
@@ -5669,6 +5669,7 @@ mod tests {
         use crate::service::dto::{RecordSaveInput, RecordType};
         let vault_id = core.vaults().unwrap()[0].vault_id;
         core.record_save(RecordSaveInput {
+            base: None,
             vault_id,
             record_id: None,
             record_type: RecordType::Host,
@@ -6214,6 +6215,7 @@ mod tests {
         }
         let vault_id = core.vaults().unwrap()[0].vault_id;
         core.record_save(crate::service::dto::RecordSaveInput {
+            base: None,
             vault_id,
             record_id: Some(host),
             record_type: crate::service::dto::RecordType::Host,
@@ -6307,6 +6309,7 @@ mod tests {
         }
         let vault_id = core.vaults().unwrap()[0].vault_id;
         core.record_save(crate::service::dto::RecordSaveInput {
+            base: None,
             vault_id,
             record_id: Some(host),
             record_type: crate::service::dto::RecordType::Host,
@@ -6483,6 +6486,7 @@ mod tests {
         crate::store::fail_open::next(0);
         assert_eq!(core.lock_status().state, LockState::Locked);
         let saved = core.record_save(crate::service::dto::RecordSaveInput {
+            base: None,
             vault_id,
             record_id: None,
             record_type: crate::service::dto::RecordType::Host,

@@ -29,6 +29,7 @@ pub mod key;
 pub mod known_host;
 pub mod merge;
 pub mod order_key;
+pub mod partial;
 pub mod payload;
 pub mod snippet;
 pub mod text;

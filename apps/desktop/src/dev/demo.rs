@@ -182,6 +182,7 @@ fn save(
         _ => Map::new(),
     };
     let view = core.record_save(RecordSaveInput {
+        base: None,
         vault_id,
         record_id: None,
         record_type,

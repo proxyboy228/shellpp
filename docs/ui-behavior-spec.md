@@ -135,6 +135,9 @@
   - after that, changes are saved automatically; there is no save button;
   - an invalid value is highlighted, with the reason under the field, and is not saved. The
     last valid value stays in effect;
+  - the host and group panels write only the fields the user changed (data-model 2.1,
+    D221): a change that sync brings in while the panel is open keeps every field the user
+    did not touch, and a value the user's edit overwrites is kept as a conflict copy (13.6);
   - wizards with an explicit "Create" button (8.3), the Keychain's forms that add a
     key (New key and Generate key, 7.3, D33) and the snippet panel (9.3) are the only
     exceptions.
