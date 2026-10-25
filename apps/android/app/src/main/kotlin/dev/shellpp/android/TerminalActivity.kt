@@ -81,9 +81,15 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
     private val altKey = StickyModifier()
     private var cursorOn by mutableStateOf(false)
     private var hostPassword by mutableStateOf(false)
-    private var confirmingPassword by mutableStateOf(false)
-    private var attachFolder by mutableStateOf<Pair<Long, String>?>(null)
+    /** The session whose saved password the open confirmation is for. */
+    private var confirmingPassword by mutableStateOf<Long?>(null)
+
+    /** The upload's SFTP session, its home folder and the host it goes to. */
+    private var attachFolder by mutableStateOf<Triple<Long, String, String>?>(null)
     private var attachUris: List<Uri> = emptyList()
+
+    /** The terminal session the attach key was pressed on (the picker's answer goes there). */
+    private var attachFor = 0L
     private var keyGroups by mutableStateOf(listOf<List<XKey>>())
 
     /** Hosts still to open (several selected hosts connect one after another). */
@@ -172,6 +178,13 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             show(kept)
             return
         }
+        // Recreated after the intent was handled (an SFTP or a terminal still
+        // opening then): the sessions are in App; nothing opens twice.
+        if (savedInstanceState?.getBoolean(STATE_HANDLED) == true) {
+            permissionsSettled = true
+            app.sessions.maxOrNull()?.let(::show) ?: finish()
+            return
+        }
         // The notification of the foreground service (Android 13+) and, from
         // Android 17, the local network (a server at home, 10.x or 192.168.x):
         // asked before a session opens, which waits for the answer.
@@ -189,6 +202,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handle(intent)
     }
 
@@ -237,6 +251,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         if (active != 0L) outState.putLong(STATE_SESSION, active)
+        outState.putBoolean(STATE_HANDLED, true)
     }
 
     // ----- sessions --------------------------------------------------------
@@ -318,6 +333,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             }
         }
         active = id
+        openingSftp = null
         app.activeSessionId.value = id
         showView(view)
         view.cursorPad = cursorOn
@@ -539,33 +555,45 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
                 ExtraKeysRow(keyGroups, colors, this@TerminalActivity, modifiersVersion, password = hostPassword, attach = saved)
             }
         }
-        if (confirmingPassword) PasswordConfirm()
-        attachFolder?.let { (session, home) -> AttachDialog(session, home) }
+        confirmingPassword?.let { session ->
+            // Another session came to the front: the confirmation goes, it
+            // never sends to a session it did not name (review of 3.3).
+            if (session != active) confirmingPassword = null else PasswordConfirm(session)
+        }
+        attachFolder?.let { (session, home, host) -> AttachDialog(session, home, host) }
     }
 
     /** "+" → Connect: a new session to the host of the active one (reference-2 7.6). */
     private fun connectAgain() {
         val view = app.sessionViews.value[active] ?: return
         val recordId = view.optString("recordId").ifBlank { null }
-        val vaultId = recordVault()
-        if (recordId != null && vaultId != null) {
+        if (recordId == null) {
+            Toast.makeText(this, R.string.connect_again_saved_only, Toast.LENGTH_LONG).show()
+            return
+        }
+        withVault { vaultId ->
             queue.addLast(Target(vaultId, recordId, "", 22, "", view.optString("title")))
             openNext()
-        } else {
-            Toast.makeText(this, R.string.connect_again_saved_only, Toast.LENGTH_LONG).show()
         }
+    }
+
+    /** The vault's id, read off the main thread, then [then] on it. */
+    private fun withVault(then: (String) -> Unit) {
+        Thread({
+            val vault = recordVault()
+            runOnUiThread { if (vault != null && !isFinishing) then(vault) }
+        }, "vault-id").start()
     }
 
     /** "+" → Connect via SFTP: a new SFTP session; the terminal session stays (D220). */
     private fun sftpAgain() {
         val view = app.sessionViews.value[active] ?: return
         val recordId = view.optString("recordId").ifBlank { null }
-        val vaultId = recordVault()
-        if (recordId != null && vaultId != null) {
-            openSftp(vaultId, recordId, view.optString("title"))
-        } else {
+        if (recordId == null) {
             Toast.makeText(this, R.string.connect_again_saved_only, Toast.LENGTH_LONG).show()
+            return
         }
+        withVault { vaultId -> openSftp(vaultId, recordId, view.optString("title")) }
     }
 
     private fun recordVault(): String? = runCatching { Core.array("vaults").getJSONObject(0).getString("vault_id") }.getOrNull()
@@ -585,15 +613,22 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
     override val altState: StickyModifier.State get() = altKey.state
     override val cursorMode: Boolean get() = cursorOn
 
-    override fun key(key: XKey) {
-        val view = views[active] ?: return
+    override fun target(): Long = active
+
+    override fun key(key: XKey, session: Long) {
+        // The session switched since the press: nothing goes to another one.
+        if (session != active) return
+        val view = views[session] ?: return
         when (key) {
-            XKey.Password -> if (hostPassword) confirmingPassword = true
+            XKey.Password -> if (hostPassword) confirmingPassword = session
             XKey.Cursor -> {
                 cursorOn = !cursorOn
                 view.cursorPad = cursorOn
             }
-            XKey.Attach -> pickFiles.launch(arrayOf("*/*"))
+            XKey.Attach -> {
+                attachFor = session
+                pickFiles.launch(arrayOf("*/*"))
+            }
             XKey.Ctrl -> {
                 ctrlKey.tap(System.currentTimeMillis())
                 modifiersVersion += 1
@@ -604,18 +639,18 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             }
             is XKey.Code -> view.sendKey(key.code)
             is XKey.Text -> repeat(key.times) { view.sendText(key.text, ctrl = key.ctrl) }
-            is XKey.Sequence -> key.steps.forEach { view.sendText(it.text, ctrl = it.ctrl) }
+            // A tmux prefix sequence as it is, without the armed Ctrl or Alt.
+            is XKey.Sequence -> key.steps.forEach { view.sendText(it.text, ctrl = it.ctrl, raw = true) }
         }
         modifiersVersion += 1
     }
 
     /** The password key works only when the host has a saved password (D220). */
     private fun refreshPassword() {
-        val recordId = app.sessionViews.value[active]?.optString("recordId")?.ifBlank { null }
-        if (recordId == null) {
-            hostPassword = false
-            return
-        }
+        val session = active
+        val recordId = app.sessionViews.value[session]?.optString("recordId")?.ifBlank { null }
+        hostPassword = false
+        if (recordId == null) return
         worker.execute {
             val has = runCatching {
                 val vault = recordVault() ?: return@runCatching false
@@ -623,7 +658,8 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
                 val set = view.optJSONArray("secrets_set")
                 set != null && (0 until set.length()).any { set.optString(it) == "ssh.password" }
             }.getOrDefault(false)
-            runOnUiThread { hostPassword = has }
+            // An answer for a session no longer in front changes nothing.
+            runOnUiThread { if (active == session) hostPassword = has }
         }
     }
 
@@ -633,25 +669,39 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
      * straight to the session ([Native.sendPassword]).
      */
     @Composable
-    private fun PasswordConfirm() {
-        val session = active
+    private fun PasswordConfirm(session: Long) {
         val view = app.sessionViews.value[session]
         val title = view?.optString("title") ?: ""
         ComposeAlertDialog(
-            onDismissRequest = { confirmingPassword = false },
+            onDismissRequest = { confirmingPassword = null },
             title = { Text(getString(R.string.send_password_title)) },
             text = { Text(getString(R.string.send_password_text, title)) },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmingPassword = false
+                    confirmingPassword = null
                     val recordId = view?.optString("recordId")?.ifBlank { null } ?: return@TextButton
-                    worker.execute {
-                        val vault = recordVault() ?: return@execute
-                        runCatching { Native.sendPassword(session, vault, recordId) }
-                    }
+                    // A thread of its own: never queued behind other work, so
+                    // it goes right after the tap or not at all.
+                    Thread({
+                        val vault = recordVault() ?: return@Thread
+                        val answer = runCatching { Native.sendPassword(session, vault, recordId) }.getOrDefault(Native.PASSWORD_FAILED)
+                        if (answer != Native.PASSWORD_SENT) {
+                            runOnUiThread {
+                                Toast.makeText(
+                                    this,
+                                    when (answer) {
+                                        Native.PASSWORD_RECORDED -> R.string.password_not_sent_recorded
+                                        Native.PASSWORD_CONTROL -> R.string.password_not_sent_control
+                                        else -> R.string.password_not_sent
+                                    },
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    }, "password-key").start()
                 }, modifier = Modifier.testTag("password_send")) { Text(getString(R.string.send)) }
             },
-            dismissButton = { TextButton(onClick = { confirmingPassword = false }) { Text(getString(R.string.cancel)) } },
+            dismissButton = { TextButton(onClick = { confirmingPassword = null }) { Text(getString(R.string.cancel)) } },
         )
     }
 
@@ -662,13 +712,22 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
      * shows the transfers); the shell's current folder is not guessed.
      */
     private fun startAttach(uris: List<Uri>) {
-        val terminalSession = active
-        val view = app.sessionViews.value[terminalSession] ?: return
-        val recordId = view.optString("recordId").ifBlank { null } ?: return
+        // The session the key was pressed on, not the one in front now
+        // (another may have come up while the picker was open).
+        val terminalSession = attachFor
+        attachFor = 0L
+        val view = app.sessionViews.value[terminalSession]
+        val recordId = view?.optString("recordId")?.ifBlank { null }
+        if (view == null || recordId == null || terminalSession !in app.sessions) {
+            Toast.makeText(this, R.string.attach_session_gone, Toast.LENGTH_LONG).show()
+            return
+        }
         attachUris = uris
+        val host = view.optString("title")
         Toast.makeText(this, R.string.attach_connecting, Toast.LENGTH_SHORT).show()
-        worker.execute {
-            val vault = recordVault() ?: return@execute
+        // A thread of its own: the wait below never holds up other work.
+        Thread({
+            val vault = recordVault() ?: return@Thread
             // An SFTP session to this host that is open already, else a new one.
             val existing = app.sessionViews.value.values.firstOrNull {
                 it.optLong("id") in app.sftpSessions && it.optString("recordId") == recordId && it.optString("state") == "connected"
@@ -680,31 +739,46 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             }
             if (sftp == 0L) {
                 runOnUiThread { Toast.makeText(this, R.string.attach_failed, Toast.LENGTH_LONG).show() }
-                return@execute
+                return@Thread
             }
             val deadline = System.currentTimeMillis() + 30_000
+            var connected = false
             while (System.currentTimeMillis() < deadline) {
                 val state = app.sessionViews.value[sftp]
-                if (state?.optString("state") == "connected") break
+                if (state?.optString("state") == "connected") {
+                    connected = true
+                    break
+                }
                 if (state?.optJSONObject("prompt") != null || state?.optString("state") == "closed") {
-                    // It asks something (or failed): its screen answers.
-                    runOnUiThread { show(sftp) }
-                    return@execute
+                    // It asks something (or failed): its screen answers, and
+                    // the files wait for the attach key again.
+                    runOnUiThread {
+                        show(sftp)
+                        Toast.makeText(this, R.string.attach_answer_first, Toast.LENGTH_LONG).show()
+                    }
+                    return@Thread
                 }
                 Thread.sleep(200)
             }
-            val home = runCatching { Core.answer(Native.sftpCall(sftp, "home", "{}")) as String }.getOrDefault("/")
-            runOnUiThread { attachFolder = sftp to home }
-        }
+            if (!connected) {
+                runOnUiThread { Toast.makeText(this, R.string.attach_failed, Toast.LENGTH_LONG).show() }
+                return@Thread
+            }
+            val home = runCatching { Core.answer(Native.sftpCall(sftp, "home", "{}")) as String }.getOrNull()
+            runOnUiThread {
+                if (home == null) Toast.makeText(this, R.string.attach_failed, Toast.LENGTH_LONG).show() else attachFolder = Triple(sftp, home, host)
+            }
+        }, "attach").start()
     }
 
     @Composable
-    private fun AttachDialog(session: Long, home: String) {
+    private fun AttachDialog(session: Long, home: String, host: String) {
         var folder by remember { mutableStateOf(home) }
         val count = attachUris.size
         ComposeAlertDialog(
             onDismissRequest = { attachFolder = null },
-            title = { Text(resources.getQuantityString(R.plurals.attach_title, count, count)) },
+            // The host is named: the files go to its server (review of 3.3).
+            title = { Text(resources.getQuantityString(R.plurals.attach_title, count, count, host)) },
             text = {
                 OutlinedTextField(folder, { folder = it }, label = { Text(getString(R.string.attach_folder)) }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("attach_folder"))
             },
@@ -793,6 +867,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         const val EXTRA_TEST_PASSWORD = "test.password"
         private const val PERMISSIONS = 1
         private const val STATE_SESSION = "session"
+        private const val STATE_HANDLED = "handled"
         const val EXTRA_TEST_ACCEPT_HOST_KEY = "test.acceptHostKey"
         const val ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
     }

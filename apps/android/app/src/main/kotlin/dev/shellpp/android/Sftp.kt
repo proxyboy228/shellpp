@@ -178,6 +178,8 @@ fun SftpScreen(
 
     fun load(to: String) {
         if (session == 0L) return
+        // A selection belongs to its folder (review of 3.3).
+        selected = emptySet()
         loading = true
         scope.launch {
             val listed = withContext(Dispatchers.IO) {
@@ -553,12 +555,14 @@ fun SftpScreen(
                 TextButton(onClick = {
                     deleting = null
                     selected = emptySet()
+                    // The folder they were chosen in, whatever is shown meanwhile.
+                    val folder = path
                     scope.launch {
                         listError = withContext(Dispatchers.IO) {
                             var failure: String? = null
                             for (entry in chosen) {
                                 try {
-                                    sftp(session, "remove", JSONObject().put("path", remoteJoin(path, entry.optString("name"))).put("dir", entry.optBoolean("dir")))
+                                    sftp(session, "remove", JSONObject().put("path", remoteJoin(folder, entry.optString("name"))).put("dir", entry.optBoolean("dir")))
                                 } catch (error: CoreException) {
                                     failure = error.message
                                 } catch (error: Exception) {
@@ -567,7 +571,7 @@ fun SftpScreen(
                             }
                             failure
                         }
-                        load(path)
+                        load(folder)
                     }
                 }, modifier = Modifier.testTag("sftp_delete_confirm")) { Text("Delete", color = Tokens.danger) }
             },

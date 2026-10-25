@@ -414,12 +414,13 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         worker.execute { runCatching { Native.key(session, code, withCtrl, withAlt) } }
     }
 
-    fun sendText(text: String, ctrl: Boolean = false, alt: Boolean = false) {
+    /** [raw]: as it is, without the armed Ctrl and Alt (a tmux sequence). */
+    fun sendText(text: String, ctrl: Boolean = false, alt: Boolean = false, raw: Boolean = false) {
         if (session == 0L || text.isEmpty()) return
         (context.applicationContext as? App)?.noteActivity()
-        val withCtrl = ctrl || modifiers.ctrl
-        val withAlt = alt || modifiers.alt
-        modifiers.consume()
+        val withCtrl = ctrl || (!raw && modifiers.ctrl)
+        val withAlt = alt || (!raw && modifiers.alt)
+        if (!raw) modifiers.consume()
         if (selection != null) clearSelection()
         if (worker.isShutdown) return
         worker.execute { runCatching { Native.text(session, text, withCtrl, withAlt) } }
@@ -585,6 +586,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     private var padStartY = 0f
     private var padMoved = false
 
+    /** A second finger came down in this gesture: a pinch, no arrows until all fingers are up. */
+    private var padPinch = false
+
     /**
      * The cursor key's drag: every [step] of the finger sends one arrow key
      * the way it moved. A tap still puts the cursor; a drag never does.
@@ -596,6 +600,19 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             3 -> 0.6f
             else -> 1f
         }
+        if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN || (event.pointerCount > 1 && !padPinch)) {
+            // Two fingers: a pinch (scale), and no tap afterwards.
+            padPinch = true
+            padMoved = true
+            val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+            gestures.onTouchEvent(cancel)
+            cancel.recycle()
+        }
+        if (padPinch) {
+            scale.onTouchEvent(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) padPinch = false
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 padStartX = event.x
@@ -603,6 +620,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                 padRestX = 0f
                 padRestY = 0f
                 padMoved = false
+                padPinch = false
                 gestures.onTouchEvent(event)
                 return true
             }
@@ -667,25 +685,16 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         actionMode?.finish()
         actionMode = startActionMode(object : ActionMode.Callback2() {
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-                // The platform's own floating bar and words (reference-2 11.1).
-                menu.add(0, COPY, 0, android.R.string.copy)
-                menu.add(0, PASTE, 1, android.R.string.paste)
-                menu.add(0, SELECT_SCREEN, 2, android.R.string.selectAll)
-                // What really deletes on the server (UI spec 9.6): nano's own
-                // cut where its shortcut rows show, Backspaces on the line
-                // being typed; never in the scrollback.
-                val s = screen
-                val sel = selection
-                if (s != null && sel != null && s.scrollOffset == 0) {
-                    if (isNano(s)) menu.add(0, CUT_NANO, 3, R.string.cut_in_nano)
-                    if (!s.alternateScreen && sel.start.row == sel.end.row && sel.start.row == s.cursorRow) {
-                        menu.add(0, DELETE_LINE, 4, R.string.delete_selection)
-                    }
-                }
+                fillMenu(menu)
                 return true
             }
 
-            override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = false
+            // Built again whenever the selection changes (Select all).
+            override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+                menu.clear()
+                fillMenu(menu)
+                return true
+            }
 
             override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
                 val s = screen ?: return false
@@ -709,6 +718,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                     }
                     SELECT_SCREEN -> {
                         selection = Selection.all(s)
+                        mode.invalidate()
                         mode.invalidateContentRect()
                         invalidate()
                     }
@@ -729,6 +739,29 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             }
         }, ActionMode.TYPE_FLOATING)
     }
+
+    /**
+     * The selection toolbar: the platform's own Copy, Paste, Select all
+     * (reference-2 11.1), and what really deletes on the server (UI spec
+     * 9.6): nano's own cut where its shortcut rows show and it does not take
+     * the mouse (a click is not a walk that can be checked), Backspaces on
+     * the line being typed; never in the scrollback.
+     */
+    private fun fillMenu(menu: Menu) {
+        menu.add(0, COPY, 0, android.R.string.copy)
+        menu.add(0, PASTE, 1, android.R.string.paste)
+        menu.add(0, SELECT_SCREEN, 2, android.R.string.selectAll)
+        val s = screen ?: return
+        val sel = selection ?: return
+        if (s.scrollOffset != 0) return
+        if (isNano(s) && !s.mouse && !isWholeScreen(sel, s)) menu.add(0, CUT_NANO, 3, R.string.cut_in_nano)
+        if (!s.alternateScreen && sel.start.row == sel.end.row && sel.start.row == s.cursorRow) {
+            menu.add(0, DELETE_LINE, 4, R.string.delete_selection)
+        }
+    }
+
+    private fun isWholeScreen(sel: Selection, s: Screen): Boolean =
+        sel.start == Cell(0, 0) && sel.end == Cell(s.cols - 1, s.rows - 1)
 
     /** nano's shortcut rows on the last two rows (`^G` and `^X`). */
     private fun isNano(s: Screen): Boolean {
@@ -775,7 +808,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     private fun deleteOnLine(sel: Selection) {
         if (worker.isShutdown) return
         val id = session
-        val count = sel.end.col - sel.start.col + 1
+        val s = screen ?: return
+        val count = (sel.start.col..sel.end.col).count { col -> s.cellText(col, sel.start.row).isNotEmpty() }
         worker.execute {
             runCatching {
                 if (!Native.putCursor(id, sel.end.col + 1, sel.end.row)) {

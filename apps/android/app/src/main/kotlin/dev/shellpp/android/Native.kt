@@ -51,8 +51,17 @@ object Native {
     @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun text(session: Long, text: String, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun paste(session: Long, text: String)
-    /** Types the host's saved password into [session] once, without Enter; false without one (D220). */
-    @JvmStatic external fun sendPassword(session: Long, vaultId: String, recordId: String): Boolean
+    /**
+     * Types the host's saved password into [session] once, without Enter
+     * (D220): [PASSWORD_SENT], or why not.
+     */
+    @JvmStatic external fun sendPassword(session: Long, vaultId: String, recordId: String): Int
+
+    const val PASSWORD_SENT = 0
+    const val PASSWORD_NONE = 1
+    const val PASSWORD_RECORDED = 2
+    const val PASSWORD_CONTROL = 3
+    const val PASSWORD_FAILED = 4
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
     @JvmStatic external fun snapshot(session: Long): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean

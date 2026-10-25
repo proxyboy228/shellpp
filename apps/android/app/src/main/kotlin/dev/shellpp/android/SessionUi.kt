@@ -5,9 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -93,9 +93,18 @@ fun SessionBar(
     ) {
         SquareButton(Icons.AutoMirrored.Filled.ArrowBack, "Back to the lists", "session_back", colors, onBack)
         Spacer(Modifier.width(8.dp))
-        LazyRow(Modifier.weight(1f), state = strip, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(sessions, key = { it.id }) { session ->
-                SessionChip(session, session.id == active, colors, onSwitch = { onSwitch(session.id) }, onClose = { onClose(session.id) })
+        BoxWithConstraints(Modifier.weight(1f)) {
+            // The active chip fits the strip, so its x is always in view.
+            val widest = maxWidth
+            // 16 dp between chips: a tap that misses the next chip does not
+            // land on the active chip's x (D220).
+            LazyRow(Modifier.fillMaxWidth(), state = strip, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                items(sessions, key = { it.id }) { session ->
+                    SessionChip(
+                        session, session.id == active, colors, widest, closable = !plus,
+                        onSwitch = { onSwitch(session.id) }, onClose = { onClose(session.id) },
+                    )
+                }
             }
         }
         // Set apart from the chip's ×, so that a miss does not close a session.
@@ -129,13 +138,21 @@ private fun SquareButton(icon: ImageVector, description: String, tag: String, co
 
 /** A chip of the strip: the active one in full with its ×, the others faded, a tap switches. */
 @Composable
-private fun SessionChip(session: BarSession, active: Boolean, colors: BarColors, onSwitch: () -> Unit, onClose: () -> Unit) {
+private fun SessionChip(
+    session: BarSession,
+    active: Boolean,
+    colors: BarColors,
+    widest: androidx.compose.ui.unit.Dp,
+    closable: Boolean,
+    onSwitch: () -> Unit,
+    onClose: () -> Unit,
+) {
     Row(
-        Modifier.height(48.dp).clip(RoundedCornerShape(12.dp)).background(colors.surface)
+        Modifier.height(48.dp).widthIn(max = if (active) widest else minOf(widest, 140.dp))
+            .clip(RoundedCornerShape(12.dp)).background(colors.surface)
             .alpha(if (active) 1f else 0.55f)
             .clickable(enabled = !active, onClick = onSwitch)
             .padding(start = 6.dp, end = if (active) 0.dp else 10.dp)
-            .widthIn(max = if (active) 260.dp else 140.dp)
             .testTag((if (active) "chip_active_" else "chip_") + session.title),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -145,11 +162,14 @@ private fun SessionChip(session: BarSession, active: Boolean, colors: BarColors,
             session.title + if (session.state.isNotEmpty() && session.state != "connected") " · ${stateText(session.state)}" else "",
             color = colors.content, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
         )
-        if (active) {
+        // No x while the "+" menu is open: a menu never lies over a x (D220).
+        if (active && closable) {
             Box(
                 Modifier.size(48.dp).clickable(onClick = onClose).testTag("chip_close"),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Filled.Close, contentDescription = "Close the session", tint = colors.muted, modifier = Modifier.size(20.dp)) }
+        } else if (active) {
+            Spacer(Modifier.width(48.dp))
         }
     }
 }
@@ -164,7 +184,11 @@ fun stateText(state: String): String = when (state) {
 
 /** What the extra-keys row does with a key. */
 interface KeySink {
-    fun key(key: XKey)
+    /** The session a key pressed now goes to. */
+    fun target(): Long
+
+    /** [key] for [session] (gone or not shown any more: nothing is sent). */
+    fun key(key: XKey, session: Long)
     val ctrlState: StickyModifier.State
     val altState: StickyModifier.State
     val cursorMode: Boolean
@@ -213,22 +237,39 @@ private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUS
             .pointerInput(key, enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
-                    awaitFirstDown()
-                    sink.key(key)
-                    if (!repeats) {
-                        waitForUpOrCancellation()
-                        return@awaitEachGesture
-                    }
-                    // A held arrow or Delete repeats until it is let go.
-                    val repeat = scope.launch {
-                        delay(400)
-                        while (true) {
-                            sink.key(key)
-                            delay(60)
+                    // The row scrolls sideways: a key goes on release, and
+                    // only when the touch stayed a tap (review of 3.3). The
+                    // session is the one shown when the key was pressed.
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val target = sink.target()
+                    val slop = viewConfiguration.touchSlop
+                    var fired = false
+                    // A held arrow or Delete repeats after a still hold.
+                    val repeat = if (repeats) {
+                        scope.launch {
+                            delay(400)
+                            fired = true
+                            while (true) {
+                                sink.key(key, target)
+                                delay(60)
+                            }
                         }
+                    } else {
+                        null
                     }
-                    waitForUpOrCancellation()
-                    repeat.cancel()
+                    var released = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            released = !change.isConsumed
+                            break
+                        }
+                        // Moved past the slop or taken by the row's scroll: no key.
+                        if (change.isConsumed || (change.position - down.position).getDistance() > slop) break
+                    }
+                    repeat?.cancel()
+                    if (released && !fired) sink.key(key, target)
                 }
             }
             .padding(horizontal = 10.dp)

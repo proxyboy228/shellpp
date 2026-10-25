@@ -86,6 +86,9 @@ fun parseSsh(text: String): QuickTarget? {
     return null
 }
 
+/** When a session card's x last closed one (a double tap closes only one). */
+private var lastCardClose = 0L
+
 /** The equivalent command of a recent connection (reference-2 11.4). */
 fun sshCommand(user: String?, address: String, port: Int): String =
     "ssh " + (if (user.isNullOrEmpty()) "" else "$user@") + address + " -p " + port
@@ -110,15 +113,21 @@ fun ConnectionsScreen(app: App, activity: MainActivity, nav: Nav) {
     var query by rememberSaveable { mutableStateOf("") }
     var pickingSftp by remember { mutableStateOf(false) }
     val command = parseSsh(query)
-    val matches by produceState(listOf<Record>(), query) {
+    // The hosts found, with the text they were found for: Connect takes
+    // them only while that is still the text shown (review of 3.3).
+    val found by produceState(Pair("", listOf<Record>()), query) {
         value = if (query.isBlank() || command != null) {
-            emptyList()
+            Pair(query, emptyList())
         } else {
-            withContext(Dispatchers.IO) {
-                runCatching { records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all")).put("text", query.trim())) }.getOrDefault(emptyList())
-            }
+            Pair(
+                query,
+                withContext(Dispatchers.IO) {
+                    runCatching { records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all")).put("text", query.trim())) }.getOrDefault(emptyList())
+                },
+            )
         }
     }
+    val matches = if (found.first == query) found.second else emptyList()
     Page(top = { TopBar("Connections") }) {
         QuickConnectField(query, { query = it }, enabled = command != null || matches.isNotEmpty()) {
             when {
@@ -238,6 +247,11 @@ private fun SessionCard(app: App, activity: MainActivity, view: JSONObject) {
             }
             Box(
                 Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).clickable {
+                    // The next card slides under the finger: a second tap
+                    // right after a close closes nothing.
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastCardClose < 600) return@clickable
+                    lastCardClose = now
                     runCatching { Native.close(id) }
                     app.forget(id)
                 }.testTag("session_close_$id"),

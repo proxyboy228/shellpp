@@ -323,10 +323,13 @@ pub extern "system" fn Java_dev_shellpp_android_Native_text<'caller>(
 }
 
 /// `sendPassword(session, vaultId, recordId)`: the saved password of the
-/// host typed into the session once, without Enter (D220: the password key,
-/// after the user confirmed it). It goes from the vault to the session here
-/// and never crosses into Kotlin; the phone's terminal keeps no command
-/// history and no recording. `false` when the host has no saved password.
+/// host into the session once, without Enter (D220: the password key, after
+/// the user confirmed it). It goes from the vault to the session here and
+/// never crosses into Kotlin, as injected input that the history capture
+/// never takes for a command. Refused when the host's output is recorded
+/// (an echoing prompt would put it in the recording) or the password holds
+/// a control character (a line break would be an Enter). The answer:
+/// 0 sent, 1 no saved password, 2 recorded, 3 control character.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -334,9 +337,9 @@ pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
     session: jlong,
     vault_id: JString<'caller>,
     record_id: JString<'caller>,
-) -> jboolean {
+) -> jint {
     unowned
-        .with_env(|env| -> Result<jboolean, NativeError> {
+        .with_env(|env| -> Result<jint, NativeError> {
             let parse = |text: String| {
                 uuid::Uuid::parse_str(&text)
                     .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
@@ -347,19 +350,26 @@ pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
                 path: "ssh.password".to_owned(),
             };
             let engine = engine()?;
+            let host = shellpp_core::service::dto::RecordRef {
+                vault_id: field.vault_id,
+                record_id: field.record_id,
+            };
+            if engine.core().record_output_for(Some(host)) {
+                return Ok(2);
+            }
             let password = match engine.core().secret_reveal(field) {
                 Ok(password) => password,
-                Err(shellpp_core::CoreError::NotFound) => return Ok(false),
+                Err(shellpp_core::CoreError::NotFound) => return Ok(1),
                 Err(error) => {
                     return Err(NativeError::Engine(EngineError(error.code().to_owned())));
                 }
             };
-            // The bytes go to the session's input queue as typed text would.
-            let bytes = secrecy::ExposeSecret::expose_secret(&password)
-                .as_bytes()
-                .to_vec();
-            engine.send(id(session), bytes)?;
-            Ok(true)
+            let text = secrecy::ExposeSecret::expose_secret(&password);
+            if text.chars().any(char::is_control) {
+                return Ok(3);
+            }
+            engine.inject(id(session), text.as_bytes().to_vec())?;
+            Ok(0)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

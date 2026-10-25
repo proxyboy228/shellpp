@@ -312,9 +312,13 @@ prompts, the end and the reconnect policy, the lock) is the desktop's
 - **The password key** (D220): a tap asks "Send the saved password?" naming
   the host; only **Send** types the host's saved password into the session,
   once and without Enter, straight from the vault (it never passes through
-  the interface's memory; the phone's terminal keeps no command history or
-  recording). Disabled when the host has no saved password, and for a quick
-  connect.
+  the interface's memory). It goes in as injected input, which the history
+  capture never takes for a command. It is refused with a notice when the
+  host's output is recorded (an echoing prompt would put it in the
+  recording) and when the password holds a control character (a line break
+  would be an Enter). The confirmation belongs to the session it was asked
+  for: switching sessions meanwhile sends nothing to the other one.
+  Disabled when the host has no saved password, and for a quick connect.
 - **The cursor key**: a toggle (filled while on); while on, a drag on the
   terminal sends the arrow keys the way the finger moves, at Settings'
   cursor speed; a tap still puts the cursor (9.3).

@@ -48,7 +48,12 @@
     <string name="attach_folder">Folder on the server</string>
     <string name="attach_started">Uploading to %1$s: the SFTP session shows the transfers.</string>
     <plurals name="attach_title">
-        <item quantity="one">Upload %1$d file</item>
-        <item quantity="other">Upload %1$d files</item>
+        <item quantity="one">Upload %1$d file to %2$s</item>
+        <item quantity="other">Upload %1$d files to %2$s</item>
     </plurals>
+    <string name="attach_session_gone">The session the file was for is closed: nothing was uploaded.</string>
+    <string name="attach_answer_first">SFTP to this host asks something: answer it, then tap the attach key again.</string>
+    <string name="password_not_sent">The password was not sent.</string>
+    <string name="password_not_sent_recorded">Not sent: this host records the session\'s output, and the password could be in the recording.</string>
+    <string name="password_not_sent_control">Not sent: the saved password holds a line break or another control character.</string>
 </resources>

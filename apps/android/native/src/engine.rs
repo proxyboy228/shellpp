@@ -470,6 +470,14 @@ impl Engine {
         Ok(())
     }
 
+    /// What the password key sends (D220): input that is not typing, so the
+    /// history capture never takes it as a command (`inject_input`).
+    pub fn inject(&self, id: u64, bytes: Vec<u8>) -> Result<(), EngineError> {
+        let terminal = self.with(id, |live| live.terminal.clone())?;
+        terminal.inject_input(bytes);
+        Ok(())
+    }
+
     /// Bytes for the session that are not typing (mouse reports).
     pub fn send_raw(&self, id: u64, bytes: Vec<u8>) -> Result<(), EngineError> {
         let terminal = self.with(id, |live| live.terminal.clone())?;
@@ -543,8 +551,22 @@ impl Engine {
 
     /// The network came back (Android's default network, M2): a dropped
     /// terminal session tries again now instead of at the end of its
-    /// countdown. Returns how many did.
+    /// countdown, when the user lets sessions reconnect by themselves
+    /// (`terminal.autoreconnect`, on by default). Returns how many did.
     pub fn reconnect_dropped(&self) -> usize {
+        let autoreconnect = self
+            .core
+            .settings_get()
+            .ok()
+            .and_then(|values| {
+                values
+                    .get("terminal.autoreconnect")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(true);
+        if !autoreconnect {
+            return 0;
+        }
         let dropped: Vec<SessionHandle> = self
             .sessions()
             .values()
