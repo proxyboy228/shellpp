@@ -994,7 +994,20 @@ fn a_set_aside_copy_is_read_under_a_path_with_unusual_characters() {
     let root = TempDir::new().unwrap();
     let dir = root.path().join("a b%#\u{e9}");
     std::fs::create_dir(&dir).unwrap();
-    set_aside_copy(&dir, "shellpp.db.20261021T000000Z.old", true, "found");
+    let name = "shellpp.db.20261021T000000Z.old";
+    set_aside_copy(&dir, name, true, "found");
+    // The URI itself opens it (no plain open behind it here).
+    let uri = immutable_uri(&dir.join(name)).expect("a URI");
+    let conn = Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .expect("the URI opens the copy");
+    let kdf: String = conn
+        .query_row("SELECT kdf FROM local_auth", [], |row| row.get(0))
+        .expect("read through the URI");
+    assert_eq!(kdf, "found");
+    drop(conn);
     let (kdf, _) = set_aside_bound_kdf(&dir).expect("a bound copy");
     assert_eq!(kdf, "found");
 }

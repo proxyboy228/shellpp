@@ -916,6 +916,49 @@ fn a_refused_first_run_sign_in_revokes_its_login() {
     assert_eq!(sessions_and_revoked_devices(&server, &email), (3, 0));
 }
 
+/// Review of run 13 (its third pass): a first run whose sign-in to one
+/// account failed after its login signs in to another account of the same
+/// server as a device of its own (a device id belongs to one account; the
+/// first account keeps the revoked row).
+#[test]
+fn a_failed_first_run_keeps_no_device_id_for_another_account() {
+    let server = Server::start();
+    let (proxy, _a, _b, email, password) = setup(&server);
+    let other_email = support::email();
+    let other_password = new_password();
+    let d = Client::local("D", &other_password);
+    d.core
+        .sync_register(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: other_email.clone(),
+            password: other_password.clone(),
+            registration_code: None,
+        })
+        .expect("the other account");
+    let c = Client::empty("C");
+    proxy.set(Mode::TamperLoginWrap);
+    match c.core.sync_sign_in(shellpp_core::service::SignInInput {
+        origin: proxy.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    }) {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "integrity"),
+        other => panic!("expected integrity, got {other:?}"),
+    }
+    proxy.set(Mode::Pass);
+    let outcome = c
+        .core
+        .sync_sign_in(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: other_email,
+            password: other_password,
+            registration_code: None,
+        })
+        .expect("signed in to the other account");
+    assert!(matches!(outcome, SignInOutcome::Done(_)));
+}
+
 /// Review of run 13 (its second pass): a signed-out device locked while
 /// its login is under way fails the rebind with `locked`; the login's
 /// session goes and the device's own row stays (a lock keeps the vault id

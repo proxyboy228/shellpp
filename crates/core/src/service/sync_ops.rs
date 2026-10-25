@@ -169,10 +169,12 @@ pub(super) struct SyncRuntime {
     /// written even when a lock dropped the token meanwhile (review of
     /// run 13).
     bindings: u64,
-    /// The device id of first-run sign-ins until one binds: a retry logs
-    /// in as the same device, so failed attempts leave no row each
-    /// (review of run 13). A lock does not clear it.
-    first_run_device: Option<Uuid>,
+    /// The device id of first-run sign-ins to one account (origin and
+    /// email) until one binds: a retry logs in as the same device, so
+    /// failed attempts leave no row each; another account gets its own id,
+    /// since a device id belongs to one account on a server (review of
+    /// run 13). A lock does not clear it; a local first run does.
+    first_run_device: Option<(String, String, Uuid)>,
 }
 
 impl SyncRuntime {
@@ -190,9 +192,11 @@ impl SyncRuntime {
         self.first_run_device = None;
     }
 
-    /// Drops a sign-in waiting for its TOTP code.
-    pub(super) fn drop_pending(&mut self) {
+    /// A local first run made a vault: a sign-in waiting for its TOTP
+    /// code and the first-run device id are no longer this device's.
+    pub(super) fn first_run_done(&mut self) {
         self.pending = None;
+        self.first_run_device = None;
     }
 
     /// Drops the access token and a half-finished sign-in (lock).
@@ -212,6 +216,9 @@ struct PendingSignIn {
     /// The device id the login was made with: the TOTP step's tokens are
     /// that device's (review of run 13: a first run made a second id).
     device_id: Uuid,
+    /// The sign-in started at first run: it binds an empty device only
+    /// (a local first run that finished meanwhile refuses it).
+    first_run: bool,
     email: String,
     ticket: Zeroizing<String>,
     kek: Key32,
@@ -1299,16 +1306,22 @@ impl Core {
             .as_deref()
             .and_then(crate::store::set_aside_bound_kdf)
             .and_then(|(json, _)| KdfParams::from_json(&json).ok());
+        // A device at first run has no id yet (`meta.device_id`).
+        let first_run = device_id.is_none();
         let device_id = match device_id {
             Some(id) => id,
             None => {
                 let now = self.now();
                 let mut guard = self.inner();
-                match guard.sync.first_run_device {
-                    Some(id) => id,
-                    None => {
+                match &guard.sync.first_run_device {
+                    Some((seen_origin, seen_email, id))
+                        if *seen_origin == origin && *seen_email == email =>
+                    {
+                        *id
+                    }
+                    _ => {
                         let id = guard.ids.next(now);
-                        guard.sync.first_run_device = Some(id);
+                        guard.sync.first_run_device = Some((origin.clone(), email.clone(), id));
                         id
                     }
                 }
@@ -1369,6 +1382,7 @@ impl Core {
                 started: self.now(),
                 origin,
                 device_id,
+                first_run,
                 email,
                 ticket: Zeroizing::new(ticket.into_inner()),
                 kek: derived.kek,
@@ -1379,13 +1393,14 @@ impl Core {
         }
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
         let Some(account) = response.account else {
-            self.revoke_unknown_login(&api, device_id, &tokens);
+            Self::revoke_login(&api, first_run.then_some(device_id), &tokens);
             return Err(HttpError::Malformed.into());
         };
         let pending = PendingSignIn {
             started: self.now(),
             origin,
             device_id,
+            first_run,
             email,
             ticket: Zeroizing::new(String::new()),
             kek: derived.kek,
@@ -1499,7 +1514,7 @@ impl Core {
         };
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
         let Some(account) = response.account else {
-            self.revoke_unknown_login(&api, device_id, &tokens);
+            Self::revoke_login(&api, pending.first_run.then_some(device_id), &tokens);
             return Err(HttpError::Malformed.into());
         };
         self.finish_sign_in(&api, pending, device_id, tokens, account)?;
@@ -1554,14 +1569,6 @@ impl Core {
         result
     }
 
-    /// A login whose answer has no account bundle: a first run's device
-    /// row is this login's and goes; a device with a vault cannot tell, so
-    /// only the login's family goes.
-    fn revoke_unknown_login(&self, api: &HttpApi, device_id: Uuid, tokens: &wire::Tokens) {
-        let first_run = self.inner().personal_vault_id.is_none();
-        Self::revoke_login(api, first_run.then_some(device_id), tokens);
-    }
-
     /// Revokes what a login opened that no binding took (run 13, D216):
     /// with `device`, that device is revoked in the account (`DELETE
     /// /v1/devices/{id}`: every token of it goes and its row is marked
@@ -1607,6 +1614,11 @@ impl Core {
         };
         let (ring, chain_rows) = ring_from_chain(vault_id, epoch, vault_key, &keys)?;
         let state = self.inner().state;
+        // Begun on an empty device, which made a local vault meanwhile:
+        // its tokens bind nothing here (review of run 13).
+        if pending.first_run && state == LockState::Unlocked {
+            return Err(CoreError::WrongState);
+        }
         match state {
             LockState::FirstRun => {
                 self.sign_in_empty(api, &pending, device_id, tokens, &account, ring, chain_rows)
