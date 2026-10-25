@@ -72,4 +72,13 @@ class CoreLogicTest {
         assertTrue(Fingerprint.passwordDue(now - 8 * day, now))
         assertTrue("a clock set back", Fingerprint.passwordDue(now + 30 * day, now))
     }
+
+    @Test
+    fun aSecretBecomesJsonWithoutAString() {
+        val secret = "pa\"ss\\w\u0001rd é".toCharArray()
+        val bytes = Core.secretJson("password", secret)
+        val parsed = JSONObject(String(bytes, Charsets.UTF_8))
+        assertEquals("pa\"ss\\w\u0001rd é", parsed.getString("password"))
+        assertEquals(1, parsed.length())
+    }
 }

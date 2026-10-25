@@ -114,7 +114,7 @@ fun AppRoot(app: App, activity: MainActivity) {
                 Modifier.padding(16.dp),
                 color = Tokens.danger,
             )
-            lock.firstRun -> FirstRunScreen(app)
+            lock.firstRun -> FirstRunScreen(app, activity)
             !lock.unlocked -> UnlockScreen(app, activity, lock)
             else -> MainScreen(app, activity)
         }
@@ -172,8 +172,16 @@ fun PasswordField(
 
 /** UI spec 4: the first run, a new vault ("Restore from sync" comes with sync, M3). */
 @Composable
-fun FirstRunScreen(app: App) {
+fun FirstRunScreen(app: App, activity: MainActivity) {
     var creating by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
+    if (restoring) {
+        SyncWizard(app, activity, WizardMode.Restore, onClose = { restoring = false }, onDone = {
+            restoring = false
+            app.afterRestore()
+        })
+        return
+    }
     var password by remember { mutableStateOf("") }
     var repeat by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -194,6 +202,10 @@ fun FirstRunScreen(app: App) {
                 onClick = { creating = true },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("create_vault_start"),
             ) { Text("Create a new vault") }
+            OutlinedButton(
+                onClick = { restoring = true },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("restore_from_sync"),
+            ) { Text("Restore from sync") }
             return@Column
         }
         PasswordField(password, { password = it; error = null }, "Master password", "first_password", enabled = !busy)
@@ -381,7 +393,7 @@ fun ForgotDialog(app: App, onDismiss: () -> Unit) {
                                     val keys = app.platform.deviceKeys
                                     keys.storedAccount()?.let(keys::delete)
                                     app.unlockPrefs.edit().putBoolean(Fingerprint.PREF_ON, false).apply()
-                                } catch (failed: CoreException) {
+                                } catch (failed: Exception) {
                                     // The lock state says what happened.
                                 }
                                 app.refreshLock()

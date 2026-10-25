@@ -86,7 +86,10 @@ $EndToEndClasses = @(
     'dev.shellpp.android.VaultAfterRestartTest',
     'dev.shellpp.android.ConnectTest',
     'dev.shellpp.android.FingerprintOnTest',
-    'dev.shellpp.android.FingerprintInvalidatedTest'
+    'dev.shellpp.android.FingerprintInvalidatedTest',
+    'dev.shellpp.android.SyncSignInTest',
+    'dev.shellpp.android.SyncAfterUnlockTest',
+    'dev.shellpp.android.SyncRestoreTest'
 )
 
 $failed = @()
@@ -131,6 +134,8 @@ if ($Emulator) {
     $startedEmulator = $false
     $containerStarted = $false
     $pinSet = $false
+    $peer = $null
+    $stopTouch = $null
     try {
         if (-not $bash -or -not (Test-Path -LiteralPath $bash)) { throw "no Git for Windows bash (set SHELLPP_BASH)" }
         if (Test-Path -LiteralPath $work) { Remove-Item -Recurse -Force -LiteralPath $work }
@@ -159,6 +164,20 @@ if ($Emulator) {
             if (-not $booted) { throw "the emulator ($Avd) did not boot in 6 minutes" }
             Write-Host "ok      ($Avd)" -ForegroundColor Green
         }
+        # Sync (M3): the second device and the server behind its TLS front
+        # (server/tests/android_peer.rs) start now, as they build meanwhile;
+        # the phone's sync classes wait for its peer.json, and the script
+        # runs the desktop's steps between them through files.
+        $peerDir = Join-Path $logDir 'sync-peer'
+        if (Test-Path -LiteralPath $peerDir) { Remove-Item -Recurse -Force -LiteralPath $peerDir }
+        New-Item -ItemType Directory -Force $peerDir | Out-Null
+        $savedPeer = $env:SHELLPP_TEST_ANDROID_PEER
+        $savedTest = $env:SHELLPP_TEST
+        $env:SHELLPP_TEST_ANDROID_PEER = $peerDir
+        $env:SHELLPP_TEST = '1'
+        $peer = Start-Process -FilePath 'cargo' -ArgumentList @('test', '--locked', '--manifest-path', (Join-Path $repo 'server\Cargo.toml'), '--test', 'android_peer') -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir 'sync-peer.log') -RedirectStandardError (Join-Path $logDir 'sync-peer.err.log')
+        $env:SHELLPP_TEST_ANDROID_PEER = $savedPeer
+        $env:SHELLPP_TEST = $savedTest
         # A fresh install (the app's data from earlier runs goes), then each
         # test class in a process of its own, in order: the second class
         # finds what the first one left after a real restart (M1).
@@ -196,11 +215,52 @@ if ($Emulator) {
                     continue
                 }
             }
+            $classArgs = $instrumentArgs
+            if ($short -like 'Sync*') {
+                $ready = $true
+                if ($short -eq 'SyncSignInTest') {
+                    $deadline = (Get-Date).AddMinutes(20)
+                    while (-not (Test-Path -LiteralPath (Join-Path $peerDir 'peer.json')) -and -not $peer.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+                    $ready = Test-Path -LiteralPath (Join-Path $peerDir 'peer.json')
+                }
+                if ($short -eq 'SyncAfterUnlockTest') {
+                    New-Item -ItemType File -Force (Join-Path $peerDir 'phone-1.done') | Out-Null
+                    $deadline = (Get-Date).AddMinutes(3)
+                    while (-not (Test-Path -LiteralPath (Join-Path $peerDir 'desktop-1.done')) -and -not $peer.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+                    $ready = Test-Path -LiteralPath (Join-Path $peerDir 'desktop-1.done')
+                }
+                if ($short -eq 'SyncRestoreTest') {
+                    # A clean install: nothing of the phone's data stays.
+                    foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
+                    foreach ($apk in 'app\build\outputs\apk\debug\app-debug.apk', 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk') {
+                        & $adb install -r (Join-Path $android $apk) 2>$null | Out-Null
+                    }
+                }
+                if (-not $ready) {
+                    Write-Host ("{0,-34}" -f "e2e-$short") -NoNewline
+                    Write-Host "FAILED  (the sync peer did not come: $(Join-Path $logDir 'sync-peer.log'))" -ForegroundColor Red
+                    $script:failed += "e2e-$short"
+                    continue
+                }
+                $peerInfo = Get-Content -Raw -LiteralPath (Join-Path $peerDir 'peer.json') | ConvertFrom-Json
+                # The phone reaches the server at the same origin as the
+                # desktop (https://localhost:<port>): the account's keys are
+                # bound to the origin.
+                $peerPort = ([Uri]$peerInfo.origin).Port
+                & $adb reverse "tcp:$peerPort" "tcp:$peerPort" 2>$null | Out-Null
+                $classArgs = $instrumentArgs + @(
+                    '-e', 'syncOrigin', $peerInfo.origin,
+                    '-e', 'syncEmail', $peerInfo.email,
+                    '-e', 'syncPassword', $peerInfo.password,
+                    '-e', 'syncSha256', $peerInfo.sha256,
+                    '-e', 'syncCa', [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($peerInfo.ca_pem))
+                )
+            }
             if ($short -eq 'FingerprintOnTest') {
                 Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $stopTouch
                 $toucher = Start-Process -FilePath $bash -ArgumentList @((Join-Path $repo 'tests\android\touch-sensor.sh'), '1', ($stopTouch -replace '\\', '/')) -WindowStyle Hidden -PassThru
             }
-            $arguments = @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $class) + $instrumentArgs + @("$appId.test/androidx.test.runner.AndroidJUnitRunner")
+            $arguments = @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $class) + $classArgs + @("$appId.test/androidx.test.runner.AndroidJUnitRunner")
             Write-Host ("{0,-34}" -f "e2e-$short") -NoNewline
             $log = Join-Path $logDir "e2e-$short.log"
             $code = Invoke-Logged $adb $arguments $log (Join-Path $logDir "e2e-$short.err.log")
@@ -223,6 +283,19 @@ if ($Emulator) {
         Write-Host "FAILED  ($($_.Exception.Message))" -ForegroundColor Red
         $failed += 'emulator'
     } finally {
+        # A sensor toucher left by an exception stops too.
+        if ($stopTouch) { New-Item -ItemType File -Force $stopTouch | Out-Null }
+        if ($peer) {
+            & $adb reverse --remove-all 2>$null | Out-Null
+            New-Item -ItemType File -Force (Join-Path $peerDir 'stop') | Out-Null
+            if (-not $peer.WaitForExit(120000)) { Stop-Process -Id $peer.Id -Force -ErrorAction SilentlyContinue }
+            $peerFailed = Join-Path $peerDir 'failed'
+            if (Test-Path -LiteralPath $peerFailed) {
+                Write-Host ("{0,-34}" -f 'e2e-sync-peer') -NoNewline
+                Write-Host "FAILED  ($(Get-Content -Raw -LiteralPath $peerFailed))" -ForegroundColor Red
+                $script:failed += 'e2e-sync-peer'
+            }
+        }
         foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
         # Clearing the PIN removes the test's fingerprints too.
         if ($pinSet) { & $adb shell locksettings clear --old 1111 2>$null | Out-Null }

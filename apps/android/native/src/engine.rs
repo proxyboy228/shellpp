@@ -32,6 +32,7 @@ use shellpp_terminal::{TerminalHandle, TerminalSink};
 use crate::cursor;
 use crate::events::EventQueue;
 use crate::input::Cell;
+use crate::sftp::{SftpFailure, SftpSessions};
 
 /// Lines of scrollback of a prototype terminal.
 const SCROLLBACK: usize = 2000;
@@ -119,8 +120,12 @@ pub struct Engine {
     manager: Arc<SessionManager>,
     key_dir: PathBuf,
     sessions: Mutex<BTreeMap<u64, Live>>,
+    /// SFTP sessions (no terminal) and their transfers (UI spec 10).
+    sftp: SftpSessions,
     next: AtomicU64,
     events: Arc<EventQueue>,
+    /// Held while the session layer's lock state is set from the core's.
+    lock_sync: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -174,15 +179,23 @@ impl Engine {
         // The session layer follows the core's lock (prompts cancelled while
         // locked, reconnects waiting for unlock), as the desktop's lock
         // events tell it; it ends with the core.
+        // Every change is applied from the core's state as it is then, under
+        // the same lock as the opens, so a lock between a read and a write
+        // never leaves the session layer unlocked (review of run 14).
+        let lock_sync = Arc::new(Mutex::new(()));
         let follower = Arc::downgrade(&manager);
+        let follower_core = Arc::downgrade(&core);
+        let follower_sync = lock_sync.clone();
         std::thread::Builder::new()
             .name("lock-follower".to_owned())
             .spawn(move || {
-                while let Ok(unlocked) = lock_changes.recv() {
-                    let Some(manager) = follower.upgrade() else {
+                while lock_changes.recv().is_ok() {
+                    let (Some(manager), Some(core)) = (follower.upgrade(), follower_core.upgrade())
+                    else {
                         break;
                     };
-                    manager.set_unlocked(unlocked);
+                    let _held = follower_sync.lock().unwrap_or_else(PoisonError::into_inner);
+                    manager.set_unlocked(core.is_unlocked());
                 }
             })
             .map_err(|e| error(format!("lock thread: {e}")))?;
@@ -191,8 +204,10 @@ impl Engine {
             manager,
             key_dir,
             sessions: Mutex::new(BTreeMap::new()),
+            sftp: SftpSessions::new(events.clone()),
             next: AtomicU64::new(1),
             events,
+            lock_sync,
         })
     }
 
@@ -262,7 +277,7 @@ impl Engine {
             wake.clone(),
         );
         // An unlock just now may not have reached the follower thread yet.
-        self.manager.set_unlocked(self.core.is_unlocked());
+        self.sync_lock_state();
         let opened = self
             .manager
             .open(
@@ -272,11 +287,31 @@ impl Engine {
             )
             .map_err(|e| error(e.message()))?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        let mut events = opened.events;
+        if self.forward(id, opened.events).is_err() {
+            opened.handle.close();
+            return Err(error("no thread for the session's events"));
+        }
+        self.sessions().insert(
+            id,
+            Live {
+                session: opened.handle,
+                terminal,
+                wake,
+                woken,
+            },
+        );
+        Ok(id)
+    }
+
+    /// The session's events, as JSON, into the engine's queue: a thread of
+    /// its own waits on the session's stream.
+    fn forward(
+        &self,
+        id: u64,
+        mut events: futures::channel::mpsc::UnboundedReceiver<SessionEvent>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
         let tx = self.events.sender();
-        // The session's events, as JSON, into the engine's queue: a thread of
-        // its own waits on the session's stream.
-        let forward = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name(format!("session-events-{id}"))
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().build() else {
@@ -291,21 +326,62 @@ impl Engine {
                         }
                     }
                 });
-            });
-        if forward.is_err() {
+            })
+    }
+
+    /// The session layer's lock state from the core's, as the follower sets it.
+    fn sync_lock_state(&self) {
+        let _held = self
+            .lock_sync
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.manager.set_unlocked(self.core.is_unlocked());
+    }
+
+    /// Opens an SFTP session to `target` (UI spec 10): the prompts of an SSH
+    /// session come as its events; returns its handle.
+    pub fn open_sftp(&self, target: SessionTarget) -> Result<u64, EngineError> {
+        self.sync_lock_state();
+        let opened = self
+            .manager
+            .open_sftp(target)
+            .map_err(|e| error(e.message()))?;
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        if self.forward(id, opened.events).is_err() {
             opened.handle.close();
             return Err(error("no thread for the session's events"));
         }
-        self.sessions().insert(
-            id,
-            Live {
-                session: opened.handle,
-                terminal,
-                wake,
-                woken,
-            },
-        );
+        self.sftp.add(id, opened.handle);
         Ok(id)
+    }
+
+    /// One request of SFTP session `id` ([`SftpSessions::call`]).
+    pub fn sftp_call(&self, id: u64, command: &str, input: &[u8]) -> String {
+        self.sftp.call(id, command, input)
+    }
+
+    /// Queues a download of `remote` into the cache file `local`.
+    pub fn sftp_download(
+        &self,
+        id: u64,
+        remote: String,
+        local: PathBuf,
+    ) -> Result<u64, EngineError> {
+        self.sftp
+            .download(id, remote, local)
+            .map_err(|SftpFailure { message, .. }| error(message))
+    }
+
+    /// Queues an upload of the cache file `local` to `remote`.
+    pub fn sftp_upload(&self, id: u64, local: PathBuf, remote: String) -> Result<u64, EngineError> {
+        self.sftp
+            .upload(id, local, remote)
+            .map_err(|SftpFailure { message, .. }| error(message))
+    }
+
+    /// Cancels a transfer.
+    pub fn transfer_cancel(&self, transfer: u64) {
+        self.sftp.cancel(transfer);
     }
 
     /// The next event (the core's or a session's) as JSON, waiting at most
@@ -332,7 +408,10 @@ impl Engine {
             ("cancel", _) => PromptReply::Cancel,
             _ => return Err(error("unknown reply")),
         };
-        let session = self.with(id, |live| live.session.clone())?;
+        let session = match self.with(id, |live| live.session.clone()) {
+            Ok(session) => session,
+            Err(missing) => self.sftp.handle(id).ok_or(missing)?,
+        };
         session
             .reply(prompt, reply)
             .map_err(|e| error(e.to_string()))
@@ -404,17 +483,23 @@ impl Engine {
         Ok(cursor::put(&self.terminal(id)?, target, step_wait))
     }
 
-    /// Closes session `id` and its terminal.
+    /// Closes session `id` and its terminal (or its transfers).
     pub fn close(&self, id: u64) {
+        if self.sftp.contains(id) {
+            self.sftp.close(id);
+            return;
+        }
         if let Some(live) = self.sessions().remove(&id) {
             live.session.close();
             live.terminal.close();
         }
     }
 
-    /// Ids of the sessions not closed yet.
+    /// Ids of the sessions not closed yet (terminals and SFTP).
     pub fn open_sessions(&self) -> Vec<u64> {
-        self.sessions().keys().copied().collect()
+        let mut ids: Vec<u64> = self.sessions().keys().copied().collect();
+        ids.extend(self.sftp.ids());
+        ids
     }
 }
 

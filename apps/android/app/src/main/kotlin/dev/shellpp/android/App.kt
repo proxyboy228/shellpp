@@ -40,6 +40,9 @@ class App : Application() {
     private val lastEvents = ConcurrentHashMap<Long, JSONObject>()
     private val worker = Executors.newSingleThreadExecutor()
 
+    /** Syncs run apart from the tick and the activity notes, which must not wait for a network. */
+    private val syncWorker = Executors.newSingleThreadExecutor()
+
     /** Open sessions (not closed yet), for the service's notification. */
     val sessions: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
@@ -69,10 +72,21 @@ class App : Application() {
         super.onCreate()
         platform = Platform(this, DeviceKeys(this))
         registerActivityLifecycleCallbacks(Foreground())
+        Core.onLocalChange = ::kickSync
+        // A network that comes back: a sync (the core keeps its backoff).
+        getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
+            object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    if (started > 0) syncSoon()
+                }
+            },
+        )
         // The core opens its database off the main thread (architecture 2).
         Thread({
             try {
                 Native.start(filesDir.absolutePath, deviceName(), platform)
+                // Before any sync: Android's trust manager behind the TLS checks.
+                Native.initTls(this)
                 ready = true
                 refreshLock()
                 pumpEvents()
@@ -96,25 +110,53 @@ class App : Application() {
     fun refreshLock() {
         if (!ready) return
         try {
-            lockFlow.value = Core.lockStatus()
-        } catch (error: RuntimeException) {
+            publishLock(Core.lockStatus())
+        } catch (error: Exception) {
             // The next event brings it.
         }
     }
 
     /** Sets the lock state from a command's answer. */
-    fun setLock(status: LockStatus) {
-        lockFlow.value = status
+    fun setLock(status: LockStatus) = publishLock(status)
+
+    private val lockListeners = java.util.concurrent.CopyOnWriteArrayList<(LockStatus) -> Unit>()
+
+    /** [listener] hears every lock state on the main thread (a terminal leaves when locked). */
+    fun onLockChange(listener: (LockStatus) -> Unit) {
+        lockListeners += listener
+    }
+
+    fun removeLockListener(listener: (LockStatus) -> Unit) {
+        lockListeners -= listener
+    }
+
+    /**
+     * Every new lock state goes through here, from a command's answer or an
+     * event: the change from locked to unlocked starts a sync
+     * (architecture 3), whichever path saw it first.
+     */
+    private fun publishLock(status: LockStatus) {
+        val was = synchronized(lockFlow) {
+            val previous = lockFlow.value
+            lockFlow.value = status
+            previous
+        }
+        if (!was.unlocked && status.unlocked) syncSoon()
+        if (was.state != status.state) main.post { for (listener in lockListeners) listener(status) }
     }
 
     private fun pumpEvents() {
         while (true) {
             val text = try {
                 Native.nextEvent(1000)
-            } catch (error: RuntimeException) {
+            } catch (error: Exception) {
                 null
             } ?: continue
-            val event = JSONObject(text)
+            val event = try {
+                JSONObject(text)
+            } catch (error: org.json.JSONException) {
+                continue
+            }
             if (event.optString("kind") == "core") {
                 onCoreEvent(event)
                 continue
@@ -153,10 +195,12 @@ class App : Application() {
     fun opened(id: Long, title: String, recordId: String?) {
         sessions += id
         if (recordId != null) sessionHosts[id] = recordId
-        val view = JSONObject().put("id", id).put("title", title).put("state", "connecting")
+        // An event may have come first: it is kept, with the host added.
+        val view = sessionViews.value[id] ?: JSONObject().put("id", id).put("title", title).put("state", "connecting")
         if (recordId != null) view.put("recordId", recordId)
         sessionViews.value = sessionViews.value + (id to view)
         updateService()
+        startTicking()
     }
 
     fun forget(id: Long) {
@@ -191,9 +235,51 @@ class App : Application() {
         worker.execute {
             try {
                 Core.call("activity")
-            } catch (error: RuntimeException) {
+            } catch (error: Exception) {
                 // Locked meanwhile: nothing to note.
             }
+        }
+    }
+
+    /**
+     * A sync when the vault is unlocked and bound (after unlock and when the
+     * app comes back to the foreground; no timer in the background,
+     * architecture 3). Off the main thread; failures wait for the next one.
+     */
+    fun syncSoon() {
+        if (!ready) return
+        syncWorker.execute {
+            try {
+                if (!Core.lockStatus().unlocked) return@execute
+                val status = Core.obj("sync_status")
+                if (status.optBoolean("bound") && status.optBoolean("signed_in")) Core.call("sync_auto")
+            } catch (error: Exception) {
+                // No network or a refusal: Account and sync shows the last error.
+            }
+        }
+    }
+
+    private val kick = Runnable { syncSoon() }
+
+    /** One sync 2 s after the last local change, as on the desktop (architecture 3). */
+    fun kickSync() {
+        main.removeCallbacks(kick)
+        main.postDelayed(kick, 2_000)
+    }
+
+    /** After "Restore from sync" at the first run: the phone's own defaults (UI spec 5). */
+    fun afterRestore() {
+        worker.execute {
+            try {
+                Core.call(
+                    "settings_set",
+                    JSONObject().put("values", JSONObject().put("security.auto_lock_minutes", 15)),
+                )
+            } catch (error: Exception) {
+                // The default of the core (never) stays.
+            }
+            unlockPrefs.edit().putLong(Fingerprint.PREF_LAST_PASSWORD, System.currentTimeMillis()).apply()
+            refreshLock()
         }
     }
 
@@ -202,17 +288,35 @@ class App : Application() {
         worker.execute {
             try {
                 Core.call("tick")
-            } catch (error: RuntimeException) {
+            } catch (error: Exception) {
                 // The next tick tries again.
             }
         }
     }
 
+    @Volatile
+    private var ticking = false
+
+    /**
+     * The core's tick, every second while a screen is started or a session
+     * keeps the process alive (architecture 3): the auto-lock comes on time
+     * in the background too.
+     */
     private val ticker = object : Runnable {
         override fun run() {
             tick()
-            if (started > 0) main.postDelayed(this, 1_000)
+            if (started > 0 || sessions.isNotEmpty()) {
+                main.postDelayed(this, 1_000)
+            } else {
+                ticking = false
+            }
         }
+    }
+
+    private fun startTicking() {
+        if (ticking) return
+        ticking = true
+        main.post(ticker)
     }
 
     /** Counts the started screens: the core ticks while one is (architecture 3). */
@@ -222,8 +326,10 @@ class App : Application() {
             if (started == 1) {
                 // A frozen process locks at once when it wakes (the core
                 // compares wall-clock time with the last input).
-                main.removeCallbacks(ticker)
-                main.post(ticker)
+                tick()
+                startTicking()
+                // Back in the foreground: a sync (architecture 3).
+                syncSoon()
             }
         }
 

@@ -107,6 +107,29 @@ pub extern "system" fn Java_dev_shellpp_android_Native_start<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `initTls(context)`: the JNI setup of `rustls-platform-verifier` with the
+/// application context, before the first TLS connection (architecture 5).
+/// Until it ran, the sync commands answer `unavailable`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_initTls<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    context: JObject<'caller>,
+) -> jboolean {
+    unowned
+        .with_env(|env| -> Result<jboolean, NativeError> {
+            #[cfg(target_os = "android")]
+            {
+                rustls_platform_verifier::android::init_with_env(env, context)?;
+                crate::dispatch::tls_initialized();
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = (env, context);
+            Ok(true)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `call(command, input)`: one command of the core's service API with a
 /// JSON input (UTF-8, may be null), answered as JSON (`dispatch.rs`). The
 /// input may hold secrets: it is copied into a buffer wiped after the call,
@@ -448,6 +471,106 @@ pub extern "system" fn Java_dev_shellpp_android_Native_openSessions<'caller>(
     unowned
         .with_env(|_env| -> Result<jint, NativeError> {
             Ok(jint::try_from(engine()?.open_sessions().len()).unwrap_or(jint::MAX))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `openSftp(vaultId, recordId)`: an SFTP session to a saved host (UI spec
+/// 10); its prompts come as session events. Returns its handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_openSftp<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    vault_id: JString<'caller>,
+    record_id: JString<'caller>,
+) -> jlong {
+    unowned
+        .with_env(|env| -> Result<jlong, NativeError> {
+            let parse = |text: String| {
+                uuid::Uuid::parse_str(&text)
+                    .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
+            };
+            let target = SessionTarget::Host {
+                vault_id: parse(vault_id.try_to_string(env)?)?,
+                record_id: parse(record_id.try_to_string(env)?)?,
+            };
+            let opened = engine()?.open_sftp(target)?;
+            Ok(jlong::try_from(opened).unwrap_or(0))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `sftpCall(session, command, input)`: a request of the remote panel
+/// (`sftp.rs`), answered as JSON. Blocks; off the main thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_sftpCall<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+    command: JString<'caller>,
+    input: JString<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>, NativeError> {
+            let command = command.try_to_string(env)?;
+            let input = input.try_to_string(env)?;
+            let answer = engine()?.sftp_call(id(session), &command, input.as_bytes());
+            Ok(JString::from_str(env, answer)?)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `sftpDownload(session, remote, local)`: queues a download into the cache
+/// file `local`; returns the transfer's id (its events: `kind` "transfer").
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_sftpDownload<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+    remote: JString<'caller>,
+    local: JString<'caller>,
+) -> jlong {
+    unowned
+        .with_env(|env| -> Result<jlong, NativeError> {
+            let remote = remote.try_to_string(env)?;
+            let local = std::path::PathBuf::from(local.try_to_string(env)?);
+            let transfer = engine()?.sftp_download(id(session), remote, local)?;
+            Ok(jlong::try_from(transfer).unwrap_or(0))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `sftpUpload(session, local, remote)`: queues an upload of the cache file
+/// `local`; returns the transfer's id.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_sftpUpload<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+    local: JString<'caller>,
+    remote: JString<'caller>,
+) -> jlong {
+    unowned
+        .with_env(|env| -> Result<jlong, NativeError> {
+            let local = std::path::PathBuf::from(local.try_to_string(env)?);
+            let remote = remote.try_to_string(env)?;
+            let transfer = engine()?.sftp_upload(id(session), local, remote)?;
+            Ok(jlong::try_from(transfer).unwrap_or(0))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `transferCancel(transfer)`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_transferCancel<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    transfer: jlong,
+) {
+    unowned
+        .with_env(|_env| -> Result<(), NativeError> {
+            engine()?.transfer_cancel(id(transfer));
+            Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

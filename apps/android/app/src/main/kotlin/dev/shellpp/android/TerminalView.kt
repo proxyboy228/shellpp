@@ -384,6 +384,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
 
     fun sendKey(code: Int, ctrl: Boolean = false, alt: Boolean = false) {
         if (session == 0L) return
+        // Keys of the soft keyboard count as input for the auto-lock (UI spec 5).
+        (context.applicationContext as? App)?.noteActivity()
         val withCtrl = ctrl || modifiers.ctrl
         val withAlt = alt || modifiers.alt
         modifiers.consume()
@@ -394,6 +396,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
 
     fun sendText(text: String, ctrl: Boolean = false, alt: Boolean = false) {
         if (session == 0L || text.isEmpty()) return
+        (context.applicationContext as? App)?.noteActivity()
         val withCtrl = ctrl || modifiers.ctrl
         val withAlt = alt || modifiers.alt
         modifiers.consume()

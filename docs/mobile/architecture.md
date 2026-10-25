@@ -232,20 +232,22 @@ clears a copied password when it can, instead of taking an empty read for
   (the owner's server has a Let's Encrypt certificate, D204); an added CA is
   checked beside it (D212); a pinned certificate works as on the desktop.
 - The crate needs its JNI initialization before the first TLS connection:
-  `Application.onCreate` calls `nativeInit(context)`, which calls
+  `Application.onCreate` calls `Native.initTls(context)`, which calls
   `rustls_platform_verifier::android::init_with_env` with the JNI
   environment and the application context. Without it the crate panics, so
-  every sync entry checks that the initialization ran and returns an error
-  otherwise.
+  every sync command of the dispatcher checks that the initialization ran
+  and answers `unavailable` otherwise.
 - The crate needs a small Kotlin component in the app. The crate
   `rustls-platform-verifier-android` on crates.io carries only a version
   marker, and the component's published Maven repository is on GitHub, which
   is not one of the allowed sources (Maven Central, Google Maven). The app
-  vendors the component's source (MIT or Apache-2.0) under
-  `apps/android/third_party/` at the version 0.7.1 needs, with its line in
-  THIRD_PARTY_NOTICES and the R8 rule
-  `-keep class org.rustls.platformverifier.** { *; }` [decision; done when
-  sync lands on the phone].
+  vendors the component's source (MIT OR Apache-2.0) from the upstream
+  repository's tag `v/0.7.1` (commit `252e2516`, component 0.2.0) as the
+  Gradle library `apps/android/third_party/rustls-platform-verifier`,
+  unchanged, with its line in THIRD_PARTY_NOTICES and the R8 rule
+  `-keep class org.rustls.platformverifier.** { *; }` (D213, D218; run 14).
+  Its manifest brings the library's network security config (cleartext only
+  to the CRL hosts it lists), which the app's own Rust sockets do not use.
 
 ## 6. The terminal: drawing and input
 

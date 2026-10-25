@@ -26,6 +26,7 @@ async-channel.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "sync"] }
 futures.workspace = true
 secrecy.workspace = true
+data-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -33,6 +34,11 @@ uuid.workspace = true
 zeroize.workspace = true
 # The JNI calls (the version rustls-platform-verifier already brings in).
 jni = "0.22.4"
+
+# Android's trust manager for the sync server's certificate: initialized
+# from the app's context before the first TLS connection (architecture 5).
+[target.'cfg(target_os = "android")'.dependencies]
+rustls-platform-verifier.workspace = true
 
 [dev-dependencies]
 getrandom.workspace = true

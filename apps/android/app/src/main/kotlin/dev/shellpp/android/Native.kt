@@ -33,6 +33,8 @@ object Native {
      * `{"ok": ...}` or `{"error": {"code", "message", "details"}}`.
      */
     @JvmStatic external fun call(command: String, input: ByteArray?): String
+    /** The TLS setup of the sync client with the application context (architecture 5). */
+    @JvmStatic external fun initTls(context: android.content.Context): Boolean
     @JvmStatic external fun keyDir(): String
     @JvmStatic external fun open(address: String, port: Int, username: String, cols: Int, rows: Int, dark: Boolean): Long
     @JvmStatic external fun openHost(vaultId: String, recordId: String, cols: Int, rows: Int, dark: Boolean): Long

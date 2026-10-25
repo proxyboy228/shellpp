@@ -285,15 +285,31 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         finish()
     }
 
+    /** Locked while shown (auto-lock, Lock): the terminal goes and the unlock screen comes (UI spec 5). */
+    private val onLock: (LockStatus) -> Unit = { status ->
+        if (!status.unlocked && !isFinishing) leaveForUnlock()
+    }
+
+    private fun leaveForUnlock() {
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        finish()
+    }
+
     override fun onStart() {
         super.onStart()
         // Locked: a live terminal asks for the password first (UI spec 5);
-        // the session keeps running meanwhile.
+        // the session keeps running meanwhile. A lock while the terminal is
+        // shown takes it away too; coming back after the auto-lock time,
+        // the tick of App's start locks at once (the core compares the wall
+        // clock with the last input).
         val app = application as App
-        if (app.ready && !app.lock.value.unlocked) {
-            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
-            finish()
-        }
+        app.onLockChange(onLock)
+        if (app.ready && !app.lock.value.unlocked) leaveForUnlock()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        (application as App).removeLockListener(onLock)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

@@ -1,5 +1,11 @@
 package dev.shellpp.android
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -63,13 +69,13 @@ private val GROUP_FIELDS = setOf("name", "parent_id", "color", "ssh", "order_key
  * field, are shown. Returns the record id after a save.
  */
 private fun save(
-    vaultId: String,
+    vaultId: String?,
     recordId: String?,
     type: String,
     data: JSONObject,
     secrets: JSONObject?,
 ): Pair<String?, Map<String, String>> = try {
-    val input = JSONObject().put("vault_id", vaultId).put("type", type).put("data", data)
+    val input = JSONObject().put("vault_id", vaultId ?: vaultId()).put("type", type).put("data", data)
     if (recordId != null) input.put("record_id", recordId)
     if (secrets != null && secrets.length() > 0) input.put("secrets", secrets)
     val saved = Core.obj("record_save", input)
@@ -85,6 +91,9 @@ private fun save(
     }
     if (fields.isEmpty()) fields[""] = error.message ?: error.code
     recordId to fields
+} catch (error: Exception) {
+    // Locked meanwhile, or the vault list did not answer.
+    recordId to mapOf("" to (error.message ?: "not saved"))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -177,6 +186,12 @@ private fun inheritedHint(record: JSONObject?, field: String, groups: Map<String
     return value to "from group $from"
 }
 
+/** The errors no field of the editor shows, as one line at its top. */
+private fun unshown(errors: Map<String, String>, shown: Set<String>): String? =
+    errors.filterKeys { it !in shown }.entries.joinToString("; ") { (field, reason) ->
+        if (field.isEmpty()) reason else "${field.replace('_', ' ')}: $reason"
+    }.ifEmpty { null }
+
 /** The host editor (UI spec 6.2): the desktop's host panel for the fields the phone edits. */
 @Composable
 fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit) {
@@ -204,12 +219,16 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
     var errors by remember { mutableStateOf(mapOf<String, String>()) }
     var picking by remember { mutableStateOf<String?>(null) }
     var edits by remember { mutableStateOf(0) }
+    var saved by remember { mutableStateOf(0) }
+    var triedClose by remember { mutableStateOf(false) }
+    val saving = remember { Mutex() }
+    val scope = rememberCoroutineScope()
 
     val groups by produceState(mapOf<String, String>(), edits) {
         value = withContext(Dispatchers.IO) {
             try {
                 records(JSONObject().put("types", JSONArray().put("group"))).associate { it.id to it.title }
-            } catch (error: CoreException) {
+            } catch (error: Exception) {
                 emptyMap()
             }
         }
@@ -219,7 +238,7 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             try {
                 val list = Core.array("keys_list")
                 (0 until list.length()).map { list.getJSONObject(it) }.map { it.getString("record_id") to it.optString("label") }
-            } catch (error: CoreException) {
+            } catch (error: Exception) {
                 emptyList()
             }
         }
@@ -227,50 +246,85 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
 
     fun changed() {
         edits += 1
+        app.noteActivity()
     }
 
-    // Saves a moment after the last change (the desktop saves as you go).
-    LaunchedEffect(edits) {
-        if (edits == 0 || address.isBlank()) return@LaunchedEffect
-        delay(500)
-        val data = JSONObject(original.toString())
-        data.put("address", address.trim())
-        data.put("label", label.trim().ifBlank { JSONObject.NULL })
-        data.put("group_id", group ?: JSONObject.NULL)
-        data.put("tags", JSONArray(tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }))
-        data.put("color", color ?: JSONObject.NULL)
-        data.put("backspace", backspace)
-        data.put("charset", charset.trim().lowercase().ifBlank { "utf-8" })
-        val ssh = data.optJSONObject("ssh") ?: JSONObject()
-        ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
-        ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
-        ssh.put("key_id", keyId ?: JSONObject.NULL)
-        data.put("ssh", ssh)
-        val secrets = JSONObject()
-        if (newPassword.isNotEmpty()) secrets.put("ssh.password", newPassword)
-        if (clearPassword) secrets.put("ssh.password", JSONObject.NULL)
-        val (saved, problems) = withContext(Dispatchers.IO) {
-            save(record?.vaultId ?: vaultId(), recordId, "host", data, secrets)
-        }
-        errors = problems
-        if (problems.isEmpty()) {
-            recordId = saved
-            if (newPassword.isNotEmpty()) passwordSaved = true
-            if (clearPassword) passwordSaved = false
-            newPassword = ""
-            clearPassword = false
-            view = withContext(Dispatchers.IO) {
-                try {
-                    Core.obj("record_get", JSONObject().put("vault_id", record?.vaultId ?: vaultId()).put("record_id", saved))
-                } catch (error: CoreException) {
-                    view
+    /**
+     * Saves what the editor shows; the password only with [withPassword]
+     * (when the editor closes), so a pause while typing it never stores a
+     * piece of it. One save at a time, never cancelled half way: a new
+     * host gets its record id once (review of run 14).
+     */
+    suspend fun persist(withPassword: Boolean) = withContext(NonCancellable) {
+        saving.withLock {
+            if (address.isBlank()) return@withLock
+            val passwordChange = withPassword && (newPassword.isNotEmpty() || clearPassword)
+            if (saved == edits && !passwordChange) return@withLock
+            val upTo = edits
+            val data = JSONObject(original.toString())
+            data.put("address", address.trim())
+            data.put("label", label.trim().ifBlank { JSONObject.NULL })
+            data.put("group_id", group ?: JSONObject.NULL)
+            data.put("tags", JSONArray(tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }))
+            data.put("color", color ?: JSONObject.NULL)
+            data.put("backspace", backspace)
+            data.put("charset", charset.trim().lowercase().ifBlank { "utf-8" })
+            val ssh = data.optJSONObject("ssh") ?: JSONObject()
+            ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
+            ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
+            ssh.put("key_id", keyId ?: JSONObject.NULL)
+            data.put("ssh", ssh)
+            val secrets = JSONObject()
+            if (passwordChange) {
+                if (clearPassword) secrets.put("ssh.password", JSONObject.NULL) else secrets.put("ssh.password", newPassword)
+            }
+            val (id, problems) = withContext(Dispatchers.IO) {
+                save(record?.vaultId, recordId, "host", data, secrets)
+            }
+            errors = problems
+            if (problems.isEmpty()) {
+                recordId = id
+                saved = upTo
+                if (passwordChange) {
+                    passwordSaved = !clearPassword
+                    newPassword = ""
+                    clearPassword = false
+                }
+                view = withContext(Dispatchers.IO) {
+                    try {
+                        Core.obj("record_get", JSONObject().put("vault_id", record?.vaultId ?: vaultId()).put("record_id", id))
+                    } catch (error: Exception) {
+                        view
+                    }
                 }
             }
         }
     }
 
-    EditorFrame(if (record == null) "New host" else "Edit host", onClose) {
-        errors[""]?.let { Text(it, color = Tokens.danger) }
+    // Saves a moment after the last change (the desktop saves as you go).
+    LaunchedEffect(edits) {
+        if (edits == 0) return@LaunchedEffect
+        delay(500)
+        persist(withPassword = false)
+    }
+
+    // Closing saves what is left, the password included (back arrow or gesture).
+    // With errors the first Back shows them; a second one leaves without them.
+    fun close() {
+        scope.launch {
+            persist(withPassword = true)
+            if (errors.isEmpty() || triedClose) onClose() else triedClose = true
+        }
+    }
+    BackHandler(onBack = ::close)
+
+    EditorFrame(if (record == null) "New host" else "Edit host", ::close) {
+        unshown(errors, setOf("address", "label", "tags", "ssh.port", "ssh.username", "ssh.password", "charset"))?.let {
+            Text(it, color = Tokens.danger, modifier = Modifier.testTag("editor_error"))
+        }
+        if (triedClose && errors.isNotEmpty()) {
+            Text("Not saved: correct it, or go back again to leave without this change.", color = Tokens.danger)
+        }
         Field(address, { address = it; changed() }, "Address", "host_address", error = errors["address"])
         Field(label, { label = it; changed() }, "Label", "host_label", error = errors["label"])
         PickerRow("Group", group?.let { groups[it] } ?: "Top level", "host_group") { picking = "group" }
@@ -293,9 +347,9 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             inherited = inheritedUser?.takeIf { username.isBlank() }?.let { "${it.first}, ${it.second}" },
         )
         PasswordField(
-            newPassword, { newPassword = it; clearPassword = false; changed() },
+            newPassword, { newPassword = it; clearPassword = false; app.noteActivity() },
             if (passwordSaved) "Password (saved; type to replace)" else "Password", "host_password",
-            error = errors["ssh.password"],
+            error = errors["ssh.password"] ?: if (newPassword.isNotEmpty()) "Saved when you leave the editor" else null,
         )
         if (passwordSaved) {
             TextButton(onClick = { clearPassword = true; newPassword = ""; changed() }) { Text("Remove the saved password") }
@@ -379,57 +433,113 @@ fun GroupEditor(app: App, record: Record?, parentId: String?, onClose: () -> Uni
     var color by remember { mutableStateOf(original.optString("color").takeIf { it.isNotBlank() && it != "null" }) }
     var port by remember { mutableStateOf(if (ssh0.has("port") && !ssh0.isNull("port")) ssh0.optInt("port").toString() else "") }
     var username by remember { mutableStateOf(ssh0.optString("username").takeIf { it != "null" } ?: "") }
+    var keyId by remember { mutableStateOf(ssh0.optString("key_id").takeIf { it.isNotBlank() && it != "null" }) }
     var errors by remember { mutableStateOf(mapOf<String, String>()) }
-    var picking by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf<String?>(null) }
     var edits by remember { mutableStateOf(0) }
+    var saved by remember { mutableStateOf(0) }
+    var triedClose by remember { mutableStateOf(false) }
+    val saving = remember { Mutex() }
+    val scope = rememberCoroutineScope()
     val groups by produceState(mapOf<String, String>()) {
         value = withContext(Dispatchers.IO) {
             try {
                 records(JSONObject().put("types", JSONArray().put("group"))).associate { it.id to it.title }
-            } catch (error: CoreException) {
+            } catch (error: Exception) {
                 emptyMap()
+            }
+        }
+    }
+    val keys by produceState(listOf<Pair<String, String>>()) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val list = Core.array("keys_list")
+                (0 until list.length()).map { list.getJSONObject(it) }.map { it.getString("record_id") to it.optString("label") }
+            } catch (error: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    fun changed() {
+        edits += 1
+        app.noteActivity()
+    }
+
+    suspend fun persist() = withContext(NonCancellable) {
+        saving.withLock {
+            if (name.isBlank() || saved == edits) return@withLock
+            val upTo = edits
+            val data = JSONObject(original.toString())
+            data.put("name", name.trim())
+            data.put("parent_id", parent ?: JSONObject.NULL)
+            data.put("color", color ?: JSONObject.NULL)
+            val ssh = data.optJSONObject("ssh") ?: JSONObject()
+            ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
+            ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
+            ssh.put("key_id", keyId ?: JSONObject.NULL)
+            data.put("ssh", ssh)
+            val (id, problems) = withContext(Dispatchers.IO) {
+                save(record?.vaultId, recordId, "group", data, null)
+            }
+            errors = problems
+            if (problems.isEmpty()) {
+                recordId = id
+                saved = upTo
             }
         }
     }
 
     LaunchedEffect(edits) {
-        if (edits == 0 || name.isBlank()) return@LaunchedEffect
+        if (edits == 0) return@LaunchedEffect
         delay(500)
-        val data = JSONObject(original.toString())
-        data.put("name", name.trim())
-        data.put("parent_id", parent ?: JSONObject.NULL)
-        data.put("color", color ?: JSONObject.NULL)
-        val ssh = data.optJSONObject("ssh") ?: JSONObject()
-        ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
-        ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
-        data.put("ssh", ssh)
-        val (saved, problems) = withContext(Dispatchers.IO) {
-            save(record?.vaultId ?: vaultId(), recordId, "group", data, null)
-        }
-        errors = problems
-        if (problems.isEmpty()) recordId = saved
+        persist()
     }
 
-    EditorFrame(if (record == null) "New group" else "Edit group", onClose) {
-        errors[""]?.let { Text(it, color = Tokens.danger) }
-        Field(name, { name = it; edits += 1 }, "Name", "group_name", error = errors["name"])
-        ColorPicker(color) { color = it; edits += 1 }
-        PickerRow("Parent group", parent?.let { groups[it] } ?: "Top level", "group_parent") { picking = true }
+    // With errors the first Back shows them; a second one leaves without them.
+    fun close() {
+        scope.launch {
+            persist()
+            if (errors.isEmpty() || triedClose) onClose() else triedClose = true
+        }
+    }
+    BackHandler(onBack = ::close)
+
+    EditorFrame(if (record == null) "New group" else "Edit group", ::close) {
+        unshown(errors, setOf("name", "ssh.port", "ssh.username"))?.let {
+            Text(it, color = Tokens.danger, modifier = Modifier.testTag("editor_error"))
+        }
+        if (triedClose && errors.isNotEmpty()) {
+            Text("Not saved: correct it, or go back again to leave without this change.", color = Tokens.danger)
+        }
+        Field(name, { name = it; changed() }, "Name", "group_name", error = errors["name"])
+        ColorPicker(color) { color = it; changed() }
+        PickerRow("Parent group", parent?.let { groups[it] } ?: "Top level", "group_parent") { picking = "parent" }
         Section("SSH defaults for its hosts")
-        Field(port, { port = it.filter(Char::isDigit).take(5); edits += 1 }, "Port", "group_port", error = errors["ssh.port"], number = true)
-        Field(username, { username = it; edits += 1 }, "Username", "group_username", error = errors["ssh.username"])
+        Field(port, { port = it.filter(Char::isDigit).take(5); changed() }, "Port", "group_port", error = errors["ssh.port"], number = true)
+        Field(username, { username = it; changed() }, "Username", "group_username", error = errors["ssh.username"])
+        PickerRow("Key", keyId?.let { id -> keys.firstOrNull { it.first == id }?.second ?: "A key" } ?: "None", "group_key") { picking = "key" }
         val others = original.keys().asSequence().filter { it !in GROUP_FIELDS && !original.isNull(it) }.toList() +
-            ssh0.keys().asSequence().filter { it !in setOf("port", "username") && !ssh0.isNull(it) }.map { "ssh.$it" }.toList()
+            ssh0.keys().asSequence().filter { it !in setOf("port", "username", "key_id") && !ssh0.isNull(it) }.map { "ssh.$it" }.toList()
         if (others.isNotEmpty()) {
             Section("More settings (edit on the desktop)")
             Text(others.joinToString(", ") { it.replace('_', ' ') }, color = Tokens.textSecondary)
         }
     }
-    if (picking) {
-        GroupPicker("Parent group", exclude = recordId, onDismiss = { picking = false }) { picked ->
+    when (picking) {
+        "parent" -> GroupPicker("Parent group", exclude = recordId, onDismiss = { picking = null }) { picked ->
             parent = picked
-            picking = false
-            edits += 1
+            picking = null
+            changed()
+        }
+        "key" -> ChoiceDialog(
+            "Key",
+            listOf<Pair<String?, String>>(null to "None") + keys.map { it.first to it.second },
+            onDismiss = { picking = null },
+        ) { picked ->
+            keyId = picked
+            picking = null
+            changed()
         }
     }
 }

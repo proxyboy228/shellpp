@@ -783,14 +783,23 @@ SOFTWARE.
 | SQLite (bundled by libsqlite3-sys 0.38.2) | 3.53.2 | Public domain | <https://sqlite.org/copyright.html> |
 | Lucide icons (embedded by gpui-kit-assets 0.7.3) | as bundled | ISC (some icons derived from Feather, MIT) | <https://github.com/lucide-icons/lucide> |
 
-## The Android prototype (apps/android)
+## The Android app (apps/android)
 
-The debug APK of the Android prototype (run 13; not distributed) ships the
+The debug APK of the Android app (runs 13 and 14; not distributed) ships the
 Rust crates of the shared core listed above that its library links, plus
 the `jni` crate and its dependencies (MIT OR Apache-2.0, checked by
 `cargo deny` with the client workspace), JetBrains Mono Regular with its
-license (`apps/android/app/src/main/assets/fonts/OFL.txt`), and the Kotlin
-standard library (Apache-2.0, <https://github.com/JetBrains/kotlin>). Its
-tests use JUnit 4 (EPL-1.0) and AndroidX Test (Apache-2.0), which never
-ship in the app. The full table of the Android app comes with its first
-release.
+license (`apps/android/app/src/main/assets/fonts/OFL.txt`), the Kotlin
+standard library (Apache-2.0, <https://github.com/JetBrains/kotlin>), and,
+from Google Maven, Jetpack Compose (UI, Foundation, Material 3, Material
+Icons Core) and AndroidX Activity with their AndroidX dependencies
+(Apache-2.0, <https://developer.android.com/jetpack/androidx>) and Kotlin
+coroutines (Apache-2.0, <https://github.com/Kotlin/kotlinx.coroutines>).
+Its tests use JUnit 4 (EPL-1.0), org.json (Public Domain, unit tests only),
+AndroidX Test and UI Automator (Apache-2.0), which never ship in the app.
+
+| Component | Version | License | Source |
+|---|---|---|---|
+| rustls-platform-verifier, Android component (`CertificateVerifier.kt`, its manifest and network security config; vendored in `apps/android/third_party/rustls-platform-verifier`, unchanged) | 0.2.0 (tag `v/0.7.1`, commit `252e25161a91af476cbea620e29d277592d27ec7`) | MIT OR Apache-2.0 | <https://github.com/rustls/rustls-platform-verifier> |
+
+The full table of the Android app comes with its first release.

@@ -7949,9 +7949,11 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
+ "data-encoding",
  "futures",
  "getrandom 0.4.3",
  "jni",
+ "rustls-platform-verifier",
  "secrecy",
  "serde",
  "serde_json",

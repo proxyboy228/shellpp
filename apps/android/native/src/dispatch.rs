@@ -8,16 +8,36 @@
 //! `SecretString`s, and only the command's name and an error's code are
 //! ever logged.
 
+use data_encoding::{BASE64, HEXLOWER};
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use shellpp_core::crypto::KdfParams;
 use shellpp_core::lock::FirstRunOptions;
 use shellpp_core::service::dto::{
-    FirstRunInput, PasswordInput, RecordMoveInput, RecordRef, RecordSaveInput, RecordsQuery,
-    RecordsRef, RememberDeviceInput, SettingsSetInput,
+    FirstRunInput, KeyGenerateInput, KeyImportInput, PasswordInput, RecordMoveInput, RecordRef,
+    RecordSaveInput, RecordsQuery, RecordsRef, RememberDeviceInput, SecretCopyTarget,
+    SettingsSetInput,
 };
+use shellpp_core::service::keychain::KeyLabelInput;
+use shellpp_core::service::{ServerCheck, SignInInput, SignInOutcome, SyncReport, TrustChoice};
+use shellpp_core::sync::{CertInfo, TlsProblem, fingerprint_text, tls};
 use shellpp_core::{Core, CoreError};
 use uuid::Uuid;
+
+/// `rustls-platform-verifier` was initialized (Android only; elsewhere the
+/// platform verifier needs no setup). Without it the crate panics at the
+/// first TLS connection, so every sync command checks it first
+/// (architecture 5).
+static TLS_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(!cfg!(target_os = "android"));
+
+/// Called once the JNI setup of the platform verifier ran.
+pub fn tls_initialized() {
+    TLS_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+}
 
 /// Why a command failed.
 enum Failure {
@@ -37,6 +57,190 @@ impl From<CoreError> for Failure {
 #[derive(serde::Deserialize)]
 struct RecordIds {
     record_ids: Vec<Uuid>,
+}
+
+/// The input of `key_label_set`.
+#[derive(Deserialize)]
+struct KeyLabelJson {
+    key: RecordRef,
+    label: String,
+}
+
+/// The origin of a sync command.
+#[derive(Deserialize)]
+struct OriginInput {
+    origin: String,
+}
+
+/// A trust choice of the certificate dialog (UI spec 11.1): the system's
+/// roots, a pinned certificate (its SHA-256 in hex) or a CA (its DER in
+/// base64, from `ca_file_info`).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ChoiceInput {
+    System,
+    Pin { sha256: String },
+    Ca { der: String },
+}
+
+#[derive(Deserialize)]
+struct TrustInput {
+    origin: String,
+    choice: ChoiceInput,
+}
+
+/// Registration or sign-in (UI spec 11.1).
+#[derive(Deserialize)]
+struct SignInJson {
+    origin: String,
+    email: String,
+    password: SecretString,
+    #[serde(default)]
+    registration_code: Option<SecretString>,
+    /// The KDF settings the user accepted after a "weaker" or "changed" notice.
+    #[serde(default)]
+    accepted_kdf: Option<KdfParams>,
+    /// The password or the email changed on another device (D200).
+    #[serde(default)]
+    after_kdf_change: bool,
+}
+
+#[derive(Deserialize)]
+struct CodeInput {
+    code: SecretString,
+}
+
+#[derive(Deserialize)]
+struct SignOutInput {
+    delete_local: bool,
+}
+
+#[derive(Deserialize)]
+struct FileInput {
+    /// The file's bytes in base64.
+    file: String,
+}
+
+#[derive(Deserialize)]
+struct ServerRecoveryInput {
+    recovery_key: SecretString,
+    new_password: SecretString,
+    email: String,
+    #[serde(default)]
+    totp_code: Option<SecretString>,
+}
+
+fn cert_json(info: &CertInfo) -> Value {
+    json!({
+        "subject": info.subject,
+        "issuer": info.issuer,
+        "not_before": info.not_before,
+        "not_after": info.not_after,
+        "fingerprint": fingerprint_text(&info.sha256),
+        "sha256": HEXLOWER.encode(&info.sha256),
+    })
+}
+
+fn problem_json(problem: &TlsProblem) -> Value {
+    match problem {
+        TlsProblem::UnknownIssuer(info) => {
+            json!({ "kind": "unknown_issuer", "cert": cert_json(info) })
+        }
+        TlsProblem::Expired(info) => json!({ "kind": "expired", "cert": cert_json(info) }),
+        TlsProblem::WrongName(info) => json!({ "kind": "wrong_name", "cert": cert_json(info) }),
+        TlsProblem::PinChanged {
+            pinned,
+            new,
+            system_trusts,
+        } => json!({
+            "kind": "pin_changed",
+            "pinned": fingerprint_text(pinned),
+            "cert": cert_json(new),
+            "system_trusts": system_trusts,
+        }),
+        TlsProblem::Other(reason) => json!({ "kind": "other", "reason": reason }),
+    }
+}
+
+fn check_json(check: &ServerCheck) -> Value {
+    match check {
+        ServerCheck::Ready {
+            origin,
+            invite_only,
+            version,
+            ..
+        } => json!({
+            "kind": "ready",
+            "origin": origin,
+            "invite_only": invite_only,
+            "version": version,
+        }),
+        ServerCheck::Certificate { origin, problem } => json!({
+            "kind": "certificate",
+            "origin": origin,
+            "problem": problem_json(problem),
+        }),
+    }
+}
+
+fn outcome_json(outcome: SignInOutcome) -> Result<Value, Failure> {
+    match outcome {
+        SignInOutcome::Done(status) => Ok(json!({ "kind": "done", "status": out(Ok(status))? })),
+        SignInOutcome::TotpRequired => Ok(json!({ "kind": "totp_required" })),
+    }
+}
+
+fn report_json(report: &SyncReport) -> Value {
+    json!({
+        "pulled": report.pulled,
+        "pushed": report.pushed,
+        "conflicts": report.conflicts,
+        "integrity_warnings": report.integrity_warnings,
+        "failed": report.failed,
+        "newer_epoch": report.newer_epoch,
+        "brought_back": report.brought_back,
+        "restored": report.restored,
+    })
+}
+
+fn choice(input: ChoiceInput) -> Result<TrustChoice, Failure> {
+    match input {
+        ChoiceInput::System => Ok(TrustChoice::System),
+        ChoiceInput::Pin { sha256 } => {
+            let bytes = HEXLOWER
+                .decode(sha256.to_ascii_lowercase().as_bytes())
+                .map_err(|_| Failure::Input)?;
+            Ok(TrustChoice::Pin(
+                bytes.try_into().map_err(|_| Failure::Input)?,
+            ))
+        }
+        ChoiceInput::Ca { der } => Ok(TrustChoice::Ca(
+            BASE64.decode(der.as_bytes()).map_err(|_| Failure::Input)?,
+        )),
+    }
+}
+
+/// Sign-in and registration: the code is kept for the TOTP step by the core.
+fn sign_in(core: &Core, input: SignInJson, register: bool) -> Result<Value, Failure> {
+    let accepted = input.accepted_kdf;
+    let after_change = input.after_kdf_change;
+    let input = SignInInput {
+        origin: input.origin,
+        email: input.email,
+        password: input.password,
+        registration_code: input.registration_code,
+    };
+    if register {
+        return Ok(json!({ "kind": "done", "status": out(core.sync_register(input))? }));
+    }
+    let outcome = if after_change {
+        core.sync_sign_in_after_kdf_change(input, accepted)
+    } else if let Some(accepted) = accepted {
+        core.sync_sign_in_accepting_kdf(input, accepted)
+    } else {
+        core.sync_sign_in(input)
+    }?;
+    outcome_json(outcome)
 }
 
 fn parse<I: DeserializeOwned>(input: &[u8]) -> Result<I, Failure> {
@@ -73,6 +277,10 @@ pub fn call(core: &Core, command: &str, input: &[u8]) -> String {
 }
 
 fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
+    let syncs = command.starts_with("sync_") || command == "recovery_unlock_server";
+    if syncs && !TLS_READY.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Failure::Core(CoreError::Unavailable));
+    }
     match command {
         // Lock (UI spec 4, 5).
         "lock_status" => out(Ok(core.lock_status())),
@@ -154,8 +362,122 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
             let input: RecordIds = parse(input)?;
             out(core.recently_deleted_restore(&input.record_ids))
         }
-        // The Keychain's list (the host editor's key picker).
+        // The Keychain (UI spec 7, M4).
         "keys_list" => out(core.keys_list()),
+        "key_generate" => {
+            let input: KeyGenerateInput = parse(input)?;
+            out(core.key_generate(input))
+        }
+        "key_import" => {
+            let input: KeyImportInput = parse(input)?;
+            out(core.key_import(input))
+        }
+        "key_public_key" => {
+            let input: RecordRef = parse(input)?;
+            out(core.key_public_key(input))
+        }
+        "key_users" => {
+            let input: RecordRef = parse(input)?;
+            out(core.key_users(input))
+        }
+        "key_label_set" => {
+            let input: KeyLabelJson = parse(input)?;
+            out(core.key_label_set(KeyLabelInput {
+                key: input.key,
+                label: input.label,
+            }))
+        }
+        // Known hosts (UI spec 8, M4).
+        "known_hosts_list" => out(core.known_hosts_list()),
+        "known_host_remove" => {
+            let input: RecordsRef = parse(input)?;
+            out(core.known_host_remove(input))
+        }
+        "known_host_restore" => {
+            let input: RecordsRef = parse(input)?;
+            out(core.known_host_restore(input))
+        }
+        // Sync (UI spec 11, M3).
+        "sync_status" => out(core.sync_status()),
+        "sync_server_check" => {
+            let input: OriginInput = parse(input)?;
+            Ok(check_json(&core.sync_server_check(&input.origin)?))
+        }
+        "sync_server_trust_verified" => {
+            let input: TrustInput = parse(input)?;
+            let choice = choice(input.choice)?;
+            Ok(check_json(
+                &core.sync_server_trust_verified(&input.origin, choice)?,
+            ))
+        }
+        "sync_server_trust_info" => {
+            let input: OriginInput = parse(input)?;
+            out(core.sync_server_trust_info(&input.origin))
+        }
+        "ca_file_info" => {
+            let input: FileInput = parse(input)?;
+            let bytes = BASE64
+                .decode(input.file.as_bytes())
+                .map_err(|_| Failure::Input)?;
+            let der = tls::ca_der_from_file(&bytes).ok_or(Failure::Core(CoreError::field(
+                "file",
+                shellpp_core::ValidationReason::Invalid,
+            )))?;
+            let info = tls::cert_info(&der).ok_or(Failure::Core(CoreError::field(
+                "file",
+                shellpp_core::ValidationReason::Invalid,
+            )))?;
+            Ok(json!({ "der": BASE64.encode(&der), "cert": cert_json(&info) }))
+        }
+        "sync_sign_in" => sign_in(core, parse(input)?, false),
+        "sync_register" => sign_in(core, parse(input)?, true),
+        "sync_sign_in_totp" => {
+            let input: CodeInput = parse(input)?;
+            outcome_json(core.sync_sign_in_totp(input.code.expose_secret())?)
+        }
+        "sync_sign_in_cancel" => {
+            core.sync_sign_in_cancel();
+            out(Ok(Value::Null))
+        }
+        "sync_weaker_kdf" => out(Ok(core.sync_weaker_kdf())),
+        "recovery_key_granted" => out(core.recovery_key_granted()),
+        "secret_copy" => {
+            let input: SecretCopyTarget = parse(input)?;
+            out(core.secret_copy(input))
+        }
+        "sync_totp_setup" => {
+            let input: PasswordInput = parse(input)?;
+            let setup = core.sync_totp_setup(input.password)?;
+            Ok(json!({
+                "secret": setup.secret.expose_secret(),
+                "otpauth_uri": setup.otpauth_uri.as_ref().map(|uri| uri.expose_secret().to_owned()),
+            }))
+        }
+        "sync_totp_enable" => {
+            let input: CodeInput = parse(input)?;
+            out(core.sync_totp_enable(input.code.expose_secret()))
+        }
+        "sync_now" => Ok(report_json(&core.sync_now()?)),
+        "sync_auto" => Ok(report_json(&core.sync_auto()?)),
+        "sync_due" => out(Ok(core.sync_due())),
+        "sync_devices" => out(core.sync_devices()),
+        "sync_sign_out" => {
+            let input: SignOutInput = parse(input)?;
+            out(core.sync_sign_out(input.delete_local))
+        }
+        "recovery_unlock_server" => {
+            let input: ServerRecoveryInput = parse(input)?;
+            let totp = input
+                .totp_code
+                .as_ref()
+                .map(|code| code.expose_secret().to_owned());
+            out(core.recovery_unlock_server(
+                input.recovery_key,
+                input.new_password,
+                &input.email,
+                totp,
+            ))
+        }
         _ => Err(Failure::Unknown),
     }
 }

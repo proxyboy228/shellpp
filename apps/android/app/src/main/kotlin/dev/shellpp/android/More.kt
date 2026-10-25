@@ -89,7 +89,7 @@ fun MoreScreen(app: App, onOpen: (Overlay) -> Unit) {
     Screen("More", onClose = null) {
         MenuRow("Known hosts", "more_known_hosts", enabled = false, detail = "Comes with the keys update") {}
         MenuRow("Recently deleted", "more_recently_deleted") { onOpen(Overlay.RecentlyDeleted) }
-        MenuRow("Account and sync", "more_account", enabled = false, detail = "Comes with the sync update") {}
+        MenuRow("Account and sync", "more_account") { onOpen(Overlay.Account) }
         MenuRow("Settings", "more_settings") { onOpen(Overlay.Settings) }
         MenuRow("Lock", "more_lock") {
             scope.launch {

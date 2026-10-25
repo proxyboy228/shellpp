@@ -19,6 +19,7 @@ pub mod events;
 pub mod input;
 pub mod jni_api;
 pub mod screen;
+pub mod sftp;
 pub mod theme;
 
 pub use engine::{Engine, EngineError, Services};

@@ -164,3 +164,51 @@ fn fingerprint_unlock_opens_after_a_lock_and_not_without_the_prompt() {
     assert_eq!(status["remember_device_enabled"], true);
     assert_eq!(store.accounts().len(), 1);
 }
+
+#[test]
+fn the_sync_commands_answer_before_an_account_exists() {
+    let files = tempfile::tempdir().expect("files");
+    let store = Arc::new(MemorySecretStore::new());
+    let engine = Engine::start(files.path(), services(&store)).expect("engine");
+    ok(
+        &engine,
+        "first_run_setup",
+        &json!({ "password": random("pw") }),
+    );
+    let status = ok(&engine, "sync_status", &json!(null));
+    assert_eq!(status["bound"], false);
+    assert_eq!(status["signed_in"], false);
+
+    // Not a server address: the reason the wizard shows.
+    let answer: Value = serde_json::from_str(
+        &engine.call(
+            "sync_server_check",
+            json!({ "origin": "ftp://example.org" })
+                .to_string()
+                .as_bytes(),
+        ),
+    )
+    .expect("json");
+    assert_eq!(answer["error"]["code"], "sync_error", "{answer}");
+    assert_eq!(
+        answer["error"]["details"]["reason"], "invalid_origin",
+        "{answer}"
+    );
+
+    // A trust choice that is not one, and a file that is not a certificate.
+    let bad_pin = json!({ "origin": "https://sync.example.org", "choice": { "kind": "pin", "sha256": "abc" } });
+    assert_eq!(
+        code(
+            &engine,
+            "sync_server_trust_verified",
+            bad_pin.to_string().as_bytes()
+        ),
+        "bad_input"
+    );
+    let not_a_cert = json!({ "file": "aGVsbG8=" });
+    assert_eq!(
+        code(&engine, "ca_file_info", not_a_cert.to_string().as_bytes()),
+        "validation_failed"
+    );
+    assert_eq!(ok(&engine, "sync_weaker_kdf", &json!(null)), Value::Null);
+}

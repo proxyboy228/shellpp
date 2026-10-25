@@ -49,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -140,6 +141,7 @@ fun MainScreen(app: App, activity: MainActivity) {
             is Overlay.EditGroup -> GroupEditor(app, current.record, current.parentId, onClose = { overlay = null })
             Overlay.Settings -> SettingsScreen(app, activity, onClose = { overlay = null })
             Overlay.RecentlyDeleted -> RecentlyDeletedScreen(app, onClose = { overlay = null })
+            Overlay.Account -> AccountScreen(app, activity, onClose = { overlay = null })
         }
         return
     }
@@ -176,6 +178,7 @@ sealed interface Overlay {
     data class EditGroup(val record: Record?, val parentId: String?) : Overlay
     data object Settings : Overlay
     data object RecentlyDeleted : Overlay
+    data object Account : Overlay
 }
 
 /** Opens a terminal on a saved host (UI spec 6.1: tap a host to connect). */
@@ -206,6 +209,7 @@ fun HostsScreen(
     var moving by remember { mutableStateOf<Record?>(null) }
     var adding by remember { mutableStateOf(false) }
     var refresh by remember { mutableStateOf(0) }
+    var syncing by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val group = path.lastOrNull()
@@ -244,7 +248,12 @@ fun HostsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(group?.title ?: vaultName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = {
+                    Text(
+                        if (path.isEmpty()) vaultName else path.joinToString(" › ") { it.title },
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = {
                     if (path.isNotEmpty()) {
                         IconButton(onClick = { onPath(path.dropLast(1)) }, modifier = Modifier.testTag("up")) {
@@ -299,38 +308,61 @@ fun HostsScreen(
                 }
                 return@Column
             }
-            LazyColumn(Modifier.fillMaxSize()) {
-                if (quick != null) {
-                    item {
-                        Row(
-                            Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                                .combinedClickable(onClick = {
-                                    activity.startActivity(
-                                        Intent(activity, TerminalActivity::class.java)
-                                            .putExtra(TerminalActivity.EXTRA_ADDRESS, quick.address)
-                                            .putExtra(TerminalActivity.EXTRA_PORT, quick.port ?: 22)
-                                            .putExtra(TerminalActivity.EXTRA_USERNAME, quick.user),
-                                    )
-                                })
-                                .padding(horizontal = 16.dp)
-                                .testTag("quick_connect"),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) { Text("Connect to ${quick.user}@${quick.address}", color = Tokens.accent) }
+            // Pull to refresh runs a sync when an account is connected (UI spec 6.1).
+            PullToRefreshBox(
+                isRefreshing = syncing,
+                onRefresh = {
+                    syncing = true
+                    scope.launch {
+                        val failure = withContext(Dispatchers.IO) {
+                            try {
+                                val status = Core.obj("sync_status")
+                                if (status.optBoolean("bound")) Core.call("sync_now")
+                                null
+                            } catch (error: CoreException) {
+                                syncErrorText(error)
+                            }
+                        }
+                        syncing = false
+                        refresh += 1
+                        failure?.let { snackbar.showSnackbar(it) }
                     }
-                }
-                items(groups, key = { it.id }) { row ->
-                    RecordRow(
-                        row, live = false,
-                        onClick = { search = ""; onPath(path + row) },
-                        onLongClick = { sheet = row },
-                    )
-                }
-                items(hosts, key = { it.id }) { row ->
-                    RecordRow(
-                        row, live = row.id in liveHosts,
-                        onClick = { connect(activity, row) },
-                        onLongClick = { sheet = row },
-                    )
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    if (quick != null) {
+                        item {
+                            Row(
+                                Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                                    .combinedClickable(onClick = {
+                                        activity.startActivity(
+                                            Intent(activity, TerminalActivity::class.java)
+                                                .putExtra(TerminalActivity.EXTRA_ADDRESS, quick.address)
+                                                .putExtra(TerminalActivity.EXTRA_PORT, quick.port ?: 22)
+                                                .putExtra(TerminalActivity.EXTRA_USERNAME, quick.user),
+                                        )
+                                    })
+                                    .padding(horizontal = 16.dp)
+                                    .testTag("quick_connect"),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) { Text("Connect to ${quick.user}@${quick.address}", color = Tokens.accent) }
+                        }
+                    }
+                    items(groups, key = { it.id }) { row ->
+                        RecordRow(
+                            row, live = false,
+                            onClick = { search = ""; onPath(path + row) },
+                            onLongClick = { sheet = row },
+                        )
+                    }
+                    items(hosts, key = { it.id }) { row ->
+                        RecordRow(
+                            row, live = row.id in liveHosts,
+                            onClick = { connect(activity, row) },
+                            onLongClick = { sheet = row },
+                        )
+                    }
                 }
             }
         }
@@ -397,24 +429,38 @@ fun HostsScreen(
                             val ref = JSONObject().put("vault_id", record.vaultId).put("record_ids", JSONArray().put(record.id))
                             val deleted = withContext(Dispatchers.IO) {
                                 try {
-                                    Core.call("record_delete", ref)
-                                    true
-                                } catch (error: CoreException) {
-                                    false
+                                    Core.obj("record_delete", ref)
+                                } catch (error: Exception) {
+                                    null
                                 }
                             }
                             refresh += 1
-                            if (!deleted) return@launch
+                            if (deleted == null) return@launch
                             val answer = snackbar.showSnackbar("Deleted “${record.title}”", "Undo", duration = SnackbarDuration.Long)
                             if (answer == SnackbarResult.ActionPerformed) {
-                                withContext(Dispatchers.IO) {
+                                val undone = withContext(Dispatchers.IO) {
                                     try {
                                         Core.call("record_restore", ref)
+                                        // A group's hosts and groups moved one level up
+                                        // when it went: they go back into it, as on the
+                                        // desktop (review of run 14).
+                                        val moved = deleted.optJSONArray("moved")
+                                        if (record.isGroup && moved != null && moved.length() > 0) {
+                                            Core.call(
+                                                "record_move",
+                                                JSONObject().put("vault_id", record.vaultId).put("record_ids", moved)
+                                                    .put("target_group_id", record.id),
+                                            )
+                                        }
+                                        null
                                     } catch (error: CoreException) {
-                                        // Past the undo window: Recently deleted has it.
+                                        "Not undone: ${error.message}. Recently deleted has it."
+                                    } catch (error: Exception) {
+                                        "Not undone. Recently deleted has it."
                                     }
                                 }
                                 refresh += 1
+                                undone?.let { snackbar.showSnackbar(it) }
                             }
                         }
                     },
@@ -433,16 +479,19 @@ fun HostsScreen(
             onPick = { target ->
                 moving = null
                 scope.launch {
-                    withContext(Dispatchers.IO) {
+                    val failure = withContext(Dispatchers.IO) {
                         try {
                             val input = JSONObject().put("vault_id", record.vaultId).put("record_ids", JSONArray().put(record.id))
                             if (target != null) input.put("target_group_id", target)
                             Core.call("record_move", input)
-                        } catch (error: CoreException) {
+                            null
+                        } catch (error: Exception) {
                             // A move under itself is refused by the core.
+                            "Not moved: ${error.message}"
                         }
                     }
                     refresh += 1
+                    failure?.let { snackbar.showSnackbar(it) }
                 }
             },
         )
