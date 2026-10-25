@@ -191,7 +191,8 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
    programs, Delete on the command line, Cut in nano), sticky Ctrl and Alt,
    the input method tested with Gboard and the Samsung Keyboard, the desktop's key mapping moved into
    `shellpp-terminal` and shared, the foreground service, reconnects on
-   network changes, rotation and pinch.
+   network changes, rotation and pinch, snapshots only while the terminal
+   is visible (the prototype's review, run 13).
 4. **M3, sync** (1 run): `rustls-platform-verifier`'s initialization and its
    Kotlin part, "Restore from sync" and the connect wizard, the account
    screen, sync on demand and on resume; checked against the owner's server

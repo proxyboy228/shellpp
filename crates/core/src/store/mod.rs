@@ -281,10 +281,28 @@ fn set_aside_order(name: &str) -> (String, u64) {
 fn open_set_aside(data_dir: &Path, name: &str) -> Option<Connection> {
     let path = data_dir.join(name);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let plain = || Connection::open_with_flags(&path, flags).ok();
     if data_dir.join(format!("{name}-wal")).exists() {
-        return Connection::open_with_flags(path, flags).ok();
+        return plain();
     }
+    immutable_uri(&path)
+        .and_then(|uri| Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI).ok())
+        .or_else(plain)
+}
+
+/// The `file:` URI that opens `path` read-only and immutable; `None` for a
+/// path a URI cannot name here (a network share), which is then opened
+/// plainly.
+fn immutable_uri(path: &Path) -> Option<String> {
     let text = path.to_str()?;
+    // Windows' verbatim prefix (`\\?\C:\…`) is not part of a drive path.
+    let text = text
+        .strip_prefix(r"\\?\")
+        .filter(|rest| !rest.starts_with("UNC"))
+        .unwrap_or(text);
+    if text.starts_with(r"\\") || text.starts_with("//") {
+        return None;
+    }
     let mut uri = String::from("file:");
     for byte in text.bytes() {
         match byte {
@@ -296,7 +314,7 @@ fn open_set_aside(data_dir: &Path, name: &str) -> Option<Connection> {
         }
     }
     uri.push_str("?mode=ro&immutable=1");
-    Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI).ok()
+    Some(uri)
 }
 
 impl Store {

@@ -169,6 +169,10 @@ pub(super) struct SyncRuntime {
     /// written even when a lock dropped the token meanwhile (review of
     /// run 13).
     bindings: u64,
+    /// The device id of first-run sign-ins until one binds: a retry logs
+    /// in as the same device, so failed attempts leave no row each
+    /// (review of run 13). A lock does not clear it.
+    first_run_device: Option<Uuid>,
 }
 
 impl SyncRuntime {
@@ -183,6 +187,12 @@ impl SyncRuntime {
     fn bound_by_login(&mut self, token: Zeroizing<String>, origin: &str) {
         self.hold_access(token, origin);
         self.bindings = self.bindings.wrapping_add(1);
+        self.first_run_device = None;
+    }
+
+    /// Drops a sign-in waiting for its TOTP code.
+    pub(super) fn drop_pending(&mut self) {
+        self.pending = None;
     }
 
     /// Drops the access token and a half-finished sign-in (lock).
@@ -1291,7 +1301,18 @@ impl Core {
             .and_then(|(json, _)| KdfParams::from_json(&json).ok());
         let device_id = match device_id {
             Some(id) => id,
-            None => self.inner().ids.next(self.now()),
+            None => {
+                let now = self.now();
+                let mut guard = self.inner();
+                match guard.sync.first_run_device {
+                    Some(id) => id,
+                    None => {
+                        let id = guard.ids.next(now);
+                        guard.sync.first_run_device = Some(id);
+                        id
+                    }
+                }
+            }
         };
         let prelogin = api.prelogin(&email)?;
         let kdf = local_kdf(&prelogin.kdf);
@@ -1358,7 +1379,7 @@ impl Core {
         }
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
         let Some(account) = response.account else {
-            Self::revoke_login(&api, None, &tokens);
+            self.revoke_unknown_login(&api, device_id, &tokens);
             return Err(HttpError::Malformed.into());
         };
         let pending = PendingSignIn {
@@ -1478,7 +1499,7 @@ impl Core {
         };
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
         let Some(account) = response.account else {
-            Self::revoke_login(&api, None, &tokens);
+            self.revoke_unknown_login(&api, device_id, &tokens);
             return Err(HttpError::Malformed.into());
         };
         self.finish_sign_in(&api, pending, device_id, tokens, account)?;
@@ -1507,12 +1528,12 @@ impl Core {
         // The device's own row in that account (a rebind: its personal
         // vault is the account's) was there before this login and stays;
         // a row this login made (a first run, a merge) goes with it
-        // (review of run 13).
+        // (review of run 13). Read from the vault id alone, which a lock
+        // during the login keeps (the state would read Locked).
         let (own_row, bindings) = {
             let guard = self.inner();
             (
-                guard.state == LockState::Unlocked
-                    && guard.personal_vault_id == Some(account.personal_vault.vault_id),
+                guard.personal_vault_id == Some(account.personal_vault.vault_id),
                 guard.sync.bindings,
             )
         };
@@ -1531,6 +1552,14 @@ impl Core {
             Self::revoke_login(api, (!own_row).then_some(device_id), &tokens);
         }
         result
+    }
+
+    /// A login whose answer has no account bundle: a first run's device
+    /// row is this login's and goes; a device with a vault cannot tell, so
+    /// only the login's family goes.
+    fn revoke_unknown_login(&self, api: &HttpApi, device_id: Uuid, tokens: &wire::Tokens) {
+        let first_run = self.inner().personal_vault_id.is_none();
+        Self::revoke_login(api, first_run.then_some(device_id), tokens);
     }
 
     /// Revokes what a login opened that no binding took (run 13, D216):
@@ -2141,10 +2170,12 @@ impl Core {
             return Err(error.into());
         }
         drop(old_session);
+        // Bound once stored: a failure loading the session after it does
+        // not revoke the login (review of run 13).
+        inner.sync.bound_by_login(access, &pending.origin);
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
         inner.personal_vault_id = Some(account_vault);
-        inner.sync.bound_by_login(access, &pending.origin);
         super::checkpoint(&inner.store);
         tracing::info!(merged = rows.len(), "local data merged into the account");
         self.emit(

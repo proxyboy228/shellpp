@@ -374,6 +374,38 @@ fn totp_sign_in() {
     assert_eq!(current[0].device_id, local);
 }
 
+/// Review of run 13: a TOTP step left waiting on an empty device ends when
+/// the user makes a local vault instead: its tokens bind nothing.
+#[test]
+fn a_new_local_vault_ends_a_waiting_totp_step() {
+    let server = Server::start();
+    let password = new_password();
+    let email = email();
+    let a = Client::local("A", &password);
+    a.register(&server, &email, &password);
+    let setup = a.core.sync_totp_setup(password.clone()).expect("setup");
+    let secret = secrecy::ExposeSecret::expose_secret(&setup.secret).to_owned();
+    let key = totp_key(&secret);
+    a.core
+        .sync_totp_enable(&shellpp_server::secrets::totp_code(&key, totp_now()))
+        .expect("enabled");
+
+    let b = Client::empty("B");
+    assert_eq!(
+        b.sign_in(&server, &email, &password),
+        SignInOutcome::TotpRequired
+    );
+    b.core
+        .first_run_setup(new_password())
+        .expect("a local vault");
+    let right = shellpp_server::secrets::totp_code(&key, totp_now() + 30);
+    assert!(matches!(
+        b.core.sync_sign_in_totp(&right),
+        Err(CoreError::WrongState)
+    ));
+    assert!(!b.status().signed_in);
+}
+
 /// D175 from the client's side: a code answered with a delay (`429`) keeps
 /// the login ticket, and the right code after `Retry-After` finishes the
 /// same sign-in without the password again (SP 8: wait and retry).

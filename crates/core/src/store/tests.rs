@@ -986,3 +986,44 @@ fn the_newest_bound_set_aside_copy_gives_the_settings_and_leaves_nothing_beside_
         "{names:?}"
     );
 }
+
+/// A path with a space, `%`, `#` and a letter outside ASCII reaches the
+/// copy through its `file:` URI.
+#[test]
+fn a_set_aside_copy_is_read_under_a_path_with_unusual_characters() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("a b%#\u{e9}");
+    std::fs::create_dir(&dir).unwrap();
+    set_aside_copy(&dir, "shellpp.db.20261021T000000Z.old", true, "found");
+    let (kdf, _) = set_aside_bound_kdf(&dir).expect("a bound copy");
+    assert_eq!(kdf, "found");
+}
+
+/// A copy set aside with its `-wal` (the rows only in the log) is read
+/// with it, not as an immutable file without them.
+#[test]
+fn a_set_aside_copy_with_its_wal_is_read_with_it() {
+    let dir = TempDir::new().unwrap();
+    let live = dir.path().join("live.db");
+    let conn = Connection::open(&live).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA wal_autocheckpoint = 0;
+         CREATE TABLE server_account (id INTEGER PRIMARY KEY);
+         CREATE TABLE vaults (vault_id BLOB, account_user_id TEXT);
+         CREATE TABLE local_auth (id INTEGER PRIMARY KEY, kdf TEXT NOT NULL, kdf_salt BLOB NOT NULL);
+         INSERT INTO server_account (id) VALUES (1);
+         INSERT INTO local_auth (id, kdf, kdf_salt) VALUES (1, 'in the log', x'00');",
+    )
+    .unwrap();
+    let name = "shellpp.db.20261021T000000Z.old";
+    std::fs::copy(&live, dir.path().join(name)).unwrap();
+    std::fs::copy(
+        dir.path().join("live.db-wal"),
+        dir.path().join(format!("{name}-wal")),
+    )
+    .unwrap();
+    drop(conn);
+    let (kdf, _) = set_aside_bound_kdf(dir.path()).expect("a bound copy");
+    assert_eq!(kdf, "in the log");
+}

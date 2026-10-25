@@ -420,6 +420,9 @@ impl Core {
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
         inner.recovery_grant.grant(now);
+        // A sign-in waiting for its TOTP code was for the empty device: its
+        // tokens must not bind this new vault (review of run 13).
+        inner.sync.drop_pending();
         tracing::info!(vault_id = %vault_id, "first run completed");
         self.lock_changed(inner);
         self.emit(

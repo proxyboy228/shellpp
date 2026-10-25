@@ -63,11 +63,45 @@ struct Proxy {
     seen: Arc<Mutex<Vec<Value>>>,
     /// Push requests passed on.
     pushes: Arc<std::sync::atomic::AtomicUsize>,
+    login_gate: Arc<LoginGate>,
+}
+
+/// Holds the login's answer (the server has issued its tokens) until the
+/// test releases it ([`Proxy::hold_login`]).
+#[derive(Default)]
+struct LoginGate {
+    hold: std::sync::atomic::AtomicBool,
+    held: (Mutex<bool>, std::sync::Condvar),
+    release: tokio::sync::Notify,
 }
 
 impl Proxy {
     fn set(&self, mode: Mode) {
         *self.mode.lock().unwrap() = mode;
+    }
+
+    /// The next login's answer waits for [`Proxy::release_login`].
+    fn hold_login(&self) {
+        self.login_gate
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Waits until a login's answer is held.
+    fn wait_login_held(&self) {
+        let (held, signal) = &self.login_gate.held;
+        let guard = held.lock().unwrap();
+        let (_guard, wait) = signal
+            .wait_timeout_while(guard, std::time::Duration::from_secs(60), |held| !*held)
+            .unwrap();
+        assert!(!wait.timed_out(), "a login reached the proxy");
+    }
+
+    fn release_login(&self) {
+        self.login_gate
+            .hold
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.login_gate.release.notify_one();
     }
 
     /// Envelopes (base64url) the proxy saw in pull answers.
@@ -257,6 +291,8 @@ fn proxy(server: &Server) -> Proxy {
         .expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let pushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let login_gate = Arc::new(LoginGate::default());
+    let task_gate = login_gate.clone();
     let (task_mode, task_seen, task_pushes) = (mode.clone(), seen.clone(), pushes.clone());
     server.runtime().spawn(async move {
         loop {
@@ -264,6 +300,7 @@ fn proxy(server: &Server) -> Proxy {
                 return;
             };
             let (mode, seen, pushes) = (task_mode.clone(), task_seen.clone(), task_pushes.clone());
+            let gate = task_gate.clone();
             tokio::spawn(async move {
                 let Some((head, body)) = read_message(&mut client).await else {
                     return;
@@ -360,6 +397,14 @@ connection: close
                     if let Some(changed) = rewrite_login(&current, &response) {
                         response = changed;
                     }
+                    if gate.hold.load(std::sync::atomic::Ordering::SeqCst) {
+                        {
+                            let (held, signal) = &gate.held;
+                            *held.lock().unwrap() = true;
+                            signal.notify_all();
+                        }
+                        gate.release.notified().await;
+                    }
                 }
                 if push && response_head.starts_with("HTTP/1.1 200") {
                     let current = mode.lock().unwrap().clone();
@@ -379,6 +424,7 @@ connection: close
         mode,
         seen,
         pushes,
+        login_gate,
     }
 }
 
@@ -825,7 +871,7 @@ fn a_server_error_in_the_merge_at_sign_in_revokes_the_login() {
     a_refused_sign_in_revokes_its_login(Mode::FailPull, "unavailable");
 }
 
-/// The access tokens of the account that are not expired.
+/// The access tokens of the account (revoking a family deletes its own).
 fn live_access_tokens(server: &Server, email: &str) -> i64 {
     server
         .db
@@ -843,7 +889,8 @@ fn live_access_tokens(server: &Server, email: &str) -> i64 {
 
 /// Review of run 13: a first run (an empty device, "Restore from sync")
 /// whose login's key wrap does not open revokes the device row that login
-/// made; signing in again through an honest server works.
+/// made; signing in again through an honest server works and logs in as
+/// the same device, whose row is active again (no row per attempt).
 #[test]
 fn a_refused_first_run_sign_in_revokes_its_login() {
     let server = Server::start();
@@ -866,7 +913,36 @@ fn a_refused_first_run_sign_in_revokes_its_login() {
         c.core.sync_sign_in(input()).expect("signed in"),
         SignInOutcome::Done(_)
     ));
-    assert_eq!(sessions_and_revoked_devices(&server, &email), (3, 1));
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (3, 0));
+}
+
+/// Review of run 13 (its second pass): a signed-out device locked while
+/// its login is under way fails the rebind with `locked`; the login's
+/// session goes and the device's own row stays (a lock keeps the vault id
+/// that tells a rebind).
+#[test]
+fn a_rebind_locked_during_its_login_keeps_the_devices_own_row() {
+    let server = Server::start();
+    let (proxy, _a, b, email, password) = setup(&server);
+    b.core.sync_sign_out(false).expect("signed out");
+    proxy.hold_login();
+    let result = std::thread::scope(|scope| {
+        let signing = scope.spawn(|| {
+            b.core.sync_sign_in(shellpp_core::service::SignInInput {
+                origin: proxy.origin.clone(),
+                email: email.clone(),
+                password: password.clone(),
+                registration_code: None,
+            })
+        });
+        proxy.wait_login_held();
+        b.core.lock().expect("locked");
+        proxy.release_login();
+        signing.join().expect("the sign-in's thread")
+    });
+    assert!(matches!(result, Err(CoreError::Locked)), "{result:?}");
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (1, 0));
+    assert_eq!(live_access_tokens(&server, &email), 1, "A's alone");
 }
 
 /// Review of run 13: a device of the account signed out (its refresh
