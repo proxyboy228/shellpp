@@ -323,6 +323,29 @@ fn secrets_replaced(
         })
 }
 
+/// Removes the proxy password from `built` when its proxy is another server
+/// (type or address) than the stored proxy the password was set for.
+fn drop_proxy_password_for_another_server(
+    stored: Option<&Map<String, Value>>,
+    built: &mut Map<String, Value>,
+) {
+    let server = |data: Option<&Map<String, Value>>| {
+        let proxy = data?.get("ssh")?.get("proxy")?;
+        Some((proxy.get("type").cloned(), proxy.get("address").cloned()))
+    };
+    if server(stored) == server(Some(built)) {
+        return;
+    }
+    if let Some(mut password) = built
+        .get_mut("ssh")
+        .and_then(|ssh| ssh.get_mut("proxy"))
+        .and_then(Value::as_object_mut)
+        .and_then(|proxy| proxy.remove("password"))
+    {
+        crate::model::wipe::wipe_value(&mut password);
+    }
+}
+
 /// The last deletion of a record and its last live version (Recently
 /// deleted), or `not_found`.
 fn deleted_version(
@@ -523,7 +546,12 @@ impl Core {
             .ok_or(CoreError::NotFound)
     }
 
-    pub(super) fn record_save_impl(&self, input: RecordSaveInput) -> Result<RecordView, CoreError> {
+    /// `record_save`; also says whether a new version was written (a partial
+    /// save that changes nothing writes none).
+    pub(super) fn record_save_impl(
+        &self,
+        input: RecordSaveInput,
+    ) -> Result<(RecordView, bool), CoreError> {
         let now = self.now();
         let mut guard = self.inner();
         let mut parts = parts(&mut guard)?;
@@ -558,6 +586,8 @@ impl Core {
         // base, written onto the stored record as it is now.
         let mut merged: Option<WipeOnDrop> = None;
         let mut same_members = false;
+        // The edit writes a proxy over one that changed since its base.
+        let mut proxy_moved = false;
         if let (Some(base), Some(current), Some(id)) =
             (&input.base, stored.as_deref(), input.record_id)
         {
@@ -594,10 +624,15 @@ impl Core {
                         .session
                         .index
                         .view(&id)
+                        .map(|view| (view, false))
                         .ok_or(CoreError::Internal("edited record missing")),
                 };
             }
             same_members = !partial::conflicts(&base_data, &current_public, &changes).is_empty();
+            let proxy_path = ["ssh".to_owned(), "proxy".to_owned()];
+            proxy_moved = changes.iter().any(|change| change.path == proxy_path)
+                && partial::value_at(&current_public, &proxy_path)
+                    != partial::value_at(&base_data, &proxy_path);
             let mut data = WipeOnDrop::new(current_public.clone());
             partial::apply(&mut data, &changes, &edited);
             merged = Some(data);
@@ -610,6 +645,11 @@ impl Core {
             &input.secrets,
             input.record_id,
         )?;
+        if proxy_moved && !input.secrets.contains_key("ssh.proxy.password") {
+            // The stored proxy password belongs to the newer proxy: it never
+            // goes to another server the edit wrote (a copy keeps it, below).
+            drop_proxy_password_for_another_server(stored.as_deref(), &mut data);
+        }
         if let (Some(base), Some(current), Some(id)) =
             (&input.base, stored.as_deref(), input.record_id)
         {
@@ -691,6 +731,7 @@ impl Core {
             .session
             .index
             .view(&record_id)
+            .map(|view| (view, true))
             .ok_or(CoreError::Internal("saved record missing"))
     }
 

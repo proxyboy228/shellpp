@@ -578,3 +578,63 @@ fn a_base_in_another_normalization_is_no_change() {
     assert_eq!(saved.data["label"], "v6 edited");
     assert!(app.core.sync_conflicts().expect("conflicts").is_empty());
 }
+
+#[test]
+fn a_newer_proxy_password_never_goes_to_the_proxy_the_edit_writes() {
+    let app = first_run();
+    let host = host_with(
+        &app,
+        json!({"address": "px.example.com", "ssh": {"proxy": {"type": "http", "address": "proxy-a.example.com", "port": 8080}}}),
+        &[("ssh.proxy.password", Some("pass-a"))],
+    );
+    let base = base_of(&get(&app, host.record_id));
+    // Elsewhere: another proxy, with its own password.
+    let mut other = as_host(get(&app, host.record_id)).data;
+    other["ssh"]["proxy"]["address"] = json!("proxy-b.example.com");
+    save(
+        &app.core,
+        app.vault_id,
+        Some(host.record_id),
+        RecordType::Host,
+        other,
+        &[("ssh.proxy.password", Some("pass-b"))],
+    )
+    .expect("written");
+    // Here: only the port of the proxy the editor shows (A).
+    let mut form = Value::Object(base.data.clone());
+    form["ssh"]["proxy"]["port"] = json!(3128);
+    let saved = as_host(
+        save_from(&app, host.record_id, RecordType::Host, &base, form, &[]).expect("saved"),
+    );
+    assert_eq!(saved.data["ssh"]["proxy"]["address"], "proxy-a.example.com");
+    assert_eq!(
+        proxy_password(&app, host.record_id),
+        None,
+        "B's password is not sent to A"
+    );
+    let copies = app.core.sync_conflicts().expect("conflicts");
+    assert_eq!(copies.len(), 1, "B and its password are kept in a copy");
+    assert_eq!(
+        copies[0].losing_data.as_ref().unwrap()["ssh"]["proxy"]["address"],
+        "proxy-b.example.com"
+    );
+}
+
+#[test]
+fn an_own_proxy_edit_keeps_its_password() {
+    let app = first_run();
+    let host = host_with(
+        &app,
+        json!({"address": "px.example.com", "ssh": {"proxy": {"type": "http", "address": "proxy-a.example.com", "port": 8080}}}),
+        &[("ssh.proxy.password", Some("pass-a"))],
+    );
+    let base = base_of(&get(&app, host.record_id));
+    let mut form = Value::Object(base.data.clone());
+    form["ssh"]["proxy"]["address"] = json!("proxy-a2.example.com");
+    save_from(&app, host.record_id, RecordType::Host, &base, form, &[]).expect("saved");
+    assert_eq!(
+        proxy_password(&app, host.record_id).as_deref(),
+        Some("pass-a")
+    );
+    assert!(app.core.sync_conflicts().expect("conflicts").is_empty());
+}

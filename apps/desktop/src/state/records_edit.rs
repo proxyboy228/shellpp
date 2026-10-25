@@ -917,13 +917,15 @@ pub struct SaveReport<T> {
     pub origin: Option<RecordBase>,
 }
 
-/// The revision a form's next save starts from (D221): a save right on top
-/// of `origin` moves it to the stored one; a save that merged another
-/// version keeps the old one, so a secret the form sets later still counts
-/// as replacing a newer version's (review of run 15).
-fn next_revision(origin: Option<&RecordBase>, saved: u64) -> u64 {
+/// The revision a form's next save starts from (D221): a save that
+/// wrote its own version right on top of `origin` moves it to the
+/// stored one; a save that merged another version, or wrote nothing (the
+/// revision it got back is someone else's), keeps the old one, so a secret
+/// the form sets later still counts as replacing a newer version's (review
+/// of run 15).
+fn next_revision(origin: Option<&RecordBase>, saved: u64, written: bool) -> u64 {
     match origin {
-        Some(origin) if saved != origin.revision + 1 => origin.revision,
+        Some(origin) if !written || saved != origin.revision + 1 => origin.revision,
         _ => saved,
     }
 }
@@ -1080,8 +1082,22 @@ impl AppState {
         base: Option<RecordBase>,
         cx: &mut Context<Self>,
     ) -> Result<HostItem, CoreError> {
+        self.save_host_written(record_id, data, secrets, base, cx)
+            .map(|(host, _)| host)
+    }
+
+    /// [`AppState::save_host_with_secrets`], and whether a new version was
+    /// written.
+    fn save_host_written(
+        &mut self,
+        record_id: Option<Uuid>,
+        data: Map<String, Value>,
+        secrets: BTreeMap<String, Option<SecretString>>,
+        base: Option<RecordBase>,
+        cx: &mut Context<Self>,
+    ) -> Result<(HostItem, bool), CoreError> {
         let vault_id = self.require_vault()?;
-        let view = self.require_core()?.record_save(RecordSaveInput {
+        let (view, written) = self.require_core()?.record_save_written(RecordSaveInput {
             base,
             vault_id,
             record_id,
@@ -1091,7 +1107,7 @@ impl AppState {
         })?;
         self.records_written(cx);
         match view {
-            RecordView::Host(view) => Ok(HostItem::from_view(&view)),
+            RecordView::Host(view) => Ok((HostItem::from_view(&view), written)),
             RecordView::Group(_) => Err(CoreError::NotFound),
         }
     }
@@ -1174,20 +1190,20 @@ impl AppState {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.save_host_with_secrets(
+            match self.save_host_written(
                 record_id,
                 data.clone(),
                 secrets.clone(),
                 origin.cloned(),
                 cx,
             ) {
-                Ok(host) => {
+                Ok((host, written)) => {
                     if record_id.is_none() {
                         self.select(host.record_id, SelectMode::Replace, &[], cx);
                     }
                     return SaveReport {
                         origin: Some(RecordBase {
-                            revision: next_revision(origin, host.revision),
+                            revision: next_revision(origin, host.revision, written),
                             data,
                         }),
                         saved: Some(host),
@@ -1528,11 +1544,11 @@ impl AppState {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.save_group_from(record_id, data.clone(), origin.cloned(), cx) {
-                Ok(group) => {
+            match self.save_group_written(record_id, data.clone(), origin.cloned(), cx) {
+                Ok((group, written)) => {
                     return SaveReport {
                         origin: Some(RecordBase {
-                            revision: next_revision(origin, group.revision),
+                            revision: next_revision(origin, group.revision, written),
                             data,
                         }),
                         saved: Some(group),
@@ -1965,6 +1981,66 @@ mod tests {
             );
             let copies = state.require_core().unwrap().sync_conflicts().unwrap();
             assert_eq!(copies.len(), 1, "the newer password is kept in a copy");
+            state.shutdown();
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_panel_save_that_writes_nothing_keeps_its_origin(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        state.update(cx, |state, cx| {
+            let host = state
+                .save_host_with_secrets(
+                    None,
+                    map(json!({"address": "192.0.2.12", "label": "db"})),
+                    BTreeMap::from([(
+                        "ssh.password".to_owned(),
+                        Some(SecretString::from("first-test")),
+                    )]),
+                    None,
+                    cx,
+                )
+                .unwrap();
+            let origin = RecordBase {
+                revision: host.revision,
+                data: host.data_map(),
+            };
+            let draft = HostDraft::from_host(&host);
+            // A pull one revision up, with another password.
+            state
+                .save_host_with_secrets(
+                    Some(host.record_id),
+                    host.data_map(),
+                    BTreeMap::from([(
+                        "ssh.password".to_owned(),
+                        Some(SecretString::from("other-test")),
+                    )]),
+                    None,
+                    cx,
+                )
+                .unwrap();
+            // A save that changes nothing: the origin stays where it was.
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                Some(&origin),
+                cx,
+            );
+            assert_eq!(report.origin.as_ref().unwrap().revision, origin.revision);
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets {
+                    password: SecretChange::Set(SecretString::from("mine-test")),
+                    ..HostSecrets::default()
+                },
+                report.origin.as_ref(),
+                cx,
+            );
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            let copies = state.require_core().unwrap().sync_conflicts().unwrap();
+            assert_eq!(copies.len(), 1, "the pulled password is kept in a copy");
             state.shutdown();
         });
     }

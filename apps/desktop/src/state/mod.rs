@@ -627,7 +627,7 @@ impl AppState {
         data: Map<String, Value>,
         cx: &mut Context<Self>,
     ) -> Result<HostItem, CoreError> {
-        match self.save(record_id, RecordType::Host, data, None, cx)? {
+        match self.save(record_id, RecordType::Host, data, None, cx)?.0 {
             RecordView::Host(view) => Ok(HostItem::from_view(&view)),
             RecordView::Group(_) => Err(CoreError::NotFound),
         }
@@ -652,9 +652,21 @@ impl AppState {
         base: Option<RecordBase>,
         cx: &mut Context<Self>,
     ) -> Result<GroupItem, CoreError> {
+        self.save_group_written(record_id, data, base, cx)
+            .map(|(group, _)| group)
+    }
+
+    /// [`AppState::save_group_from`], and whether a new version was written.
+    pub(crate) fn save_group_written(
+        &mut self,
+        record_id: Option<Uuid>,
+        data: Map<String, Value>,
+        base: Option<RecordBase>,
+        cx: &mut Context<Self>,
+    ) -> Result<(GroupItem, bool), CoreError> {
         match self.save(record_id, RecordType::Group, data, base, cx)? {
-            RecordView::Group(view) => Ok(GroupItem::from_view(&view)),
-            RecordView::Host(_) => Err(CoreError::NotFound),
+            (RecordView::Group(view), written) => Ok((GroupItem::from_view(&view), written)),
+            (RecordView::Host(_), _) => Err(CoreError::NotFound),
         }
     }
 
@@ -665,9 +677,9 @@ impl AppState {
         data: Map<String, Value>,
         base: Option<RecordBase>,
         cx: &mut Context<Self>,
-    ) -> Result<RecordView, CoreError> {
+    ) -> Result<(RecordView, bool), CoreError> {
         let vault_id = self.require_vault()?;
-        let view = self.require_core()?.record_save(RecordSaveInput {
+        let saved = self.require_core()?.record_save_written(RecordSaveInput {
             base,
             vault_id,
             record_id,
@@ -676,7 +688,7 @@ impl AppState {
             secrets: Default::default(),
         })?;
         self.records_written(cx);
-        Ok(view)
+        Ok(saved)
     }
 
     /// Deletes hosts and groups (a removed group's children move one level

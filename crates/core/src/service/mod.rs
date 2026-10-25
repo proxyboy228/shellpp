@@ -492,6 +492,16 @@ impl Core {
     }
 
     pub fn record_save(&self, input: RecordSaveInput) -> Result<RecordView, CoreError> {
+        self.record_save_impl(input).map(|(view, _)| view)
+    }
+
+    /// [`Core::record_save`], and whether it wrote a new version: a partial
+    /// save that changes nothing writes none (D221), so an editor knows
+    /// whether the revision it got back is its own.
+    pub fn record_save_written(
+        &self,
+        input: RecordSaveInput,
+    ) -> Result<(RecordView, bool), CoreError> {
         self.record_save_impl(input)
     }
 
