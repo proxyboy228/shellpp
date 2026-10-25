@@ -38,7 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -301,7 +301,9 @@ data class OsMark(val letters: String?, val color: String?) {
  */
 @Composable
 fun OsTile(mark: OsMark, size: Dp = 44.dp, active: Boolean = false, sftp: Boolean = false, onTerminal: Boolean = false) {
-    val fill = tagColor(mark.color) ?: Tokens.bgInput
+    // A tag colour a quarter darker under white letters: at least 4.8:1 for
+    // every colour of the palette (design-system 7.3).
+    val fill = tagColor(mark.color)?.let { lerp(it, Color.Black, 0.25f) } ?: Tokens.bgInput
     val ring = if (active) Modifier.border(2.dp, Tokens.accent, TileShape) else Modifier
     Box(Modifier.size(size).then(ring).padding(if (active) 3.dp else 0.dp).clip(TileShape).background(if (onTerminal) Color.Transparent else fill), contentAlignment = Alignment.Center) {
         if (sftp) {
@@ -310,7 +312,7 @@ fun OsTile(mark: OsMark, size: Dp = 44.dp, active: Boolean = false, sftp: Boolea
         when {
             mark.letters != null -> Text(
                 mark.letters,
-                color = if (fill.luminance() > 0.16f) Color(0xFF151515) else Color.White,
+                color = Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = (size.value * 0.36f).sp,
                 modifier = Modifier.padding(top = if (sftp) 3.dp else 0.dp),
