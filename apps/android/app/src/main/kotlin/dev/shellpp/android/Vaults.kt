@@ -262,13 +262,9 @@ fun SearchBar(query: String, onQuery: (String) -> Unit, placeholder: String, onC
 fun sessionsOf(views: Map<Long, JSONObject>, recordId: String): List<JSONObject> =
     views.values.filter { it.optString("recordId") == recordId }.sortedBy { it.optLong("id") }
 
-/** Opens an open session: SFTP in its screen, a terminal in the terminal. */
-fun openSession(app: App, activity: MainActivity, nav: Nav, id: Long) {
-    if (id in app.sftpSessions) {
-        nav.push(Page.Sftp(null, id))
-    } else {
-        activity.startActivity(Intent(activity, TerminalActivity::class.java).putExtra(TerminalActivity.EXTRA_SESSION, id))
-    }
+/** Shows an open session, terminal or SFTP, in the session screen. */
+fun openSession(activity: android.app.Activity, id: Long) {
+    activity.startActivity(Intent(activity, TerminalActivity::class.java).putExtra(TerminalActivity.EXTRA_SESSION, id))
 }
 
 /**
@@ -346,7 +342,7 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
                         val chosen = all.filter { it.id in selected }
                         if (chosen.size == 1 && !chosen[0].isGroup) {
                             DropdownMenuItem(text = { Text("Connect via SFTP") }, modifier = Modifier.testTag("selection_sftp"), onClick = {
-                                close(); selected = emptySet(); nav.push(Page.Sftp(chosen[0], null))
+                                close(); selected = emptySet(); connectSftp(activity, chosen[0])
                             })
                         }
                         if (chosen.all { !it.isGroup }) {
@@ -399,7 +395,7 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
                     ExtendedFloatingActionButton(
                         onClick = {
                             selected = emptySet()
-                            for (host in chosenHosts) connect(activity, host)
+                            connectAll(activity, chosenHosts)
                         },
                         containerColor = Tokens.accent,
                         contentColor = Tokens.onAccent,
@@ -646,13 +642,13 @@ private fun SessionCounter(app: App, activity: MainActivity, nav: Nav, host: Rec
         }
         DropdownMenu(expanded = shown, onDismissRequest = { shown = false }, containerColor = Tokens.bgRaised) {
             DropdownMenuItem(text = { Text("Connect") }, onClick = { shown = false; connect(activity, host) }, modifier = Modifier.testTag("counter_connect"))
-            DropdownMenuItem(text = { Text("Connect via SFTP") }, onClick = { shown = false; nav.push(Page.Sftp(host, null)) }, modifier = Modifier.testTag("counter_sftp"))
+            DropdownMenuItem(text = { Text("Connect via SFTP") }, onClick = { shown = false; connectSftp(activity, host) }, modifier = Modifier.testTag("counter_sftp"))
             HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
             for (view in open) {
                 val id = view.optLong("id")
                 DropdownMenuItem(
                     text = { Text((if (id in app.sftpSessions) "SFTP · " else "") + view.optString("title").ifBlank { host.title }) },
-                    onClick = { shown = false; openSession(app, activity, nav, id) },
+                    onClick = { shown = false; openSession(activity, id) },
                     modifier = Modifier.testTag("counter_session_$id"),
                 )
             }

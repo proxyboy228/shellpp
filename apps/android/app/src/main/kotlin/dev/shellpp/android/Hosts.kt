@@ -135,8 +135,30 @@ fun quickTarget(text: String): QuickTarget? {
     return QuickTarget(match.groupValues[1], match.groupValues[2], port)
 }
 
+/** Terminal sessions to several saved hosts, one after another in the session screen. */
+fun connectAll(activity: android.app.Activity, hosts: List<Record>) {
+    if (hosts.isEmpty()) return
+    activity.startActivity(
+        Intent(activity, TerminalActivity::class.java)
+            .putExtra(TerminalActivity.EXTRA_VAULT_ID, hosts[0].vaultId)
+            .putStringArrayListExtra(TerminalActivity.EXTRA_RECORD_IDS, ArrayList(hosts.map { it.id }))
+            .putStringArrayListExtra(TerminalActivity.EXTRA_TITLES, ArrayList(hosts.map { it.title })),
+    )
+}
+
+/** An SFTP session to a saved host in the session screen (reference-2 8). */
+fun connectSftp(activity: android.app.Activity, host: Record) {
+    activity.startActivity(
+        Intent(activity, TerminalActivity::class.java)
+            .putExtra(TerminalActivity.EXTRA_SFTP, true)
+            .putExtra(TerminalActivity.EXTRA_VAULT_ID, host.vaultId)
+            .putExtra(TerminalActivity.EXTRA_RECORD_ID, host.id)
+            .putExtra(TerminalActivity.EXTRA_TITLE, host.title),
+    )
+}
+
 /** Opens a terminal on a saved host (UI spec 6.1: tap a host to connect). */
-fun connect(activity: MainActivity, host: Record) {
+fun connect(activity: android.app.Activity, host: Record) {
     activity.startActivity(
         Intent(activity, TerminalActivity::class.java)
             .putExtra(TerminalActivity.EXTRA_VAULT_ID, host.vaultId)

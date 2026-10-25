@@ -436,6 +436,8 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
                 label: input.label,
             }))
         }
+        // Recent connections (the Connections tab, run 15).
+        "recent_connections" => out(core.recent_connections()),
         // Identities (the editors' identity picker and the Keychain, run 15).
         "identities_list" => {
             let list = core.identities_list()?;

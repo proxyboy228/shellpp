@@ -220,3 +220,60 @@ fn the_sync_commands_answer_before_an_account_exists() {
         "wrong_state"
     );
 }
+
+#[test]
+fn identities_recent_connections_and_a_partial_save_through_the_binding() {
+    let files = tempfile::tempdir().expect("files");
+    let store = Arc::new(MemorySecretStore::new());
+    let engine = Engine::start(files.path(), services(&store)).expect("engine");
+    let password = random("pw");
+    ok(&engine, "first_run_setup", &json!({ "password": password }));
+    let vault = ok(&engine, "vaults", &json!(null))[0]["vault_id"].clone();
+
+    // An identity, made with a password the answer never shows.
+    let secret = random("identity-pw");
+    let made = ok(
+        &engine,
+        "identity_save",
+        &json!({"label": "deploy", "username": "deploy", "password": secret}),
+    );
+    assert_eq!(made["label"], "deploy");
+    assert_eq!(made["password_set"], true);
+    assert!(!made.to_string().contains(&secret));
+    let list = ok(&engine, "identities_list", &json!(null));
+    assert_eq!(list.as_array().map(Vec::len), Some(1));
+    // Cleared again; the label stays.
+    let id = made["record_id"].clone();
+    let cleared = ok(
+        &engine,
+        "identity_save",
+        &json!({"record_id": id, "label": "deploy", "username": "deploy", "clear_password": true}),
+    );
+    assert_eq!(cleared["password_set"], false);
+
+    // No session yet: no recent connection.
+    assert_eq!(ok(&engine, "recent_connections", &json!(null)), json!([]));
+
+    // The editor's partial save (D221): a change made meanwhile stays.
+    let host = ok(
+        &engine,
+        "record_save",
+        &json!({"vault_id": vault, "type": "host", "data": {"address": "web.example.org", "label": "web"}}),
+    );
+    let host_id = host["record_id"].clone();
+    let base = json!({"revision": host["revision"], "data": host["data"]});
+    ok(
+        &engine,
+        "record_save",
+        &json!({"vault_id": vault, "record_id": host_id, "type": "host", "data": {"address": "web.example.org", "label": "web", "notes": "from elsewhere"}}),
+    );
+    let mut form = host["data"].clone();
+    form["label"] = json!("edited");
+    let saved = ok(
+        &engine,
+        "record_save",
+        &json!({"vault_id": vault, "record_id": host_id, "type": "host", "data": form, "base": base}),
+    );
+    assert_eq!(saved["data"]["label"], "edited");
+    assert_eq!(saved["data"]["notes"], "from elsewhere");
+}

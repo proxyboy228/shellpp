@@ -100,5 +100,48 @@ class Run15ScreensTest {
         E2e.click("editor_close")
         E2e.click("tab_settings")
         shot(theme, "20-settings")
+        val port = args.getString("sshPort") ?: return
+        terminalStates(theme, port.toInt())
+    }
+
+    /** The terminal, two sessions, SFTP and Connections, against the run's OpenSSH server. */
+    private fun terminalStates(theme: String, port: Int) {
+        E2e.click("tab_connections")
+        shot(theme, "30-connections-empty")
+        val title = "Lab server"
+        if (Core.array("records_query", JSONObject().put("types", JSONArray().put("host")).put("text", title)).length() == 0) {
+            save(
+                "host",
+                JSONObject().put("address", E2e.sshHost).put("label", title)
+                    .put("ssh", JSONObject().put("port", port).put("username", E2e.sshUser)),
+                JSONObject().put("ssh.password", E2e.sshPassword),
+            )
+        }
+        E2e.openHosts()
+        E2e.click("host_$title")
+        E2e.device.wait(androidx.test.uiautomator.Until.findObject(androidx.test.uiautomator.By.text(java.util.regex.Pattern.compile("(?i)accept and save"))), 20_000)?.click()
+        E2e.waitForTerminal(60_000) { lines -> lines.any { it.contains("$") } }
+        E2e.typeInTerminal("ls -la /etc | head -24\r")
+        E2e.waitForTerminal(10_000) { lines -> lines.any { it.contains("passwd") || it.contains("total") } }
+        shot(theme, "31-terminal-keyboard")
+        E2e.hideKeyboard()
+        shot(theme, "32-terminal")
+        val width = E2e.device.displayWidth
+        E2e.device.swipe(width / 3, 420, width / 3, 420, 120)
+        shot(theme, "33-selection")
+        E2e.device.pressBack()
+        E2e.click("key_password")
+        shot(theme, "34-password-confirm")
+        E2e.clickText("Cancel")
+        E2e.click("session_plus")
+        shot(theme, "35-plus-menu")
+        E2e.clickText("Connect via SFTP")
+        E2e.find("sftp_add", 60_000)
+        shot(theme, "36-sftp")
+        E2e.click("chip_$title")
+        shot(theme, "37-two-sessions")
+        E2e.click("session_back")
+        E2e.click("tab_connections", 30_000)
+        shot(theme, "38-connections-sessions")
     }
 }

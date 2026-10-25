@@ -103,6 +103,8 @@ class App : Application() {
             object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
                     if (started > 0) syncSoon()
+                    // Dropped sessions reconnect at once on a new network (M2).
+                    if (ready && sessions.isNotEmpty()) worker.execute { runCatching { Native.reconnectDropped() } }
                 }
             },
         )

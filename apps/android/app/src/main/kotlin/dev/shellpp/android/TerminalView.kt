@@ -61,13 +61,32 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     /** The size the terminal has now, once laid out. */
     var onSize: ((cols: Int, rows: Int) -> Unit)? = null
 
+    /**
+     * The cursor key is on (reference-2 7.3; plan 3.3): a drag on the
+     * terminal moves the cursor with the arrow keys, at Settings' cursor
+     * speed.
+     */
+    var cursorPad = false
+
+    /** The screen is not seen: wake-ups are taken, no snapshot is made (M2). */
+    @Volatile
+    var paused = false
+        set(value) {
+            val resumed = field && !value
+            field = value
+            if (resumed && session != 0L && !released) Thread({ refresh() }, "terminal-resume").start()
+        }
+
+    private var padRestX = 0f
+    private var padRestY = 0f
+
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.createFromAsset(context.assets, "fonts/JetBrainsMono-Regular.ttf")
     }
     private val fill = Paint()
-    private var fontSp = 14f
+    private var fontSp = TerminalPrefs.of(context).getInt(TerminalPrefs.FONT, 14).toFloat()
     private var cellW = 1f
     private var cellH = 1f
     private var ascent = 0f
@@ -113,6 +132,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     }
 
     private fun refresh() {
+        if (paused) return
         val bytes = try {
             Native.snapshot(session)
         } catch (e: RuntimeException) {
@@ -484,6 +504,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
 
     private val scale = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
+            // Pinch to zoom is a setting (reference-1 4).
+            if (!TerminalPrefs.of(context).getBoolean(TerminalPrefs.PINCH, true)) return true
             val next = min(28f, max(8f, fontSp * detector.scaleFactor))
             if (abs(next - fontSp) >= 0.5f) {
                 fontSp = Math.round(next).toFloat()
@@ -507,6 +529,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val s = screen
+        if (cursorPad && selection == null && padDrag(event)) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val sel = selection
@@ -558,6 +581,66 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         return true
     }
 
+    private var padStartX = 0f
+    private var padStartY = 0f
+    private var padMoved = false
+
+    /**
+     * The cursor key's drag: every [step] of the finger sends one arrow key
+     * the way it moved. A tap still puts the cursor; a drag never does.
+     */
+    private fun padDrag(event: MotionEvent): Boolean {
+        val speed = TerminalPrefs.of(context).getInt(TerminalPrefs.CURSOR_SPEED, 2)
+        val factor = when (speed) {
+            1 -> 1.6f
+            3 -> 0.6f
+            else -> 1f
+        }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                padStartX = event.x
+                padStartY = event.y
+                padRestX = 0f
+                padRestY = 0f
+                padMoved = false
+                gestures.onTouchEvent(event)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - padStartX
+                val dy = event.y - padStartY
+                padStartX = event.x
+                padStartY = event.y
+                padRestX += dx
+                padRestY += dy
+                val stepX = cellW * factor
+                val stepY = cellH * factor
+                if (!padMoved && abs(padRestX) < stepX && abs(padRestY) < stepY) return true
+                if (!padMoved) {
+                    // A drag, not a tap or a long press.
+                    val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                    gestures.onTouchEvent(cancel)
+                    cancel.recycle()
+                }
+                padMoved = true
+                while (abs(padRestX) >= stepX) {
+                    sendKey(if (padRestX > 0) Native.KEY_RIGHT else Native.KEY_LEFT)
+                    padRestX -= if (padRestX > 0) stepX else -stepX
+                }
+                while (abs(padRestY) >= stepY) {
+                    sendKey(if (padRestY > 0) Native.KEY_DOWN else Native.KEY_UP)
+                    padRestY -= if (padRestY > 0) stepY else -stepY
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!padMoved) gestures.onTouchEvent(event)
+                return true
+            }
+        }
+        return false
+    }
+
     private fun showMagnifier(cell: Cell) {
         if (Build.VERSION.SDK_INT < 28) return
         val lens = magnifier ?: Magnifier(this).also { magnifier = it }
@@ -573,14 +656,32 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         invalidate()
     }
 
+    /** Back with a selection clears it and is used up (D220); false without one. */
+    fun clearSelectionIfAny(): Boolean {
+        if (selection == null) return false
+        clearSelection()
+        return true
+    }
+
     private fun startSelectionToolbar() {
         actionMode?.finish()
         actionMode = startActionMode(object : ActionMode.Callback2() {
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
-                menu.add(0, COPY, 0, R.string.copy)
-                menu.add(0, PASTE, 1, R.string.paste)
-                menu.add(0, SELECT_LINE, 2, R.string.select_line)
-                menu.add(0, SELECT_SCREEN, 3, R.string.select_screen)
+                // The platform's own floating bar and words (reference-2 11.1).
+                menu.add(0, COPY, 0, android.R.string.copy)
+                menu.add(0, PASTE, 1, android.R.string.paste)
+                menu.add(0, SELECT_SCREEN, 2, android.R.string.selectAll)
+                // What really deletes on the server (UI spec 9.6): nano's own
+                // cut where its shortcut rows show, Backspaces on the line
+                // being typed; never in the scrollback.
+                val s = screen
+                val sel = selection
+                if (s != null && sel != null && s.scrollOffset == 0) {
+                    if (isNano(s)) menu.add(0, CUT_NANO, 3, R.string.cut_in_nano)
+                    if (!s.alternateScreen && sel.start.row == sel.end.row && sel.start.row == s.cursorRow) {
+                        menu.add(0, DELETE_LINE, 4, R.string.delete_selection)
+                    }
+                }
                 return true
             }
 
@@ -598,10 +699,13 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                         clearSelection()
                         paste()
                     }
-                    SELECT_LINE -> {
-                        selection = Selection.line(s, sel.start.row)
-                        mode.invalidateContentRect()
-                        invalidate()
+                    CUT_NANO -> {
+                        clearSelection()
+                        cutInNano(sel, s)
+                    }
+                    DELETE_LINE -> {
+                        clearSelection()
+                        deleteOnLine(sel)
                     }
                     SELECT_SCREEN -> {
                         selection = Selection.all(s)
@@ -624,6 +728,63 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                 )
             }
         }, ActionMode.TYPE_FLOATING)
+    }
+
+    /** nano's shortcut rows on the last two rows (`^G` and `^X`). */
+    private fun isNano(s: Screen): Boolean {
+        if (s.rows < 3) return false
+        val bottom = s.text(0, s.rows - 2, s.cols - 1, s.rows - 1)
+        return bottom.contains("^G") && bottom.contains("^X")
+    }
+
+    /** The cell just past [cell] on the screen (the next row's first one at a row's end). */
+    private fun after(cell: Cell, s: Screen): Cell =
+        if (cell.col + 1 < s.cols) Cell(cell.col + 1, cell.row) else Cell(0, min(s.rows - 1, cell.row + 1))
+
+    private fun cannotReach() = main.post {
+        Toast.makeText(context, R.string.cursor_not_reached, Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * Cut in nano (UI spec 9.6): the cursor on the first character, nano's
+     * mark (Alt+A), the cursor just past the last one, Ctrl+K. Nothing is
+     * cut unless both walks landed; a mark it set is unset again.
+     */
+    private fun cutInNano(sel: Selection, s: Screen) {
+        if (worker.isShutdown) return
+        val id = session
+        worker.execute {
+            runCatching {
+                if (!Native.putCursor(id, sel.start.col, sel.start.row)) {
+                    cannotReach()
+                    return@runCatching
+                }
+                Native.text(id, "a", false, true)
+                val past = after(sel.end, s)
+                if (!Native.putCursor(id, past.col, past.row)) {
+                    Native.text(id, "a", false, true)
+                    cannotReach()
+                    return@runCatching
+                }
+                Native.text(id, "k", true, false)
+            }
+        }
+    }
+
+    /** Delete on the command line (UI spec 9.6): the cursor past the selection, one Backspace per character. */
+    private fun deleteOnLine(sel: Selection) {
+        if (worker.isShutdown) return
+        val id = session
+        val count = sel.end.col - sel.start.col + 1
+        worker.execute {
+            runCatching {
+                if (!Native.putCursor(id, sel.end.col + 1, sel.end.row)) {
+                    cannotReach()
+                    return@runCatching
+                }
+                repeat(count) { Native.key(id, Native.KEY_BACKSPACE, false, false) }
+            }
+        }
     }
 
     private fun copy(text: String) {
@@ -652,7 +813,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     companion object {
         private const val COPY = 1
         private const val PASTE = 2
-        private const val SELECT_LINE = 3
         private const val SELECT_SCREEN = 4
+        private const val CUT_NANO = 5
+        private const val DELETE_LINE = 6
     }
 }

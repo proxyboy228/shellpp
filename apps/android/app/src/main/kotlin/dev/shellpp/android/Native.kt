@@ -51,6 +51,8 @@ object Native {
     @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun text(session: Long, text: String, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun paste(session: Long, text: String)
+    /** Types the host's saved password into [session] once, without Enter; false without one (D220). */
+    @JvmStatic external fun sendPassword(session: Long, vaultId: String, recordId: String): Boolean
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
     @JvmStatic external fun snapshot(session: Long): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean
@@ -58,5 +60,8 @@ object Native {
     @JvmStatic external fun resize(session: Long, cols: Int, rows: Int)
     @JvmStatic external fun scroll(session: Long, lines: Int)
     @JvmStatic external fun close(session: Long)
+
+    /** The network came back: dropped sessions try again now (M2). */
+    @JvmStatic external fun reconnectDropped(): Int
     @JvmStatic external fun openSessions(): Int
 }

@@ -495,6 +495,22 @@ impl Engine {
         }
     }
 
+    /// The network came back (Android's default network, M2): a dropped
+    /// terminal session tries again now instead of at the end of its
+    /// countdown. Returns how many did.
+    pub fn reconnect_dropped(&self) -> usize {
+        let dropped: Vec<SessionHandle> = self
+            .sessions()
+            .values()
+            .filter(|live| live.session.view().state == SessionState::Dropped)
+            .map(|live| live.session.clone())
+            .collect();
+        for session in &dropped {
+            session.reconnect();
+        }
+        dropped.len()
+    }
+
     /// Ids of the sessions not closed yet (terminals and SFTP).
     pub fn open_sessions(&self) -> Vec<u64> {
         let mut ids: Vec<u64> = self.sessions().keys().copied().collect();

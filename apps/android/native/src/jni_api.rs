@@ -322,6 +322,48 @@ pub extern "system" fn Java_dev_shellpp_android_Native_text<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `sendPassword(session, vaultId, recordId)`: the saved password of the
+/// host typed into the session once, without Enter (D220: the password key,
+/// after the user confirmed it). It goes from the vault to the session here
+/// and never crosses into Kotlin; the phone's terminal keeps no command
+/// history and no recording. `false` when the host has no saved password.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+    vault_id: JString<'caller>,
+    record_id: JString<'caller>,
+) -> jboolean {
+    unowned
+        .with_env(|env| -> Result<jboolean, NativeError> {
+            let parse = |text: String| {
+                uuid::Uuid::parse_str(&text)
+                    .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
+            };
+            let field = shellpp_core::service::dto::SecretFieldRef {
+                vault_id: parse(vault_id.try_to_string(env)?)?,
+                record_id: parse(record_id.try_to_string(env)?)?,
+                path: "ssh.password".to_owned(),
+            };
+            let engine = engine()?;
+            let password = match engine.core().secret_reveal(field) {
+                Ok(password) => password,
+                Err(shellpp_core::CoreError::NotFound) => return Ok(false),
+                Err(error) => {
+                    return Err(NativeError::Engine(EngineError(error.code().to_owned())));
+                }
+            };
+            // The bytes go to the session's input queue as typed text would.
+            let bytes = secrecy::ExposeSecret::expose_secret(&password)
+                .as_bytes()
+                .to_vec();
+            engine.send(id(session), bytes)?;
+            Ok(true)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `paste(session, text)`: a paste, bracketed when the program asked for it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_paste<'caller>(
@@ -459,6 +501,20 @@ pub extern "system" fn Java_dev_shellpp_android_Native_close<'caller>(
         .with_env(|_env| -> Result<(), NativeError> {
             engine()?.close(id(session));
             Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `reconnectDropped()`: the network came back; dropped sessions try again
+/// now (M2). How many did.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_reconnectDropped<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+) -> jint {
+    unowned
+        .with_env(|_env| -> Result<jint, NativeError> {
+            Ok(jint::try_from(engine()?.reconnect_dropped()).unwrap_or(jint::MAX))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

@@ -66,7 +66,6 @@ sealed interface Page {
     data class EditHost(val record: Record?, val groupId: String?) : Page
     data class EditGroup(val record: Record?, val parentId: String?) : Page
     data object Account : Page
-    data class Sftp(val host: Record?, val session: Long?) : Page
 
     data object Connections : Page {
         override val withBar get() = true
@@ -152,7 +151,6 @@ private fun PageContent(app: App, activity: MainActivity, nav: Nav, page: Page) 
         is Page.EditHost -> HostEditor(app, nav, page.record, page.groupId, onClose = { nav.pop() })
         is Page.EditGroup -> GroupEditor(app, nav, page.record, page.parentId, onClose = { nav.pop() })
         Page.Account -> AccountScreen(app, activity, onClose = { nav.pop() })
-        is Page.Sftp -> SftpScreen(app, activity, page.host, page.session, onClose = { nav.pop() })
         Page.Connections -> ConnectionsScreen(app, activity, nav)
         Page.SettingsHome -> SettingsScreen(app, activity, nav)
         Page.CustomizeKeyboard -> CustomizeKeyboardScreen(app, onClose = { nav.pop() })

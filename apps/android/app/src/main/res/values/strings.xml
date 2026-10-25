@@ -35,4 +35,20 @@
     <string name="passphrase_for">Passphrase of %1$s</string>
     <string name="connecting">Connecting…</string>
     <string name="local_network_denied">Without the local network permission, servers at home (10.x, 192.168.x) cannot be reached. Settings › Apps › Shell++ › Permissions.</string>
+    <string name="connect_again_saved_only">Only a saved host can be connected to again from here.</string>
+    <string name="send_password_title">Send the saved password?</string>
+    <string name="send_password_text">The saved password of %1$s is typed into the session once, without Enter.</string>
+    <string name="send">Send</string>
+    <string name="cut_in_nano">Cut in nano</string>
+    <string name="delete_selection">Delete</string>
+    <string name="cursor_not_reached">The cursor could not reach the selection; nothing was deleted.</string>
+    <string name="upload">Upload</string>
+    <string name="attach_connecting">Opening SFTP to this host…</string>
+    <string name="attach_failed">SFTP to this host could not be opened.</string>
+    <string name="attach_folder">Folder on the server</string>
+    <string name="attach_started">Uploading to %1$s: the SFTP session shows the transfers.</string>
+    <plurals name="attach_title">
+        <item quantity="one">Upload %1$d file</item>
+        <item quantity="other">Upload %1$d files</item>
+    </plurals>
 </resources>

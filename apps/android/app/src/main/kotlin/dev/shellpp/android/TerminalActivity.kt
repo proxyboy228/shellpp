@@ -1,46 +1,94 @@
 package dev.shellpp.android
 
 import android.Manifest
-import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
-import android.content.Intent
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.widget.Button
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog as ComposeAlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /**
- * An SSH session in the terminal: a saved host's or a quick connect's
- * (UI spec 6.1), or an open one from Sessions. The session's state and
- * Close in a thin top bar, the terminal, the extra keys; the connection's
- * questions (host key, password) as dialogs, as the desktop asks them.
- * Back leaves the session running (UI spec 3).
+ * The session screen (reference-1 5, reference-2 7-8; D220): the open
+ * sessions, terminal and SFTP, one shown at a time, the session bar with
+ * its chips under it and, on a terminal session, the extra-keys row.
+ * Opened from a host, a recent connection, a session card or quick
+ * connect; "<" and Back go back to the lists and leave every session
+ * running (Back clears a selection first).
  */
-class TerminalActivity : Activity(), ExtraKeys.Sink {
-    lateinit var terminal: TerminalView
-        private set
-    private lateinit var keys: ExtraKeys
-    private lateinit var status: TextView
+class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
+    private val app get() = application as App
     private val worker = Executors.newSingleThreadExecutor()
-    /** The session shown here (0 until it opened). */
-    var session = 0L
-        private set
-    private var openedOnce = false
-    private var answeredPrompt = -1L
 
-    /** The size laid out, once known; the session opens with it. */
-    private var size: Pair<Int, Int>? = null
+    /** The terminal views of the terminal sessions shown here, by session. */
+    private val views = LinkedHashMap<Long, TerminalView>()
+
+    /** A terminal whose session is opening (no id yet). */
+    private var opening: TerminalView? = null
+    private lateinit var content: FrameLayout
+    private lateinit var sftpView: ComposeView
+
+    /** The session shown, 0 while one opens. */
+    private var active by mutableStateOf(0L)
+
+    /** An SFTP session opening for this host (its screen connects it). */
+    private var openingSftp by mutableStateOf<Record?>(null)
+    private var keyboardShown by mutableStateOf(false)
+    private var modifiersVersion by mutableIntStateOf(0)
+    private val ctrlKey = StickyModifier()
+    private val altKey = StickyModifier()
+    private var cursorOn by mutableStateOf(false)
+    private var hostPassword by mutableStateOf(false)
+    private var confirmingPassword by mutableStateOf(false)
+    private var attachFolder by mutableStateOf<Pair<Long, String>?>(null)
+    private var attachUris: List<Uri> = emptyList()
+    private var keyGroups by mutableStateOf(listOf<List<XKey>>())
+
+    /** Hosts still to open (several selected hosts connect one after another). */
+    private val queue = ArrayDeque<Target>()
+    private val answered = HashMap<Long, Long>()
 
     /** The permission dialog was answered (or there was none to ask). */
     private var permissionsSettled = false
@@ -49,6 +97,23 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
     private var testPassword: ByteArray? = null
     private var testAcceptHostKey = false
 
+    /** Where a terminal session goes: a saved host or a quick connect. */
+    data class Target(val vaultId: String?, val recordId: String?, val address: String, val port: Int, val username: String, val title: String)
+
+    /** The session shown (0 while one opens). */
+    val session: Long get() = active
+
+    /** The terminal shown (tests read its screen and type into it). */
+    val terminal: TerminalView
+        get() = views[active] ?: opening ?: views.values.lastOrNull() ?: idle
+
+    private val idle by lazy { TerminalView(this, this) }
+
+    private val pickFiles = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) startAttach(uris)
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
@@ -56,171 +121,272 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             testPassword = intent.getByteArrayExtra(EXTRA_TEST_PASSWORD)
             testAcceptHostKey = intent.getBooleanExtra(EXTRA_TEST_ACCEPT_HOST_KEY, false)
         }
-        keys = ExtraKeys(this, this)
-        terminal = TerminalView(this, keys)
-        status = TextView(this).apply {
-            textSize = 14f
-            setTextColor(color(R.color.text_secondary))
-            setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
-            text = getString(R.string.connecting)
-            setSingleLine()
+        keyGroups = XKey.groups(this)
+        content = FrameLayout(this)
+        sftpView = ComposeView(this).apply {
+            setContent {
+                ShellTheme {
+                    Box(Modifier.semantics { testTagsAsResourceId = true }) { SftpContent() }
+                }
+            }
         }
-        val close = Button(this).apply {
-            text = getString(R.string.close)
-            isAllCaps = false
-            textSize = 14f
-            background = null
-            setTextColor(color(R.color.accent))
-            setOnClickListener { closeSession() }
-        }
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(status, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(close, LinearLayout.LayoutParams(WRAP_CONTENT, dp(48f)))
+        val bottom = ComposeView(this).apply {
+            setContent {
+                ShellTheme {
+                    Box(Modifier.semantics { testTagsAsResourceId = true }) { Bottom() }
+                }
+            }
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(color(R.color.bg_base))
-            addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, dp(48f)))
-            addView(terminal, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-            addView(keys, LinearLayout.LayoutParams(MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-            padForInsets()
+            addView(content, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(bottom, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+        // The bars sit right above the keyboard; the keyboard button follows it.
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            if (Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                keyboardShown = insets.isVisible(WindowInsets.Type.ime())
+            } else {
+                @Suppress("DEPRECATION")
+                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
+            insets
         }
         setContentView(root)
-        terminal.onSize = { cols, rows ->
-            size = Pair(cols, rows)
-            openWhenReady()
-        }
-        terminal.requestFocus()
-        // Recreated (split screen, a fold, a font or language change): the
-        // session this screen had goes on, it is not opened again (review
-        // of run 13, architecture 3).
-        // An open session from Sessions is shown again, not opened anew.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                // A selection goes first; then the lists (D220).
+                if (views[active]?.clearSelectionIfAny() == true) return
+                finish()
+            }
+        })
         val kept = savedInstanceState?.getLong(STATE_SESSION, 0L)?.takeIf { it != 0L }
-            ?: intent.getLongExtra(EXTRA_SESSION, 0L)
-        if (kept != 0L) {
-            openedOnce = true
+        if (kept != null && kept in app.sessions) {
             permissionsSettled = true
-            if (kept in (application as App).sessions) adopt(kept) else finish()
+            show(kept)
             return
         }
         // The notification of the foreground service (Android 13+) and, from
         // Android 17, the local network (a server at home, 10.x or 192.168.x):
-        // asked before the session opens, which waits for the answer.
+        // asked before a session opens, which waits for the answer.
         val wanted = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT >= 37) add(ACCESS_LOCAL_NETWORK)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (wanted.isNotEmpty()) {
+        if (wanted.isNotEmpty() && intent.getLongExtra(EXTRA_SESSION, 0L) == 0L) {
             requestPermissions(wanted.toTypedArray(), PERMISSIONS)
         } else {
             permissionsSettled = true
         }
+        handle(intent)
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    /** What an intent asks for: an open session, an SFTP session, or new terminal sessions. */
+    private fun handle(intent: Intent) {
+        val existing = intent.getLongExtra(EXTRA_SESSION, 0L)
+        if (existing != 0L) {
+            if (existing in app.sessions) show(existing) else if (app.sessions.isEmpty()) finish()
+            return
+        }
+        val vaultId = intent.getStringExtra(EXTRA_VAULT_ID)
+        if (intent.getBooleanExtra(EXTRA_SFTP, false)) {
+            val recordId = intent.getStringExtra(EXTRA_RECORD_ID) ?: return finish()
+            openSftp(vaultId ?: return finish(), recordId, intent.getStringExtra(EXTRA_TITLE) ?: "SFTP")
+            return
+        }
+        val many = intent.getStringArrayListExtra(EXTRA_RECORD_IDS)
+        if (many != null && vaultId != null) {
+            val titles = intent.getStringArrayListExtra(EXTRA_TITLES) ?: arrayListOf()
+            many.forEachIndexed { index, id -> queue.addLast(Target(vaultId, id, "", 22, "", titles.getOrElse(index) { "" })) }
+        } else {
+            val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return finish()
+            val username = intent.getStringExtra(EXTRA_USERNAME) ?: ""
+            queue.addLast(
+                Target(
+                    vaultId, intent.getStringExtra(EXTRA_RECORD_ID), address, intent.getIntExtra(EXTRA_PORT, 22), username,
+                    intent.getStringExtra(EXTRA_TITLE) ?: if (username.isEmpty()) address else "$username@$address",
+                ),
+            )
+        }
+        openNext()
+    }
+
+    @Deprecated("The result API is for Compose screens; this one asks once at start")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != PERMISSIONS) return
         val localDenied = permissions.indices.any {
             permissions[it] == ACCESS_LOCAL_NETWORK && grantResults.getOrNull(it) != PackageManager.PERMISSION_GRANTED
         }
-        if (localDenied) status.text = getString(R.string.local_network_denied)
+        if (localDenied) Toast.makeText(this, R.string.local_network_denied, Toast.LENGTH_LONG).show()
         permissionsSettled = true
-        openWhenReady()
+        openNext()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        if (session != 0L) outState.putLong(STATE_SESSION, session)
+        if (active != 0L) outState.putLong(STATE_SESSION, active)
     }
 
-    private fun openWhenReady() {
-        val (cols, rows) = size ?: return
-        if (openedOnce || !permissionsSettled) return
-        open(cols, rows)
+    // ----- sessions --------------------------------------------------------
+
+    /** Opens the next queued terminal session once the screen has a size. */
+    private fun openNext() {
+        if (!permissionsSettled || opening != null) return
+        val target = queue.removeFirstOrNull() ?: return
+        val view = TerminalView(this, this)
+        opening = view
+        active = 0L
+        openingSftp = null
+        showView(view)
+        var started = false
+        view.onSize = { cols, rows ->
+            if (!started) {
+                started = true
+                open(view, target, cols, rows)
+            }
+        }
     }
 
-    private fun open(cols: Int, rows: Int) {
-        openedOnce = true
-        val vaultId = intent.getStringExtra(EXTRA_VAULT_ID)
-        val recordId = intent.getStringExtra(EXTRA_RECORD_ID)
-        val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return finish()
-        val port = intent.getIntExtra(EXTRA_PORT, 22)
-        val username = intent.getStringExtra(EXTRA_USERNAME) ?: ""
-        val title = intent.getStringExtra(EXTRA_TITLE) ?: if (username.isEmpty()) address else "$username@$address"
+    private fun open(view: TerminalView, target: Target, cols: Int, rows: Int) {
         worker.execute {
             val id = try {
-                if (vaultId != null && recordId != null) {
-                    Native.openHost(vaultId, recordId, cols, rows, isDark)
+                if (target.vaultId != null && target.recordId != null) {
+                    Native.openHost(target.vaultId, target.recordId, cols, rows, isDark)
                 } else {
-                    Native.open(address, port, username, cols, rows, isDark)
+                    Native.open(target.address, target.port, target.username, cols, rows, isDark)
                 }
             } catch (error: RuntimeException) {
-                runOnUiThread { status.text = error.message }
+                runOnUiThread {
+                    Toast.makeText(this, error.message ?: getString(R.string.connecting), Toast.LENGTH_LONG).show()
+                    if (opening == view) opening = null
+                    view.release()
+                    afterOpen()
+                }
                 return@execute
             }
             runOnUiThread {
-                // Closed (Back) while it opened: the session goes too.
+                // Gone (Back) while it opened: the session goes on in the
+                // list, as one left with "<" (the bar's sessions have it).
+                val title = target.title.ifEmpty { target.address }
+                app.opened(id, title, target.recordId)
                 if (isDestroyed || isFinishing) {
-                    runCatching { Native.close(id) }
+                    view.release()
                     return@runOnUiThread
                 }
-                (application as App).opened(id, title, recordId)
-                adopt(id)
+                if (opening == view) opening = null
+                views[id] = view
+                app.listen(id) { event -> onEvent(id, event) }
+                view.attach(id)
+                show(id)
+                view.showKeyboard()
+                afterOpen()
             }
         }
     }
 
-    /** Shows session [id] here: its events and its terminal. */
-    private fun adopt(id: Long) {
-        session = id
-        (application as App).listen(id, ::onEvent)
-        terminal.attach(id)
+    private fun afterOpen() {
+        if (queue.isNotEmpty()) openNext() else if (views.isEmpty() && app.sessions.isEmpty() && openingSftp == null) finish()
     }
 
-    private fun onEvent(event: JSONObject) {
-        val state = event.optString("state")
-        val error = event.optString("error").takeIf { !event.isNull("error") && it.isNotEmpty() }
-        status.text = when (state) {
-            "connecting" -> getString(R.string.connecting)
-            "connected" -> event.optString("title")
-            "dropped" -> listOfNotNull(error, event.optInt("reconnectIn", -1).takeIf { it >= 0 }?.let { "↻ $it s" })
-                .joinToString(" · ")
-            else -> listOfNotNull(event.optString("title"), error).joinToString(" · ")
+    /** Shows session [id]: its terminal, made here when another screen opened it, or its files. */
+    private fun show(id: Long) {
+        if (id in app.sftpSessions) {
+            active = id
+            openingSftp = null
+            app.activeSessionId.value = id
+            showView(sftpView)
+            hideKeyboard()
+            hostPassword = false
+            return
         }
+        val view = views.getOrPut(id) {
+            TerminalView(this, this).also { made ->
+                app.listen(id) { event -> onEvent(id, event) }
+                made.attach(id)
+            }
+        }
+        active = id
+        app.activeSessionId.value = id
+        showView(view)
+        view.cursorPad = cursorOn
+        view.requestFocus()
+        refreshPassword()
+    }
+
+    private fun showView(view: View) {
+        if (content.childCount == 1 && content.getChildAt(0) == view) return
+        content.removeAllViews()
+        content.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+    }
+
+    private fun hideKeyboard() {
+        getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+            ?.hideSoftInputFromWindow(content.windowToken, 0)
+    }
+
+    /** × on the active chip: the session closes at once (D220). */
+    private fun close(id: Long) {
+        worker.execute { runCatching { Native.close(id) } }
+        app.forget(id)
+        gone(id)
+    }
+
+    /** Session [id] ended: its view goes; the bar shows another session, or the lists come back. */
+    private fun gone(id: Long) {
+        views.remove(id)?.let { view ->
+            app.unlisten(id)
+            view.release()
+        }
+        if (active != id) return
+        val next = app.sessions.filter { it != id }.maxOrNull()
+        if (next != null) show(next) else if (opening == null && openingSftp == null && queue.isEmpty()) finish()
+    }
+
+    private fun onEvent(id: Long, event: JSONObject) {
+        val state = event.optString("state")
         if (state == "closed") {
-            finish()
+            gone(id)
             return
         }
         val prompt = event.optJSONObject("prompt") ?: return
         val promptId = prompt.getLong("id")
-        if (promptId == answeredPrompt) return
-        answeredPrompt = promptId
+        if (answered[id] == promptId) return
+        answered[id] = promptId
+        // A question of another session: that session comes to the front first.
+        if (id != active) show(id)
         when (prompt.getString("kind")) {
             "host_key_unknown" -> if (testAcceptHostKey) {
-                reply(promptId, "accept", null)
+                reply(id, promptId, "accept", null)
             } else {
-                hostKeyDialog(promptId, prompt, changed = false)
+                hostKeyDialog(id, promptId, prompt, changed = false)
             }
-            "host_key_changed" -> hostKeyDialog(promptId, prompt, changed = true)
+            "host_key_changed" -> hostKeyDialog(id, promptId, prompt, changed = true)
             "password" -> {
                 val ready = if (prompt.optBoolean("error")) null else testPassword
                 testPassword = null
                 if (ready != null) {
-                    reply(promptId, "text", ready)
+                    reply(id, promptId, "text", ready)
                 } else {
-                    textDialog(promptId, getString(R.string.password_for, prompt.optString("username")), true, prompt.optBoolean("error"))
+                    textDialog(id, promptId, getString(R.string.password_for, prompt.optString("username")), true, prompt.optBoolean("error"))
                 }
             }
-            "passphrase" -> textDialog(promptId, getString(R.string.passphrase_for, prompt.optString("keyLabel")), true, prompt.optBoolean("error"))
-            "keyboard_interactive" -> textDialog(promptId, prompt.optString("prompt"), !prompt.optBoolean("echo"), prompt.optBoolean("error"))
-            "username" -> textDialog(promptId, getString(R.string.username), false, false)
-            else -> reply(promptId, "cancel", null)
+            "passphrase" -> textDialog(id, promptId, getString(R.string.passphrase_for, prompt.optString("keyLabel")), true, prompt.optBoolean("error"))
+            "keyboard_interactive" -> textDialog(id, promptId, prompt.optString("prompt"), !prompt.optBoolean("echo"), prompt.optBoolean("error"))
+            "username" -> textDialog(id, promptId, getString(R.string.username), false, false)
+            else -> reply(id, promptId, "cancel", null)
         }
     }
 
-    private fun reply(prompt: Long, kind: String, text: ByteArray?) {
-        val id = session
+    private fun reply(id: Long, prompt: Long, kind: String, text: ByteArray?) {
         worker.execute {
             try {
                 Native.reply(id, prompt, kind, text)
@@ -240,19 +406,16 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
      * offers Cancel first, and replaces the key only after a second
      * confirmation.
      */
-    private fun hostKeyDialog(prompt: Long, info: JSONObject, changed: Boolean) {
-        // A terminal shown again from Sessions has no address of its own: its title then.
-        val host = intent.getStringExtra(EXTRA_ADDRESS)
-            ?: (application as App).sessionViews.value[session]?.optString("title")
-            ?: getString(R.string.this_host)
+    private fun hostKeyDialog(id: Long, prompt: Long, info: JSONObject, changed: Boolean) {
+        val host = app.sessionViews.value[id]?.optString("title")?.ifBlank { null } ?: getString(R.string.this_host)
         if (!changed) {
             AlertDialog.Builder(this)
                 .setTitle(R.string.host_key_unknown)
                 .setMessage("$host\n${info.optString("keyType")}\n${info.optString("fingerprint")}")
                 .setCancelable(false)
-                .setPositiveButton(R.string.accept_and_save) { _, _ -> reply(prompt, "accept", null) }
-                .setNeutralButton(R.string.connect_once) { _, _ -> reply(prompt, "once", null) }
-                .setNegativeButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+                .setPositiveButton(R.string.accept_and_save) { _, _ -> reply(id, prompt, "accept", null) }
+                .setNeutralButton(R.string.connect_once) { _, _ -> reply(id, prompt, "once", null) }
+                .setNegativeButton(R.string.cancel) { _, _ -> reply(id, prompt, "cancel", null) }
                 .show()
             return
         }
@@ -263,14 +426,14 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             .setTitle(R.string.host_key_changed)
             .setMessage(warning)
             .setCancelable(false)
-            .setPositiveButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+            .setPositiveButton(R.string.cancel) { _, _ -> reply(id, prompt, "cancel", null) }
             .setNegativeButton(R.string.replace_key_ellipsis) { _, _ ->
                 AlertDialog.Builder(this)
                     .setTitle(R.string.replace_key_confirm)
                     .setMessage(getString(R.string.replace_key_confirm_text, host))
                     .setCancelable(false)
-                    .setPositiveButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
-                    .setNegativeButton(R.string.replace_key) { _, _ -> reply(prompt, "replace", null) }
+                    .setPositiveButton(R.string.cancel) { _, _ -> reply(id, prompt, "cancel", null) }
+                    .setNegativeButton(R.string.replace_key) { _, _ -> reply(id, prompt, "replace", null) }
                     .show()
                     .getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(color(R.color.danger))
             }
@@ -278,7 +441,7 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(color(R.color.danger))
     }
 
-    private fun textDialog(prompt: Long, title: String, masked: Boolean, wrong: Boolean) {
+    private fun textDialog(id: Long, prompt: Long, title: String, masked: Boolean, wrong: Boolean) {
         val field = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or
                 if (masked) InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
@@ -296,21 +459,264 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
                 chars.fill('\u0000')
                 if (encoded.hasArray()) encoded.array().fill(0)
                 editable.clear()
-                reply(prompt, "text", bytes)
+                reply(id, prompt, "text", bytes)
             }
-            .setNegativeButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+            .setNegativeButton(R.string.cancel) { _, _ -> reply(id, prompt, "cancel", null) }
             .show()
     }
 
-    /** Close in the bar: the session ends and the screen goes. */
-    private fun closeSession() {
-        val id = session
-        if (id != 0L) {
-            runCatching { Native.close(id) }
-            (application as App).forget(id)
-        }
-        finish()
+    // ----- SFTP --------------------------------------------------------------
+
+    /** A new SFTP session to a saved host, shown here (reference-2 8; D220: the terminal stays). */
+    private fun openSftp(vaultId: String, recordId: String, title: String) {
+        openingSftp = Record(
+            JSONObject().put("record_id", recordId).put("vault_id", vaultId).put("type", "host")
+                .put("data", JSONObject().put("label", title)),
+        )
+        active = 0L
+        showView(sftpView)
+        hideKeyboard()
     }
+
+    @Composable
+    private fun SftpContent() {
+        val pending = openingSftp
+        val shown = active.takeIf { it in app.sftpSessions }
+        if (pending == null && shown == null) return
+        androidx.compose.runtime.key(pending?.id ?: shown) {
+            SftpScreen(
+                app, this, host = if (shown == null) pending else null, existing = shown,
+                onClose = { finish() },
+                onOpened = { id ->
+                    openingSftp = null
+                    show(id)
+                },
+                onEnded = { id -> gone(id) },
+            )
+        }
+    }
+
+    // ----- the bars ----------------------------------------------------------
+
+    @Composable
+    private fun Bottom() {
+        val sessionViews by app.sessionViews.collectAsState()
+        val changes by app.changes.collectAsState()
+        val records = sessionViews.values.mapNotNull { it.optString("recordId").ifBlank { null } }.toSet()
+        // Again after a change: OS detection writes the host after connecting.
+        val marks by produceState(mapOf<String, OsMark>(), records, changes) {
+            value = withContext(Dispatchers.IO) { records.associateWith { hostMark(it) } }
+        }
+        val sessions = sessionViews.values.sortedBy { it.optLong("id") }.map { view ->
+            val id = view.optLong("id")
+            BarSession(
+                id, view.optString("title").ifBlank { "Session" }, view.optString("state"), id in app.sftpSessions,
+                marks[view.optString("recordId")] ?: OsMark(null, null),
+            )
+        }
+        val onTerminal = openingSftp == null && active !in app.sftpSessions
+        val theme = terminalTheme(if (isDark) "graphite" else "paper") ?: TERMINAL_THEMES.first()
+        val colors = if (onTerminal) {
+            BarColors(theme.bg, Color(theme.foreground).copy(alpha = 0.10f), theme.fg, Tokens.accent, theme.fg.copy(alpha = 0.6f))
+        } else {
+            BarColors(Tokens.bgBase, Tokens.bgRaised, Tokens.text, Tokens.accent, Tokens.textSecondary)
+        }
+        Column {
+            SessionBar(
+                sessions, active, colors, keyboardShown, showKeyboardButton = onTerminal,
+                onBack = { finish() },
+                onSwitch = { show(it) },
+                onClose = { close(it) },
+                onConnect = { connectAgain() },
+                onSftp = { sftpAgain() },
+                onKeyboard = { terminal.toggleKeyboard() },
+            )
+            if (onTerminal) {
+                val saved = sessionViews[active]?.optString("recordId")?.isNotBlank() == true
+                ExtraKeysRow(keyGroups, colors, this@TerminalActivity, modifiersVersion, password = hostPassword, attach = saved)
+            }
+        }
+        if (confirmingPassword) PasswordConfirm()
+        attachFolder?.let { (session, home) -> AttachDialog(session, home) }
+    }
+
+    /** "+" → Connect: a new session to the host of the active one (reference-2 7.6). */
+    private fun connectAgain() {
+        val view = app.sessionViews.value[active] ?: return
+        val recordId = view.optString("recordId").ifBlank { null }
+        val vaultId = recordVault()
+        if (recordId != null && vaultId != null) {
+            queue.addLast(Target(vaultId, recordId, "", 22, "", view.optString("title")))
+            openNext()
+        } else {
+            Toast.makeText(this, R.string.connect_again_saved_only, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** "+" → Connect via SFTP: a new SFTP session; the terminal session stays (D220). */
+    private fun sftpAgain() {
+        val view = app.sessionViews.value[active] ?: return
+        val recordId = view.optString("recordId").ifBlank { null }
+        val vaultId = recordVault()
+        if (recordId != null && vaultId != null) {
+            openSftp(vaultId, recordId, view.optString("title"))
+        } else {
+            Toast.makeText(this, R.string.connect_again_saved_only, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun recordVault(): String? = runCatching { Core.array("vaults").getJSONObject(0).getString("vault_id") }.getOrNull()
+
+    // ----- keys --------------------------------------------------------------
+
+    override val ctrl: Boolean get() = ctrlKey.active
+    override val alt: Boolean get() = altKey.active
+
+    override fun consume() {
+        ctrlKey.consume()
+        altKey.consume()
+        modifiersVersion += 1
+    }
+
+    override val ctrlState: StickyModifier.State get() = ctrlKey.state
+    override val altState: StickyModifier.State get() = altKey.state
+    override val cursorMode: Boolean get() = cursorOn
+
+    override fun key(key: XKey) {
+        val view = views[active] ?: return
+        when (key) {
+            XKey.Password -> if (hostPassword) confirmingPassword = true
+            XKey.Cursor -> {
+                cursorOn = !cursorOn
+                view.cursorPad = cursorOn
+            }
+            XKey.Attach -> pickFiles.launch(arrayOf("*/*"))
+            XKey.Ctrl -> {
+                ctrlKey.tap(System.currentTimeMillis())
+                modifiersVersion += 1
+            }
+            XKey.Alt -> {
+                altKey.tap(System.currentTimeMillis())
+                modifiersVersion += 1
+            }
+            is XKey.Code -> view.sendKey(key.code)
+            is XKey.Text -> repeat(key.times) { view.sendText(key.text, ctrl = key.ctrl) }
+            is XKey.Sequence -> key.steps.forEach { view.sendText(it.text, ctrl = it.ctrl) }
+        }
+        modifiersVersion += 1
+    }
+
+    /** The password key works only when the host has a saved password (D220). */
+    private fun refreshPassword() {
+        val recordId = app.sessionViews.value[active]?.optString("recordId")?.ifBlank { null }
+        if (recordId == null) {
+            hostPassword = false
+            return
+        }
+        worker.execute {
+            val has = runCatching {
+                val vault = recordVault() ?: return@runCatching false
+                val view = Core.obj("record_get", JSONObject().put("vault_id", vault).put("record_id", recordId))
+                val set = view.optJSONArray("secrets_set")
+                set != null && (0 until set.length()).any { set.optString(it) == "ssh.password" }
+            }.getOrDefault(false)
+            runOnUiThread { hostPassword = has }
+        }
+    }
+
+    /**
+     * The password key's confirmation (D220): it names the host; the
+     * password goes only after Send, once and without Enter, from the vault
+     * straight to the session ([Native.sendPassword]).
+     */
+    @Composable
+    private fun PasswordConfirm() {
+        val session = active
+        val view = app.sessionViews.value[session]
+        val title = view?.optString("title") ?: ""
+        ComposeAlertDialog(
+            onDismissRequest = { confirmingPassword = false },
+            title = { Text(getString(R.string.send_password_title)) },
+            text = { Text(getString(R.string.send_password_text, title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingPassword = false
+                    val recordId = view?.optString("recordId")?.ifBlank { null } ?: return@TextButton
+                    worker.execute {
+                        val vault = recordVault() ?: return@execute
+                        runCatching { Native.sendPassword(session, vault, recordId) }
+                    }
+                }, modifier = Modifier.testTag("password_send")) { Text(getString(R.string.send)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmingPassword = false }) { Text(getString(R.string.cancel)) } },
+        )
+    }
+
+    /**
+     * The attach key (D220 item 6): files from the system picker go by SFTP
+     * to the user's home folder on this server, or the folder typed here.
+     * An SFTP session to the host opens beside the terminal for it (its chip
+     * shows the transfers); the shell's current folder is not guessed.
+     */
+    private fun startAttach(uris: List<Uri>) {
+        val terminalSession = active
+        val view = app.sessionViews.value[terminalSession] ?: return
+        val recordId = view.optString("recordId").ifBlank { null } ?: return
+        attachUris = uris
+        Toast.makeText(this, R.string.attach_connecting, Toast.LENGTH_SHORT).show()
+        worker.execute {
+            val vault = recordVault() ?: return@execute
+            // An SFTP session to this host that is open already, else a new one.
+            val existing = app.sessionViews.value.values.firstOrNull {
+                it.optLong("id") in app.sftpSessions && it.optString("recordId") == recordId && it.optString("state") == "connected"
+            }?.optLong("id")
+            val sftp = existing ?: try {
+                Native.openSftp(vault, recordId).also { if (it != 0L) runOnUiThread { app.opened(it, view.optString("title"), recordId, sftp = true) } }
+            } catch (error: RuntimeException) {
+                0L
+            }
+            if (sftp == 0L) {
+                runOnUiThread { Toast.makeText(this, R.string.attach_failed, Toast.LENGTH_LONG).show() }
+                return@execute
+            }
+            val deadline = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < deadline) {
+                val state = app.sessionViews.value[sftp]
+                if (state?.optString("state") == "connected") break
+                if (state?.optJSONObject("prompt") != null || state?.optString("state") == "closed") {
+                    // It asks something (or failed): its screen answers.
+                    runOnUiThread { show(sftp) }
+                    return@execute
+                }
+                Thread.sleep(200)
+            }
+            val home = runCatching { Core.answer(Native.sftpCall(sftp, "home", "{}")) as String }.getOrDefault("/")
+            runOnUiThread { attachFolder = sftp to home }
+        }
+    }
+
+    @Composable
+    private fun AttachDialog(session: Long, home: String) {
+        var folder by remember { mutableStateOf(home) }
+        val count = attachUris.size
+        ComposeAlertDialog(
+            onDismissRequest = { attachFolder = null },
+            title = { Text(resources.getQuantityString(R.plurals.attach_title, count, count)) },
+            text = {
+                OutlinedTextField(folder, { folder = it }, label = { Text(getString(R.string.attach_folder)) }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("attach_folder"))
+            },
+            confirmButton = {
+                TextButton(enabled = folder.isNotBlank(), onClick = {
+                    attachFolder = null
+                    app.upload(session, folder.trim(), attachUris) { problem -> Toast.makeText(this, problem, Toast.LENGTH_LONG).show() }
+                    Toast.makeText(this, getString(R.string.attach_started, folder.trim()), Toast.LENGTH_LONG).show()
+                }, modifier = Modifier.testTag("attach_upload")) { Text(getString(R.string.upload)) }
+            },
+            dismissButton = { TextButton(onClick = { attachFolder = null }) { Text(getString(R.string.cancel)) } },
+        )
+    }
+
+    // ----- lifecycle ---------------------------------------------------------
 
     /** Locked while shown (auto-lock, Lock): the terminal goes and the unlock screen comes (UI spec 5). */
     private val onLock: (LockStatus) -> Unit = { status ->
@@ -325,46 +731,48 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
     override fun onStart() {
         super.onStart()
         // Locked: a live terminal asks for the password first (UI spec 5);
-        // the session keeps running meanwhile. A lock while the terminal is
-        // shown takes it away too; coming back after the auto-lock time,
-        // the tick of App's start locks at once (the core compares the wall
-        // clock with the last input).
-        val app = application as App
+        // the session keeps running meanwhile.
         app.onLockChange(onLock)
         if (app.ready && !app.lock.value.unlocked) leaveForUnlock()
+        // Snapshots of the screen only while it is seen (M2).
+        for (view in views.values) view.paused = false
+        keyGroups = XKey.groups(this)
+        if (TerminalPrefs.of(this).getBoolean(TerminalPrefs.KEEP_ON, false)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     override fun onStop() {
         super.onStop()
-        (application as App).removeLockListener(onLock)
+        app.removeLockListener(onLock)
+        for (view in views.values) view.paused = true
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) (application as App).noteActivity()
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) app.noteActivity()
         return super.dispatchTouchEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        (application as App).noteActivity()
+        app.noteActivity()
         return super.dispatchKeyEvent(event)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        (application as App).platform.focused = hasFocus
+        app.platform.focused = hasFocus
     }
-
-    // ExtraKeys.Sink
-    override fun key(code: Int) = terminal.sendKey(code)
-    override fun text(text: String) = terminal.sendText(text)
-    override fun toggleKeyboard() = terminal.toggleKeyboard()
 
     override fun onDestroy() {
         super.onDestroy()
-        val app = application as App
-        // Back leaves the session running (Sessions has it); Close ends it.
-        if (session != 0L) app.unlisten(session)
-        terminal.release()
+        // Back and "<" leave the sessions running (the bar and Connections have them).
+        for ((id, view) in views) {
+            app.unlisten(id)
+            view.release()
+        }
+        opening?.release()
         worker.shutdown()
     }
 
@@ -374,8 +782,11 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         const val EXTRA_USERNAME = "username"
         const val EXTRA_VAULT_ID = "vaultId"
         const val EXTRA_RECORD_ID = "recordId"
+        const val EXTRA_RECORD_IDS = "recordIds"
+        const val EXTRA_TITLES = "titles"
         const val EXTRA_TITLE = "title"
         const val EXTRA_SESSION = "session"
+        const val EXTRA_SFTP = "sftp"
         const val EXTRA_TEST_PASSWORD = "test.password"
         private const val PERMISSIONS = 1
         private const val STATE_SESSION = "session"

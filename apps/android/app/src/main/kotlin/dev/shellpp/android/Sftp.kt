@@ -106,7 +106,15 @@ private fun sftp(session: Long, command: String, input: JSONObject = JSONObject(
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
-fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?, onClose: () -> Unit) {
+fun SftpScreen(
+    app: App,
+    activity: android.content.Context,
+    host: Record?,
+    existing: Long?,
+    onClose: () -> Unit,
+    onOpened: (Long) -> Unit = {},
+    onEnded: (Long) -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     var session by remember { mutableStateOf(existing ?: 0L) }
     var view by remember { mutableStateOf<JSONObject?>(null) }
@@ -154,13 +162,14 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
             // "Disconnect all" know the session (review of run 14).
             val opened = withContext(NonCancellable + Dispatchers.IO) {
                 try {
-                    Native.openSftp(host.vaultId, host.id).also { if (it != 0L) app.opened(it, host.title, host.id, sftp = true) }
+                    Native.openSftp(host.vaultId, host.id).also { if (it != 0L) withContext(Dispatchers.Main) { app.opened(it, host.title, host.id, sftp = true) } }
                 } catch (error: Exception) {
                     listError = error.message
                     0L
                 }
             }
             session = opened
+            if (opened != 0L) onOpened(opened)
         }
     }
     DisposableEffect(session) {
@@ -176,7 +185,7 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
             }
             load(home)
         }
-        if (state == "closed") onClose()
+        if (state == "closed") onEnded(session)
     }
 
     // Download: "Save to…" every time (UI spec 10), the file goes through the cache.
