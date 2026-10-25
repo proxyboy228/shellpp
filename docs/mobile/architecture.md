@@ -1,43 +1,46 @@
 # Mobile client architecture (Android)
 
-Status: run 13, the design run (D213). The owner's description of the app is
-`docs/mobile/owner-notes.md` (D211); the Rust core's state for Android is
-`docs/android-feasibility.md`. Choices beyond the owner's words are marked
-[decision].
+Status: run 13, the design run (D213; reviewed in run 13, the findings are
+in). The owner's description of the app is `docs/mobile/owner-notes.md`
+(D211); the Rust core's state for Android is `docs/android-feasibility.md`;
+the screens are `docs/mobile/ui-spec.md` (D214). Choices beyond the owner's
+words are marked [decision].
 
 ## 1. The choice
 
 **A Kotlin app (Jetpack Compose screens, a terminal drawn by a custom
 Android `View`) over the shared Rust core, joined by a small hand-written JNI
 layer in one Rust library (`libshellpp_android.so`) that has two kinds of
-calls: JSON commands for the core's service API, and direct calls for the
-terminal's hot path.** [decision]
+calls: JSON commands for the core's service API, and direct calls for
+sessions, the terminal and file transfers.** [decision]
 
 Why, against the criteria of the plan:
 
 - **A fast terminal with exact cursor and selection** (the owner's two pains,
   D211). The terminal is a custom `View` drawing on a `Canvas` from a binary
-  snapshot of the screen the Rust model writes into a reused direct
-  `ByteBuffer`: no per-frame allocation, no serialization of cells. Touch,
-  gestures, the magnifier, the selection handles and the floating toolbar
-  are Android's own (`GestureDetector`, `Magnifier`, `ActionMode`), so they
-  behave as on every other app of the phone. Where a cell is, what the
-  cursor and the mouse mode are, what a selection holds: the model answers,
-  the same code as on the desktop (`shellpp-terminal`).
+  snapshot of the screen the Rust model writes in one pass: no serialization
+  of cells into text formats. Touch, gestures, the magnifier, the selection
+  handles and the floating toolbar are Android's own (`GestureDetector`,
+  `Magnifier`, `ActionMode`), so they behave as everywhere else on the phone.
+  Where the cursor is, which modes the program set, what a selection holds:
+  the model answers, the same code as on the desktop (`shellpp-terminal`),
+  and the cursor can be walked to a tapped cell with feedback from it
+  (section 6.3).
 - **Android's system services without a fight.** Keystore, the foreground
   service and its notification, the soft keyboard (`InputConnection`), the
-  clipboard and biometrics are Kotlin APIs; Kotlin calls them directly.
-- **Little own code, low risk.** The boundary is a handful of `extern
+  clipboard, the file picker (Storage Access Framework) and biometrics are
+  Kotlin APIs; Kotlin calls them directly.
+- **Little own code, low risk.** The boundary is a few dozen `extern
   "system"` functions. The core's service API already takes and returns
-  `serde` DTOs (the desktop's former IPC; `crates/core/src/service/dto.rs`),
-  so one `call(command, json) -> json` entry serves every screen but the
-  terminal, and the dispatcher is plain Rust, tested on the computer. The
-  `jni` crate (0.22) is already in the dependency graph through
-  `rustls-platform-verifier`.
-- **Builds on this machine without extra tools.** Gradle (the wrapper), the
-  Android Gradle plugin, the NDK and `cargo`; the Rust library is built by a
-  Gradle task that runs `cargo build` with the NDK's clang (no `cargo-ndk`,
-  no generator).
+  `serde` DTOs (`crates/core/src/service/dto.rs`), so one `call(command,
+  json) -> json` entry serves the vault's screens, and that dispatcher is
+  plain Rust, tested on the computer. The session layer's types are not
+  `serde` (`SessionView`, `PromptReply`): the Android crate keeps their JSON
+  shapes by hand, in one module with tests. The `jni` crate (0.22) is already
+  in the dependency graph through `rustls-platform-verifier`.
+- **Builds on this machine without extra tools.** Gradle (the wrapper, with
+  its checksum), the Android Gradle plugin, the NDK and `cargo`; a Gradle task
+  runs `cargo build` with the NDK's clang (no `cargo-ndk`, no generator).
 
 Rejected (one line each):
 
@@ -49,8 +52,8 @@ Rejected (one line each):
 - **A command protocol only**: serializing every terminal frame and every
   output burst costs what the terminal cannot spare.
 - **The interface in Rust** (GPUI's mobile work, Slint, Dioxus, egui): input
-  methods, selection handles, accessibility and system integration are
-  young there, which is exactly where the owner's pains are.
+  methods, selection handles and system integration are young there, which
+  is exactly where the owner's pains are.
 - **Kotlin Multiplatform**: no iPhone app (D211); a second shared layer over
   a core already shared in Rust.
 
@@ -61,125 +64,177 @@ Kotlin (app)                               Rust (libshellpp_android.so)
 ──────────────────────────────────────     ─────────────────────────────────────
 screens (Compose)          ── call(json) ─►  dispatcher ─► shellpp-core service API
                            ◄─ events ──────  EventSink (JSON events)
-TerminalView (Canvas, IME) ── direct ─────►  shellpp-terminal: feed, snapshot, select,
-                                             cursor, modes, input bytes
-SessionService (FGS)       ── call(json) ─►  shellpp-sessions: open, write, resize,
-                                             reply, close; SessionEvent (JSON)
+SessionService (FGS)       ── direct ─────►  shellpp-sessions: open, write, resize,
+                           ◄─ events ──────  reply, close; session views (JSON)
+TerminalView (Canvas, IME) ── direct ─────►  shellpp-terminal: snapshot, modes, cursor,
+                                             input bytes, selection text
+SFTP, key import           ── direct ─────►  shellpp-ssh SFTP to a file descriptor;
+                                             key bytes into the core
 SecretStore, Clipboard     ◄─ JNI calls ───  core platform traits (Kotlin objects)
 Application.onCreate       ── init ───────►  rustls-platform-verifier (JNI env, Context)
 ```
 
-- **Shared Rust** (unchanged from the desktop): `shellpp-core` (vault,
-  hosts, groups, keys, known hosts, sync client), `shellpp-ssh` (SSH, SFTP),
+- **Shared Rust** (as on the desktop): `shellpp-core` (vault, hosts,
+  groups, keys, known hosts, sync client), `shellpp-ssh` (SSH, SFTP),
   `shellpp-sessions` (sessions, prompts, reconnect, the lock),
   `shellpp-terminal` (the terminal model), `shellpp-sync-api`,
   `shellpp-private-file`.
 - **The Android crate** (`apps/android/native`, package `shellpp-android`,
   a `cdylib` built for `aarch64-linux-android` and `x86_64-linux-android`):
-  the JNI exports, the command dispatcher, the screen snapshot format, the
-  Kotlin-backed platform services. It is a member of the client workspace
-  and builds and tests on the computer too; only the exports are
-  Android-specific in use, not in code.
+  the JNI exports, the command dispatcher, the JSON shapes of the session
+  views, the screen snapshot, the input mapping until it moves into
+  `shellpp-terminal`, and the Kotlin-backed platform services. A member of
+  the client workspace: it builds and tests on the computer too.
 - **Kotlin**: every screen, the terminal's drawing and input, the extra keys
   row, the foreground service, notifications, the Keystore, biometrics, the
-  clipboard, the network callbacks, the app's lifecycle.
+  clipboard, files, network callbacks, the app's lifecycle.
 - Nothing about the data changes: the same vault, records, sync protocol and
   rules as the desktop (`docs/data-model.md`, `docs/sync-protocol.md`); the
   phone is one more device of the account.
 
-**The calls.** `call(command: String, input: String): String` runs one
-command of the service API with a JSON input and returns `{"ok": ...}` or
-`{"error": {"code", "message"}}` (the core's error codes). Blocking: Kotlin
-calls it on its own worker threads (coroutines on `Dispatchers.IO`), never
-on the main thread. Terminal calls take a handle (a `long` that indexes a
-table on the Rust side, never a raw pointer) and are short: they take the
-terminal's lock for one copy.
+**The calls.** `call(command, input)` runs one command of the service API
+with a JSON input and returns `{"ok": ...}` or `{"error": {"code",
+"message"}}` (the core's error codes). Every call that can block runs on
+Kotlin's worker threads (`Dispatchers.IO`), never on the main thread.
+Sessions and terminals are addressed by handles: numbers that index a table
+on the Rust side, never pointers; an unknown handle is an error.
 
-**Errors at the boundary.** No Rust panic crosses JNI: every export runs
-under `catch_unwind` and turns a panic into an error result (and a log
-line). A handle that is not in the table is an error, not undefined
-behaviour. JNI local references are scoped per call (`with_local_frame`).
+**Errors and panics at the boundary.** Every export runs inside the `jni`
+crate's `EnvUnowned::with_env`, which catches a panic and turns it into a
+Java exception; the Android build profile keeps `panic = "unwind"` so that
+it can. JNI local references live in the call's frame.
+
+**Secrets at the boundary.** The master password, SSH passwords and
+passphrases, prompt answers and the `secrets` of records cross the boundary.
+[decision]
+
+- Kotlin hands them over as `ByteArray` (UTF-8) or `CharArray`, never as
+  `String`, and fills its arrays with zeros after the call; Rust copies them
+  into `Zeroizing` buffers and `SecretString`.
+- JSON that carries secrets (record saves) is parsed from a `Zeroizing`
+  buffer; the dispatcher logs only the command's name and the error code,
+  never inputs or outputs.
+- The residual risk: text fields of Compose hold the typed password as a
+  `String` until they are cleared, and the JVM may keep copies until garbage
+  collection; the same as any Android password field.
 
 ## 3. Threads and lifecycle
 
 - **Rust threads**: the session layer's Tokio runtime (2 workers,
   `shellpp-sessions`), one parser thread per terminal (`shellpp-terminal`),
-  blocking pool threads for core calls. Rust never calls into the JVM from
-  its own threads except for the platform services, which attach the thread
-  once (`JavaVM::attach_current_thread_as_daemon`).
+  blocking pool threads for core calls, and the sync client's thread.
+- **Calls into the JVM from Rust threads** (the platform services, and the
+  platform verifier during TLS) attach the thread with the `jni` crate's
+  `JavaVM::attach_current_thread`, which opens its own local frame. They use
+  global references to the Kotlin objects and classes taken at
+  initialization: `FindClass` on a native thread cannot see the app's
+  classes. `rustls-platform-verifier` keeps its own `JavaVM` and `Context`
+  from its initialization (section 5).
 - **Wake-ups without callbacks**: Kotlin waits on Rust instead of Rust
-  calling Kotlin. One "pump" thread per terminal blocks in
-  `awaitWake(handle, timeoutMs)` (the model's wake channel) and posts
-  `invalidate()` to the view; one event thread blocks in
+  calling Kotlin. One pump thread per terminal blocks in `awaitWake(handle)`
+  (the model's wake channel; it returns `false` when the terminal closed)
+  and posts `invalidate()` to the view; one event thread blocks in
   `nextEvent(timeoutMs)` for session and core events (JSON) and hands them
-  to the UI. A closed handle ends its pump.
-- **A foreground service keeps live sessions** (`SessionService`): started
-  with the first live SSH session, stopped with the last; its notification
-  says how many sessions are open and has "Disconnect all". Type
-  `specialUse` (an interactive remote shell has no better-fitting type;
-  `dataSync` is time-limited on Android 15) [decision]. The notification
-  permission (Android 13+) is asked when the first session starts
-  [decision]. The service holds the Rust objects through the application
-  object, so an activity that is destroyed and recreated (rotation, theme,
-  the app swiped away from recents while sessions live) finds its sessions
-  again.
+  to the UI.
+- **`Core::tick`** runs about once a second, as on the desktop: the
+  auto-lock check and the 30-second clearing of a copied password. A
+  handler on the main thread ticks while the app is in the foreground, the
+  foreground service's thread while sessions keep the process alive, and the
+  app ticks once on every resume (the core compares wall-clock time with the
+  last input, so a frozen process locks at once when it wakes).
+- **The foreground service** (`SessionService`) runs while any session is
+  open: connecting, connected, dropped and waiting to reconnect, ended with
+  its output kept, and while an SFTP transfer runs. It stops when the last
+  one is closed. Android 12+ does not let a background app start it again,
+  which is why a dropped session keeps it. [decision]
+  - Type `specialUse` (an interactive remote shell has no better-fitting
+    type; `dataSync` is time-limited on Android 15), with the
+    `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_SPECIAL_USE` permissions and
+    the `android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE` property ("Keeps the
+    SSH terminal sessions the user opened").
+  - The notification says how many sessions are open and offers "Disconnect
+    all". The notification permission (Android 13+) is asked when the first
+    session starts; when it is denied, the service still runs and the
+    notification is not shown in the shade: the Sessions screen has
+    "Disconnect all" too.
+  - The service holds the Rust objects through the application object, so an
+    activity that is recreated (rotation, theme, swiped away from recents)
+    finds its sessions again.
 - **Network changes**: a `ConnectivityManager.NetworkCallback` tells the
-  session layer when the default network is lost or changes; a dropped
-  session follows the reconnect policy of UI 4.6 (`shellpp-sessions`), and a
-  new network makes a waiting attempt start at once [decision]. Keepalive is
-  the host's setting, as on the desktop.
-- **Sync runs on demand and when the app comes to the foreground**
-  (`ProcessLifecycleOwner` start), and after a local change, debounced as on
-  the desktop; no timer of its own and no `WorkManager` job in the first
-  version [decision]. Every sync call runs off the main thread (the sync
-  client is blocking, `crates/core/src/sync/http.rs`).
-- **The lock**: the core's auto-lock as on the desktop; leaving the app does
-  not lock by itself, the auto-lock time does [decision: the desktop's
-  rule]. Live terminals keep running while locked, prompts are cancelled
-  (`shellpp-sessions`).
-- **Process death**: Android may kill the process while it is in the
-  background without a foreground service; the vault is closed then, and the
-  next start asks for the master password. Terminal contents are not kept
-  across process death.
+  session layer when the default network is lost or comes back; a dropped
+  session follows the reconnect policy of UI 4.6, and a network that comes
+  back starts a waiting attempt at once [decision].
+- **Sync** runs after unlock, when the app comes to the foreground with the
+  vault unlocked, after a local change (debounced as on the desktop), on
+  "Sync now", and when a network comes back after a failed sync; there is no
+  periodic cycle (the desktop's 60-second cycle has no counterpart), and
+  failures back off as `docs/sync-protocol.md` 6.11 says while the app stays
+  in the foreground [decision]. Every sync call runs off the main thread.
+- **The lock**: the core's auto-lock as on the desktop, counted from the
+  last touch in the app (UI spec 5). Live terminals keep running while
+  locked; prompts are cancelled (`shellpp-sessions`).
+- **Process death**: Android may kill the process when no service keeps it;
+  the vault is closed, and the next start asks for the master password (or
+  the fingerprint, section 4). Terminal contents do not survive it.
 
-## 4. `SecretStore` on the Android Keystore
+## 4. `SecretStore` on the Android Keystore; fingerprint unlock
 
 The core's `SecretStore` (`crates/core/src/platform/mod.rs`) keeps the
-32-byte device key per account (`device-key:<db_id>`), which lets a device
-unlock without the master password ("remember on this device",
-docs/architecture.md 5.2).
+32-byte device key per account (`device-key:<db_id>`), which the core uses
+**at launch only** to unlock without the master password, and also reads
+during rotations, rebinds, key changes and recoveries
+(docs/architecture.md 5.2; docs/security.md, RR8).
 
-- **Default: not used.** The owner unlocks with the master password (D211):
-  nothing is stored, and `availability()` says the store is there but the
-  app does not offer "remember" except through fingerprint unlock.
-- **Fingerprint unlock** (an option, off by default, D211): the device key
-  is encrypted with an AES-256-GCM key generated in the `AndroidKeyStore`
-  (never exported; `setUserAuthenticationRequired(true)` with
-  `BIOMETRIC_STRONG`, invalidated when a new fingerprint is enrolled) and
-  the ciphertext with its IV is kept in the app's private storage. `get`
-  needs a `Cipher` that a `BiometricPrompt` authorized: the app shows the
-  prompt first and calls the core's unlock in its callback, and the Kotlin
-  store uses that cipher for that one call. A failed or cancelled prompt
-  falls back to the master password. An invalidated key (new fingerprint)
-  deletes the entry and asks for the password once.
+- **Default: nothing stored.** The owner unlocks with the master password
+  (D211).
+- **Fingerprint unlock** (an option, off by default, D211) is "remember on
+  this device" behind the system's biometric prompt [decision]:
+  - The device key is encrypted with an AES-256-GCM key generated in the
+    `AndroidKeyStore` (never exported, hardware-backed where the phone has
+    it, no user-authentication binding), and the ciphertext with its IV is
+    kept in the app's private storage. The core's reads during rotations
+    and rebinds then work without a prompt, as the desktop's keychain does.
+  - At a cold start the app shows the `BiometricPrompt` (`BIOMETRIC_STRONG`)
+    first and asks the core for the device unlock only after it succeeds; a
+    failure or "Use password" leaves the password field.
+  - After a lock (auto-lock, "Lock") the password is asked, as on the
+    desktop: the core uses the device key at launch only (RR8). A biometric
+    unlock after a lock needs a change of the core's rule and is the
+    owner's decision for the first version's runs.
+  - The biometric prompt is an app-level gate: like the desktop's keychain,
+    the stored key is readable by the app's own process. An attacker with
+    code in the app's process is outside what it protects (A2).
+  - Turning the option off deletes the entry and the Keystore key.
 - The 32 bytes cross JNI as a byte array that both sides wipe after use;
-  they are never logged, never put in a `String`.
+  they are never logged.
+
+**The clipboard** (`Clipboard`): Android 10+ lets an app read the clipboard
+only while it has focus. The Kotlin implementation returns an error from
+`read_text` while the app has no focus, so the core keeps its guard and
+clears a copied password when it can, instead of taking an empty read for
+"cleared". Sensitive text is marked with `ClipDescription.EXTRA_IS_SENSITIVE`
+(Android 13+) [decision].
 
 ## 5. TLS: `rustls-platform-verifier` on Android
 
 - The sync server's certificate is checked by Android's own trust manager
-  (the owner's server has a Let's Encrypt certificate, D204). Run 13 made the
-  core build there: an added CA is checked beside the platform verifier
-  (D212); a pinned certificate works as on the desktop.
+  (the owner's server has a Let's Encrypt certificate, D204); an added CA is
+  checked beside it (D212); a pinned certificate works as on the desktop.
 - The crate needs its JNI initialization before the first TLS connection:
   `Application.onCreate` calls `nativeInit(context)`, which calls
   `rustls_platform_verifier::android::init_with_env` with the JNI
   environment and the application context. Without it the crate panics, so
   every sync entry checks that the initialization ran and returns an error
   otherwise.
-- The crate also needs its small Kotlin component in the app's build (it
-  ships with the crate as a Maven artifact; how version 0.7.1 provides it is
-  checked when sync lands on the phone).
+- The crate needs a small Kotlin component in the app. The crate
+  `rustls-platform-verifier-android` on crates.io carries only a version
+  marker, and the component's published Maven repository is on GitHub, which
+  is not one of the allowed sources (Maven Central, Google Maven). The app
+  vendors the component's source (MIT or Apache-2.0) under
+  `apps/android/third_party/` at the version 0.7.1 needs, with its line in
+  THIRD_PARTY_NOTICES and the R8 rule
+  `-keep class org.rustls.platformverifier.** { *; }` [decision; done when
+  sync lands on the phone].
 
 ## 6. The terminal: drawing and input
 
@@ -187,63 +242,99 @@ docs/architecture.md 5.2).
 
 - The model runs on its parser thread exactly as on the desktop (the
   journal, the limits, VS16 and emoji widths, D85, D206).
-- `snapshot(handle, buffer)` copies the visible rows into a direct
-  `ByteBuffer` the view owns and reuses: per cell the character (a code
-  point; a cell with combining marks or an emoji sequence points into a
-  side table of strings), the resolved foreground and background (RGB from
-  the palette, with the theme's dim, bold-bright and inverse rules applied in
-  Rust), and flags (bold, italic, underline kinds, strikeout, wide, hidden);
-  then the cursor (position, shape, visible), the selection's cells, the
-  scroll position, and the modes the view needs (mouse reporting, bracketed
-  paste, application cursor keys, the alternate screen).
-- The view draws rows with `Canvas.drawText` per run of equal attributes,
-  in the desktop's terminal font, JetBrains Mono (OFL, in the app's assets) [decision]; a
-  run's background first, then text, then decorations, the cursor and the
-  selection on top. Only rows that changed are measured again.
+- `snapshot(handle)` copies the visible rows in one pass under the
+  terminal's lock: per cell the character (a cell with combining marks or an
+  emoji sequence also gets its whole text in a side table), the resolved
+  foreground and background (the palette, dim, bold-bright and inverse rules
+  applied in Rust), and flags; then the cursor, which rows wrap, the scroll
+  position, and the modes the view needs (mouse reporting and its encoding,
+  bracketed paste, application cursor keys, the alternate screen). The
+  layout is fixed-size little-endian fields
+  (`apps/android/native/src/screen.rs`). A reused direct buffer can replace
+  the array when profiling asks for it.
+- The view draws rows with `Canvas.drawText` per run of equal attributes, in
+  the desktop's terminal font, JetBrains Mono (OFL, in the app's assets)
+  [decision]: backgrounds, then text, then decorations, the cursor and the
+  selection on top.
 - Pinch zooms the font size (the cell size), which changes the terminal's
-  columns and rows; the new size goes to the server (resize) when the
-  gesture ends [decision].
+  columns and rows; the new size goes to the server when the gesture ends
+  [decision].
+- Accessibility: a `Canvas` view has none by itself; an
+  `AccessibilityNodeProvider` that reads the screen's rows is part of the
+  first version's terminal run [decision].
 
 ### 6.2 Input
 
-- The view is its own input target (`onCreateInputConnection`) with an
-  input type that turns off suggestions and auto-correction; committed text
-  becomes UTF-8 bytes, deletions become DEL, the Enter action becomes CR.
-  The IME's composing text is shown at the cursor and sent when committed.
+- The view is its own input target (`onCreateInputConnection`) with the
+  input type `TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_VISIBLE_PASSWORD |
+  TYPE_TEXT_FLAG_NO_SUGGESTIONS`, which turns off predictions and
+  composition on Gboard and the Samsung Keyboard alike, so each key commits
+  as it is typed (`htop` keys, nano's Y/N and Tab completion need that)
+  [decision].
+- What the keyboard does anyway is sent at once: committed text as UTF-8;
+  composing text that a keyboard still uses is sent as the difference to
+  what was sent before (new characters, or Backspace for removed ones);
+  `deleteSurroundingText` as Backspace; key events that keyboards send
+  through `sendKeyEvent` (`KEYCODE_DEL`, Enter, the arrows, Tab) as those
+  keys. Backspace sends what the host's setting says (UI 3.1; DEL by
+  default). The run that builds it tests Gboard and the Samsung Keyboard,
+  with the English and the Russian layout.
 - Keys from the extra keys row and from a hardware keyboard go through the
-  same mapping as the desktop's keys (the bytes of Esc, Tab, the arrows in
-  normal or application cursor mode, Ctrl and Alt combinations); that
-  mapping moves from the desktop's `terminal/input.rs` into
-  `shellpp-terminal` as a pure function when the first version is built, so
-  both clients send the same bytes [decision].
-- Ctrl and Alt on the extra keys row are sticky: one tap applies to the
-  next key, a double tap locks until tapped again [decision].
+  desktop's mapping (the bytes of Esc, Tab, the arrows in normal or
+  application cursor mode, Ctrl and Alt combinations); that mapping moves
+  from the desktop's `terminal/input.rs` and `mouse.rs` into
+  `shellpp-terminal` as a pure function in the first version's terminal run,
+  so both clients send the same bytes [decision]. Until then the Android
+  crate has its own copy, tested against the desktop's sequences.
+- Ctrl and Alt on the extra keys row are sticky (UI spec 9.2).
 - Paste goes through the model's paste rules (bracketed paste, the
   multi-line confirmation of UI 4.2).
 
 ### 6.3 Cursor and selection
 
-The owner's two pains (D211); the details are in `docs/mobile/ui-spec.md`.
+The owner's two pains (D211); the gestures are in `docs/mobile/ui-spec.md`
+9.3–9.6.
 
-- **Moving the cursor**: a tap on the line being typed moves the cursor
-  there. When the program asked for mouse reports (nano with mouse support,
-  `htop`, vim with `mouse=a`), the tap is a mouse click at that cell;
-  otherwise the view sends the arrow keys that walk from the cursor to the
-  tapped cell along the typed line (the model knows where the cursor is and
-  where the line wraps) [decision]. A horizontal drag on the extra keys row
-  moves the cursor one cell per step, with a magnifier above the finger
-  [decision].
+- **A tap puts the cursor on a character** [decision]:
+  - when the program asked for mouse reports, the tap is a click at that
+    cell;
+  - otherwise the terminal walks the cursor there with the arrow keys,
+    **with feedback**: it sends one step, waits until the program has
+    answered (the model's cursor moved, or a short time passed), reads the
+    cursor from the model and decides the next step, until the cursor is on
+    the tapped cell or stops moving. On the shell's command line it walks ←
+    and → along the typed line; in a full-screen program (the alternate
+    screen: nano without mouse support, vim) ↑ and ↓ first, then ← and →.
+    Feedback makes tabs, wide characters and an editor's own soft wrap land
+    right, where counting cells blindly would not.
+  - A walk sends at most as many arrows as there are cells between the
+    cursor and the tap and gives up after a step that did not move the
+    cursor; a program where arrows do not move a cursor (a pager) sees at
+    most a few of them.
 - **Selecting**: long-press selects a word with the model's word rules,
-  with handles to drag and a floating toolbar (Copy, Paste, Select line,
-  Select screen) [decision]; a magnifier shows under the finger while a
-  handle moves.
+  with handles, a magnifier (Android 9+, API 28; below it no lens) and a
+  floating toolbar (UI spec 9.4).
 - **Deleting a selected piece in an editor**: a terminal cannot delete text
-  on the server by itself, so the toolbar offers what the program can do:
-  on a shell's typed line, "Delete" moves the cursor to the selection's end
-  and sends the backspaces; in a full-screen program the selection is for
-  copying, and the extra keys row offers the editor's own keys (for nano:
-  set mark, cut) to cut a block the cursor walked over [decision; the limits
-  are in the UI spec].
+  on the server; only the program can, with its own keys. On the command
+  line, the walk goes to the selection's end and sends Backspaces. For nano
+  (the owner's example) "Cut in nano" walks to the selection's start, sets
+  the mark (Alt+A), walks to its end and cuts (Ctrl+K): the same walks as a
+  tap. The app does not know which program runs, and the UI spec says where
+  this stops (9.6).
+
+### 6.4 Files: SFTP and key files
+
+- **SFTP downloads** go from `shellpp-ssh`'s SFTP straight to a file: Kotlin
+  asks the Storage Access Framework for a document ("Save to..." or the
+  Downloads folder), opens it, and hands the file descriptor to Rust
+  (`ParcelFileDescriptor.detachFd`), which writes and closes it. Uploads read
+  a picked document's descriptor the same way. No file content crosses JNI
+  as arrays or JSON [decision].
+- Transfers report progress and their end as events, can be cancelled, and
+  keep the foreground service running (section 3).
+- **Key files** for import are read by Kotlin from the picked document into
+  a `ByteArray` that is wiped after the call; the core parses them as on the
+  desktop.
 
 ## 7. Build and layout
 
@@ -251,9 +342,11 @@ The owner's two pains (D211); the details are in `docs/mobile/ui-spec.md`.
   `distributionSha256Sum`), module `app`; `apps/android/native`: the Rust
   crate. A Gradle task builds the library for `aarch64-linux-android` (the
   phone) and `x86_64-linux-android` (the emulator) with the NDK's clang and
-  copies it to `jniLibs` before the APK is packaged.
-- Minimum Android 8.0 (API 26, as the Rust check uses); target and compile
-  SDK 37, the SDK installed here [decision].
+  copies it to the APK's native libraries before packaging. The Android
+  build profile is release-like with symbols stripped and `panic = "unwind"`.
+- Minimum Android 8.0 (API 26, as the Rust check uses; the magnifier needs
+  API 28 and is left out below it); target and compile SDK 37, the SDK
+  installed here [decision].
 - Checks: `scripts\verify-android.ps1` (the debug APK, the Rust binding's
   tests on the computer, Kotlin unit tests; with `-Emulator` an end-to-end
   test on the emulator against OpenSSH in Docker). The desktop's full

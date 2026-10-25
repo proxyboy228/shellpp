@@ -182,8 +182,9 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
    editor); connecting from a host.
 3. **M2, the terminal for real** (1–2 runs): the binary screen snapshot,
    every gesture of UI spec 9 (the cursor by tap and by the row, selection
-   with handles and the magnifier, Delete on the command line, Mark and Cut
-   for nano), sticky Ctrl and Alt, the desktop's key mapping moved into
+   with handles and the magnifier, walks with feedback in full-screen
+   programs, Delete on the command line, Cut in nano), sticky Ctrl and Alt,
+   the input method tested with Gboard and the Samsung Keyboard, the desktop's key mapping moved into
    `shellpp-terminal` and shared, the foreground service, reconnects on
    network changes, rotation and pinch.
 4. **M3, sync** (1 run): `rustls-platform-verifier`'s initialization and its
