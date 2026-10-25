@@ -17,7 +17,7 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 4 | SFTP | done | names that are not UTF-8 on the server are a known limitation (D50, item 12) |
 | 5 | Port forwarding, jump hosts, proxy, snippets | done | |
 | 6 | Logs, settings, shortcuts, highlighting | done | interface scale (run 6) |
-| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in refused after its login revokes that login's device (D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
+| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in that fails after its login and before the binding revokes that login (a rebind keeps the device's own row, D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
 | 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215); shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
@@ -74,7 +74,12 @@ None loses data as built.
   rebind's `rolled_back` before binding (a server whose chain does not
   reach the device's key) goes through that path but has no test scenario
   of its own; a failure with no answer (no network, a timeout) revokes
-  nothing; the lock race fixed by the review has no test hook.
+  nothing; the lock race fixed by the review has no test hook; a failed
+  rebind leaves its row active even if another device had revoked it (the
+  login itself restores a revoked row, as before).
+- **The recovery key after Log out** (D217): Show answers `wrong_state`,
+  Reissue `account_binding` (not unified; the interface hides both in local
+  mode).
 - **Known limitations** (recorded, no work planned): the server's sign-in
   limits (D175, D185: a turn lost to an attacker at the moment a wait ends,
   the soft limit counted after Argon2id, counts in memory, the email map);
