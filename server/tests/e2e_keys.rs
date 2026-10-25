@@ -503,6 +503,8 @@ fn a_local_compromised_change_replaces_the_recovery_key() {
         "and ends the grant to copy it"
     );
     assert!(a.core.recovery_key_granted().is_err());
+    // Read back through the local path the app never offers (D217).
+    shellpp_core::service::local_recovery_key::allow(true);
     let held = a.core.recovery_key_show(new.clone()).expect("held");
     assert_ne!(text(&held.recovery_key), text(&old_key));
 

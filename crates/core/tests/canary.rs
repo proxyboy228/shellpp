@@ -114,6 +114,8 @@ fn assert_wraps_gone(data_dir: &Path, wraps: &[(&str, Vec<u8>)]) {
 #[test]
 fn replaced_key_wraps_do_not_stay_in_the_database_files() {
     let _serial = serial();
+    // The local recovery paths (the app offers neither in local mode, D217).
+    shellpp_core::service::local_recovery_key::allow(true);
     let env = Env::new();
     let core = env.open();
     let password = common::new_password();
@@ -147,6 +149,8 @@ fn replaced_key_wraps_do_not_stay_in_the_database_files() {
 #[test]
 fn canaries_never_reach_logs_debug_output_or_disk() {
     let _serial = serial();
+    // The local recovery paths (the app offers neither in local mode, D217).
+    shellpp_core::service::local_recovery_key::allow(true);
     let tag = common::random_hex();
     let master = format!("CanaryMaster-{tag}");
     let master_2 = format!("CanaryMasterTwo-{tag}");

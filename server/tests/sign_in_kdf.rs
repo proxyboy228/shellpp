@@ -340,6 +340,56 @@ fn prelogin_server(
     (format!("http://127.0.0.1:{port}"), seen)
 }
 
+/// "Start with a new vault" sets a bound database aside (UI 13.2): the
+/// first run that follows, and the new local vault after it, still compare
+/// with the set-aside copy's parameters (run 13, D189, D217). A server that
+/// asks for weaker ones gets no login; one that asks for the same ones is
+/// not refused by the check (the wrong password is its own answer).
+#[test]
+fn a_new_vault_after_a_bound_one_still_refuses_weaker_parameters() {
+    let server = Server::start();
+    let email = email();
+    let password = new_password();
+    let laptop = Client::local("laptop", &password);
+    laptop.register(&server, &email, &password);
+    laptop.core.lock().expect("locked");
+    laptop.core.start_new_vault().expect("set aside");
+
+    let (hostile, seen) = prelogin_server(MOBILE_PRELOGIN);
+    let input = |origin: &str| SignInInput {
+        origin: origin.to_owned(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    };
+    match laptop.core.sync_sign_in(input(&hostile)) {
+        Err(CoreError::Sync(HttpError::Refused("weaker_kdf"))) => {}
+        other => panic!("expected the downgrade refusal at first run, got {other:?}"),
+    }
+    laptop
+        .core
+        .first_run_setup(new_password())
+        .expect("a new local vault");
+    match laptop.core.sync_sign_in(input(&hostile)) {
+        Err(CoreError::Sync(HttpError::Refused("weaker_kdf"))) => {}
+        other => panic!("expected the downgrade refusal in the new vault, got {other:?}"),
+    }
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec!["/v1/auth/prelogin", "/v1/auth/prelogin"],
+        "no auth key was sent"
+    );
+
+    let (same, _) = prelogin_server(DESKTOP_PRELOGIN);
+    match laptop.core.sync_sign_in(input(&same)) {
+        Err(CoreError::Sync(HttpError::Refused("weaker_kdf"))) => {
+            panic!("the same settings are not weaker")
+        }
+        Err(_) => {}
+        Ok(outcome) => panic!("the fake server signs nobody in, got {outcome:?}"),
+    }
+}
+
 /// A device that is no longer bound but was (Log out, or an
 /// `account_deleted` answer of a hostile server: the vault keeps its
 /// binding) still compares with its own parameters, at any address: a

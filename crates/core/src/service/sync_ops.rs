@@ -1214,7 +1214,7 @@ impl Core {
         let origin = normalize_origin(&input.origin).map_err(HttpError::from)?;
         let email = crypto::normalize_email(&input.email);
         let class = self.platform.class;
-        let (api, device_id, bound_kdf) = {
+        let (api, device_id, bound_kdf, aside_kdf) = {
             let mut guard = self.inner();
             guard.sync.weaker_kdf = None;
             let mut bound_kdf = None;
@@ -1253,7 +1253,25 @@ impl Core {
                 .store
                 .meta_get(META_DEVICE_ID)?
                 .and_then(|text| Uuid::parse_str(&text).ok());
-            (self.api(&guard.store, &origin)?, device_id, bound_kdf)
+            // A device whose own database has nothing to compare with, after
+            // "Start with a new vault" (UI 13.2): the newest set-aside copy
+            // that was bound gives the reference of the weaker check (D189),
+            // and only that check (its salt and settings are another
+            // vault's, not this sign-in's).
+            let aside_kdf = match &bound_kdf {
+                Some(_) => None,
+                None => guard
+                    .store
+                    .data_dir()
+                    .and_then(crate::store::set_aside_bound_kdf)
+                    .and_then(|(json, _)| KdfParams::from_json(&json).ok()),
+            };
+            (
+                self.api(&guard.store, &origin)?,
+                device_id,
+                bound_kdf,
+                aside_kdf,
+            )
         };
         let device_id = match device_id {
             Some(id) => id,
@@ -1269,7 +1287,11 @@ impl Core {
         // Weaker than this device's own parameters: a possible downgrade
         // attack (D189). Nothing is derived or sent until the user confirms
         // these very parameters.
-        if let Some((local, _)) = &bound_kdf
+        let reference = bound_kdf
+            .as_ref()
+            .map(|(local, _)| local)
+            .or(aside_kdf.as_ref());
+        if let Some(local) = reference
             && super::sync_trust::kdf_weaker(&kdf, local)
             && accepted != Some(&kdf)
         {

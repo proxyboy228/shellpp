@@ -55,7 +55,7 @@ fn set_aside_prefix() -> String {
 /// `shellpp.db.<yyyymmddThhmmssZ>[-failed][-<n>].old`, the name the app
 /// gives the database of a set-aside copy (`super::new_vault`); a file
 /// the user named `shellpp.db.mine.old` is not one (review of run 10).
-fn is_set_aside(name: &str) -> bool {
+pub(crate) fn is_set_aside(name: &str) -> bool {
     let Some(rest) = name
         .strip_prefix(&set_aside_prefix())
         .and_then(|rest| rest.strip_suffix(ARCHIVE_SUFFIX))

@@ -28,6 +28,9 @@ struct Ui {
 
 impl Ui {
     fn open(cx: &mut TestAppContext, opened: crate::state::OpenedCore) -> Self {
+        // The core stays in local mode (above), where it refuses Show and
+        // Reissue unless a test allows them (D217).
+        shellpp_core::service::local_recovery_key::allow(true);
         cx.update(|cx| {
             crate::testing::init_ui(cx);
             app::root::bind_keys(cx);

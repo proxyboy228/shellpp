@@ -83,6 +83,8 @@ use host_api::{
 /// Tests: a key change the server accepted is not stored (`test-hooks`).
 #[cfg(any(test, feature = "test-hooks"))]
 pub use key_change::fail_store as key_change_fail_store;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use key_change::local_recovery_key;
 pub use key_change::{KeyChangeFailure, PreparedKey};
 use session::Session;
 pub use sync_ops::{

@@ -329,7 +329,35 @@ fn password_change_rewraps_without_reencryption() {
 }
 
 #[test]
+fn the_recovery_key_is_neither_shown_nor_reissued_in_local_mode() {
+    // The key belongs to the account (D29): without one the core refuses
+    // both before it checks the password (run 13, D217).
+    shellpp_core::service::local_recovery_key::allow(false);
+    let app = first_run();
+    let core = &app.core;
+    assert!(matches!(
+        core.recovery_key_show(app.password.clone()),
+        Err(CoreError::WrongState)
+    ));
+    assert!(matches!(
+        core.recovery_key_reissue(app.password.clone()),
+        Err(CoreError::WrongState)
+    ));
+    assert!(matches!(
+        core.recovery_key_reissue_prepare(app.password.clone()),
+        Err(CoreError::WrongState)
+    ));
+    // A wrong password is not even looked at: no attempt is counted.
+    assert!(matches!(
+        core.recovery_key_show(SecretString::from("not the password".to_owned())),
+        Err(CoreError::WrongState)
+    ));
+}
+
+#[test]
 fn recovery_key_show_copy_and_reissue() {
+    // The local recovery paths (the app offers neither in local mode, D217).
+    shellpp_core::service::local_recovery_key::allow(true);
     let app = first_run();
     let core = &app.core;
     // The first run grants a short copy window.
@@ -390,6 +418,8 @@ fn recovery_key_show_copy_and_reissue() {
 
 #[test]
 fn remember_on_this_device() {
+    // The local recovery paths (the app offers neither in local mode, D217).
+    shellpp_core::service::local_recovery_key::allow(true);
     let mut app = first_run();
     let status = app.core.remember_device_set(true).expect("remember on");
     assert!(status.remember_device_enabled);

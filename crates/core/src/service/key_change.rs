@@ -95,6 +95,49 @@ pub mod fail_store {
     }
 }
 
+/// Tests: the recovery key may be shown and reissued in local mode on
+/// this thread (`test-hooks`; never in a release build). The app never
+/// offers either there (D29), and the core refuses them (run 13, D217);
+/// tests of the local recovery paths turn this on.
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod local_recovery_key {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ALLOWED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn allow(allowed: bool) {
+        ALLOWED.with(|cell| cell.set(allowed));
+    }
+
+    pub(crate) fn allowed() -> bool {
+        ALLOWED.with(Cell::get)
+    }
+}
+
+/// Without `test-hooks` the recovery key is never shown or reissued in
+/// local mode.
+#[cfg(not(any(test, feature = "test-hooks")))]
+pub(crate) mod local_recovery_key {
+    pub(crate) fn allowed() -> bool {
+        false
+    }
+}
+
+impl Core {
+    /// The recovery key is the account's (D29): local mode (no server
+    /// account on this device) neither shows nor reissues it. Checked
+    /// before the password, so nothing is derived for a refused call.
+    pub(super) fn require_recovery_key_mode(&self) -> Result<(), CoreError> {
+        if self.bound()? || local_recovery_key::allowed() {
+            Ok(())
+        } else {
+            Err(CoreError::WrongState)
+        }
+    }
+}
+
 /// Why a confirmed key change did not finish. The new key's fate differs,
 /// so the interface tells the user which (section 5.3, step 7).
 #[derive(Debug)]
@@ -227,7 +270,10 @@ impl Core {
                 }),
             )
         } else {
+            // A device out of its account says so first; a device that never
+            // had one is in local mode, where no key is reissued (D217).
             self.require_no_account_binding(&context)?;
+            self.require_recovery_key_mode()?;
             (self.verify_password(&context, &password)?, None)
         };
         drop(password);

@@ -978,6 +978,7 @@ impl Core {
         password: SecretString,
     ) -> Result<RecoveryKeyResult, CoreError> {
         let context = self.unlocked_context()?;
+        self.require_recovery_key_mode()?;
         self.verify_password(&context, &password)?;
         drop(password);
         let now = self.now();
@@ -1099,6 +1100,8 @@ mod tests {
 
     #[test]
     fn key_rows_unchanged_sees_password_changes_and_rotations() {
+        // The local recovery paths (the app offers neither in local mode, D217).
+        crate::service::local_recovery_key::allow(true);
         let dir = tempfile::tempdir().expect("temp dir");
         let mem = MemoryPlatform::new();
         let config = CoreConfig {

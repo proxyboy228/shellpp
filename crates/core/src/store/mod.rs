@@ -221,6 +221,47 @@ fn peek_user_version(path: &Path) -> Option<u32> {
     migrate::user_version(&conn).ok()
 }
 
+/// The KDF settings and salt of the newest set-aside copy in `data_dir`
+/// that was bound to an account ("Start with a new vault" set it aside,
+/// UI 13.2): a `server_account` row or a vault with its account binding.
+/// Read without opening the file for writing; a copy that cannot be read
+/// this way is passed over, and a half-made one (`-failed`) never counts.
+/// The reference of D189's weaker-settings check for a device whose own
+/// database has none (run 13, D217).
+pub fn set_aside_bound_kdf(data_dir: &Path) -> Option<(String, Vec<u8>)> {
+    let mut names: Vec<String> = std::fs::read_dir(data_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| crate::lock::erase::is_set_aside(name) && !name.contains("-failed"))
+        .collect();
+    // The stamp in the name orders the copies: the newest first.
+    names.sort_unstable_by(|a, b| b.cmp(a));
+    names.into_iter().find_map(|name| {
+        let conn = Connection::open_with_flags(
+            data_dir.join(&name),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()?;
+        let bound: bool = conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM server_account) \
+                 OR EXISTS (SELECT 1 FROM vaults WHERE account_user_id IS NOT NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .ok()?;
+        if !bound {
+            return None;
+        }
+        conn.query_row(
+            "SELECT kdf, kdf_salt FROM local_auth WHERE id = 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .ok()
+    })
+}
+
 impl Store {
     /// Opens or creates `shellpp.db` in `data_dir`.
     ///
