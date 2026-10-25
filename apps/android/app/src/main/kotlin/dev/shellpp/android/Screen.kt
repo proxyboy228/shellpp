@@ -56,10 +56,16 @@ class Screen(
      * dropped (the desktop's copy rules).
      */
     fun text(fromCol: Int, fromRow: Int, toCol: Int, toRow: Int): String {
+        // A selection made on a screen of another size stays inside this one.
+        if (cols == 0 || rows == 0) return ""
+        val firstRow = fromRow.coerceIn(0, rows - 1)
+        val lastRow = toRow.coerceIn(firstRow, rows - 1)
+        val firstCol = fromCol.coerceIn(0, cols - 1)
+        val lastCol = toCol.coerceIn(0, cols - 1)
         val out = StringBuilder()
-        for (row in fromRow..toRow) {
-            val start = if (row == fromRow) fromCol else 0
-            val end = if (row == toRow) toCol else cols - 1
+        for (row in firstRow..lastRow) {
+            val start = if (row == firstRow) firstCol else 0
+            val end = if (row == lastRow) lastCol else cols - 1
             val line = StringBuilder()
             for (col in start..end) {
                 val i = index(col, row)
@@ -67,9 +73,9 @@ class Screen(
                 val t = cellText(col, row)
                 line.append(if (t.isEmpty()) " " else t)
             }
-            val wraps = row < toRow && this.wraps[row]
+            val wraps = row < lastRow && this.wraps[row]
             out.append(if (wraps) line else line.trimEnd())
-            if (row < toRow && !wraps) out.append('\n')
+            if (row < lastRow && !wraps) out.append('\n')
         }
         return out.toString()
     }

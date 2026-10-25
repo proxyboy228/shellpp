@@ -26,9 +26,20 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
     private lateinit var keys: ExtraKeys
     private lateinit var status: TextView
     private val worker = Executors.newSingleThreadExecutor()
-    private var session = 0L
+    /** The session shown here (0 until it opened). */
+    var session = 0L
+        private set
     private var openedOnce = false
     private var answeredPrompt = -1L
+
+    /** The size laid out, once known; the session opens with it. */
+    private var size: Pair<Int, Int>? = null
+
+    /** The permission dialog was answered (or there was none to ask). */
+    private var permissionsSettled = false
+
+    /** This screen's own quick-connect password, for its first password prompt only. */
+    private var password: ByteArray? = null
 
     /** Test-only answers (a debuggable build only): the e2e test's password and host key. */
     private var testPassword: ByteArray? = null
@@ -58,15 +69,58 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             padForInsets()
         }
         setContentView(root)
-        terminal.onSize = { cols, rows -> if (!openedOnce) open(cols, rows) }
+        terminal.onSize = { cols, rows ->
+            size = Pair(cols, rows)
+            openWhenReady()
+        }
         terminal.requestFocus()
+        // Recreated (split screen, a fold, a font or language change): the
+        // session this screen had goes on, it is not opened again (review
+        // of run 13, architecture 3).
+        val kept = savedInstanceState?.getLong(STATE_SESSION, 0L) ?: 0L
+        if (kept != 0L && kept in (application as App).sessions) {
+            openedOnce = true
+            permissionsSettled = true
+            adopt(kept)
+            return
+        }
+        // This screen's password, taken from the form's one-time slot, so no
+        // other session's prompt can get it.
+        password = PendingPassword.take(intent.getLongExtra(EXTRA_PASSWORD_TOKEN, 0L))
         // The notification of the foreground service (Android 13+) and, from
-        // Android 17, the local network (a server at home, 10.x or 192.168.x).
+        // Android 17, the local network (a server at home, 10.x or 192.168.x):
+        // asked before the session opens, which waits for the answer.
         val wanted = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT >= 37) add(ACCESS_LOCAL_NETWORK)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (wanted.isNotEmpty()) requestPermissions(wanted.toTypedArray(), 1)
+        if (wanted.isNotEmpty()) {
+            requestPermissions(wanted.toTypedArray(), PERMISSIONS)
+        } else {
+            permissionsSettled = true
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != PERMISSIONS) return
+        val localDenied = permissions.indices.any {
+            permissions[it] == ACCESS_LOCAL_NETWORK && grantResults.getOrNull(it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (localDenied) status.text = getString(R.string.local_network_denied)
+        permissionsSettled = true
+        openWhenReady()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (session != 0L) outState.putLong(STATE_SESSION, session)
+    }
+
+    private fun openWhenReady() {
+        val (cols, rows) = size ?: return
+        if (openedOnce || !permissionsSettled) return
+        open(cols, rows)
     }
 
     private fun open(cols: Int, rows: Int) {
@@ -82,13 +136,22 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
                 return@execute
             }
             runOnUiThread {
-                session = id
-                val app = application as App
-                app.opened(id)
-                app.listen(id, ::onEvent)
-                terminal.attach(id)
+                // Closed (Back) while it opened: the session goes too.
+                if (isDestroyed || isFinishing) {
+                    runCatching { Native.close(id) }
+                    return@runOnUiThread
+                }
+                (application as App).opened(id)
+                adopt(id)
             }
         }
+    }
+
+    /** Shows session [id] here: its events and its terminal. */
+    private fun adopt(id: Long) {
+        session = id
+        (application as App).listen(id, ::onEvent)
+        terminal.attach(id)
     }
 
     private fun onEvent(event: JSONObject) {
@@ -117,8 +180,9 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             }
             "host_key_changed" -> hostKeyDialog(promptId, prompt, changed = true)
             "password" -> {
-                val ready = if (prompt.optBoolean("error")) null else (testPassword ?: PendingPassword.take())
+                val ready = if (prompt.optBoolean("error")) null else (testPassword ?: password)
                 testPassword = null
+                password = null
                 if (ready != null) {
                     reply(promptId, "text", ready)
                 } else {
@@ -205,6 +269,8 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
                 app.forget(session)
             }
         }
+        password?.fill(0)
+        password = null
         terminal.release()
         worker.shutdown()
     }
@@ -213,7 +279,10 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
         const val EXTRA_USERNAME = "username"
+        const val EXTRA_PASSWORD_TOKEN = "passwordToken"
         const val EXTRA_TEST_PASSWORD = "test.password"
+        private const val PERMISSIONS = 1
+        private const val STATE_SESSION = "session"
         const val EXTRA_TEST_ACCEPT_HOST_KEY = "test.acceptHostKey"
         const val ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
     }

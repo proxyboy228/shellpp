@@ -295,6 +295,21 @@ pub extern "system" fn Java_dev_shellpp_android_Native_awaitWake<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `wake(session)`: wakes one `awaitWake` of the session (does not block).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_wake<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+) {
+    unowned
+        .with_env(|_env| -> Result<(), NativeError> {
+            engine()?.wake(id(session));
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `resize(session, cols, rows)`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_resize<'caller>(

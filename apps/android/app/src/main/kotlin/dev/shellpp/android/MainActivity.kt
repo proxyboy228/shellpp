@@ -13,6 +13,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.io.File
 
 /**
@@ -37,9 +38,6 @@ class MainActivity : Activity() {
         column.addView(text(getString(R.string.prototype_note), 14f, R.color.text_secondary).apply {
             setPadding(0, dp(4f), 0, dp(16f))
         })
-        app.startError?.let {
-            column.addView(text(getString(R.string.engine_failed, it), 14f, R.color.danger))
-        }
         address = field(R.string.address, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         port = field(R.string.port, InputType.TYPE_CLASS_NUMBER).apply { setText("22") }
         username = field(R.string.username, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
@@ -48,9 +46,7 @@ class MainActivity : Activity() {
         keyLabel = text("", 14f, R.color.text_secondary)
         column.addView(button(getString(R.string.key_file), primary = false) { pickKey() })
         column.addView(keyLabel)
-        column.addView(button(getString(R.string.connect), primary = true) { connect() }.apply {
-            isEnabled = app.startError == null
-        })
+        column.addView(button(getString(R.string.connect), primary = true) { connect() })
         val scroll = ScrollView(this).apply {
             setBackgroundColor(color(R.color.bg_base))
             addView(column)
@@ -94,7 +90,18 @@ class MainActivity : Activity() {
         setOnClickListener { onClick() }
     }
 
+    /** The engine runs; otherwise says why not (it failed, or it still starts). */
+    private fun engineReady(): Boolean {
+        val app = application as App
+        if (app.ready) return true
+        val error = app.startError
+        val message = if (error != null) getString(R.string.engine_failed, error) else getString(R.string.starting)
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        return false
+    }
+
     private fun pickKey() {
+        if (!engineReady()) return
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
@@ -109,11 +116,16 @@ class MainActivity : Activity() {
         if (requestCode != PICK_KEY || resultCode != RESULT_OK) return
         // The session layer offers the key files of its key folder (as
         // `~/.ssh` on the desktop); the picked file goes there, private to the app.
-        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-        val target = File(Native.keyDir(), "id_picked")
-        target.writeBytes(bytes)
-        bytes.fill(0)
-        keyLabel.text = getString(R.string.key_file_set, uri.lastPathSegment ?: "key")
+        // Off the main thread; the copy lasts this run of the app (the
+        // engine empties the folder at its start).
+        val label = uri.lastPathSegment ?: "key"
+        Thread {
+            val bytes = runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                ?: return@Thread
+            runCatching { File(Native.keyDir(), "id_picked").writeBytes(bytes) }
+            bytes.fill(0)
+            runOnUiThread { keyLabel.text = getString(R.string.key_file_set, label) }
+        }.start()
     }
 
     private fun connect() {
@@ -122,6 +134,12 @@ class MainActivity : Activity() {
             address.error = getString(R.string.address)
             return
         }
+        val portNumber = port.text.toString().toIntOrNull()
+        if (portNumber == null || portNumber !in 1..65535) {
+            port.error = getString(R.string.port)
+            return
+        }
+        if (!engineReady()) return
         // The password waits in memory for the session's password prompt and
         // is wiped there (architecture 2: never a String handed around).
         val typed = password.text
@@ -131,11 +149,12 @@ class MainActivity : Activity() {
         chars.fill('\u0000')
         if (encoded.hasArray()) encoded.array().fill(0)
         password.text.clear()
-        PendingPassword.set(if (secret.isEmpty()) null else secret)
+        val token = PendingPassword.put(if (secret.isEmpty()) null else secret)
         startActivity(
             Intent(this, TerminalActivity::class.java)
+                .putExtra(TerminalActivity.EXTRA_PASSWORD_TOKEN, token)
                 .putExtra(TerminalActivity.EXTRA_ADDRESS, host)
-                .putExtra(TerminalActivity.EXTRA_PORT, port.text.toString().toIntOrNull() ?: 22)
+                .putExtra(TerminalActivity.EXTRA_PORT, portNumber)
                 .putExtra(TerminalActivity.EXTRA_USERNAME, username.text.toString().trim()),
         )
     }
@@ -145,16 +164,25 @@ class MainActivity : Activity() {
     }
 }
 
-/** The quick connect's password, handed to the first password prompt and wiped. */
+/**
+ * The quick connect's password between the form and its terminal screen:
+ * one slot per Connect, taken once by the screen whose intent carries its
+ * token (review of run 13: never by another session's prompt). A slot not
+ * taken is wiped by the next Connect.
+ */
 object PendingPassword {
-    private var bytes: ByteArray? = null
+    private val slots = HashMap<Long, ByteArray>()
+    private var next = 1L
 
     @Synchronized
-    fun set(value: ByteArray?) {
-        bytes?.fill(0)
-        bytes = value
+    fun put(value: ByteArray?): Long {
+        for (old in slots.values) old.fill(0)
+        slots.clear()
+        val token = next++
+        if (value != null) slots[token] = value
+        return token
     }
 
     @Synchronized
-    fun take(): ByteArray? = bytes.also { bytes = null }
+    fun take(token: Long): ByteArray? = slots.remove(token)
 }

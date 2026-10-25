@@ -31,6 +31,12 @@ class ExtraKeys(context: Context, private val sink: Sink) : LinearLayout(context
     private lateinit var altView: TextView
     private val handler = Handler(Looper.getMainLooper())
 
+    /** A key held while the row goes away stops repeating (review of run 13). */
+    override fun onDetachedFromWindow() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDetachedFromWindow()
+    }
+
     override val ctrl: Boolean get() = ctrlState.active
     override val alt: Boolean get() = altState.active
 

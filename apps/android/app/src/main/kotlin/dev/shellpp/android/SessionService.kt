@@ -53,6 +53,10 @@ class SessionService : Service() {
         } else {
             startForeground(NOTIFICATION, notification)
         }
+        // The last session may have gone between the start and now: the
+        // service stops itself only after it went to the foreground, which
+        // Android requires (review of run 13).
+        if (app.sessions.isEmpty()) stopSelf()
         return START_NOT_STICKY
     }
 

@@ -99,6 +99,8 @@ impl TerminalSink for SessionSink {
 struct Live {
     session: SessionHandle,
     terminal: TerminalHandle,
+    /// The terminal's own sender, for [`Engine::wake`].
+    wake: async_channel::Sender<()>,
     woken: async_channel::Receiver<()>,
 }
 
@@ -129,7 +131,12 @@ impl Engine {
             std::fs::remove_dir_all(&data_dir).map_err(|e| error(format!("old vault: {e}")))?;
         }
         std::fs::create_dir_all(&data_dir).map_err(|e| error(format!("data folder: {e}")))?;
+        // A key file picked for a quick connect lasts one run, as the vault
+        // does (review of run 13): never left on disk for later servers.
         let key_dir = files.join("keys");
+        if key_dir.exists() {
+            std::fs::remove_dir_all(&key_dir).map_err(|e| error(format!("old keys: {e}")))?;
+        }
         std::fs::create_dir_all(&key_dir).map_err(|e| error(format!("key folder: {e}")))?;
         let platform = Platform {
             secret_store: Arc::new(MemorySecretStore::new()),
@@ -214,7 +221,7 @@ impl Engine {
                 cursor_shape: CursorShape::Block,
             },
             crate::theme::palette(dark),
-            wake,
+            wake.clone(),
         );
         let target = SessionTarget::Quick {
             address: address.trim().to_owned(),
@@ -259,6 +266,7 @@ impl Engine {
             Live {
                 session: opened.handle,
                 terminal,
+                wake,
                 woken,
             },
         );
@@ -343,6 +351,14 @@ impl Engine {
             return false;
         };
         woken.recv_blocking().is_ok()
+    }
+
+    /// Wakes one waiter of [`Engine::await_wake`] for session `id`. The wake
+    /// channel has one receiver per session, shared by every waiter: a
+    /// screen let go (Android recreates its activity) hands a wake it took
+    /// on to the screen that replaced it.
+    pub fn wake(&self, id: u64) {
+        let _ = self.with(id, |live| live.wake.try_send(()));
     }
 
     /// Puts the cursor of session `id` on `target` ([`cursor::put`]).

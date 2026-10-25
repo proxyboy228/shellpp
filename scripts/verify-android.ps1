@@ -143,6 +143,9 @@ if ($Emulator) {
         }
         $arguments = @(
             'connectedDebugAndroidTest', '--console=plain',
+            # The screenshots run only when asked (ScreenshotsTest, argument
+            # screenshots=<theme>); here the test would report its skip as a failure.
+            '-Pandroid.testInstrumentationRunnerArguments.notClass=dev.shellpp.android.ScreenshotsTest',
             "-Pandroid.testInstrumentationRunnerArguments.sshPort=$($server.port)",
             "-Pandroid.testInstrumentationRunnerArguments.sshUser=$($server.users.password.name)",
             "-Pandroid.testInstrumentationRunnerArguments.sshPassword=$($server.users.password.password)"

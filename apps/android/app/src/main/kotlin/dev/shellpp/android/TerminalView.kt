@@ -49,6 +49,10 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     var session: Long = 0
         private set
 
+    /** Let go by its activity ([release]); its pump ends. */
+    @Volatile
+    private var released = false
+
     /** The screen drawn last (tests read it). */
     @Volatile
     var screen: Screen? = null
@@ -92,9 +96,17 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     /** Starts drawing session [id]: a pump thread waits for the model's wake-ups. */
     fun attach(id: Long) {
         session = id
+        // A size laid out before the session existed reaches the server now.
+        if (cols > 0 && rows > 0) worker.execute { runCatching { Native.resize(id, cols, rows) } }
         Thread({
             refresh()
             while (try { Native.awaitWake(id) } catch (e: RuntimeException) { false }) {
+                if (released) {
+                    // One wake channel per session: a wake this let-go view
+                    // took belongs to the screen that replaced it.
+                    runCatching { Native.wake(id) }
+                    break
+                }
                 refresh()
             }
         }, "terminal-pump-$id").apply { isDaemon = true }.start()
@@ -137,11 +149,13 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         if (newCols == cols && newRows == rows) return
         cols = newCols
         rows = newRows
+        // Cells of the old size mean nothing on the new screen (review of run 13).
+        if (selection != null) clearSelection()
         pendingResize?.let { main.removeCallbacks(it) }
         // Once, after the change settles (ui-spec 9.8).
         val resize = Runnable {
             onSize?.invoke(cols, rows)
-            if (session != 0L) worker.execute { runCatching { Native.resize(session, cols, rows) } }
+            if (session != 0L && !worker.isShutdown) worker.execute { runCatching { Native.resize(session, cols, rows) } }
         }
         pendingResize = resize
         if (session == 0L) resize.run() else main.postDelayed(resize, settleMs)
@@ -240,6 +254,12 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         when (s.cursorShape) {
             1 -> canvas.drawRect(x, y + cellH - cellH / 8, x + cellW, y + cellH, fill)
             2 -> canvas.drawRect(x, y, x + max(2f, cellW / 8), y + cellH, fill)
+            3 -> {
+                fill.style = Paint.Style.STROKE
+                fill.strokeWidth = max(1f, cellW / 10)
+                canvas.drawRect(x, y, x + cellW, y + cellH, fill)
+                fill.style = Paint.Style.FILL
+            }
             else -> {
                 canvas.drawRect(x, y, x + cellW, y + cellH, fill)
                 val text = s.cellText(s.cursorCol, s.cursorRow)
@@ -368,6 +388,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         val withAlt = alt || modifiers.alt
         modifiers.consume()
         if (selection != null) clearSelection()
+        if (worker.isShutdown) return
         worker.execute { runCatching { Native.key(session, code, withCtrl, withAlt) } }
     }
 
@@ -377,6 +398,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         val withAlt = alt || modifiers.alt
         modifiers.consume()
         if (selection != null) clearSelection()
+        if (worker.isShutdown) return
         worker.execute { runCatching { Native.text(session, text, withCtrl, withAlt) } }
     }
 
@@ -406,6 +428,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
 
     /** Puts the cursor on [cell] off the main thread (a walk blocks). */
     private fun putCursor(cell: Cell) {
+        if (worker.isShutdown) return
         worker.execute {
             runCatching { Native.putCursor(session, cell.col, cell.row) }
             main.post { invalidate() }
@@ -610,11 +633,15 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     fun paste() {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-        if (session == 0L || text.isNullOrEmpty()) return
+        if (session == 0L || text.isNullOrEmpty() || worker.isShutdown) return
         worker.execute { runCatching { Native.paste(session, text) } }
     }
 
     fun release() {
+        released = true
+        // Unblocks this view's pump, which hands the wake on and ends.
+        if (session != 0L) runCatching { Native.wake(session) }
+        main.removeCallbacksAndMessages(null)
         worker.shutdown()
         magnifier?.dismiss()
     }

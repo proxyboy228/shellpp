@@ -36,6 +36,7 @@ object Native {
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
     @JvmStatic external fun snapshot(session: Long): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean
+    @JvmStatic external fun wake(session: Long)
     @JvmStatic external fun resize(session: Long, cols: Int, rows: Int)
     @JvmStatic external fun scroll(session: Long, lines: Int)
     @JvmStatic external fun close(session: Long)

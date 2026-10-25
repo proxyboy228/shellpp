@@ -82,6 +82,13 @@ class ScreenTest {
     }
 
     @Test
+    fun textOutsideTheScreenStaysInsideIt() {
+        val screen = Screen.parse(Snapshots.of(listOf("ab", "cd"), cols = 2))
+        assertEquals("ab\ncd", screen.text(-3, -1, 9, 7))
+        assertEquals("d", screen.text(1, 1, 5, 1))
+    }
+
+    @Test
     fun aWideCharacterIsOneCharacterOfText() {
         val screen = Screen.parse(Snapshots.of(listOf("漢 x"), cols = 4, wide = setOf(Pair(0, 0))))
         assertEquals("漢", screen.cellText(0, 0))

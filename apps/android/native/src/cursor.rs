@@ -24,11 +24,23 @@ fn cells(a: Cell, b: Cell, cols: u16) -> u64 {
     (index(a) - index(b)).unsigned_abs()
 }
 
+/// How far the cursor is from `target`, in the arrows the walk would send:
+/// along the typed line, the cells between; on the alternate screen, the
+/// rows plus the columns.
+fn distance(cursor: Cell, target: Cell, cols: u16, alternate: bool) -> u64 {
+    if alternate {
+        u64::from(cursor.row.abs_diff(target.row)) + u64::from(cursor.col.abs_diff(target.col))
+    } else {
+        cells(cursor, target, cols)
+    }
+}
+
 /// Puts the cursor on `target`: a click where the program asked for mouse
 /// reports; otherwise one arrow, then a few at a time, waiting after each step
 /// until the program has moved its cursor (at most `step_wait`) and reading
-/// where it went, until it is on `target`, an arrow no longer moves it, or
-/// the arrows sent pass the cells between the two. On the shell's screen
+/// where it went, until it is on `target`, an arrow no longer moves it or
+/// moves it no closer (a program that redraws on its own), or the arrows
+/// sent pass the distance between the two. On the shell's screen
 /// only along the typed line (the cursor's row and the rows it wraps onto);
 /// on the alternate screen rows first, then columns. Blocks the calling
 /// thread; `true` when the cursor ended on `target` or the click was sent.
@@ -45,12 +57,13 @@ pub fn put(terminal: &TerminalHandle, target: Cell, step_wait: Duration) -> bool
     if !alternate && input::walk_to(start, target, cols, &wraps, modes).is_none() {
         return false;
     }
-    let budget = cells(start, target, cols) + u64::from(BATCH);
+    let budget = distance(start, target, cols, alternate) + u64::from(BATCH);
     let origin = Cell { col: 0, row: 0 };
     let mut sent = 0u64;
     let mut batch = 1u16;
     let mut cursor = start;
     while cursor != target && sent <= budget {
+        let away = distance(cursor, target, cols, alternate);
         let (key, count) = if alternate && cursor.row != target.row {
             let key = if target.row < cursor.row {
                 Key::Up
@@ -96,6 +109,11 @@ pub fn put(terminal: &TerminalHandle, target: Cell, step_wait: Duration) -> bool
                 _ if Instant::now() >= deadline => return cursor == target,
                 _ => {}
             }
+        }
+        if distance(cursor, target, cols, alternate) >= away {
+            // It moved, but no closer: not our arrows (a program that
+            // redraws on its own), so the walk stops.
+            return false;
         }
     }
     cursor == target
@@ -227,6 +245,31 @@ mod tests {
             Duration::from_millis(200)
         ));
         assert_eq!(program.arrows.load(Ordering::SeqCst), 1);
+        program.terminal.lock().unwrap().take();
+    }
+
+    /// A program that moves its cursor somewhere else on every key (one
+    /// that redraws on its own) gets two steps, not the screen's worth.
+    #[test]
+    fn a_walk_stops_when_the_cursor_moves_no_closer() {
+        let (terminal, program, _woken) = terminal(false);
+        terminal.feed_blocking(b"\x1b[?1049h\x1b[1;1H").unwrap();
+        terminal.flush_blocking();
+        let other = terminal.clone();
+        let wanderer = std::thread::spawn(move || {
+            for row in 2..40 {
+                std::thread::sleep(Duration::from_millis(30));
+                let place = format!("\x1b[{};1H", 1 + row % 2);
+                let _ = other.feed_blocking(place.as_bytes());
+            }
+        });
+        assert!(!put(
+            &terminal,
+            Cell { col: 15, row: 5 },
+            Duration::from_millis(300)
+        ));
+        assert!(program.arrows.load(Ordering::SeqCst) <= 1 + BATCH as usize);
+        wanderer.join().unwrap();
         program.terminal.lock().unwrap().take();
     }
 

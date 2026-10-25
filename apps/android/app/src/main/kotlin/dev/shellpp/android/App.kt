@@ -14,8 +14,14 @@ import java.util.concurrent.ConcurrentHashMap
  * open sessions alive (architecture 3).
  */
 class App : Application() {
-    /** Why the engine did not start, or null when it runs. */
+    /** Why the engine did not start, or null when it runs (or still starts). */
+    @Volatile
     var startError: String? = null
+        private set
+
+    /** The engine runs. */
+    @Volatile
+    var ready = false
         private set
 
     private val main = Handler(Looper.getMainLooper())
@@ -27,15 +33,17 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        startError = try {
-            Native.start(filesDir.absolutePath)
-            null
-        } catch (error: RuntimeException) {
-            error.message ?: error.toString()
-        }
-        if (startError == null) {
-            Thread(::pumpEvents, "session-events").apply { isDaemon = true }.start()
-        }
+        // The core makes its throwaway vault (Argon2id) off the main thread
+        // (architecture 2; review of run 13).
+        Thread({
+            try {
+                Native.start(filesDir.absolutePath)
+                ready = true
+                pumpEvents()
+            } catch (error: RuntimeException) {
+                startError = error.message ?: error.toString()
+            }
+        }, "engine").apply { isDaemon = true }.start()
     }
 
     private fun pumpEvents() {
@@ -86,11 +94,9 @@ class App : Application() {
 
     /** The service runs while a session is open (dropped and reconnecting included). */
     fun updateService() {
+        // Started again for every change, so the notification counts right;
+        // with nothing open the service stops itself once in the foreground.
         val intent = Intent(this, SessionService::class.java)
-        if (sessions.isEmpty()) {
-            stopService(intent)
-        } else if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent)
-        }
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent)
     }
 }

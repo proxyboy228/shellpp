@@ -108,11 +108,18 @@ async fn a_quick_connect_asks_the_host_key_and_the_password_then_runs_a_command(
             terminal.screen_text()
         );
 
+        // A wake by hand reaches the next waiter (a recreated screen's
+        // pump hands on the wake the old one took).
+        engine.wake(id);
+        assert!(engine.await_wake(id));
+
         // `exit 0` closes the session.
         engine.send(id, b"exit 0\r".to_vec()).expect("send");
         wait_for(&engine, id, |event| event["state"] == "closed");
         engine.close(id);
         assert!(engine.open_sessions().is_empty());
+        engine.wake(id);
+        assert!(!engine.await_wake(id), "a closed session has no wakes");
     })
     .await;
     drop(server);

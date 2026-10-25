@@ -31,4 +31,6 @@
     <string name="passphrase_for">Passphrase of %1$s</string>
     <string name="connecting">Connecting…</string>
     <string name="engine_failed">The engine did not start: %1$s</string>
+    <string name="starting">Starting, try again in a moment.</string>
+    <string name="local_network_denied">Without the local network permission, servers at home (10.x, 192.168.x) cannot be reached. Settings › Apps › Shell++ › Permissions.</string>
 </resources>
