@@ -278,12 +278,21 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-After run 14 (its report has the details; run 13's two questions are
+After run 15 (the run reports have the details; run 13's two questions are
 answered in D218):
 
 1. **Release preparation** (D210): the project's contact address for
    `CODE_OF_CONDUCT.md`, whether to rewrite the history that holds the old
    one, Linux on a real desktop.
+2. **The phone's screens after run 15** (D220-D222): the owner's look on
+   the S25 (the Samsung keyboard was not checked on the emulator); which
+   hidden editor fields and missing Settings rows the first version needs;
+   Recently deleted as a row of the vault's home screen.
+3. **The partial save** (D221): keep the extra conflict copy when a
+   password is changed while a newer version arrived, or give the core a
+   fingerprint of secrets to compare; the partial save for identities.
+4. **The password and attach keys for a quick connect** (no saved host):
+   both are disabled now; whether they are needed.
 
 ## 6. Technical debt
 

@@ -470,6 +470,19 @@ impl Engine {
         Ok(())
     }
 
+    /// Whether the session is connected and was opened to `host` (the
+    /// password key's check, D220: the password goes only to its own host).
+    pub fn connected_to(
+        &self,
+        id: u64,
+        host: shellpp_core::service::dto::RecordRef,
+    ) -> Result<bool, EngineError> {
+        self.with(id, |live| {
+            let view = live.session.view();
+            view.state == SessionState::Connected && view.host == Some(host)
+        })
+    }
+
     /// What the password key sends (D220): input that is not typing, so the
     /// history capture never takes it as a command (`inject_input`).
     pub fn inject(&self, id: u64, bytes: Vec<u8>) -> Result<(), EngineError> {

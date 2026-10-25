@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -300,6 +301,7 @@ private fun IdentityEditDialog(identity: JSONObject, onDismiss: () -> Unit, onDo
     var password by remember { mutableStateOf("") }
     var clear by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     val saved = identity.optBoolean("password_set")
     val scope = rememberCoroutineScope()
     AlertDialog(
@@ -315,14 +317,23 @@ private fun IdentityEditDialog(identity: JSONObject, onDismiss: () -> Unit, onDo
             }
         },
         confirmButton = {
-            TextButton(enabled = label.isNotBlank(), onClick = {
+            TextButton(enabled = label.isNotBlank() && !busy, onClick = {
+                busy = true
                 val chars = password.toCharArray()
-                password = ""
                 scope.launch {
                     val failure = withContext(Dispatchers.IO) {
                         try {
-                            val input = JSONObject().put("record_id", identity.optString("record_id")).put("label", label.trim())
-                                .put("username", username).put("key_id", identity.opt("key_id") ?: JSONObject.NULL).put("clear_password", clear)
+                            // The identity as it is now (a sync may have
+                            // changed it): what this dialog did not change
+                            // stays as it is there (review of 3.4).
+                            val id = identity.optString("record_id")
+                            val current = runCatching {
+                                Core.array("identities_list").let { list -> (0 until list.length()).map { list.getJSONObject(it) } }.firstOrNull { it.optString("record_id") == id }
+                            }.getOrNull() ?: identity
+                            val newLabel = if (label.trim() == identity.optString("label")) current.optString("label") else label.trim()
+                            val newUser = if (username == (identity.text("username") ?: "")) current.text("username") ?: "" else username
+                            val input = JSONObject().put("record_id", id).put("label", newLabel)
+                                .put("username", newUser).put("key_id", current.opt("key_id") ?: JSONObject.NULL).put("clear_password", clear)
                             if (chars.isNotEmpty()) Core.callWithSecrets("identity_save", input, listOf("password" to chars)) else Core.call("identity_save", input)
                             null
                         } catch (failed: CoreException) {
@@ -331,7 +342,14 @@ private fun IdentityEditDialog(identity: JSONObject, onDismiss: () -> Unit, onDo
                             chars.fill('\u0000')
                         }
                     }
-                    if (failure == null) onDone() else error = failure
+                    busy = false
+                    // A failed save keeps what was typed, so Save again sends it.
+                    if (failure == null) {
+                        password = ""
+                        onDone()
+                    } else {
+                        error = failure
+                    }
                 }
             }, modifier = Modifier.testTag("identity_save")) { Text("Save") }
         },
@@ -364,19 +382,24 @@ fun KnownHostsScreen(app: App, nav: Nav) {
             runCatching { Core.array("known_hosts_list").let { list -> (0 until list.length()).map { list.getJSONObject(it) } } }.getOrDefault(emptyList())
         }
     }
-    // The labels of the saved hosts that use each address and port.
-    val users by produceState(mapOf<String, List<String>>(), changes) {
+    // The labels of the saved hosts each entry is for: the core matches
+    // them (`host_ids`: the normalised address and the effective port).
+    val titles by produceState(mapOf<String, String>(), changes) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all"))).groupBy({ host ->
-                    val port = host.data.optJSONObject("ssh")?.opt("port")?.toString()?.toIntOrNull()
-                        ?: host.inherited.optJSONObject("port")?.optInt("value")?.takeIf { it > 0 } ?: 22
-                    host.address.lowercase() + ":" + port
-                }, { it.title })
+                records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all"))).associate { it.id to it.title }
             }.getOrDefault(emptyMap())
         }
     }
-    fun usersOf(entry: JSONObject): List<String> = users[entry.optString("host").lowercase() + ":" + entry.optInt("port", 22)] ?: emptyList()
+    fun usersOf(entry: JSONObject): List<String> {
+        val ids = entry.optJSONArray("host_ids") ?: return emptyList()
+        return (0 until ids.length()).mapNotNull { titles[ids.optString(it)] }
+    }
+    // A sync that removed an entry takes it out of the selection too.
+    LaunchedEffect(entries) {
+        val present = entries.map { it.optString("record_id") }.toSet()
+        if (!present.containsAll(selected)) selected = selected intersect present
+    }
 
     BackHandler(enabled = selected.isNotEmpty()) { selected = emptySet() }
     BackHandler(enabled = searching && selected.isEmpty()) { searching = false; query = "" }
@@ -414,7 +437,7 @@ fun KnownHostsScreen(app: App, nav: Nav) {
                     selected.isNotEmpty() -> SelectionBar(selected.size, canEdit = false, onClose = { selected = emptySet() }, onEdit = null) { close ->
                         DropdownMenuItem(
                             text = { Text("Remove", color = Tokens.danger) },
-                            onClick = { close(); removing = entries.filter { it.optString("record_id") in selected } },
+                            onClick = { close(); removing = entries.filter { it.optString("record_id") in selected }.ifEmpty { null } },
                             modifier = Modifier.testTag("known_remove_selected"),
                         )
                     }
@@ -449,7 +472,7 @@ fun KnownHostsScreen(app: App, nav: Nav) {
             }
         }
     }
-    removing?.let { chosen ->
+    removing?.takeIf { it.isNotEmpty() }?.let { chosen ->
         AlertDialog(
             onDismissRequest = { removing = null },
             title = { Text(if (chosen.size == 1) "Remove this known host?" else "Remove ${chosen.size} known hosts?") },

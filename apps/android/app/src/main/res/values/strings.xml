@@ -55,5 +55,6 @@
     <string name="attach_answer_first">SFTP to this host asks something: answer it, then tap the attach key again.</string>
     <string name="password_not_sent">The password was not sent.</string>
     <string name="password_not_sent_recorded">Not sent: this host records the session\'s output, and the password could be in the recording.</string>
+    <string name="password_not_sent_offline">Not sent: the session is not connected to this host.</string>
     <string name="password_not_sent_control">Not sent: the saved password holds a line break or another control character.</string>
 </resources>

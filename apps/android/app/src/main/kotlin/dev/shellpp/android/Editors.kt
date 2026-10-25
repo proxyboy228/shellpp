@@ -1050,7 +1050,6 @@ fun IdentityDialog(onDismiss: () -> Unit, onDone: (String?) -> Unit) {
             TextButton(enabled = label.isNotBlank() && !busy, onClick = {
                 busy = true
                 val chars = password.toCharArray()
-                password = ""
                 scope.launch {
                     val made = withContext(Dispatchers.IO) {
                         try {
@@ -1065,7 +1064,11 @@ fun IdentityDialog(onDismiss: () -> Unit, onDone: (String?) -> Unit) {
                         }
                     }
                     busy = false
-                    if (made != null) onDone(made)
+                    // A failed save keeps what was typed (review of 3.4).
+                    if (made != null) {
+                        password = ""
+                        onDone(made)
+                    }
                 }
             }, modifier = Modifier.testTag("identity_save")) { Text("Create") }
         },

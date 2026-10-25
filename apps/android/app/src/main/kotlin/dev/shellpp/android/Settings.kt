@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Remove
@@ -56,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -228,12 +228,16 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
 @Composable
 fun CustomizeKeyboardScreen(app: App, onClose: () -> Unit) {
     val context = LocalContext.current
-    var groups by remember { mutableStateOf(XKey.groups(context).map { group -> group.map { it.id } }) }
+    // Each group with an id of this screen, so its card (and a drag on its
+    // handle) stays while the group moves (review of 3.4).
+    val made = remember { intArrayOf(0) }
+    fun numbered(list: List<List<String>>): List<Pair<Int, List<String>>> = list.map { made[0] += 1; made[0] to it }
+    var groups by remember { mutableStateOf(numbered(XKey.groups(context).map { group -> group.map { it.id } })) }
     var adding by remember { mutableStateOf(false) }
     var resetting by remember { mutableStateOf(false) }
-    fun store(next: List<List<String>>) {
+    fun store(next: List<Pair<Int, List<String>>>) {
         groups = next
-        XKey.save(context, next)
+        XKey.save(context, next.map { it.second })
     }
     BackHandler(onBack = onClose)
     Box(Modifier.fillMaxSize()) {
@@ -250,16 +254,17 @@ fun CustomizeKeyboardScreen(app: App, onClose: () -> Unit) {
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
             LazyColumn(Modifier.fillMaxSize()) {
-                itemsIndexed(groups, key = { index, group -> "$index:" + group.joinToString(",") }) { index, group ->
+                itemsIndexed(groups, key = { _, group -> group.first }) { index, group ->
                     KeyGroupCard(
-                        group,
+                        group.second,
                         tag = "keys_group_$index",
-                        onDelete = { store(groups.filterIndexed { at, _ -> at != index }) },
+                        onDelete = { store(groups.filter { it.first != group.first }) },
                         onMove = { step ->
-                            val target = (index + step).coerceIn(0, groups.size - 1)
-                            if (target != index) {
+                            val at = groups.indexOfFirst { it.first == group.first }
+                            val target = (at + step).coerceIn(0, groups.size - 1)
+                            if (at >= 0 && target != at) {
                                 val list = groups.toMutableList()
-                                list.add(target, list.removeAt(index))
+                                list.add(target, list.removeAt(at))
                                 store(list)
                             }
                         },
@@ -289,7 +294,7 @@ fun CustomizeKeyboardScreen(app: App, onClose: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(enabled = chosen.isNotEmpty(), onClick = { adding = false; store(groups + listOf(chosen)) }, modifier = Modifier.testTag("keys_add_ok")) { Text("Add") }
+                TextButton(enabled = chosen.isNotEmpty(), onClick = { adding = false; store(groups + numbered(listOf(chosen))) }, modifier = Modifier.testTag("keys_add_ok")) { Text("Add") }
             },
             dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } },
         )
@@ -303,7 +308,7 @@ fun CustomizeKeyboardScreen(app: App, onClose: () -> Unit) {
                 TextButton(onClick = {
                     resetting = false
                     XKey.save(context, null)
-                    groups = XKey.DEFAULT
+                    groups = numbered(XKey.DEFAULT)
                 }, modifier = Modifier.testTag("keys_reset_ok")) { Text("Reset") }
             },
             dismissButton = { TextButton(onClick = { resetting = false }) { Text("Cancel") } },
@@ -336,6 +341,8 @@ private fun KeyGroupCard(group: List<String>, tag: String, onDelete: () -> Unit,
     val density = LocalDensity.current
     val step = with(density) { 64.dp.toPx() }
     var dragged by remember { mutableStateOf(0f) }
+    // The gesture outlives recompositions: it calls the newest onMove.
+    val move by rememberUpdatedState(onMove)
     Row(
         Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().clip(CardShape).background(Tokens.bgRaised)
             .heightIn(min = 64.dp).padding(horizontal = 4.dp).testTag(tag),
@@ -351,10 +358,10 @@ private fun KeyGroupCard(group: List<String>, tag: String, onDelete: () -> Unit,
                     dragged += amount
                     if (dragged > step) {
                         dragged = 0f
-                        onMove(1)
+                        move(1)
                     } else if (dragged < -step) {
                         dragged = 0f
-                        onMove(-1)
+                        move(-1)
                     }
                 }
             }.testTag(tag + "_handle"),
@@ -395,13 +402,11 @@ fun FontColoursScreen(app: App, onClose: () -> Unit) {
                 setSize(FONT_SIZES.firstOrNull { it > size } ?: size)
             }
             Spacer(Modifier.width(12.dp))
-            Row(
-                Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(Tokens.bgInput).heightIn(min = 48.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("JetBrains Mono", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Tokens.textMuted)
-            }
+            // The one font of the first version: a value, not a menu.
+            Text(
+                "JetBrains Mono", Modifier.weight(1f).padding(horizontal = 12.dp),
+                color = Tokens.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         LazyVerticalGrid(GridCells.Fixed(2), Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
             item {

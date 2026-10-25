@@ -140,7 +140,17 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         }
         val parsed = Screen.parse(bytes)
         main.post {
+            val before = screen
             screen = parsed
+            val shown = (0xFF000000.toInt() or parsed.background) to (0xFF000000.toInt() or parsed.foreground)
+            if (colors[session] != shown) colors[session] = shown
+            // Another program took the screen (nano left, a pager came):
+            // what was selected and offered no longer holds.
+            if (selection != null && before != null &&
+                (before.alternateScreen != parsed.alternateScreen || before.mouse != parsed.mouse)
+            ) {
+                clearSelection()
+            }
             invalidate()
         }
     }
@@ -569,6 +579,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                     cursorMark = null
                     main.postDelayed({ invalidate() }, 4100)
                 } else {
+                    // The items follow the new selection (Delete, Cut in nano).
+                    actionMode?.invalidate()
                     actionMode?.invalidateContentRect()
                     actionMode?.hide(0)
                 }
@@ -708,13 +720,15 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                         clearSelection()
                         paste()
                     }
+                    // Checked again on the screen of now: nothing is sent
+                    // to a program the item was not offered for.
                     CUT_NANO -> {
                         clearSelection()
-                        cutInNano(sel, s)
+                        if (canCutInNano(sel, s)) cutInNano(sel, s)
                     }
                     DELETE_LINE -> {
                         clearSelection()
-                        deleteOnLine(sel)
+                        if (canDeleteOnLine(sel, s)) deleteOnLine(sel)
                     }
                     SELECT_SCREEN -> {
                         selection = Selection.all(s)
@@ -753,12 +767,15 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         menu.add(0, SELECT_SCREEN, 2, android.R.string.selectAll)
         val s = screen ?: return
         val sel = selection ?: return
-        if (s.scrollOffset != 0) return
-        if (isNano(s) && !s.mouse && !isWholeScreen(sel, s)) menu.add(0, CUT_NANO, 3, R.string.cut_in_nano)
-        if (!s.alternateScreen && sel.start.row == sel.end.row && sel.start.row == s.cursorRow) {
-            menu.add(0, DELETE_LINE, 4, R.string.delete_selection)
-        }
+        if (canCutInNano(sel, s)) menu.add(0, CUT_NANO, 3, R.string.cut_in_nano)
+        if (canDeleteOnLine(sel, s)) menu.add(0, DELETE_LINE, 4, R.string.delete_selection)
     }
+
+    private fun canCutInNano(sel: Selection, s: Screen): Boolean =
+        s.scrollOffset == 0 && isNano(s) && !s.mouse && !isWholeScreen(sel, s)
+
+    private fun canDeleteOnLine(sel: Selection, s: Screen): Boolean =
+        s.scrollOffset == 0 && !s.alternateScreen && sel.start.row == sel.end.row && sel.start.row == s.cursorRow
 
     private fun isWholeScreen(sel: Selection, s: Screen): Boolean =
         sel.start == Cell(0, 0) && sel.end == Cell(s.cols - 1, s.rows - 1)
@@ -845,6 +862,13 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     }
 
     companion object {
+        /**
+         * The background and foreground each session's terminal shows (its
+         * host's theme first, D220): the session bar and the cards of
+         * Connections paint with them, not with the Settings theme.
+         */
+        val colors = androidx.compose.runtime.mutableStateMapOf<Long, Pair<Int, Int>>()
+
         private const val COPY = 1
         private const val PASTE = 2
         private const val SELECT_SCREEN = 4

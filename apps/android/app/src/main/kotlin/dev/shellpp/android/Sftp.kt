@@ -151,11 +151,11 @@ fun SftpScreen(
     var entries by remember { mutableStateOf(listOf<JSONObject>()) }
     var listError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
-    var fileSheet by remember { mutableStateOf<JSONObject?>(null) }
+    var fileSheet by remember { mutableStateOf<InFolder<JSONObject>?>(null) }
     var queueShown by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
-    var naming by remember { mutableStateOf<Pair<String, JSONObject?>?>(null) }
-    var deleting by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var naming by remember { mutableStateOf<InFolder<Pair<String, JSONObject?>>?>(null) }
+    var deleting by remember { mutableStateOf<InFolder<List<JSONObject>>?>(null) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -176,10 +176,19 @@ fun SftpScreen(
     val title = host?.title ?: app.sessionViews.value[session]?.optString("title") ?: "SFTP"
     val clipboard = LocalClipboardManager.current
 
+    // What was chosen in one folder never acts in another (reviews of 3.3
+    // and 3.4): another folder shown drops the selection and the open
+    // sheets and dialogs, and each of them holds its folder besides.
+    fun forgetChoices() {
+        selected = emptySet()
+        fileSheet = null
+        naming = null
+        deleting = null
+    }
+
     fun load(to: String) {
         if (session == 0L) return
-        // A selection belongs to its folder (review of 3.3).
-        selected = emptySet()
+        if (to != path) forgetChoices()
         loading = true
         scope.launch {
             val listed = withContext(Dispatchers.IO) {
@@ -194,6 +203,7 @@ fun SftpScreen(
             }
             loading = false
             listed.first?.let {
+                if (to != path) forgetChoices()
                 entries = it
                 path = to
                 listError = null
@@ -235,13 +245,13 @@ fun SftpScreen(
     }
 
     // Download: "Save to…" every time (UI spec 10), the file goes through the cache.
-    var pendingDownload by remember { mutableStateOf<JSONObject?>(null) }
+    var pendingDownload by remember { mutableStateOf<InFolder<JSONObject>?>(null) }
     val saveTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
-        val entry = pendingDownload ?: return@rememberLauncherForActivityResult
+        val chosen = pendingDownload ?: return@rememberLauncherForActivityResult
         pendingDownload = null
         if (uri == null) return@rememberLauncherForActivityResult
         val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
-        app.queueTransfer(remoteJoin(path, entry.optString("name")), TransferTarget(cache, uri, download = true, session = session))
+        app.queueTransfer(remoteJoin(chosen.folder, chosen.value.optString("name")), TransferTarget(cache, uri, download = true, session = session))
         queueShown = true
     }
     // The download folder on the phone (⋮): files go there without asking.
@@ -256,10 +266,10 @@ fun SftpScreen(
         downloadFolder = tree
     }
 
-    fun download(entry: JSONObject) {
+    fun download(entry: JSONObject, from: String) {
         val tree = downloadFolder
         if (tree == null) {
-            pendingDownload = entry
+            pendingDownload = InFolder(from, entry)
             saveTo.launch(entry.optString("name"))
             return
         }
@@ -275,7 +285,7 @@ fun SftpScreen(
                 return@launch
             }
             val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
-            app.queueTransfer(remoteJoin(path, entry.optString("name")), TransferTarget(cache, target, download = true, session = session))
+            app.queueTransfer(remoteJoin(from, entry.optString("name")), TransferTarget(cache, target, download = true, session = session))
             queueShown = true
         }
     }
@@ -300,12 +310,12 @@ fun SftpScreen(
                 val one = chosen.singleOrNull()
                 if (one != null && !one.optBoolean("dir")) {
                     DropdownMenuItem(text = { Text("Download") }, modifier = Modifier.testTag("sftp_download"), onClick = {
-                        close(); selected = emptySet(); download(one)
+                        close(); selected = emptySet(); download(one, path)
                     })
                 }
                 if (one != null) {
                     DropdownMenuItem(text = { Text("Rename") }, modifier = Modifier.testTag("sftp_rename"), onClick = {
-                        close(); selected = emptySet(); naming = "rename" to one
+                        close(); selected = emptySet(); naming = InFolder(path, "rename" to one)
                     })
                     DropdownMenuItem(text = { Text("Copy path") }, modifier = Modifier.testTag("sftp_copy_path"), onClick = {
                         close(); selected = emptySet(); clipboard.setText(AnnotatedString(remoteJoin(path, one.optString("name"))))
@@ -313,7 +323,7 @@ fun SftpScreen(
                 }
                 HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
                 DropdownMenuItem(text = { Text("Delete", color = Tokens.danger) }, modifier = Modifier.testTag("sftp_delete"), onClick = {
-                    close(); deleting = chosen
+                    close(); deleting = InFolder(path, chosen)
                 })
             }
             searching -> SearchBar(query, { query = it }, "Search this folder", onClose = { searching = false; query = "" })
@@ -349,7 +359,7 @@ fun SftpScreen(
                         BarIcon(Icons.Filled.MoreVert, "More", "sftp_more") { menu = true }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Tokens.bgRaised) {
                             DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Filled.CreateNewFolder, null) }, modifier = Modifier.testTag("sftp_mkdir"), onClick = {
-                                menu = false; naming = "mkdir" to null
+                                menu = false; naming = InFolder(path, "mkdir" to null)
                             })
                             HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
                             for ((key, label) in listOf("name" to "Sort by name", "date" to "Sort by date", "size" to "Sort by size", "kind" to "Sort by kind")) {
@@ -461,7 +471,7 @@ fun SftpScreen(
                             when {
                                 selected.isNotEmpty() -> selected = if (name in selected) selected - name else selected + name
                                 dir -> load(remoteJoin(path, name))
-                                else -> fileSheet = entry
+                                else -> fileSheet = InFolder(path, entry)
                             }
                         },
                         onLongClick = { selected = if (name in selected) selected - name else selected + name },
@@ -491,15 +501,15 @@ fun SftpScreen(
         }
     }
 
-    fileSheet?.let { entry ->
+    fileSheet?.let { (from, entry) ->
         ModalBottomSheet(onDismissRequest = { fileSheet = null }, containerColor = Tokens.bgRaised) {
             Column(Modifier.padding(bottom = 24.dp)) {
                 Text(entry.optString("name"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
                 val actions = listOf(
-                    "Download" to { download(entry) },
-                    "Rename" to { naming = "rename" to entry },
-                    "Delete" to { deleting = listOf(entry) },
-                    "Copy path" to { clipboard.setText(AnnotatedString(remoteJoin(path, entry.optString("name")))) },
+                    "Download" to { download(entry, from) },
+                    "Rename" to { naming = InFolder(from, "rename" to entry) },
+                    "Delete" to { deleting = InFolder(from, listOf(entry)) },
+                    "Copy path" to { clipboard.setText(AnnotatedString(remoteJoin(from, entry.optString("name")))) },
                 )
                 for ((label, run) in actions) {
                     Text(
@@ -513,24 +523,44 @@ fun SftpScreen(
         }
     }
 
-    naming?.let { (what, entry) ->
+    naming?.let { (folder, asked) ->
+        val (what, entry) = asked
         var name by remember(what, entry) { mutableStateOf(entry?.optString("name") ?: "") }
+        val wanted = name.trim()
+        // The listing of that folder, when it is the one shown.
+        val taken = folder == path && wanted != entry?.optString("name") && entries.any { it.optString("name") == wanted }
         AlertDialog(
             onDismissRequest = { naming = null },
             title = { Text(if (what == "mkdir") "New folder" else "Rename") },
-            text = { OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name") }) },
+            text = {
+                OutlinedTextField(
+                    name, { name = it }, singleLine = true, label = { Text("Name") },
+                    isError = taken,
+                    supportingText = if (taken) ({ Text("This folder already has “$wanted”.") }) else null,
+                )
+            },
             confirmButton = {
-                TextButton(enabled = name.isNotBlank() && !name.contains('/'), onClick = {
+                TextButton(enabled = wanted.isNotEmpty() && !wanted.contains('/') && !taken && wanted != entry?.optString("name"), onClick = {
                     naming = null
                     scope.launch {
                         val failure = withContext(Dispatchers.IO) {
                             try {
-                                if (what == "mkdir") {
-                                    sftp(session, "mkdir", JSONObject().put("path", remoteJoin(path, name.trim())))
-                                } else if (entry != null) {
-                                    sftp(session, "rename", JSONObject().put("from", remoteJoin(path, entry.optString("name"))).put("to", remoteJoin(path, name.trim())))
+                                val target = remoteJoin(folder, wanted)
+                                // The listing may be old: the server is asked
+                                // too, so a rename never replaces a file.
+                                val exists = runCatching { sftp(session, "exists", JSONObject().put("path", target)) as Boolean }.getOrNull()
+                                if (exists == null) {
+                                    "The name could not be checked; nothing was changed."
+                                } else if (exists) {
+                                    "“$wanted” is already there; nothing was changed."
+                                } else {
+                                    if (what == "mkdir") {
+                                        sftp(session, "mkdir", JSONObject().put("path", target))
+                                    } else if (entry != null) {
+                                        sftp(session, "rename", JSONObject().put("from", remoteJoin(folder, entry.optString("name"))).put("to", target))
+                                    }
+                                    null
                                 }
-                                null
                             } catch (error: CoreException) {
                                 error.message
                             } catch (error: Exception) {
@@ -538,7 +568,7 @@ fun SftpScreen(
                             }
                         }
                         listError = failure
-                        load(path)
+                        if (folder == path) load(path)
                     }
                 }) { Text("OK") }
             },
@@ -546,7 +576,7 @@ fun SftpScreen(
         )
     }
 
-    deleting?.let { chosen ->
+    deleting?.let { (folder, chosen) ->
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text(if (chosen.size == 1) "Delete “${chosen[0].optString("name")}”?" else "Delete ${chosen.size} items?") },
@@ -555,14 +585,12 @@ fun SftpScreen(
                 TextButton(onClick = {
                     deleting = null
                     selected = emptySet()
-                    // The folder they were chosen in, whatever is shown meanwhile.
-                    val folder = path
                     scope.launch {
                         listError = withContext(Dispatchers.IO) {
                             var failure: String? = null
                             for (entry in chosen) {
                                 try {
-                                    sftp(session, "remove", JSONObject().put("path", remoteJoin(folder, entry.optString("name"))).put("dir", entry.optBoolean("dir")))
+                                    sftp(session, "remove", JSONObject().put("path", remoteJoin(folder, entry.optString("name"))).put("dir", entry.optString("kind") == "dir"))
                                 } catch (error: CoreException) {
                                     failure = error.message
                                 } catch (error: Exception) {
@@ -571,7 +599,7 @@ fun SftpScreen(
                             }
                             failure
                         }
-                        load(folder)
+                        if (folder == path) load(path)
                     }
                 }, modifier = Modifier.testTag("sftp_delete_confirm")) { Text("Delete", color = Tokens.danger) }
             },
@@ -792,3 +820,6 @@ private fun FileRow(
         }
     }
 }
+
+/** A choice made in one folder of the server, acted on in that folder only. */
+private data class InFolder<T>(val folder: String, val value: T)

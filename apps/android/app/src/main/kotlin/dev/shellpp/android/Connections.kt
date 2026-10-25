@@ -200,7 +200,13 @@ private fun QuickConnectField(query: String, onQuery: (String) -> Unit, enabled:
 private fun SessionCard(app: App, activity: MainActivity, view: JSONObject) {
     val id = view.optLong("id")
     val sftp = id in app.sftpSessions
-    val theme = TerminalPrefs.theme(androidx.compose.ui.platform.LocalContext.current, androidx.compose.foundation.isSystemInDarkTheme())
+    val settingsTheme = TerminalPrefs.theme(androidx.compose.ui.platform.LocalContext.current, androidx.compose.foundation.isSystemInDarkTheme())
+    // The colors its terminal shows (the host's theme first), else Settings'.
+    val shown = TerminalView.colors[id]
+    val theme = object {
+        val bg = shown?.let { Color(it.first) } ?: settingsTheme.bg
+        val fg = shown?.let { Color(it.second) } ?: settingsTheme.fg
+    }
     val recordId = view.optString("recordId").ifBlank { null }
     val mark by produceState(OsMark(null, null), recordId) { value = withContext(Dispatchers.IO) { hostMark(recordId) } }
     // A live preview: read again every second while the card shows.

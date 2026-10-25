@@ -62,6 +62,7 @@ object Native {
     const val PASSWORD_RECORDED = 2
     const val PASSWORD_CONTROL = 3
     const val PASSWORD_FAILED = 4
+    const val PASSWORD_NOT_CONNECTED = 5
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
     @JvmStatic external fun snapshot(session: Long): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean

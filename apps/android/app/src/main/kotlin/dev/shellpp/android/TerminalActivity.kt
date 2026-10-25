@@ -535,8 +535,11 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         }
         val onTerminal = openingSftp == null && active !in app.sftpSessions
         val theme = TerminalPrefs.theme(this, isDark)
+        val shown = TerminalView.colors[active]
         val colors = if (onTerminal) {
-            BarColors(theme.bg, Color(theme.foreground).copy(alpha = 0.10f), theme.fg, Tokens.accent, theme.fg.copy(alpha = 0.6f))
+            val bg = shown?.let { Color(it.first) } ?: theme.bg
+            val fg = shown?.let { Color(it.second) } ?: theme.fg
+            BarColors(bg, fg.copy(alpha = 0.10f), fg, Tokens.accent, fg.copy(alpha = 0.6f))
         } else {
             BarColors(Tokens.bgBase, Tokens.bgRaised, Tokens.text, Tokens.accent, Tokens.textSecondary)
         }
@@ -692,6 +695,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
                                     when (answer) {
                                         Native.PASSWORD_RECORDED -> R.string.password_not_sent_recorded
                                         Native.PASSWORD_CONTROL -> R.string.password_not_sent_control
+                                        Native.PASSWORD_NOT_CONNECTED -> R.string.password_not_sent_offline
                                         else -> R.string.password_not_sent
                                     },
                                     Toast.LENGTH_LONG,

@@ -328,8 +328,10 @@ pub extern "system" fn Java_dev_shellpp_android_Native_text<'caller>(
 /// never crosses into Kotlin, as injected input that the history capture
 /// never takes for a command. Refused when the host's output is recorded
 /// (an echoing prompt would put it in the recording) or the password holds
-/// a control character (a line break would be an Enter). The answer:
-/// 0 sent, 1 no saved password, 2 recorded, 3 control character.
+/// a control character (a line break would be an Enter), and when the
+/// session is not connected or was opened to another host. The answer:
+/// 0 sent, 1 no saved password, 2 recorded, 3 control character, 5 not
+/// connected to this host.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -354,6 +356,9 @@ pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
                 vault_id: field.vault_id,
                 record_id: field.record_id,
             };
+            if !engine.connected_to(id(session), host)? {
+                return Ok(5);
+            }
             if engine.core().record_output_for(Some(host)) {
                 return Ok(2);
             }
