@@ -299,28 +299,32 @@ The owner's two pains (D211); the gestures are in `docs/mobile/ui-spec.md`
   - when the program asked for mouse reports, the tap is a click at that
     cell;
   - otherwise the terminal walks the cursor there with the arrow keys,
-    **with feedback**: it sends one step, waits until the program has
+    **with feedback**: it sends one arrow, waits until the program has
     answered (the model's cursor moved, or a short time passed), reads the
-    cursor from the model and decides the next step, until the cursor is on
-    the tapped cell or stops moving. On the shell's command line it walks ←
+    cursor from the model and decides the next step (a few arrows at a time
+    once the first one moved it), until the cursor is on the tapped cell or
+    stops moving. On the shell's command line it walks ←
     and → along the typed line; in a full-screen program (the alternate
     screen: nano without mouse support, vim) ↑ and ↓ first, then ← and →.
     Feedback makes tabs, wide characters and an editor's own soft wrap land
     right, where counting cells blindly would not.
   - A walk sends at most as many arrows as there are cells between the
     cursor and the tap and gives up after a step that did not move the
-    cursor; a program where arrows do not move a cursor (a pager) sees at
-    most a few of them.
+    cursor; a program where arrows do not move a cursor (a pager) gets one.
+  - A fingertip covers several cells: after a tap, a handle under the cursor
+    can be dragged with the magnifier, and its release walks again (UI spec
+    9.3).
 - **Selecting**: long-press selects a word with the model's word rules,
   with handles, a magnifier (Android 9+, API 28; below it no lens) and a
   floating toolbar (UI spec 9.4).
 - **Deleting a selected piece in an editor**: a terminal cannot delete text
   on the server; only the program can, with its own keys. On the command
-  line, the walk goes to the selection's end and sends Backspaces. For nano
-  (the owner's example) "Cut in nano" walks to the selection's start, sets
-  the mark (Alt+A), walks to its end and cuts (Ctrl+K): the same walks as a
-  tap. The app does not know which program runs, and the UI spec says where
-  this stops (9.6).
+  line, the walk goes just past the selection's end and sends Backspaces.
+  For nano (the owner's example), while nano's shortcut rows are on the
+  screen, "Cut in nano" walks to the selection's start, sets the mark
+  (Alt+A), walks just past its end and cuts (Ctrl+K): the same walks as a
+  tap. No deleting key is sent unless every walk landed exactly. The app does
+  not know which program runs, and the UI spec says where this stops (9.6).
 
 ### 6.4 Files: SFTP and key files
 
