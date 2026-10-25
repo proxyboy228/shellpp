@@ -33,6 +33,12 @@ enum Mode {
     /// The header of the first record names key epoch 7 (the server holds
     /// epoch 1).
     ForgeEpoch,
+    /// The header of the first record names key epoch 2 and the page says
+    /// the vault's current epoch is 2 (a rotation the device has not seen).
+    NewerEpoch,
+    /// The login's answer carries a personal `kek_wrap` with one byte
+    /// flipped (it opens to nothing).
+    TamperLoginWrap,
     /// Push answers carry no results (the server's write is unknown).
     EmptyPush,
     /// `ForgeEpoch` on the first page of a pull from 0, and the first pull
@@ -153,11 +159,36 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
                 record["envelope"] = Value::String(BASE64URL_NOPAD.encode(&bytes));
             }
         }
+        Mode::NewerEpoch => {
+            if let Some(record) = records.first_mut() {
+                let text = record["envelope"].as_str()?.to_owned();
+                let mut bytes = BASE64URL_NOPAD.decode(text.as_bytes()).ok()?;
+                bytes[44..48].copy_from_slice(&2u32.to_be_bytes());
+                record["envelope"] = Value::String(BASE64URL_NOPAD.encode(&bytes));
+            }
+            page["current_epoch"] = Value::from(2);
+        }
         Mode::Purge { hide, .. } => {
             records.retain(|record| record_id(record) != Some(*hide));
         }
+        Mode::TamperLoginWrap => return None,
     }
     serde_json::to_vec(&page).ok()
+}
+
+/// The login's answer with its personal `kek_wrap` changed
+/// ([`Mode::TamperLoginWrap`]).
+fn rewrite_login(mode: &Mode, body: &[u8]) -> Option<Vec<u8>> {
+    if !matches!(mode, Mode::TamperLoginWrap) {
+        return None;
+    }
+    let mut answer: Value = serde_json::from_slice(body).ok()?;
+    let wrap = answer.pointer_mut("/account/personal_vault/kek_wrap")?;
+    let mut bytes = BASE64URL_NOPAD.decode(wrap.as_str()?.as_bytes()).ok()?;
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    *wrap = Value::String(BASE64URL_NOPAD.encode(&bytes));
+    serde_json::to_vec(&answer).ok()
 }
 
 async fn read_message(stream: &mut tokio::net::TcpStream) -> Option<(String, Vec<u8>)> {
@@ -237,6 +268,7 @@ fn proxy(server: &Server) -> Proxy {
                 };
                 let pull = head.starts_with("GET /v1/vaults/") && head.contains("/changes");
                 let push = head.starts_with("POST /v1/vaults/") && head.contains("/changes");
+                let login = head.starts_with("POST /v1/auth/login");
                 if push {
                     pushes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
@@ -307,6 +339,12 @@ connection: close
                 if pull && response_head.starts_with("HTTP/1.1 200") {
                     let current = mode.lock().unwrap().clone();
                     if let Some(changed) = rewrite(&current, &seen, &response) {
+                        response = changed;
+                    }
+                }
+                if login && response_head.starts_with("HTTP/1.1 200") {
+                    let current = mode.lock().unwrap().clone();
+                    if let Some(changed) = rewrite_login(&current, &response) {
                         response = changed;
                     }
                 }
@@ -674,4 +712,89 @@ fn an_interrupted_reset_still_refuses_the_forged_epoch() {
     proxy.set(Mode::ForgeEpoch);
     assert!(b.core.sync_now().is_err());
     assert_eq!(b.status().last_error.as_deref(), Some("forged_epoch"));
+}
+
+/// Live refresh tokens and revoked devices of the account with `email`.
+fn sessions_and_revoked_devices(server: &Server, email: &str) -> (i64, i64) {
+    let count = |sql: &str| {
+        server
+            .db
+            .tx(shellpp_server::db::TxKind::Read, |tx| {
+                let rows = tx.query(
+                    sql,
+                    &[shellpp_server::db::Val::from(email)],
+                    &[shellpp_server::db::Ty::Int],
+                )?;
+                Ok::<_, shellpp_server::db::DbError>(rows[0][0].int().unwrap_or(0))
+            })
+            .expect("count")
+    };
+    (
+        count(
+            "SELECT COUNT(*) FROM refresh_tokens t JOIN users u ON u.user_id = t.user_id \
+             WHERE u.email = ? AND t.revoked_at IS NULL",
+        ),
+        count(
+            "SELECT COUNT(*) FROM devices d JOIN users u ON u.user_id = d.user_id \
+             WHERE u.email = ? AND d.revoked_at IS NOT NULL",
+        ),
+    )
+}
+
+/// Run 13, plan 3.9 (D209 for every refusal, D216): a device with local data
+/// signs in through a hostile server; the login goes through, the merge or
+/// the key wraps refuse with `code` before the device is bound, and what
+/// that login opened is revoked: no token of it stays live and its device
+/// row is marked revoked. Nothing local changed, the device stays signed
+/// out, and the account's two devices still sync.
+fn a_refused_sign_in_revokes_its_login(mode: Mode, code: &str) {
+    let server = Server::start();
+    let (proxy, a, b, email, password) = setup(&server);
+    let (live, revoked) = sessions_and_revoked_devices(&server, &email);
+    assert_eq!((live, revoked), (2, 0), "A and B");
+
+    let laptop = Client::local("laptop", &new_password());
+    laptop.host("laptop.example.com");
+    let vault_before = laptop.vault_id();
+    proxy.set(mode);
+    let refused = laptop
+        .core
+        .sync_sign_in(shellpp_core::service::SignInInput {
+            origin: proxy.origin.clone(),
+            email: email.clone(),
+            password: password.clone(),
+            registration_code: None,
+        });
+    match refused {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), code),
+        other => panic!("expected {code}, got {other:?}"),
+    }
+    proxy.set(Mode::Pass);
+    assert_eq!(
+        sessions_and_revoked_devices(&server, &email),
+        (2, 1),
+        "the login's tokens are gone and its device row is revoked"
+    );
+    assert!(!laptop.status().signed_in);
+    assert_eq!(laptop.vault_id(), vault_before);
+    assert_eq!(laptop.addresses(), vec!["laptop.example.com"]);
+    a.host("after.example.com");
+    a.sync();
+    b.sync();
+    assert!(b.addresses().contains(&"after.example.com".to_owned()));
+}
+
+#[test]
+fn a_forged_epoch_at_sign_in_revokes_the_login() {
+    a_refused_sign_in_revokes_its_login(Mode::ForgeEpoch, "forged_epoch");
+}
+
+#[test]
+fn a_newer_epoch_at_sign_in_revokes_the_login() {
+    a_refused_sign_in_revokes_its_login(Mode::NewerEpoch, "newer_epoch");
+}
+
+#[test]
+fn a_key_wrap_that_does_not_open_at_sign_in_revokes_the_login() {
+    a_refused_sign_in_revokes_its_login(Mode::TamperLoginWrap, "integrity");
 }

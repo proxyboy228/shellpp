@@ -411,6 +411,8 @@ fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
     // one revoked: the desk's session still works.
     assert_eq!(refresh_tokens(&other, &other_email, false), 2);
     assert_eq!(refresh_tokens(&other, &other_email, true), 1);
+    // And the laptop's device row in that account is marked revoked (D216).
+    assert_eq!(revoked_devices(&other, &other_email), 1);
     desk.core.sync_now().expect("the desk still syncs");
     assert!(!laptop.status().signed_in);
 
@@ -419,6 +421,22 @@ fn another_accounts_login_on_a_bound_device_is_refused_and_revoked() {
         .sync_sign_in(input(&server, &email.to_uppercase(), &password))
         .expect("the own account signs in");
     assert!(matches!(outcome, SignInOutcome::Done(_)));
+}
+
+/// The revoked device rows of the account with `email`.
+fn revoked_devices(server: &Server, email: &str) -> i64 {
+    server
+        .db
+        .tx(TxKind::Read, |tx| {
+            let rows = tx.query(
+                "SELECT COUNT(*) FROM devices d JOIN users u ON u.user_id = d.user_id \
+                 WHERE u.email = ? AND d.revoked_at IS NOT NULL",
+                &[Val::from(email)],
+                &[Ty::Int],
+            )?;
+            Ok::<_, DbError>(rows[0][0].int().unwrap_or(0))
+        })
+        .expect("count")
 }
 
 /// The refresh tokens of the account with `email`; with `live_only`, those

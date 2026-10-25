@@ -1447,12 +1447,64 @@ impl Core {
         Ok(SignInOutcome::Done(self.sync_status()?))
     }
 
+    /// The binding after a successful login. A refusal before the device is
+    /// bound (another account's vault, D209; a rebind's `rolled_back` or
+    /// `integrity`; a merge's `forged_epoch` or `newer_epoch`) revokes what
+    /// that login opened on the server ([`Self::revoke_login`]); a refusal
+    /// after the binding was written (a rolled-back server whose key matches
+    /// keeps its session, for the re-post of the epochs) does not.
     fn finish_sign_in(
         &self,
         api: &HttpApi,
         pending: PendingSignIn,
         device_id: Uuid,
         tokens: wire::Tokens,
+        account: wire::AccountBundle,
+    ) -> Result<(), CoreError> {
+        let result = self.bind_after_login(api, pending, device_id, &tokens, account);
+        if let Err(CoreError::Sync(HttpError::Refused(code))) = &result
+            && !self.holds_access(&tokens.access_token.0)
+        {
+            tracing::info!(
+                code,
+                "a sign-in refused after its login; its session is revoked"
+            );
+            Self::revoke_login(api, device_id, &tokens);
+        }
+        result
+    }
+
+    /// Whether the access token held for sync is `token`: every binding
+    /// holds its login's token right after it is written.
+    fn holds_access(&self, token: &str) -> bool {
+        self.inner()
+            .sync
+            .access
+            .as_deref()
+            .is_some_and(|held| held.as_str() == token)
+    }
+
+    /// Revokes what a login opened that no binding took (run 13, D216): the
+    /// device is revoked in that account (`DELETE /v1/devices/{id}`: every
+    /// token of it goes and its row is marked revoked; the protocol deletes
+    /// no device row), and when that fails the login's refresh token family
+    /// alone. Best effort: the refusal stands either way.
+    fn revoke_login(api: &HttpApi, device_id: Uuid, tokens: &wire::Tokens) {
+        let Err(error) = api.device_revoke(&tokens.access_token.0, device_id) else {
+            return;
+        };
+        tracing::warn!(?error, "the refused sign-in's device was not revoked");
+        if let Err(error) = api.revoke(&tokens.refresh_token.0) {
+            tracing::warn!(?error, "the refused sign-in's session was not revoked");
+        }
+    }
+
+    fn bind_after_login(
+        &self,
+        api: &HttpApi,
+        pending: PendingSignIn,
+        device_id: Uuid,
+        tokens: &wire::Tokens,
         account: wire::AccountBundle,
     ) -> Result<(), CoreError> {
         let vault_id = account.personal_vault.vault_id;
@@ -1474,15 +1526,15 @@ impl Core {
         let (ring, chain_rows) = ring_from_chain(vault_id, epoch, vault_key, &keys)?;
         let state = self.inner().state;
         match state {
-            LockState::FirstRun => self.sign_in_empty(
-                api, &pending, device_id, &tokens, &account, ring, chain_rows,
-            ),
+            LockState::FirstRun => {
+                self.sign_in_empty(api, &pending, device_id, tokens, &account, ring, chain_rows)
+            }
             LockState::Unlocked => {
                 let local_vault = self.inner().personal_vault_id;
                 if local_vault == Some(vault_id) {
-                    self.sign_in_rebind(&pending, &tokens, &account, ring, chain_rows)
+                    self.sign_in_rebind(&pending, tokens, &account, ring, chain_rows)
                 } else {
-                    self.sign_in_merge(api, &pending, &tokens, &account, ring, chain_rows)
+                    self.sign_in_merge(api, &pending, tokens, &account, ring, chain_rows)
                 }
             }
             _ => Err(CoreError::Locked),
@@ -1910,13 +1962,8 @@ impl Core {
         });
         // Another account than the one this vault is bound to (D197): the
         // login went through before that could be known (the email may
-        // have changed, SP 5.4), so its session is revoked rather than left
-        // open on that account (D209). Best effort: the refusal stands.
-        if let Err(CoreError::Sync(HttpError::Refused("previous_account"))) = &step
-            && let Err(error) = api.revoke(&tokens.refresh_token.0)
-        {
-            tracing::warn!(?error, "the refused sign-in's session was not revoked");
-        }
+        // have changed, SP 5.4); `finish_sign_in` revokes what it opened
+        // (D209, D216).
         let (db_id, device_id, old_vault) = step?;
         // Step 2: pull the account vault into a session of its own. Rows
         // left by an interrupted earlier attempt are loaded first, so the

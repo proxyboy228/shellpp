@@ -2453,3 +2453,14 @@ Status: run 13 (plan, sections 3.7 and 3.8); `apps/android`, `scripts\verify-and
 - **Checks**: `scripts\verify-android.ps1` runs the binding's Rust tests, builds the debug APK (both ABIs; Gradle runs cargo with the NDK's clang) and the Kotlin unit tests; `-Emulator` adds the end-to-end test on the emulator against OpenSSH in Docker. Outside the full criterion, which keeps its "mobile-ready" step.
 
 **Spec impact:** `docs/mobile/architecture.md` (the local network permission), `docs/mobile/README.md` (new), CLAUDE.md, ROADMAP 3.1.
+
+
+### 216. A sign-in refused after its login revokes that login's device, for every refusal (run 13)
+
+Status: run 13 (plan, section 3.9; ROADMAP 2.2, "Sessions after a refused sign-in"; extends D209).
+
+**Context.** D209 revoked the session of a login whose merge refused `previous_account`. The other refusals after a login (a rebind's `rolled_back` or `integrity`, a merge's `forged_epoch` or `newer_epoch`, and a personal `kek_wrap` that opens to nothing) still left that session live, and the login's device row stayed active in the account's list.
+
+**Decision:** Every refusal after the login and before the device is bound revokes what the login opened, in one place (`finish_sign_in`): `DELETE /v1/devices/{device_id}` with the login's access token, which deletes every token of the device in that account and marks its row revoked, and, when that fails, `POST /v1/auth/token/revoke` with the login's refresh token. Best effort: the refusal stands either way. "Before the device is bound" is read from the core itself: every binding holds its login's access token right after it is written, so a refusal while that token is not held revokes; the one refusal after a binding (a rebind to a rolled-back server whose key matches, which keeps its session for the re-post of the epochs, section 5.1 of the protocol) does not. The protocol deletes no device row: the row stays in the account's list, marked revoked, which is what a sign-out leaves too. Tests through a hostile proxy: `forged_epoch` and `newer_epoch` at the merge and a `kek_wrap` that does not open, each with no live token of the login, its device row revoked, nothing local changed and the account's two devices still syncing; D209's test now also checks the device row; the rolled-back server's test (a binding kept) still re-posts its epochs. A rebind's `rolled_back` before binding (a server whose chain does not reach the device's key) goes through the same path and was not built as a scenario of its own.
+
+**Spec impact:** docs/sync-protocol.md 4.4 (sign-in), ROADMAP 2.2.
