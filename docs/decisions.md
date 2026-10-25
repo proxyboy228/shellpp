@@ -2407,3 +2407,14 @@ Status: run 13 (plan, section 3.3; `docs/android-feasibility.md`).
 - **The "mobile-ready" check** is a step of `scripts\verify.ps1`: `cargo check --locked --target aarch64-linux-android` of the crates a phone client shares, with the NDK's clang (API level 26) for the C parts. The NDK is found from `ANDROID_NDK_HOME`, `ANDROID_NDK_ROOT` or the newest one of the Android SDK; without one the step says SKIPPED with the reason and the summary names it, never a green mark; a missing Rust target fails the step with the command that adds it.
 
 **Spec impact:** docs/architecture.md 2.1-2.3 (the crates, the dependency graph, the check), docs/android-feasibility.md 6, CLAUDE.md.
+
+
+### 213. The Android app's stack: Kotlin screens and terminal view over the Rust core through a small JNI layer (run 13)
+
+Status: run 13 (plan, section 3.4); `docs/mobile/architecture.md`.
+
+**Context.** `docs/android-feasibility.md` 5 listed the ways to join the Rust core to an Android interface (UniFFI, JNI by hand, a command protocol, an interface in Rust, Kotlin Multiplatform) and left the choice to the design run. The owner's main requirements of the terminal are putting the cursor on the wanted character and selecting the wanted text (D211).
+
+**Decision:** A Kotlin app: Jetpack Compose screens, the terminal a custom Android `View` drawn on a `Canvas`. The Rust core (`shellpp-core`, `shellpp-ssh`, `shellpp-sessions`, `shellpp-terminal`) is one library, `libshellpp_android.so` from the crate `shellpp-android` (`apps/android/native`), with a small hand-written JNI layer (the `jni` crate already in the graph): JSON commands for the core's service API, whose DTOs are already `serde`; direct calls for the terminal's hot path (feeding, a binary screen snapshot into a reused direct buffer, selection, cursor and modes). Kotlin waits on Rust (blocking "await wake" and "next event" calls on its own threads) instead of Rust calling back into the JVM. Handles are table indices, never pointers; no panic crosses JNI. Live sessions stay in a foreground service (`specialUse`); sync runs on demand and when the app comes to the foreground. The device key of fingerprint unlock is wrapped by a biometric-bound `AndroidKeyStore` key; with the default (master password) nothing is stored. `rustls-platform-verifier` is initialized in `Application.onCreate`. Rejected: UniFFI (a generator and JNA for little gain at this size; to revisit if the command set outgrows JSON), JNI typed by hand for every call, a command protocol only (terminal frames), an interface in Rust (input methods, selection handles and accessibility are young where the owner's pains are), Kotlin Multiplatform (no iPhone app).
+
+**Spec impact:** `docs/mobile/architecture.md` (new), ROADMAP 3.1.
