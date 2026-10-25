@@ -136,6 +136,32 @@ object E2e {
         openHosts(timeoutMs)
         click("search_open")
         type("search", text)
+        // The results settle before a tap on them (a tap while the list
+        // is redrawn for the query can miss the card). Back here would
+        // close the search, so the keyboard stays.
+        device.waitForIdle(2_000)
+        Thread.sleep(700)
+    }
+
+    /**
+     * A tap on the host card [label] that opens the session screen; a tap
+     * that UI Automator lost (the list redrawn under it) is made once more.
+     */
+    fun connectTo(label: String) {
+        click("host_$label")
+        repeat(2) {
+            val deadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < deadline) {
+                var shown = false
+                instrumentation.runOnMainSync { shown = resumedTerminal() != null }
+                if (shown) return
+                Thread.sleep(250)
+            }
+            if (has("host_$label", 1_000)) {
+                shot("connect-retry-$label")
+                click("host_$label")
+            }
+        }
     }
 
     /** The first page of Settings. */

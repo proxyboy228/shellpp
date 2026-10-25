@@ -82,7 +82,7 @@ class KeysSftpTest {
             ),
         )
         E2e.searchHosts("client-$label")
-        E2e.click("host_client-$label")
+        E2e.connectTo("client-$label")
         acceptHostKeyIfAsked()
         assertTrue("a prompt", E2e.waitForTerminal(60_000) { lines -> lines.any { it.contains("$") } })
         E2e.typeInTerminal("echo '$public' >> ~/.ssh/authorized_keys && echo key-added-$label\r")
@@ -101,7 +101,7 @@ class KeysSftpTest {
         )
         E2e.launch()
         E2e.searchHosts("key-$label")
-        E2e.click("host_key-$label")
+        E2e.connectTo("key-$label")
         acceptHostKeyIfAsked()
         val signedIn = E2e.waitForTerminal(60_000) { lines -> lines.any { it.contains("$") } }
         if (!signedIn) E2e.shot("key-no-prompt")
