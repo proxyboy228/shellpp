@@ -460,6 +460,10 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
         }
         "sync_weaker_kdf" => out(Ok(core.sync_weaker_kdf())),
         "recovery_key_granted" => out(core.recovery_key_granted()),
+        "recovery_key_show" => {
+            let input: PasswordInput = parse(input)?;
+            out(core.recovery_key_show(input.password))
+        }
         "secret_copy" => {
             let input: SecretCopyTarget = parse(input)?;
             out(core.secret_copy(input))

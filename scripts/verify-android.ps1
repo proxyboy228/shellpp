@@ -84,6 +84,7 @@ $appId = 'io.github.proxyboy228.shellpp'
 $EndToEndClasses = @(
     'dev.shellpp.android.VaultFirstRunTest',
     'dev.shellpp.android.VaultAfterRestartTest',
+    'dev.shellpp.android.EditorKeepsOtherChangesTest',
     'dev.shellpp.android.ConnectTest',
     'dev.shellpp.android.KeysSftpTest',
     'dev.shellpp.android.FingerprintOnTest',

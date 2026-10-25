@@ -353,11 +353,13 @@ The owner's two pains (D211); the gestures are in `docs/mobile/ui-spec.md`
   the SFTP code works on paths, and a document's file descriptor has no
   sibling for a `.part`]. No file content crosses JNI as arrays or JSON.
   The cost is the file's size in the cache for the time of one transfer.
-  The end of a transfer is handled by the application object, whatever
-  screen shows: a download is copied into its document before it shows as
-  done, a failed copy shows as a failure, a cancelled or failed download
-  removes its empty document, and the cache folder is emptied at every
-  start (review of run 14).
+  Transfers are queued and their ends handled by the application object
+  on its own threads, whatever screen shows or whether the app locked
+  meanwhile: a download is copied into its document before it shows as
+  done, a failed copy shows as a failure, a cancelled download removes its
+  empty document, a failed one keeps its cache file and document for Retry
+  until its session closes, and the cache folder is emptied at every start
+  (reviews of run 14).
 - Transfers report progress and their end as events, can be cancelled, and
   keep the foreground service running (section 3).
 - **Key files** for import are read by Kotlin from the picked document into

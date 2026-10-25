@@ -224,6 +224,8 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         worker.execute {
             try {
                 Native.reply(id, prompt, kind, text)
+                // A host key saved or replaced is a known host to sync.
+                if (kind == "accept" || kind == "replace") Core.onLocalChange?.invoke()
             } catch (_: RuntimeException) {
             } finally {
                 text?.fill(0)

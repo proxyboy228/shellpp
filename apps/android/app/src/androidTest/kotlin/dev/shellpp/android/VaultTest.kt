@@ -4,6 +4,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Until
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,3 +98,50 @@ class VaultAfterRestartTest {
         E2e.find("tab_hosts", 60_000)
     }
 }
+
+/**
+ * The host editor writes only what was changed in it (review of run 14):
+ * a change that comes in while it is open (written here through the core,
+ * as a sync's pull writes it) stays after the editor's next saves, in a
+ * field it does not show and in one it shows but nobody touched.
+ */
+@RunWith(AndroidJUnit4::class)
+class EditorKeepsOtherChangesTest {
+    @Test
+    fun aChangeThatComesInWhileTheEditorIsOpenStays() {
+        E2e.ensureUnlocked()
+        E2e.launch()
+        val vault = Core.array("vaults").getJSONObject(0).getString("vault_id")
+        val label = "editor-" + UUID.randomUUID().toString().take(6)
+        val id = Core.obj(
+            "record_save",
+            JSONObject().put("vault_id", vault).put("type", "host")
+                .put("data", JSONObject().put("address", "editor.example.org").put("label", label)),
+        ).getString("record_id")
+        fun data() = Core.obj("record_get", JSONObject().put("vault_id", vault).put("record_id", id)).getJSONObject("data")
+
+        E2e.click("tab_hosts", 60_000)
+        E2e.type("search", label)
+        E2e.find("host_$label").longClick()
+        E2e.clickText("Edit")
+        E2e.type("host_tags", "one")
+        // Saved half a second after the last change.
+        Thread.sleep(1_500)
+        assertEquals("one", data().optJSONArray("tags")?.optString(0))
+
+        // Another device's change arrives: the notes and the port.
+        val incoming = data().put("notes", "from the desktop")
+        incoming.put("ssh", (incoming.optJSONObject("ssh") ?: JSONObject()).put("port", 2222))
+        Core.call("record_save", JSONObject().put("vault_id", vault).put("record_id", id).put("type", "host").put("data", incoming))
+
+        E2e.type("host_tags", "one, two")
+        Thread.sleep(1_500)
+        E2e.click("editor_close")
+        val after = data()
+        assertEquals("the incoming notes stay", "from the desktop", after.optString("notes"))
+        assertEquals("the incoming port stays", 2222, after.optJSONObject("ssh")?.optInt("port"))
+        assertEquals("the editor's change is saved", 2, after.optJSONArray("tags")?.length())
+        Core.call("record_delete", JSONObject().put("vault_id", vault).put("record_ids", JSONArray().put(id)))
+    }
+}
+

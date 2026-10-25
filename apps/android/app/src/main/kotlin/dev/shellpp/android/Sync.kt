@@ -275,6 +275,9 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
             "totp_required" -> step = "totp"
             else -> {
                 if (register) {
+                    // Until "I saved it", the account screen offers the key
+                    // again: a lock before it wipes the core's grant.
+                    app.accountPrefs.edit().putBoolean(PREF_RECOVERY_UNSAVED, true).apply()
                     recoveryKey = withContext(Dispatchers.IO) {
                         try {
                             Core.obj("recovery_key_granted").optString("recovery_key")
@@ -483,6 +486,7 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                     }
                 }) { Text("Copy") }
                 Busy(busy, "I saved it", "recovery_saved") {
+                    app.accountPrefs.edit().remove(PREF_RECOVERY_UNSAVED).apply()
                     recoveryKey = null
                     step = "done"
                 }
@@ -638,6 +642,7 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
     var signingOut by remember { mutableStateOf(false) }
     var wizard by remember { mutableStateOf(false) }
     var pinCheck by remember { mutableStateOf<String?>(null) }
+    var showingRecovery by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val changes by app.changes.collectAsState()
     val status by produceState<JSONObject?>(null, refresh, changes) {
@@ -734,12 +739,25 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
             }
             HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
         }
+        if (app.accountPrefs.getBoolean(PREF_RECOVERY_UNSAVED, false)) {
+            Text(
+                "The recovery key of this account was not confirmed as saved: it opens your data when the password is forgotten.",
+                color = Tokens.danger,
+            )
+            Busy(false, "Show the recovery key", "account_recovery_show") { showingRecovery = true }
+        }
         Text(
             "Changing the password, the recovery key and \"Lost or stolen\" are on the desktop.",
             color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall,
         )
         TextButton(onClick = { signingOut = true }, modifier = Modifier.testTag("account_sign_out")) {
             Text("Sign out", color = Tokens.danger)
+        }
+    }
+    if (showingRecovery) {
+        RecoveryKeyDialog(app) {
+            showingRecovery = false
+            refresh += 1
         }
     }
     pinCheck?.let { origin ->
@@ -815,3 +833,85 @@ private fun QrCode(qr: JSONObject) {
         }
     }
 }
+
+/** Set at registration until "I saved it" (review of run 14). */
+private const val PREF_RECOVERY_UNSAVED = "recovery_unsaved"
+
+/**
+ * The recovery key again, for an account registered on this phone whose key
+ * was not confirmed as saved (a lock during the wizard wipes the core's
+ * grant) [decision]: the master password, then the key with Copy and
+ * "I saved it". Showing it again any other time is the desktop's (UI spec
+ * 11.2).
+ */
+@Composable
+private fun RecoveryKeyDialog(app: App, onClose: () -> Unit) {
+    var password by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val shown = key
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Your recovery key") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (shown == null) {
+                    Text("Type the master password to show it.", color = Tokens.textSecondary)
+                    PasswordField(password, { password = it; error = null }, "Master password", "recovery_show_password")
+                } else {
+                    Text(
+                        "Keep it somewhere safe, away from this phone.",
+                        color = Tokens.textSecondary,
+                    )
+                    Text(shown, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("recovery_key"))
+                    TextButton(onClick = {
+                        scope.launch {
+                            val copied = withContext(Dispatchers.IO) {
+                                runCatching { Core.call("secret_copy", JSONObject().put("kind", "recovery_key")) }.isSuccess
+                            }
+                            error = if (copied) null else "Not copied any more (5 minutes have passed): write it down from the screen."
+                        }
+                    }) { Text("Copy") }
+                }
+                error?.let { Text(it, color = Tokens.danger) }
+            }
+        },
+        confirmButton = {
+            if (shown == null) {
+                TextButton(enabled = password.isNotEmpty() && !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val typed = password.toCharArray()
+                        password = ""
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                Core.withPassword("recovery_key_show", "password", typed) as JSONObject
+                            }
+                            key = result.optString("recovery_key")
+                        } catch (failed: CoreException) {
+                            error = if (failed.code == "wrong_password") "Wrong password." else (failed.message ?: failed.code)
+                        } catch (failed: Exception) {
+                            error = failed.message
+                        }
+                        busy = false
+                    }
+                }, modifier = Modifier.testTag("recovery_show")) { Text("Show") }
+            } else {
+                TextButton(onClick = {
+                    app.accountPrefs.edit().remove(PREF_RECOVERY_UNSAVED).apply()
+                    key = null
+                    onClose()
+                }, modifier = Modifier.testTag("recovery_saved")) { Text("I saved it") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                key = null
+                onClose()
+            }) { Text("Cancel") }
+        },
+    )
+}
+

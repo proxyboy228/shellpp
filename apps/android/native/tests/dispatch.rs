@@ -211,4 +211,12 @@ fn the_sync_commands_answer_before_an_account_exists() {
         "validation_failed"
     );
     assert_eq!(ok(&engine, "sync_weaker_kdf", &json!(null)), Value::Null);
+
+    // The account screen's "Show the recovery key": a local vault has none
+    // (D217); a bound one shows it for the master password.
+    let show = json!({ "password": random("pw") });
+    assert_eq!(
+        code(&engine, "recovery_key_show", show.to_string().as_bytes()),
+        "wrong_state"
+    );
 }

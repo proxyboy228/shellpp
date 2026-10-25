@@ -136,6 +136,37 @@ class KeysSftpTest {
         val listed = Core.answer(Native.sftpCall(session, "list", JSONObject().put("path", home).toString())) as JSONArray
         assertTrue((0 until listed.length()).any { listed.getJSONObject(it).optString("name") == name })
         Core.answer(Native.sftpCall(session, "remove", JSONObject().put("path", remoteJoin(home, name)).toString()))
+
+        // An upload through the app's own queue, with a lock while it goes
+        // (review of run 14): it is not dropped with the screen, it ends
+        // on the server whole, and its cache file goes.
+        val big = File(dir, "big").apply {
+            outputStream().use { out ->
+                val chunk = ByteArray(1 shl 20) { it.toByte() }
+                repeat(24) { out.write(chunk) }
+            }
+        }
+        val folder = remoteJoin(home, "shellpp-m4-" + UUID.randomUUID().toString().take(8))
+        Core.answer(Native.sftpCall(session, "mkdir", JSONObject().put("path", folder).toString()))
+        val transfersBefore = app.transfers.value.keys.toSet()
+        val problem = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        app.upload(session, folder, listOf(android.net.Uri.fromFile(big))) { problem.set(it) }
+        Core.call("lock")
+        app.refreshLock()
+        val queued = waitNewTransfer(app, transfersBefore)
+        assertTrue("the upload was queued (${problem.get()})", queued != null)
+        assertTrue("the upload ended while locked", waitTransfer(app, queued!!, 120_000))
+        val uploaded = Core.answer(Native.sftpCall(session, "list", JSONObject().put("path", folder).toString())) as JSONArray
+        assertEquals(1, uploaded.length())
+        assertEquals(big.length(), uploaded.getJSONObject(0).optLong("size"))
+        val cache = File(E2e.instrumentation.targetContext.cacheDir, "transfers")
+        val emptied = System.currentTimeMillis() + 10_000
+        while (cache.listFiles().orEmpty().isNotEmpty() && System.currentTimeMillis() < emptied) Thread.sleep(200)
+        assertTrue("no cache file left: ${cache.listFiles().orEmpty().map { it.name }}", cache.listFiles().orEmpty().isEmpty())
+        Core.answer(Native.sftpCall(session, "remove", JSONObject().put("path", remoteJoin(folder, uploaded.getJSONObject(0).optString("name"))).toString()))
+        Core.answer(Native.sftpCall(session, "remove", JSONObject().put("path", folder).put("dir", true).toString()))
+        E2e.ensureUnlocked()
+
         // What the test made goes: its hosts, its keys, its files.
         Core.call(
             "record_delete",
@@ -148,8 +179,18 @@ class KeysSftpTest {
         dir.deleteRecursively()
     }
 
-    private fun waitTransfer(app: App, id: Long): Boolean {
-        val deadline = System.currentTimeMillis() + 60_000
+    /** The id of a transfer that was not in [before], once the app has one. */
+    private fun waitNewTransfer(app: App, before: Set<Long>): Long? {
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            app.transfers.value.keys.firstOrNull { it !in before }?.let { return it }
+            Thread.sleep(100)
+        }
+        return null
+    }
+
+    private fun waitTransfer(app: App, id: Long, timeoutMs: Long = 60_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             when (app.transfers.value[id]?.optString("state")) {
                 "done" -> return true

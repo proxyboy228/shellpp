@@ -308,6 +308,15 @@ fun HostsScreen(
                     Text(if (search.isBlank()) "No hosts yet" else "Nothing found", style = MaterialTheme.typography.titleMedium)
                     if (search.isBlank()) {
                         TextButton(onClick = { onEdit(Overlay.EditHost(null, group?.id)) }) { Text("New host") }
+                        // With no account yet, the hosts may be on the server (UI spec 6.1).
+                        val bound by produceState<Boolean?>(null) {
+                            value = withContext(Dispatchers.IO) { runCatching { Core.obj("sync_status").optBoolean("bound") }.getOrNull() }
+                        }
+                        if (group == null && bound == false) {
+                            TextButton(onClick = { onEdit(Overlay.Account) }, modifier = Modifier.testTag("empty_restore")) {
+                                Text("Restore from sync")
+                            }
+                        }
                     }
                 }
                 return@Column

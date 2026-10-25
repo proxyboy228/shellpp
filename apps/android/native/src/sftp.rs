@@ -348,16 +348,25 @@ impl SftpSessions {
             };
             // The channel as it is now: a reconnect while this one waited
             // made a new one.
-            let Some(sftp) = session_handle.sftp() else {
-                report(
-                    "failed",
-                    0,
-                    Some(SftpFailure::from(SftpError::ConnectionLost).message),
-                );
+            // Out of the table before its end is reported: a cancel or a
+            // close that took it first reported it cancelled, and it ends
+            // only once (review of run 14: a "cancelled" after "done" made the
+            // app delete the document just written).
+            let ours = || {
                 transfers
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&transfer);
+                    .remove(&transfer)
+                    .is_some()
+            };
+            let Some(sftp) = session_handle.sftp() else {
+                if ours() {
+                    report(
+                        "failed",
+                        0,
+                        Some(SftpFailure::from(SftpError::ConnectionLost).message),
+                    );
+                }
                 return;
             };
             report("running", 0, None);
@@ -380,14 +389,13 @@ impl SftpSessions {
                     }
                 }
             };
+            if !ours() {
+                return;
+            }
             match result {
                 Ok(bytes) => report("done", bytes, None),
                 Err(error) => report("failed", done, Some(SftpFailure::from(error).message)),
             }
-            transfers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&transfer);
         });
         table.insert(transfer, Transfer { session: id, task });
         drop(table);

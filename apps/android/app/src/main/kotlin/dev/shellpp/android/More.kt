@@ -254,12 +254,17 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
             // prompt reads it back once, so a key the phone cannot use is
             // found now rather than at the next unlock.
             val turnedOn = withContext(Dispatchers.IO) {
+                val keys = app.platform.deviceKeys
                 try {
+                    // The one place a new key pair may replace an invalid one.
+                    keys.newPairAllowed = true
                     app.setLock(LockStatus.from(Core.obj("remember_device_set", JSONObject().put("enabled", true))))
                     true
                 } catch (error: CoreException) {
                     message = "Fingerprint unlock could not be turned on: ${error.message}"
                     false
+                } finally {
+                    keys.newPairAllowed = false
                 }
             }
             if (turnedOn) {

@@ -79,6 +79,7 @@ class App : Application() {
 
     /** Unlock preferences of this device (fingerprint unlock, D218). */
     val unlockPrefs by lazy { getSharedPreferences("unlock", Context.MODE_PRIVATE) }
+    val accountPrefs by lazy { getSharedPreferences("account", Context.MODE_PRIVATE) }
 
     private var started = 0
     private var lastActivityNote = 0L
@@ -237,9 +238,18 @@ class App : Application() {
         sessions -= id
         sftpSessions -= id
         sessionHosts.remove(id)
-        // Its transfers are gone with it (the core cancelled them).
+        // Its transfers are gone with it (the core cancelled them); failed
+        // ones kept their cache file and document for Retry until now.
         conflicts.value = conflicts.value.filter { conflict ->
             (conflict.session != id).also { keep -> if (!keep) conflict.cache.delete() }
+        }
+        transferWorker.execute {
+            for ((transfer, target) in transferTargets.entries.toList()) {
+                if (target.session != id) continue
+                transferTargets.remove(transfer)
+                deleteDocument(target)
+                target.dropCache()
+            }
         }
         lastEvents.remove(id)
         sessionViews.value = sessionViews.value - id
@@ -312,7 +322,6 @@ class App : Application() {
     private fun onTransfer(event: JSONObject) {
         val transfer = event.optLong("id")
         val state = event.optString("state")
-        val target = transferTargets[transfer]
         val publish = { update: JSONObject ->
             main.post {
                 // A cancel's event carries only its state.
@@ -322,11 +331,17 @@ class App : Application() {
                 transferNotification(transfer, merged.optString("state"))
             }
         }
-        if (target == null || state !in setOf("done", "failed", "cancelled")) {
+        if (state !in setOf("done", "failed", "cancelled")) {
             publish(event)
             return
         }
+        // On the worker that queued it (queueTransfer): its target is there.
         transferWorker.execute {
+            val target = transferTargets[transfer]
+            if (target == null) {
+                publish(event)
+                return@execute
+            }
             when (state) {
                 "done" -> {
                     transferTargets.remove(transfer)
@@ -351,15 +366,88 @@ class App : Application() {
                     deleteDocument(target)
                     target.dropCache()
                 }
-                // A failure keeps its cache file for Retry (an upload needs it);
-                // a download's empty document goes.
-                "failed" -> deleteDocument(target)
+                // A failure keeps its cache file and its document for Retry;
+                // they go when the session closes (forget).
+                "failed" -> Unit
             }
             publish(event)
         }
     }
 
     private val transferWorker = Executors.newSingleThreadExecutor()
+    private val copyWorker = Executors.newSingleThreadExecutor()
+
+    /**
+     * Queues a transfer and records its target in one step on the transfer
+     * worker, which also handles the transfers' ends ([onTransfer]), so an
+     * end never comes before its target. On the app's own threads: a lock or
+     * Back meanwhile drops nothing (review of run 14). One the core refuses
+     * (the session closed) leaves no document or cache file.
+     */
+    fun queueTransfer(remote: String, target: TransferTarget) {
+        transferWorker.execute {
+            val id = try {
+                if (target.download) {
+                    Native.sftpDownload(target.session, remote, target.cache.absolutePath)
+                } else {
+                    Native.sftpUpload(target.session, target.cache.absolutePath, remote)
+                }
+            } catch (error: Exception) {
+                0L
+            }
+            if (id != 0L) {
+                transferTargets[id] = target
+            } else {
+                deleteDocument(target)
+                target.dropCache()
+            }
+        }
+    }
+
+    /**
+     * Uploads [uris] into [into] (UI spec 10): each file is copied into the
+     * cache, then queued, or waits for Replace or Skip when its name is
+     * taken. On the app's own thread, as [queueTransfer]; [problem] hears of
+     * a file that could not be read.
+     */
+    fun upload(session: Long, into: String, uris: List<android.net.Uri>, problem: (String) -> Unit) {
+        copyWorker.execute {
+            val picked = HashSet<String>()
+            for (uri in uris) {
+                if (session !in sessions) return@execute
+                val name = displayName(this, uri) ?: "upload"
+                val cache = File(File(cacheDir, "transfers").apply { mkdirs() }, java.util.UUID.randomUUID().toString())
+                val copied = try {
+                    contentResolver.openInputStream(uri)?.use { input -> cache.outputStream().use { input.copyTo(it) } } != null
+                } catch (error: Exception) {
+                    false
+                }
+                if (!copied) {
+                    cache.delete()
+                    main.post { problem("$name could not be read.") }
+                    continue
+                }
+                val remote = remoteJoin(into, name)
+                val exists = try {
+                    Core.answer(Native.sftpCall(session, "exists", JSONObject().put("path", remote).toString())) as Boolean
+                } catch (error: Exception) {
+                    true
+                }
+                if (exists || !picked.add(name)) {
+                    // A name conflict asks (the desktop's 5.7): Replace or Skip.
+                    main.post {
+                        if (session in sessions) {
+                            conflicts.value = conflicts.value + Conflict(session, cache, remote, name)
+                        } else {
+                            cache.delete()
+                        }
+                    }
+                    continue
+                }
+                queueTransfer(remote, TransferTarget(cache, null, download = false, session = session))
+            }
+        }
+    }
 
     private val notifiedStates = HashMap<Long, String>()
     private var notifiedAt = 0L
@@ -473,7 +561,7 @@ class App : Application() {
 }
 
 /** A transfer's file in the app's cache and, for a download, the document it goes to. */
-data class TransferTarget(val cache: java.io.File, val uri: android.net.Uri?, val download: Boolean) {
+data class TransferTarget(val cache: java.io.File, val uri: android.net.Uri?, val download: Boolean, val session: Long) {
     /** The cache file and the `.part` the SFTP code writes beside it. */
     fun dropCache() {
         cache.delete()

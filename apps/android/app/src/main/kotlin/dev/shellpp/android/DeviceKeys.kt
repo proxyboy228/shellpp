@@ -182,6 +182,16 @@ class DeviceKeys(private val context: Context) {
         }
     }
 
+    /**
+     * Set by Settings' "turn on" only, around its call: a new key pair may
+     * then take the place of an invalid or missing one. Any other write (a
+     * sync merge, a key rotation) refuses then, so a fingerprint added
+     * meanwhile never gets in without the master password; the option goes
+     * off with its reason at the next unlock (D218; review of run 14).
+     */
+    @Volatile
+    var newPairAllowed = false
+
     /** Encrypts [key] for [account] with the public key (no prompt). */
     fun write(account: String, key: ByteArray) {
         val public = publicKey()
@@ -221,6 +231,7 @@ class DeviceKeys(private val context: Context) {
      */
     private fun publicKey(): java.security.PublicKey {
         if (lost()) {
+            check(newPairAllowed) { "the fingerprint key is no longer valid" }
             try {
                 keyStore().deleteEntry(ALIAS)
             } catch (error: Exception) {

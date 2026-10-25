@@ -34,9 +34,13 @@ data class LockStatus(
  * blocks: never on the main thread.
  */
 object Core {
-    /** The commands that change records here: a sync follows them (architecture 3). */
+    /**
+     * The commands that change records here: a sync follows them
+     * (architecture 3), keys and known hosts included (review of run 14).
+     */
     private val LOCAL_CHANGES = setOf(
         "record_save", "record_delete", "record_restore", "record_move", "record_duplicate", "recently_deleted_restore",
+        "key_generate", "key_import", "key_label_set", "known_host_remove", "known_host_restore",
     )
 
     /** Called after a local change ([App.kickSync]). */
@@ -109,7 +113,9 @@ object Core {
         val closed = bytes + byteArrayOf('}'.code.toByte())
         bytes.fill(0)
         try {
-            return answer(Native.call(command, closed))
+            val result = answer(Native.call(command, closed))
+            if (command in LOCAL_CHANGES) onLocalChange?.invoke()
+            return result
         } finally {
             closed.fill(0)
         }

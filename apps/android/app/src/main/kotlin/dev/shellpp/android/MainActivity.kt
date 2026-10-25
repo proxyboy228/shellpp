@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -260,6 +261,9 @@ fun FirstRunScreen(app: App, activity: MainActivity) {
     }
 }
 
+/** [Fingerprint.blocker] not known yet. */
+private const val BLOCKER_PENDING = "pending"
+
 /** UI spec 5: the master password, or the fingerprint first when it is on (D218). */
 @Composable
 fun UnlockScreen(app: App, activity: MainActivity, lock: LockStatus) {
@@ -269,7 +273,11 @@ fun UnlockScreen(app: App, activity: MainActivity, lock: LockStatus) {
     var forgot by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
-    val blocker = remember(lock) { Fingerprint.blocker(app, lock) }
+    // Off the main thread: the Keystore and the sensor take a while (review
+    // of run 14). Until it is known, neither the prompt nor its notes show.
+    val blocker by produceState<String?>(BLOCKER_PENDING, lock) {
+        value = withContext(Dispatchers.IO) { Fingerprint.blocker(app, lock) }
+    }
 
     fun useFingerprint() {
         scope.launch {
@@ -291,7 +299,8 @@ fun UnlockScreen(app: App, activity: MainActivity, lock: LockStatus) {
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(blocker == BLOCKER_PENDING) {
+        if (blocker == BLOCKER_PENDING) return@LaunchedEffect
         if (blocker == null) useFingerprint() else focus.requestFocus()
     }
 

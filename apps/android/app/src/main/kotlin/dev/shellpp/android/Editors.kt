@@ -68,6 +68,42 @@ private val GROUP_FIELDS = setOf("name", "parent_id", "color", "ssh", "order_key
  * 3.2): a new record is made once it is valid; the answer's errors, by
  * field, are shown. Returns the record id after a save.
  */
+/**
+ * What a save writes (review of run 14): the record as it is in the vault
+ * now, with only the editor's [fields] that changed since its last save
+ * ([baseline]). A change sync brought in while the editor was open stays,
+ * in the fields the editor shows but nobody touched too; a new record is
+ * [original] with every field. Keys `ssh.x` go into the record's `ssh`.
+ */
+private fun merged(
+    vaultId: String?,
+    recordId: String?,
+    original: JSONObject,
+    fields: Map<String, Any>,
+    baseline: Map<String, Any>,
+): JSONObject {
+    val now = if (recordId == null) {
+        null
+    } else {
+        try {
+            Core.obj("record_get", JSONObject().put("vault_id", vaultId ?: vaultId()).put("record_id", recordId)).optJSONObject("data")
+        } catch (error: Exception) {
+            null
+        }
+    }
+    val data = now ?: JSONObject(original.toString())
+    for ((key, value) in fields) {
+        if (now != null && value.toString() == baseline[key]?.toString()) continue
+        if (key.startsWith("ssh.")) {
+            val ssh = data.optJSONObject("ssh") ?: JSONObject().also { data.put("ssh", it) }
+            ssh.put(key.removePrefix("ssh."), value)
+        } else {
+            data.put(key, value)
+        }
+    }
+    return data
+}
+
 private fun save(
     vaultId: String?,
     recordId: String?,
@@ -212,8 +248,12 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
     var keyId by remember { mutableStateOf(ssh0.optString("key_id").takeIf { it.isNotBlank() && it != "null" }) }
     var backspace by remember { mutableStateOf(original.optString("backspace").ifBlank { "default" }) }
     var charset by remember { mutableStateOf(original.optString("charset").ifBlank { "utf-8" }) }
-    // A host that signs in with an identity shows its name, read-only (UI spec 6.2).
+    // A host that signs in with an identity, its own or its group's, shows
+    // the identity's name, read-only (UI spec 6.2).
+    val inheritedIdentity = record?.inherited?.optJSONObject("identity_id")
     val identityId = ssh0.optString("identity_id").takeIf { it.isNotBlank() && it != "null" }
+        ?: inheritedIdentity?.optString("value")?.takeIf { it.isNotBlank() && it != "null" }
+    val identityGroup = inheritedIdentity?.optString("from_group_id")?.takeIf { !ssh0.has("identity_id") || ssh0.isNull("identity_id") }
     val identityName by produceState<String?>(null, identityId) {
         if (identityId == null) return@produceState
         value = withContext(Dispatchers.IO) {
@@ -263,6 +303,21 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
         app.noteActivity()
     }
 
+    /** The fields the host editor writes, as it writes them. */
+    fun fields(): Map<String, Any> = mapOf(
+        "address" to address.trim(),
+        "label" to label.trim().ifBlank { JSONObject.NULL },
+        "group_id" to (group ?: JSONObject.NULL),
+        "tags" to JSONArray(tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }),
+        "color" to (color ?: JSONObject.NULL),
+        "backspace" to backspace,
+        "charset" to charset.trim().lowercase().ifBlank { "utf-8" },
+        "ssh.port" to (port.trim().toIntOrNull() ?: JSONObject.NULL),
+        "ssh.username" to username.trim().ifBlank { JSONObject.NULL },
+        "ssh.key_id" to (keyId ?: JSONObject.NULL),
+    )
+    val baseline = remember { HashMap(fields()) }
+
     /**
      * Saves what the editor shows; the password only with [withPassword]
      * (when the editor closes), so a pause while typing it never stores a
@@ -275,19 +330,10 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             val passwordChange = withPassword && (newPassword.isNotEmpty() || clearPassword)
             if (saved == edits && !passwordChange) return@withLock
             val upTo = edits
-            val data = JSONObject(original.toString())
-            data.put("address", address.trim())
-            data.put("label", label.trim().ifBlank { JSONObject.NULL })
-            data.put("group_id", group ?: JSONObject.NULL)
-            data.put("tags", JSONArray(tags.split(',').map { it.trim() }.filter { it.isNotEmpty() }))
-            data.put("color", color ?: JSONObject.NULL)
-            data.put("backspace", backspace)
-            data.put("charset", charset.trim().lowercase().ifBlank { "utf-8" })
-            val ssh = data.optJSONObject("ssh") ?: JSONObject()
-            ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
-            ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
-            ssh.put("key_id", keyId ?: JSONObject.NULL)
-            data.put("ssh", ssh)
+            val current = fields()
+            val vault = record?.vaultId
+            val id0 = recordId
+            val data = withContext(Dispatchers.IO) { merged(vault, id0, original, current, baseline) }
             val secrets = JSONObject()
             if (passwordChange) {
                 if (clearPassword) secrets.put("ssh.password", JSONObject.NULL) else secrets.put("ssh.password", newPassword)
@@ -299,6 +345,7 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             if (problems.isEmpty()) {
                 recordId = id
                 saved = upTo
+                baseline.putAll(current)
                 if (passwordChange) {
                     passwordSaved = !clearPassword
                     newPassword = ""
@@ -382,11 +429,12 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
 
         val others = original.keys().asSequence().filter { it !in HOST_FIELDS && !original.isNull(it) }.toList() +
             ssh0.keys().asSequence().filter { it !in HOST_SSH_FIELDS && it != "password" && !ssh0.isNull(it) }.map { "ssh.$it" }.toList()
-        if (others.isNotEmpty()) {
+        if (others.isNotEmpty() || identityId != null) {
             Section("More settings (edit on the desktop)")
             if (identityId != null) {
+                val from = identityGroup?.let { ", from group ${groups[it] ?: "a group"}" } ?: ""
                 Text(
-                    "Identity: ${identityName ?: "an identity"}",
+                    "Identity: ${identityName ?: "an identity"}$from",
                     color = Tokens.textSecondary,
                     modifier = Modifier.testTag("host_identity"),
                 )
@@ -488,26 +536,33 @@ fun GroupEditor(app: App, record: Record?, parentId: String?, onClose: () -> Uni
         app.noteActivity()
     }
 
+    /** The fields the group editor writes, as it writes them. */
+    fun fields(): Map<String, Any> = mapOf(
+        "name" to name.trim(),
+        "parent_id" to (parent ?: JSONObject.NULL),
+        "color" to (color ?: JSONObject.NULL),
+        "ssh.port" to (port.trim().toIntOrNull() ?: JSONObject.NULL),
+        "ssh.username" to username.trim().ifBlank { JSONObject.NULL },
+        "ssh.key_id" to (keyId ?: JSONObject.NULL),
+    )
+    val baseline = remember { HashMap(fields()) }
+
+    // One save at a time, onto the group as it is now (see merged).
     suspend fun persist() = withContext(NonCancellable) {
         saving.withLock {
             if (name.isBlank() || saved == edits) return@withLock
             val upTo = edits
-            val data = JSONObject(original.toString())
-            data.put("name", name.trim())
-            data.put("parent_id", parent ?: JSONObject.NULL)
-            data.put("color", color ?: JSONObject.NULL)
-            val ssh = data.optJSONObject("ssh") ?: JSONObject()
-            ssh.put("port", port.trim().toIntOrNull() ?: JSONObject.NULL)
-            ssh.put("username", username.trim().ifBlank { JSONObject.NULL })
-            ssh.put("key_id", keyId ?: JSONObject.NULL)
-            data.put("ssh", ssh)
+            val current = fields()
+            val vault = record?.vaultId
+            val id0 = recordId
             val (id, problems) = withContext(Dispatchers.IO) {
-                save(record?.vaultId, recordId, "group", data, null)
+                save(vault, id0, "group", merged(vault, id0, original, current, baseline), null)
             }
             errors = problems
             if (problems.isEmpty()) {
                 recordId = id
                 saved = upTo
+                baseline.putAll(current)
             }
         }
     }

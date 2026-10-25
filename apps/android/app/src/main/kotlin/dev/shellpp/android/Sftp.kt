@@ -185,49 +185,14 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
         val entry = pendingDownload ?: return@rememberLauncherForActivityResult
         pendingDownload = null
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
-            val remote = remoteJoin(path, entry.optString("name"))
-            val id = withContext(Dispatchers.IO) {
-                runCatching { Native.sftpDownload(session, remote, cache.absolutePath) }.getOrDefault(0L)
-            }
-            if (id != 0L) app.transferTargets[id] = TransferTarget(cache, uri, download = true)
-            queueShown = true
-        }
+        val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
+        app.queueTransfer(remoteJoin(path, entry.optString("name")), TransferTarget(cache, uri, download = true, session = session))
+        queueShown = true
     }
     val pickUploads = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        val into = path
-        scope.launch {
-            val picked = HashSet<String>()
-            for (uri in uris) {
-                val name = displayName(activity, uri) ?: "upload"
-                val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
-                val copied = withContext(Dispatchers.IO) {
-                    runCatching {
-                        activity.contentResolver.openInputStream(uri)?.use { input -> cache.outputStream().use { input.copyTo(it) } }
-                        true
-                    }.getOrDefault(false)
-                }
-                if (!copied) {
-                    cache.delete()
-                    listError = "$name could not be read."
-                    continue
-                }
-                val remote = remoteJoin(into, name)
-                val exists = withContext(Dispatchers.IO) {
-                    runCatching { sftp(session, "exists", JSONObject().put("path", remote)) as Boolean }.getOrDefault(true)
-                }
-                if (exists || !picked.add(name)) {
-                    // A name conflict asks (the desktop's 5.7): here Replace or Skip.
-                    app.conflicts.value = app.conflicts.value + Conflict(session, cache, remote, name)
-                    continue
-                }
-                val id = withContext(Dispatchers.IO) { runCatching { Native.sftpUpload(session, cache.absolutePath, remote) }.getOrDefault(0L) }
-                if (id != 0L) app.transferTargets[id] = TransferTarget(cache, null, download = false)
-            }
-            queueShown = true
-        }
+        app.upload(session, path, uris) { problem -> listError = problem }
+        queueShown = true
     }
     val conflicts by app.conflicts.collectAsState()
 
@@ -339,6 +304,8 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
             scope.launch(Dispatchers.IO) {
                 try {
                     Native.reply(session, prompt.optLong("id"), kind, text)
+                    // A host key saved or replaced is a known host to sync.
+                    if (kind == "accept" || kind == "replace") Core.onLocalChange?.invoke()
                 } catch (error: Exception) {
                     // The next event says what happened.
                 } finally {
@@ -438,10 +405,7 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
             confirmButton = {
                 TextButton(onClick = {
                     app.conflicts.value = app.conflicts.value - conflict
-                    scope.launch {
-                        val id = withContext(Dispatchers.IO) { runCatching { Native.sftpUpload(session, conflict.cache.absolutePath, conflict.remote) }.getOrDefault(0L) }
-                        if (id != 0L) app.transferTargets[id] = TransferTarget(conflict.cache, null, download = false)
-                    }
+                    app.queueTransfer(conflict.remote, TransferTarget(conflict.cache, null, download = false, session = session))
                 }) { Text("Replace", color = Tokens.danger) }
             },
             dismissButton = {
@@ -476,17 +440,7 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
                                     // Retry: queued again from the start.
                                     val target = app.transferTargets.remove(id)
                                     app.transfers.value = app.transfers.value - id
-                                    if (target != null) {
-                                        scope.launch {
-                                            val again = withContext(Dispatchers.IO) {
-                                                runCatching {
-                                                    if (target.download) Native.sftpDownload(session, transfer.optString("path"), target.cache.absolutePath)
-                                                    else Native.sftpUpload(session, target.cache.absolutePath, transfer.optString("path"))
-                                                }.getOrDefault(0L)
-                                            }
-                                            if (again != 0L) app.transferTargets[again] = target
-                                        }
-                                    }
+                                    if (target != null) app.queueTransfer(transfer.optString("path"), target)
                                 }) { Text("Retry") }
                             }
                         }
@@ -508,8 +462,8 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
 }
 
 /** The display name of a picked document. */
-private fun displayName(activity: MainActivity, uri: Uri): String? =
-    activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+fun displayName(context: android.content.Context, uri: Uri): String? =
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
         if (cursor.moveToFirst()) cursor.getString(0) else null
     }?.replace('/', '_')
 
