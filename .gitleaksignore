@@ -12,6 +12,8 @@
 # the alphabet, whose GitHub checksum does not hold.
 0aafa82febe510ad59f0cb4c01a492dfc129223d:apps/desktop/src/terminal/autocomplete.rs:github-pat:263
 0aafa82febe510ad59f0cb4c01a492dfc129223d:apps/desktop/src/terminal/tests.rs:github-pat:1524
+# The same test, moved with the terminal model into crates/terminal (run 13).
+1c52d0cd3d7e6467b91cadc7f1081949e3b697b0:crates/terminal/src/autocomplete.rs:github-pat:338
 
 # SHELLPP_SERVER_SECRET in the configuration unit test: the base64 of a run of
 # ASCII digits and letters.
