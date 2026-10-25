@@ -18,7 +18,7 @@ Shell++ is approaching release 1.0. The desktop app works: hosts and groups, the
 
 Not there yet (`docs/ROADMAP.md`): team vaults (after 1.0), the mobile client (Android, after 1.0; Mosh comes with it), and the archive of a previous account. Known limits of the terminal are in `docs/compatibility.md` (on Windows, flags are drawn as two letters).
 
-Platforms of release 1.0: Windows (checked) and Linux (it builds and passes its tests in Docker, `scripts\verify-linux.ps1`; not yet tried on a Linux desktop, and dates are shown in UTC there). macOS builds are not checked: there is no Mac to test on.
+Platforms of release 1.0: Windows (checked) and Linux (it builds and passes its tests in Docker, `scripts\verify-linux.ps1`; not yet tried on a Linux desktop). macOS builds are not checked: there is no Mac to test on.
 
 - There are no published releases yet: build it yourself (below). Releases need the owner's signing key (`docs/release.md`).
 - Data formats may still change before 1.0.

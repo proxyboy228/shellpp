@@ -238,8 +238,9 @@ Additionally:
 - The tooltip of a date gives its full time in UTC ("2026-10-21 15:04:09 UTC").
 - Records keep their UTC timestamps (`docs/data-model.md`, 1.1); exports write them
   as they are.
-- Where the platform's zone cannot be read yet (outside Windows for now), times are
-  shown in UTC and say so ("18:04 UTC").
+- On Linux and macOS the zone is the C library's (`TZ`, else `/etc/localtime`) and
+  dates are written as ISO dates ("2026-10-21 18:04"; D210). Where the platform's
+  zone cannot be read, or is UTC, times are shown in UTC and say so ("18:04 UTC").
 
 ---
 

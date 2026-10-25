@@ -106,9 +106,9 @@ certificate: on Android all of that needs the crate's initialization
   split has to free from it. Splitting the model from the view gives Android
   the same terminal behaviour (VS16 and emoji sequences, D206; the memory
   bounds of D85).
-- **Dates**: local time comes from the Windows API (`platform/local_time.rs`);
-  elsewhere the time is shown in UTC, Android included, until the zone is
-  read there.
+- **Dates**: local time comes from the Windows API (`platform/local_time.rs`),
+  on Linux and macOS from the C library (`TZ`, `/etc/localtime`; run 13,
+  D210); a phone client takes the zone and the format from Android.
 - **FIDO2** (`platform/security_key*.rs`: the system WebAuthn API on
   Windows, `ctap-hid-fido2` over HID behind the optional `fido2-hid`
   feature elsewhere): desktops only. Android reaches security keys over NFC or USB through its own

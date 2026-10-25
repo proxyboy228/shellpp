@@ -4,10 +4,11 @@
 //! display changes.
 //!
 //! On Windows the zone (with the daylight saving rules of each date) and
-//! the format come from the system ([`crate::platform::local_time`]).
-//! Elsewhere the time stays in UTC and says so ("18:04 UTC") until the
-//! platform's zone is read there. Tests fix the zone and the format per
-//! thread ([`set_fixed_display`]).
+//! the format come from the system ([`crate::platform::local_time`]); on
+//! Linux and macOS the zone comes from the C library and dates are written
+//! as ISO dates ("2026-10-21 18:04"; D210). Where the zone cannot be read,
+//! or is UTC, the time stays in UTC and says so ("18:04 UTC"). Tests fix the
+//! zone and the format per thread ([`set_fixed_display`]).
 
 use std::cell::Cell;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -151,6 +152,12 @@ fn fixed() -> Option<FixedDisplay> {
 
 /// The calendar time of `time` in the display's zone.
 pub fn local(time: SystemTime) -> Civil {
+    local_and_known(time).0
+}
+
+/// The calendar time of `time` in the display's zone, and whether that zone
+/// is the local one (else UTC, said so).
+fn local_and_known(time: SystemTime) -> (Civil, bool) {
     if let Some(fixed) = fixed() {
         let offset = Duration::from_secs(u64::from(fixed.offset_minutes.unsigned_abs()) * 60);
         let shifted = if fixed.offset_minutes >= 0 {
@@ -158,18 +165,13 @@ pub fn local(time: SystemTime) -> Civil {
         } else {
             time.checked_sub(offset)
         };
-        return Civil::utc(shifted.unwrap_or(time));
+        return (Civil::utc(shifted.unwrap_or(time)), true);
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     if let Some(civil) = crate::platform::local_time::to_local(time) {
-        return civil;
+        return (civil, true);
     }
-    Civil::utc(time)
-}
-
-/// Whether the display's zone is the local one (else UTC, said so).
-fn zone_known() -> bool {
-    fixed().is_some() || cfg!(windows)
+    (Civil::utc(time), cfg!(windows))
 }
 
 /// The short date in the user's locale ("21.10.2026", "10/21/2026").
@@ -188,7 +190,7 @@ pub fn date(time: SystemTime) -> String {
 /// The time of day without seconds in the user's locale ("18:04",
 /// "6:04 PM"); "18:04 UTC" where the local zone is not known.
 pub fn time(time: SystemTime) -> String {
-    let civil = local(time);
+    let (civil, known) = local_and_known(time);
     if fixed().is_none() {
         #[cfg(windows)]
         if let Some(text) = crate::platform::local_time::time_text(&civil, None) {
@@ -196,11 +198,7 @@ pub fn time(time: SystemTime) -> String {
         }
     }
     let text = format!("{:02}:{:02}", civil.hour, civil.minute);
-    if zone_known() {
-        text
-    } else {
-        format!("{text} UTC")
-    }
+    if known { text } else { format!("{text} UTC") }
 }
 
 /// The date and the time ("21.10.2026 18:04").
@@ -320,12 +318,19 @@ mod tests {
     }
 
     /// The system's display writes something for a date (Windows: its
-    /// zone and locale; elsewhere UTC, said so).
+    /// zone and locale; Linux and macOS: the C library's zone, or UTC said
+    /// so, as `platform::local_time` tests with set zones; elsewhere UTC,
+    /// said so).
     #[test]
     fn the_system_display_writes_dates() {
         set_fixed_display(None);
         let moment = at("2026-10-21T12:00:00.000Z");
         assert!(!date(moment).is_empty());
-        assert_eq!(time(moment).contains("UTC"), !cfg!(windows));
+        let says_utc = time(moment).contains("UTC");
+        if cfg!(windows) {
+            assert!(!says_utc);
+        } else if !cfg!(any(target_os = "linux", target_os = "macos")) {
+            assert!(says_utc);
+        }
     }
 }
