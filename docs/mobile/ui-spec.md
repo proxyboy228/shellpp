@@ -89,12 +89,15 @@ As the desktop's 13.2:
 
 - The app name, the "Master password" field with the keyboard up, "Unlock"
   (accent). The IME's Enter unlocks.
-- With fingerprint unlock on (section 12), **at a cold start** (the app's
-  process starting): the system's biometric prompt opens first; "Use
-  password" in it, a cancel or a failure leaves the password field. After a
-  lock (auto-lock, Lock) the password is asked, as on the desktop: the core
-  takes the device key at launch only (architecture 4) [decision]. When no
-  fingerprint is enrolled any more, the option is off and Settings says so.
+- With fingerprint unlock on (section 12), **at a cold start and after a
+  lock** (auto-lock, Lock): the system's biometric prompt opens first; "Use
+  password" in it, a cancel or a failure leaves the password field (D218,
+  architecture 4). The password is asked instead when the fingerprint key
+  became invalid (a fingerprint was added: the option goes off and Settings
+  says why), when the system locked biometrics out, once every 7 days, and
+  once after the vault's key changed while the prompt was not passed. When
+  no fingerprint is enrolled any more, the option is off and Settings says
+  so.
 - A wrong password clears the field and says "Wrong password"; the pauses
   after 5 wrong passwords in a row are the desktop's and the core's.
 - "Forgot password?" offers the desktop's choices: Restore from sync (with
@@ -481,8 +484,8 @@ The desktop's connect wizard (13.5), one step per screen:
   default), Bell (vibrate, off) [decision], copy on select (off) [decision].
 - **Security**: Auto-lock (section 5); **Fingerprint unlock** (off by
   default; turning it on asks for the master password once and then the
-  biometric prompt; it unlocks at a cold start, a locked app asks for the
-  password; architecture 4) (D211). A copied password is cleared from the
+  biometric prompt; it unlocks at a cold start and after a lock;
+  architecture 4) (D211, D218). A copied password is cleared from the
   clipboard after 30 seconds, as on the desktop (`docs/security.md` 9.4);
   Android hides the clipboard from apps in the background, so it is cleared
   when the app next has focus.

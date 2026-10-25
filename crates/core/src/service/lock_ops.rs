@@ -19,7 +19,7 @@ use crate::lock::{self, AutoLock, FirstRunOptions, Lockout, PasswordMaterial};
 use crate::model::hlc::HlcClock;
 use crate::model::time::{format_timestamp, unix_ms};
 use crate::model::types::RecordKind;
-use crate::platform::{Availability, OsKind};
+use crate::platform::{Availability, OsKind, SecretStoreError};
 use crate::service::dto::{CoreEventKind, LockState, LockStatus, RecoveryKeyResult};
 use crate::settings::Settings;
 use crate::store::{
@@ -27,6 +27,32 @@ use crate::store::{
     WrapKind,
 };
 use crate::vault::{self, KeyRing, Rotation};
+
+/// What reading the device key from the OS key store found.
+pub(super) enum DeviceKeyRead {
+    Key(Key32),
+    /// No item, or one that could not be read (D173: the option is lost).
+    Gone,
+    /// The item is there but needs the user's authentication first
+    /// (Android's biometric prompt was not shown or was cancelled, D218): a
+    /// rotation goes on without a `device` row for its new epoch, but the
+    /// item stays and the option is not marked lost.
+    NeedsAuthentication,
+}
+
+impl DeviceKeyRead {
+    pub(super) fn key(self) -> Option<Key32> {
+        match self {
+            Self::Key(key) => Some(key),
+            Self::Gone | Self::NeedsAuthentication => None,
+        }
+    }
+
+    /// `true` for [`Self::Gone`] read where a `device` row exists.
+    pub(super) fn lost(read: Option<&Self>) -> bool {
+        matches!(read, Some(Self::Gone))
+    }
+}
 
 /// Rows needed to open the personal vault, read under the mutex.
 /// `meta` flag: "Remember on this device" went off at a rotation because
@@ -209,7 +235,10 @@ impl Core {
         inner.recovery_grant.clear();
         inner.key_change = None;
         self.clear_clipboard_if_ours(inner);
-        inner.device_unlock_allowed = false;
+        // RR8: the device key opens the vault at launch only, never after a
+        // lock; on Android after a lock too, since reading it there needs
+        // the biometric prompt every time (D218).
+        inner.device_unlock_allowed = self.platform.os == OsKind::Android;
         inner.state = LockState::Locked;
         tracing::info!("locked");
         self.lock_changed(inner);
@@ -217,21 +246,39 @@ impl Core {
 
     /// Reads the device key from the OS keychain (call without the mutex).
     pub(super) fn fetch_device_key(&self, db_id: &Uuid) -> Option<Key32> {
+        self.read_device_key(db_id).key()
+    }
+
+    /// Reads the device key and says why there is none (call without the
+    /// mutex). A key that needs the user's authentication first (Android,
+    /// D218) is not lost: nobody deletes its item or marks the option lost.
+    pub(super) fn read_device_key(&self, db_id: &Uuid) -> DeviceKeyRead {
         if self.platform.secret_store.availability() != Availability::Available {
-            return None;
+            return DeviceKeyRead::Gone;
         }
         match self
             .platform
             .secret_store
             .get(&ids::keychain_account(db_id))
         {
-            Ok(Some(secret)) => Some(Key32::from_secret_box(&secret)),
-            Ok(None) => None,
+            Ok(Some(secret)) => DeviceKeyRead::Key(Key32::from_secret_box(&secret)),
+            Ok(None) => DeviceKeyRead::Gone,
+            Err(SecretStoreError::AuthenticationRequired) => {
+                tracing::info!("device key needs the user's authentication");
+                DeviceKeyRead::NeedsAuthentication
+            }
             Err(_) => {
                 tracing::warn!("device key could not be read");
-                None
+                DeviceKeyRead::Gone
             }
         }
+    }
+
+    /// The device key of a rotation or a rebind when the `device` row
+    /// exists: `None` without a row, else what the key store gave.
+    pub(super) fn read_rotation_device_key(&self, context: &KeyContext) -> Option<DeviceKeyRead> {
+        context.device_row.as_ref()?;
+        Some(self.read_device_key(&context.db_id))
     }
 
     pub(super) fn delete_device_key(&self, db_id: &Uuid) {
@@ -811,11 +858,9 @@ impl Core {
         drop(recovery_key);
         let vault_key = vault::open_wrap(recovery_row, &recovery_kek)
             .map_err(|_| CoreError::InvalidRecoveryKey)?;
-        let device_key = context
-            .device_row
-            .as_ref()
-            .and_then(|_| self.fetch_device_key(&context.db_id));
-        let device_lost = context.device_row.is_some() && device_key.is_none();
+        let device_read = self.read_rotation_device_key(&context);
+        let device_lost = DeviceKeyRead::lost(device_read.as_ref());
+        let device_key = device_read.and_then(DeviceKeyRead::key);
         let class = self.platform.class;
         let material = PasswordMaterial::fresh(class, context.local_auth.kdf_email.clone())?;
         let kek = material.derive_kek(&new_password, class)?;

@@ -31,6 +31,8 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 struct SecretState {
     available: bool,
+    /// `get` of a stored item answers `AuthenticationRequired` (D218).
+    requires_authentication: bool,
     items: BTreeMap<String, Zeroizing<[u8; 32]>>,
 }
 
@@ -50,6 +52,7 @@ impl MemorySecretStore {
         Self {
             state: Mutex::new(SecretState {
                 available: true,
+                requires_authentication: false,
                 items: BTreeMap::new(),
             }),
         }
@@ -57,6 +60,12 @@ impl MemorySecretStore {
 
     pub fn set_available(&self, available: bool) {
         guard(&self.state).available = available;
+    }
+
+    /// Makes `get` of a stored item answer `AuthenticationRequired`, as the
+    /// Android store does until the biometric prompt passed (D218).
+    pub fn set_requires_authentication(&self, required: bool) {
+        guard(&self.state).requires_authentication = required;
     }
 
     pub fn is_available(&self) -> bool {
@@ -116,7 +125,12 @@ impl SecretStore for MemorySecretStore {
         if !state.available {
             return Err(SecretStoreError::Unavailable);
         }
-        Ok(state.items.get(account).map(boxed_copy))
+        match state.items.get(account) {
+            Some(_) if state.requires_authentication => {
+                Err(SecretStoreError::AuthenticationRequired)
+            }
+            item => Ok(item.map(boxed_copy)),
+        }
     }
 
     fn set(&self, account: &str, secret: &SecretBox<[u8; 32]>) -> Result<(), SecretStoreError> {

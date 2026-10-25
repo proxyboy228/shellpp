@@ -1796,8 +1796,15 @@ impl Core {
                 .filter(|context| context.device_row.is_some())
                 .map(|context| context.db_id)
         };
-        let device_wrap_key = remembered.and_then(|db_id| {
-            self.fetch_device_key(&db_id)
+        let device_read = remembered.map(|db_id| (db_id, self.read_device_key(&db_id)));
+        // A key behind the biometric prompt that was not passed (D218) is
+        // not lost: the option is not marked lost below.
+        let device_needs_authentication = matches!(
+            device_read,
+            Some((_, lock_ops::DeviceKeyRead::NeedsAuthentication))
+        );
+        let device_wrap_key = device_read.and_then(|(db_id, read)| {
+            read.key()
                 .map(|key| crypto::derive_device_wrap_key(&key, &db_id))
         });
         // D184, residual 2 (D197): the generation this device synced with
@@ -1917,8 +1924,12 @@ impl Core {
             state.cursor = 0;
             state.resync_classes = sel.classes.clone();
             vault_row.current_epoch = epoch;
-            // Without the device key the option goes off, with a note.
-            let remember_lost = epoch > local_epoch && remembered.is_some() && device_row.is_none();
+            // Without the device key the option goes off, with a note; a key
+            // that needs the user's authentication (D218) is not lost.
+            let remember_lost = epoch > local_epoch
+                && remembered.is_some()
+                && device_row.is_none()
+                && !device_needs_authentication;
             let written = inner.store.write(|tx| {
                 for row in &new_rows {
                     tx.key_wrap_put(row)?;

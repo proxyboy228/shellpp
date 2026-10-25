@@ -181,30 +181,41 @@ passphrases, prompt answers and the `secrets` of records cross the boundary.
 
 The core's `SecretStore` (`crates/core/src/platform/mod.rs`) keeps the
 32-byte device key per account (`device-key:<db_id>`), which the core uses
-**at launch only** to unlock without the master password, and also reads
-during rotations, rebinds, key changes and recoveries
-(docs/architecture.md 5.2; docs/security.md, RR8).
+to unlock without the master password, and also reads during rotations,
+rebinds, key changes and recoveries (docs/architecture.md 5.2;
+docs/security.md, RR8). On Android the core takes it at launch and after a
+lock (D218).
 
 - **Default: nothing stored.** The owner unlocks with the master password
   (D211).
-- **Fingerprint unlock** (an option, off by default, D211) is "remember on
-  this device" behind the system's biometric prompt [decision]:
-  - The device key is encrypted with an AES-256-GCM key generated in the
-    `AndroidKeyStore` (never exported, hardware-backed where the phone has
-    it, no user-authentication binding), and the ciphertext with its IV is
-    kept in the app's private storage. The core's reads during rotations
-    and rebinds then work without a prompt, as the desktop's keychain does.
-  - At a cold start the app shows the `BiometricPrompt` (`BIOMETRIC_STRONG`)
-    first and asks the core for the device unlock only after it succeeds; a
-    failure or "Use password" leaves the password field.
-  - After a lock (auto-lock, "Lock") the password is asked, as on the
-    desktop: the core uses the device key at launch only (RR8). A biometric
-    unlock after a lock needs a change of the core's rule and is the
-    owner's decision for the first version's runs.
-  - The biometric prompt is an app-level gate: like the desktop's keychain,
-    the stored key is readable by the app's own process. An attacker with
-    code in the app's process is outside what it protects (A2).
-  - Turning the option off deletes the entry and the Keystore key.
+- **Fingerprint unlock** (Settings → Security, off by default; D211, D218)
+  binds the device key to the fingerprint cryptographically:
+  - The device key is encrypted with an RSA key pair generated in the
+    `AndroidKeyStore` (2048 bits, OAEP with SHA-256; in StrongBox where the
+    phone has one): its private key needs `BIOMETRIC_STRONG` for every use
+    and becomes invalid when a fingerprint is added. The ciphertext is kept
+    in the app's private storage, outside backups. The public key encrypts
+    without a prompt, so turning the option on, a sign-in's new device key
+    (D195) and the new key after a rotation need no prompt; only reading
+    the key does [decision].
+  - Reading: the app shows the `BiometricPrompt` with the private key's
+    cipher; when it passes, the app decrypts the key and holds it for the
+    one step that asked (an unlock, a sign-in, a recovery, a key change),
+    then wipes it. Without a passed prompt the store answers
+    "authentication required" (`SecretStoreError::AuthenticationRequired`):
+    the core keeps the item and does not mark the option lost, and a
+    rotation goes on without a `device` row for its new epoch.
+  - Before the steps that may read the key (a sign-in again after a
+    rotation made on another device, a recovery, a key change) the app asks
+    for the fingerprint first. Cancelled: the step goes on with the master
+    password and the option stays on; the new epoch has no `device` row, so
+    the next unlock asks for the password once, and after it the app wraps
+    a new device key [decision].
+  - The master password is asked when the Keystore key became invalid (a
+    fingerprint added: the option goes off and Settings says why), when the
+    system locked biometrics out after failed attempts, and once every 7
+    days since the last password unlock [decision] (D218).
+  - Turning the option off deletes the item and the Keystore key pair.
 - The 32 bytes cross JNI as a byte array that both sides wipe after use;
   they are never logged.
 

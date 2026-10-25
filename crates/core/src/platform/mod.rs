@@ -60,12 +60,20 @@ pub enum SecretStoreError {
     Malformed,
     #[error("secret store failure: {0}")]
     Backend(String),
+    /// The item is there, but reading it needs the user's authentication
+    /// first (Android: the biometric prompt, D218). Not a lost key: the core
+    /// keeps the item and its `device` row.
+    #[error("secret store needs the user's authentication")]
+    AuthenticationRequired,
 }
 
 /// OS keychain access for the device key (docs/architecture.md, section 5.2).
 /// Blocking; the host calls it from a blocking thread. Service `shellpp`,
 /// account `device-key:<db_id>` ([`crate::ids::keychain_account`]); the
 /// implementation stores the 32 bytes as base64url without padding.
+///
+/// Only `get` may answer [`SecretStoreError::AuthenticationRequired`]
+/// (Android, D218); `set` and `delete` never ask the user.
 pub trait SecretStore: Send + Sync {
     fn availability(&self) -> Availability;
     fn get(&self, account: &str) -> Result<Option<SecretBox<[u8; 32]>>, SecretStoreError>;

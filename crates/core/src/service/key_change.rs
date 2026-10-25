@@ -17,7 +17,7 @@ use shellpp_sync_api::api::{self as wire, B64, code};
 use uuid::Uuid;
 
 use super::lock_ops;
-use super::lock_ops::KeyContext;
+use super::lock_ops::{DeviceKeyRead, KeyContext};
 use super::sync_ops::{self, Link, key_b64, wire_kdf, wire_rotation};
 use super::{Core, Inner, checkpoint};
 use crate::crypto::{self, Key32};
@@ -550,8 +550,11 @@ impl Core {
             let guard = self.inner();
             lock_ops::key_context(&guard.store).map_err(NotAccepted)?
         };
-        let device_wrap_key = self.rotation_device_key(&context);
-        let device_lost = context.device_row.is_some() && device_wrap_key.is_none();
+        let device_read = self.read_rotation_device_key(&context);
+        let device_lost = DeviceKeyRead::lost(device_read.as_ref());
+        let device_wrap_key = device_read
+            .and_then(DeviceKeyRead::key)
+            .map(|key| crypto::derive_device_wrap_key(&key, &context.db_id));
         let recovery_kek = crypto::derive_recovery_kek(&pending.recovery_key);
         let recovery_auth_key = crypto::derive_recovery_auth_key(&pending.recovery_key, &origin);
         let now = self.now();
@@ -703,11 +706,9 @@ impl Core {
         // device key fetched below, and a lost device key is deleted last.
         let _remember = self.remember_lock();
         let context = &pending.context;
-        let device_key = context
-            .device_row
-            .as_ref()
-            .and_then(|_| self.fetch_device_key(&context.db_id));
-        let device_lost = context.device_row.is_some() && device_key.is_none();
+        let device_read = self.read_rotation_device_key(context);
+        let device_lost = DeviceKeyRead::lost(device_read.as_ref());
+        let device_key = device_read.and_then(DeviceKeyRead::key);
         let recovery_kek = crypto::derive_recovery_kek(&pending.recovery_key);
         let device_wrap_key = device_key
             .as_ref()

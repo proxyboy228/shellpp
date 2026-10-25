@@ -121,7 +121,8 @@ struct Inner {
     recovery_grant: RecoveryGrant,
     /// State version of the last emitted event.
     v: u64,
-    /// The device key is used at launch only, never after a lock (UI 13.2).
+    /// The device key is used at launch only, never after a lock (UI 13.2);
+    /// on Android after a lock too (D218).
     device_unlock_allowed: bool,
     ids: IdGenerator,
     /// Stage 2: connection log entries of this process and ends waiting for

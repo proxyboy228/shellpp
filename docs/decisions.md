@@ -2488,3 +2488,27 @@ Status: run 13 (plan, section 3.9; ROADMAP 2.2, "Keys").
 **Amended after the review of run 13:** the key in the grant a first run opens (`recovery_key_granted`) is refused in local mode too. The set-aside copies are ordered by stamp and number (`-2` after the first copy of that second, `-10` after `-2`), read with the core's lock released, and a copy without a `-wal` beside it is opened immutable through a `file:` URI, so reading leaves no `-wal` or `-shm` that a read-only connection could not remove; a path a URI cannot name here (a network share) and a URI that does not open fall back to the plain read-only open. Tested: the order, unbound and `-failed` copies passed over, no side files left, a path with a space, `%`, `#` and a letter outside ASCII, a copy whose rows are only in its `-wal`. A device out of its account still gets `wrong_state` for Show and `account_binding` for a reissue (not unified: the interface hides both in local mode).
 
 **Spec impact:** docs/security.md (unlock and the recovery key), docs/sync-protocol.md 4.2, ROADMAP 2.2.
+
+
+### 218. The owner's answers to run 13's report: fingerprint unlock after a lock behind the Keystore, the app id, the verifier's Kotlin part (run 14)
+
+Status: run 14 (plan, section 2, and the owner's answers before the start of the run).
+
+**Context.** Run 13's report asked whether fingerprint unlock should work after a lock (the core took the device key at launch only, RR8, and D213 wrapped it with a Keystore key without an authentication binding so that the core could read it during rotations and rebinds), which app id and signing key the first version takes, and left open where the vendored Kotlin part of `rustls-platform-verifier` comes from (D213 vendors it, its Maven repository is on GitHub).
+
+**Decision:**
+
+- **main red in the morning**: continuing without stopping was right; main moves only with a green final check.
+- **Fingerprint unlock on Android** (M1, with the unlock):
+  - The core takes the device key after a lock (auto-lock, Lock) too, not only at launch: RR8 changes for Android only (`OsKind::Android`); the desktop keeps it.
+  - The device key is wrapped by a key of the Android Keystore that needs strong biometrics (`BIOMETRIC_STRONG`) for every use, becomes invalid when a fingerprint is added, and lives in StrongBox where the phone has one: a cryptographic binding, not only a prompt. It is an RSA key pair with OAEP [decision]: the public key wraps without a prompt (turning the option on, a sign-in's new device key, D195), only reading needs the fingerprint.
+  - The master password is asked when the Keystore key became invalid, when the system locked biometrics out after failed attempts, and once every 7 days so that it is not forgotten [decision].
+  - Off by default (D211); turned on in Settings → Security, which M1 builds with the unlock.
+  - `SecretStore` has an error of its own, `AuthenticationRequired`, apart from a missing or unreadable key: the core never deletes the item or marks the option lost because a fingerprint prompt was not passed (tested: a device unlock and a local recovery while the key needs the prompt keep the item and leave the option not lost; the rebind of a sign-in follows the same rule).
+  - Before the steps that may read the device key (a sign-in again after a rotation made on another device, a recovery, a key change) the app asks for the fingerprint. Cancelled: the step goes on with the master password and the option stays on. The master password cannot stand in for the device key where a new vault key has to be wrapped for the device: the new epoch has no `device` row, so the next unlock asks for the password once and the app then wraps a new device key [decision]. The option goes off only when the step cannot be done otherwise without the device key (the Keystore key became invalid), and Settings says why.
+- **The app id** is `io.github.proxyboy228.shellpp` (the owner's GitHub account; the project has no domain yet), changed in this run while the app is installed nowhere. The release signing key is the owner's to make before M5, as the minisign key; the agent never makes it, and the debug key of this machine signs until then. `docs/mobile/README.md` says that a new id or signing key means a new install whose local data comes back through sync, and how the owner makes and keeps the key.
+- **The verifier's Kotlin part** is vendored from the source of the upstream repository (rustls/rustls-platform-verifier on GitHub) at the tag of the version 0.7.1 needs (the Android component 0.2.0), with the commit, its URL and the license (MIT or Apache-2.0) recorded, under `apps/android/third_party/`, with its line in THIRD_PARTY_NOTICES; Gradle still takes dependencies from Google Maven and Maven Central only. No certificate checking of our own.
+- **Android 17's local network permission**: noted; the owner's sync server is at a public domain and does not need it, servers at home do.
+- **The visibility of the terminal model's internals** stays technical debt, to be narrowed when that code is touched.
+
+**Spec impact:** docs/security.md (unlock, "Remember on this device", RR8), docs/mobile/architecture.md 4, docs/mobile/ui-spec.md 5 and 12, docs/mobile/README.md, ROADMAP 3.1 and 5.
