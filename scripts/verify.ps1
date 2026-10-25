@@ -13,10 +13,11 @@
     branch, with the image, config and ignore file of the Secret scan
     workflow (run 12); a finding fails the step;
   - cargo deny (licenses, bans, advisories, sources) for both workspaces,
-    with the configs of CI's "Licenses and advisories" job (run 13). The
-    advisory database is fetched first; without the network that step only
-    warns and the checks use the copy already downloaded, and with no copy
-    at all they fail;
+    with the configs and the cargo-deny version of CI's "Licenses and
+    advisories" job (run 13). The advisory database and cargo's index (for
+    yanked crates) are refreshed first; without the network those steps only
+    warn and the checks use the copies already downloaded, and with no
+    database at all they fail;
   - the root workspace: rustfmt, clippy (default and all features), clippy
     of the libraries and binaries alone, the tests
     (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all features;
@@ -38,7 +39,8 @@
   lock file fails the step instead of being rewritten; every test step runs
   with --no-fail-fast, so the failures of every test binary show. A step
   that fails does not stop the others; a step that may only warn (the
-  advisory fetch) shows WARNING instead and is named in the summary. The
+  advisory and index refreshes) shows WARNING instead and is named in the
+  summary. The
   output goes to
   <target>\verify\<step>.log and <step>.err.log; the summary to the
   console.
@@ -156,9 +158,22 @@ $gitleaks = @('run', '--rm', '--network', 'none', '-v', "${repo}:/src:ro", '-v',
 # (deny.toml, server/deny.toml). Both use RustSec's default advisory
 # database, so one fetch serves both checks; the checks then run offline,
 # so a missing network costs only the fetch (a warning) and a missing
-# database fails them (D205, run 13).
+# database fails them (D205, run 13). The yanked-crate check reads cargo's
+# cached index, which a resolve never refreshes for crates already locked:
+# `cargo update --dry-run` refreshes it (the lock file stays as it is), as
+# CI's fresh index is (review of run 13). The same cargo-deny as CI's.
+$denyVersion = '0.20.2'
 $denyFetchWarning = 'could not fetch the advisory database (no network?): the deny steps use the copy already downloaded'
-$denyProblem = if (Get-Command cargo-deny -ErrorAction SilentlyContinue) { '' } else { 'cargo-deny is not installed (CI uses 0.20.2: cargo install --locked cargo-deny@0.20.2)' }
+$denyIndexWarning = 'could not refresh the crates.io index (no network?): yanked crates are checked against the cached index'
+$denyProblem = ''
+if (-not (Get-Command cargo-deny -ErrorAction SilentlyContinue)) {
+    $denyProblem = "cargo-deny is not installed (CI uses $denyVersion`: cargo install --locked cargo-deny@$denyVersion)"
+} else {
+    $installed = "$(& cargo-deny --version 2>$null)".Trim()
+    if ($installed -ne "cargo-deny $denyVersion") {
+        $denyProblem = "found '$installed', CI uses $denyVersion`: cargo install --locked cargo-deny@$denyVersion"
+    }
+}
 
 # The "mobile-ready" check (docs/architecture.md, 2.3): the crates a phone
 # client shares build for the Samsung S25's target with the NDK's clang
@@ -194,6 +209,8 @@ $steps = @(
     (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
     (Step 'gitleaks' @{} $gitleaks 'docker' $gitleaksProblem),
     (Step 'deny-fetch' @{} @('deny', 'fetch', 'db') -Problem $denyProblem -Warning $denyFetchWarning),
+    (Step 'deny-index' @{} @('update', '--dry-run') -Warning $denyIndexWarning),
+    (Step 'deny-index-server' @{} (@('update', '--dry-run') + $server) -Warning $denyIndexWarning),
     (Step 'deny' @{} @('deny', '--locked', '--offline', 'check') -Problem $denyProblem),
     (Step 'deny-server' @{} (@('deny', '--locked', '--offline') + $server + @('check')) -Problem $denyProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),

@@ -270,7 +270,10 @@ mod unix {
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         // SAFETY: `tzset` reads `TZ` and the zone files into the library's
         // own state; `localtime_r` reads `seconds` and writes `tm`, locals
-        // that outlive the call, and returns null when it fails.
+        // that outlive the call, and returns null when it fails. Reading
+        // `TZ` races only with a `setenv` on another thread: the app and
+        // its crates never change the environment (`set_var` is `unsafe`
+        // and the workspace denies unsafe code outside platform modules).
         let converted = unsafe {
             tzset();
             libc::localtime_r(&seconds, &mut tm)
@@ -386,7 +389,7 @@ mod unix {
                     .unwrap();
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 assert!(
-                    output.status.success() && stdout.contains("1 passed"),
+                    output.status.success() && stdout.contains("test result: ok. 1 passed"),
                     "TZ={tz}:\n{stdout}\n{}",
                     String::from_utf8_lossy(&output.stderr)
                 );

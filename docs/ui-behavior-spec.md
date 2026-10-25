@@ -239,8 +239,9 @@ Additionally:
 - Records keep their UTC timestamps (`docs/data-model.md`, 1.1); exports write them
   as they are.
 - On Linux and macOS the zone is the C library's (`TZ`, else `/etc/localtime`) and
-  dates are written as ISO dates ("2026-10-21 18:04"; D210). Where the platform's
-  zone cannot be read, or is UTC, times are shown in UTC and say so ("18:04 UTC").
+  dates are written as ISO dates ("2026-10-21 18:04"; D210); there, and on other
+  platforms outside Windows, a zone that cannot be read, or is UTC, shows times in UTC
+  and says so ("18:04 UTC").
 
 ---
 

@@ -6,9 +6,10 @@
 //! On Windows the zone (with the daylight saving rules of each date) and
 //! the format come from the system ([`crate::platform::local_time`]); on
 //! Linux and macOS the zone comes from the C library and dates are written
-//! as ISO dates ("2026-10-21 18:04"; D210). Where the zone cannot be read,
-//! or is UTC, the time stays in UTC and says so ("18:04 UTC"). Tests fix the
-//! zone and the format per thread ([`set_fixed_display`]).
+//! as ISO dates ("2026-10-21 18:04"; D210), and where the zone cannot be
+//! read, or is UTC, the time stays in UTC and says so ("18:04 UTC"), as it
+//! does on other platforms. Tests fix the zone and the format per thread
+//! ([`set_fixed_display`]).
 
 use std::cell::Cell;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -327,10 +328,12 @@ mod tests {
         let moment = at("2026-10-21T12:00:00.000Z");
         assert!(!date(moment).is_empty());
         let says_utc = time(moment).contains("UTC");
-        if cfg!(windows) {
-            assert!(!says_utc);
-        } else if !cfg!(any(target_os = "linux", target_os = "macos")) {
-            assert!(says_utc);
-        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert_eq!(
+            says_utc,
+            crate::platform::local_time::to_local(moment).is_none()
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        assert_eq!(says_utc, !cfg!(windows));
     }
 }
