@@ -1,6 +1,7 @@
-//! The terminal palettes of the prototype: the desktop's built-in themes
-//! Graphite (dark) and Paper (light), read from the desktop's theme files
-//! (design-system 4.1, 4.2, 7.2), as plain RGB for the model.
+//! The terminal palettes: the desktop's built-in themes, read from its theme
+//! files (design-system 4.1, 4.2, 7.2), as plain RGB for the model.
+//! Graphite (dark) and Paper (light) follow the system's mode unless
+//! Settings → Font & colours or the host picks another (run 15).
 
 use alacritty_terminal::vte::ansi::Rgb;
 use serde::Deserialize;
@@ -8,6 +9,44 @@ use shellpp_terminal::colors::{Palette, PaletteColors, Translucent};
 
 const GRAPHITE: &str = include_str!("../../../desktop/src/theme/terminal/graphite.json");
 const PAPER: &str = include_str!("../../../desktop/src/theme/terminal/paper.json");
+
+/// Every built-in theme by its slug (`shellpp_core::model::fields::BUILTIN_THEMES`).
+const BUILT_IN: &[(&str, &str)] = &[
+    ("graphite", GRAPHITE),
+    ("paper", PAPER),
+    (
+        "dracula",
+        include_str!("../../../desktop/src/theme/terminal/dracula.json"),
+    ),
+    (
+        "nord",
+        include_str!("../../../desktop/src/theme/terminal/nord.json"),
+    ),
+    (
+        "solarized-dark",
+        include_str!("../../../desktop/src/theme/terminal/solarized-dark.json"),
+    ),
+    (
+        "solarized-light",
+        include_str!("../../../desktop/src/theme/terminal/solarized-light.json"),
+    ),
+    (
+        "gruvbox-dark",
+        include_str!("../../../desktop/src/theme/terminal/gruvbox-dark.json"),
+    ),
+    (
+        "tokyo-night",
+        include_str!("../../../desktop/src/theme/terminal/tokyo-night.json"),
+    ),
+    (
+        "catppuccin-mocha",
+        include_str!("../../../desktop/src/theme/terminal/catppuccin-mocha.json"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../../../desktop/src/theme/terminal/catppuccin-latte.json"),
+    ),
+];
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +149,14 @@ fn palette_of(json: &str) -> Option<Palette> {
     }))
 }
 
+/// The palette of the built-in theme `slug`, else of the dark (Graphite) or
+/// light (Paper) one.
+pub fn palette_for(slug: Option<&str>, dark: bool) -> Palette {
+    slug.and_then(|slug| BUILT_IN.iter().find(|(name, _)| *name == slug))
+        .and_then(|(_, json)| palette_of(json))
+        .unwrap_or_else(|| palette(dark))
+}
+
 /// The palette of the dark (Graphite) or light (Paper) built-in theme.
 pub fn palette(dark: bool) -> Palette {
     let json = if dark { GRAPHITE } else { PAPER };
@@ -124,6 +171,21 @@ mod tests {
 
     #[test]
     fn the_built_in_themes_read() {
+        for (slug, json) in BUILT_IN {
+            assert!(palette_of(json).is_some(), "{slug}");
+        }
+        assert_eq!(
+            BUILT_IN.len(),
+            shellpp_core::model::fields::BUILTIN_THEMES.len()
+        );
+        assert_ne!(
+            palette_for(Some("dracula"), true).background(),
+            palette(true).background()
+        );
+        assert_eq!(
+            palette_for(Some("no-such-theme"), false).background(),
+            palette(false).background()
+        );
         assert!(palette_of(GRAPHITE).is_some());
         assert!(palette_of(PAPER).is_some());
         assert_ne!(palette(true).background(), palette(false).background());

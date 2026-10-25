@@ -77,8 +77,9 @@ struct IdentityJson {
     username: String,
     #[serde(default)]
     key_id: Option<Uuid>,
+    /// Set when given; `clear_password` removes it; neither keeps it.
     #[serde(default)]
-    password: Option<Option<SecretString>>,
+    password: Option<SecretString>,
     #[serde(default)]
     clear_password: bool,
 }
@@ -452,10 +453,7 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
                 .ok_or(CoreError::Locked)?;
             let password = match (input.clear_password, input.password) {
                 (true, _) => shellpp_core::model::identity::PasswordChange::Clear,
-                (false, Some(Some(value))) => {
-                    shellpp_core::model::identity::PasswordChange::Set(value)
-                }
-                (false, Some(None)) => shellpp_core::model::identity::PasswordChange::Clear,
+                (false, Some(value)) => shellpp_core::model::identity::PasswordChange::Set(value),
                 (false, None) => shellpp_core::model::identity::PasswordChange::Keep,
             };
             let view = core.identity_save(shellpp_core::service::keychain::IdentitySaveInput {

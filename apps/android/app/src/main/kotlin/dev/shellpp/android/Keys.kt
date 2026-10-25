@@ -130,150 +130,33 @@ fun generateKey(input: JSONObject, passphrase: CharArray): String {
     return made.getJSONObject("key").getString("record_id")
 }
 
-/** The Keychain (UI spec 7): the keys, Generate, Import from file, a key's screen. */
-@OptIn(ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
-@Composable
-fun KeychainScreen(app: App, activity: MainActivity, nav: Nav) {
-    val changes by app.changes.collectAsState()
-    var refresh by remember { mutableStateOf(0) }
-    var adding by remember { mutableStateOf(false) }
-    var generating by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf<CharArray?>(null) }
-    var opened by remember { mutableStateOf<JSONObject?>(null) }
-    val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
-    val keys by produceState(listOf<JSONObject>(), changes, refresh) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                val list = Core.array("keys_list")
-                (0 until list.length()).map { list.getJSONObject(it) }.sortedBy { it.optString("label").lowercase() }
-            } catch (error: Exception) {
-                emptyList()
-            }
+/**
+ * The text of a picked key file as chars, never a String; the bytes are
+ * wiped (architecture 6.4). Null when it cannot be read or is too big to be
+ * a key. Blocking: off the main thread.
+ */
+fun readKeyFile(context: android.content.Context, uri: android.net.Uri): CharArray? = try {
+    context.contentResolver.openInputStream(uri)?.use { stream ->
+        val limit = 256 * 1024
+        val buffer = ByteArray(limit + 1)
+        var read = 0
+        while (read < buffer.size) {
+            val n = stream.read(buffer, read, buffer.size - read)
+            if (n < 0) break
+            read += n
         }
-    }
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            // The key file's text as chars, never a String; the bytes are wiped
-            // (architecture 6.4).
-            val text = withContext(Dispatchers.IO) {
-                try {
-                    activity.contentResolver.openInputStream(uri)?.use { stream ->
-                        val limit = 256 * 1024
-                        val buffer = ByteArray(limit + 1)
-                        var read = 0
-                        while (read < buffer.size) {
-                            val n = stream.read(buffer, read, buffer.size - read)
-                            if (n < 0) break
-                            read += n
-                        }
-                        // A key file is small; anything big is not one.
-                        val chars = if (read > limit) {
-                            null
-                        } else {
-                            val decoded = Charsets.UTF_8.decode(java.nio.ByteBuffer.wrap(buffer, 0, read))
-                            CharArray(decoded.remaining()).also { decoded.get(it); if (decoded.hasArray()) decoded.array().fill('\u0000') }
-                        }
-                        buffer.fill(0)
-                        chars
-                    }
-                } catch (error: Exception) {
-                    null
-                }
-            }
-            if (text == null) snackbar.showSnackbar("The file could not be read as a key.") else importing = text
+        // A key file is small; anything big is not one.
+        val chars = if (read > limit) {
+            null
+        } else {
+            val decoded = Charsets.UTF_8.decode(java.nio.ByteBuffer.wrap(buffer, 0, read))
+            CharArray(decoded.remaining()).also { decoded.get(it); if (decoded.hasArray()) decoded.array().fill('\u0000') }
         }
+        buffer.fill(0)
+        chars
     }
-
-    // The private key text of an import in progress goes when the screen goes.
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        onDispose { importing?.fill('\u0000') }
-    }
-    opened?.let { key ->
-        KeyScreen(app, activity, key, onBack = { opened = null; refresh += 1 }, onDeleted = { refs, label ->
-            // Here, not in the key's screen, which is gone by then: the Undo
-            // must outlive it (review of run 14).
-            opened = null
-            scope.launch {
-                val done = withContext(Dispatchers.IO) { runCatching { Core.call("record_delete", refs) }.isSuccess }
-                refresh += 1
-                if (done) {
-                    val answer = snackbar.showSnackbar("Deleted “$label”", "Undo", duration = SnackbarDuration.Long)
-                    if (answer == SnackbarResult.ActionPerformed) {
-                        withContext(Dispatchers.IO) { runCatching { Core.call("record_restore", refs) } }
-                        refresh += 1
-                    }
-                }
-            }
-        })
-        return
-    }
-    Page(
-        "Keychain", onBack = null, snackbar = snackbar,
-        fab = {
-            Box {
-                FloatingActionButton(onClick = { adding = true }, modifier = Modifier.testTag("key_add")) {
-                    Icon(Icons.Filled.Add, contentDescription = "New key")
-                }
-                DropdownMenu(expanded = adding, onDismissRequest = { adding = false }) {
-                    DropdownMenuItem(text = { Text("Generate") }, onClick = { adding = false; generating = true })
-                    DropdownMenuItem(text = { Text("Import from file") }, onClick = { adding = false; pickFile.launch(arrayOf("*/*")) })
-                }
-            }
-        },
-    ) {
-        if (keys.isEmpty()) {
-            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("No keys yet", style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = { generating = true }, modifier = Modifier.testTag("key_generate_empty")) { Text("Generate") }
-                TextButton(onClick = { pickFile.launch(arrayOf("*/*")) }) { Text("Import") }
-            }
-            return@Page
-        }
-        LazyColumn {
-            items(keys, key = { it.optString("record_id") }) { key ->
-                Column(
-                    Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable { opened = key }
-                        .padding(horizontal = 16.dp, vertical = 10.dp).testTag("key_" + key.optString("label")),
-                ) {
-                    Text(key.optString("label"), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        algorithmName(key.optString("algorithm")) + " · " + shortFingerprint(key.optString("fingerprint")),
-                        color = Tokens.textSecondary, style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
-            }
-        }
-    }
-    if (generating) {
-        GenerateKeyDialog(onDismiss = { generating = false }) { input, passphrase ->
-            generating = false
-            scope.launch {
-                val failure = withContext(Dispatchers.IO) {
-                    try {
-                        generateKey(input, passphrase)
-                        null
-                    } catch (error: CoreException) {
-                        error.message
-                    } catch (error: Exception) {
-                        "The key was not made."
-                    }
-                }
-                refresh += 1
-                failure?.let { snackbar.showSnackbar(it) }
-            }
-        }
-    }
-    importing?.let { text ->
-        ImportKeyDialog(text, onDone = { message ->
-            text.fill('\u0000')
-            importing = null
-            refresh += 1
-            message?.let { scope.launch { snackbar.showSnackbar(it) } }
-        })
-    }
+} catch (error: Exception) {
+    null
 }
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -322,7 +205,7 @@ fun GenerateKeyDialog(onDismiss: () -> Unit, onGenerate: (JSONObject, CharArray)
 
 /** Imports the text of a picked key file; asks for its passphrase when it has one (UI spec 7). */
 @Composable
-private fun ImportKeyDialog(text: CharArray, onDone: (String?) -> Unit) {
+internal fun ImportKeyDialog(text: CharArray, onDone: (String?) -> Unit) {
     var passphrase by remember { mutableStateOf("") }
     var save by remember { mutableStateOf(false) }
     var askPassphrase by remember { mutableStateOf(false) }
@@ -392,7 +275,7 @@ private fun ImportKeyDialog(text: CharArray, onDone: (String?) -> Unit) {
 
 /** A key's screen (UI spec 7): label, type, fingerprint, public key (Copy, Share), its hosts, Delete. */
 @Composable
-private fun KeyScreen(
+internal fun KeyScreen(
     app: App,
     activity: MainActivity,
     key: JSONObject,
@@ -470,102 +353,6 @@ private fun KeyScreen(
                 }) { Text("Delete", color = Tokens.danger) }
             },
             dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } },
-        )
-    }
-}
-
-/** Known hosts (UI spec 8): the list with search, a row's fingerprint and Remove with Undo. */
-@Composable
-fun KnownHostsScreen(app: App, nav: Nav) {
-    val onClose = { nav.pop(); Unit }
-    var refresh by remember { mutableStateOf(0) }
-    var search by remember { mutableStateOf("") }
-    var opened by remember { mutableStateOf<JSONObject?>(null) }
-    var removing by remember { mutableStateOf<JSONObject?>(null) }
-    val snackbar = remember { SnackbarHostState() }
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    val hosts by produceState(listOf<JSONObject>(), refresh) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                val list = Core.array("known_hosts_list")
-                (0 until list.length()).map { list.getJSONObject(it) }
-            } catch (error: Exception) {
-                emptyList()
-            }
-        }
-    }
-    fun name(entry: JSONObject): String {
-        if (entry.optBoolean("hashed")) return "hashed host"
-        // `display_address` already carries a port that is not 22 (`[host]:port`).
-        entry.text("display_address")?.let { return it }
-        val host = entry.optString("host")
-        val port = entry.optInt("port", 22)
-        return if (port == 22 || entry.isNull("port")) host else "[$host]:$port"
-    }
-    opened?.let { entry ->
-        Page(name(entry), onBack = { opened = null }) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Key type: " + entry.optString("key_type"))
-                Text("SHA-256 fingerprint", color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
-                Text(entry.optString("fingerprint"), modifier = Modifier.testTag("known_fingerprint"))
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(entry.optString("fingerprint"))) }) { Text("Copy") }
-                Text("First seen " + entry.optString("created_at").take(16).replace('T', ' '), color = Tokens.textSecondary)
-                if (entry.optBoolean("revoked")) Text("Revoked: connections to this host are refused.", color = Tokens.danger)
-                TextButton(onClick = { removing = entry }, modifier = Modifier.testTag("known_remove")) { Text("Remove", color = Tokens.danger) }
-            }
-        }
-    }
-    if (opened == null) {
-        Page("Known hosts", onBack = onClose, snackbar = snackbar) {
-            OutlinedTextField(search, { search = it }, placeholder = { Text("Search by host") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
-            val shown = hosts.filter { search.isBlank() || name(it).contains(search.trim(), ignoreCase = true) }
-            if (shown.isEmpty()) {
-                Text("No known hosts yet", Modifier.padding(24.dp), color = Tokens.textSecondary)
-                return@Page
-            }
-            LazyColumn {
-                items(shown, key = { it.optString("record_id") }) { entry ->
-                    Column(
-                        Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable { opened = entry }
-                            .padding(horizontal = 16.dp, vertical = 10.dp).testTag("known_" + name(entry)),
-                    ) {
-                        Text(name(entry), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            entry.optString("key_type") + " · " + shortFingerprint(entry.optString("fingerprint")) + " · " +
-                                entry.optString("created_at").take(10),
-                            color = Tokens.textSecondary, style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
-                }
-            }
-        }
-    }
-    removing?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { removing = null },
-            title = { Text("Remove this known host?") },
-            text = { Text("The next connection to ${name(entry)} asks about its key again.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    removing = null
-                    opened = null
-                    scope.launch {
-                        val refs = JSONObject().put("vault_id", entry.optString("vault_id")).put("record_ids", JSONArray().put(entry.optString("record_id")))
-                        val done = withContext(Dispatchers.IO) { runCatching { Core.call("known_host_remove", refs) }.isSuccess }
-                        refresh += 1
-                        if (done) {
-                            val answer = snackbar.showSnackbar("Removed ${name(entry)}", "Undo", duration = SnackbarDuration.Long)
-                            if (answer == SnackbarResult.ActionPerformed) {
-                                withContext(Dispatchers.IO) { runCatching { Core.call("known_host_restore", refs) } }
-                                refresh += 1
-                            }
-                        }
-                    }
-                }) { Text("Remove", color = Tokens.danger) }
-            },
-            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
     }
 }

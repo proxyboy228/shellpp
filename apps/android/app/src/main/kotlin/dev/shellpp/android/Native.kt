@@ -61,6 +61,9 @@ object Native {
     @JvmStatic external fun scroll(session: Long, lines: Int)
     @JvmStatic external fun close(session: Long)
 
+    /** Settings → Font & colours: the theme of new terminals ("" follows the system). */
+    @JvmStatic external fun setTheme(slug: String)
+
     /** The network came back: dropped sessions try again now (M2). */
     @JvmStatic external fun reconnectDropped(): Int
     @JvmStatic external fun openSessions(): Int

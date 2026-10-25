@@ -46,8 +46,12 @@ sealed interface Page {
         override val withBar get() = true
     }
 
-    /** The hosts of the vault at [path] (empty: the top level), one page per group level. */
-    data class Hosts(val path: List<Record>) : Page {
+    /**
+     * The hosts of the vault at [path] (empty: the top level), one page per
+     * group level; [opened] keeps a page opened again apart from the one
+     * before (its search and scroll start afresh).
+     */
+    data class Hosts(val path: List<Record>, val opened: Long = System.nanoTime()) : Page {
         override val withBar get() = true
     }
 
@@ -128,6 +132,8 @@ fun MainScreen(app: App, activity: MainActivity) {
     val holder = rememberSaveableStateHolder()
     val top = nav.top
     BackHandler(enabled = nav.stack.size > 1) { nav.pop() }
+    // Back at the first page of Connections or Settings goes to Vaults.
+    BackHandler(enabled = nav.stack.size == 1 && nav.tab != Tab.Vaults) { nav.tab = Tab.Vaults }
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
             // Each page keeps its scroll position and fields while others

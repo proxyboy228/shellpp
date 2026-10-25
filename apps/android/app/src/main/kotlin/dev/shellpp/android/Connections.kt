@@ -191,7 +191,7 @@ private fun QuickConnectField(query: String, onQuery: (String) -> Unit, enabled:
 private fun SessionCard(app: App, activity: MainActivity, view: JSONObject) {
     val id = view.optLong("id")
     val sftp = id in app.sftpSessions
-    val theme = terminalTheme(if (androidx.compose.foundation.isSystemInDarkTheme()) "graphite" else "paper") ?: TERMINAL_THEMES.first()
+    val theme = TerminalPrefs.theme(androidx.compose.ui.platform.LocalContext.current, androidx.compose.foundation.isSystemInDarkTheme())
     val recordId = view.optString("recordId").ifBlank { null }
     val mark by produceState(OsMark(null, null), recordId) { value = withContext(Dispatchers.IO) { hostMark(recordId) } }
     // A live preview: read again every second while the card shows.

@@ -126,7 +126,10 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         sftpView = ComposeView(this).apply {
             setContent {
                 ShellTheme {
-                    Box(Modifier.semantics { testTagsAsResourceId = true }) { SftpContent() }
+                    // Text in the theme's color, as inside a Scaffold.
+                    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides Tokens.text) {
+                        Box(Modifier.semantics { testTagsAsResourceId = true }) { SftpContent() }
+                    }
                 }
             }
         }
@@ -515,7 +518,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             )
         }
         val onTerminal = openingSftp == null && active !in app.sftpSessions
-        val theme = terminalTheme(if (isDark) "graphite" else "paper") ?: TERMINAL_THEMES.first()
+        val theme = TerminalPrefs.theme(this, isDark)
         val colors = if (onTerminal) {
             BarColors(theme.bg, Color(theme.foreground).copy(alpha = 0.10f), theme.fg, Tokens.accent, theme.fg.copy(alpha = 0.6f))
         } else {

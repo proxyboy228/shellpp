@@ -119,6 +119,8 @@ class App : Application() {
                 } catch (error: RuntimeException) {
                     android.util.Log.w("Shell++", "TLS setup failed")
                 }
+                // Settings → Font & colours: the theme of new terminals.
+                runCatching { Native.setTheme(TerminalPrefs.of(this).getString(TerminalPrefs.THEME, "") ?: "") }
                 ready = true
                 refreshLock()
                 pumpEvents()

@@ -130,7 +130,8 @@ fun JSONObject.with(path: String, value: Any?): JSONObject {
 
 /** Equal data, a missing member the same as null or "" (the core's own rule, D221). */
 fun sameData(a: Any?, b: Any?): Boolean {
-    fun empty(value: Any?) = value == null || value == JSONObject.NULL || value == ""
+    fun empty(value: Any?): Boolean = value == null || value == JSONObject.NULL || value == "" || value == false ||
+        (value is JSONObject && value.keys().asSequence().all { empty(value.opt(it)) })
     if (empty(a) && empty(b)) return true
     if (a is JSONObject && b is JSONObject) {
         val keys = a.keys().asSequence().toSet() + b.keys().asSequence().toSet()
@@ -193,10 +194,11 @@ private fun FormHeader(text: String) {
 /** The round button beside a field, in the accent (reference-2 1.2). */
 @Composable
 fun RoundAction(icon: ImageVector, description: String, tag: String, onClick: () -> Unit) {
-    Box(
-        Modifier.size(40.dp).clip(CircleShape).background(Tokens.accent).clickable(onClick = onClick).testTag(tag),
-        contentAlignment = Alignment.Center,
-    ) { Icon(icon, contentDescription = description, tint = Tokens.onAccent, modifier = Modifier.size(22.dp)) }
+    Box(Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onClick).testTag(tag), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(Tokens.accent), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = description, tint = Tokens.onAccent, modifier = Modifier.size(22.dp))
+        }
+    }
 }
 
 /**
@@ -250,7 +252,9 @@ private fun FormField(
                 modifier = Modifier.fillMaxWidth().testTag(tag),
             )
             // A read-only field opens its picker on a tap anywhere on it.
-            if (readOnly && onTap != null) Box(Modifier.matchParentSize().clickable(onClick = onTap).testTag(tag + "_tap"))
+            if (readOnly && onTap != null) {
+                Box(Modifier.matchParentSize().clickable(onClickLabel = "Choose $label", onClick = onTap).testTag(tag + "_tap"))
+            }
         }
         if (action != null) {
             Spacer(Modifier.width(12.dp))
@@ -306,6 +310,35 @@ private fun inherited(view: JSONObject?, field: String, groups: Map<String, Stri
     return text to (groups[value.optString("from_group_id")] ?: "a group")
 }
 
+/**
+ * What a record placed in [group] (its view) inherits for [field]: the
+ * group's own value, else what the group inherits, with the group it comes
+ * from (data-model 8). It follows the group chosen in the form.
+ */
+private fun inheritedFrom(group: JSONObject?, field: String, groups: Map<String, String>): Pair<String, String>? {
+    group ?: return null
+    val own = group.optJSONObject("data")?.optJSONObject("ssh")?.opt(field)
+    if (own != null && own != JSONObject.NULL && own.toString().isNotEmpty() && own.toString() != "[]") {
+        return own.toString() to (group.optJSONObject("data")?.text("name") ?: "a group")
+    }
+    return inherited(group, field, groups)
+}
+
+/** The view of the group a form puts its record in, read again when it changes. */
+@Composable
+private fun groupView(groupId: String?): JSONObject? {
+    val view by produceState<JSONObject?>(null, groupId) {
+        value = if (groupId == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching { Core.obj("record_get", JSONObject().put("vault_id", vaultId()).put("record_id", groupId)) }.getOrNull()
+            }
+        }
+    }
+    return view
+}
+
 // -- The editors ---------------------------------------------------------------------
 
 /** Pickers and sub-editors pushed over an editor (reference-2 3). */
@@ -352,6 +385,9 @@ private class EditorState(val record: Record?, initial: JSONObject) {
     }
 }
 
+/** The members whose errors show under their own fields. */
+private val SHOWN_ERRORS = setOf("label", "address", "tags", "ssh.port", "ssh.username", "ssh.password", "name", "parent_id", "telnet.port")
+
 /** The editor's frame: the bar, the scrolling cards, the discard prompt. */
 @Composable
 private fun EditorFrame(
@@ -370,8 +406,12 @@ private fun EditorFrame(
     BackHandler(onBack = ::back)
     Page(top = { EditorBar(title, ::back, onSave, state.saving) }) {
         Column(Modifier.fillMaxSize().verticalScroll(scroll).imePadding().padding(bottom = 32.dp)) {
-            val unshown = state.errors[""]
-            if (unshown != null) Text(unshown, color = Tokens.danger, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).testTag("editor_error"))
+            // Errors of members no field shows (a Telnet host's protocol, a
+            // reference) go here, with the general ones.
+            val unshown = state.errors.filterKeys { it !in SHOWN_ERRORS }.entries.joinToString("; ") { (field, reason) ->
+                if (field.isEmpty()) reason else "${field.replace('_', ' ')}: $reason"
+            }
+            if (unshown.isNotEmpty()) Text(unshown, color = Tokens.danger, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).testTag("editor_error"))
             content()
         }
     }
@@ -400,10 +440,13 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
     var clearPassword by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
     var proxyPassword by remember { mutableStateOf<String?>(null) }
-    val groups by produceState(mapOf<String, String>()) {
+    val groups by produceState(mapOf<String, String>(), state.picker) {
         value = withContext(Dispatchers.IO) { runCatching { records(JSONObject().put("types", JSONArray().put("group")).put("scope", JSONObject().put("kind", "all"))).associate { it.id to it.title } }.getOrDefault(emptyMap()) }
     }
     val names = rememberNames(state.picker)
+    val group = groupView(state.data.at("group_id") as? String)
+    // The tags as typed (commas and spaces stay until the save reads them).
+    var tagsText by remember { mutableStateOf(state.data.optJSONArray("tags").strings().joinToString(", ")) }
 
     fun secrets(): JSONObject {
         val secrets = JSONObject()
@@ -437,6 +480,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
         Picker.Tags -> {
             TagPickerPage(state.data.optJSONArray("tags").strings(), onBack = { state.picker = null }) { tags ->
                 state.set("tags", if (tags.isEmpty()) null else JSONArray(tags))
+                tagsText = tags.joinToString(", ")
             }
             return
         }
@@ -456,12 +500,13 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
         }
         Picker.Chain -> {
             ChainEditorPage(
-                state.data.optJSONObject("ssh")?.optJSONArray("jump_chain").strings(),
+                state.data.optJSONObject("ssh")?.optJSONArray("jump_chain")?.strings(),
                 selfId = record?.id,
                 selfTitle = state.str("label").ifBlank { state.str("address") },
+                inheritedFrom = inheritedFrom(group, "jump_chain", groups)?.second,
                 onBack = { state.picker = null },
             ) { chain ->
-                state.set("ssh.jump_chain", if (chain.isEmpty()) null else JSONArray(chain))
+                state.set("ssh.jump_chain", chain?.let { JSONArray(it) })
                 state.picker = null
             }
             return
@@ -477,7 +522,10 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
         }
         Picker.Theme -> {
             ThemePickerPage(state.data.optJSONObject("terminal_theme")?.text("builtin"), onBack = { state.picker = null }) { picked ->
-                state.set("terminal_theme", picked?.let { JSONObject().put("builtin", it) })
+                // Confirmed as it was: a theme imported on the desktop stays.
+                if (picked != state.data.optJSONObject("terminal_theme")?.text("builtin")) {
+                    state.set("terminal_theme", picked?.let { JSONObject().put("builtin", it) })
+                }
                 state.picker = null
             }
             return
@@ -496,7 +544,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
     EditorFrame(if (record == null) "New host" else "Edit host", state, scroll, ::save, onClose, extra) {
         VaultSelector()
         FormCard {
-            FormField(state.str("label"), { state.set("label", it) }, "Alias", "host_label", error = state.errors["label"])
+            FormField(state.str("label"), { state.set("label", it) }, "Label", "host_label", error = state.errors["label"])
             FormField(state.str("address"), { state.set("address", it.trim()) }, "Hostname or IP address", "host_address", error = state.errors["address"])
             val group = state.data.at("group_id") as? String
             FormField(
@@ -511,8 +559,11 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
                 },
             )
             FormField(
-                state.data.optJSONArray("tags").strings().joinToString(", "),
-                { text -> state.set("tags", text.split(',').map { it.trim() }.filter { it.isNotEmpty() }.let { if (it.isEmpty()) null else JSONArray(it) }) },
+                tagsText,
+                { text ->
+                    tagsText = text
+                    state.set("tags", text.split(',').map { it.trim() }.filter { it.isNotEmpty() }.let { if (it.isEmpty()) null else JSONArray(it) })
+                },
                 "Tags", "host_tags", error = state.errors["tags"],
                 action = { RoundAction(Icons.Filled.Sell, "Pick tags", "host_tags_pick") { state.picker = Picker.Tags } },
             )
@@ -521,7 +572,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
             }
         }
         FormCard {
-            val port = inherited(record?.json, "port", groups)
+            val port = inheritedFrom(group, "port", groups)
             FormField(
                 state.str("ssh.port"), { text -> state.set("ssh.port", text.filter(Char::isDigit).take(5).toIntOrNull()) }, "Port", "host_port",
                 placeholder = "22", note = port?.takeIf { state.str("ssh.port").isEmpty() }?.let { "${it.first}, from group ${it.second}" },
@@ -530,7 +581,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
         }
         FormHeader("Credentials")
         FormCard {
-            val user = inherited(record?.json, "username", groups)
+            val user = inheritedFrom(group, "username", groups)
             FormField(
                 state.str("ssh.username"), { state.set("ssh.username", it.trim()) }, "Username", "host_username",
                 note = user?.takeIf { state.str("ssh.username").isEmpty() }?.let { "${it.first}, from group ${it.second}" }, error = state.errors["ssh.username"],
@@ -544,7 +595,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
                     TextButton(onClick = { state.set("ssh.identity_id", null) }, modifier = Modifier.testTag("host_identity_clear")) { Text("Remove") }
                 }
             } else {
-                inherited(record?.json, "identity_id", groups)?.let { (id, from) ->
+                inheritedFrom(group, "identity_id", groups)?.let { (id, from) ->
                     Text("Identity ${names[id] ?: ""}, from group $from", color = Tokens.textSecondary, modifier = Modifier.padding(start = 16.dp, bottom = 4.dp).testTag("host_identity"))
                 }
             }
@@ -562,7 +613,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
                 TextButton(onClick = { clearPassword = true }, modifier = Modifier.testTag("host_password_clear")) { Text("Remove the saved password") }
             }
             val key = state.data.at("ssh.key_id") as? String
-            val keyFrom = inherited(record?.json, "key_id", groups)
+            val keyFrom = inheritedFrom(group, "key_id", groups)
             FormField(
                 key?.let { names[it] ?: "A key" } ?: "", {}, "Key", "host_key",
                 note = keyFrom?.takeIf { key == null }?.let { "${names[it.first] ?: "A key"}, from group ${it.second}" },
@@ -574,10 +625,11 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
             CheckRow("Agent forwarding", state.data.at("ssh.agent_forwarding") == true, "host_agent_forwarding") {
                 state.set("ssh.agent_forwarding", if (it) true else null)
             }
-            val chain = state.data.optJSONObject("ssh")?.optJSONArray("jump_chain").strings()
+            val chainJson = state.data.optJSONObject("ssh")?.optJSONArray("jump_chain")
+            val chain = chainJson.strings()
             FormField(
-                chain.joinToString(" → ") { names[it] ?: "a host" }, {}, "Host chaining", "host_chain",
-                note = inherited(record?.json, "jump_chain", groups)?.takeIf { chain.isEmpty() }?.let { "Through the chain of group ${it.second}" },
+                if (chainJson != null && chain.isEmpty()) "Directly, no jump hosts" else chain.joinToString(" → ") { names[it] ?: "a host" }, {}, "Host chaining", "host_chain",
+                note = inheritedFrom(group, "jump_chain", groups)?.takeIf { chainJson == null }?.let { "Through the chain of group ${it.second}" },
                 readOnly = true, onTap = { state.picker = Picker.Chain },
                 action = { RoundAction(Icons.Filled.Lan, "Edit the chain", "host_chain_edit") { state.picker = Picker.Chain } },
             )
@@ -590,7 +642,13 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
             EnvVars(state)
             ValueRow(
                 "Colour scheme",
-                terminalTheme(state.data.optJSONObject("terminal_theme")?.text("builtin"))?.name ?: "Default",
+                state.data.optJSONObject("terminal_theme").let { theme ->
+                    when {
+                        theme == null -> "Default"
+                        theme.has("record_id") -> "Custom (desktop)"
+                        else -> terminalTheme(theme.text("builtin"))?.name ?: "Default"
+                    }
+                },
                 "host_theme",
             ) { state.picker = Picker.Theme }
             ValueRow("Charset", state.str("charset").ifBlank { "utf-8" }.uppercase(), "host_charset") { state.picker = Picker.Charset }
@@ -602,7 +660,7 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
             }
             if (telnet != null) {
                 FormField(
-                    telnet.optInt("port", 23).toString(), { text -> state.set("telnet.port", text.filter(Char::isDigit).take(5).toIntOrNull()) },
+                    telnet.opt("port")?.takeIf { it != JSONObject.NULL }?.toString() ?: "", { text -> state.set("telnet.port", text.filter(Char::isDigit).take(5).toIntOrNull()) },
                     "Telnet port", "host_telnet_port", number = true, error = state.errors["telnet.port"],
                 )
             }
@@ -688,10 +746,11 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
     }
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
-    val groups by produceState(mapOf<String, String>()) {
+    val groups by produceState(mapOf<String, String>(), state.picker) {
         value = withContext(Dispatchers.IO) { runCatching { records(JSONObject().put("types", JSONArray().put("group")).put("scope", JSONObject().put("kind", "all"))).associate { it.id to it.title } }.getOrDefault(emptyMap()) }
     }
     val names = rememberNames(state.picker)
+    val parentView = groupView(state.data.at("parent_id") as? String)
 
     fun save() {
         if (state.saving) return
@@ -726,8 +785,14 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
             return
         }
         Picker.Chain -> {
-            ChainEditorPage(state.data.optJSONObject("ssh")?.optJSONArray("jump_chain").strings(), selfId = null, selfTitle = "Hosts of ${state.str("name").ifBlank { "this group" }}", onBack = { state.picker = null }) { chain ->
-                state.set("ssh.jump_chain", if (chain.isEmpty()) null else JSONArray(chain))
+            ChainEditorPage(
+                state.data.optJSONObject("ssh")?.optJSONArray("jump_chain")?.strings(),
+                selfId = null,
+                selfTitle = "Hosts of ${state.str("name").ifBlank { "this group" }}",
+                inheritedFrom = inheritedFrom(parentView, "jump_chain", groups)?.second,
+                onBack = { state.picker = null },
+            ) { chain ->
+                state.set("ssh.jump_chain", chain?.let { JSONArray(it) })
                 state.picker = null
             }
             return
@@ -738,7 +803,7 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
     EditorFrame(if (record == null) "New group" else "Edit group", state, scroll, ::save, onClose, extraChanges = false) {
         VaultSelector()
         FormCard {
-            FormField(state.str("name"), { state.set("name", it) }, "Alias", "group_name", error = state.errors["name"])
+            FormField(state.str("name"), { state.set("name", it) }, "Name", "group_name", error = state.errors["name"])
             val parent = state.data.at("parent_id") as? String
             FormField(
                 parent?.let { groups[it] ?: "A group" } ?: "", {}, "Parent group", "group_parent",
@@ -753,7 +818,7 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
             )
         }
         FormCard {
-            val port = inherited(record?.json, "port", groups)
+            val port = inheritedFrom(parentView, "port", groups)
             FormField(
                 state.str("ssh.port"), { text -> state.set("ssh.port", text.filter(Char::isDigit).take(5).toIntOrNull()) }, "Port", "group_port",
                 placeholder = "22", note = port?.takeIf { state.str("ssh.port").isEmpty() }?.let { "${it.first}, from group ${it.second}" }, error = state.errors["ssh.port"], number = true,
@@ -761,7 +826,7 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
         }
         FormHeader("Credentials")
         FormCard {
-            val user = inherited(record?.json, "username", groups)
+            val user = inheritedFrom(parentView, "username", groups)
             FormField(
                 state.str("ssh.username"), { state.set("ssh.username", it.trim()) }, "Username", "group_username",
                 note = user?.takeIf { state.str("ssh.username").isEmpty() }?.let { "${it.first}, from group ${it.second}" }, error = state.errors["ssh.username"],
@@ -781,9 +846,10 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
             )
         }
         FormCard {
-            val chain = state.data.optJSONObject("ssh")?.optJSONArray("jump_chain").strings()
+            val chainJson = state.data.optJSONObject("ssh")?.optJSONArray("jump_chain")
+            val chain = chainJson.strings()
             FormField(
-                chain.joinToString(" → ") { names[it] ?: "a host" }, {}, "Host chaining", "group_chain",
+                if (chainJson != null && chain.isEmpty()) "Directly, no jump hosts" else chain.joinToString(" → ") { names[it] ?: "a host" }, {}, "Host chaining", "group_chain",
                 readOnly = true, onTap = { state.picker = Picker.Chain },
                 action = { RoundAction(Icons.Filled.Lan, "Edit the chain", "group_chain_edit") { state.picker = Picker.Chain } },
             )
@@ -909,10 +975,12 @@ private fun TagPickerPage(current: List<String>, onBack: () -> Unit, onChange: (
     }
     if (creating) {
         NameDialog("New tag", "Tag", onDismiss = { creating = false }) { name ->
-            creating = false
-            added = added + name
-            chosen = chosen + name
-            withContext(Dispatchers.Main) { onChange(chosen) }
+            withContext(Dispatchers.Main) {
+                added = added + name
+                chosen = chosen + name
+                onChange(chosen)
+                creating = false
+            }
         }
     }
 }
@@ -965,6 +1033,7 @@ fun IdentityDialog(onDismiss: () -> Unit, onDone: (String?) -> Unit) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -978,7 +1047,8 @@ fun IdentityDialog(onDismiss: () -> Unit, onDone: (String?) -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(enabled = label.isNotBlank(), onClick = {
+            TextButton(enabled = label.isNotBlank() && !busy, onClick = {
+                busy = true
                 val chars = password.toCharArray()
                 password = ""
                 scope.launch {
@@ -994,6 +1064,7 @@ fun IdentityDialog(onDismiss: () -> Unit, onDone: (String?) -> Unit) {
                             chars.fill('\u0000')
                         }
                     }
+                    busy = false
                     if (made != null) onDone(made)
                 }
             }, modifier = Modifier.testTag("identity_save")) { Text("Create") }
@@ -1067,17 +1138,28 @@ private fun KeyPickerPage(current: String?, onBack: () -> Unit, onPick: (String?
  * the host being edited; "Add a host" adds one before it, Clear empties it.
  */
 @Composable
-private fun ChainEditorPage(current: List<String>, selfId: String?, selfTitle: String, onBack: () -> Unit, onDone: (List<String>) -> Unit) {
-    var chain by remember { mutableStateOf(current) }
+private fun ChainEditorPage(current: List<String>?, selfId: String?, selfTitle: String, inheritedFrom: String?, onBack: () -> Unit, onDone: (List<String>?) -> Unit) {
+    // `null` inherits the group's chain; an empty list connects directly and
+    // stops the inheritance (data-model 7.1, 8.3).
+    var inherit by remember { mutableStateOf(current == null) }
+    var chain by remember { mutableStateOf(current ?: emptyList()) }
     var adding by remember { mutableStateOf(false) }
     val hosts by produceState(listOf<Record>()) {
         value = withContext(Dispatchers.IO) { runCatching { records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all"))) }.getOrDefault(emptyList()) }
     }
     val byId = hosts.associateBy { it.id }
-    PickerPage("Host chaining", onBack, onConfirm = { onDone(chain) }) {
+    PickerPage("Host chaining", onBack, onConfirm = { onDone(if (inherit) null else chain) }) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Column(Modifier.fillMaxWidth().clip(CardShape).background(Tokens.bgRaised).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Connect through these hosts first, top to bottom.", color = Tokens.textSecondary)
+                if (inherit) {
+                    Text(
+                        if (inheritedFrom != null) "Now: the chain of group $inheritedFrom." else "Now: no jump hosts (none set in the groups).",
+                        color = Tokens.textSecondary, modifier = Modifier.testTag("chain_inherits"),
+                    )
+                } else if (chain.isEmpty()) {
+                    Text("Now: directly, without jump hosts.", color = Tokens.textSecondary, modifier = Modifier.testTag("chain_direct"))
+                }
                 for ((index, id) in chain.withIndex()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         OsTile(OsMark.of(byId[id]?.os), 36.dp)
@@ -1095,7 +1177,10 @@ private fun ChainEditorPage(current: List<String>, selfId: String?, selfTitle: S
                 Text(selfTitle.ifBlank { "This host" }, Modifier.padding(start = 12.dp))
             }
             Spacer(Modifier.height(16.dp))
-            TextButton(onClick = { chain = emptyList() }, modifier = Modifier.align(Alignment.Start).testTag("chain_clear")) { Text("Clear", color = Tokens.danger) }
+            TextButton(onClick = { chain = emptyList(); inherit = false }, modifier = Modifier.align(Alignment.Start).testTag("chain_clear")) { Text("Clear: connect directly", color = Tokens.danger) }
+            if (!inherit) {
+                TextButton(onClick = { chain = emptyList(); inherit = true }, modifier = Modifier.align(Alignment.Start).testTag("chain_inherit")) { Text("Use the group's chain") }
+            }
         }
     }
     if (adding) {
@@ -1106,7 +1191,7 @@ private fun ChainEditorPage(current: List<String>, selfId: String?, selfTitle: S
             text = {
                 LazyColumn {
                     items(choices, key = { it.id }) { host ->
-                        Text(host.title, Modifier.fillMaxWidth().clickable { chain = chain + host.id; adding = false }.padding(vertical = 14.dp).testTag("chain_pick_" + host.title))
+                        Text(host.title, Modifier.fillMaxWidth().clickable { chain = chain + host.id; inherit = false; adding = false }.padding(vertical = 14.dp).testTag("chain_pick_" + host.title))
                     }
                 }
             },
@@ -1204,7 +1289,7 @@ private fun CharsetPickerPage(current: String, onBack: () -> Unit, onPick: (Stri
     PickerPage("Charset", onBack) {
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
             item {
-                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { onPick(current) }, verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(onClick = onBack), verticalAlignment = Alignment.CenterVertically) {
                     Text("Current", color = Tokens.accent, modifier = Modifier.weight(1f))
                     Text(current.uppercase())
                 }

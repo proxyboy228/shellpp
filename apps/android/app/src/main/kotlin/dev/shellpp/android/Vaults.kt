@@ -74,6 +74,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -138,7 +140,7 @@ fun VaultHome(app: App, nav: Nav) {
 @Composable
 private fun VaultTitle(name: String, onClick: () -> Unit) {
     Row(
-        Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp).testTag("vault_switcher"),
+        Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClickLabel = "Switch vault", onClick = onClick).heightIn(min = 48.dp).padding(horizontal = 12.dp).testTag("vault_switcher"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Filled.Storage, contentDescription = null, tint = Tokens.accent, modifier = Modifier.size(20.dp))
@@ -202,7 +204,8 @@ fun SortButton(order: SortOrder, onOrder: (SortOrder) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Box(
-            Modifier.size(48.dp).clip(RoundedCornerShape(24.dp)).clickable { open = true }.testTag("sort"),
+            Modifier.size(48.dp).clip(RoundedCornerShape(24.dp)).clickable(onClickLabel = "Sort: ${order.label}") { open = true }
+                .semantics { contentDescription = "Sort: ${order.label}" }.testTag("sort"),
             contentAlignment = Alignment.Center,
         ) {
             if (order.badge.isNotEmpty()) {
@@ -293,7 +296,7 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    val listed by produceState(Pair(listOf<Record>(), listOf<Record>()), changes, group?.id, searching, query, refresh) {
+    val loaded by produceState<Pair<List<Record>, List<Record>>?>(null, changes, group?.id, searching, query, refresh) {
         value = withContext(Dispatchers.IO) {
             try {
                 if (searching) {
@@ -314,9 +317,25 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
             }
         }
     }
+    val listed = loaded ?: Pair(emptyList(), emptyList())
+    val identityUsers by produceState(mapOf<String, String>(), changes) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val list = Core.array("identities_list")
+                (0 until list.length()).map { list.getJSONObject(it) }.mapNotNull { identity ->
+                    identity.text("username")?.let { identity.getString("record_id") to it }
+                }.toMap()
+            }.getOrDefault(emptyMap())
+        }
+    }
     val groups = order.sort(listed.first)
     val hosts = order.sort(listed.second)
     val all = groups + hosts
+    // Records a sync removed leave the selection.
+    LaunchedEffect(all) {
+        val ids = all.map { it.id }.toSet()
+        if (!ids.containsAll(selected)) selected = selected.filter { it in ids }.toSet()
+    }
     val selecting = selected.isNotEmpty()
 
     BackHandler(enabled = selecting) { selected = emptySet() }
@@ -334,9 +353,9 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
                     canEdit = selected.size == 1,
                     onClose = { selected = emptySet() },
                     onEdit = {
-                        val record = all.first { it.id in selected }
+                        val record = all.firstOrNull { it.id in selected }
                         selected = emptySet()
-                        nav.push(if (record.isGroup) Page.EditGroup(record, null) else Page.EditHost(record, null))
+                        if (record != null) nav.push(if (record.isGroup) Page.EditGroup(record, null) else Page.EditHost(record, null))
                     },
                     menu = { close ->
                         val chosen = all.filter { it.id in selected }
@@ -418,7 +437,8 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             if (all.isEmpty()) {
-                EmptyHosts(app, nav, group, searching)
+                // Nothing until the first answer: no "No hosts yet" flash.
+                if (loaded != null) EmptyHosts(app, nav, group, searching)
                 return@Box
             }
             // Pull to refresh runs a sync when an account is connected (UI spec 6.1).
@@ -457,12 +477,17 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
                                 onClick = {
                                     if (selecting) {
                                         toggle(row)
+                                    } else if (searching) {
+                                        // From the search, the group's ancestors come first
+                                        // (read off the main thread).
+                                        scope.launch {
+                                            val target = withContext(Dispatchers.IO) { pathTo(row, path) }
+                                            searching = false
+                                            query = ""
+                                            nav.push(Page.Hosts(target))
+                                        }
                                     } else {
-                                        // From the search, the group's ancestors come first.
-                                        val target = if (searching) pathTo(row, path) else path + row
-                                        searching = false
-                                        query = ""
-                                        nav.push(Page.Hosts(target))
+                                        nav.push(Page.Hosts(path + row))
                                     }
                                 },
                                 onLongClick = { toggle(row) },
@@ -475,7 +500,7 @@ fun HostsScreen(app: App, activity: MainActivity, nav: Nav, path: List<Record>) 
                             val open = sessionsOf(views, row.id)
                             ListCard(
                                 title = highlighted(row.title, if (searching) query else ""),
-                                subtitle = if (open.isNotEmpty()) "Active" else row.subtitle,
+                                subtitle = if (open.isNotEmpty()) "Active" else row.subtitle(identityUsers),
                                 tag = "host_" + row.title,
                                 tile = { if (row.id in selected) CheckTile() else OsTile(OsMark.of(row.os), active = open.isNotEmpty()) },
                                 selected = row.id in selected,
@@ -574,7 +599,7 @@ private fun GroupTitle(group: Record, path: List<Record>, nav: Nav) {
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
-            Modifier.clip(RoundedCornerShape(20.dp)).clickable { open = true }.padding(horizontal = 8.dp, vertical = 6.dp).testTag("group_title"),
+            Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClickLabel = "Go up the groups") { open = true }.heightIn(min = 48.dp).padding(horizontal = 8.dp).testTag("group_title"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Filled.Folder, contentDescription = null, tint = Tokens.accent, modifier = Modifier.size(20.dp))
@@ -590,7 +615,13 @@ private fun GroupTitle(group: Record, path: List<Record>, nav: Nav) {
             path.dropLast(1).forEachIndexed { index, ancestor ->
                 DropdownMenuItem(text = { Text(ancestor.title) }, onClick = {
                     open = false
-                    nav.popTo { it is Page.Hosts && it.path.size == index + 1 }
+                    // That group's page when the stack has it (by id), else a new one.
+                    val inStack = nav.stack.any { it is Page.Hosts && it.path.lastOrNull()?.id == ancestor.id }
+                    if (inStack) {
+                        nav.popTo { it is Page.Hosts && it.path.lastOrNull()?.id == ancestor.id }
+                    } else {
+                        nav.push(Page.Hosts(path.take(index + 1)))
+                    }
                 })
             }
         }
@@ -633,8 +664,8 @@ private fun SessionCounter(app: App, activity: MainActivity, nav: Nav, host: Rec
     var shown by remember { mutableStateOf(false) }
     Box {
         Row(
-            Modifier.clip(RoundedCornerShape(16.dp)).background(Tokens.accentSubtle).clickable { shown = true }
-                .heightIn(min = 40.dp).padding(horizontal = 12.dp).testTag("sessions_" + host.title),
+            Modifier.clip(RoundedCornerShape(16.dp)).background(Tokens.accentSubtle).clickable(onClickLabel = "Sessions of ${host.title}") { shown = true }
+                .heightIn(min = 48.dp).padding(horizontal = 12.dp).testTag("sessions_" + host.title),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(open.size.toString(), fontWeight = FontWeight.Bold)

@@ -92,6 +92,18 @@ data class Record(val json: JSONObject) {
         get() = data.optJSONObject("ssh")?.text("username")?.takeIf { it.isNotBlank() }
             ?: inherited.optJSONObject("username")?.text("value")
 
+    /**
+     * The effective user name (D220, data-model 8.3): the host's own, then
+     * its own identity's, then the groups' username or identity.
+     */
+    fun effectiveUser(identityUsers: Map<String, String>): String? {
+        val ssh = data.optJSONObject("ssh")
+        ssh?.text("username")?.takeIf { it.isNotBlank() }?.let { return it }
+        ssh?.text("identity_id")?.let { identityUsers[it] }?.let { return it }
+        inherited.optJSONObject("username")?.text("value")?.let { return it }
+        return inherited.optJSONObject("identity_id")?.text("value")?.let { identityUsers[it] }
+    }
+
     val hostCount: Int get() = json.optInt("host_count")
     val revision: Long get() = json.optLong("revision")
     val createdAt: String get() = json.optString("created_at")
@@ -102,6 +114,8 @@ data class Record(val json: JSONObject) {
 
     /** The second line of a host card (D220): the protocol and the effective user name. */
     val subtitle: String get() = listOfNotNull(protocol, username).joinToString(", ")
+
+    fun subtitle(identityUsers: Map<String, String>): String = listOfNotNull(protocol, effectiveUser(identityUsers)).joinToString(", ")
 }
 
 /** The design system's tag colors (`TagColor`), for color labels. */

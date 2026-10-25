@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -230,19 +231,19 @@ fun highlighted(text: String, query: String): AnnotatedString {
     val accent = Tokens.accent
     val needle = query.trim()
     if (needle.isEmpty()) return AnnotatedString(text)
+    // Indices of the text itself (a lowercase of another length, as "İ",
+    // must not shift them).
     return buildAnnotatedString {
         var at = 0
-        val lower = text.lowercase()
-        val find = needle.lowercase()
         while (at < text.length) {
-            val hit = lower.indexOf(find, at)
+            val hit = text.indexOf(needle, at, ignoreCase = true)
             if (hit < 0) {
                 append(text.substring(at))
                 break
             }
             append(text.substring(at, hit))
-            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) { append(text.substring(hit, hit + find.length)) }
-            at = hit + find.length
+            withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) { append(text.substring(hit, hit + needle.length)) }
+            at = hit + needle.length
         }
     }
 }
@@ -309,7 +310,7 @@ fun OsTile(mark: OsMark, size: Dp = 44.dp, active: Boolean = false, sftp: Boolea
         when {
             mark.letters != null -> Text(
                 mark.letters,
-                color = Color.White,
+                color = if (fill.luminance() > 0.16f) Color(0xFF151515) else Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = (size.value * 0.36f).sp,
                 modifier = Modifier.padding(top = if (sftp) 3.dp else 0.dp),

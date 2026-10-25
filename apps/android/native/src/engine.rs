@@ -126,6 +126,9 @@ pub struct Engine {
     events: Arc<EventQueue>,
     /// Held while the session layer's lock state is set from the core's.
     lock_sync: Arc<Mutex<()>>,
+    /// The terminal theme of Settings → Font & colours (a built-in slug),
+    /// `None` to follow the system's dark or light mode (run 15).
+    theme: Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -208,7 +211,50 @@ impl Engine {
             next: AtomicU64::new(1),
             events,
             lock_sync,
+            theme: Mutex::new(None),
         })
+    }
+
+    /// Settings → Font & colours: the theme new terminals take (`None`:
+    /// Graphite or Paper with the system's mode).
+    pub fn set_theme(&self, slug: Option<String>) {
+        *self.theme.lock().unwrap_or_else(PoisonError::into_inner) =
+            slug.filter(|slug| !slug.is_empty());
+    }
+
+    /// The theme of a new terminal: the host's own (data-model 7.2
+    /// `terminal_theme`, a built-in one), else Settings', else the system's
+    /// mode.
+    fn theme_for(&self, target: &SessionTarget, dark: bool) -> shellpp_terminal::colors::Palette {
+        let host = match target {
+            SessionTarget::Host {
+                vault_id,
+                record_id,
+            } => self
+                .core
+                .record_get(shellpp_core::service::dto::RecordRef {
+                    vault_id: *vault_id,
+                    record_id: *record_id,
+                })
+                .ok()
+                .and_then(|view| match view {
+                    shellpp_core::service::dto::RecordView::Host(host) => host
+                        .data
+                        .get("terminal_theme")
+                        .and_then(|theme| theme.get("builtin"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    shellpp_core::service::dto::RecordView::Group(_) => None,
+                }),
+            _ => None,
+        };
+        let chosen = host.or_else(|| {
+            self.theme
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        });
+        crate::theme::palette_for(chosen.as_deref(), dark)
     }
 
     /// Where a key file for quick connects goes.
@@ -273,7 +319,7 @@ impl Engine {
                 scrollback: SCROLLBACK,
                 cursor_shape: CursorShape::Block,
             },
-            crate::theme::palette(dark),
+            self.theme_for(&target, dark),
             wake.clone(),
         );
         // An unlock just now may not have reached the follower thread yet.

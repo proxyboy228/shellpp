@@ -3,6 +3,35 @@ package dev.shellpp.android
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
+import android.provider.DocumentsContract
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Locale
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -126,7 +155,22 @@ fun SftpScreen(
     var queueShown by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf<Pair<String, JSONObject?>?>(null) }
-    var deleting by remember { mutableStateOf<JSONObject?>(null) }
+    var deleting by remember { mutableStateOf<List<JSONObject>?>(null) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var menu by remember { mutableStateOf(false) }
+    var sortBy by remember { mutableStateOf("name") }
+    var ascending by remember { mutableStateOf(true) }
+    var showHidden by remember { mutableStateOf(false) }
+    val prefs = remember { activity.getSharedPreferences("sftp", android.content.Context.MODE_PRIVATE) }
+    var downloadFolder by remember { mutableStateOf(prefs.getString(PREF_DOWNLOAD_TREE, null)?.let(Uri::parse)) }
+    val downloadFolderName = downloadFolder?.let { tree ->
+        runCatching { DocumentsContract.getTreeDocumentId(tree).substringAfter(':').ifBlank { null } }.getOrNull()
+    }
+    LaunchedEffect(Unit) {
+        showHidden = withContext(Dispatchers.IO) { coreSettings().optBoolean("sftp.show_hidden", false) }
+    }
     var answered by remember { mutableStateOf(-1L) }
     val transfers by app.transfers.collectAsState()
     val title = host?.title ?: app.sessionViews.value[session]?.optString("title") ?: "SFTP"
@@ -198,6 +242,42 @@ fun SftpScreen(
         app.queueTransfer(remoteJoin(path, entry.optString("name")), TransferTarget(cache, uri, download = true, session = session))
         queueShown = true
     }
+    // The download folder on the phone (⋮): files go there without asking.
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree == null) return@rememberLauncherForActivityResult
+        runCatching {
+            activity.contentResolver.takePersistableUriPermission(
+                tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        prefs.edit().putString(PREF_DOWNLOAD_TREE, tree.toString()).apply()
+        downloadFolder = tree
+    }
+
+    fun download(entry: JSONObject) {
+        val tree = downloadFolder
+        if (tree == null) {
+            pendingDownload = entry
+            saveTo.launch(entry.optString("name"))
+            return
+        }
+        scope.launch {
+            val target = withContext(Dispatchers.IO) {
+                runCatching {
+                    val folder = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+                    DocumentsContract.createDocument(activity.contentResolver, folder, "application/octet-stream", entry.optString("name"))
+                }.getOrNull()
+            }
+            if (target == null) {
+                listError = "The download folder cannot be written; choose it again in ⋮."
+                return@launch
+            }
+            val cache = File(File(activity.cacheDir, "transfers").apply { mkdirs() }, UUID.randomUUID().toString())
+            app.queueTransfer(remoteJoin(path, entry.optString("name")), TransferTarget(cache, target, download = true, session = session))
+            queueShown = true
+        }
+    }
+
     val pickUploads = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         app.upload(session, path, uris) { problem -> listError = problem }
@@ -205,102 +285,187 @@ fun SftpScreen(
     }
     val conflicts by app.conflicts.collectAsState()
 
-    // Back leaves the session open (Sessions has it); Close in the bar ends it.
-    BackHandler(onBack = onClose)
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onClose, modifier = Modifier.testTag("sftp_back")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    if (session != 0L) {
-                        TextButton(onClick = {
-                            val id = session
-                            scope.launch(Dispatchers.IO) { runCatching { Native.close(id) } }
-                            app.forget(id)
-                            onClose()
-                        }, modifier = Modifier.testTag("sftp_close")) { Text("Close") }
-                    }
-                    val running = transfers.values.count { it.optLong("session") == session && it.optString("state") in setOf("queued", "running", "failed") }
-                    if (running > 0 || transfers.values.any { it.optLong("session") == session }) {
-                        TextButton(onClick = { queueShown = true }, modifier = Modifier.testTag("sftp_queue")) {
-                            Text(if (running > 0) "Transfers ($running)" else "Transfers")
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Tokens.bgBase),
-            )
-        },
-        floatingActionButton = {
-            if (state == "connected") {
-                Box {
-                    FloatingActionButton(onClick = { adding = true }, modifier = Modifier.testTag("sftp_add")) {
-                        Icon(Icons.Filled.Add, contentDescription = "Upload or new folder")
-                    }
-                    DropdownMenu(expanded = adding, onDismissRequest = { adding = false }) {
-                        DropdownMenuItem(text = { Text("Upload") }, onClick = { adding = false; pickUploads.launch(arrayOf("*/*")) })
-                        DropdownMenuItem(text = { Text("New folder") }, onClick = { adding = false; naming = "mkdir" to null })
-                    }
+    // Back leaves the session open (the session bar has it); × on its chip ends it.
+    BackHandler(enabled = selected.isEmpty() && !searching, onBack = onClose)
+    BackHandler(enabled = selected.isNotEmpty()) { selected = emptySet() }
+    BackHandler(enabled = searching && selected.isEmpty()) { searching = false; query = "" }
+    val shown = sortEntries(entries.filter { showHidden || !it.optString("name").startsWith(".") }, sortBy, ascending)
+        .filter { query.isBlank() || it.optString("name").contains(query.trim(), ignoreCase = true) }
+    Column(Modifier.fillMaxSize().background(Tokens.bgBase).semantics { testTagsAsResourceId = true }) {
+        when {
+            selected.isNotEmpty() -> SelectionBar(selected.size, canEdit = false, onClose = { selected = emptySet() }, onEdit = null) { close ->
+                val chosen = entries.filter { it.optString("name") in selected }
+                val one = chosen.singleOrNull()
+                if (one != null && !one.optBoolean("dir")) {
+                    DropdownMenuItem(text = { Text("Download") }, modifier = Modifier.testTag("sftp_download"), onClick = {
+                        close(); selected = emptySet(); download(one)
+                    })
                 }
+                if (one != null) {
+                    DropdownMenuItem(text = { Text("Rename") }, modifier = Modifier.testTag("sftp_rename"), onClick = {
+                        close(); selected = emptySet(); naming = "rename" to one
+                    })
+                    DropdownMenuItem(text = { Text("Copy path") }, modifier = Modifier.testTag("sftp_copy_path"), onClick = {
+                        close(); selected = emptySet(); clipboard.setText(AnnotatedString(remoteJoin(path, one.optString("name"))))
+                    })
+                }
+                HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
+                DropdownMenuItem(text = { Text("Delete", color = Tokens.danger) }, modifier = Modifier.testTag("sftp_delete"), onClick = {
+                    close(); deleting = chosen
+                })
             }
-        },
-        containerColor = Tokens.bgBase,
-    ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().semantics { testTagsAsResourceId = true }) {
-            if (state != "connected") {
-                Text(
-                    when (state) {
-                        "connecting" -> "Connecting…"
-                        "failed", "dropped", "ended" -> view?.optString("error")?.takeIf { it.isNotBlank() && it != "null" } ?: "Not connected"
-                        else -> state
-                    },
-                    Modifier.padding(16.dp).testTag("sftp_state"),
-                )
-                listError?.let { Text(it, color = Tokens.danger, modifier = Modifier.padding(horizontal = 16.dp)) }
-                return@Column
-            }
-            // The path bar: a tap on a segment goes there.
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp)) {
+            searching -> SearchBar(query, { query = it }, "Search this folder", onClose = { searching = false; query = "" })
+            else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                // The path as a breadcrumb: parents muted, the folder shown emphasised.
                 val parts = path.split('/').filter { it.isNotEmpty() }
-                TextButton(onClick = { load("/") }) { Text("/") }
-                parts.forEachIndexed { index, part ->
-                    TextButton(onClick = { load("/" + parts.take(index + 1).joinToString("/")) }, modifier = Modifier.testTag("sftp_crumb_$part")) {
-                        Text("$part /")
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    Text("/", color = if (parts.isEmpty()) Tokens.text else Tokens.textSecondary, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { load("/") }.padding(horizontal = 6.dp, vertical = 12.dp))
+                    parts.forEachIndexed { index, part ->
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Tokens.textMuted, modifier = Modifier.size(18.dp))
+                        val last = index == parts.lastIndex
+                        Text(
+                            part,
+                            color = if (last) Tokens.text else Tokens.textSecondary,
+                            fontWeight = if (last) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { load("/" + parts.take(index + 1).joinToString("/")) }
+                                .padding(horizontal = 6.dp, vertical = 12.dp).testTag("sftp_crumb_$part"),
+                        )
                     }
+                }
+                if (state == "connected") {
+                    OutlinedButton(
+                        onClick = { pickUploads.launch(arrayOf("*/*")) },
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        modifier = Modifier.heightIn(min = 40.dp).testTag("sftp_add"),
+                    ) {
+                        Icon(Icons.Filled.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Upload")
+                    }
+                    Box {
+                        BarIcon(Icons.Filled.MoreVert, "More", "sftp_more") { menu = true }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = Tokens.bgRaised) {
+                            DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Filled.CreateNewFolder, null) }, modifier = Modifier.testTag("sftp_mkdir"), onClick = {
+                                menu = false; naming = "mkdir" to null
+                            })
+                            HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
+                            for ((key, label) in listOf("name" to "Sort by name", "date" to "Sort by date", "size" to "Sort by size", "kind" to "Sort by kind")) {
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    trailingIcon = { if (sortBy == key) Text(if (ascending) "↑" else "↓", color = Tokens.accent) },
+                                    modifier = Modifier.testTag("sftp_sort_$key"),
+                                    onClick = {
+                                        menu = false
+                                        if (sortBy == key) ascending = !ascending else { sortBy = key; ascending = true }
+                                    },
+                                )
+                            }
+                            HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
+                            DropdownMenuItem(
+                                text = { Text(if (downloadFolder == null) "Download folder: ask each time" else "Download folder: ${downloadFolderName ?: "chosen"}") },
+                                leadingIcon = { Icon(Icons.Filled.Download, null) },
+                                modifier = Modifier.testTag("sftp_download_folder"),
+                                onClick = { menu = false; pickFolder.launch(null) },
+                            )
+                            if (downloadFolder != null) {
+                                DropdownMenuItem(text = { Text("Ask where to save each time") }, onClick = {
+                                    menu = false
+                                    prefs.edit().remove(PREF_DOWNLOAD_TREE).apply()
+                                    downloadFolder = null
+                                })
+                            }
+                            DropdownMenuItem(text = { Text("Copy path") }, leadingIcon = { Icon(Icons.Filled.ContentCopy, null) }, modifier = Modifier.testTag("sftp_copy_folder"), onClick = {
+                                menu = false; clipboard.setText(AnnotatedString(path))
+                            })
+                            DropdownMenuItem(
+                                text = { Text(if (showHidden) "Hide hidden files" else "Show hidden files") },
+                                leadingIcon = { Icon(if (showHidden) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, null) },
+                                modifier = Modifier.testTag("sftp_hidden"),
+                                onClick = {
+                                    menu = false
+                                    showHidden = !showHidden
+                                    scope.launch(Dispatchers.IO) { runCatching { setCoreSetting("sftp.show_hidden", showHidden) } }
+                                },
+                            )
+                            val running = transfers.values.count { it.optLong("session") == session && it.optString("state") in setOf("queued", "running", "failed") }
+                            if (transfers.values.any { it.optLong("session") == session }) {
+                                HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
+                                DropdownMenuItem(text = { Text(if (running > 0) "Transfers ($running)" else "Transfers") }, modifier = Modifier.testTag("sftp_queue"), onClick = {
+                                    menu = false; queueShown = true
+                                })
+                            }
+                        }
+                    }
+                    BarIcon(Icons.Filled.Search, "Search", "sftp_search") { searching = true }
                 }
             }
-            listError?.let { Text(it, color = Tokens.danger, modifier = Modifier.padding(horizontal = 16.dp).testTag("sftp_error")) }
-            PullToRefreshBox(isRefreshing = loading, onRefresh = { load(path) }, modifier = Modifier.fillMaxSize()) {
-                LazyColumn(Modifier.fillMaxSize()) {
-                    if (path != "/" && path.isNotEmpty()) {
-                        item {
-                            Text("..", Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { load(remoteParent(path)) }.padding(16.dp).testTag("sftp_up"))
-                        }
-                    }
-                    items(entries, key = { it.optString("name") }) { entry ->
-                        val dir = entry.optBoolean("dir")
-                        Column(
-                            Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                                .clickable { if (dir) load(remoteJoin(path, entry.optString("name"))) else fileSheet = entry }
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .testTag("sftp_entry_" + entry.optString("name")),
-                        ) {
-                            Text((if (dir) "▸ " else "") + entry.optString("name"), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val modified = entry.optLong("modified", 0L).takeIf { it > 0 }?.let {
-                                DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(it * 1000))
-                            }
-                            Text(
-                                listOfNotNull(if (dir) null else humanSize(entry.optLong("size")), modified).joinToString(" · "),
-                                color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
+        }
+        if (state != "connected") {
+            Text(
+                when (state) {
+                    "connecting" -> "Connecting…"
+                    "failed", "dropped", "ended" -> view?.optString("error")?.takeIf { it.isNotBlank() && it != "null" } ?: "Not connected"
+                    else -> state
+                },
+                Modifier.padding(16.dp).testTag("sftp_state"),
+            )
+            listError?.let { Text(it, color = Tokens.danger, modifier = Modifier.padding(horizontal = 16.dp)) }
+            return@Column
+        }
+        listError?.let { Text(it, color = Tokens.danger, modifier = Modifier.padding(horizontal = 16.dp).testTag("sftp_error")) }
+        val running = transfers.values.count { it.optLong("session") == session && it.optString("state") in setOf("queued", "running") }
+        if (running > 0) {
+            Text(
+                "$running transfer" + (if (running == 1) "" else "s") + " running",
+                color = Tokens.accent, style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp).clickable { queueShown = true }.testTag("sftp_running"),
+            )
+        }
+        // The listing on one large panel (reference-2 8.1).
+        PullToRefreshBox(
+            isRefreshing = loading, onRefresh = { load(path) },
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp).clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).background(Tokens.bgRaised),
+        ) {
+            LazyColumn(Modifier.fillMaxSize().padding(top = 8.dp)) {
+                if (path != "/" && path.isNotEmpty() && !searching) {
+                    item {
+                        FileRow(
+                            name = "..", icon = Icons.Filled.Folder, permissions = null, size = null, modified = null,
+                            selected = false, tag = "sftp_up", onClick = { load(remoteParent(path)) }, onLongClick = null,
+                        )
                     }
                 }
+                items(shown, key = { it.optString("name") }) { entry ->
+                    val name = entry.optString("name")
+                    val dir = entry.optBoolean("dir")
+                    val modified = entry.optLong("modified", 0L).takeIf { it > 0 }?.let {
+                        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(it * 1000))
+                    }
+                    FileRow(
+                        name = name,
+                        icon = when {
+                            name in selected -> Icons.Filled.CheckCircle
+                            entry.optString("kind") == "link" -> Icons.Filled.Link
+                            dir -> Icons.Filled.Folder
+                            else -> Icons.AutoMirrored.Filled.InsertDriveFile
+                        },
+                        permissions = permissionString(entry),
+                        size = if (dir) null else humanSize(entry.optLong("size")),
+                        modified = modified,
+                        selected = name in selected,
+                        tag = "sftp_entry_$name",
+                        onClick = {
+                            when {
+                                selected.isNotEmpty() -> selected = if (name in selected) selected - name else selected + name
+                                dir -> load(remoteJoin(path, name))
+                                else -> fileSheet = entry
+                            }
+                        },
+                        onLongClick = { selected = if (name in selected) selected - name else selected + name },
+                    )
+                }
+                item { Spacer(Modifier.height(32.dp)) }
             }
         }
     }
@@ -329,9 +494,9 @@ fun SftpScreen(
             Column(Modifier.padding(bottom = 24.dp)) {
                 Text(entry.optString("name"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
                 val actions = listOf(
-                    "Download" to { pendingDownload = entry; saveTo.launch(entry.optString("name")) },
+                    "Download" to { download(entry) },
                     "Rename" to { naming = "rename" to entry },
-                    "Delete" to { deleting = entry },
+                    "Delete" to { deleting = listOf(entry) },
                     "Copy path" to { clipboard.setText(AnnotatedString(remoteJoin(path, entry.optString("name")))) },
                 )
                 for ((label, run) in actions) {
@@ -379,28 +544,32 @@ fun SftpScreen(
         )
     }
 
-    deleting?.let { entry ->
+    deleting?.let { chosen ->
         AlertDialog(
             onDismissRequest = { deleting = null },
-            title = { Text("Delete “${entry.optString("name")}”?") },
-            text = { Text("It is deleted on the server; there is no undo.") },
+            title = { Text(if (chosen.size == 1) "Delete “${chosen[0].optString("name")}”?" else "Delete ${chosen.size} items?") },
+            text = { Text("They are deleted on the server; there is no undo.") },
             confirmButton = {
                 TextButton(onClick = {
                     deleting = null
+                    selected = emptySet()
                     scope.launch {
                         listError = withContext(Dispatchers.IO) {
-                            try {
-                                sftp(session, "remove", JSONObject().put("path", remoteJoin(path, entry.optString("name"))).put("dir", entry.optBoolean("dir")))
-                                null
-                            } catch (error: CoreException) {
-                                error.message
-                            } catch (error: Exception) {
-                                "Not deleted."
+                            var failure: String? = null
+                            for (entry in chosen) {
+                                try {
+                                    sftp(session, "remove", JSONObject().put("path", remoteJoin(path, entry.optString("name"))).put("dir", entry.optBoolean("dir")))
+                                } catch (error: CoreException) {
+                                    failure = error.message
+                                } catch (error: Exception) {
+                                    failure = "Not deleted."
+                                }
                             }
+                            failure
                         }
                         load(path)
                     }
-                }) { Text("Delete", color = Tokens.danger) }
+                }, modifier = Modifier.testTag("sftp_delete_confirm")) { Text("Delete", color = Tokens.danger) }
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
@@ -556,5 +725,66 @@ fun SessionPrompt(prompt: JSONObject, host: String, onReply: (String, ByteArray?
             )
         }
         else -> LaunchedEffect(prompt.optLong("id")) { onReply("cancel", null) }
+    }
+}
+
+/** Where downloads go without asking (a document tree the user picked), or none. */
+private const val PREF_DOWNLOAD_TREE = "download_tree"
+
+/** An entry's permissions as `ls` shows them (`drwxr-xr-x`), or null when the server sent none. */
+fun permissionString(entry: JSONObject): String? {
+    if (entry.isNull("permissions") || !entry.has("permissions")) return null
+    val bits = entry.optInt("permissions")
+    val type = when (entry.optString("kind")) {
+        "dir" -> 'd'
+        "link" -> 'l'
+        else -> '-'
+    }
+    val chars = "rwxrwxrwx"
+    return type + (0 until 9).map { index -> if (bits and (1 shl (8 - index)) != 0) chars[index] else '-' }.joinToString("")
+}
+
+/** The listing in the order of ⋮: name, date, size or kind; folders first by name. */
+fun sortEntries(entries: List<JSONObject>, by: String, ascending: Boolean): List<JSONObject> {
+    val comparator: Comparator<JSONObject> = when (by) {
+        "date" -> compareBy { it.optLong("modified") }
+        "size" -> compareBy { it.optLong("size") }
+        "kind" -> compareBy<JSONObject> { it.optString("name").substringAfterLast('.', "").lowercase() }.thenBy { it.optString("name").lowercase() }
+        else -> compareBy { it.optString("name").lowercase() }
+    }
+    val ordered = entries.sortedWith(comparator).let { if (ascending) it else it.reversed() }
+    return ordered.sortedByDescending { it.optBoolean("dir") }
+}
+
+/** A row of the listing: icon, name, permissions in monospace; size and date on the right. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FileRow(
+    name: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    permissions: String?,
+    size: String?,
+    modified: String?,
+    selected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 60.dp)
+            .background(if (selected) Tokens.accentSubtle else androidx.compose.ui.graphics.Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = Tokens.accent, modifier = Modifier.size(26.dp))
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (permissions != null) Text(permissions, color = Tokens.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            if (size != null) Text(size, color = Tokens.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            if (modified != null) Text(modified, color = Tokens.textSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+        }
     }
 }

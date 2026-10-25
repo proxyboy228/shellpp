@@ -505,6 +505,23 @@ pub extern "system" fn Java_dev_shellpp_android_Native_close<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+/// `setTheme(slug)`: Settings → Font & colours, the theme of new terminals
+/// ("" follows the system's mode).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_setTheme<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    slug: JString<'caller>,
+) {
+    unowned
+        .with_env(|env| -> Result<(), NativeError> {
+            let slug = slug.try_to_string(env)?;
+            engine()?.set_theme(Some(slug));
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
 /// `reconnectDropped()`: the network came back; dropped sessions try again
 /// now (M2). How many did.
 #[unsafe(no_mangle)]

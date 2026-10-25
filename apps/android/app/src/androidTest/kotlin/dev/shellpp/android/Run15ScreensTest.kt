@@ -100,8 +100,34 @@ class Run15ScreensTest {
         E2e.click("editor_close")
         E2e.click("tab_settings")
         shot(theme, "20-settings")
-        val port = args.getString("sshPort") ?: return
-        terminalStates(theme, port.toInt())
+        val port = args.getString("sshPort")
+        if (port != null) terminalStates(theme, port.toInt())
+        vaultStates(theme)
+    }
+
+    /** Keychain, Known hosts and the two sub-pages of Settings (plan 3.4). */
+    private fun vaultStates(theme: String) {
+        if (Core.array("keys_list").length() == 0) {
+            generateKey(JSONObject().put("label", "laptop").put("kind", "ed25519").put("save_passphrase", false), CharArray(0))
+            Core.call("identity_save", JSONObject().put("label", "deploy").put("username", "deploy"))
+        }
+        E2e.openVaultSection("vault_keychain")
+        E2e.find("key_laptop")
+        shot(theme, "40-keychain")
+        E2e.click("key_add")
+        shot(theme, "41-keychain-sheet")
+        E2e.device.pressBack()
+        E2e.click("tab_vaults")
+        E2e.click("tab_vaults")
+        E2e.click("vault_known_hosts")
+        shot(theme, "42-known-hosts")
+        E2e.openSettings()
+        E2e.click("settings_keyboard")
+        shot(theme, "43-customize-keyboard")
+        E2e.device.pressBack()
+        E2e.click("settings_font")
+        shot(theme, "44-font-colours")
+        E2e.device.pressBack()
     }
 
     /** The terminal, two sessions, SFTP and Connections, against the run's OpenSSH server. */

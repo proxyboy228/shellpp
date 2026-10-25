@@ -128,6 +128,7 @@ fn entry_json(entry: &RemoteEntry) -> Value {
         "dir": to_dir,
         "size": entry.size,
         "modified": entry.modified,
+        "permissions": entry.permissions,
     })
 }
 

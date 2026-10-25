@@ -1,6 +1,38 @@
 package dev.shellpp.android
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,6 +81,11 @@ object TerminalPrefs {
     const val KEEP_ON = "keep_screen_on"
     const val KEYS = "extra_keys"
     const val FONT = "font_size"
+    const val THEME = "theme"
+
+    /** The theme of new terminals (a built-in slug), or Graphite / Paper with the system's mode. */
+    fun theme(context: Context, dark: Boolean): TerminalTheme =
+        terminalTheme(of(context).getString(THEME, null)) ?: terminalTheme(if (dark) "graphite" else "paper") ?: TERMINAL_THEMES.first()
 
     fun of(context: Context) = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 }
@@ -69,7 +106,7 @@ private fun SettingsHeader(text: String, first: Boolean = false) {
 
 /** A two-line row: the title, the current value muted under it, a toggle or a chevron. */
 @Composable
-private fun SettingsRow(title: String, value: String?, tag: String, toggle: Boolean? = null, onClick: () -> Unit) {
+private fun SettingsRow(title: String, value: String?, tag: String, toggle: Boolean? = null, chevron: Boolean = true, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 8.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
@@ -80,7 +117,7 @@ private fun SettingsRow(title: String, value: String?, tag: String, toggle: Bool
         }
         if (toggle != null) {
             Switch(toggle, onCheckedChange = { onClick() }, colors = SwitchDefaults.colors(checkedTrackColor = Tokens.accent))
-        } else {
+        } else if (chevron) {
             Text("›", color = Tokens.textMuted, fontSize = 22.sp)
         }
     }
@@ -122,7 +159,7 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
             ) { nav.push(Page.Account) }
 
             SettingsHeader("Terminal")
-            val theme = terminalTheme(values.optJSONObject("terminal.default_theme")?.text("builtin"))?.name ?: "Graphite"
+            val theme = terminalTheme(prefs.getString(TerminalPrefs.THEME, null))?.name ?: "Graphite / Paper"
             SettingsRow("Font and colours", "$theme / ${prefs.getInt(TerminalPrefs.FONT, 14)} / JetBrains Mono", "settings_font") { nav.push(Page.FontColours) }
             SettingsRow("Terminal type", values.text("terminal.term") ?: "xterm-256color", "settings_term") { editing = "terminal.term" }
             SettingsRow("Customize keyboard", "The extra-keys row of the terminal", "settings_keyboard") { nav.push(Page.CustomizeKeyboard) }
@@ -160,7 +197,7 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
 
             SettingsHeader("About")
             val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
-            SettingsRow("Shell++", "Version $version", "settings_about") {}
+            SettingsRow("Shell++", "Version $version", "settings_about", chevron = false) {}
         }
     }
 
@@ -181,14 +218,208 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
     }
 }
 
-/** Settings → Customize keyboard (reference-2 9.2): built in 3.4 of run 15. */
+/**
+ * Settings → Customize keyboard (reference-2 9.2): the extra-keys row's
+ * groups as cards, each with a delete button, its keys and a drag handle;
+ * "+" adds a group, the circular arrow puts back the default set. Changes
+ * apply at once and stay on this device (D220 [decision]).
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CustomizeKeyboardScreen(app: App, onClose: () -> Unit) {
-    Page(top = { TopBar("Customize keyboard", left = { BackButton(onClose) }) }) {}
+    val context = LocalContext.current
+    var groups by remember { mutableStateOf(XKey.groups(context).map { group -> group.map { it.id } }) }
+    var adding by remember { mutableStateOf(false) }
+    var resetting by remember { mutableStateOf(false) }
+    fun store(next: List<List<String>>) {
+        groups = next
+        XKey.save(context, next)
+    }
+    BackHandler(onBack = onClose)
+    Box(Modifier.fillMaxSize()) {
+        Page(top = {
+            TopBar(
+                "Customize keyboard",
+                left = { BackButton(onClose) },
+                actions = { BarIcon(Icons.Filled.RestartAlt, "Back to the default keys", "keys_reset") { resetting = true } },
+            )
+        }) {
+            Text(
+                "The groups of the extra-keys row, in its order. Drag a group by its handle to move it.",
+                color = Tokens.textSecondary, style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            )
+            LazyColumn(Modifier.fillMaxSize()) {
+                itemsIndexed(groups, key = { index, group -> "$index:" + group.joinToString(",") }) { index, group ->
+                    KeyGroupCard(
+                        group,
+                        tag = "keys_group_$index",
+                        onDelete = { store(groups.filterIndexed { at, _ -> at != index }) },
+                        onMove = { step ->
+                            val target = (index + step).coerceIn(0, groups.size - 1)
+                            if (target != index) {
+                                val list = groups.toMutableList()
+                                list.add(target, list.removeAt(index))
+                                store(list)
+                            }
+                        },
+                    )
+                }
+                item { Spacer(Modifier.height(96.dp)) }
+            }
+        }
+        FloatingActionButton(
+            onClick = { adding = true }, containerColor = Tokens.accent, contentColor = Tokens.onAccent,
+            shape = RoundedCornerShape(16.dp), modifier = Modifier.align(Alignment.BottomEnd).padding(24.dp).testTag("keys_add"),
+        ) { Icon(Icons.Filled.Add, contentDescription = "Add a group") }
+    }
+    if (adding) {
+        var chosen by remember { mutableStateOf(listOf<String>()) }
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text("New group (up to four keys)") },
+            text = {
+                FlowRow(Modifier.verticalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (key in XKey.ALL.values) {
+                        val on = key.id in chosen
+                        KeyLabel(key, selected = on, modifier = Modifier.clickable {
+                            chosen = if (on) chosen - key.id else if (chosen.size < 4) chosen + key.id else chosen
+                        }.testTag("keys_pick_" + key.id))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = chosen.isNotEmpty(), onClick = { adding = false; store(groups + listOf(chosen)) }, modifier = Modifier.testTag("keys_add_ok")) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } },
+        )
+    }
+    if (resetting) {
+        AlertDialog(
+            onDismissRequest = { resetting = false },
+            title = { Text("Back to the default keys?") },
+            text = { Text("The row gets its default groups again; your changes go.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    resetting = false
+                    XKey.save(context, null)
+                    groups = XKey.DEFAULT
+                }, modifier = Modifier.testTag("keys_reset_ok")) { Text("Reset") }
+            },
+            dismissButton = { TextButton(onClick = { resetting = false }) { Text("Cancel") } },
+        )
+    }
 }
 
-/** Settings → Font & colours (reference-2 9.3): built in 3.4 of run 15. */
+/** A key as its chip shows it: its label, or the icon keys' names. */
+@Composable
+private fun KeyLabel(key: XKey, selected: Boolean = false, modifier: Modifier = Modifier) {
+    val label = when (key) {
+        XKey.Password -> "password"
+        XKey.Cursor -> "cursor"
+        XKey.Attach -> "file"
+        else -> key.label
+    }
+    Box(
+        modifier.heightIn(min = 40.dp).widthIn(min = 40.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Tokens.accent else Tokens.bgInput).padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (selected) Tokens.onAccent else Tokens.accent, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+    }
+}
+
+/** A group's card: delete, its keys, and a handle that moves it one place per drag step. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun KeyGroupCard(group: List<String>, tag: String, onDelete: () -> Unit, onMove: (Int) -> Unit) {
+    val density = LocalDensity.current
+    val step = with(density) { 64.dp.toPx() }
+    var dragged by remember { mutableStateOf(0f) }
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().clip(CardShape).background(Tokens.bgRaised)
+            .heightIn(min = 64.dp).padding(horizontal = 4.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BarIcon(Icons.Filled.DeleteOutline, "Delete the group", tag + "_delete", onClick = onDelete)
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
+            for (id in group) XKey.ALL[id]?.let { KeyLabel(it) }
+        }
+        Box(
+            Modifier.size(48.dp).pointerInput(Unit) {
+                detectVerticalDragGestures(onDragEnd = { dragged = 0f }) { _, amount ->
+                    dragged += amount
+                    if (dragged > step) {
+                        dragged = 0f
+                        onMove(1)
+                    } else if (dragged < -step) {
+                        dragged = 0f
+                        onMove(-1)
+                    }
+                }
+            }.testTag(tag + "_handle"),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Filled.DragHandle, contentDescription = "Move the group", tint = Tokens.textSecondary) }
+    }
+}
+
+/** The font sizes of the stepper (sp). */
+private val FONT_SIZES = listOf(8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28)
+
+/**
+ * Settings → Font & colours (reference-2 9.3): the font size stepper and
+ * the font above a grid of the terminal themes; a tap applies at once.
+ * The phone ships JetBrains Mono only.
+ */
 @Composable
 fun FontColoursScreen(app: App, onClose: () -> Unit) {
-    Page(top = { TopBar("Font & colours", left = { BackButton(onClose) }) }) {}
+    val context = LocalContext.current
+    val prefs = remember { TerminalPrefs.of(context) }
+    var size by remember { mutableStateOf(prefs.getInt(TerminalPrefs.FONT, 14)) }
+    var theme by remember { mutableStateOf(prefs.getString(TerminalPrefs.THEME, "") ?: "") }
+    fun setSize(next: Int) {
+        size = next
+        prefs.edit().putInt(TerminalPrefs.FONT, next).apply()
+    }
+    BackHandler(onBack = onClose)
+    Page(top = { TopBar("Font & colours", left = { BackButton(onClose) }) }) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            BarIcon(Icons.Filled.Remove, "Smaller", "font_smaller", enabled = size > FONT_SIZES.first()) {
+                setSize(FONT_SIZES.lastOrNull { it < size } ?: size)
+            }
+            Box(
+                Modifier.widthIn(min = 48.dp).clip(RoundedCornerShape(8.dp)).background(Tokens.bgInput).padding(horizontal = 12.dp, vertical = 8.dp).testTag("font_size"),
+                contentAlignment = Alignment.Center,
+            ) { Text(size.toString()) }
+            BarIcon(Icons.Filled.Add, "Larger", "font_larger", enabled = size < FONT_SIZES.last()) {
+                setSize(FONT_SIZES.firstOrNull { it > size } ?: size)
+            }
+            Spacer(Modifier.width(12.dp))
+            Row(
+                Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(Tokens.bgInput).heightIn(min = 48.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("JetBrains Mono", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Tokens.textMuted)
+            }
+        }
+        LazyVerticalGrid(GridCells.Fixed(2), Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+            item {
+                // Graphite in dark mode, Paper in light mode: the app's own default.
+                ThemeTile(terminalTheme(if (isSystemInDarkTheme()) "graphite" else "paper"), "Graphite / Paper (system)", theme.isEmpty(), "theme_system") {
+                    theme = ""
+                    prefs.edit().remove(TerminalPrefs.THEME).apply()
+                    runCatching { Native.setTheme("") }
+                }
+            }
+            items(TERMINAL_THEMES.size) { index ->
+                val shown = TERMINAL_THEMES[index]
+                ThemeTile(shown, shown.name, theme == shown.id, "theme_" + shown.id) {
+                    theme = shown.id
+                    prefs.edit().putString(TerminalPrefs.THEME, shown.id).apply()
+                    runCatching { Native.setTheme(shown.id) }
+                }
+            }
+        }
+    }
 }
