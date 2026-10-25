@@ -253,10 +253,11 @@ impl Plan {
 }
 
 /// Validates `input` and builds the data to store, as `record_save` does
-/// for a host or a group.
+/// for a host or a group; a group's place in the tree only with `tree`
+/// (a partial save checks it on the merged data alone).
 fn build_record(
     kind: RecordKind,
-    tree: &Tree,
+    tree: Option<&Tree>,
     input: &Map<String, Value>,
     stored: Option<&Map<String, Value>>,
     secrets: &BTreeMap<String, Option<SecretString>>,
@@ -279,7 +280,10 @@ fn build_record(
                 .and_then(Value::as_str)
                 .and_then(|raw| Uuid::parse_str(raw.trim()).ok())
                 .filter(|parent| Some(*parent) != record_id);
-            let tree_errors = group_tree_errors(tree, record_id, parent, "parent_id");
+            let tree_errors = match tree {
+                Some(tree) => group_tree_errors(tree, record_id, parent, "parent_id"),
+                None => Vec::new(),
+            };
             match built {
                 Ok(data) if tree_errors.is_empty() => Ok(data),
                 Ok(_) => Err(tree_errors),
@@ -301,29 +305,31 @@ fn public_data(kind: RecordKind, data: &Map<String, Value>) -> Map<String, Value
     }
 }
 
-/// `true` when `secrets` gives a secret member of `stored` another value.
-fn secrets_replace(
+/// Members of a host or group that a partial save compares and writes whole
+/// (a proxy, a theme reference, Telnet, the detected OS: data-model 7.2-7.6).
+const ATOMIC: &[&str] = &["ssh.proxy", "terminal_theme", "telnet", "os"];
+
+/// `true` when `built` holds another value, or none, for a secret member of
+/// `stored` (a set password, a removed proxy with its password).
+fn secrets_replaced(
     kind: RecordKind,
     stored: &Map<String, Value>,
-    secrets: &BTreeMap<String, Option<SecretString>>,
+    built: &Map<String, Value>,
 ) -> bool {
     kind == RecordKind::Host
-        && secrets.iter().any(|(path, value)| {
-            let new = value
-                .as_ref()
-                .map(|value| value.expose_secret())
-                .filter(|value| !value.is_empty());
-            host::secret_value(stored, path) != new
+        && host::SECRET_PATHS.iter().any(|path| {
+            let old = host::secret_value(stored, path);
+            old.is_some() && old != host::secret_value(built, path)
         })
 }
 
-/// The last deletion of a record and its last live data (Recently deleted),
-/// or `not_found`.
+/// The last deletion of a record and its last live version (Recently
+/// deleted), or `not_found`.
 fn deleted_version(
     parts: &mut Parts<'_>,
     kind: RecordKind,
     id: Uuid,
-) -> Result<(RecordRow, Payload, Map<String, Value>), CoreError> {
+) -> Result<(RecordRow, Payload, Payload), CoreError> {
     let vault_id = parts.session.ring.vault_id();
     let row = parts
         .store
@@ -340,8 +346,9 @@ fn deleted_version(
         .find(|entry| entry.vault_id == vault_id && entry.record_id == id)
         .ok_or(CoreError::NotFound)?;
     let live = open_envelope_payload(&mut parts.session.ring, &entry.envelope)
-        .filter(|payload| payload.type_name == kind.name() && !payload.deleted)
-        .and_then(|payload| payload.data.clone())
+        .filter(|payload| {
+            payload.type_name == kind.name() && !payload.deleted && payload.data.is_some()
+        })
         .ok_or(CoreError::NotFound)?;
     Ok((row, tombstone, live))
 }
@@ -523,9 +530,11 @@ impl Core {
         check_vault(parts.session, Some(input.vault_id))?;
         let kind = RecordKind::from_record_type(input.record_type);
         let tree = parts.session.index.tree();
-        // The version a partial save overwrites in members it changed too,
-        // kept as a conflict copy (D220).
-        let mut losing: Option<(RecordRow, Payload)> = None;
+        // The versions a partial save overwrites in members it changed too,
+        // each kept as a conflict copy (D221).
+        let mut losing: Vec<(RecordRow, Payload)> = Vec::new();
+        // The record was deleted meanwhile: its tombstone and last live version.
+        let mut revived: Option<(RecordRow, Payload, Payload)> = None;
         // A copy of the stored data, secrets included: wiped on every path.
         let stored: Option<WipeOnDrop> = match input.record_id {
             None => None,
@@ -536,71 +545,109 @@ impl Core {
                 // record back; the deletion is kept as a conflict copy, as a
                 // sync conflict would keep it (sync-protocol 6.7).
                 None if input.base.is_some() => {
-                    let (row, tombstone, live) = deleted_version(&mut parts, kind, id)?;
-                    losing = Some((row, tombstone));
-                    Some(WipeOnDrop::new(live))
+                    let found = deleted_version(&mut parts, kind, id)?;
+                    let live = WipeOnDrop::new(found.2.data.clone().unwrap_or_default());
+                    revived = Some(found);
+                    Some(live)
                 }
                 None => return Err(CoreError::NotFound),
             },
         };
 
-        // A partial save (D220): the members the edit changed against its
+        // A partial save (D221): the members the edit changed against its
         // base, written onto the stored record as it is now.
         let mut merged: Option<WipeOnDrop> = None;
+        let mut same_members = false;
         if let (Some(base), Some(current), Some(id)) =
             (&input.base, stored.as_deref(), input.record_id)
         {
+            // The edit and its base as the stored data would hold them, so
+            // an address in brackets or text in another normalization is
+            // no change (review of run 15).
             let edited = WipeOnDrop::new(build_record(
                 kind,
-                &tree,
+                None,
                 &input.data,
                 Some(current),
                 &input.secrets,
                 Some(id),
             )?);
             let edited = WipeOnDrop::new(public_data(kind, &edited));
+            let base_data = match build_record(
+                kind,
+                None,
+                &base.data,
+                Some(current),
+                &BTreeMap::new(),
+                Some(id),
+            ) {
+                Ok(built) => WipeOnDrop::new(public_data(kind, &built)),
+                Err(_) => WipeOnDrop::new(base.data.clone()),
+            };
             let current_public = WipeOnDrop::new(public_data(kind, current));
-            let changes = partial::changes(&base.data, &edited);
-            if losing.is_none() {
-                let record = parts
-                    .session
-                    .index
-                    .get(&id)
-                    .ok_or(CoreError::Internal("edited record missing"))?;
-                let same_members =
-                    !partial::conflicts(&base.data, &current_public, &changes).is_empty();
-                // The view holds no secrets, so a secret changed since the
-                // base cannot be told apart: a newer version whose secret
-                // the edit replaces is kept whole.
-                let same_secrets = record.revision != base.revision
-                    && secrets_replace(kind, current, &input.secrets);
-                if same_members || same_secrets {
-                    let row = parts
-                        .store
-                        .record(&parts.session.ring.vault_id(), &id)?
-                        .ok_or(CoreError::Internal("edited record row missing"))?;
-                    losing = Some((row, record.payload.clone()));
-                } else if changes.is_empty() && input.secrets.is_empty() {
-                    // Nothing changed: no new version.
-                    return parts
+            let changes = partial::changes(&base_data, &edited, ATOMIC);
+            if changes.is_empty() && input.secrets.is_empty() {
+                // Nothing changed: no new version, and nothing brought back.
+                return match revived {
+                    Some(_) => Err(CoreError::NotFound),
+                    None => parts
                         .session
                         .index
                         .view(&id)
-                        .ok_or(CoreError::Internal("edited record missing"));
-                }
+                        .ok_or(CoreError::Internal("edited record missing")),
+                };
             }
+            same_members = !partial::conflicts(&base_data, &current_public, &changes).is_empty();
             let mut data = WipeOnDrop::new(current_public.clone());
-            partial::apply(&mut data, &changes);
+            partial::apply(&mut data, &changes, &edited);
             merged = Some(data);
         }
         let mut data = build_record(
             kind,
-            &tree,
+            Some(&tree),
             merged.as_deref().unwrap_or(&input.data),
             stored.as_deref(),
             &input.secrets,
             input.record_id,
         )?;
+        if let (Some(base), Some(current), Some(id)) =
+            (&input.base, stored.as_deref(), input.record_id)
+        {
+            // The view holds no secrets, so a secret changed since the base
+            // cannot be told apart: once the revision moved on, a version
+            // whose secret this save replaces or drops is kept whole.
+            let moved_on = revived.is_some()
+                || parts
+                    .session
+                    .index
+                    .get(&id)
+                    .is_some_and(|record| record.revision != base.revision);
+            let secrets_lost = moved_on && secrets_replaced(kind, current, &data);
+            match &revived {
+                Some((row, tombstone, live)) => {
+                    losing.push((row.clone(), tombstone.clone()));
+                    // The last live version is in no other place once the
+                    // record is live again (Recently deleted lets it go).
+                    if same_members || secrets_lost {
+                        losing.push((row.clone(), live.clone()));
+                    }
+                }
+                None if same_members || secrets_lost => {
+                    let record = parts
+                        .session
+                        .index
+                        .get(&id)
+                        .ok_or(CoreError::Internal("edited record missing"))?;
+                    let payload = record.payload.clone();
+                    let row = parts
+                        .store
+                        .record(&parts.session.ring.vault_id(), &id)?
+                        .ok_or(CoreError::Internal("edited record row missing"))?;
+                    losing.push((row, payload));
+                }
+                None => {}
+            }
+        }
 
         let record_id = input.record_id.unwrap_or_else(|| parts.ids.next(now));
         let new_container = container_member(kind, &data);
@@ -625,18 +672,18 @@ impl Core {
             }
         }
         plan.set(kind, record_id, data);
-        let copy = match &losing {
-            Some((row, payload)) => Some(conflict_copy(parts.session, row, payload, now)?),
-            None => None,
-        };
+        let mut copies = Vec::with_capacity(losing.len());
+        for (row, payload) in &losing {
+            copies.push(conflict_copy(parts.session, row, payload, now)?);
+        }
         let writes = plan.prepare(&mut parts, now)?;
         self.commit_records_then(&mut parts, writes, Vec::new(), Vec::new(), true, |tx| {
-            if let Some(copy) = &copy {
+            for copy in &copies {
                 tx.record_put(copy)?;
             }
             Ok(())
         })?;
-        if copy.is_some() {
+        if !copies.is_empty() {
             tracing::info!(record_id = %record_id, "an edit kept the version it overwrote as a conflict copy");
             self.emit_with(parts.v, CoreEventKind::SyncChanged {});
         }

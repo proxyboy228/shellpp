@@ -917,6 +917,40 @@ pub struct SaveReport<T> {
     pub origin: Option<RecordBase>,
 }
 
+/// The revision a form's next save starts from (D221): a save right on top
+/// of `origin` moves it to the stored one; a save that merged another
+/// version keeps the old one, so a secret the form sets later still counts
+/// as replacing a newer version's (review of run 15).
+fn next_revision(origin: Option<&RecordBase>, saved: u64) -> u64 {
+    match origin {
+        Some(origin) if saved != origin.revision + 1 => origin.revision,
+        _ => saved,
+    }
+}
+
+/// Copies `members` of the stored data into a form's `origin` when the form
+/// takes them from the stored record (a pull, an edit elsewhere): the next
+/// save then sees no change there (review of run 15).
+pub fn adopt_stored(
+    origin: &mut Option<RecordBase>,
+    stored: &Map<String, Value>,
+    members: &[&str],
+) {
+    let Some(origin) = origin else {
+        return;
+    };
+    for member in members {
+        match stored.get(*member) {
+            Some(value) => {
+                origin.data.insert((*member).to_owned(), value.clone());
+            }
+            None => {
+                origin.data.remove(*member);
+            }
+        }
+    }
+}
+
 fn errors_from(fields: Vec<FieldError>) -> FieldErrors {
     fields
         .into_iter()
@@ -1107,6 +1141,12 @@ impl AppState {
                 .unwrap_or_default(),
         };
         let mut data = draft.apply(&base);
+        if record_id.is_some() {
+            // The group of a stored host changes only through `move_records`:
+            // the save keeps the stored member, also one the draft cannot
+            // resolve (a group not synced yet; review of run 15).
+            restore_member(&mut data, &base, "group_id");
+        }
         for path in errors.keys() {
             restore_member(&mut data, &base, &member_of(path));
         }
@@ -1147,7 +1187,7 @@ impl AppState {
                     }
                     return SaveReport {
                         origin: Some(RecordBase {
-                            revision: host.revision,
+                            revision: next_revision(origin, host.revision),
                             data,
                         }),
                         saved: Some(host),
@@ -1478,6 +1518,10 @@ impl AppState {
                 .unwrap_or_default(),
         };
         let mut data = draft.apply(&base);
+        if record_id.is_some() {
+            // The parent changes only through `move_records` (as a host's group).
+            restore_member(&mut data, &base, "parent_id");
+        }
         for path in errors.keys() {
             restore_member(&mut data, &base, &member_of(path));
         }
@@ -1488,7 +1532,7 @@ impl AppState {
                 Ok(group) => {
                     return SaveReport {
                         origin: Some(RecordBase {
-                            revision: group.revision,
+                            revision: next_revision(origin, group.revision),
                             data,
                         }),
                         saved: Some(group),
@@ -1846,6 +1890,81 @@ mod tests {
             assert_eq!(stored.data["label"], "pulled label");
             assert_eq!(stored.data["ssh"]["username"], "admin");
             assert_eq!(stored.data["ssh"]["port"], 2200);
+            state.shutdown();
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_panel_password_after_a_merged_version_keeps_that_version(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| AppState::new(TestProfile::new().into_unlocked(), cx));
+        state.update(cx, |state, cx| {
+            let host = state
+                .save_host_with_secrets(
+                    None,
+                    map(json!({"address": "192.0.2.11", "label": "db"})),
+                    BTreeMap::from([(
+                        "ssh.password".to_owned(),
+                        Some(SecretString::from("first-test")),
+                    )]),
+                    None,
+                    cx,
+                )
+                .unwrap();
+            let origin = RecordBase {
+                revision: host.revision,
+                data: host.data_map(),
+            };
+            let mut draft = HostDraft::from_host(&host);
+            // A newer version with another password arrives (a pull).
+            state
+                .save_host_with_secrets(
+                    Some(host.record_id),
+                    host.data_map(),
+                    BTreeMap::from([(
+                        "ssh.password".to_owned(),
+                        Some(SecretString::from("other-test")),
+                    )]),
+                    None,
+                    cx,
+                )
+                .unwrap();
+            // The panel saves its label (merged on top of it), then a password.
+            draft.label = "db2".into();
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets::default(),
+                Some(&origin),
+                cx,
+            );
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            assert_eq!(
+                state
+                    .reveal_secret(host.record_id, "ssh.password")
+                    .unwrap()
+                    .expose_secret(),
+                "other-test"
+            );
+            let report = state.save_host_draft(
+                Some(host.record_id),
+                &draft,
+                &HostSecrets {
+                    password: SecretChange::Set(SecretString::from("mine-test")),
+                    ..HostSecrets::default()
+                },
+                report.origin.as_ref(),
+                cx,
+            );
+            assert!(report.errors.is_empty(), "{:?}", report.errors);
+            assert_eq!(
+                state
+                    .reveal_secret(host.record_id, "ssh.password")
+                    .unwrap()
+                    .expose_secret(),
+                "mine-test"
+            );
+            let copies = state.require_core().unwrap().sync_conflicts().unwrap();
+            assert_eq!(copies.len(), 1, "the newer password is kept in a copy");
             state.shutdown();
         });
     }

@@ -1,12 +1,14 @@
-//! Partial updates of a record (D220; docs/data-model.md, section 18.1): an
+//! Partial updates of a record (D221; docs/data-model.md, section 2.1): an
 //! editor's save writes only the members it changed onto the stored record,
 //! so a version that arrived meanwhile (a pull, another window) keeps every
 //! member the edit did not touch.
 //!
 //! The members are compared as data objects: a member that is an object on
 //! both sides is compared member by member, anything else (strings, numbers,
-//! arrays such as tags or the jump chain) as one value. A `null` member is
-//! the same as a missing one, as for validation ([`fields::present`]).
+//! arrays such as tags or the jump chain) as one value, and so are the
+//! objects that only make sense whole (a proxy, a theme reference: the
+//! caller's `atomic` paths). A `null` member is the same as a missing one,
+//! as for validation ([`fields::present`]).
 //!
 //! [`fields::present`]: crate::model::fields::present
 
@@ -22,16 +24,22 @@ pub struct Change {
     pub value: Option<Value>,
 }
 
-/// The members `edited` changes against `base`.
-pub fn changes(base: &Map<String, Value>, edited: &Map<String, Value>) -> Vec<Change> {
+/// The members `edited` changes against `base`; the dotted paths in
+/// `atomic` are compared whole.
+pub fn changes(
+    base: &Map<String, Value>,
+    edited: &Map<String, Value>,
+    atomic: &[&str],
+) -> Vec<Change> {
     let mut out = Vec::new();
-    diff_level(base, edited, &mut Vec::new(), &mut out);
+    diff_level(base, edited, atomic, &mut Vec::new(), &mut out);
     out
 }
 
 fn diff_level(
     base: &Map<String, Value>,
     edited: &Map<String, Value>,
+    atomic: &[&str],
     prefix: &mut Path,
     out: &mut Vec<Change>,
 ) {
@@ -41,9 +49,10 @@ fn diff_level(
         let old = present(base.get(key));
         let new = present(edited.get(key));
         prefix.push(key.clone());
+        let whole = atomic.contains(&prefix.join(".").as_str());
         match (old, new) {
-            (Some(Value::Object(old)), Some(Value::Object(new))) => {
-                diff_level(old, new, prefix, out);
+            (Some(Value::Object(old)), Some(Value::Object(new))) if !whole => {
+                diff_level(old, new, atomic, prefix, out);
             }
             _ if old == new => {}
             _ => out.push(Change {
@@ -65,23 +74,31 @@ pub fn value_at<'a>(data: &'a Map<String, Value>, path: &[String]) -> Option<&'a
     present(level.get(last))
 }
 
-/// Applies `changes` to `target`: a removed member is set to `null` (the
-/// record builders then drop it, unknown members included), and a missing or
-/// non-object level on the way becomes an object.
-pub fn apply(target: &mut Map<String, Value>, changes: &[Change]) {
-    for change in changes {
+/// Applies `changes` (made against `edited`) to `target`: a removed member
+/// is set to `null` (the record builders then drop it, unknown members
+/// included), a removal under a level `target` no longer has is nothing to
+/// do, and a change under such a level writes the edit's whole level there,
+/// so that no object is made of pieces (review of run 15).
+pub fn apply(target: &mut Map<String, Value>, changes: &[Change], edited: &Map<String, Value>) {
+    'change: for change in changes {
         let Some((last, parents)) = change.path.split_last() else {
             continue;
         };
         let mut level = &mut *target;
-        for key in parents {
-            let slot = level
-                .entry(key.clone())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if !slot.is_object() {
-                *slot = Value::Object(Map::new());
+        for (depth, key) in parents.iter().enumerate() {
+            let present = level.get(key).is_some_and(Value::is_object);
+            if !present {
+                if change.value.is_some()
+                    && let Some(whole) = value_at(edited, &change.path[..=depth])
+                {
+                    level.insert(key.clone(), whole.clone());
+                }
+                continue 'change;
             }
-            level = slot.as_object_mut().expect("made an object above");
+            level = level
+                .get_mut(key)
+                .and_then(Value::as_object_mut)
+                .expect("an object, checked above");
         }
         level.insert(last.clone(), change.value.clone().unwrap_or(Value::Null));
     }
@@ -140,7 +157,7 @@ mod tests {
             "ssh": {"port": 22, "username": null, "proxy": {"type": "http", "port": 8080}},
             "color": "blue"
         }));
-        let mut found = changes(&base, &edited);
+        let mut found = changes(&base, &edited, &[]);
         found.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(
             found,
@@ -177,7 +194,7 @@ mod tests {
     fn null_and_missing_are_the_same() {
         let base = map(json!({"label": null, "ssh": {"port": 22}}));
         let edited = map(json!({"ssh": {"port": 22, "username": null}}));
-        assert!(changes(&base, &edited).is_empty());
+        assert!(changes(&base, &edited, &[]).is_empty());
     }
 
     #[test]
@@ -185,11 +202,58 @@ mod tests {
         let base = map(json!({"ssh": {"proxy": {"type": "http"}}}));
         let edited = map(json!({"ssh": {"proxy": null}}));
         assert_eq!(
-            changes(&base, &edited),
+            changes(&base, &edited, &[]),
             vec![Change {
                 path: path("ssh.proxy"),
                 value: None
             }]
+        );
+    }
+
+    #[test]
+    fn atomic_members_change_whole() {
+        let base = map(json!({"ssh": {"proxy": {"type": "http", "port": 1}}}));
+        let edited = map(json!({"ssh": {"proxy": {"type": "http", "port": 2}}}));
+        assert_eq!(
+            changes(&base, &edited, &["ssh.proxy"]),
+            vec![Change {
+                path: path("ssh.proxy"),
+                value: Some(json!({"type": "http", "port": 2}))
+            }]
+        );
+    }
+
+    #[test]
+    fn a_removal_under_a_level_that_is_gone_does_nothing() {
+        let mut current = map(json!({"address": "h"}));
+        apply(
+            &mut current,
+            &[Change {
+                path: path("telnet.username"),
+                value: None,
+            }],
+            &map(json!({"telnet": {"port": 23}})),
+        );
+        assert_eq!(Value::Object(current), json!({"address": "h"}));
+    }
+
+    #[test]
+    fn a_change_under_a_level_that_is_gone_writes_the_whole_level() {
+        let mut current = map(json!({"ssh": {"port": 22}}));
+        let edited = map(
+            json!({"ssh": {"port": 22, "proxy": {"type": "http", "address": "p", "port": 3128}}}),
+        );
+        apply(
+            &mut current,
+            &[Change {
+                path: path("ssh.proxy.port"),
+                value: Some(json!(3128)),
+            }],
+            &edited,
+        );
+        assert_eq!(
+            Value::Object(current),
+            json!({"ssh": {"port": 22, "proxy": {"type": "http", "address": "p", "port": 3128}}})
         );
     }
 
@@ -214,7 +278,8 @@ mod tests {
                 value: Some(json!(8080)),
             },
         ];
-        apply(&mut current, &edit);
+        let edited = map(json!({"ssh": {"proxy": {"port": 8080}}}));
+        apply(&mut current, &edit, &edited);
         assert_eq!(
             Value::Object(current),
             json!({
@@ -226,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_replaces_a_value_on_the_way_by_an_object() {
+    fn apply_replaces_a_value_on_the_way_by_the_edited_object() {
         let mut current = map(json!({"ssh": "broken"}));
         apply(
             &mut current,
@@ -234,8 +299,12 @@ mod tests {
                 path: path("ssh.port"),
                 value: Some(json!(22)),
             }],
+            &map(json!({"ssh": {"port": 22, "username": "u"}})),
         );
-        assert_eq!(Value::Object(current), json!({"ssh": {"port": 22}}));
+        assert_eq!(
+            Value::Object(current),
+            json!({"ssh": {"port": 22, "username": "u"}})
+        );
     }
 
     #[test]

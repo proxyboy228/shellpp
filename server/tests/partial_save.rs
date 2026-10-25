@@ -145,3 +145,49 @@ fn a_pull_that_deleted_the_record_gives_way_to_the_edit_and_keeps_the_deletion()
     assert_eq!(copies.len(), 1);
     assert!(copies[0].losing_deleted);
 }
+
+#[test]
+fn a_newer_version_before_the_deletion_is_kept_when_the_edit_brings_the_record_back() {
+    let (_server, a, b, id) = two_devices();
+    let base = a.base(id);
+    let mut data = b.data(id);
+    data["label"] = json!("from B");
+    b.save(Some(id), RecordType::Host, data);
+    b.sync();
+    a.sync();
+    b.delete(id);
+    b.sync();
+    a.sync();
+
+    a.save_from(id, RecordType::Host, &base, edited(&base, "label", "kept"))
+        .expect("saved");
+    assert_eq!(a.data(id)["label"], "kept");
+    let copies = a.core.sync_conflicts().expect("conflicts");
+    assert_eq!(copies.len(), 2, "the deletion and the version it deleted");
+    assert!(copies.iter().any(|copy| copy.losing_deleted));
+    assert!(copies.iter().any(|copy| {
+        copy.losing_data
+            .as_ref()
+            .and_then(|data| data.get("label"))
+            .and_then(Value::as_str)
+            == Some("from B")
+    }));
+    a.sync();
+    b.sync();
+    assert_eq!(b.core.sync_conflicts().expect("conflicts").len(), 2);
+}
+
+#[test]
+fn a_save_that_changes_nothing_does_not_bring_a_deleted_record_back() {
+    let (_server, a, b, id) = two_devices();
+    let base = a.base(id);
+    b.delete(id);
+    b.sync();
+    a.sync();
+    let unchanged = Value::Object(base.data.clone());
+    assert!(matches!(
+        a.save_from(id, RecordType::Host, &base, unchanged),
+        Err(shellpp_core::CoreError::NotFound)
+    ));
+    assert!(!a.addresses().contains(&"web.example.com".to_owned()));
+}

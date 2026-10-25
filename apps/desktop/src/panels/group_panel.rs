@@ -272,9 +272,12 @@ impl GroupPanel {
             // elsewhere), never through the autosave: always take it from the
             // stored record, or a pending autosave would move the group back.
             self.draft.parent_id = group.parent_id;
+            let data = group.data_map();
+            crate::state::records_edit::adopt_stored(&mut self.origin, &data, &["parent_id"]);
             if !self.autosave.is_pending() {
                 // A color picked elsewhere.
                 self.draft.color = GroupDraft::from_group(&group).color;
+                crate::state::records_edit::adopt_stored(&mut self.origin, &data, &["color"]);
             }
         }
         self.refresh_placeholders(window, cx);

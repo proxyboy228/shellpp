@@ -592,10 +592,13 @@ impl HostPanel {
         // through the autosave: always take it from the stored record, or a
         // pending autosave would move the host back.
         self.draft.group_id = stored.group_id;
+        let data = host.data_map();
+        crate::state::records_edit::adopt_stored(&mut self.origin, &data, &["group_id"]);
         if !self.autosave.is_pending() {
             // Tag and color edits made elsewhere.
             self.draft.tags = stored.tags;
             self.draft.color = stored.color;
+            crate::state::records_edit::adopt_stored(&mut self.origin, &data, &["tags", "color"]);
         }
         self.password_stored = host.secrets_set.iter().any(|path| path == "ssh.password");
         self.refresh_placeholders(window, cx);

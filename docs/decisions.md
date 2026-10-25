@@ -2599,3 +2599,12 @@ Status: run 15 (plan, section 3.1); `crates/core/src/model/partial.rs`, `crates/
 **Tested:** the change and conflict rules (`model::partial`), the core's save on a newer version in other members, in the same member, the same value, cleared members, nothing changed, secrets with and without a newer version, a group's parent and name, an invalid edit, a record deleted without a trace (`crates/core/tests/partial_save.rs`); through the server, a pull between the read and the save in other members, in the same member (a copy on both devices) and a pulled deletion (`server/tests/partial_save.rs`); the property "data is never lost" with editors that stay open across steps and pulls (`server/tests/property.rs`), 40 seeds × 500 steps green; the desktop's panels (`state::records_edit`). With the old whole write both server tests and the property fail.
 
 **Spec impact:** data-model 2.1 and 15, UI 1.3 (EN and RU).
+
+**Amended after the review of run 15 (four medium findings, all fixed with tests):**
+
+- The secrets check compares the stored version with the data the save writes, for every secret member once the revision moved on, not only the secrets the edit sends: removing a proxy whose password a newer version set keeps that version as a copy.
+- A record brought back from Recently deleted keeps its last live version as a second copy when the edit overwrites its members or secrets (Recently deleted lets it go once the record is live); a save that changes nothing brings nothing back (`not_found`).
+- A proxy, a theme reference, Telnet and the detected OS are compared and written whole; a removal under a level the stored version no longer has does nothing, and a change under one writes the edit's whole level, so no object is made of pieces.
+- The base is normalized like the edit before they are compared (an address in brackets, text in another normalization), and a group's place in the tree is checked on the merged data only.
+- The desktop: a panel's `origin` moves to the stored revision only when its save went right on top of it (a save that merged another version keeps the old revision, so a password set later still counts as replacing the newer one); the members a panel takes from the stored record after a pull (group, tags, color, a group's parent and color) go into its `origin` too; a save keeps the stored `group_id` / `parent_id`, also one the panel cannot resolve.
+- The sync request's log line leaves the URL out (security.md 9.1), from 2da6175.

@@ -355,3 +355,226 @@ fn a_record_deleted_here_without_a_trace_is_not_found() {
     .unwrap_err();
     assert!(matches!(error, CoreError::NotFound));
 }
+
+/// A host saved with `secrets`, its view.
+fn host_with(app: &Unlocked, data: Value, secrets: &[(&str, Option<&str>)]) -> HostView {
+    as_host(
+        save(
+            &app.core,
+            app.vault_id,
+            None,
+            RecordType::Host,
+            data,
+            secrets,
+        )
+        .expect("saved"),
+    )
+}
+
+fn proxy_password(app: &Unlocked, id: Uuid) -> Option<String> {
+    app.core
+        .secret_reveal(SecretFieldRef {
+            vault_id: app.vault_id,
+            record_id: id,
+            path: "ssh.proxy.password".into(),
+        })
+        .ok()
+        .map(|secret| secret.expose_secret().to_owned())
+}
+
+#[test]
+fn a_newer_version_that_already_holds_the_new_password_makes_no_copy() {
+    let app = first_run();
+    let host = host_with(
+        &app,
+        json!({"address": "db.example.com"}),
+        &[("ssh.password", Some("old"))],
+    );
+    let base = base_of(&get(&app, host.record_id));
+    let other = as_host(get(&app, host.record_id)).data;
+    save(
+        &app.core,
+        app.vault_id,
+        Some(host.record_id),
+        RecordType::Host,
+        other,
+        &[("ssh.password", Some("same"))],
+    )
+    .expect("written");
+    save_from(
+        &app,
+        host.record_id,
+        RecordType::Host,
+        &base,
+        Value::Object(base.data.clone()),
+        &[("ssh.password", Some("same"))],
+    )
+    .expect("saved");
+    assert!(app.core.sync_conflicts().expect("conflicts").is_empty());
+}
+
+#[test]
+fn a_removed_proxy_keeps_a_newer_proxy_password_in_a_copy() {
+    let app = first_run();
+    let host = host_with(
+        &app,
+        json!({"address": "px.example.com", "ssh": {"proxy": {"type": "http", "address": "proxy.example.com", "port": 8080}}}),
+        &[("ssh.proxy.password", Some("old"))],
+    );
+    let base = base_of(&get(&app, host.record_id));
+    let other = as_host(get(&app, host.record_id)).data;
+    save(
+        &app.core,
+        app.vault_id,
+        Some(host.record_id),
+        RecordType::Host,
+        other,
+        &[("ssh.proxy.password", Some("newer"))],
+    )
+    .expect("written");
+    let mut form = Value::Object(base.data.clone());
+    form["ssh"].as_object_mut().unwrap().remove("proxy");
+    save_from(&app, host.record_id, RecordType::Host, &base, form, &[]).expect("saved");
+    assert!(
+        as_host(get(&app, host.record_id)).data["ssh"]
+            .get("proxy")
+            .is_none()
+    );
+    assert_eq!(proxy_password(&app, host.record_id), None);
+    let copies = app.core.sync_conflicts().expect("conflicts");
+    assert_eq!(
+        copies.len(),
+        1,
+        "the newer proxy password is kept in a copy"
+    );
+}
+
+#[test]
+fn a_parent_changed_elsewhere_does_not_refuse_a_rename() {
+    let app = first_run();
+    let p = app.group(json!({"name": "P"}));
+    let a = app.group(json!({"name": "A", "parent_id": p.record_id}));
+    let base = base_of(&get(&app, a.record_id));
+    // Elsewhere: A goes to the top level and P under A.
+    let mut a_data = as_group(get(&app, a.record_id)).data;
+    a_data.as_object_mut().unwrap().remove("parent_id");
+    write_whole(&app, a.record_id, RecordType::Group, a_data);
+    let mut p_data = as_group(get(&app, p.record_id)).data;
+    p_data["parent_id"] = json!(a.record_id);
+    write_whole(&app, p.record_id, RecordType::Group, p_data);
+    let saved = as_group(
+        save_from(
+            &app,
+            a.record_id,
+            RecordType::Group,
+            &base,
+            with(&base, json!({"name": "A renamed"})),
+            &[],
+        )
+        .expect("saved"),
+    );
+    assert_eq!(saved.data["name"], "A renamed");
+    assert!(saved.data.get("parent_id").is_none());
+}
+
+#[test]
+fn a_theme_reference_is_written_whole() {
+    let app = first_run();
+    let host = app.host(json!({"address": "t.example.com", "terminal_theme": {"builtin": "nord"}}));
+    let base = base_of(&get(&app, host.record_id));
+    let mut other = host.data.clone();
+    other["terminal_theme"] = json!({"builtin": "paper"});
+    write_whole(&app, host.record_id, RecordType::Host, other);
+    let saved = as_host(
+        save_from(
+            &app,
+            host.record_id,
+            RecordType::Host,
+            &base,
+            with(&base, json!({"terminal_theme": {"builtin": "dracula"}})),
+            &[],
+        )
+        .expect("saved"),
+    );
+    assert_eq!(saved.data["terminal_theme"], json!({"builtin": "dracula"}));
+    assert_eq!(app.core.sync_conflicts().expect("conflicts").len(), 1);
+}
+
+#[test]
+fn telnet_removed_elsewhere_and_changed_here_goes_to_the_edit_with_a_copy() {
+    let app = first_run();
+    let host = app.host(json!({"address": "tn.example.com", "telnet": {"port": 2323}}));
+    let base = base_of(&get(&app, host.record_id));
+    let mut other = host.data.clone();
+    other.as_object_mut().unwrap().remove("telnet");
+    write_whole(&app, host.record_id, RecordType::Host, other);
+    let saved = as_host(
+        save_from(
+            &app,
+            host.record_id,
+            RecordType::Host,
+            &base,
+            with(&base, json!({"telnet": {"port": 2424}})),
+            &[],
+        )
+        .expect("saved"),
+    );
+    // Telnet is one member: the edit wins and the other version is kept.
+    assert_eq!(saved.data["telnet"], json!({"port": 2424}));
+    let copies = app.core.sync_conflicts().expect("conflicts");
+    assert_eq!(copies.len(), 1);
+    assert!(
+        copies[0]
+            .losing_data
+            .as_ref()
+            .unwrap()
+            .get("telnet")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_proxy_removed_elsewhere_and_edited_here_comes_back_whole() {
+    let app = first_run();
+    let host = app.host(json!({"address": "px.example.com", "ssh": {"proxy": {"type": "http", "address": "proxy.example.com", "port": 8080}}}));
+    let base = base_of(&get(&app, host.record_id));
+    let mut other = host.data.clone();
+    other["ssh"].as_object_mut().unwrap().remove("proxy");
+    write_whole(&app, host.record_id, RecordType::Host, other);
+    let mut form = Value::Object(base.data.clone());
+    form["ssh"]["proxy"]["port"] = json!(3128);
+    let saved = as_host(
+        save_from(&app, host.record_id, RecordType::Host, &base, form, &[]).expect("saved"),
+    );
+    assert_eq!(
+        saved.data["ssh"]["proxy"],
+        json!({"type": "http", "address": "proxy.example.com", "port": 3128})
+    );
+    assert_eq!(app.core.sync_conflicts().expect("conflicts").len(), 1);
+}
+
+#[test]
+fn a_base_in_another_normalization_is_no_change() {
+    let app = first_run();
+    let host = app.host(json!({"address": "[2001:db8::1]", "label": "v6"}));
+    let stored = as_host(get(&app, host.record_id));
+    assert_eq!(stored.data["address"], "2001:db8::1");
+    // The editor's base holds the address as it was typed.
+    let mut sent = stored.data.clone();
+    sent["address"] = json!("[2001:db8::1]");
+    let base = RecordBase {
+        revision: stored.revision,
+        data: map(sent.clone()),
+    };
+    let mut other = stored.data.clone();
+    other["address"] = json!("2001:db8::2");
+    write_whole(&app, host.record_id, RecordType::Host, other);
+    let mut form = sent;
+    form["label"] = json!("v6 edited");
+    let saved = as_host(
+        save_from(&app, host.record_id, RecordType::Host, &base, form, &[]).expect("saved"),
+    );
+    assert_eq!(saved.data["address"], "2001:db8::2");
+    assert_eq!(saved.data["label"], "v6 edited");
+    assert!(app.core.sync_conflicts().expect("conflicts").is_empty());
+}
