@@ -211,12 +211,24 @@ class DeviceKeys(private val context: Context) {
         synchronized(held) { held.remove(account)?.fill(0) }
     }
 
+    /**
+     * A key pair a new fingerprint invalidated was deleted since (with its
+     * last item): the reason the option went off stays "a new fingerprint"
+     * rather than "the key is gone" (D218; review of run 14).
+     */
+    fun wasInvalidated(): Boolean = File(dir, INVALIDATED).exists()
+
     /** Deletes the item of [account]; with no item left, the Keystore key pair too. */
     fun delete(account: String) {
         file(account).delete()
         synchronized(held) { held.remove(account)?.fill(0) }
         if (dir.listFiles()?.none { it.name.endsWith(".bin") } != false) {
             File(dir, "accounts").delete()
+            try {
+                if (keyState() == KeyState.Invalidated) File(dir.apply { mkdirs() }, INVALIDATED).writeText("")
+            } catch (error: Exception) {
+                // The reason may then read "the key is gone".
+            }
             try {
                 keyStore().deleteEntry(ALIAS)
             } catch (error: Exception) {
@@ -247,6 +259,7 @@ class DeviceKeys(private val context: Context) {
     }
 
     private fun generate() {
+        File(dir, INVALIDATED).delete()
         check(Build.VERSION.SDK_INT >= 30) { "fingerprint unlock needs Android 11" }
         fun spec(strongBox: Boolean) = KeyGenParameterSpec.Builder(
             ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
@@ -280,3 +293,7 @@ class DeviceKeys(private val context: Context) {
         private val OAEP = OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA1, PSource.PSpecified.DEFAULT)
     }
 }
+
+/** The mark of [DeviceKeys.wasInvalidated]. */
+private const val INVALIDATED = "invalidated"
+

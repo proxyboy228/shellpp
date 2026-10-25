@@ -402,6 +402,7 @@ fun ForgotDialog(app: App, activity: MainActivity, onDismiss: () -> Unit) {
                             withContext(Dispatchers.IO) {
                                 try {
                                     Core.call("start_new_vault")
+                                    app.accountPrefs.edit().remove(PREF_RECOVERY_UNSAVED).apply()
                                     // Fingerprint unlock belonged to the set-aside vault.
                                     val keys = app.platform.deviceKeys
                                     keys.storedAccount()?.let(keys::delete)

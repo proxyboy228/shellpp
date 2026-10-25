@@ -1,6 +1,7 @@
 package dev.shellpp.android
 
 import android.util.Base64
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +37,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +54,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -275,9 +279,13 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
             "totp_required" -> step = "totp"
             else -> {
                 if (register) {
-                    // Until "I saved it", the account screen offers the key
+                    // Until "I saved it", this account's screen offers the key
                     // again: a lock before it wipes the core's grant.
-                    app.accountPrefs.edit().putBoolean(PREF_RECOVERY_UNSAVED, true).apply()
+                    withContext(Dispatchers.IO) {
+                        runCatching { accountOf(Core.obj("sync_status")) }.getOrNull()?.let { account ->
+                            app.accountPrefs.edit().putString(PREF_RECOVERY_UNSAVED, account).apply()
+                        }
+                    }
                     recoveryKey = withContext(Dispatchers.IO) {
                         try {
                             Core.obj("recovery_key_granted").optString("recovery_key")
@@ -294,6 +302,9 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
             }
         }
     }
+
+    // The TOTP secret and the recovery key stay out of Recents and screenshots.
+    SecureWhile(activity, step == "recovery" || (step == "totp_offer" && totpSecret != null))
 
     LaunchedEffect(step) {
         if (step == "done") {
@@ -739,7 +750,7 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
             }
             HorizontalDivider(color = Tokens.border.copy(alpha = 0.4f))
         }
-        if (app.accountPrefs.getBoolean(PREF_RECOVERY_UNSAVED, false)) {
+        if (app.accountPrefs.getString(PREF_RECOVERY_UNSAVED, null) == accountOf(current)) {
             Text(
                 "The recovery key of this account was not confirmed as saved: it opens your data when the password is forgotten.",
                 color = Tokens.danger,
@@ -788,6 +799,7 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                         withContext(Dispatchers.IO) {
                             try {
                                 Core.call("sync_sign_out", JSONObject().put("delete_local", deleteLocal))
+                                app.accountPrefs.edit().remove(PREF_RECOVERY_UNSAVED).apply()
                             } catch (failed: CoreException) {
                                 message = syncErrorText(failed)
                             }
@@ -834,8 +846,24 @@ private fun QrCode(qr: JSONObject) {
     }
 }
 
-/** Set at registration until "I saved it" (review of run 14). */
-private const val PREF_RECOVERY_UNSAVED = "recovery_unsaved"
+/**
+ * The account (its server and email) registered on this phone whose
+ * recovery key is not confirmed as saved yet; cleared by "I saved it",
+ * Sign out and a new vault (reviews of run 14).
+ */
+const val PREF_RECOVERY_UNSAVED = "recovery_unsaved"
+
+/** An account as [PREF_RECOVERY_UNSAVED] keeps it. */
+private fun accountOf(status: JSONObject): String = "${status.text("server_url")}\n${status.text("email")}"
+
+/** The window shows no secret in Recents or screenshots while [secret] is on screen. */
+@Composable
+fun SecureWhile(activity: MainActivity, secret: Boolean) {
+    DisposableEffect(secret) {
+        if (secret) activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { if (secret) activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    }
+}
 
 /**
  * The recovery key again, for an account registered on this phone whose key
@@ -854,6 +882,7 @@ private fun RecoveryKeyDialog(app: App, onClose: () -> Unit) {
     val shown = key
     AlertDialog(
         onDismissRequest = onClose,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         title = { Text("Your recovery key") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -884,16 +913,23 @@ private fun RecoveryKeyDialog(app: App, onClose: () -> Unit) {
                     busy = true
                     scope.launch {
                         val typed = password.toCharArray()
+                        val again = typed.copyOf()
                         password = ""
                         try {
                             val result = withContext(Dispatchers.IO) {
-                                Core.withPassword("recovery_key_show", "password", typed) as JSONObject
+                                // The unlock's attempt limit first (D29): the
+                                // show itself does not count attempts.
+                                Core.withPassword("password_check", "password", typed)
+                                Core.withPassword("recovery_key_show", "password", again) as JSONObject
                             }
                             key = result.optString("recovery_key")
                         } catch (failed: CoreException) {
-                            error = if (failed.code == "wrong_password") "Wrong password." else (failed.message ?: failed.code)
+                            error = if (failed.code == "invalid_password") "Wrong password." else (failed.message ?: failed.code)
                         } catch (failed: Exception) {
                             error = failed.message
+                        } finally {
+                            typed.fill('\u0000')
+                            again.fill('\u0000')
                         }
                         busy = false
                     }

@@ -238,14 +238,17 @@ class App : Application() {
         sessions -= id
         sftpSessions -= id
         sessionHosts.remove(id)
-        // Its transfers are gone with it (the core cancelled them); failed
-        // ones kept their cache file and document for Retry until now.
+        // Its transfers are gone with it: the core reports the running ones
+        // cancelled; failed ones kept their cache file and document for
+        // Retry until now. A finished one is left to its "done" (review of
+        // run 14: its document was deleted when the close came first).
         conflicts.value = conflicts.value.filter { conflict ->
             (conflict.session != id).also { keep -> if (!keep) conflict.cache.delete() }
         }
         transferWorker.execute {
             for ((transfer, target) in transferTargets.entries.toList()) {
-                if (target.session != id) continue
+                if (target.session != id || transfer !in failedTransfers) continue
+                failedTransfers -= transfer
                 transferTargets.remove(transfer)
                 deleteDocument(target)
                 target.dropCache()
@@ -345,37 +348,66 @@ class App : Application() {
             when (state) {
                 "done" -> {
                     transferTargets.remove(transfer)
-                    if (target.download && target.uri != null) {
-                        val written = try {
-                            contentResolver.openOutputStream(target.uri, "wt")?.use { out ->
-                                target.cache.inputStream().use { it.copyTo(out) }
-                                true
-                            } ?: false
-                        } catch (error: Exception) {
-                            false
-                        }
-                        if (!written) {
-                            deleteDocument(target)
-                            event.put("state", "failed").put("error", "The file could not be written where you chose.")
-                        }
+                    // The copy into the document on a thread of its own: a
+                    // slow provider holds up no other transfer (review of run 14).
+                    deliverWorker.execute {
+                        deliver(target, event)
+                        publish(event)
                     }
-                    target.dropCache()
+                    return@execute
                 }
                 "cancelled" -> {
                     transferTargets.remove(transfer)
                     deleteDocument(target)
                     target.dropCache()
                 }
-                // A failure keeps its cache file and its document for Retry;
-                // they go when the session closes (forget).
-                "failed" -> Unit
+                // A failure keeps its cache file and its document for Retry
+                // while its session is open; they go when it closes (forget).
+                "failed" -> if (target.session in sessions) {
+                    failedTransfers += transfer
+                } else {
+                    transferTargets.remove(transfer)
+                    deleteDocument(target)
+                    target.dropCache()
+                }
             }
             publish(event)
         }
     }
 
+    /** A finished download into its document; a failed copy shows as a failure and leaves no document. */
+    private fun deliver(target: TransferTarget, event: JSONObject) {
+        if (target.download && target.uri != null) {
+            val written = try {
+                contentResolver.openOutputStream(target.uri, "wt")?.use { out ->
+                    target.cache.inputStream().use { it.copyTo(out) }
+                    true
+                } ?: false
+            } catch (error: Exception) {
+                false
+            }
+            if (!written) {
+                deleteDocument(target)
+                event.put("state", "failed").put("error", "The file could not be written where you chose.")
+            }
+        }
+        target.dropCache()
+    }
+
     private val transferWorker = Executors.newSingleThreadExecutor()
+    private val deliverWorker = Executors.newSingleThreadExecutor()
     private val copyWorker = Executors.newSingleThreadExecutor()
+
+    /** Failed transfers whose target waits for Retry (on [transferWorker]). */
+    private val failedTransfers: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** Retry of a failed transfer: queued again from the start with its target. */
+    fun retryTransfer(transfer: Long, remote: String) {
+        val target = transferTargets.remove(transfer) ?: return
+        failedTransfers -= transfer
+        transfers.value = transfers.value - transfer
+        queueTransfer(remote, target)
+    }
 
     /**
      * Queues a transfer and records its target in one step on the transfer

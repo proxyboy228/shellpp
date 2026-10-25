@@ -92,7 +92,7 @@ object Fingerprint {
             when {
                 keys.sensor() == DeviceKeys.Sensor.None -> REASON_NONE_ENROLLED
                 keys.sensor() == DeviceKeys.Sensor.Busy -> "busy"
-                keys.keyState() == DeviceKeys.KeyState.Invalidated -> REASON_NEW_FINGERPRINT
+                keys.keyState() == DeviceKeys.KeyState.Invalidated || keys.wasInvalidated() -> REASON_NEW_FINGERPRINT
                 keys.keyState() == DeviceKeys.KeyState.Missing -> REASON_KEY_GONE
                 keys.keyState() == DeviceKeys.KeyState.Unknown -> "busy"
                 !lock.rememberEnabled || keys.storedAccount() == null -> "refresh"
@@ -153,7 +153,7 @@ object Fingerprint {
         val reason = try {
             when {
                 keys.sensor() == DeviceKeys.Sensor.None -> REASON_NONE_ENROLLED
-                keys.keyState() == DeviceKeys.KeyState.Invalidated -> REASON_NEW_FINGERPRINT
+                keys.keyState() == DeviceKeys.KeyState.Invalidated || keys.wasInvalidated() -> REASON_NEW_FINGERPRINT
                 keys.keyState() == DeviceKeys.KeyState.Missing -> REASON_KEY_GONE
                 keys.sensor() == DeviceKeys.Sensor.Busy || keys.keyState() == DeviceKeys.KeyState.Unknown -> return
                 else -> null

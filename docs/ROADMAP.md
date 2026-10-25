@@ -215,7 +215,9 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
 5. **M4, keys, known hosts, SFTP** (done, run 14): the Keychain (generate,
    import, share the public key), the known hosts screens and the host key
    dialogs, SFTP (browse, download, upload through the cache, the queue,
-   the progress in the notification).
+   the progress in the notification). Left: a partial update in the core,
+   so an editor's save cannot overwrite a pull that lands in the
+   milliseconds between its read and its write (D219).
 6. **M5, the first version** (1 run): the rest of Settings (appearance,
    terminal, about), the host editor's terminal theme (the identity's name
    shows read-only since run 14),

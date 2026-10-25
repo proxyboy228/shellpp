@@ -438,9 +438,7 @@ fun SftpScreen(app: App, activity: MainActivity, host: Record?, existing: Long?,
                                 }) { Text("Cancel") }
                                 "failed" -> TextButton(onClick = {
                                     // Retry: queued again from the start.
-                                    val target = app.transferTargets.remove(id)
-                                    app.transfers.value = app.transfers.value - id
-                                    if (target != null) app.queueTransfer(transfer.optString("path"), target)
+                                    app.retryTransfer(id, transfer.optString("path"))
                                 }) { Text("Retry") }
                             }
                         }

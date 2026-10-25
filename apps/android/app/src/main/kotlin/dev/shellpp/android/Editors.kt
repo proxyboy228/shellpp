@@ -82,18 +82,17 @@ private fun merged(
     fields: Map<String, Any>,
     baseline: Map<String, Any>,
 ): JSONObject {
+    // A record that cannot be read now is not written from the old copy:
+    // the save fails and says so (review of run 14).
     val now = if (recordId == null) {
         null
     } else {
-        try {
-            Core.obj("record_get", JSONObject().put("vault_id", vaultId ?: vaultId()).put("record_id", recordId)).optJSONObject("data")
-        } catch (error: Exception) {
-            null
-        }
+        Core.obj("record_get", JSONObject().put("vault_id", vaultId ?: vaultId()).put("record_id", recordId)).optJSONObject("data")
+            ?: error("the record could not be read")
     }
     val data = now ?: JSONObject(original.toString())
     for ((key, value) in fields) {
-        if (now != null && value.toString() == baseline[key]?.toString()) continue
+        if (now != null && same(value, baseline[key])) continue
         if (key.startsWith("ssh.")) {
             val ssh = data.optJSONObject("ssh") ?: JSONObject().also { data.put("ssh", it) }
             ssh.put(key.removePrefix("ssh."), value)
@@ -103,6 +102,10 @@ private fun merged(
     }
     return data
 }
+
+/** Equal field values; JSON null is not the text "null". */
+private fun same(a: Any?, b: Any?): Boolean =
+    if (a == JSONObject.NULL || b == JSONObject.NULL) a == JSONObject.NULL && b == JSONObject.NULL else a.toString() == b.toString()
 
 private fun save(
     vaultId: String?,
@@ -333,7 +336,12 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             val current = fields()
             val vault = record?.vaultId
             val id0 = recordId
-            val data = withContext(Dispatchers.IO) { merged(vault, id0, original, current, baseline) }
+            val data = try {
+                withContext(Dispatchers.IO) { merged(vault, id0, original, current, baseline) }
+            } catch (failed: Exception) {
+                errors = mapOf("" to "Not saved: ${failed.message ?: "the host could not be read"}.")
+                return@withLock
+            }
             val secrets = JSONObject()
             if (passwordChange) {
                 if (clearPassword) secrets.put("ssh.password", JSONObject.NULL) else secrets.put("ssh.password", newPassword)
@@ -555,9 +563,13 @@ fun GroupEditor(app: App, record: Record?, parentId: String?, onClose: () -> Uni
             val current = fields()
             val vault = record?.vaultId
             val id0 = recordId
-            val (id, problems) = withContext(Dispatchers.IO) {
-                save(vault, id0, "group", merged(vault, id0, original, current, baseline), null)
+            val data = try {
+                withContext(Dispatchers.IO) { merged(vault, id0, original, current, baseline) }
+            } catch (failed: Exception) {
+                errors = mapOf("" to "Not saved: ${failed.message ?: "the group could not be read"}.")
+                return@withLock
             }
+            val (id, problems) = withContext(Dispatchers.IO) { save(vault, id0, "group", data, null) }
             errors = problems
             if (problems.isEmpty()) {
                 recordId = id
