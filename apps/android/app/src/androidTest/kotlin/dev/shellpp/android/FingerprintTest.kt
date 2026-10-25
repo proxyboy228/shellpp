@@ -25,6 +25,9 @@ class FingerprintOnTest {
         val toggle = E2e.find("settings_fingerprint")
         assertTrue("fingerprint unlock is offered", toggle.isEnabled)
         toggle.click()
+        // The master password once before the prompt (UI spec 12).
+        E2e.type("fingerprint_password", E2e.vaultPassword)
+        E2e.clickText("Continue")
         val deadline = System.currentTimeMillis() + 60_000
         while (!E2e.find("settings_fingerprint").isChecked && System.currentTimeMillis() < deadline) Thread.sleep(500)
         if (!E2e.find("settings_fingerprint").isChecked) E2e.shot("fingerprint-not-on")

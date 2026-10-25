@@ -63,4 +63,13 @@ class CoreLogicTest {
         assertEquals(3, group.hostCount)
         assertEquals("ocean", group.color)
     }
+
+    @Test
+    fun theWeeklyPasswordIsDueAfterAWeekOrWhenTheClockWentBack() {
+        val day = 24L * 60 * 60 * 1000
+        val now = 1_800_000_000_000L
+        assertFalse(Fingerprint.passwordDue(now - day, now))
+        assertTrue(Fingerprint.passwordDue(now - 8 * day, now))
+        assertTrue("a clock set back", Fingerprint.passwordDue(now + 30 * day, now))
+    }
 }

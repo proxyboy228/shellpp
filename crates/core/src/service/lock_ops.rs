@@ -535,6 +535,42 @@ impl Core {
         Ok(self.status(inner, available))
     }
 
+    /// The master password again while unlocked, under the unlock's attempt
+    /// limit (D29): the attempt counts as wrong until Argon2id proves it.
+    pub(super) fn password_check_impl(&self, password: SecretString) -> Result<(), CoreError> {
+        let context = {
+            let mut guard = self.inner();
+            let inner = &mut *guard;
+            Self::require_session(inner)?;
+            let now = self.now();
+            if let Some(left) = inner.lockout.remaining(now) {
+                return Err(CoreError::TooManyAttempts {
+                    retry_after_secs: lockout::whole_seconds(left),
+                });
+            }
+            let context = key_context(&inner.store)?;
+            inner.lockout.record_failure(now);
+            Self::save_lockout(inner);
+            context
+        };
+        let class = self.platform.class;
+        let material = PasswordMaterial::from_row(&context.local_auth)?;
+        let kek = material.derive_kek(&password, class)?;
+        drop(password);
+        let opened = vault::open_wrap(&context.kek_row, &kek).is_ok();
+        drop(kek);
+        if !opened {
+            self.unlock_failed();
+            return Err(CoreError::InvalidPassword);
+        }
+        let mut guard = self.inner();
+        let inner = &mut *guard;
+        if inner.lockout.reset() {
+            Self::save_lockout(inner);
+        }
+        Ok(())
+    }
+
     /// Logs a wrong master password (D29). [`Core::unlock_impl`] counted it
     /// and stored the counter before Argon2id ran.
     fn unlock_failed(&self) {

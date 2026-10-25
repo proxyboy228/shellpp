@@ -35,6 +35,7 @@ object Fingerprint {
     const val PREF_OFF_REASON = "fingerprint_off_reason"
     const val REASON_NEW_FINGERPRINT = "new_fingerprint"
     const val REASON_NONE_ENROLLED = "none_enrolled"
+    const val REASON_KEY_GONE = "key_gone"
     const val REASON_FAILED = "failed"
 
     /** The master password is asked once a week at least (D218). */
@@ -87,13 +88,27 @@ object Fingerprint {
         val prefs = app.unlockPrefs
         if (!prefs.getBoolean(PREF_ON, false)) return "off"
         val keys = app.platform.deviceKeys
-        if (!keys.available()) return REASON_NONE_ENROLLED
-        if (keys.invalidated()) return REASON_NEW_FINGERPRINT
-        if (!lock.rememberEnabled || keys.storedAccount() == null) return "refresh"
-        val last = prefs.getLong(PREF_LAST_PASSWORD, 0L)
-        if (System.currentTimeMillis() - last > PASSWORD_EVERY_MS) return "weekly"
-        return null
+        return try {
+            when {
+                keys.sensor() == DeviceKeys.Sensor.None -> REASON_NONE_ENROLLED
+                keys.sensor() == DeviceKeys.Sensor.Busy -> "busy"
+                keys.keyState() == DeviceKeys.KeyState.Invalidated -> REASON_NEW_FINGERPRINT
+                keys.keyState() == DeviceKeys.KeyState.Missing -> REASON_KEY_GONE
+                keys.keyState() == DeviceKeys.KeyState.Unknown -> "busy"
+                !lock.rememberEnabled || keys.storedAccount() == null -> "refresh"
+                passwordDue(prefs.getLong(PREF_LAST_PASSWORD, 0L), System.currentTimeMillis()) -> "weekly"
+                else -> null
+            }
+        } catch (error: Exception) {
+            "busy"
+        }
     }
+
+    /**
+     * The weekly master password is due: a week since the last one, or a
+     * clock that went back past it (D218; review of run 14).
+     */
+    fun passwordDue(last: Long, now: Long): Boolean = now < last || now - last > PASSWORD_EVERY_MS
 
     /**
      * Holds the device key behind the prompt for [step] (an unlock, a
@@ -104,11 +119,18 @@ object Fingerprint {
         val keys = app.platform.deviceKeys
         val account = keys.storedAccount()
         val cipher = keys.decryptCipher()
-        val result = if (account != null && cipher != null) prompt(activity, title, cipher) else PromptResult.Cancelled
+        val result = try {
+            if (account != null && cipher != null) prompt(activity, title, cipher) else PromptResult.Cancelled
+        } catch (error: Exception) {
+            PromptResult.Failed(error.message ?: "The fingerprint prompt did not open.")
+        }
         return withContext(Dispatchers.IO) {
             try {
-                if (result is PromptResult.Passed && account != null) keys.hold(account, result.cipher)
-                result to step()
+                // A key that cannot be read after a passed prompt (a damaged
+                // item, a Keystore error): the step goes on without it.
+                val read = result is PromptResult.Passed && account != null && keys.hold(account, result.cipher)
+                val outcome = if (result is PromptResult.Passed && !read) PromptResult.Failed("The fingerprint key could not be read.") else result
+                outcome to step()
             } finally {
                 keys.release()
             }
@@ -126,10 +148,18 @@ object Fingerprint {
         prefs.edit().putLong(PREF_LAST_PASSWORD, System.currentTimeMillis()).apply()
         if (!prefs.getBoolean(PREF_ON, false)) return
         val keys = app.platform.deviceKeys
-        val reason = when {
-            !keys.available() -> REASON_NONE_ENROLLED
-            keys.invalidated() -> REASON_NEW_FINGERPRINT
-            else -> null
+        // Only a key gone for good turns the option off (D218): a sensor busy
+        // for a moment or a Keystore that did not answer changes nothing.
+        val reason = try {
+            when {
+                keys.sensor() == DeviceKeys.Sensor.None -> REASON_NONE_ENROLLED
+                keys.keyState() == DeviceKeys.KeyState.Invalidated -> REASON_NEW_FINGERPRINT
+                keys.keyState() == DeviceKeys.KeyState.Missing -> REASON_KEY_GONE
+                keys.sensor() == DeviceKeys.Sensor.Busy || keys.keyState() == DeviceKeys.KeyState.Unknown -> return
+                else -> null
+            }
+        } catch (error: Exception) {
+            return
         }
         try {
             if (reason != null) {
@@ -138,8 +168,9 @@ object Fingerprint {
             } else if (!Core.lockStatus().rememberEnabled) {
                 app.setLock(LockStatus.from(Core.obj("remember_device_set", org.json.JSONObject().put("enabled", true))))
             }
-        } catch (error: RuntimeException) {
-            prefs.edit().putBoolean(PREF_ON, false).putString(PREF_OFF_REASON, REASON_FAILED).apply()
+        } catch (error: Exception) {
+            // The core refused (a store error): the option stays as it is and
+            // the next unlock tries again.
         }
     }
 }

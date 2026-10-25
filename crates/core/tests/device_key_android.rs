@@ -96,3 +96,27 @@ fn a_device_key_behind_the_prompt_is_not_used_and_not_lost() {
     phone.core.lock().expect("lock");
     assert!(phone.core.try_device_unlock().expect("device unlock"));
 }
+
+#[test]
+fn the_master_password_is_checked_again_while_unlocked() {
+    let phone = remembered(OsKind::Android);
+    phone
+        .core
+        .password_check(phone.password.clone())
+        .expect("the right password");
+    assert!(matches!(
+        phone.core.password_check(new_password()),
+        Err(shellpp_core::CoreError::InvalidPassword)
+    ));
+    assert_eq!(phone.core.unlock_failures(), 1, "counted as an unlock is");
+    phone
+        .core
+        .password_check(phone.password.clone())
+        .expect("the right password");
+    assert_eq!(phone.core.unlock_failures(), 0);
+    phone.core.lock().expect("lock");
+    assert!(matches!(
+        phone.core.password_check(phone.password.clone()),
+        Err(shellpp_core::CoreError::Locked)
+    ));
+}

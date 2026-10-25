@@ -2512,3 +2512,10 @@ Status: run 14 (plan, section 2, and the owner's answers before the start of the
 - **The visibility of the terminal model's internals** stays technical debt, to be narrowed when that code is touched.
 
 **Spec impact:** docs/security.md (unlock, "Remember on this device", RR8), docs/mobile/architecture.md 4, docs/mobile/ui-spec.md 5 and 12, docs/mobile/README.md, ROADMAP 3.1 and 5.
+
+**Amended after the review of run 14 (the Keystore and fingerprint part):**
+
+- Turning fingerprint unlock on asks for the master password once, as UI spec 12 says: the core's `password_check` verifies it while unlocked under the unlock's attempt limit (D29), so whoever holds the unlocked app cannot turn the option on for a fingerprint of their own.
+- A key is lost only for good: the store answers "no key" only when there is no item or its Keystore key became invalid or is missing; a sensor busy for a moment, a Keystore that did not answer, or any other failure answers "authentication required", and `secretAvailable` counts a busy sensor as there. The option goes off (with its reason in Settings) only for an invalid or missing Keystore key or no fingerprint enrolled.
+- A key that cannot be read after a passed prompt (a damaged item) leaves the step without it and asks for the password, instead of failing; the weekly password is also due when the clock went back past the last one; turning the option off keeps it on when the core could not delete the item and its row.
+- Tested: `password_check` (right, wrong and counted, locked), and on the server a sign-in again after a rotation made on another device while the phone's key store wants the prompt (`server/tests/device_key_prompt.rs`): the item stays, nothing is marked lost, and the option comes back once the prompt passes.

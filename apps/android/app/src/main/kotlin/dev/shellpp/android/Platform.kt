@@ -22,7 +22,7 @@ class Platform(private val context: Context, val deviceKeys: DeviceKeys) {
     private val clipboard: ClipboardManager
         get() = context.getSystemService(ClipboardManager::class.java)
 
-    fun secretAvailable(): Boolean = deviceKeys.available()
+    fun secretAvailable(): Boolean = deviceKeys.storeAvailable()
 
     /** 0: no key, 1: the key is in [out], 2: the fingerprint prompt was not passed. */
     fun secretGet(account: String, out: ByteArray): Int = deviceKeys.read(account, out)

@@ -93,6 +93,11 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
             out(core.unlock(input.password))
         }
         "try_device_unlock" => out(core.try_device_unlock()),
+        // The master password again while unlocked (Settings, D218).
+        "password_check" => {
+            let input: PasswordInput = parse(input)?;
+            out(core.password_check(input.password))
+        }
         "lock" => out(core.lock()),
         "start_new_vault" => out(core.start_new_vault()),
         "remember_device_set" => {

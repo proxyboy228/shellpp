@@ -664,6 +664,13 @@ impl Core {
     }
 
     /// UI 13.4 "Remember on this device". `unavailable` without an OS keychain.
+    /// The master password again while unlocked: the phone's Settings asks
+    /// it before fingerprint unlock is turned on (UI spec 12, D218).
+    /// `invalid_password` or `too_many_attempts` as `unlock` (D29).
+    pub fn password_check(&self, password: SecretString) -> Result<(), CoreError> {
+        self.password_check_impl(password)
+    }
+
     pub fn remember_device_set(&self, enabled: bool) -> Result<LockStatus, CoreError> {
         self.remember_device_set_impl(enabled)
     }

@@ -34,17 +34,44 @@ class DeviceKeys(private val context: Context) {
     private val dir = File(context.noBackupFilesDir, "device-keys")
     private val held = HashMap<String, ByteArray>()
 
-    /** A strong biometric is enrolled and usable. */
-    fun available(): Boolean {
-        if (Build.VERSION.SDK_INT < 30) return false
-        val manager = context.getSystemService(BiometricManager::class.java) ?: return false
-        return try {
-            manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
-                BiometricManager.BIOMETRIC_SUCCESS
+    /** What the system says about strong biometrics now. */
+    enum class Sensor {
+        /** Enrolled and usable. */
+        Ready,
+
+        /** Enrolled, but not usable this moment (the sensor busy, an update due): nothing is lost. */
+        Busy,
+
+        /** No fingerprint enrolled, no sensor, or Android older than 11. */
+        None,
+    }
+
+    fun sensor(): Sensor {
+        if (Build.VERSION.SDK_INT < 30) return Sensor.None
+        val manager = context.getSystemService(BiometricManager::class.java) ?: return Sensor.None
+        val answer = try {
+            manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
         } catch (error: SecurityException) {
-            false
+            return Sensor.None
+        }
+        return when (answer) {
+            BiometricManager.BIOMETRIC_SUCCESS -> Sensor.Ready
+            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+            -> Sensor.None
+            else -> Sensor.Busy
         }
     }
+
+    /** A strong biometric is enrolled and usable now. */
+    fun available(): Boolean = sensor() == Sensor.Ready
+
+    /**
+     * The core's `SecretStore` availability: a sensor that is only busy
+     * counts as there, so the core never takes a moment of it for a lost key
+     * (review of run 14).
+     */
+    fun storeAvailable(): Boolean = sensor() != Sensor.None
 
     private fun file(account: String) = File(dir, account.replace(Regex("[^A-Za-z0-9-]"), "_") + ".bin")
 
@@ -66,38 +93,64 @@ class DeviceKeys(private val context: Context) {
 
     private fun privateKey(): PrivateKey? = keyStore().getKey(ALIAS, null) as? PrivateKey
 
-    /**
-     * The cipher for the biometric prompt that reads a key, or null when the
-     * Keystore key is gone or became invalid (a fingerprint was added).
-     */
-    fun decryptCipher(): Cipher? {
+    /** The Keystore key as the prompt would use it. */
+    enum class KeyState {
+        /** Usable after a passed prompt. */
+        Usable,
+
+        /** Became invalid: a fingerprint was added (or all were removed). */
+        Invalidated,
+
+        /** The Keystore has no such key (the screen lock was removed, data cleared). */
+        Missing,
+
+        /** The Keystore did not answer this time: nothing is concluded. */
+        Unknown,
+    }
+
+    private fun cipherOrState(): Pair<Cipher?, KeyState> {
         val key = try {
             privateKey()
         } catch (error: Exception) {
-            null
-        } ?: return null
+            return null to KeyState.Unknown
+        } ?: return null to KeyState.Missing
         return try {
-            Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, OAEP) }
+            Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, OAEP) } to KeyState.Usable
         } catch (error: KeyPermanentlyInvalidatedException) {
-            null
+            null to KeyState.Invalidated
+        } catch (error: Exception) {
+            null to KeyState.Unknown
         }
     }
 
-    /** The Keystore key exists but became invalid (a fingerprint was added). */
-    fun invalidated(): Boolean {
-        if (privateKey() == null) return false
-        return decryptCipher() == null
-    }
+    fun keyState(): KeyState = cipherOrState().second
+
+    /** The cipher for the biometric prompt that reads a key, or null when the key cannot be used now. */
+    fun decryptCipher(): Cipher? = cipherOrState().first
+
+    /** The Keystore key is gone for good (invalid or missing): its items can never be read. */
+    fun lost(): Boolean = keyState().let { it == KeyState.Invalidated || it == KeyState.Missing }
 
     /**
      * After the prompt passed: decrypts the item of [account] with the
-     * authorized [cipher] and holds it for the step that asked.
+     * authorized [cipher] and holds it for the step that asked. False when
+     * it could not be read (a damaged item, a Keystore error): the step goes
+     * on without the key, and the password is asked.
      */
-    fun hold(account: String, cipher: Cipher) {
-        val plain = cipher.doFinal(file(account).readBytes())
+    fun hold(account: String, cipher: Cipher): Boolean {
+        val plain = try {
+            cipher.doFinal(file(account).readBytes())
+        } catch (error: Exception) {
+            return false
+        }
+        if (plain.size != 32) {
+            plain.fill(0)
+            return false
+        }
         synchronized(held) {
             held.put(account, plain)?.fill(0)
         }
+        return true
     }
 
     /** Wipes every held key (the step is over). */
@@ -109,9 +162,11 @@ class DeviceKeys(private val context: Context) {
     }
 
     /**
-     * The core's read ([Platform.secretGet]): the held key, else 0 (no
-     * usable key: none stored, or the Keystore key is invalid), else 2 (the
-     * prompt was not passed for this step).
+     * The core's read ([Platform.secretGet]): the held key, else 0 only when
+     * the key is gone for good (no item, or its Keystore key invalid or
+     * missing), else 2: the prompt was not passed for this step, or the
+     * phone could not tell now. A key is never declared lost by a moment's
+     * failure (D218; review of run 14).
      */
     fun read(account: String, out: ByteArray): Int {
         synchronized(held) {
@@ -120,9 +175,11 @@ class DeviceKeys(private val context: Context) {
                 return 1
             }
         }
-        if (!has(account)) return 0
-        if (decryptCipher() == null) return 0
-        return 2
+        return try {
+            if (!has(account) || lost()) 0 else 2
+        } catch (error: Exception) {
+            2
+        }
     }
 
     /** Encrypts [key] for [account] with the public key (no prompt). */
@@ -163,7 +220,7 @@ class DeviceKeys(private val context: Context) {
      * old one became invalid (its items cannot be read any more).
      */
     private fun publicKey(): java.security.PublicKey {
-        if (privateKey() == null || invalidated()) {
+        if (lost()) {
             try {
                 keyStore().deleteEntry(ALIAS)
             } catch (error: Exception) {

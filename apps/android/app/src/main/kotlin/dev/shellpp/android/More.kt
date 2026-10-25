@@ -37,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -211,6 +213,7 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
     var picking by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var askPassword by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val autoLock by produceState<Int?>(null, refresh) {
         value = withContext(Dispatchers.IO) {
@@ -232,15 +235,21 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
         message = null
         scope.launch {
             if (!on) {
-                withContext(Dispatchers.IO) {
+                // The item and the core's row go first; when that fails the
+                // option stays on and the switch can try again (architecture 4).
+                val off = withContext(Dispatchers.IO) {
                     try {
                         app.setLock(LockStatus.from(Core.obj("remember_device_set", JSONObject().put("enabled", false))))
+                        true
                     } catch (error: CoreException) {
                         message = "Fingerprint unlock could not be turned off: ${error.message}"
+                        false
                     }
                 }
-                prefs.edit().putBoolean(Fingerprint.PREF_ON, false).remove(Fingerprint.PREF_OFF_REASON).apply()
-                fingerprintOn = false
+                if (off) {
+                    prefs.edit().putBoolean(Fingerprint.PREF_ON, false).remove(Fingerprint.PREF_OFF_REASON).apply()
+                    fingerprintOn = false
+                }
                 busy = false
                 return@launch
             }
@@ -296,7 +305,8 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("Fingerprint unlock", color = if (available) Tokens.text else Tokens.textMuted)
                     val detail = when {
-                        !available -> "No fingerprint is enrolled on this phone (Android 11 or newer)."
+                        offReason == Fingerprint.REASON_KEY_GONE -> "Turned off: the phone's fingerprint key is gone (the screen lock changed). Turn it on again."
+                        !available && !fingerprintOn -> "No fingerprint is enrolled on this phone (Android 11 or newer)."
                         fingerprintOn -> "Unlocks at a start and after a lock; the master password is asked once a week."
                         offReason == Fingerprint.REASON_NEW_FINGERPRINT -> "Turned off: a new fingerprint was added to the phone. Turn it on again."
                         offReason == Fingerprint.REASON_NONE_ENROLLED -> "Turned off: no fingerprint is enrolled any more."
@@ -307,8 +317,9 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                 }
                 Switch(
                     checked = fingerprintOn,
-                    enabled = available && !busy,
-                    onCheckedChange = ::setFingerprint,
+                    enabled = (available || fingerprintOn) && !busy,
+                    // Turning it on asks for the master password once first (UI spec 12).
+                    onCheckedChange = { on -> if (on) askPassword = true else setFingerprint(false) },
                     modifier = Modifier.testTag("settings_fingerprint"),
                 )
             }
@@ -319,6 +330,59 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                 modifier = Modifier.padding(16.dp),
             )
         }
+    }
+    if (askPassword) {
+        var password by remember { mutableStateOf("") }
+        var wrong by remember { mutableStateOf<String?>(null) }
+        var checking by remember { mutableStateOf(false) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!checking) askPassword = false },
+            title = { Text("Master password") },
+            text = {
+                // A dialog is a window of its own: its tags too as ids for the emulator test.
+                @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+                Column(
+                    Modifier.semantics { testTagsAsResourceId = true },
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Enter the master password to turn on fingerprint unlock.")
+                    PasswordField(password, { password = it; wrong = null }, "Master password", "fingerprint_password", error = wrong)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = password.isNotEmpty() && !checking,
+                    onClick = {
+                        checking = true
+                        val chars = password.toCharArray()
+                        scope.launch {
+                            val failure = withContext(Dispatchers.IO) {
+                                try {
+                                    Core.withPassword("password_check", "password", chars)
+                                    null
+                                } catch (error: CoreException) {
+                                    when (error.code) {
+                                        "invalid_password" -> "Wrong password"
+                                        "too_many_attempts" -> "Too many wrong passwords: try again later."
+                                        else -> error.message
+                                    }
+                                }
+                            }
+                            password = ""
+                            checking = false
+                            if (failure != null) {
+                                wrong = failure
+                            } else {
+                                askPassword = false
+                                setFingerprint(true)
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("fingerprint_password_ok"),
+                ) { Text("Continue") }
+            },
+            dismissButton = { TextButton(onClick = { askPassword = false }) { Text("Cancel") } },
+        )
     }
     if (picking) {
         ChoiceDialog("Auto-lock", AUTO_LOCK.map { it.first?.toString() to it.second }, onDismiss = { picking = false }) { picked ->
