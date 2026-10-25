@@ -166,7 +166,7 @@ fn with_columns(size: TerminalSize, forced: Option<u16>) -> TerminalSize {
 
 /// Grid dimensions for alacritty (`Dimensions` without scrollback).
 #[derive(Clone, Copy, Debug)]
-pub(super) struct GridDims {
+pub struct GridDims {
     pub cols: usize,
     pub rows: usize,
 }
@@ -220,7 +220,7 @@ pub enum FeedError {
 
 /// Events for the UI thread, collected on the parser thread.
 #[derive(Debug, Default)]
-pub(super) struct PendingEvents {
+pub struct PendingEvents {
     /// `Some(None)` resets the title.
     pub title: Option<Option<String>>,
     pub bell: bool,
@@ -229,7 +229,7 @@ pub(super) struct PendingEvents {
 type ColorFormatter = Arc<dyn Fn(Rgb) -> String + Sync + Send + 'static>;
 
 /// State shared by the handle, the parser thread, the listener and the view.
-pub(super) struct Outbox {
+pub struct Outbox {
     sink: RwLock<Option<Arc<dyn TerminalSink>>>,
     pending: Mutex<PendingEvents>,
     color_requests: Mutex<Vec<(usize, ColorFormatter)>>,
@@ -251,20 +251,20 @@ pub(super) struct Outbox {
     /// journal): the view keeps its own.
     selection_moved: std::sync::atomic::AtomicBool,
     /// Command history capture (docs/security.md, section 10.1).
-    pub(super) capture: super::history_capture::Capture,
+    pub capture: super::history_capture::Capture,
     /// Autocomplete's history source and list (D142).
-    pub(super) autocomplete: Arc<super::autocomplete::Slot>,
+    pub autocomplete: Arc<super::autocomplete::Slot>,
 }
 
 impl Outbox {
     /// The journal (lock the terminal first).
-    pub(super) fn journal(&self) -> MutexGuard<'_, Journal> {
+    pub fn journal(&self) -> MutexGuard<'_, Journal> {
         self.journal.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Whether a compaction ended the emulator's selection since the last
     /// call.
-    pub(super) fn take_selection_moved(&self) -> bool {
+    pub fn take_selection_moved(&self) -> bool {
         self.selection_moved.swap(false, Ordering::AcqRel)
     }
 
@@ -311,8 +311,20 @@ impl Outbox {
     }
 }
 
+impl std::fmt::Debug for Outbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Outbox").finish_non_exhaustive()
+    }
+}
+
 /// Receives the emulator's events on the parser thread (inside the lock).
-pub(super) struct Listener(Arc<Outbox>);
+pub struct Listener(Arc<Outbox>);
+
+impl std::fmt::Debug for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Listener").finish_non_exhaustive()
+    }
+}
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
@@ -369,7 +381,7 @@ fn is_bidi_control(ch: char) -> bool {
     matches!(ch, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}')
 }
 
-pub(super) type SharedTerm = Arc<FairMutex<Term<Listener>>>;
+pub type SharedTerm = Arc<FairMutex<Term<Listener>>>;
 
 enum Message {
     Bytes(Vec<u8>),
@@ -378,7 +390,7 @@ enum Message {
 }
 
 /// The emulator configuration.
-pub(super) fn term_config(scrollback: usize, cursor_shape: CursorShape) -> Config {
+pub fn term_config(scrollback: usize, cursor_shape: CursorShape) -> Config {
     Config {
         scrolling_history: scrollback,
         default_cursor_style: CursorStyle {
@@ -421,11 +433,7 @@ impl std::fmt::Debug for TerminalHandle {
 impl TerminalHandle {
     /// Creates the emulator and starts its parser thread. `wake` receives
     /// a value (coalesced) whenever the screen or the pending events changed.
-    pub(super) fn spawn(
-        options: ModelOptions,
-        palette: Palette,
-        wake: async_channel::Sender<()>,
-    ) -> Self {
+    pub fn spawn(options: ModelOptions, palette: Palette, wake: async_channel::Sender<()>) -> Self {
         let outbox = Arc::new(Outbox {
             sink: RwLock::new(None),
             pending: Mutex::new(PendingEvents::default()),
@@ -465,11 +473,11 @@ impl TerminalHandle {
         }
     }
 
-    pub(super) fn term(&self) -> &SharedTerm {
+    pub fn term(&self) -> &SharedTerm {
         &self.term
     }
 
-    pub(super) fn outbox(&self) -> &Arc<Outbox> {
+    pub fn outbox(&self) -> &Arc<Outbox> {
         &self.outbox
     }
 
@@ -568,7 +576,7 @@ impl TerminalHandle {
     /// Resizes the grid for the view's size and tells the sink. Returns
     /// whether it changed. A width a DECCOLM set (D90) stays until the
     /// view's own size changes.
-    pub(super) fn resize(&self, size: TerminalSize) -> bool {
+    pub fn resize(&self, size: TerminalSize) -> bool {
         let size = {
             let Ok(mut columns) = self.outbox.columns.lock() else {
                 return false;
@@ -584,7 +592,7 @@ impl TerminalHandle {
         apply_size(&self.term, &self.outbox, self.scrollback, size)
     }
 
-    pub(super) fn set_palette(&self, palette: Palette) {
+    pub fn set_palette(&self, palette: Palette) {
         if let Ok(mut current) = self.outbox.palette.write() {
             *current = palette;
         }
@@ -639,13 +647,13 @@ impl TerminalHandle {
     }
 
     /// Scrolls the view: the scrollback and its journal together.
-    pub(super) fn scroll(&self, scroll: Scroll) {
+    pub fn scroll(&self, scroll: Scroll) {
         let mut term = self.term.lock();
         journal::scroll(&mut term, &mut self.outbox.journal(), scroll);
     }
 
     /// Back to the bottom of the scrollback (typed input, a paste).
-    pub(super) fn scroll_to_bottom(&self) {
+    pub fn scroll_to_bottom(&self) {
         let mut term = self.term.lock();
         let mut journal = self.outbox.journal();
         let alt = term.mode().contains(TermMode::ALT_SCREEN);
@@ -656,15 +664,14 @@ impl TerminalHandle {
 
     /// Whether the view is scrolled up from the bottom (into the
     /// scrollback or its journal).
-    pub(super) fn scrolled_back(&self) -> bool {
+    pub fn scrolled_back(&self) -> bool {
         let term = self.term.lock();
         let alt = term.mode().contains(TermMode::ALT_SCREEN);
         term.grid().display_offset() != 0 || (!alt && self.outbox.journal().view() != 0)
     }
 
     /// Rows the view is scrolled up from the bottom (tests).
-    #[cfg(test)]
-    pub(super) fn view_offset(&self) -> usize {
+    pub fn view_offset(&self) -> usize {
         let term = self.term.lock();
         use super::journal::Buffer as _;
         Lines::new(&term, &self.outbox.journal()).view_offset()
@@ -672,11 +679,7 @@ impl TerminalHandle {
 
     /// Runs `read` on the buffer of `term` (this handle's terminal,
     /// locked): the journal and the grid.
-    pub(super) fn with_lines<R>(
-        &self,
-        term: &Term<Listener>,
-        read: impl FnOnce(&Lines<'_>) -> R,
-    ) -> R {
+    pub fn with_lines<R>(&self, term: &Term<Listener>, read: impl FnOnce(&Lines<'_>) -> R) -> R {
         let journal = self.outbox.journal();
         read(&Lines::new(term, &journal))
     }
@@ -684,13 +687,13 @@ impl TerminalHandle {
     /// Lines dropped off the top of the scrollback so far (a full
     /// scrollback that scrolls on, or a cleared one). Read it while holding
     /// the terminal lock to match the grid.
-    pub(super) fn evicted_lines(&self) -> usize {
+    pub fn evicted_lines(&self) -> usize {
         self.outbox.evicted.load(Ordering::Acquire)
     }
 
     /// Where the buffer of `term` (this handle's terminal, locked) stands,
     /// for the search.
-    pub(super) fn search_origin(&self, term: &Term<Listener>) -> super::search::Origin {
+    pub fn search_origin(&self, term: &Term<Listener>) -> super::search::Origin {
         super::search::Origin {
             evicted: self.evicted_lines(),
             alt_screen: term.mode().contains(TermMode::ALT_SCREEN),
@@ -866,12 +869,11 @@ fn answer_color_requests(term: &Term<Listener>, outbox: &Outbox) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::limits::MAX_ZEROWIDTH;
-    use crate::theme::terminal::builtin;
+    use crate::limits::MAX_ZEROWIDTH;
 
     /// Records what the terminal sends.
     #[derive(Default)]
-    pub(crate) struct RecordingSink {
+    pub struct RecordingSink {
         pub sent: Mutex<Vec<u8>>,
         pub sizes: Mutex<Vec<TerminalSize>>,
     }
@@ -892,7 +894,7 @@ mod tests {
         scrollback: usize,
     ) -> (TerminalHandle, async_channel::Receiver<()>) {
         let (wake, woken) = async_channel::bounded(1);
-        let palette = Palette::from_theme(&builtin()[0]);
+        let palette = crate::colors::test_palette();
         let handle = TerminalHandle::spawn(
             ModelOptions {
                 size: TerminalSize::cells(cols, rows),
@@ -1018,7 +1020,7 @@ mod tests {
         handle.flush_blocking();
         assert!(handle.term().lock().mode().contains(TermMode::ALT_SCREEN));
 
-        handle.feed_blocking(crate::sessions::MODE_RESET).unwrap();
+        handle.feed_blocking(shellpp_sessions::MODE_RESET).unwrap();
         for line in 0..10 {
             handle
                 .feed_blocking(format!("line {line}\r\n").as_bytes())

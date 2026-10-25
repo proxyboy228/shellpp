@@ -456,7 +456,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
-    use crate::terminal::model::GridDims;
+    use crate::model::GridDims;
 
     fn row_text(row: &Row<Cell>) -> String {
         let mut text = String::new();
@@ -571,7 +571,7 @@ mod tests {
     fn a_reset_cap_and_a_reflow_keep_the_journal_in_order() {
         use std::sync::{Arc, Mutex};
 
-        use crate::terminal::limits::{self, Capped};
+        use crate::limits::{self, Capped};
 
         let journal = Arc::new(Mutex::new(Journal::default()));
         limits::count_evictions(2_000, journal.clone());

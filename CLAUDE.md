@@ -17,7 +17,7 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo clippy --locked --workspace -- -D warnings
 $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_SSHD='russh'; cargo test --locked --no-fail-fast --workspace
 cargo test --locked --no-fail-fast -p shellpp-desktop --all-features
-cargo check --locked --target aarch64-linux-android -p shellpp-core -p shellpp-ssh -p shellpp-sync-api -p shellpp-private-file -p shellpp-sessions
+cargo check --locked --target aarch64-linux-android -p shellpp-core -p shellpp-ssh -p shellpp-sync-api -p shellpp-private-file -p shellpp-sessions -p shellpp-terminal
 cargo fmt --manifest-path server/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets -- -D warnings
 cargo clippy --locked --manifest-path server/Cargo.toml --workspace --all-targets --all-features -- -D warnings

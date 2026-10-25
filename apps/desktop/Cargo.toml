@@ -72,7 +72,9 @@ dirs.workspace = true
 # Strength indicator of the master password (lock::strength).
 zxcvbn.workspace = true
 arboard.workspace = true
-# The terminal view (src/terminal): emulator and the parser thread's queue.
+# The terminal view (src/terminal) over the terminal model (shellpp-terminal,
+# run 13): the emulator's types and the parser thread's wake channel.
+shellpp-terminal.workspace = true
 alacritty_terminal.workspace = true
 unicode-width.workspace = true
 async-channel.workspace = true

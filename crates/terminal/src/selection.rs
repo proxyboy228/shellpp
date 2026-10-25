@@ -421,7 +421,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
-    use crate::terminal::model::GridDims;
+    use crate::model::GridDims;
 
     fn term(text: &str) -> Term<VoidListener> {
         let mut term = Term::new(

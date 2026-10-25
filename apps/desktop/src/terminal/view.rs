@@ -24,7 +24,7 @@ use gpui_kit::TestSupportExt as _;
 // The app menu's Edit items (UI 1.4) dispatch these to the focused element.
 use gpui_kit::component::input as edit;
 
-use super::colors::{Palette, rgb_token};
+use super::colors::{FromTheme as _, Palette, rgb_token};
 use super::fonts::{self, FontSet};
 use super::input::{self, BackspaceKey, KeyAction};
 use super::journal::Buffer as _;

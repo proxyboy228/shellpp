@@ -165,7 +165,7 @@ $denyProblem = if (Get-Command cargo-deny -ErrorAction SilentlyContinue) { '' } 
 # (API level 26, docs/android-feasibility.md) for the C parts (SQLite,
 # ring). No NDK: skipped, said so; no Rust target: a failure with the fix.
 $androidTarget = 'aarch64-linux-android'
-$mobileCrates = @('shellpp-core', 'shellpp-ssh', 'shellpp-sync-api', 'shellpp-private-file', 'shellpp-sessions')
+$mobileCrates = @('shellpp-core', 'shellpp-ssh', 'shellpp-sync-api', 'shellpp-private-file', 'shellpp-sessions', 'shellpp-terminal')
 $mobileSkip = ''
 $mobileProblem = ''
 $mobileEnvironment = @{}

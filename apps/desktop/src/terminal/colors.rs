@@ -1,34 +1,14 @@
-//! Cell colors from the terminal theme (design-system 4.1-4.2, 7.2).
-//!
-//! The 16 ANSI colors, the foreground, the background and the cursor come
-//! from the theme; the 256-color palette above 15 is the standard xterm
-//! 6x6x6 cube and gray ramp, computed (not stored); truecolor (`SGR 38;2`)
-//! is used as sent. Colors that the remote side changed with OSC 4/10/11/12
-//! (alacritty's `Colors` overrides) win over the theme.
+//! Cell colors: the model's palette (`shellpp-terminal`, run 13) from the
+//! desktop's terminal themes (design-system 4.1-4.2, 7.2). A theme's tokens
+//! become plain RGB for the model, and the model's RGB becomes theme tokens
+//! again for drawing (`.hsla()`; the conversion lives with the theme,
+//! design-system 7.1).
 
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::color::{COUNT, Colors};
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::Rgb;
+pub use shellpp_terminal::colors::*;
 
 use crate::theme::palette::Token;
 use crate::theme::terminal::TerminalTheme;
-
-/// Brightness factor of dim text (SGR 2) and of the dim named colors.
-const DIM_FACTOR: f32 = 0.66;
-
-/// The resolved colors of one terminal theme.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Palette {
-    ansi: [Rgb; 16],
-    foreground: Rgb,
-    background: Rgb,
-    cursor: Rgb,
-    cursor_text: Rgb,
-    selection: Token,
-    selection_foreground: Option<Rgb>,
-    search_match: Rgb,
-    search_match_active: Rgb,
-}
 
 /// An opaque [`Token`] as an `Rgb` (the alpha byte is dropped).
 pub fn token_rgb(token: Token) -> Rgb {
@@ -39,8 +19,7 @@ pub fn token_rgb(token: Token) -> Rgb {
     }
 }
 
-/// An `Rgb` as an opaque theme [`Token`]; `.hsla()` gives the GPUI color
-/// (the conversion lives with the theme, design-system 7.1).
+/// An `Rgb` as an opaque theme [`Token`]; `.hsla()` gives the GPUI color.
 pub fn rgb_token(color: Rgb) -> Token {
     Token {
         rgb: (u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b),
@@ -48,196 +27,44 @@ pub fn rgb_token(color: Rgb) -> Token {
     }
 }
 
-fn dim(color: Rgb) -> Rgb {
-    color * DIM_FACTOR
-}
-
-/// Index 16-255 of the xterm 256-color palette: a 6x6x6 cube
-/// (levels 0, 95, 135, 175, 215, 255) and 24 grays (8, 18, ..., 238).
-pub fn xterm_256(index: u8) -> Option<Rgb> {
-    match index {
-        16..=231 => {
-            let cube = index - 16;
-            let level = |value: u8| if value == 0 { 0 } else { 55 + 40 * value };
-            Some(Rgb {
-                r: level(cube / 36),
-                g: level((cube / 6) % 6),
-                b: level(cube % 6),
-            })
-        }
-        232..=255 => {
-            let gray = 8 + 10 * (index - 232);
-            Some(Rgb {
-                r: gray,
-                g: gray,
-                b: gray,
-            })
-        }
-        _ => None,
+/// A translucent model color (the selection) as a theme [`Token`].
+pub fn translucent_token(color: Translucent) -> Token {
+    Token {
+        alpha: color.alpha,
+        ..rgb_token(color.rgb)
     }
 }
 
-impl Palette {
-    pub fn from_theme(theme: &TerminalTheme) -> Self {
-        Self {
+/// The palette of a terminal theme.
+pub trait FromTheme {
+    fn from_theme(theme: &TerminalTheme) -> Self;
+}
+
+impl FromTheme for Palette {
+    fn from_theme(theme: &TerminalTheme) -> Self {
+        Palette::new(PaletteColors {
             ansi: theme.ansi.0.map(token_rgb),
             foreground: token_rgb(theme.foreground),
             background: token_rgb(theme.background),
             cursor: token_rgb(theme.cursor),
             cursor_text: token_rgb(theme.cursor_text),
-            selection: theme.selection,
+            selection: Translucent {
+                rgb: token_rgb(theme.selection),
+                alpha: theme.selection.alpha,
+            },
             selection_foreground: theme.selection_foreground.map(token_rgb),
             search_match: token_rgb(theme.search_match),
             search_match_active: token_rgb(theme.search_match_active),
-        }
-    }
-
-    /// The background of search matches (design-system 7.2 `searchMatch`).
-    pub fn search_match(&self) -> Rgb {
-        self.search_match
-    }
-
-    /// The background of the current search match (`searchMatchActive`).
-    pub fn search_match_active(&self) -> Rgb {
-        self.search_match_active
-    }
-
-    pub fn foreground(&self) -> Rgb {
-        self.foreground
-    }
-
-    pub fn background(&self) -> Rgb {
-        self.background
-    }
-
-    pub fn cursor(&self) -> Rgb {
-        self.cursor
-    }
-
-    pub fn cursor_text(&self) -> Rgb {
-        self.cursor_text
-    }
-
-    /// The selection color, translucent, drawn over the cell backgrounds.
-    pub fn selection(&self) -> Token {
-        self.selection
-    }
-
-    /// The text color of selected cells when the theme sets one.
-    pub fn selection_foreground(&self) -> Option<Rgb> {
-        self.selection_foreground
-    }
-
-    /// Color `index` of the 256-color palette (0-15 from the theme).
-    pub fn indexed(&self, index: u8) -> Rgb {
-        match index {
-            0..=15 => self.ansi[usize::from(index)],
-            _ => xterm_256(index).unwrap_or(self.foreground),
-        }
-    }
-
-    /// A named color of the theme.
-    pub fn named(&self, name: NamedColor) -> Rgb {
-        let index = name as usize;
-        match name {
-            NamedColor::Foreground | NamedColor::BrightForeground => self.foreground,
-            NamedColor::Background => self.background,
-            NamedColor::Cursor => self.cursor,
-            NamedColor::DimForeground => dim(self.foreground),
-            _ if index < 16 => self.ansi[index],
-            // DimBlack ..= DimWhite follow the eight normal colors.
-            _ => dim(self.ansi[(index - NamedColor::DimBlack as usize) % 8]),
-        }
-    }
-
-    /// The color behind entry `index` of alacritty's color table (0-255,
-    /// then the named colors from 256): the answer to an OSC 4/10/11 query.
-    pub fn table_entry(&self, index: usize, overrides: &Colors) -> Rgb {
-        if let Some(color) = (index < COUNT).then(|| overrides[index]).flatten() {
-            return color;
-        }
-        match u8::try_from(index) {
-            Ok(index) => self.indexed(index),
-            Err(_) => match index {
-                256 => self.foreground,
-                257 => self.background,
-                258 => self.cursor,
-                _ => self.foreground,
-            },
-        }
-    }
-
-    /// Whether the text of a cell is drawn in a truecolor (`SGR 38;2`, or
-    /// `48;2` for inverse text) rather than in a palette color: the
-    /// "Palette only" minimum contrast leaves such text alone.
-    pub fn text_is_truecolor(fg: Color, bg: Color, flags: Flags) -> bool {
-        let text = if flags.contains(Flags::INVERSE) {
-            bg
-        } else {
-            fg
-        };
-        matches!(text, Color::Spec(_))
-    }
-
-    /// A cell color with the remote overrides applied.
-    pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {
-        match color {
-            Color::Spec(rgb) => rgb,
-            Color::Indexed(index) => {
-                overrides[usize::from(index)].unwrap_or_else(|| self.indexed(index))
-            }
-            Color::Named(name) => overrides[name].unwrap_or_else(|| self.named(name)),
-        }
-    }
-
-    /// The foreground and background of a cell. The background is `None`
-    /// when it is the default background (nothing to paint).
-    ///
-    /// - Bold text in one of the eight normal colors uses the bright
-    ///   variant when `bold_is_bright` (UI 12.4 "Bright colors for bold text").
-    /// - Dim (SGR 2) uses the dim variant.
-    /// - Inverse (SGR 7) swaps the two; hidden (SGR 8) paints the text in
-    ///   the background color.
-    pub fn cell_colors(
-        &self,
-        fg: Color,
-        bg: Color,
-        flags: Flags,
-        bold_is_bright: bool,
-        overrides: &Colors,
-    ) -> (Rgb, Option<Rgb>) {
-        let fg = match fg {
-            Color::Named(name) if flags.contains(Flags::DIM) => Color::Named(name.to_dim()),
-            Color::Named(name)
-                if bold_is_bright && flags.contains(Flags::BOLD) && (name as usize) < 8 =>
-            {
-                Color::Named(name.to_bright())
-            }
-            Color::Indexed(index) if bold_is_bright && flags.contains(Flags::BOLD) && index < 8 => {
-                Color::Indexed(index + 8)
-            }
-            other => other,
-        };
-        let mut fg_rgb = self.resolve(fg, overrides);
-        if flags.contains(Flags::DIM) && !matches!(fg, Color::Named(_)) {
-            fg_rgb = dim(fg_rgb);
-        }
-        let default_bg = matches!(bg, Color::Named(NamedColor::Background));
-        let bg_rgb = self.resolve(bg, overrides);
-        let (fg_rgb, bg_rgb) = if flags.contains(Flags::INVERSE) {
-            (bg_rgb, Some(fg_rgb))
-        } else {
-            (fg_rgb, (!default_bg).then_some(bg_rgb))
-        };
-        if flags.contains(Flags::HIDDEN) {
-            return (bg_rgb.unwrap_or(self.background), bg_rgb);
-        }
-        (fg_rgb, bg_rgb)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::term::color::Colors;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
     use super::*;
     use crate::theme::terminal::builtin;
 
@@ -294,5 +121,140 @@ mod tests {
         assert_eq!(palette.resolve(Color::Indexed(1), &changed), spec);
         assert_eq!(palette.table_entry(1, &changed), spec);
         assert_eq!(palette.table_entry(257, &overrides), palette.background());
+    }
+}
+
+#[cfg(test)]
+mod contrast_tests {
+    use alacritty_terminal::vte::ansi::Rgb;
+    use shellpp_terminal::contrast::*;
+
+    use super::token_rgb;
+    use crate::theme::terminal::{TerminalTheme, builtin};
+
+    // Colors come from the built-in themes (design-system 4) or are grays
+    // given by one channel value: no color literals outside src/theme.
+    fn gray(level: u8) -> Rgb {
+        Rgb {
+            r: level,
+            g: level,
+            b: level,
+        }
+    }
+
+    fn themes() -> (TerminalTheme, TerminalTheme) {
+        let themes = builtin();
+        (themes[0].clone(), themes[1].clone())
+    }
+
+    fn ansi(theme: &TerminalTheme, index: usize) -> Rgb {
+        token_rgb(theme.ansi.0[index])
+    }
+
+    #[test]
+    fn the_formula_matches_known_ratios() {
+        assert!((ratio(WHITE, BLACK) - 21.).abs() < 1e-9);
+        assert!((ratio(BLACK, BLACK) - 1.).abs() < 1e-9);
+        // Paper's foreground on its background (design-system 4.2).
+        let (_, paper) = themes();
+        let quoted = ratio(token_rgb(paper.foreground), token_rgb(paper.background));
+        assert!(quoted > 13. && quoted < 15., "{quoted}");
+    }
+
+    #[test]
+    fn pairs_below_the_minimum_reach_it_and_others_stay() {
+        let (graphite, paper) = themes();
+        let pairs = [
+            // Black text on ANSI blue / red / magenta / cyan (htop, mc in Paper).
+            (ansi(&paper, 0), ansi(&paper, 4)),
+            (ansi(&paper, 0), ansi(&paper, 1)),
+            (ansi(&paper, 0), ansi(&paper, 5)),
+            (ansi(&paper, 0), ansi(&paper, 6)),
+            // Gray on gray, both directions.
+            (gray(119), gray(136)),
+            (gray(136), gray(119)),
+            // Equal colors.
+            (ansi(&graphite, 4), ansi(&graphite, 4)),
+            // Dark text on a dark background (Graphite black on default).
+            (ansi(&graphite, 0), token_rgb(graphite.background)),
+            // Light text on white.
+            (ansi(&graphite, 15), WHITE),
+            // Middle grays: one end always reaches.
+            (gray(118), gray(119)),
+            (BLACK, gray(89)),
+        ];
+        for (text, background) in pairs {
+            let adjusted = adjust(text, background);
+            let value = ratio(adjusted, background);
+            assert!(
+                value >= MIN_RATIO,
+                "{text:?} on {background:?} -> {adjusted:?}: {value}"
+            );
+        }
+        // Enough contrast already: unchanged.
+        for theme in [&graphite, &paper] {
+            let (text, background) = (token_rgb(theme.foreground), token_rgb(theme.background));
+            assert_eq!(adjust(text, background), text);
+        }
+    }
+
+    #[test]
+    fn text_moves_away_from_the_background_by_the_smallest_step() {
+        // Lighter text on a dark background brightens.
+        let background = gray(32);
+        let adjusted = adjust(gray(64), background);
+        assert!(luminance(adjusted) > luminance(gray(64)));
+        // The step is minimal: one unit less toward white is not enough.
+        let back_one = Rgb {
+            r: adjusted.r - 1,
+            g: adjusted.g - 1,
+            b: adjusted.b - 1,
+        };
+        assert!(ratio(back_one, background) < MIN_RATIO);
+        // Darker text on a light background darkens.
+        let adjusted = adjust(gray(176), gray(224));
+        assert!(luminance(adjusted) < luminance(gray(176)));
+        // Light gray text slightly lighter than a light background cannot
+        // reach 4.5 toward white: it goes to the dark side instead.
+        let adjusted = adjust(gray(208), gray(200));
+        assert!(luminance(adjusted) < luminance(gray(200)));
+        assert!(ratio(adjusted, gray(200)) >= MIN_RATIO);
+        // Paper's black on its blue: the darker blue cannot be passed by
+        // going toward black, so the text turns light.
+        let (_, paper) = themes();
+        let blue = ansi(&paper, 4);
+        let adjusted = adjust(ansi(&paper, 0), blue);
+        assert!(
+            luminance(adjusted) > luminance(blue),
+            "black on blue turns light"
+        );
+    }
+
+    #[test]
+    fn modes_choose_what_is_adjusted() {
+        assert!(!MinContrast::Off.applies(false));
+        assert!(!MinContrast::Off.applies(true));
+        assert!(MinContrast::Palette.applies(false));
+        assert!(!MinContrast::Palette.applies(true));
+        assert!(MinContrast::Always.applies(false));
+        assert!(MinContrast::Always.applies(true));
+        assert_eq!(MinContrast::default(), MinContrast::Palette);
+        for mode in MinContrast::ALL {
+            assert_eq!(MinContrast::from_key(mode.key()), Some(mode));
+        }
+        assert_eq!(MinContrast::from_key("sometimes"), None);
+    }
+
+    #[test]
+    fn the_cache_keeps_one_result_per_pair() {
+        let (_, paper) = themes();
+        let mut cache = ContrastCache::default();
+        let (text, background) = (ansi(&paper, 0), ansi(&paper, 4));
+        let first = cache.adjust(text, background);
+        assert_eq!(cache.adjust(text, background), first);
+        assert_eq!(cache.len(), 1);
+        cache.adjust(ansi(&paper, 0), ansi(&paper, 1));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(first, adjust(text, background));
     }
 }

@@ -206,7 +206,7 @@ struct Columns {
 
 /// Before parsing a batch: the forced width the terminal has now (the
 /// view ends it when its own size changes).
-pub(super) fn set_forced_columns(forced: Option<u16>) {
+pub fn set_forced_columns(forced: Option<u16>) {
     let mut columns = COLUMNS.get();
     columns.forced = forced;
     columns.changed = false;
@@ -215,7 +215,7 @@ pub(super) fn set_forced_columns(forced: Option<u16>) {
 
 /// After parsing: `Some(width)` when a DECCOLM or RIS changed the forced
 /// width (`Some(None)`: back to the view's width).
-pub(super) fn take_column_change() -> Option<Option<u16>> {
+pub fn take_column_change() -> Option<Option<u16>> {
     let mut columns = COLUMNS.get();
     let changed = columns.changed.then_some(columns.forced);
     columns.changed = false;
@@ -703,7 +703,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
-    use crate::terminal::model::GridDims;
+    use crate::model::GridDims;
 
     fn filtered(limiter: &mut OscLimiter, bytes: &[u8]) -> Vec<u8> {
         limiter.filter(bytes).into_owned()

@@ -9,7 +9,7 @@
 //! // A tab: the terminal view first, then the session on its handle.
 //! let terminal = view.read(cx).handle();
 //! let opened = sessions::ui::manager(cx)?
-//!     .open(OpenRequest::Ssh(target), (cols, rows), Arc::new(terminal))?;
+//!     .open(OpenRequest::Ssh(target), (cols, rows), Arc::new(ViewTerminal(terminal)))?;
 //! let task = sessions::ui::forward_events(opened.events, cx, |tab, view, cx| { .. });
 //! // Quit, before `AppState::shutdown` (connection log ends need the core):
 //! sessions::ui::shutdown(cx);
@@ -145,20 +145,20 @@ pub fn forward_events<T: 'static>(
     })
 }
 
-/// The terminal view's handle is a session's terminal: output goes to its
+/// The terminal view's handle as a session's terminal: output goes to its
 /// parser queue (which waits while full: flow control), and the session
-/// becomes its sink for input and size changes.
-impl SessionTerminal for TerminalHandle {
+/// becomes its sink for input and size changes. A wrapper: the handle and
+/// the trait live in two crates (run 13).
+#[derive(Clone, Debug)]
+pub struct ViewTerminal(pub TerminalHandle);
+
+impl SessionTerminal for ViewTerminal {
     fn inject(&self, bytes: Vec<u8>) {
-        self.inject_input(bytes);
+        self.0.inject_input(bytes);
     }
 
     fn feed<'a>(&'a self, bytes: &'a [u8]) -> BoxFuture<'a, Result<(), TerminalClosed>> {
-        Box::pin(async move {
-            TerminalHandle::feed(self, bytes)
-                .await
-                .map_err(|_| TerminalClosed)
-        })
+        Box::pin(async move { self.0.feed(bytes).await.map_err(|_| TerminalClosed) })
     }
 
     fn attach(&self, session: SessionHandle) {
@@ -168,7 +168,7 @@ impl SessionTerminal for TerminalHandle {
         let (history, source) = match (view.kind, view.host) {
             (SessionKind::Ssh, Some(host)) => (
                 Some(
-                    HistoryRecorder::start(session.clone(), host, self.autocomplete())
+                    HistoryRecorder::start(session.clone(), host, self.0.autocomplete())
                         as Arc<dyn HistorySink>,
                 ),
                 // Autocomplete (D142) suggests from the same host's history.
@@ -180,11 +180,11 @@ impl SessionTerminal for TerminalHandle {
             _ => (None, None),
         };
         if source.is_some() {
-            register_suggestions(&self.autocomplete());
+            register_suggestions(&self.0.autocomplete());
         }
-        self.set_history_sink(history);
-        self.set_history_source(source);
-        self.set_sink(Some(Arc::new(session)));
+        self.0.set_history_sink(history);
+        self.0.set_history_source(source);
+        self.0.set_sink(Some(Arc::new(SessionSink(session))));
     }
 }
 
@@ -343,15 +343,19 @@ impl HistorySink for HistoryRecorder {
 }
 
 /// Input, query replies and size changes of the terminal view go to the
-/// session (never blocks: a queue push under a short lock).
-impl TerminalSink for SessionHandle {
+/// session (never blocks: a queue push under a short lock). A wrapper, as
+/// [`ViewTerminal`] is.
+#[derive(Debug)]
+pub struct SessionSink(pub SessionHandle);
+
+impl TerminalSink for SessionSink {
     fn send(&self, bytes: Vec<u8>) {
-        if let Err(error) = self.write(&bytes) {
-            tracing::debug!(session = self.id(), %error, "terminal input dropped");
+        if let Err(error) = self.0.write(&bytes) {
+            tracing::debug!(session = self.0.id(), %error, "terminal input dropped");
         }
     }
 
     fn resize(&self, size: TerminalSize) {
-        SessionHandle::resize(self, size.cols, size.rows);
+        self.0.resize(size.cols, size.rows);
     }
 }

@@ -72,12 +72,14 @@ impl MinContrast {
     }
 }
 
-const WHITE: Rgb = Rgb {
+/// White, for contrast ratios.
+pub const WHITE: Rgb = Rgb {
     r: 255,
     g: 255,
     b: 255,
 };
-const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
+/// Black, for contrast ratios.
+pub const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// The sRGB transfer function of the 256 channel values.
 fn linear_table() -> &'static [f64; 256] {
@@ -127,7 +129,7 @@ fn mix(from: Rgb, to: Rgb, t: f64) -> Rgb {
 /// `color` is on the far side of `background` toward `end` and has enough
 /// contrast with it. Along a line toward `end` this holds from some point
 /// on, so it can be bisected.
-fn reaches(color: Rgb, background: Rgb, toward_white: bool) -> bool {
+pub fn reaches(color: Rgb, background: Rgb, toward_white: bool) -> bool {
     let (text, back) = (luminance(color), luminance(background));
     let far_side = if toward_white {
         text > back
@@ -221,138 +223,5 @@ impl ContrastCache {
 
     pub fn is_empty(&self) -> bool {
         self.pairs.is_empty()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::terminal::colors::token_rgb;
-    use crate::theme::terminal::{TerminalTheme, builtin};
-
-    // Colors come from the built-in themes (design-system 4) or are grays
-    // given by one channel value: no color literals outside src/theme.
-    fn gray(level: u8) -> Rgb {
-        Rgb {
-            r: level,
-            g: level,
-            b: level,
-        }
-    }
-
-    fn themes() -> (TerminalTheme, TerminalTheme) {
-        let themes = builtin();
-        (themes[0].clone(), themes[1].clone())
-    }
-
-    fn ansi(theme: &TerminalTheme, index: usize) -> Rgb {
-        token_rgb(theme.ansi.0[index])
-    }
-
-    #[test]
-    fn the_formula_matches_known_ratios() {
-        assert!((ratio(WHITE, BLACK) - 21.).abs() < 1e-9);
-        assert!((ratio(BLACK, BLACK) - 1.).abs() < 1e-9);
-        // Paper's foreground on its background (design-system 4.2).
-        let (_, paper) = themes();
-        let quoted = ratio(token_rgb(paper.foreground), token_rgb(paper.background));
-        assert!(quoted > 13. && quoted < 15., "{quoted}");
-    }
-
-    #[test]
-    fn pairs_below_the_minimum_reach_it_and_others_stay() {
-        let (graphite, paper) = themes();
-        let pairs = [
-            // Black text on ANSI blue / red / magenta / cyan (htop, mc in Paper).
-            (ansi(&paper, 0), ansi(&paper, 4)),
-            (ansi(&paper, 0), ansi(&paper, 1)),
-            (ansi(&paper, 0), ansi(&paper, 5)),
-            (ansi(&paper, 0), ansi(&paper, 6)),
-            // Gray on gray, both directions.
-            (gray(119), gray(136)),
-            (gray(136), gray(119)),
-            // Equal colors.
-            (ansi(&graphite, 4), ansi(&graphite, 4)),
-            // Dark text on a dark background (Graphite black on default).
-            (ansi(&graphite, 0), token_rgb(graphite.background)),
-            // Light text on white.
-            (ansi(&graphite, 15), WHITE),
-            // Middle grays: one end always reaches.
-            (gray(118), gray(119)),
-            (BLACK, gray(89)),
-        ];
-        for (text, background) in pairs {
-            let adjusted = adjust(text, background);
-            let value = ratio(adjusted, background);
-            assert!(
-                value >= MIN_RATIO,
-                "{text:?} on {background:?} -> {adjusted:?}: {value}"
-            );
-        }
-        // Enough contrast already: unchanged.
-        for theme in [&graphite, &paper] {
-            let (text, background) = (token_rgb(theme.foreground), token_rgb(theme.background));
-            assert_eq!(adjust(text, background), text);
-        }
-    }
-
-    #[test]
-    fn text_moves_away_from_the_background_by_the_smallest_step() {
-        // Lighter text on a dark background brightens.
-        let background = gray(32);
-        let adjusted = adjust(gray(64), background);
-        assert!(luminance(adjusted) > luminance(gray(64)));
-        // The step is minimal: one unit less toward white is not enough.
-        let back_one = Rgb {
-            r: adjusted.r - 1,
-            g: adjusted.g - 1,
-            b: adjusted.b - 1,
-        };
-        assert!(ratio(back_one, background) < MIN_RATIO);
-        // Darker text on a light background darkens.
-        let adjusted = adjust(gray(176), gray(224));
-        assert!(luminance(adjusted) < luminance(gray(176)));
-        // Light gray text slightly lighter than a light background cannot
-        // reach 4.5 toward white: it goes to the dark side instead.
-        let adjusted = adjust(gray(208), gray(200));
-        assert!(luminance(adjusted) < luminance(gray(200)));
-        assert!(ratio(adjusted, gray(200)) >= MIN_RATIO);
-        // Paper's black on its blue: the darker blue cannot be passed by
-        // going toward black, so the text turns light.
-        let (_, paper) = themes();
-        let blue = ansi(&paper, 4);
-        let adjusted = adjust(ansi(&paper, 0), blue);
-        assert!(
-            luminance(adjusted) > luminance(blue),
-            "black on blue turns light"
-        );
-    }
-
-    #[test]
-    fn modes_choose_what_is_adjusted() {
-        assert!(!MinContrast::Off.applies(false));
-        assert!(!MinContrast::Off.applies(true));
-        assert!(MinContrast::Palette.applies(false));
-        assert!(!MinContrast::Palette.applies(true));
-        assert!(MinContrast::Always.applies(false));
-        assert!(MinContrast::Always.applies(true));
-        assert_eq!(MinContrast::default(), MinContrast::Palette);
-        for mode in MinContrast::ALL {
-            assert_eq!(MinContrast::from_key(mode.key()), Some(mode));
-        }
-        assert_eq!(MinContrast::from_key("sometimes"), None);
-    }
-
-    #[test]
-    fn the_cache_keeps_one_result_per_pair() {
-        let (_, paper) = themes();
-        let mut cache = ContrastCache::default();
-        let (text, background) = (ansi(&paper, 0), ansi(&paper, 4));
-        let first = cache.adjust(text, background);
-        assert_eq!(cache.adjust(text, background), first);
-        assert_eq!(cache.len(), 1);
-        cache.adjust(ansi(&paper, 0), ansi(&paper, 1));
-        assert_eq!(cache.len(), 2);
-        assert_eq!(first, adjust(text, background));
     }
 }

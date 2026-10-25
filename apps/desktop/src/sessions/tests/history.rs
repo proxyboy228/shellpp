@@ -64,13 +64,14 @@ async fn connect(
     user: &str,
     password: &str,
 ) -> (TestSession, TerminalHandle, async_channel::Receiver<()>) {
-    let (terminal, woken) = TerminalHandle::headless(80, 24);
+    let (terminal, woken) = crate::terminal::headless(80, 24);
     let opened = harness
         .manager
         .open(
             OpenRequest::Ssh(target.clone()),
             (80, 24),
-            Arc::new(terminal.clone()) as Arc<dyn SessionTerminal>,
+            Arc::new(crate::sessions::ui::ViewTerminal(terminal.clone()))
+                as Arc<dyn SessionTerminal>,
         )
         .expect("session opens");
     let mut session = TestSession {
@@ -324,13 +325,14 @@ async fn real_bash_over_openssh() {
         vault_id,
         record_id,
     };
-    let (terminal, _woken) = TerminalHandle::headless(120, 60);
+    let (terminal, _woken) = crate::terminal::headless(120, 60);
     let opened = harness
         .manager
         .open(
             OpenRequest::Ssh(target),
             (120, 60),
-            Arc::new(terminal.clone()) as Arc<dyn SessionTerminal>,
+            Arc::new(crate::sessions::ui::ViewTerminal(terminal.clone()))
+                as Arc<dyn SessionTerminal>,
         )
         .expect("session opens");
     let mut session = TestSession {

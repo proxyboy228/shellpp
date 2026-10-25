@@ -8028,6 +8028,7 @@ dependencies = [
  "shellpp-sessions",
  "shellpp-ssh",
  "shellpp-term-local",
+ "shellpp-terminal",
  "shellpp-test-sshd",
  "ssh-key",
  "tempfile",
@@ -8114,6 +8115,20 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "shellpp-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "async-channel",
+ "shellpp-core",
+ "shellpp-sessions",
+ "thiserror 2.0.21",
+ "tracing",
+ "unicode-width 0.2.2",
+ "zeroize",
 ]
 
 [[package]]

@@ -32,7 +32,7 @@ use gpui::{
     TextRun, UnderlineStyle, Window, fill, outline, point, px, size,
 };
 
-use super::colors::{Palette, rgb_token};
+use super::colors::{Palette, rgb_token, translucent_token};
 use super::contrast::{ContrastCache, MinContrast};
 use super::fonts::FontSet;
 use super::journal::{Buffer as _, Lines};
@@ -612,7 +612,7 @@ pub fn prepaint(
         metrics,
         background: rgb_token(style.palette.background()).hsla(),
         selection,
-        selection_color: style.palette.selection().hsla(),
+        selection_color: translucent_token(style.palette.selection()).hsla(),
         matches,
         match_color: rgb_token(style.palette.search_match()).hsla(),
         match_active_color: rgb_token(style.palette.search_match_active()).hsla(),
@@ -1156,7 +1156,7 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
-    use crate::terminal::colors::token_rgb;
+    use crate::terminal::colors::{FromTheme as _, token_rgb};
     use crate::terminal::model::GridDims;
     use crate::theme::terminal::builtin;
 

@@ -58,7 +58,11 @@ impl SessionLauncher for Bridge {
         };
         let size = terminal.size();
         let opened = manager
-            .open(request, (size.cols, size.rows), Arc::new(terminal))
+            .open(
+                request,
+                (size.cols, size.rows),
+                Arc::new(crate::sessions::ui::ViewTerminal(terminal)),
+            )
             .map_err(failure_of)?;
         let prompt = Rc::new(Cell::new(None));
         let shown = prompt.clone();

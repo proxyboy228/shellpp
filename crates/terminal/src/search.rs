@@ -599,8 +599,8 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
     use super::*;
-    use crate::terminal::limits::{self, Capped};
-    use crate::terminal::model::GridDims;
+    use crate::limits::{self, Capped};
+    use crate::model::GridDims;
 
     fn term(cols: usize, rows: usize, scrollback: usize, text: &str) -> Term<VoidListener> {
         let config = Config {

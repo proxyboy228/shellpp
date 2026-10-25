@@ -1,0 +1,32 @@
+[package]
+name = "shellpp-terminal"
+description = "Shell++ terminal model: alacritty's parser and grid on a parser thread, the compact scrollback journal, the memory limits, search, selection, paste, cell colors and contrast, command capture for the history and autocomplete suggestions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Shared by the desktop app and a phone client (run 13, D212): no GPUI, and it
+# builds for aarch64-linux-android (the "mobile-ready" check of
+# scripts\verify.ps1). Drawing and input stay with each client
+# (apps/desktop/src/terminal: render, view, input, mouse); the colors of a
+# theme come in as plain RGB (`colors::PaletteColors`).
+[dependencies]
+shellpp-core.workspace = true
+alacritty_terminal.workspace = true
+unicode-width.workspace = true
+async-channel.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The model test of a new shell's mode reset feeds the session layer's own
+# bytes.
+shellpp-sessions.workspace = true
+
+[lints]
+workspace = true

@@ -9,6 +9,7 @@ members = [
     "crates/term-local",
     "crates/private-file",
     "crates/sessions",
+    "crates/terminal",
     "tests/sshd",
     "apps/desktop",
 ]
@@ -34,6 +35,7 @@ shellpp-ssh = { path = "crates/ssh" }
 shellpp-term-local = { path = "crates/term-local" }
 shellpp-private-file = { path = "crates/private-file" }
 shellpp-sessions = { path = "crates/sessions" }
+shellpp-terminal = { path = "crates/terminal" }
 shellpp-test-sshd = { path = "tests/sshd" }
 
 # Cryptography (docs/security.md, section 5.1; docs/architecture.md, section 8.2).

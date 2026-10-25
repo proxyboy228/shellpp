@@ -48,21 +48,17 @@
 
 pub mod autocomplete;
 pub mod colors;
-pub mod contrast;
 pub mod fonts;
 pub mod highlight;
 pub mod history_capture;
 pub mod input;
-pub mod journal;
-pub mod limits;
-pub mod model;
 pub mod mouse;
-pub mod paste;
 pub mod render;
-pub mod search;
-pub mod selection;
 pub mod settings;
 pub mod view;
+
+/// The model's modules (`shellpp-terminal`, run 13) under their old paths.
+pub use shellpp_terminal::{contrast, journal, limits, model, paste, search, selection};
 
 #[cfg(test)]
 mod bench;
@@ -87,4 +83,15 @@ pub use view::{
 pub fn init(cx: &mut App) {
     fonts::register(cx);
     view::bind_keys(cx);
+}
+
+/// A terminal without a view in the default theme (tests of the session
+/// layer). Keep the receiver while it is used.
+#[cfg(test)]
+pub(crate) fn headless(cols: u16, rows: u16) -> (TerminalHandle, async_channel::Receiver<()>) {
+    TerminalHandle::headless(
+        cols,
+        rows,
+        <colors::Palette as colors::FromTheme>::from_theme(&crate::theme::terminal::builtin()[0]),
+    )
 }

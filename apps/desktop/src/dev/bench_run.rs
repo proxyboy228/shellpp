@@ -635,7 +635,11 @@ fn open_session(
         let size = handle.size();
         let manager = crate::sessions::ui::manager(cx).ok_or("no session manager")?;
         manager
-            .open(request, (size.cols, size.rows), Arc::new(handle))
+            .open(
+                request,
+                (size.cols, size.rows),
+                Arc::new(crate::sessions::ui::ViewTerminal(handle)),
+            )
             .map_err(|error| error.message().to_owned())
     })?;
     Ok(BenchTerminal {
