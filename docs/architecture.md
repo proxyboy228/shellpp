@@ -74,6 +74,8 @@ Custom CA certificates for sync servers are in the MVP now, together with pinnin
 ├── crates/
 │   ├── core/                 shellpp-core
 │   ├── ssh/                  shellpp-ssh
+│   ├── sessions/             shellpp-sessions: the session layer (run 13)
+│   ├── terminal/             shellpp-terminal: the terminal model (run 13)
 │   ├── term-local/           shellpp-term-local (desktop only)
 │   └── sync-api/             shellpp-sync-api
 ├── server/                   shellpp-server, AGPL-3.0-only, its own Cargo workspace
@@ -98,6 +100,8 @@ The paths of tokens, terminal themes, components, the showcase and i18n come fro
 | `apps/desktop/src-tauri` | `shellpp-desktop`, binary `shellpp` | Apache-2.0 | Windows, macOS, Linux | Tauri host: windows, commands, events, platform trait implementations, deep links, updater | 1 |
 | `crates/core` | `shellpp-core` | Apache-2.0 | all, including iOS and Android | data model, cryptography, storage, lock, in-memory index, keys, known hosts, import and export, history filter, notifications, sync client, platform traits | 1 |
 | `crates/ssh` | `shellpp-ssh` | Apache-2.0 | all | SSH connections and authentication, channels, SFTP and the transfer queue, port forwarding, agent | 2 |
+| `crates/sessions` | `shellpp-sessions` | Apache-2.0 | desktop and Android | the session layer: SSH, Telnet, local and serial sessions on a Tokio runtime, reconnect policy, host key and password prompts, the lock, keepalive, forwarding rules on launch; no GPUI (D212) | 2 (in the desktop app), run 13 (a crate) |
+| `crates/terminal` | `shellpp-terminal` | Apache-2.0 | desktop and Android | the terminal model: alacritty's parser and grid on a parser thread, the scrollback journal, memory limits, search, selection, paste, cell colors and contrast, history capture, autocomplete list; no GPUI, no drawing (D212) | 2 (in the desktop app), run 13 (a crate) |
 | `crates/term-local` | `shellpp-term-local` | Apache-2.0 | desktop only (D5) | local PTY, serial, in-house minimal Telnet | 2 (PTY), 9 (serial, Telnet) |
 | `crates/sync-api` | `shellpp-sync-api` | Apache-2.0 | all, and the server | API request and response types, error codes, envelope header codec and size checks; no cryptography and no I/O | 1 (header codec), 7 (API types) |
 | `server` | `shellpp-server` | AGPL-3.0-only | Linux container; any OS for development | sync server and admin CLI | 7 |
@@ -111,9 +115,15 @@ Crate names come from section 7. Placing the envelope header codec in `shellpp-s
 ```text
 apps/desktop (TypeScript) ── IPC only ──► shellpp-desktop
 
-shellpp-desktop ─┬─► shellpp-ssh ──────────► shellpp-core ──► shellpp-sync-api
+shellpp-desktop ─┬─► shellpp-sessions ─┬─► shellpp-ssh
+                 │                     ├─► shellpp-term-local
+                 │                     └─► shellpp-core
+                 ├─► shellpp-terminal ────► shellpp-core
+                 ├─► shellpp-ssh ──────────► shellpp-core ──► shellpp-sync-api
                  ├─► shellpp-term-local ───► shellpp-core
                  └─► shellpp-core
+
+shellpp-terminal (dev-dependencies only) ──► shellpp-sessions   a test feeds the session layer's mode reset
 
 shellpp-server ──► shellpp-sync-api
 shellpp-server (dev-dependencies only) ──► shellpp-core     sync end-to-end tests

@@ -174,7 +174,26 @@ Only the options and their trade-offs; the choice is the design run's.
 | Rust interface (Compose not used) | the interface in Rust too: GPUI's mobile support, Slint, Dioxus or egui on Android, the app built with `cargo-apk` or `xbuild` | one language; the desktop's terminal view could be shared | the toolkits' Android support is young (input methods, accessibility, system integration); still needs JNI for the Keystore and the foreground service |
 | Kotlin Multiplatform beside Rust | a shared Kotlin layer over the Rust core (through UniFFI or JNI) | if an iOS client ever comes back | more layers; the core is already shared in Rust |
 
-## 6. Summary
+## 6. After run 13
+
+- `crates/core/src/sync/tls.rs` checks an added CA beside the platform
+  verifier on Android (D212): `shellpp-core` builds for
+  `aarch64-linux-android`.
+- The session layer and the terminal model are crates of their own,
+  `shellpp-sessions` and `shellpp-terminal` (D212), without GPUI; both build
+  for `aarch64-linux-android`. `shellpp-sessions` links `shellpp-term-local`
+  (local terminals, serial ports), which builds there too; a phone client
+  does not open those sessions.
+- `scripts\verify.ps1` runs the "mobile-ready" check of every crate a phone
+  client shares (`shellpp-core`, `shellpp-ssh`, `shellpp-sync-api`,
+  `shellpp-private-file`, `shellpp-sessions`, `shellpp-terminal`) with the
+  NDK's clang; without an NDK it says SKIPPED.
+- What stays in the desktop app: the drawing and input of the terminal
+  (render, view, input, mouse, fonts), the terminal themes (the model takes
+  plain RGB), the GPUI glue of the sessions (`sessions/ui.rs`), the history
+  recorder and the suggestions registry, and the platform services.
+
+## 7. Summary (run 12)
 
 - **Builds**: `shellpp-ssh`, `shellpp-sync-api`, `shellpp-private-file` as they are;
   `shellpp-core` after one change in `crates/core/src/sync/tls.rs` (the extra CA with the
