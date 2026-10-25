@@ -364,6 +364,14 @@ fn totp_sign_in() {
     assert!(b.core.sync_sign_in_totp(wrong).is_err());
     done(b.core.sync_sign_in_totp(&right).expect("the right code"));
     assert!(b.status().signed_in);
+    // The device id is the one the login was made with: the server's row
+    // of B's tokens is B's own (review of run 13: a first run made a
+    // second id at the TOTP step).
+    let local = b.core.device_id_for_test().expect("meta").expect("an id");
+    let devices = b.core.sync_devices().expect("devices");
+    let current: Vec<_> = devices.iter().filter(|device| device.current).collect();
+    assert_eq!(current.len(), 1, "{:?}", devices.len());
+    assert_eq!(current[0].device_id, local);
 }
 
 /// D175 from the client's side: a code answered with a delay (`429`) keeps

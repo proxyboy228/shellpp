@@ -415,7 +415,10 @@ impl Core {
         let now = self.now();
         let inner = self.inner();
         let session = Self::require_session(&inner)?;
-        if !inner.recovery_grant.allowed(now) {
+        // Local mode has no recovery key to show (D217), not even in the
+        // grant a first run opens (review of run 13).
+        let bound = inner.store.server_account()?.is_some();
+        if !inner.recovery_grant.allowed(now) || !(bound || local_recovery_key::allowed()) {
             return Err(CoreError::WrongState);
         }
         Ok(RecoveryKeyResult {

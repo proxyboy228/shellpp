@@ -380,14 +380,17 @@ fn a_new_vault_after_a_bound_one_still_refuses_weaker_parameters() {
         "no auth key was sent"
     );
 
-    let (same, _) = prelogin_server(DESKTOP_PRELOGIN);
+    let (same, same_seen) = prelogin_server(DESKTOP_PRELOGIN);
     match laptop.core.sync_sign_in(input(&same)) {
-        Err(CoreError::Sync(HttpError::Refused("weaker_kdf"))) => {
-            panic!("the same settings are not weaker")
-        }
-        Err(_) => {}
-        Ok(outcome) => panic!("the fake server signs nobody in, got {outcome:?}"),
+        // The fake server's answer to the login itself.
+        Err(CoreError::Sync(error)) if error.api_code() == Some("invalid_credentials") => {}
+        other => panic!("the same settings go on to the login, got {other:?}"),
     }
+    assert_eq!(
+        same_seen.lock().unwrap().clone(),
+        vec!["/v1/auth/prelogin", "/v1/auth/login"],
+        "the login was sent"
+    );
 }
 
 /// A device that is no longer bound but was (Log out, or an

@@ -234,14 +234,11 @@ pub fn set_aside_bound_kdf(data_dir: &Path) -> Option<(String, Vec<u8>)> {
         .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
         .filter(|name| crate::lock::erase::is_set_aside(name) && !name.contains("-failed"))
         .collect();
-    // The stamp in the name orders the copies: the newest first.
-    names.sort_unstable_by(|a, b| b.cmp(a));
+    // The stamp and the number in the name order the copies: the newest
+    // first (`<stamp>-2.old` was made after `<stamp>.old`, `-10` after `-9`).
+    names.sort_unstable_by_key(|name| std::cmp::Reverse(set_aside_order(name)));
     names.into_iter().find_map(|name| {
-        let conn = Connection::open_with_flags(
-            data_dir.join(&name),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .ok()?;
+        let conn = open_set_aside(data_dir, &name)?;
         let bound: bool = conn
             .query_row(
                 "SELECT EXISTS (SELECT 1 FROM server_account) \
@@ -260,6 +257,46 @@ pub fn set_aside_bound_kdf(data_dir: &Path) -> Option<(String, Vec<u8>)> {
         )
         .ok()
     })
+}
+
+/// The stamp and the number of a set-aside copy's name
+/// (`….<stamp>[-<n>].old`; no number is the first, 1).
+fn set_aside_order(name: &str) -> (String, u64) {
+    let base = name
+        .strip_suffix(crate::lock::new_vault::ARCHIVE_SUFFIX)
+        .unwrap_or(name);
+    let tail = base.rsplit_once('.').map_or(base, |(_, tail)| tail);
+    let (stamp, number) = tail.split_at(tail.len().min(16));
+    let number = number
+        .strip_prefix('-')
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
+    (stamp.to_owned(), number)
+}
+
+/// Opens a set-aside copy read-only, leaving nothing beside it: a copy
+/// set aside with its `-wal` is read with it; one without is opened
+/// immutable, so SQLite makes no `-wal` and `-shm` that a read-only
+/// connection could not remove (review of run 13).
+fn open_set_aside(data_dir: &Path, name: &str) -> Option<Connection> {
+    let path = data_dir.join(name);
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if data_dir.join(format!("{name}-wal")).exists() {
+        return Connection::open_with_flags(path, flags).ok();
+    }
+    let text = path.to_str()?;
+    let mut uri = String::from("file:");
+    for byte in text.bytes() {
+        match byte {
+            b'\\' if cfg!(windows) => uri.push('/'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                uri.push(char::from(byte));
+            }
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI).ok()
 }
 
 impl Store {

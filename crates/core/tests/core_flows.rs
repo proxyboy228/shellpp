@@ -335,6 +335,11 @@ fn the_recovery_key_is_neither_shown_nor_reissued_in_local_mode() {
     shellpp_core::service::local_recovery_key::allow(false);
     let app = first_run();
     let core = &app.core;
+    // Nor in the grant the first run opens (review of run 13).
+    assert!(matches!(
+        core.recovery_key_granted(),
+        Err(CoreError::WrongState)
+    ));
     assert!(matches!(
         core.recovery_key_show(app.password.clone()),
         Err(CoreError::WrongState)

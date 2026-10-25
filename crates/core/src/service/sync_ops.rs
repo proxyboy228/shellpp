@@ -164,6 +164,11 @@ pub(super) struct SyncRuntime {
     /// the next one goes on with them only after the user typed the
     /// current password.
     kdf_changed: Option<(KdfParams, [u8; 16])>,
+    /// Bindings written by sign-ins ([`SyncRuntime::bound_by_login`]); a
+    /// lock does not clear it, so a sign-in tells whether its binding was
+    /// written even when a lock dropped the token meanwhile (review of
+    /// run 13).
+    bindings: u64,
 }
 
 impl SyncRuntime {
@@ -171,6 +176,13 @@ impl SyncRuntime {
     fn hold_access(&mut self, token: Zeroizing<String>, origin: &str) {
         self.access = Some(token);
         self.access_origin = Some(origin.to_owned());
+    }
+
+    /// A sign-in's binding was written: its access token is held and the
+    /// binding counted.
+    fn bound_by_login(&mut self, token: Zeroizing<String>, origin: &str) {
+        self.hold_access(token, origin);
+        self.bindings = self.bindings.wrapping_add(1);
     }
 
     /// Drops the access token and a half-finished sign-in (lock).
@@ -187,6 +199,9 @@ struct PendingSignIn {
     /// The server's ticket lives 5 minutes; `kek` no longer than that.
     started: SystemTime,
     origin: String,
+    /// The device id the login was made with: the TOTP step's tokens are
+    /// that device's (review of run 13: a first run made a second id).
+    device_id: Uuid,
     email: String,
     ticket: Zeroizing<String>,
     kek: Key32,
@@ -1214,7 +1229,7 @@ impl Core {
         let origin = normalize_origin(&input.origin).map_err(HttpError::from)?;
         let email = crypto::normalize_email(&input.email);
         let class = self.platform.class;
-        let (api, device_id, bound_kdf, aside_kdf) = {
+        let (api, device_id, bound_kdf, aside_dir) = {
             let mut guard = self.inner();
             guard.sync.weaker_kdf = None;
             let mut bound_kdf = None;
@@ -1258,21 +1273,22 @@ impl Core {
             // that was bound gives the reference of the weaker check (D189),
             // and only that check (its salt and settings are another
             // vault's, not this sign-in's).
-            let aside_kdf = match &bound_kdf {
+            let aside_dir = match &bound_kdf {
                 Some(_) => None,
-                None => guard
-                    .store
-                    .data_dir()
-                    .and_then(crate::store::set_aside_bound_kdf)
-                    .and_then(|(json, _)| KdfParams::from_json(&json).ok()),
+                None => guard.store.data_dir().map(std::path::Path::to_path_buf),
             };
             (
                 self.api(&guard.store, &origin)?,
                 device_id,
                 bound_kdf,
-                aside_kdf,
+                aside_dir,
             )
         };
+        // Read with the core's lock released (the copies are SQLite files).
+        let aside_kdf = aside_dir
+            .as_deref()
+            .and_then(crate::store::set_aside_bound_kdf)
+            .and_then(|(json, _)| KdfParams::from_json(&json).ok());
         let device_id = match device_id {
             Some(id) => id,
             None => self.inner().ids.next(self.now()),
@@ -1331,6 +1347,7 @@ impl Core {
             self.inner().sync.pending = Some(PendingSignIn {
                 started: self.now(),
                 origin,
+                device_id,
                 email,
                 ticket: Zeroizing::new(ticket.into_inner()),
                 kek: derived.kek,
@@ -1340,10 +1357,14 @@ impl Core {
             return Ok(SignInOutcome::TotpRequired);
         }
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
-        let account = response.account.ok_or(HttpError::Malformed)?;
+        let Some(account) = response.account else {
+            Self::revoke_login(&api, None, &tokens);
+            return Err(HttpError::Malformed.into());
+        };
         let pending = PendingSignIn {
             started: self.now(),
             origin,
+            device_id,
             email,
             ticket: Zeroizing::new(String::new()),
             kek: derived.kek,
@@ -1428,23 +1449,16 @@ impl Core {
     /// The TOTP step of a sign-in.
     pub fn sync_sign_in_totp(&self, code: &str) -> Result<SignInOutcome, CoreError> {
         let _sync = self.sync_lock();
-        let (pending, api, device_id) = {
+        let (pending, api) = {
             let mut guard = self.inner();
             let pending = guard.sync.pending.take().ok_or(CoreError::WrongState)?;
             if self.now() > pending.started + Duration::from_secs(5 * 60) {
                 return Err(refused("ticket_expired"));
             }
             let api = self.api(&guard.store, &pending.origin)?;
-            let device_id = guard
-                .store
-                .meta_get(META_DEVICE_ID)?
-                .and_then(|text| Uuid::parse_str(&text).ok());
-            (pending, api, device_id)
+            (pending, api)
         };
-        let device_id = match device_id {
-            Some(id) => id,
-            None => self.inner().ids.next(self.now()),
-        };
+        let device_id = pending.device_id;
         let result = api.login_totp(&wire::LoginTotpRequest {
             login_ticket: secret(&pending.ticket),
             code: secret(code.trim()),
@@ -1463,18 +1477,25 @@ impl Core {
             }
         };
         let tokens = response.tokens.ok_or(HttpError::Malformed)?;
-        let account = response.account.ok_or(HttpError::Malformed)?;
+        let Some(account) = response.account else {
+            Self::revoke_login(&api, None, &tokens);
+            return Err(HttpError::Malformed.into());
+        };
         self.finish_sign_in(&api, pending, device_id, tokens, account)?;
         drop(_sync);
         Ok(SignInOutcome::Done(self.sync_status()?))
     }
 
-    /// The binding after a successful login. A refusal before the device is
-    /// bound (another account's vault, D209; a rebind's `rolled_back` or
-    /// `integrity`; a merge's `forged_epoch` or `newer_epoch`) revokes what
-    /// that login opened on the server ([`Self::revoke_login`]); a refusal
-    /// after the binding was written (a rolled-back server whose key matches
-    /// keeps its session, for the re-post of the epochs) does not.
+    /// The binding after a successful login. A failure before the device
+    /// is bound (a refusal: another account's vault, D209; a rebind's
+    /// `rolled_back` or `integrity`; a merge's `forged_epoch` or
+    /// `newer_epoch`; and any other error: a lock, a server error, a store
+    /// error) revokes what that login opened on the server
+    /// ([`Self::revoke_login`]); a failure after the binding was written (a
+    /// rolled-back server whose key matches keeps its session, for the
+    /// re-post of the epochs) does not. No answer at all (no network, a
+    /// timeout) is not followed by revocation requests that would wait as
+    /// long again.
     fn finish_sign_in(
         &self,
         api: &HttpApi,
@@ -1483,41 +1504,51 @@ impl Core {
         tokens: wire::Tokens,
         account: wire::AccountBundle,
     ) -> Result<(), CoreError> {
+        // The device's own row in that account (a rebind: its personal
+        // vault is the account's) was there before this login and stays;
+        // a row this login made (a first run, a merge) goes with it
+        // (review of run 13).
+        let (own_row, bindings) = {
+            let guard = self.inner();
+            (
+                guard.state == LockState::Unlocked
+                    && guard.personal_vault_id == Some(account.personal_vault.vault_id),
+                guard.sync.bindings,
+            )
+        };
         let result = self.bind_after_login(api, pending, device_id, &tokens, account);
-        if let Err(CoreError::Sync(HttpError::Refused(code))) = &result
-            && !self.holds_access(&tokens.access_token.0)
+        if let Err(error) = &result
+            && self.inner().sync.bindings == bindings
+            && !matches!(
+                error,
+                CoreError::Sync(HttpError::Network | HttpError::Timeout)
+            )
         {
             tracing::info!(
-                code,
-                "a sign-in refused after its login; its session is revoked"
+                code = %error_code(error),
+                "a sign-in failed after its login; its session is revoked"
             );
-            Self::revoke_login(api, device_id, &tokens);
+            Self::revoke_login(api, (!own_row).then_some(device_id), &tokens);
         }
         result
     }
 
-    /// Whether the access token held for sync is `token`: every binding
-    /// holds its login's token right after it is written.
-    fn holds_access(&self, token: &str) -> bool {
-        self.inner()
-            .sync
-            .access
-            .as_deref()
-            .is_some_and(|held| held.as_str() == token)
-    }
-
-    /// Revokes what a login opened that no binding took (run 13, D216): the
-    /// device is revoked in that account (`DELETE /v1/devices/{id}`: every
-    /// token of it goes and its row is marked revoked; the protocol deletes
-    /// no device row), and when that fails the login's refresh token family
-    /// alone. Best effort: the refusal stands either way.
-    fn revoke_login(api: &HttpApi, device_id: Uuid, tokens: &wire::Tokens) {
-        let Err(error) = api.device_revoke(&tokens.access_token.0, device_id) else {
-            return;
-        };
-        tracing::warn!(?error, "the refused sign-in's device was not revoked");
+    /// Revokes what a login opened that no binding took (run 13, D216):
+    /// with `device`, that device is revoked in the account (`DELETE
+    /// /v1/devices/{id}`: every token of it goes and its row is marked
+    /// revoked; the protocol deletes no device row), and when that fails
+    /// the login's refresh token family alone; without it (the device's
+    /// own row, or no account in the answer) the family alone. Best
+    /// effort: the failure stands either way.
+    fn revoke_login(api: &HttpApi, device: Option<Uuid>, tokens: &wire::Tokens) {
+        if let Some(device_id) = device {
+            let Err(error) = api.device_revoke(&tokens.access_token.0, device_id) else {
+                return;
+            };
+            tracing::warn!(?error, "the failed sign-in's device was not revoked");
+        }
         if let Err(error) = api.revoke(&tokens.refresh_token.0) {
-            tracing::warn!(?error, "the refused sign-in's session was not revoked");
+            tracing::warn!(?error, "the failed sign-in's session was not revoked");
         }
     }
 
@@ -1676,7 +1707,7 @@ impl Core {
         inner.personal_vault_id = Some(vault_id);
         inner.state = LockState::Unlocked;
         inner.auto_lock.activity(now);
-        inner.sync.hold_access(
+        inner.sync.bound_by_login(
             Zeroizing::new(tokens.access_token.0.clone()),
             &pending.origin,
         );
@@ -1800,7 +1831,7 @@ impl Core {
                     tx.meta_set(META_REBIND_UNSURE, &unsure(&vault_id))?;
                     tx.server_account_put(&account_row)
                 })?;
-                inner.sync.hold_access(
+                inner.sync.bound_by_login(
                     Zeroizing::new(tokens.access_token.0.clone()),
                     &pending.origin,
                 );
@@ -1878,7 +1909,7 @@ impl Core {
                 }
                 return Err(error.into());
             }
-            inner.sync.hold_access(
+            inner.sync.bound_by_login(
                 Zeroizing::new(tokens.access_token.0.clone()),
                 &pending.origin,
             );
@@ -2113,7 +2144,7 @@ impl Core {
         let session = Session::load(&inner.store, new_session.ring, db_id, device_id, now)?;
         inner.session = Some(session);
         inner.personal_vault_id = Some(account_vault);
-        inner.sync.hold_access(access, &pending.origin);
+        inner.sync.bound_by_login(access, &pending.origin);
         super::checkpoint(&inner.store);
         tracing::info!(merged = rows.len(), "local data merged into the account");
         self.emit(
@@ -4635,6 +4666,17 @@ impl Core {
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn sync_merge_fail_once_for_test(&self) {
         self.inner().sync.fail_merge = true;
+    }
+
+    /// Test support (feature `test-hooks`): this device's id
+    /// (`meta.device_id`), once it has one.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn device_id_for_test(&self) -> Result<Option<Uuid>, CoreError> {
+        Ok(self
+            .inner()
+            .store
+            .meta_get(META_DEVICE_ID)?
+            .and_then(|text| Uuid::parse_str(&text).ok()))
     }
 
     /// Test support (feature `test-hooks`): every vault row as (id, kind,

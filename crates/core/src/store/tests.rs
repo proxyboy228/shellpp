@@ -933,3 +933,56 @@ fn schema_1_with_data_migrates_to_2_and_keeps_everything() {
         .unwrap();
     assert_eq!(n, 1);
 }
+
+/// A set-aside copy as `new_vault` leaves one after a clean close (no
+/// `-wal` beside it): bound or not, with `kdf` as its settings' text.
+fn set_aside_copy(dir: &Path, name: &str, bound: bool, kdf: &str) {
+    let conn = Connection::open(dir.join(name)).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         CREATE TABLE server_account (id INTEGER PRIMARY KEY);
+         CREATE TABLE vaults (vault_id BLOB, account_user_id TEXT);
+         CREATE TABLE local_auth (id INTEGER PRIMARY KEY, kdf TEXT NOT NULL, kdf_salt BLOB NOT NULL);",
+    )
+    .unwrap();
+    if bound {
+        conn.execute("INSERT INTO server_account (id) VALUES (1)", [])
+            .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO local_auth (id, kdf, kdf_salt) VALUES (1, ?1, x'00')",
+        [kdf],
+    )
+    .unwrap();
+}
+
+/// Run 13 (D217, its review): the newest bound copy gives the reference,
+/// by stamp and number (`-2` after the first, `-10` after `-2`); an
+/// unbound, a half-made (`-failed`) or a user-named copy does not count;
+/// reading leaves no `-wal` or `-shm` beside a copy.
+#[test]
+fn the_newest_bound_set_aside_copy_gives_the_settings_and_leaves_nothing_beside_it() {
+    let dir = TempDir::new().unwrap();
+    for (name, bound, kdf) in [
+        ("shellpp.db.20261020T101500Z.old", true, "oldest"),
+        ("shellpp.db.20261021T000000Z.old", true, "first"),
+        ("shellpp.db.20261021T000000Z-2.old", true, "second"),
+        ("shellpp.db.20261021T000000Z-10.old", false, "unbound"),
+        ("shellpp.db.20261022T000000Z-failed.old", true, "failed"),
+        ("shellpp.db.mine.old", true, "mine"),
+    ] {
+        set_aside_copy(dir.path(), name, bound, kdf);
+    }
+    let (kdf, salt) = set_aside_bound_kdf(dir.path()).expect("a bound copy");
+    assert_eq!((kdf.as_str(), salt), ("second", vec![0]));
+    let names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert!(
+        names
+            .iter()
+            .all(|name| !name.ends_with("-wal") && !name.ends_with("-shm")),
+        "{names:?}"
+    );
+}

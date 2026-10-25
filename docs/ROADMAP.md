@@ -67,11 +67,14 @@ None loses data as built.
 - **Deleting the local copy** (D197): files that could not be deleted (a
   recording a running session holds open on Windows) reach only the log, as
   a count; the app is already at first run.
-- **Sessions after a refused sign-in** (D216): every refusal before the
-  device is bound revokes the login's device; the device row stays in the
-  account's list marked revoked (the protocol deletes no row). A rebind's
-  `rolled_back` before binding (a server whose chain does not reach the
-  device's key) goes through that path but has no test scenario of its own.
+- **Sessions after a refused sign-in** (D216): every failure before the
+  device is bound revokes the login's device (a rebind: the login's refresh
+  token only, the device's own row stays active); the device row stays in
+  the account's list marked revoked (the protocol deletes no row). A
+  rebind's `rolled_back` before binding (a server whose chain does not
+  reach the device's key) goes through that path but has no test scenario
+  of its own; a failure with no answer (no network, a timeout) revokes
+  nothing; the lock race fixed by the review has no test hook.
 - **Known limitations** (recorded, no work planned): the server's sign-in
   limits (D175, D185: a turn lost to an attacker at the moment a wait ends,
   the soft limit counted after Argon2id, counts in memory, the email map);

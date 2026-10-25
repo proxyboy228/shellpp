@@ -39,6 +39,8 @@ enum Mode {
     /// The login's answer carries a personal `kek_wrap` with one byte
     /// flipped (it opens to nothing).
     TamperLoginWrap,
+    /// Every pull is answered `503` (the server is busy).
+    FailPull,
     /// Push answers carry no results (the server's write is unknown).
     EmptyPush,
     /// `ForgeEpoch` on the first page of a pull from 0, and the first pull
@@ -171,7 +173,7 @@ fn rewrite(mode: &Mode, seen: &Mutex<Vec<Value>>, body: &[u8]) -> Option<Vec<u8>
         Mode::Purge { hide, .. } => {
             records.retain(|record| record_id(record) != Some(*hide));
         }
-        Mode::TamperLoginWrap => return None,
+        Mode::TamperLoginWrap | Mode::FailPull => return None,
     }
     serde_json::to_vec(&page).ok()
 }
@@ -295,6 +297,17 @@ fn proxy(server: &Server) -> Proxy {
                         _ => false,
                     }
                 };
+                if pull && *mode.lock().unwrap() == Mode::FailPull {
+                    let body = r#"{"error":{"code":"unavailable","message":"busy"}}"#;
+                    let head = format!(
+                        "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = client.write_all(head.as_bytes()).await;
+                    let _ = client.write_all(body.as_bytes()).await;
+                    let _ = client.shutdown().await;
+                    return;
+                }
                 if send_500 {
                     let body = r#"{"error":{"code":"internal","message":"internal"}}"#;
                     let head = format!(
@@ -752,6 +765,7 @@ fn a_refused_sign_in_revokes_its_login(mode: Mode, code: &str) {
     let (proxy, a, b, email, password) = setup(&server);
     let (live, revoked) = sessions_and_revoked_devices(&server, &email);
     assert_eq!((live, revoked), (2, 0), "A and B");
+    let access_before = live_access_tokens(&server, &email);
 
     let laptop = Client::local("laptop", &new_password());
     laptop.host("laptop.example.com");
@@ -775,6 +789,11 @@ fn a_refused_sign_in_revokes_its_login(mode: Mode, code: &str) {
         (2, 1),
         "the login's tokens are gone and its device row is revoked"
     );
+    assert_eq!(
+        live_access_tokens(&server, &email),
+        access_before,
+        "no access token of the login stays"
+    );
     assert!(!laptop.status().signed_in);
     assert_eq!(laptop.vault_id(), vault_before);
     assert_eq!(laptop.addresses(), vec!["laptop.example.com"]);
@@ -797,4 +816,91 @@ fn a_newer_epoch_at_sign_in_revokes_the_login() {
 #[test]
 fn a_key_wrap_that_does_not_open_at_sign_in_revokes_the_login() {
     a_refused_sign_in_revokes_its_login(Mode::TamperLoginWrap, "integrity");
+}
+
+/// Not only a refusal (review of run 13): the merge's pull answered `503`
+/// fails the sign-in after its login, and that login is revoked too.
+#[test]
+fn a_server_error_in_the_merge_at_sign_in_revokes_the_login() {
+    a_refused_sign_in_revokes_its_login(Mode::FailPull, "unavailable");
+}
+
+/// The access tokens of the account that are not expired.
+fn live_access_tokens(server: &Server, email: &str) -> i64 {
+    server
+        .db
+        .tx(shellpp_server::db::TxKind::Read, |tx| {
+            let rows = tx.query(
+                "SELECT COUNT(*) FROM access_tokens t JOIN users u ON u.user_id = t.user_id \
+                 WHERE u.email = ?",
+                &[shellpp_server::db::Val::from(email)],
+                &[shellpp_server::db::Ty::Int],
+            )?;
+            Ok::<_, shellpp_server::db::DbError>(rows[0][0].int().unwrap_or(0))
+        })
+        .expect("count")
+}
+
+/// Review of run 13: a first run (an empty device, "Restore from sync")
+/// whose login's key wrap does not open revokes the device row that login
+/// made; signing in again through an honest server works.
+#[test]
+fn a_refused_first_run_sign_in_revokes_its_login() {
+    let server = Server::start();
+    let (proxy, _a, _b, email, password) = setup(&server);
+    let c = Client::empty("C");
+    let input = || shellpp_core::service::SignInInput {
+        origin: proxy.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    };
+    proxy.set(Mode::TamperLoginWrap);
+    match c.core.sync_sign_in(input()) {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "integrity"),
+        other => panic!("expected integrity, got {other:?}"),
+    }
+    proxy.set(Mode::Pass);
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (2, 1));
+    assert!(matches!(
+        c.core.sync_sign_in(input()).expect("signed in"),
+        SignInOutcome::Done(_)
+    ));
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (3, 1));
+}
+
+/// Review of run 13: a device of the account signed out (its refresh
+/// token gone, its device row still active) whose sign-in is refused
+/// before it is bound again loses that login's session only: its own row
+/// stays active (D185 keeps it exempt from the email's soft limit), and
+/// it signs in again afterwards.
+#[test]
+fn a_refused_rebind_keeps_the_devices_own_row() {
+    let server = Server::start();
+    let (proxy, _a, b, email, password) = setup(&server);
+    b.core.sync_sign_out(false).expect("signed out");
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (1, 0));
+    let input = || shellpp_core::service::SignInInput {
+        origin: proxy.origin.clone(),
+        email: email.clone(),
+        password: password.clone(),
+        registration_code: None,
+    };
+    proxy.set(Mode::TamperLoginWrap);
+    match b.core.sync_sign_in(input()) {
+        Err(CoreError::Sync(error)) => assert_eq!(error.code(), "integrity"),
+        other => panic!("expected integrity, got {other:?}"),
+    }
+    proxy.set(Mode::Pass);
+    assert_eq!(
+        sessions_and_revoked_devices(&server, &email),
+        (1, 0),
+        "the login's refresh token is revoked, B's row is not"
+    );
+    assert_eq!(live_access_tokens(&server, &email), 1, "A's alone");
+    assert!(matches!(
+        b.core.sync_sign_in(input()).expect("signed in again"),
+        SignInOutcome::Done(_)
+    ));
+    assert_eq!(sessions_and_revoked_devices(&server, &email), (2, 0));
 }
