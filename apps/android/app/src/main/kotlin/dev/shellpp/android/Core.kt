@@ -40,7 +40,7 @@ object Core {
      */
     private val LOCAL_CHANGES = setOf(
         "record_save", "record_delete", "record_restore", "record_move", "record_duplicate", "recently_deleted_restore",
-        "key_generate", "key_import", "key_label_set", "known_host_remove", "known_host_restore",
+        "key_generate", "key_import", "key_label_set", "known_host_remove", "known_host_restore", "identity_save",
     )
 
     /** Called after a local change ([App.kickSync]). */

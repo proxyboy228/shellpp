@@ -52,6 +52,13 @@ class App : Application() {
     /** The last view of each open session (title, state), for the Sessions screen. */
     val sessionViews = MutableStateFlow<Map<Long, JSONObject>>(emptyMap())
 
+    /** The session shown last in the terminal screen (its host's mark is on the Connections tab). */
+    val activeSessionId = MutableStateFlow<Long?>(null)
+
+    /** The session the bottom bar and Connections treat as current: the last shown, else the newest. */
+    fun activeSession(views: Map<Long, JSONObject>): JSONObject? =
+        activeSessionId.value?.let { views[it] } ?: views.values.maxByOrNull { it.optLong("id") }
+
     /** The saved host of each session opened from one (its row shows a dot). */
     private val sessionHosts = ConcurrentHashMap<Long, String>()
 

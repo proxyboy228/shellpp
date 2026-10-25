@@ -20,8 +20,8 @@ class FingerprintOnTest {
         E2e.launch()
         E2e.type("unlock_password", E2e.vaultPassword)
         E2e.click("unlock")
-        E2e.click("tab_more", 60_000)
-        E2e.click("more_settings")
+        E2e.openSettings()
+        E2e.click("settings_security")
         val toggle = E2e.find("settings_fingerprint")
         assertTrue("fingerprint unlock is offered", toggle.isEnabled)
         toggle.click()
@@ -35,9 +35,8 @@ class FingerprintOnTest {
         E2e.click("screen_close")
 
         // Lock: the unlock screen opens the prompt by itself, the finger opens the vault.
-        E2e.click("tab_more")
-        E2e.click("more_lock")
-        assertTrue("unlocked with the fingerprint", E2e.has("tab_hosts", 60_000))
+        E2e.lockNow()
+        assertTrue("unlocked with the fingerprint", E2e.has("tab_vaults", 60_000))
         assertTrue(E2e.app.lock.value.unlocked)
     }
 }
@@ -56,8 +55,8 @@ class FingerprintInvalidatedTest {
         assertFalse("no fingerprint button", E2e.has("unlock_fingerprint", 3_000))
         E2e.type("unlock_password", E2e.vaultPassword)
         E2e.click("unlock")
-        E2e.click("tab_more", 60_000)
-        E2e.click("more_settings")
+        E2e.openSettings()
+        E2e.click("settings_security")
         assertFalse("fingerprint unlock is off", E2e.find("settings_fingerprint").isChecked)
         assertTrue("Settings says why", E2e.hasText("a new fingerprint was added", 10_000))
     }

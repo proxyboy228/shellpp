@@ -63,7 +63,7 @@ private fun MenuRow(label: String, tag: String, enabled: Boolean = true, detail:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Screen(title: String, onClose: (() -> Unit)?, content: @Composable () -> Unit) {
+internal fun Screen(title: String, onClose: (() -> Unit)?, content: @Composable () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -80,66 +80,6 @@ private fun Screen(title: String, onClose: (() -> Unit)?, content: @Composable (
         },
         containerColor = Tokens.bgBase,
     ) { padding -> Column(Modifier.padding(padding).fillMaxSize()) { content() } }
-}
-
-/** More (UI spec 3): Known hosts, Recently deleted, Account and sync, Settings, Lock. */
-@Composable
-fun MoreScreen(app: App, onOpen: (Overlay) -> Unit) {
-    val scope = rememberCoroutineScope()
-    Screen("More", onClose = null) {
-        MenuRow("Known hosts", "more_known_hosts") { onOpen(Overlay.KnownHosts) }
-        MenuRow("Recently deleted", "more_recently_deleted") { onOpen(Overlay.RecentlyDeleted) }
-        MenuRow("Account and sync", "more_account") { onOpen(Overlay.Account) }
-        MenuRow("Settings", "more_settings") { onOpen(Overlay.Settings) }
-        MenuRow("Lock", "more_lock") {
-            scope.launch {
-                withContext(Dispatchers.IO) {
-                    try {
-                        app.setLock(LockStatus.from(Core.obj("lock")))
-                    } catch (error: CoreException) {
-                        app.refreshLock()
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Sessions (UI spec 3, 9.9): the open sessions; tapping one opens it. */
-@Composable
-fun SessionsScreen(app: App, activity: MainActivity, onOpen: (Overlay) -> Unit) {
-    val views by app.sessionViews.collectAsState()
-    Screen("Sessions", onClose = null) {
-        if (views.isEmpty()) {
-            Text("No open sessions", Modifier.padding(24.dp), color = Tokens.textSecondary)
-            return@Screen
-        }
-        TextButton(onClick = { app.closeAll() }, modifier = Modifier.padding(horizontal = 8.dp).testTag("disconnect_all")) {
-            Text("Disconnect all")
-        }
-        LazyColumn {
-            items(views.values.toList(), key = { it.optLong("id") }) { view ->
-                val state = view.optString("state")
-                MenuRow(
-                    view.optString("title").ifBlank { "Session" },
-                    "session_" + view.optLong("id"),
-                    detail = when (state) {
-                        "dropped" -> "Connection lost" + (view.optInt("reconnectIn", -1).takeIf { it >= 0 }?.let { " · reconnecting in $it s" } ?: "")
-                        "ended" -> "Ended"
-                        "failed" -> "Failed"
-                        else -> state.replaceFirstChar { it.uppercase() }
-                    },
-                ) {
-                    val id = view.optLong("id")
-                    if (id in app.sftpSessions) {
-                        onOpen(Overlay.Sftp(null, id))
-                    } else {
-                        activity.startActivity(Intent(activity, TerminalActivity::class.java).putExtra(TerminalActivity.EXTRA_SESSION, id))
-                    }
-                }
-            }
-        }
-    }
 }
 
 /** Recently deleted (UI spec 6.3): restore only; deleting forever stays on the desktop. */
@@ -202,9 +142,9 @@ fun RecentlyDeletedScreen(app: App, onClose: () -> Unit) {
 
 private val AUTO_LOCK = listOf<Pair<Int?, String>>(null to "Never", 5 to "5 minutes", 15 to "15 minutes", 30 to "30 minutes", 60 to "60 minutes")
 
-/** Settings (UI spec 12) as far as M1 goes: Security (auto-lock, fingerprint unlock). */
+/** Settings → Security & Privacy (UI spec 12): auto-lock, fingerprint unlock (D218). */
 @Composable
-fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
+fun SecuritySettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
     val lock by app.lock.collectAsState()
     var refresh by remember { mutableStateOf(0) }
     var picking by remember { mutableStateOf(false) }
@@ -294,7 +234,7 @@ fun SettingsScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
         }
     }
 
-    Screen("Settings", onClose) {
+    Screen("Security & Privacy", onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Security", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             MenuRow("Auto-lock", "settings_auto_lock", detail = AUTO_LOCK.firstOrNull { it.first == autoLock }?.second ?: "Never") {

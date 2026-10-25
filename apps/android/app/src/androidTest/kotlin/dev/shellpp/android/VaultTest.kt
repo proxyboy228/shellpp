@@ -37,16 +37,16 @@ class VaultFirstRunTest {
         E2e.type("first_password", E2e.vaultPassword)
         E2e.type("first_repeat", E2e.vaultPassword)
         E2e.click("create_vault")
-        E2e.find("add", 60_000)
+        E2e.click("vault_hosts", 60_000)
+        E2e.find("add", 30_000)
 
-        // A group whose SSH defaults the host inherits.
+        // A group whose SSH defaults the host inherits; the check mark saves.
         E2e.click("add")
         E2e.clickText("New group")
         E2e.type("group_name", GROUP)
         E2e.type("group_username", E2e.sshUser)
         E2e.type("group_port", E2e.sshPort.toString())
-        Thread.sleep(1_500)
-        E2e.click("editor_close")
+        E2e.click("editor_save")
         E2e.click("group_$GROUP")
 
         // A host in it: address, label, password; the username comes from the group.
@@ -57,7 +57,7 @@ class VaultFirstRunTest {
         E2e.type("host_password", E2e.sshPassword)
         Thread.sleep(1_500)
         assertTrue("the group's username shown as inherited", E2e.hasText("from group $GROUP", 10_000))
-        E2e.click("editor_close")
+        E2e.click("editor_save")
 
         // Tap the host: a session; the first key is accepted and saved.
         E2e.click("host_$HOST")
@@ -87,23 +87,23 @@ class VaultAfterRestartTest {
         assertTrue("a wrong password is refused", E2e.hasText("Wrong password", 30_000))
         E2e.type("unlock_password", E2e.vaultPassword)
         E2e.click("unlock")
+        E2e.openHosts()
         E2e.click("group_$GROUP", 60_000)
         E2e.find("host_$HOST")
 
-        // Lock from More: the unlock screen, and the password opens it again.
-        E2e.click("tab_more")
-        E2e.click("more_lock")
+        // Lock from Settings: the unlock screen, and the password opens it again.
+        E2e.lockNow()
         E2e.type("unlock_password", E2e.vaultPassword)
         E2e.click("unlock")
-        E2e.find("tab_hosts", 60_000)
+        E2e.find("tab_vaults", 60_000)
     }
 }
 
 /**
- * The host editor writes only what was changed in it (review of run 14):
- * a change that comes in while it is open (written here through the core,
- * as a sync's pull writes it) stays after the editor's next saves, in a
- * field it does not show and in one it shows but nobody touched.
+ * The host editor writes only what was changed in it (D221): a change that
+ * comes in while it is open (written here through the core, as a sync's
+ * pull writes it) stays after the editor's save, in a field it does not
+ * show and in one it shows but nobody touched.
  */
 @RunWith(AndroidJUnit4::class)
 class EditorKeepsOtherChangesTest {
@@ -120,23 +120,20 @@ class EditorKeepsOtherChangesTest {
         ).getString("record_id")
         fun data() = Core.obj("record_get", JSONObject().put("vault_id", vault).put("record_id", id)).getJSONObject("data")
 
-        E2e.click("tab_hosts", 60_000)
-        E2e.type("search", label)
+        E2e.searchHosts(label)
         E2e.find("host_$label").longClick()
-        E2e.clickText("Edit")
-        E2e.type("host_tags", "one")
-        // Saved half a second after the last change.
-        Thread.sleep(1_500)
-        assertEquals("one", data().optJSONArray("tags")?.optString(0))
+        E2e.click("selection_edit")
+        E2e.type("host_tags", "one, two")
 
-        // Another device's change arrives: the notes and the port.
+        // Another device's change arrives while the editor is open: the
+        // notes (not in the editor) and the port (in it, untouched).
         val incoming = data().put("notes", "from the desktop")
         incoming.put("ssh", (incoming.optJSONObject("ssh") ?: JSONObject()).put("port", 2222))
         Core.call("record_save", JSONObject().put("vault_id", vault).put("record_id", id).put("type", "host").put("data", incoming))
 
-        E2e.type("host_tags", "one, two")
-        Thread.sleep(1_500)
-        E2e.click("editor_close")
+        E2e.click("editor_save")
+        val deadline = System.currentTimeMillis() + 10_000
+        while (data().optJSONArray("tags") == null && System.currentTimeMillis() < deadline) Thread.sleep(250)
         val after = data()
         assertEquals("the incoming notes stay", "from the desktop", after.optString("notes"))
         assertEquals("the incoming port stays", 2222, after.optJSONObject("ssh")?.optInt("port"))
@@ -144,4 +141,3 @@ class EditorKeepsOtherChangesTest {
         Core.call("record_delete", JSONObject().put("vault_id", vault).put("record_ids", JSONArray().put(id)))
     }
 }
-

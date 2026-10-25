@@ -133,7 +133,7 @@ fun generateKey(input: JSONObject, passphrase: CharArray): String {
 /** The Keychain (UI spec 7): the keys, Generate, Import from file, a key's screen. */
 @OptIn(ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-fun KeychainScreen(app: App, activity: MainActivity) {
+fun KeychainScreen(app: App, activity: MainActivity, nav: Nav) {
     val changes by app.changes.collectAsState()
     var refresh by remember { mutableStateOf(0) }
     var adding by remember { mutableStateOf(false) }
@@ -476,7 +476,8 @@ private fun KeyScreen(
 
 /** Known hosts (UI spec 8): the list with search, a row's fingerprint and Remove with Undo. */
 @Composable
-fun KnownHostsScreen(app: App, onClose: () -> Unit) {
+fun KnownHostsScreen(app: App, nav: Nav) {
+    val onClose = { nav.pop(); Unit }
     var refresh by remember { mutableStateOf(0) }
     var search by remember { mutableStateOf("") }
     var opened by remember { mutableStateOf<JSONObject?>(null) }

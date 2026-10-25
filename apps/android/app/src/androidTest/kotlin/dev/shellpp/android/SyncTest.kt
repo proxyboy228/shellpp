@@ -58,8 +58,8 @@ class SyncSignInTest {
         E2e.launch()
         E2e.type("unlock_password", E2e.vaultPassword)
         E2e.click("unlock")
-        E2e.click("tab_more", 60_000)
-        E2e.click("more_account")
+        E2e.openSettings()
+        E2e.click("settings_account")
         E2e.click("account_connect")
         E2e.type("sync_origin", Peer.origin)
         E2e.click("sync_continue")
@@ -95,7 +95,7 @@ class SyncAfterUnlockTest {
         E2e.launch()
         E2e.type("unlock_password", Peer.password)
         E2e.click("unlock")
-        E2e.find("tab_hosts", 60_000)
+        E2e.find("tab_vaults", 60_000)
         assertTrue("the desktop's second host arrived", Peer.waitForAddress(Peer.DESKTOP_SECOND, 90_000))
     }
 }
@@ -127,7 +127,7 @@ class SyncRestoreTest {
         E2e.type("sync_email", Peer.email)
         E2e.type("sync_password", Peer.password)
         E2e.click("sync_sign_in")
-        E2e.find("tab_hosts", 120_000)
+        E2e.find("tab_vaults", 120_000)
         for (address in listOf(Peer.DESKTOP_HOST, Peer.PHONE_HOST, Peer.DESKTOP_SECOND)) {
             assertTrue("$address restored", Peer.waitForAddress(address, 90_000))
         }
@@ -136,10 +136,9 @@ class SyncRestoreTest {
         while (Core.obj("settings_get").optInt("security.auto_lock_minutes") != 15 && System.currentTimeMillis() < deadline) Thread.sleep(200)
         assertEquals(15, Core.obj("settings_get").optInt("security.auto_lock_minutes"))
         // The account's password is the phone's master password now.
-        E2e.click("tab_more")
-        E2e.click("more_lock")
+        E2e.lockNow()
         E2e.type("unlock_password", Peer.password)
         E2e.click("unlock")
-        E2e.find("tab_hosts", 60_000)
+        E2e.find("tab_vaults", 60_000)
     }
 }

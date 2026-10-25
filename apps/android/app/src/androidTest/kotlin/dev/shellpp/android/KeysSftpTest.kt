@@ -45,7 +45,7 @@ class KeysSftpTest {
         val label = "phone-key-" + UUID.randomUUID().toString().take(6)
 
         // Keychain ▸ + ▸ Generate.
-        E2e.click("tab_keychain", 60_000)
+        E2e.openVaultSection("vault_keychain")
         E2e.click("key_add")
         E2e.clickText("Generate")
         E2e.type("key_label", label)
@@ -81,8 +81,7 @@ class KeysSftpTest {
                     .put("ssh", JSONObject().put("port", E2e.sshPort).put("username", keyUser).put("key_id", imported.getString("record_id"))),
             ),
         )
-        E2e.click("tab_hosts")
-        E2e.type("search", "client-$label")
+        E2e.searchHosts("client-$label")
         E2e.click("host_client-$label")
         acceptHostKeyIfAsked()
         assertTrue("a prompt", E2e.waitForTerminal(60_000) { lines -> lines.any { it.contains("$") } })
@@ -101,8 +100,7 @@ class KeysSftpTest {
             ),
         )
         E2e.launch()
-        E2e.click("tab_hosts", 30_000)
-        E2e.type("search", "key-$label")
+        E2e.searchHosts("key-$label")
         E2e.click("host_key-$label")
         acceptHostKeyIfAsked()
         val signedIn = E2e.waitForTerminal(60_000) { lines -> lines.any { it.contains("$") } }
@@ -113,10 +111,10 @@ class KeysSftpTest {
 
         // SFTP to the key host: its home folder, then a file up and back down.
         E2e.launch()
-        E2e.click("tab_hosts", 30_000)
-        E2e.type("search", "key-$label")
+        E2e.searchHosts("key-$label")
         E2e.find("host_key-$label").longClick()
-        E2e.clickText("Open SFTP")
+        E2e.click("selection_more")
+        E2e.clickText("Connect via SFTP")
         acceptHostKeyIfAsked()
         E2e.find("sftp_add", 60_000)
         val app = E2e.app

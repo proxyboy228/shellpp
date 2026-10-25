@@ -66,6 +66,36 @@ struct KeyLabelJson {
     label: String,
 }
 
+/// The input of `identity_save` (UI spec 7, run 15): `password` set or
+/// cleared, or kept when missing.
+#[derive(Deserialize)]
+struct IdentityJson {
+    #[serde(default)]
+    record_id: Option<Uuid>,
+    label: String,
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    key_id: Option<Uuid>,
+    #[serde(default)]
+    password: Option<Option<SecretString>>,
+    #[serde(default)]
+    clear_password: bool,
+}
+
+/// An identity as the phone shows it (no password, only whether one is set).
+fn identity_json(view: &shellpp_core::service::keychain::IdentityView) -> Value {
+    json!({
+        "vault_id": view.vault_id,
+        "record_id": view.record_id,
+        "created_at": view.created_at,
+        "label": view.label,
+        "username": view.username,
+        "key_id": view.key_id,
+        "password_set": view.password_set,
+    })
+}
+
 /// The origin of a sync command.
 #[derive(Deserialize)]
 struct OriginInput {
@@ -405,6 +435,36 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
                 key: input.key,
                 label: input.label,
             }))
+        }
+        // Identities (the editors' identity picker and the Keychain, run 15).
+        "identities_list" => {
+            let list = core.identities_list()?;
+            Ok(Value::Array(list.iter().map(identity_json).collect()))
+        }
+        "identity_save" => {
+            let input: IdentityJson = parse(input)?;
+            let vault_id = core
+                .vaults()?
+                .first()
+                .map(|vault| vault.vault_id)
+                .ok_or(CoreError::Locked)?;
+            let password = match (input.clear_password, input.password) {
+                (true, _) => shellpp_core::model::identity::PasswordChange::Clear,
+                (false, Some(Some(value))) => {
+                    shellpp_core::model::identity::PasswordChange::Set(value)
+                }
+                (false, Some(None)) => shellpp_core::model::identity::PasswordChange::Clear,
+                (false, None) => shellpp_core::model::identity::PasswordChange::Keep,
+            };
+            let view = core.identity_save(shellpp_core::service::keychain::IdentitySaveInput {
+                vault_id,
+                record_id: input.record_id,
+                label: input.label,
+                username: input.username,
+                key_id: input.key_id,
+                password,
+            })?;
+            Ok(identity_json(&view))
         }
         // Known hosts (UI spec 8, M4).
         "known_hosts_list" => out(core.known_hosts_list()),

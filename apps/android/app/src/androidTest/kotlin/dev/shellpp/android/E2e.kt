@@ -116,6 +116,40 @@ object E2e {
     fun hasText(text: String, timeoutMs: Long = 5_000): Boolean =
         device.wait(Until.hasObject(By.textContains(text)), timeoutMs)
 
+    /** The Hosts screen at the top level: Vaults, its first page, Hosts (run 15 navigation). */
+    fun openHosts(timeoutMs: Long = 60_000) {
+        click("tab_vaults", timeoutMs)
+        // A second tap on the current tab goes back to its first page.
+        click("tab_vaults")
+        click("vault_hosts")
+    }
+
+    /** A section of the vault home (Keychain, Known hosts...). */
+    fun openVaultSection(tag: String, timeoutMs: Long = 60_000) {
+        click("tab_vaults", timeoutMs)
+        click("tab_vaults")
+        click(tag)
+    }
+
+    /** Hosts with the search open and [text] typed. */
+    fun searchHosts(text: String, timeoutMs: Long = 60_000) {
+        openHosts(timeoutMs)
+        click("search_open")
+        type("search", text)
+    }
+
+    /** The first page of Settings. */
+    fun openSettings(timeoutMs: Long = 60_000) {
+        click("tab_settings", timeoutMs)
+        click("tab_settings")
+    }
+
+    /** Settings, Lock now. */
+    fun lockNow() {
+        openSettings()
+        click("more_lock")
+    }
+
     /** The engine runs (the core opens its database off the main thread). */
     fun awaitEngine() {
         val deadline = System.currentTimeMillis() + 30_000

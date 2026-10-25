@@ -792,7 +792,7 @@ the `jni` crate and its dependencies (MIT OR Apache-2.0, checked by
 license (`apps/android/app/src/main/assets/fonts/OFL.txt`), the Kotlin
 standard library (Apache-2.0, <https://github.com/JetBrains/kotlin>), and,
 from Google Maven, Jetpack Compose (UI, Foundation, Material 3, Material
-Icons Core) and AndroidX Activity with their AndroidX dependencies
+Icons Core and Extended) and AndroidX Activity with their AndroidX dependencies
 (Apache-2.0, <https://developer.android.com/jetpack/androidx>) and Kotlin
 coroutines (Apache-2.0, <https://github.com/Kotlin/kotlinx.coroutines>).
 Its tests use JUnit 4 (EPL-1.0), org.json (Public Domain, unit tests only),

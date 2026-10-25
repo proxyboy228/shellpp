@@ -50,6 +50,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    // Material Icons (Apache-2.0) for the screens of run 15: folders, keys,
+    // keyboard, upload and the like (plan 1.3: Material icons or our own glyphs).
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.13.0")
     // Android's trust manager for the sync server's certificate (architecture 5).
     implementation(project(":rustls-platform-verifier"))

@@ -161,11 +161,17 @@ if ($Emulator) {
             $booted = $false
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds 5
-                if ("$(& $adb shell getprop sys.boot_completed 2>$null)".Trim() -eq '1') { $booted = $true; break }
+                # -e: the emulator, also while a phone is connected over USB.
+                if ("$(& $adb -e shell getprop sys.boot_completed 2>$null)".Trim() -eq '1') { $booted = $true; break }
             }
             if (-not $booted) { throw "the emulator ($Avd) did not boot in 6 minutes" }
             Write-Host "ok      ($Avd)" -ForegroundColor Green
         }
+        # Every adb command and Gradle's install go to the emulator only: a
+        # phone connected over USB is never touched (plan of run 15, 1.8).
+        # For this process and its children only.
+        $env:ANDROID_SERIAL = @(& $adb devices 2>$null | Select-String -Pattern '^(emulator-\d+)\s+device' | ForEach-Object { $_.Matches[0].Groups[1].Value })[0]
+        if (-not $env:ANDROID_SERIAL) { throw 'no emulator to run on' }
         # Sync (M3): the second device and the server behind its TLS front
         # (server/tests/android_peer.rs) start now, as they build meanwhile;
         # the phone's sync classes wait for its peer.json, and the script
