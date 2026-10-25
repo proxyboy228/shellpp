@@ -215,6 +215,10 @@ menu, or Ctrl+=, Ctrl+- and Ctrl+0 outside a terminal, scales the whole
 interface from 80 % to 200 %. The terminal's own text size is set apart, in
 the font settings.
 
+**Flags on Windows** are shown as two letters (🇺🇦 as `UA`): Windows has no
+flag glyphs, and Windows Terminal shows them the same way. This is a known
+limitation (`docs/compatibility.md`).
+
 ## Keyboard shortcuts
 
 Settings > **Shortcuts** lists every shortcut. Click an action's keys and

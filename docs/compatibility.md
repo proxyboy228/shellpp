@@ -104,13 +104,11 @@ state checks what the program shows before the capture.
   fell apart (until run 12). The grid still holds one character per cell as
   the shell's `wcwidth` counts them, so the columns stay right; the cells
   after the picture stay blank (`👍🏽` takes four columns, the family six).
-- **Flags on Windows** (run 12: postponed). Windows ships no flag glyphs:
-  Segoe UI Emoji draws a flag's two regional indicators as the two letters
-  (`UA`), and so does the terminal. Drawing flags needs a font with them
-  shipped with the app, under a license the clean room allows (OFL), in a
-  format Windows 10 draws in color (COLR v0 or bitmaps); that choice is the
-  owner's. Elsewhere the system's emoji font draws them (not checked on
-  Linux yet).
+- **Flags on Windows** (run 12; a known limitation, D210). Windows ships no
+  flag glyphs: Segoe UI Emoji draws a flag's two regional indicators as the
+  two letters (`UA`), and so do the terminal and Windows Terminal. No flag
+  font ships with the app. Elsewhere the system's emoji font draws them (not
+  checked on a Linux desktop yet).
 - **VS16 emoji take two cells** (run 12, D206). A character that is one
   column wide by itself and has an emoji presentation (`❤`, `⚠`, `✔`, also
   `©`, `®` and the keycap digits) followed by VS16 becomes two cells wide
