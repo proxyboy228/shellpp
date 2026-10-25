@@ -165,9 +165,48 @@ stage 8 (section 4).
 
 ### 3.1 The mobile client (Android), a line of its own
 
+**The mobile runs** (run 13; rough sizes, one run is one overnight run of one
+agent). The first version is the owner's list (D211): SSH, host groups, the
+Keychain, SFTP, known hosts, full sync, unlock by the master password; its
+screens are `docs/mobile/ui-spec.md` (D214), its architecture
+`docs/mobile/architecture.md` (D213).
+
+1. **Run 13: the design run and the prototype** — the core for Android (the
+   session layer and the terminal model as crates, D212), the architecture,
+   the screen specification, and an APK that connects over SSH (quick
+   connect) to a terminal with the extra keys (`apps/android`).
+2. **M1, the vault on the phone** (1 run): the command dispatcher of the
+   JNI layer over the core's service API; Android's platform services
+   (`SecretStore` on the Keystore, the clipboard, the event sink); first run
+   (a new vault), unlock and auto-lock; Hosts and groups (list, search,
+   editor); connecting from a host.
+3. **M2, the terminal for real** (1–2 runs): the binary screen snapshot,
+   every gesture of UI spec 9 (the cursor by tap and by the row, selection
+   with handles and the magnifier, Delete on the command line, Mark and Cut
+   for nano), sticky Ctrl and Alt, the desktop's key mapping moved into
+   `shellpp-terminal` and shared, the foreground service, reconnects on
+   network changes, rotation and pinch.
+4. **M3, sync** (1 run): `rustls-platform-verifier`'s initialization and its
+   Kotlin part, "Restore from sync" and the connect wizard, the account
+   screen, sync on demand and on resume; checked against the owner's server
+   with a second device.
+5. **M4, keys, known hosts, SFTP** (1 run): the Keychain (generate, import,
+   share the public key), the known hosts screens and the host key dialogs,
+   SFTP (browse, download, upload, the queue).
+6. **M5, the first version** (1 run): Settings, fingerprint unlock (off by
+   default), both themes at the S25's size, a signed APK on the owner's phone
+   and the owner's acceptance.
+
+So the first version is about 5–6 runs after run 13. After it, each about one
+run: snippets (and running them on a host); the command history and
+autocomplete (the capture and the list are already in `shellpp-terminal`);
+port forwarding (local and dynamic while the app runs); Mosh (the largest:
+no Mosh in the Rust core yet; its own study first, D204, D211); then
+distribution (a release key of the owner's; Google Play only by the owner).
+
 The owner's case (D204): now and then, away from home, SSH to one's own
 servers, with full sync of the personal vault from day one; Android only
-(a Samsung S25), Mosh with it. Run 12 studied the Rust core
+(a Samsung S25); Mosh later (D211). Run 12 studied the Rust core
 (`docs/android-feasibility.md`): `shellpp-ssh`, `shellpp-sync-api` and `shellpp-private-file` build for `aarch64-linux-android` as they are; `shellpp-core` after one change (`crates/core/src/sync/tls.rs`: an added CA beside the platform verifier, which takes no extra roots on Android); the desktop app does not (clipboard, GPUI). Stripped test executables weigh about 7 MB (core) and 6 MB (SSH). The session layer and the terminal model are Rust without GPUI and the next crates to split out; Android needs the Keystore behind `SecretStore`, the platform verifier's JNI setup and a foreground service for long sessions. Next: the design run (the
 interface stack, the binding between Kotlin and Rust, the split of the
 session layer and the terminal model out of the desktop app), then the
