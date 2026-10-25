@@ -2375,3 +2375,20 @@ Status: run 13 (plan, section 2.1; ROADMAP 5, the questions after run 12).
 - **The contact address** in `CODE_OF_CONDUCT.md` is replaced with a project address the owner will give in the release preparation run; whether the git history that holds it (b4aab0de, fd654149) is rewritten before publishing is decided there. Not touched now.
 
 **Spec impact:** CLAUDE.md (the criterion), `scripts\verify.ps1`, docs/security.md (the supply-chain table), docs/compatibility.md and the guide (flags), ROADMAP 2.4 and 5.
+
+
+### 211. The mobile app: the owner's description and choices (run 13)
+
+Status: run 13 (plan, section 2.2). Supersedes the Mosh part of D204.
+
+**Context.** D204 set the mobile client's line (Android only, a Samsung S25, full sync of the personal vault from day one, Mosh with it); run 12 studied the Rust core for it (`docs/android-feasibility.md`). The design run needed the owner's own description of the case, the requirements of the terminal and the scope of a first version.
+
+**Decision:** The owner's words are recorded in `docs/mobile/owner-notes.md` (Russian as said, with an English translation), and they are the only source of the mobile app's behaviour besides the accepted desktop specifications; the mobile specifications mark everything else [decision], and nothing comes from another mobile client (clean room).
+
+- The case: now and then, away from home, SSH to one's own servers (logs, restarting services, nano, `htop`, downloading files); full sync with the owner's server (a public domain, Let's Encrypt) from the first day.
+- The terminal's main requirements: putting the cursor on the wanted character, and selecting the wanted text (for example a piece of a configuration file, to delete it); every extra key (Esc, Tab, Ctrl, Alt, the arrows, `|`, `/`, `~`, `-`).
+- Entry: the master password.
+- The first version: SSH, host groups, the Keychain, SFTP, known hosts. Snippets, history, autocomplete and the rest come in later versions.
+- No iPhone app; Mosh comes later (not with the first version, as D204 had it); fingerprint unlock is an option, off by default [decision].
+
+**Spec impact:** `docs/mobile/owner-notes.md` (new), the mobile specifications of run 13 (`docs/mobile/`), ROADMAP 3.1.
