@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import androidx.test.rule.GrantPermissionRule
 import org.junit.Rule
 import org.junit.Test
@@ -29,6 +30,10 @@ class ConnectTest {
     )
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    /** Sessions need the vault unlocked (M1): made or opened with the run's password. */
+    @Before
+    fun unlocked() = E2e.ensureUnlocked()
 
     /** A quick connect to the run's server with its password user. */
     private fun quickConnect(): Intent {

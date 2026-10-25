@@ -1,6 +1,6 @@
 [package]
 name = "shellpp-android"
-description = "Shell++ for Android: the JNI layer over the shared Rust core (docs/mobile/architecture.md; the run 13 prototype: quick connect and the terminal)."
+description = "Shell++ for Android: the JNI layer over the shared Rust core (docs/mobile/architecture.md)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,12 +28,14 @@ futures.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-getrandom.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
 # The JNI calls (the version rustls-platform-verifier already brings in).
 jni = "0.22.4"
 
 [dev-dependencies]
+getrandom.workspace = true
 shellpp-test-sshd.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tempfile.workspace = true

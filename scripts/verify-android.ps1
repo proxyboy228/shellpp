@@ -71,6 +71,13 @@ if (-not $jdk) { Write-Host 'verify-android: no JDK (set JAVA_HOME or install An
 $env:ANDROID_HOME = $sdk
 $env:JAVA_HOME = $jdk
 $gradlew = Join-Path $android 'gradlew.bat'
+# The app's id (D218) and the end-to-end classes, in the order they run.
+$appId = 'io.github.proxyboy228.shellpp'
+$EndToEndClasses = @(
+    'dev.shellpp.android.VaultFirstRunTest',
+    'dev.shellpp.android.VaultAfterRestartTest',
+    'dev.shellpp.android.ConnectTest'
+)
 
 $failed = @()
 $passed = 0
@@ -141,20 +148,41 @@ if ($Emulator) {
             if (-not $booted) { throw "the emulator ($Avd) did not boot in 6 minutes" }
             Write-Host "ok      ($Avd)" -ForegroundColor Green
         }
-        $arguments = @(
-            'connectedDebugAndroidTest', '--console=plain',
-            # The screenshots run only when asked (ScreenshotsTest, argument
-            # screenshots=<theme>); here the test would report its skip as a failure.
-            '-Pandroid.testInstrumentationRunnerArguments.notClass=dev.shellpp.android.ScreenshotsTest',
-            "-Pandroid.testInstrumentationRunnerArguments.sshPort=$($server.port)",
-            "-Pandroid.testInstrumentationRunnerArguments.sshUser=$($server.users.password.name)",
-            "-Pandroid.testInstrumentationRunnerArguments.sshPassword=$($server.users.password.password)"
+        # A fresh install (the app's data from earlier runs goes), then each
+        # test class in a process of its own, in order: the second class
+        # finds what the first one left after a real restart (M1).
+        foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
+        $installed = Run-Step 'emulator-install' $gradlew @('installDebug', 'installDebugAndroidTest', '--console=plain') @{} $android
+        if (-not $installed) { throw 'the APKs did not install' }
+        $vaultPassword = 'e2e-' + [guid]::NewGuid().ToString('N')
+        $instrumentArgs = @(
+            '-e', 'sshPort', "$($server.port)",
+            '-e', 'sshUser', "$($server.users.password.name)",
+            '-e', 'sshPassword', "$($server.users.password.password)",
+            '-e', 'vaultPassword', $vaultPassword
         )
-        $null = Run-Step 'emulator-end-to-end' $gradlew $arguments @{} $android
+        foreach ($class in $EndToEndClasses) {
+            $short = $class.Split('.')[-1]
+            $arguments = @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $class) + $instrumentArgs + @("$appId.test/androidx.test.runner.AndroidJUnitRunner")
+            Write-Host ("{0,-28}" -f "e2e-$short") -NoNewline
+            $log = Join-Path $logDir "e2e-$short.log"
+            $code = Invoke-Logged $adb $arguments $log (Join-Path $logDir "e2e-$short.err.log")
+            $text = if (Test-Path -LiteralPath $log) { Get-Content -Raw -LiteralPath $log } else { '' }
+            # `am instrument` exits 0 even when tests fail: its report says.
+            $ok = ($code -eq 0) -and ($text -match 'OK \(\d+ tests?\)') -and ($text -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed')
+            if ($ok) {
+                Write-Host 'ok' -ForegroundColor Green
+                $script:passed += 1
+            } else {
+                Write-Host "FAILED  ($log)" -ForegroundColor Red
+                $script:failed += "e2e-$short"
+            }
+        }
     } catch {
         Write-Host "FAILED  ($($_.Exception.Message))" -ForegroundColor Red
         $failed += 'emulator'
     } finally {
+        foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
         if ($startedEmulator) { & $adb emu kill 2>$null | Out-Null }
         if ($containerStarted) {
             $null = Invoke-Logged $bash @((Join-Path $repo 'tests\openssh\stop.sh'), $work) (Join-Path $logDir 'openssh-stop.log') (Join-Path $logDir 'openssh-stop.err.log')

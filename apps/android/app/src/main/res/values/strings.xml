@@ -1,15 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Shell++</string>
-    <string name="quick_connect">Quick connect</string>
-    <string name="prototype_note">Prototype: no vault and no sync yet. Known hosts last until the app restarts.</string>
-    <string name="address">Address</string>
-    <string name="port">Port</string>
-    <string name="username">Username</string>
-    <string name="password">Password</string>
-    <string name="key_file">Key file…</string>
-    <string name="key_file_set">Key file: %1$s</string>
-    <string name="connect">Connect</string>
     <string name="channel_sessions">Open sessions</string>
     <string name="sessions_open">%1$d SSH sessions open</string>
     <string name="session_open">1 SSH session open</string>
@@ -26,11 +17,12 @@
     <string name="replace_key">Replace the key</string>
     <string name="cancel">Cancel</string>
     <string name="ok">OK</string>
+    <string name="close">Close</string>
+    <string name="use_password">Use password</string>
+    <string name="username">Username</string>
     <string name="password_for">Password for %1$s</string>
     <string name="wrong_password">Wrong password, try again.</string>
     <string name="passphrase_for">Passphrase of %1$s</string>
     <string name="connecting">Connecting…</string>
-    <string name="engine_failed">The engine did not start: %1$s</string>
-    <string name="starting">Starting, try again in a moment.</string>
     <string name="local_network_denied">Without the local network permission, servers at home (10.x, 192.168.x) cannot be reached. Settings › Apps › Shell++ › Permissions.</string>
 </resources>

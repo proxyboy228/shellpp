@@ -2,8 +2,8 @@ package dev.shellpp.android
 
 /**
  * The Rust core's JNI layer (apps/android/native, crate shellpp-android).
- * Sessions are addressed by handles; calls that can block (open, putCursor,
- * awaitWake, nextEvent, reply) never run on the main thread.
+ * Sessions are addressed by handles; calls that can block (call, open,
+ * putCursor, awaitWake, nextEvent, reply) never run on the main thread.
  */
 object Native {
     init {
@@ -25,9 +25,17 @@ object Native {
     const val KEY_PAGE_DOWN = 12
     const val KEY_DELETE = 13
 
-    @JvmStatic external fun start(filesDir: String): Boolean
+    /** Opens the core on the vault in [filesDir] with [platform] behind its platform services. */
+    @JvmStatic external fun start(filesDir: String, deviceName: String, platform: Platform): Boolean
+    /**
+     * One command of the core's service API (apps/android/native/src/dispatch.rs):
+     * [input] is UTF-8 JSON, filled with zeros by the call; the answer is
+     * `{"ok": ...}` or `{"error": {"code", "message", "details"}}`.
+     */
+    @JvmStatic external fun call(command: String, input: ByteArray?): String
     @JvmStatic external fun keyDir(): String
     @JvmStatic external fun open(address: String, port: Int, username: String, cols: Int, rows: Int, dark: Boolean): Long
+    @JvmStatic external fun openHost(vaultId: String, recordId: String, cols: Int, rows: Int, dark: Boolean): Long
     @JvmStatic external fun nextEvent(timeoutMs: Int): String?
     @JvmStatic external fun reply(session: Long, prompt: Long, kind: String, text: ByteArray?)
     @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)

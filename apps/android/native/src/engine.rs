@@ -1,16 +1,14 @@
-//! The process-wide state of the prototype: the core on a throwaway vault,
-//! the session layer, and the open sessions with their terminals.
+//! The process-wide state of the app: the core on the user's vault, the
+//! session layer, the open sessions with their terminals, and the queue of
+//! events the app reads.
 //!
-//! The vault lives in `<files>/prototype`, is made again at every start with
-//! a random password nobody knows, and holds only what a quick connect
-//! writes (known hosts, the connection log): "no vault and no sync" for the
-//! prototype (plan 3.7) on the real core, so host key checks and prompts are
-//! the desktop's. The first version replaces it with the user's vault.
+//! The vault lives in `<files>/vault` and lasts across starts (M1); the
+//! app's first run makes it, the master password or the fingerprint opens
+//! it (UI spec 4, 5). Sessions need it unlocked, as on the desktop.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -18,9 +16,10 @@ use alacritty_terminal::vte::ansi::CursorShape;
 use futures::StreamExt as _;
 use secrecy::SecretString;
 use serde_json::{Value, json};
-use shellpp_core::platform::memory::{MemoryClipboard, MemorySecretStore, RecordingLauncher};
-use shellpp_core::platform::{EventSink, OsKind, Platform, PlatformClass, SystemClock};
-use shellpp_core::service::dto::{CoreEvent, SessionTarget};
+use shellpp_core::platform::{
+    Clipboard, ExternalLauncher, OsKind, Platform, PlatformClass, SecretStore, SystemClock,
+};
+use shellpp_core::service::dto::SessionTarget;
 use shellpp_core::{Core, CoreConfig};
 use shellpp_sessions::{
     AgentSource, BoxFuture, HostKeyChoice, KeySources, ManagerOptions, OpenRequest, PromptKind,
@@ -31,6 +30,7 @@ use shellpp_terminal::model::{ModelOptions, TerminalSize};
 use shellpp_terminal::{TerminalHandle, TerminalSink};
 
 use crate::cursor;
+use crate::events::EventQueue;
 use crate::input::Cell;
 
 /// Lines of scrollback of a prototype terminal.
@@ -52,11 +52,20 @@ fn error(text: impl Into<String>) -> EngineError {
     EngineError(text.into())
 }
 
-/// The core's events go nowhere in the prototype (no screen shows them).
-struct NoEvents;
+/// The platform services the app gives the core (architecture 2): the
+/// Keystore behind `SecretStore`, the clipboard, the browser.
+pub struct Services {
+    pub secret_store: Arc<dyn SecretStore>,
+    pub clipboard: Arc<dyn Clipboard>,
+    pub launcher: Arc<dyn ExternalLauncher>,
+    /// The default device name (the phone's model).
+    pub device_name: String,
+}
 
-impl EventSink for NoEvents {
-    fn emit(&self, _event: &CoreEvent) {}
+impl std::fmt::Debug for Services {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Services").finish_non_exhaustive()
+    }
 }
 
 /// The terminal model as a session's terminal: output goes to its parser
@@ -107,12 +116,11 @@ struct Live {
 /// The core, the session layer and the open sessions.
 pub struct Engine {
     core: Arc<Core>,
-    manager: SessionManager,
+    manager: Arc<SessionManager>,
     key_dir: PathBuf,
     sessions: Mutex<BTreeMap<u64, Live>>,
     next: AtomicU64,
-    events_tx: mpsc::Sender<String>,
-    events_rx: Mutex<mpsc::Receiver<String>>,
+    events: Arc<EventQueue>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -122,14 +130,11 @@ impl std::fmt::Debug for Engine {
 }
 
 impl Engine {
-    /// Opens the core on a new throwaway vault under `files` and starts the
-    /// session layer. Key files for quick connects are offered from
-    /// `files/keys` (the app copies a picked key there).
-    pub fn start(files: &Path) -> Result<Self, EngineError> {
-        let data_dir = files.join("prototype");
-        if data_dir.exists() {
-            std::fs::remove_dir_all(&data_dir).map_err(|e| error(format!("old vault: {e}")))?;
-        }
+    /// Opens the core on the vault under `files` (made at the app's first
+    /// run) and starts the session layer. Key files for quick connects are
+    /// offered from `files/keys` (the app copies a picked key there).
+    pub fn start(files: &Path, services: Services) -> Result<Self, EngineError> {
+        let data_dir = files.join("vault");
         std::fs::create_dir_all(&data_dir).map_err(|e| error(format!("data folder: {e}")))?;
         // A key file picked for a quick connect lasts one run, as the vault
         // does (review of run 13): never left on disk for later servers.
@@ -138,15 +143,17 @@ impl Engine {
             std::fs::remove_dir_all(&key_dir).map_err(|e| error(format!("old keys: {e}")))?;
         }
         std::fs::create_dir_all(&key_dir).map_err(|e| error(format!("key folder: {e}")))?;
+        let events = Arc::new(EventQueue::default());
+        let lock_changes = events.follow_lock();
         let platform = Platform {
-            secret_store: Arc::new(MemorySecretStore::new()),
-            clipboard: Arc::new(MemoryClipboard::new()),
-            launcher: Arc::new(RecordingLauncher::new()),
-            events: Arc::new(NoEvents),
+            secret_store: services.secret_store,
+            clipboard: services.clipboard,
+            launcher: services.launcher,
+            events: events.clone(),
             clock: Arc::new(SystemClock),
             class: PlatformClass::Mobile,
             os: OsKind::Android,
-            device_name: "Android".to_owned(),
+            device_name: services.device_name,
         };
         let core = Core::open(
             CoreConfig {
@@ -156,11 +163,6 @@ impl Engine {
             platform,
         )
         .map_err(|e| error(format!("core: {}", e.code())))?;
-        let mut password = [0u8; 24];
-        getrandom::fill(&mut password).map_err(|e| error(format!("random: {e}")))?;
-        let password: String = password.iter().map(|byte| format!("{byte:02x}")).collect();
-        core.first_run_setup(SecretString::from(password))
-            .map_err(|e| error(format!("vault: {}", e.code())))?;
         let core = Arc::new(core);
         let options = ManagerOptions::with_keys(KeySources {
             key_dir: Some(key_dir.clone()),
@@ -168,15 +170,29 @@ impl Engine {
         });
         let manager = SessionManager::start(core.clone() as Arc<dyn SessionCore>, options)
             .map_err(|e| error(format!("sessions: {e}")))?;
-        let (events_tx, events_rx) = mpsc::channel();
+        let manager = Arc::new(manager);
+        // The session layer follows the core's lock (prompts cancelled while
+        // locked, reconnects waiting for unlock), as the desktop's lock
+        // events tell it; it ends with the core.
+        let follower = Arc::downgrade(&manager);
+        std::thread::Builder::new()
+            .name("lock-follower".to_owned())
+            .spawn(move || {
+                while let Ok(unlocked) = lock_changes.recv() {
+                    let Some(manager) = follower.upgrade() else {
+                        break;
+                    };
+                    manager.set_unlocked(unlocked);
+                }
+            })
+            .map_err(|e| error(format!("lock thread: {e}")))?;
         Ok(Self {
             core,
             manager,
             key_dir,
             sessions: Mutex::new(BTreeMap::new()),
             next: AtomicU64::new(1),
-            events_tx,
-            events_rx: Mutex::new(events_rx),
+            events,
         })
     }
 
@@ -185,9 +201,14 @@ impl Engine {
         &self.key_dir
     }
 
-    /// The core (tests read its known hosts).
+    /// The core (the dispatcher's commands; tests read its known hosts).
     pub fn core(&self) -> &Arc<Core> {
         &self.core
+    }
+
+    /// Runs one command of the core's service API ([`crate::dispatch`]).
+    pub fn call(&self, command: &str, input: &[u8]) -> String {
+        crate::dispatch::call(&self.core, command, input)
     }
 
     fn sessions(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Live>> {
@@ -201,14 +222,31 @@ impl Engine {
             .ok_or_else(|| error("no such session"))
     }
 
-    /// Opens a quick-connect SSH session to `address` in a terminal of
-    /// `cols` × `rows`, in the dark or light theme; returns its handle.
-    /// Every change of the session comes from [`Self::next_event`].
+    /// Opens a quick-connect SSH session to `address` (nothing saved).
     pub fn open(
         &self,
         address: &str,
         port: Option<u16>,
         username: Option<&str>,
+        cols: u16,
+        rows: u16,
+        dark: bool,
+    ) -> Result<u64, EngineError> {
+        let target = SessionTarget::Quick {
+            address: address.trim().to_owned(),
+            port,
+            username: username.map(str::to_owned).filter(|name| !name.is_empty()),
+        };
+        self.open_target(target, cols, rows, dark)
+    }
+
+    /// Opens an SSH session to `target` (a saved host or a quick connect)
+    /// in a terminal of `cols` x `rows`, in the dark or light theme;
+    /// returns its handle. Every change of the session comes from
+    /// [`Self::next_event`].
+    pub fn open_target(
+        &self,
+        target: SessionTarget,
         cols: u16,
         rows: u16,
         dark: bool,
@@ -223,11 +261,8 @@ impl Engine {
             crate::theme::palette(dark),
             wake.clone(),
         );
-        let target = SessionTarget::Quick {
-            address: address.trim().to_owned(),
-            port,
-            username: username.map(str::to_owned).filter(|name| !name.is_empty()),
-        };
+        // An unlock just now may not have reached the follower thread yet.
+        self.manager.set_unlocked(self.core.is_unlocked());
         let opened = self
             .manager
             .open(
@@ -238,7 +273,7 @@ impl Engine {
             .map_err(|e| error(e.message()))?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let mut events = opened.events;
-        let tx = self.events_tx.clone();
+        let tx = self.events.sender();
         // The session's events, as JSON, into the engine's queue: a thread of
         // its own waits on the session's stream.
         let forward = std::thread::Builder::new()
@@ -273,13 +308,10 @@ impl Engine {
         Ok(id)
     }
 
-    /// The next session event as JSON, waiting at most `timeout`.
+    /// The next event (the core's or a session's) as JSON, waiting at most
+    /// `timeout`.
     pub fn next_event(&self, timeout: Duration) -> Option<String> {
-        let events = self
-            .events_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        events.recv_timeout(timeout).ok()
+        self.events.next(timeout)
     }
 
     /// Answers the prompt `prompt` of session `id`: `kind` is "accept",
@@ -459,6 +491,7 @@ pub fn view_json(id: u64, view: &SessionView) -> Value {
         out
     });
     json!({
+        "kind": "session",
         "id": id,
         "state": state_name(view.state),
         "title": view.title,

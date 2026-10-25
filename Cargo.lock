@@ -7963,6 +7963,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

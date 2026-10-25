@@ -8,16 +8,19 @@
 //! (`no_mangle`) are its only unsafe code.
 #![allow(unsafe_code)]
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use jni::EnvUnowned;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use secrecy::SecretString;
+use shellpp_core::service::dto::SessionTarget;
+use zeroize::Zeroizing;
 
-use crate::engine::{Engine, EngineError};
+use crate::android_platform::KotlinPlatform;
+use crate::engine::{Engine, EngineError, Services};
 use crate::input::{self, Cell, Key};
 use crate::screen;
 
@@ -70,21 +73,64 @@ fn cell(col: jint, row: jint) -> Cell {
     }
 }
 
-/// `start(filesDir)`: opens the core and the session layer once per process.
+/// `start(filesDir, deviceName, platform)`: opens the core on the vault
+/// and the session layer once per process, with the app's `Platform`
+/// object behind the core's platform services (`android_platform`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_start<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     files: JString<'caller>,
+    device_name: JString<'caller>,
+    platform: JObject<'caller>,
 ) -> jboolean {
     unowned
         .with_env(|env| -> Result<jboolean, NativeError> {
             let files = files.try_to_string(env)?;
+            let device_name = device_name.try_to_string(env)?;
             if ENGINE.get().is_none() {
-                let started = Engine::start(std::path::Path::new(&files))?;
+                let kotlin = Arc::new(KotlinPlatform::new(
+                    env.get_java_vm()?,
+                    env.new_global_ref(&platform)?,
+                ));
+                let services = Services {
+                    secret_store: kotlin.clone(),
+                    clipboard: kotlin.clone(),
+                    launcher: kotlin,
+                    device_name,
+                };
+                let started = Engine::start(std::path::Path::new(&files), services)?;
                 let _ = ENGINE.set(started);
             }
             Ok(true)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `call(command, input)`: one command of the core's service API with a
+/// JSON input (UTF-8, may be null), answered as JSON (`dispatch.rs`). The
+/// input may hold secrets: it is copied into a buffer wiped after the call,
+/// and the Java array is filled with zeros. Blocks; off the main thread.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_call<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    command: JString<'caller>,
+    input: JByteArray<'caller>,
+) -> JString<'caller> {
+    unowned
+        .with_env(|env| -> Result<JString<'caller>, NativeError> {
+            let command = command.try_to_string(env)?;
+            let bytes = if input.is_null() {
+                Zeroizing::new(Vec::new())
+            } else {
+                let bytes = Zeroizing::new(env.convert_byte_array(&input)?);
+                let zeros = vec![0i8; bytes.len()];
+                input.set_region(env, 0, &zeros)?;
+                bytes
+            };
+            let answer = engine()?.call(&command, &bytes);
+            Ok(JString::from_str(env, answer)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -129,7 +175,38 @@ pub extern "system" fn Java_dev_shellpp_android_Native_open<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `nextEvent(timeoutMs)`: the next session event as JSON, or null.
+/// `openHost(vaultId, recordId, cols, rows, dark)`: a session to a saved
+/// host with its effective settings; returns the session's handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_openHost<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    vault_id: JString<'caller>,
+    record_id: JString<'caller>,
+    cols: jint,
+    rows: jint,
+    dark: jboolean,
+) -> jlong {
+    unowned
+        .with_env(|env| -> Result<jlong, NativeError> {
+            let parse = |text: String| {
+                uuid::Uuid::parse_str(&text)
+                    .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
+            };
+            let target = SessionTarget::Host {
+                vault_id: parse(vault_id.try_to_string(env)?)?,
+                record_id: parse(record_id.try_to_string(env)?)?,
+            };
+            let cols = u16::try_from(cols).unwrap_or(80).max(1);
+            let rows = u16::try_from(rows).unwrap_or(24).max(1);
+            let opened = engine()?.open_target(target, cols, rows, dark)?;
+            Ok(jlong::try_from(opened).unwrap_or(0))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `nextEvent(timeoutMs)`: the next event (the core's or a session's) as
+/// JSON, or null.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_nextEvent<'caller>(
     mut unowned: EnvUnowned<'caller>,

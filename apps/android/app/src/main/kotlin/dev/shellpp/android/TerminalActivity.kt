@@ -8,7 +8,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.content.Intent
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -16,9 +21,11 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /**
- * A quick-connect SSH session in the terminal (plan 3.7): the session's
- * state in a thin top bar, the terminal, the extra keys; the connection's
+ * An SSH session in the terminal: a saved host's or a quick connect's
+ * (UI spec 6.1), or an open one from Sessions. The session's state and
+ * Close in a thin top bar, the terminal, the extra keys; the connection's
  * questions (host key, password) as dialogs, as the desktop asks them.
+ * Back leaves the session running (UI spec 3).
  */
 class TerminalActivity : Activity(), ExtraKeys.Sink {
     lateinit var terminal: TerminalView
@@ -38,9 +45,6 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
     /** The permission dialog was answered (or there was none to ask). */
     private var permissionsSettled = false
 
-    /** This screen's own quick-connect password, for its first password prompt only. */
-    private var password: ByteArray? = null
-
     /** Test-only answers (a debuggable build only): the e2e test's password and host key. */
     private var testPassword: ByteArray? = null
     private var testAcceptHostKey = false
@@ -59,11 +63,25 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             setTextColor(color(R.color.text_secondary))
             setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
             text = getString(R.string.connecting)
+            setSingleLine()
+        }
+        val close = Button(this).apply {
+            text = getString(R.string.close)
+            isAllCaps = false
+            textSize = 14f
+            background = null
+            setTextColor(color(R.color.accent))
+            setOnClickListener { closeSession() }
+        }
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(status, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(close, LinearLayout.LayoutParams(WRAP_CONTENT, dp(48f)))
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(color(R.color.bg_base))
-            addView(status, LinearLayout.LayoutParams(MATCH_PARENT, dp(36f)))
+            addView(bar, LinearLayout.LayoutParams(MATCH_PARENT, dp(48f)))
             addView(terminal, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
             addView(keys, LinearLayout.LayoutParams(MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             padForInsets()
@@ -77,16 +95,15 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         // Recreated (split screen, a fold, a font or language change): the
         // session this screen had goes on, it is not opened again (review
         // of run 13, architecture 3).
-        val kept = savedInstanceState?.getLong(STATE_SESSION, 0L) ?: 0L
-        if (kept != 0L && kept in (application as App).sessions) {
+        // An open session from Sessions is shown again, not opened anew.
+        val kept = savedInstanceState?.getLong(STATE_SESSION, 0L)?.takeIf { it != 0L }
+            ?: intent.getLongExtra(EXTRA_SESSION, 0L)
+        if (kept != 0L) {
             openedOnce = true
             permissionsSettled = true
-            adopt(kept)
+            if (kept in (application as App).sessions) adopt(kept) else finish()
             return
         }
-        // This screen's password, taken from the form's one-time slot, so no
-        // other session's prompt can get it.
-        password = PendingPassword.take(intent.getLongExtra(EXTRA_PASSWORD_TOKEN, 0L))
         // The notification of the foreground service (Android 13+) and, from
         // Android 17, the local network (a server at home, 10.x or 192.168.x):
         // asked before the session opens, which waits for the answer.
@@ -125,12 +142,19 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
 
     private fun open(cols: Int, rows: Int) {
         openedOnce = true
+        val vaultId = intent.getStringExtra(EXTRA_VAULT_ID)
+        val recordId = intent.getStringExtra(EXTRA_RECORD_ID)
         val address = intent.getStringExtra(EXTRA_ADDRESS) ?: return finish()
         val port = intent.getIntExtra(EXTRA_PORT, 22)
         val username = intent.getStringExtra(EXTRA_USERNAME) ?: ""
+        val title = intent.getStringExtra(EXTRA_TITLE) ?: if (username.isEmpty()) address else "$username@$address"
         worker.execute {
             val id = try {
-                Native.open(address, port, username, cols, rows, isDark)
+                if (vaultId != null && recordId != null) {
+                    Native.openHost(vaultId, recordId, cols, rows, isDark)
+                } else {
+                    Native.open(address, port, username, cols, rows, isDark)
+                }
             } catch (error: RuntimeException) {
                 runOnUiThread { status.text = error.message }
                 return@execute
@@ -141,7 +165,7 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
                     runCatching { Native.close(id) }
                     return@runOnUiThread
                 }
-                (application as App).opened(id)
+                (application as App).opened(id, title, recordId)
                 adopt(id)
             }
         }
@@ -180,9 +204,8 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             }
             "host_key_changed" -> hostKeyDialog(promptId, prompt, changed = true)
             "password" -> {
-                val ready = if (prompt.optBoolean("error")) null else (testPassword ?: password)
+                val ready = if (prompt.optBoolean("error")) null else testPassword
                 testPassword = null
-                password = null
                 if (ready != null) {
                     reply(promptId, "text", ready)
                 } else {
@@ -252,6 +275,42 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
             .show()
     }
 
+    /** Close in the bar: the session ends and the screen goes. */
+    private fun closeSession() {
+        val id = session
+        if (id != 0L) {
+            runCatching { Native.close(id) }
+            (application as App).forget(id)
+        }
+        finish()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Locked: a live terminal asks for the password first (UI spec 5);
+        // the session keeps running meanwhile.
+        val app = application as App
+        if (app.ready && !app.lock.value.unlocked) {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            finish()
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) (application as App).noteActivity()
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        (application as App).noteActivity()
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        (application as App).platform.focused = hasFocus
+    }
+
     // ExtraKeys.Sink
     override fun key(code: Int) = terminal.sendKey(code)
     override fun text(text: String) = terminal.sendText(text)
@@ -260,17 +319,8 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
     override fun onDestroy() {
         super.onDestroy()
         val app = application as App
-        if (session != 0L) {
-            app.unlisten(session)
-            // Back closes the prototype's session (it has no Sessions screen
-            // yet); leaving the app keeps it in the foreground service.
-            if (isFinishing) {
-                runCatching { Native.close(session) }
-                app.forget(session)
-            }
-        }
-        password?.fill(0)
-        password = null
+        // Back leaves the session running (Sessions has it); Close ends it.
+        if (session != 0L) app.unlisten(session)
         terminal.release()
         worker.shutdown()
     }
@@ -279,7 +329,10 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
         const val EXTRA_USERNAME = "username"
-        const val EXTRA_PASSWORD_TOKEN = "passwordToken"
+        const val EXTRA_VAULT_ID = "vaultId"
+        const val EXTRA_RECORD_ID = "recordId"
+        const val EXTRA_TITLE = "title"
+        const val EXTRA_SESSION = "session"
         const val EXTRA_TEST_PASSWORD = "test.password"
         private const val PERMISSIONS = 1
         private const val STATE_SESSION = "session"

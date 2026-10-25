@@ -1,15 +1,20 @@
-//! The prototype's engine end to end on the computer: a quick connect
-//! through the shared session layer to the russh test server in process,
-//! the first host key's question, the password prompt, a command and its
-//! output on the terminal's screen, a resize and the close. The password is
-//! made at run time.
+//! The engine end to end on the computer: a quick connect through the
+//! shared session layer to the russh test server in process, the first host
+//! key's question, the password prompt, a command and its output on the
+//! terminal's screen, a resize and the close; and a saved host in a group,
+//! connected with the group's username and the password saved with it.
+//! Passwords are made at run time.
 
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use secrecy::SecretString;
-use serde_json::Value;
-use shellpp_android::Engine;
+use serde_json::{Value, json};
 use shellpp_android::screen;
+use shellpp_android::{Engine, Services};
+use shellpp_core::platform::memory::{MemoryClipboard, MemorySecretStore, RecordingLauncher};
+use shellpp_core::service::dto::SessionTarget;
 use shellpp_test_sshd::{ServerConfig, TestServer, UserConfig};
 
 const WAIT: Duration = Duration::from_secs(30);
@@ -19,6 +24,36 @@ fn random(prefix: &str) -> String {
     getrandom::fill(&mut bytes).expect("random");
     let suffix: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("{prefix}-{suffix}")
+}
+
+/// An engine on a new vault in `files`, unlocked.
+fn started(files: &Path) -> Engine {
+    let engine = Engine::start(
+        files,
+        Services {
+            secret_store: Arc::new(MemorySecretStore::new()),
+            clipboard: Arc::new(MemoryClipboard::new()),
+            launcher: Arc::new(RecordingLauncher::new()),
+            device_name: "Test phone".to_owned(),
+        },
+    )
+    .expect("engine");
+    let answer = engine.call(
+        "first_run_setup",
+        json!({ "password": random("vault-pw") })
+            .to_string()
+            .as_bytes(),
+    );
+    assert!(answer.contains("\"ok\""), "{answer}");
+    engine
+}
+
+/// The `ok` value of a command.
+fn ok(engine: &Engine, command: &str, input: &Value) -> Value {
+    let answer: Value =
+        serde_json::from_str(&engine.call(command, input.to_string().as_bytes())).expect("json");
+    assert!(answer.get("error").is_none(), "{command}: {answer}");
+    answer["ok"].clone()
 }
 
 /// The next event of session `id` that `pick` accepts.
@@ -65,7 +100,7 @@ async fn a_quick_connect_asks_the_host_key_and_the_password_then_runs_a_command(
     let marker = random("marker");
 
     let result = tokio::task::spawn_blocking(move || {
-        let engine = Engine::start(files.path()).expect("engine");
+        let engine = started(files.path());
         let id = engine
             .open("127.0.0.1", Some(port), Some("alice"), 80, 24, true)
             .expect("open");
@@ -130,7 +165,7 @@ async fn a_quick_connect_asks_the_host_key_and_the_password_then_runs_a_command(
 async fn a_wrong_address_fails_with_the_session_layers_message() {
     let files = tempfile::tempdir().expect("files");
     tokio::task::spawn_blocking(move || {
-        let engine = Engine::start(files.path()).expect("engine");
+        let engine = started(files.path());
         let id = engine
             .open("127.0.0.1", Some(1), Some("alice"), 80, 24, false)
             .expect("open");
@@ -146,4 +181,67 @@ async fn a_wrong_address_fails_with_the_session_layers_message() {
     })
     .await
     .expect("the engine's steps");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_host_connects_with_its_groups_username_and_its_saved_password() {
+    let password = random("pw");
+    let server = TestServer::start(ServerConfig::new(vec![
+        UserConfig::new("deploy").with_password(SecretString::from(password.clone())),
+    ]))
+    .await
+    .expect("test server");
+    let port = server.port();
+    let files = tempfile::tempdir().expect("files");
+    let marker = random("marker");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = started(files.path());
+        let vault_id = ok(&engine, "vaults", &json!(null))[0]["vault_id"].clone();
+        let group = ok(
+            &engine,
+            "record_save",
+            &json!({
+                "vault_id": vault_id,
+                "type": "group",
+                "data": { "name": "Servers", "ssh": { "username": "deploy", "port": port } },
+            }),
+        );
+        let host = ok(
+            &engine,
+            "record_save",
+            &json!({
+                "vault_id": vault_id,
+                "type": "host",
+                "data": { "address": "127.0.0.1", "label": "Test", "group_id": group["record_id"] },
+                "secrets": { "ssh.password": password },
+            }),
+        );
+        let target = SessionTarget::Host {
+            vault_id: serde_json::from_value(vault_id).expect("vault id"),
+            record_id: serde_json::from_value(host["record_id"].clone()).expect("record id"),
+        };
+        let id = engine.open_target(target, 80, 24, true).expect("open");
+        let asked = wait_for(&engine, id, |event| {
+            event["prompt"]["kind"] == "host_key_unknown"
+        });
+        let prompt = asked["prompt"]["id"].as_u64().expect("prompt id");
+        engine.reply(id, prompt, "accept", None).expect("accept");
+        // No password prompt: the saved one signs in.
+        let connected = wait_for(&engine, id, |event| {
+            event["state"] == "connected" || event["prompt"]["kind"] == "password"
+        });
+        assert_eq!(connected["state"], "connected", "{connected}");
+        engine
+            .send(id, format!("echo {marker}\r").into_bytes())
+            .expect("send");
+        assert!(screen_has(&engine, id, &marker));
+        engine.close(id);
+        // The host key was saved in the vault's known hosts.
+        let known = engine.core().known_hosts_list().expect("known hosts");
+        assert_eq!(known.len(), 1);
+    })
+    .await;
+    drop(server);
+    result.expect("the engine's steps");
 }
