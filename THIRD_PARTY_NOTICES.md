@@ -16,7 +16,8 @@ section 8):
 - Check the license before adding a dependency and add it here in the same
   pull request. CI enforces this:
   - `cargo deny check` (`deny.toml`) checks the licenses, bans, advisories and
-    sources of every Rust crate of the client workspace;
+    sources of every Rust crate of the client workspace (the local criterion,
+    `scripts\verify.ps1`, runs it too);
   - `node scripts/rust-notices.mjs` fails when the Rust table below no longer
     matches the crates that ship in the desktop binary
     (`node scripts/rust-notices.mjs --write` regenerates it).

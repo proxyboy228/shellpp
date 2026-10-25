@@ -8,6 +8,9 @@ git push и изменения remote — только по явной прос�
 cargo metadata --locked --format-version 1
 cargo metadata --manifest-path server/Cargo.toml --locked --format-version 1
 docker run --rm --network none -v "${PWD}:/src:ro" -v "$(git rev-parse --path-format=absolute --git-common-dir):/git:ro" ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git --config /src/.gitleaks.toml --gitleaks-ignore-path /src/.gitleaksignore --redact --verbose --exit-code 1 /git
+cargo deny fetch db
+cargo deny --locked --offline check
+cargo deny --locked --offline --manifest-path server/Cargo.toml check
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -35,6 +38,17 @@ $env:SHELLPP_TEST=1; $env:SHELLPP_TEST_POSTGRES='docker'; cargo test --locked --
 D203, CONTRIBUTING). Каталог git монтируется отдельно: в worktree `.git` —
 файл с путём Windows, который контейнер не видит; `verify.ps1` находит его
 по файлам git, без вызова git. Нужен запущенный Docker.
+
+`cargo deny` (лицензии, запреты, уязвимости, источники) — оба workspace,
+конфиги `deny.toml` и `server/deny.toml`, как в задании «Licenses and
+advisories» workflow `ci.yml`; версия cargo-deny та же — 0.20.2
+(`cargo install --locked cargo-deny@0.20.2`; без него шаги провалены).
+Сначала `fetch db` скачивает базу RustSec (она общая для обоих конфигов),
+потом обе проверки идут с `--offline`. Без сети `deny-fetch` — WARNING,
+а не провал: проверки идут по уже скачанной базе, и предупреждение есть
+в итоговой строке; если базы нет совсем, проверки провалены. Находка —
+обновить зависимость; нет обновления — исключение в конфиге с причиной
+и сроком пересмотра и решение в decisions.md (D210).
 
 clippy без `--all-targets` видит код как release-сборка: с тестами
 dev-зависимости включают `test-hooks` в `shellpp-core` для всего workspace

@@ -879,7 +879,7 @@ Protocol details are in [sync-protocol.md](sync-protocol.md), "Team vaults".
 |---|---|---|
 | Lockfiles | `Cargo.lock` and `pnpm-lock.yaml` are committed; CI builds with `--locked` and installs with `pnpm install --frozen-lockfile` | stage 0 decision |
 | cargo-deny: licenses | the allowlist of D4; never-shipped dev npm packages have a separate list | D4 |
-| cargo-deny: advisories | RustSec advisories fail CI; each ignore names the advisory and the reason; RUSTSEC-2023-0071 (`rsa`) is the documented exception | D4 |
+| cargo-deny: advisories | RustSec advisories fail CI and the local criterion (`scripts\verify.ps1`, both workspaces; without the network it checks against the database already downloaded, with a warning, and fails when there is none); each ignore names the advisory and the reason; RUSTSEC-2023-0071 (`rsa`) is the documented exception | D4, D210 |
 | cargo-deny: bans | `aws-lc-fips-sys` (the `fips` feature), `ring` < 0.17.10, `aws-lc-sys` < 0.39 (D4); `libdbus-sys` from keyring's dbus features (D4); `openssl-sys` (stage 0 decision) | D4 |
 | cargo-deny: sources | crates.io only; a git dependency needs an explicit allow entry | stage 0 decision |
 | npm | license-checker in CI (D4); dependency install scripts run only for packages on an explicit allowlist (pnpm `onlyBuiltDependencies`); `pnpm audit` reported in CI | D4; stage 0 decision |

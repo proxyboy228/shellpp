@@ -2356,3 +2356,22 @@ Status: run 12 (plan, section 3.6; ROADMAP 2.2, "Sign-in to another account", D2
 **Decision:** When the merge refuses `previous_account`, the client revokes the refresh token of the login it just made (`POST /v1/auth/token/revoke`) before it reports the refusal; revoking the token family deletes its access tokens too (`server/src/model.rs`). A failed revocation is logged and does not change the refusal. The email is not compared before pre-login: a changed email and another account look the same until the account bundle comes back. Not covered (review of run 12): the other refusals after a login (a rebind's `rolled_back` or `integrity`, a merge's `forged_epoch` or `newer_epoch`) still leave their session live, and the login's `devices` row stays under the other account; ROADMAP 2.2.
 
 **Spec impact:** docs/sync-protocol.md, section 4.4 (sign-in); ROADMAP 2.2.
+
+### 210. The owner's answers to run 12's report: `cargo deny` in the local criterion, dates on Linux, flags stay letters (run 13)
+
+Status: run 13 (plan, section 2.1; ROADMAP 5, the questions after run 12).
+
+**Context.** Run 12's report left six questions (ROADMAP 5) and two notes (GitHub Actions, the contact address of `CODE_OF_CONDUCT.md`).
+
+**Decision:**
+
+- **Flags on Windows**: no font ships. Windows has no flag glyphs and Windows Terminal draws them as letters too; a known limitation (`docs/compatibility.md`, the guide). Supersedes the open part of D206.
+- **Flood rows** (D207): not bounded. A flooding tab's full rows are a short burst, not a growth, and the throughput matters more.
+- **`cargo deny` in the local criterion**: `scripts\verify.ps1` fetches RustSec's database (`cargo deny fetch db`) and runs `cargo deny --locked --offline check` for both workspaces with the configs of CI's "Licenses and advisories" job and the same cargo-deny (0.20.2). Without the network the fetch step only warns (WARNING, named in the summary) and the checks use the copy already downloaded; with no copy they fail, as a step that cannot run fails (D205). A new advisory stops main until it is handled: a dependency update, or an exception in the config with its reason and a review date, a decision here and a line to the owner.
+- **Dates on Linux**: the local zone is read there before release 1.0 (run 13, section 3.2).
+- **VS16 emoji take two cells** (D206): accepted.
+- **Linux on a real desktop** (the window, Wayland or X11, the Secret Service keychain, the fonts): checked in the release preparation run.
+- **GitHub Actions** stay off until the repository is published; public repositories get the standard runners free, and then they are turned on.
+- **The contact address** in `CODE_OF_CONDUCT.md` is replaced with a project address the owner will give in the release preparation run; whether the git history that holds it (b4aab0de, fd654149) is rewritten before publishing is decided there. Not touched now.
+
+**Spec impact:** CLAUDE.md (the criterion), `scripts\verify.ps1`, docs/security.md (the supply-chain table), docs/compatibility.md and the guide (flags), ROADMAP 2.4 and 5.

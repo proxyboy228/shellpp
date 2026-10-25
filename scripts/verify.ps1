@@ -12,6 +12,11 @@
   - the secret scan: gitleaks in Docker over the whole history of every
     branch, with the image, config and ignore file of the Secret scan
     workflow (run 12); a finding fails the step;
+  - cargo deny (licenses, bans, advisories, sources) for both workspaces,
+    with the configs of CI's "Licenses and advisories" job (run 13). The
+    advisory database is fetched first; without the network that step only
+    warns and the checks use the copy already downloaded, and with no copy
+    at all they fail;
   - the root workspace: rustfmt, clippy (default and all features), clippy
     of the libraries and binaries alone, the tests
     (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all features;
@@ -28,7 +33,9 @@
   Every cargo command that reads Cargo.lock runs with --locked, so a stale
   lock file fails the step instead of being rewritten; every test step runs
   with --no-fail-fast, so the failures of every test binary show. A step
-  that fails does not stop the others. The output goes to
+  that fails does not stop the others; a step that may only warn (the
+  advisory fetch) shows WARNING instead and is named in the summary. The
+  output goes to
   <target>\verify\<step>.log and <step>.err.log; the summary to the
   console.
 
@@ -74,9 +81,10 @@ $server = @('--manifest-path', 'server/Cargo.toml')
 # One step: its name, its environment, its cargo arguments (or, with
 # -Program, another program's). A function, not nested array literals: in
 # PowerShell the comma binds tighter than `+`, so `@('a', @{}, @('x') + $y)`
-# is not three elements (run 10).
-function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo', [string] $Problem = '') {
-    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program; Problem = $Problem }
+# is not three elements (run 10). A step with a -Warning only warns when it
+# fails, with that text.
+function Step([string] $Name, [hashtable] $Environment, [string[]] $Arguments, [string] $Program = 'cargo', [string] $Problem = '', [string] $Warning = '') {
+    [pscustomobject]@{ Name = $Name; Environment = $Environment; Arguments = $Arguments; Program = $Program; Problem = $Problem; Warning = $Warning }
 }
 
 # The repository's git directory (the common one of a worktree), read from
@@ -117,11 +125,22 @@ $gitleaks = @('run', '--rm', '--network', 'none', '-v', "${repo}:/src:ro", '-v',
     'git', '--config', '/src/.gitleaks.toml', '--gitleaks-ignore-path', '/src/.gitleaksignore',
     '--redact', '--verbose', '--exit-code', '1', '/git')
 
+# cargo deny with the configs of CI's "Licenses and advisories" job
+# (deny.toml, server/deny.toml). Both use RustSec's default advisory
+# database, so one fetch serves both checks; the checks then run offline,
+# so a missing network costs only the fetch (a warning) and a missing
+# database fails them (D205, run 13).
+$denyFetchWarning = 'could not fetch the advisory database (no network?): the deny steps use the copy already downloaded'
+$denyProblem = if (Get-Command cargo-deny -ErrorAction SilentlyContinue) { '' } else { 'cargo-deny is not installed (CI uses 0.20.2: cargo install --locked cargo-deny@0.20.2)' }
+
 $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
     (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
     (Step 'gitleaks' @{} $gitleaks 'docker' $gitleaksProblem),
+    (Step 'deny-fetch' @{} @('deny', 'fetch', 'db') -Problem $denyProblem -Warning $denyFetchWarning),
+    (Step 'deny' @{} @('deny', '--locked', '--offline', 'check') -Problem $denyProblem),
+    (Step 'deny-server' @{} (@('deny', '--locked', '--offline') + $server + @('check')) -Problem $denyProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
@@ -148,6 +167,7 @@ if ($List) {
 }
 
 $failed = @()
+$warned = @()
 $passed = 0
 Push-Location $repo
 try {
@@ -181,6 +201,10 @@ try {
         if ($code -eq 0) {
             Write-Host "ok      ($minutes min)" -ForegroundColor Green
             $passed += 1
+        } elseif ($step.Warning) {
+            Write-Host "WARNING ($minutes min, exit $code; $($step.Warning); $log)" -ForegroundColor Yellow
+            $warned += $name
+            $passed += 1
         } else {
             Write-Host "FAILED  ($minutes min, exit $code; $log)" -ForegroundColor Red
             $failed += $name
@@ -199,6 +223,10 @@ if (($stepCount -eq 0 -or $passed -ne $stepCount) -and $failed.Count -eq 0) {
 if ($failed.Count -gt 0) {
     Write-Host "verify: failed: $($failed -join ', ')" -ForegroundColor Red
     exit 1
+}
+if ($warned.Count -gt 0) {
+    Write-Host "verify: every step passed; warnings: $($warned -join ', ')" -ForegroundColor Yellow
+    exit 0
 }
 Write-Host 'verify: every step passed' -ForegroundColor Green
 exit 0
