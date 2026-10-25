@@ -50,6 +50,12 @@ param(
 $ErrorActionPreference = 'Continue'
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'process.ps1')
+if (-not (Get-Command Invoke-Logged -ErrorAction SilentlyContinue)) {
+    Write-Host 'verify: scripts\process.ps1 did not load' -ForegroundColor Red
+    exit 1
+}
+
 $repo = Split-Path -Parent $PSScriptRoot
 $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
 $logDir = Join-Path $targetDir 'verify'
@@ -164,19 +170,10 @@ try {
             }
             continue
         }
-        # Start-Process keeps the output as it is (UTF-8, no error records
-        # around the lines of stderr) and gives the exit code. It joins the
-        # arguments with spaces, so one with a space (a path) is quoted. A
-        # step that does not even start is a failure.
-        $arguments = $step.Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
+        # The program alone is awaited, not what it left running (process.ps1);
+        # a step that does not even start is a failure (-1).
         $code = -1
-        try {
-            $process = Start-Process -FilePath $step.Program -ArgumentList $arguments -NoNewWindow -Wait -PassThru `
-                -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logDir "$name.err.log") -ErrorAction Stop
-            $code = $process.ExitCode
-        } catch {
-            Write-Host "could not start: $($_.Exception.Message)" -NoNewline
-        }
+        $code = Invoke-Logged $step.Program $step.Arguments $log (Join-Path $logDir "$name.err.log")
         foreach ($key in $saved.Keys) {
             [Environment]::SetEnvironmentVariable($key, $saved[$key])
         }

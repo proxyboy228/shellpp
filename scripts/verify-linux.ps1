@@ -46,19 +46,16 @@ function Fail([string] $message) {
 }
 
 # Docker with Linux containers, or nothing runs. Every docker call goes
-# through Start-Process (as verify.ps1 does): the output stays as it is, and
-# a step that does not even start is a failure, never a pass (review of run
-# 12: with no docker on the PATH the script read as green).
+# through Invoke-Logged (process.ps1, as verify.ps1 does): the output stays
+# as it is, docker alone is awaited, and a call that does not even start is
+# a failure, never a pass (review of run 12: with no docker on the PATH the
+# script read as green).
+. (Join-Path $PSScriptRoot 'process.ps1')
+if (-not (Get-Command Invoke-Logged -ErrorAction SilentlyContinue)) { Fail 'scripts\process.ps1 did not load' }
 function Invoke-Docker([string[]] $Arguments, [string] $Log) {
-    $quoted = $Arguments | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }
-    try {
-        $process = Start-Process -FilePath 'docker' -ArgumentList $quoted -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -ErrorAction Stop
-        return $process.ExitCode
-    } catch {
-        Add-Content -LiteralPath "$Log.err" -Value "could not start docker: $($_.Exception.Message)"
-        return -1
-    }
+    $code = -1
+    $code = Invoke-Logged 'docker' $Arguments $Log "$Log.err"
+    return $code
 }
 
 $infoLog = Join-Path $logDir 'docker-info.log'
