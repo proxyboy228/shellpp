@@ -28,6 +28,7 @@ object Tokens {
     val textMuted: Color @Composable get() = colorResource(R.color.text_muted)
     val accent: Color @Composable get() = colorResource(R.color.accent)
     val onAccent: Color @Composable get() = colorResource(R.color.text_on_accent)
+    val accentSubtle: Color @Composable get() = colorResource(R.color.accent_subtle)
     val danger: Color @Composable get() = colorResource(R.color.danger)
 }
 
@@ -38,6 +39,16 @@ fun ShellTheme(content: @Composable () -> Unit) {
     val colors = base.copy(
         primary = Tokens.accent,
         onPrimary = Tokens.onAccent,
+        // The floating button and the bottom bar's selection: the accent,
+        // not Material's own purples (design-system tokens only).
+        primaryContainer = Tokens.accent,
+        onPrimaryContainer = Tokens.onAccent,
+        secondary = Tokens.accent,
+        onSecondary = Tokens.onAccent,
+        secondaryContainer = Tokens.accentSubtle,
+        onSecondaryContainer = Tokens.text,
+        tertiary = Tokens.accent,
+        onTertiary = Tokens.onAccent,
         background = Tokens.bgBase,
         onBackground = Tokens.text,
         surface = Tokens.bgSurface,

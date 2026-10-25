@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -239,13 +240,8 @@ fun FirstRunScreen(app: App, activity: MainActivity) {
                 scope.launch {
                     val failure = withContext(Dispatchers.IO) {
                         try {
+                            // The phone's defaults follow in App (the end of the first run).
                             app.setLock(LockStatus.from(Core.withPassword("first_run_setup", "password", chars) as JSONObject))
-                            // The phone locks after 15 minutes by default (UI spec 5).
-                            Core.call(
-                                "settings_set",
-                                JSONObject().put("values", JSONObject().put("security.auto_lock_minutes", 15)),
-                            )
-                            app.unlockPrefs.edit().putLong(Fingerprint.PREF_LAST_PASSWORD, System.currentTimeMillis()).apply()
                             null
                         } catch (failed: CoreException) {
                             failed.message
@@ -356,15 +352,23 @@ fun UnlockScreen(app: App, activity: MainActivity, lock: LockStatus) {
         TextButton(onClick = { forgot = true }, modifier = Modifier.testTag("forgot")) { Text("Forgot password?") }
     }
     if (forgot) {
-        ForgotDialog(app, onDismiss = { forgot = false })
+        ForgotDialog(app, activity, onDismiss = { forgot = false })
     }
 }
 
-/** "Forgot password?" (UI spec 5): Start with a new vault; Restore from sync comes with sync. */
+/**
+ * "Forgot password?" (UI spec 5): Restore from sync with the recovery key
+ * (a phone bound to an account), Start with a new vault, Cancel.
+ */
 @Composable
-fun ForgotDialog(app: App, onDismiss: () -> Unit) {
+fun ForgotDialog(app: App, activity: MainActivity, onDismiss: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
+    var recovering by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    if (recovering) {
+        RecoveryDialog(app, activity, onDismiss = { recovering = false; onDismiss() })
+        return
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (confirm) "Start with a new vault?" else "Forgot password?") },
@@ -375,7 +379,7 @@ fun ForgotDialog(app: App, onDismiss: () -> Unit) {
                         "the new vault starts empty."
                 } else {
                     "Without the master password the data on this phone cannot be opened. " +
-                        "Restore from sync comes with the sync update."
+                        "With a sync account, the recovery key sets a new one (Restore from sync)."
                 },
             )
         },
@@ -404,6 +408,89 @@ fun ForgotDialog(app: App, onDismiss: () -> Unit) {
                 },
             ) { Text(if (confirm) "Start with a new vault" else "Start with a new vault…", color = Tokens.danger) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                if (!confirm) TextButton(onClick = { recovering = true }, modifier = Modifier.testTag("forgot_recovery")) { Text("Restore from sync") }
+            }
+        },
+    )
+}
+
+/**
+ * Restore from sync with the recovery key on a locked phone bound to an
+ * account (UI spec 5; the desktop's 13.2): the account's email, the
+ * recovery key, a new master password, the TOTP code when the account has
+ * one. It rotates the vault key, so the fingerprint is asked first when
+ * fingerprint unlock is on (D218).
+ */
+@Composable
+fun RecoveryDialog(app: App, activity: MainActivity, onDismiss: () -> Unit) {
+    var email by remember { mutableStateOf("") }
+    var key by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var totp by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Restore with the recovery key") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(email, { email = it }, label = { Text("Account email") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                PasswordField(key, { key = it; error = null }, "Recovery key", "recovery_key_field")
+                PasswordField(password, { password = it; error = null }, "New master password", "recovery_new")
+                PasswordField(
+                    repeat, { repeat = it }, "Repeat password", "recovery_repeat",
+                    error = if (repeat.isNotEmpty() && repeat != password) "The passwords differ" else null,
+                )
+                OutlinedTextField(totp, { totp = it.filter(Char::isDigit).take(8) }, label = { Text("TOTP code (if the account has one)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                error?.let { Text(it, color = Tokens.danger) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && email.contains('@') && key.isNotBlank() && password.length >= 8 && password == repeat,
+                onClick = {
+                    busy = true
+                    val keyChars = key.toCharArray()
+                    val passwordChars = password.toCharArray()
+                    scope.launch {
+                        val input = JSONObject().put("email", email.trim())
+                        if (totp.isNotEmpty()) input.put("totp_code", totp)
+                        val failure = try {
+                            val step = {
+                                Core.callWithSecrets(
+                                    "recovery_unlock_server", input,
+                                    listOf("recovery_key" to keyChars, "new_password" to passwordChars),
+                                )
+                            }
+                            if (app.unlockPrefs.getBoolean(Fingerprint.PREF_ON, false)) {
+                                Fingerprint.withDeviceKey(activity, app, "Confirm the recovery", step)
+                            } else {
+                                withContext(Dispatchers.IO) { step() }
+                            }
+                            withContext(Dispatchers.IO) {
+                                Fingerprint.afterPasswordUnlock(app)
+                                app.refreshLock()
+                            }
+                            null
+                        } catch (failed: CoreException) {
+                            if (failed.code == "invalid_recovery_key") "Wrong recovery key" else syncErrorText(failed)
+                        } catch (failed: Exception) {
+                            failed.message ?: "Not restored."
+                        }
+                        key = ""
+                        password = ""
+                        repeat = ""
+                        busy = false
+                        if (failure == null) onDismiss() else error = failure
+                    }
+                },
+            ) { Text("Restore") }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancel") } },
     )
 }

@@ -142,6 +142,8 @@ fun MainScreen(app: App, activity: MainActivity) {
             Overlay.Settings -> SettingsScreen(app, activity, onClose = { overlay = null })
             Overlay.RecentlyDeleted -> RecentlyDeletedScreen(app, onClose = { overlay = null })
             Overlay.Account -> AccountScreen(app, activity, onClose = { overlay = null })
+            Overlay.KnownHosts -> KnownHostsScreen(app, onClose = { overlay = null })
+            is Overlay.Sftp -> SftpScreen(app, activity, current.host, current.session, onClose = { overlay = null })
         }
         return
     }
@@ -165,8 +167,8 @@ fun MainScreen(app: App, activity: MainActivity) {
         Box(Modifier.padding(padding)) {
             when (tab) {
                 0 -> HostsScreen(app, activity, path, onPath = { path = it }, onEdit = { overlay = it })
-                1 -> SessionsScreen(app, activity)
-                2 -> KeychainScreen()
+                1 -> SessionsScreen(app, activity, onOpen = { overlay = it })
+                2 -> KeychainScreen(app, activity)
                 else -> MoreScreen(app, onOpen = { overlay = it })
             }
         }
@@ -179,6 +181,8 @@ sealed interface Overlay {
     data object Settings : Overlay
     data object RecentlyDeleted : Overlay
     data object Account : Overlay
+    data object KnownHosts : Overlay
+    data class Sftp(val host: Record?, val session: Long?) : Overlay
 }
 
 /** Opens a terminal on a saved host (UI spec 6.1: tap a host to connect). */
@@ -321,6 +325,8 @@ fun HostsScreen(
                                 null
                             } catch (error: CoreException) {
                                 syncErrorText(error)
+                            } catch (error: Exception) {
+                                error.message ?: "No sync."
                             }
                         }
                         syncing = false
@@ -374,6 +380,7 @@ fun HostsScreen(
                 Text(record.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
                 val actions = buildList {
                     if (!record.isGroup) add(Triple("Connect", "sheet_connect") { connect(activity, record) })
+                    if (!record.isGroup) add(Triple("Open SFTP", "sheet_sftp") { onEdit(Overlay.Sftp(record, null)) })
                     add(Triple("Edit", "sheet_edit") {
                         onEdit(if (record.isGroup) Overlay.EditGroup(record, null) else Overlay.EditHost(record, null))
                     })

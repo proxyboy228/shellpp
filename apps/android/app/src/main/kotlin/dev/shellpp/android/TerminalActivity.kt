@@ -231,24 +231,49 @@ class TerminalActivity : Activity(), ExtraKeys.Sink {
         }
     }
 
+    /**
+     * The host key questions of UI spec 8 (the desktop's 10.2), which a tap
+     * outside does not dismiss: a first key offers Accept and save, Connect
+     * once, Cancel; a changed key warns with the old and new fingerprints,
+     * offers Cancel first, and replaces the key only after a second
+     * confirmation.
+     */
     private fun hostKeyDialog(prompt: Long, info: JSONObject, changed: Boolean) {
-        val message = buildString {
-            append(intent.getStringExtra(EXTRA_ADDRESS)).append('\n').append(info.optString("keyType")).append('\n')
-            append(info.optString("fingerprint"))
-            if (changed) append("\n\n").append(info.optString("oldKeyType")).append('\n').append(info.optString("oldFingerprint"))
+        // A terminal shown again from Sessions has no address of its own: its title then.
+        val host = intent.getStringExtra(EXTRA_ADDRESS)
+            ?: (application as App).sessionViews.value[session]?.optString("title")
+            ?: getString(R.string.this_host)
+        if (!changed) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.host_key_unknown)
+                .setMessage("$host\n${info.optString("keyType")}\n${info.optString("fingerprint")}")
+                .setCancelable(false)
+                .setPositiveButton(R.string.accept_and_save) { _, _ -> reply(prompt, "accept", null) }
+                .setNeutralButton(R.string.connect_once) { _, _ -> reply(prompt, "once", null) }
+                .setNegativeButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+                .show()
+            return
         }
-        val builder = AlertDialog.Builder(this)
-            .setTitle(if (changed) R.string.host_key_changed else R.string.host_key_unknown)
-            .setMessage(message)
+        val warning = getString(R.string.host_key_changed_warning, host) + "\n\n" +
+            getString(R.string.host_key_old) + "\n${info.optString("oldKeyType")}\n${info.optString("oldFingerprint")}\n\n" +
+            getString(R.string.host_key_new) + "\n${info.optString("keyType")}\n${info.optString("fingerprint")}"
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.host_key_changed)
+            .setMessage(warning)
             .setCancelable(false)
-            .setNegativeButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
-        if (changed) {
-            builder.setPositiveButton(R.string.replace_key) { _, _ -> reply(prompt, "replace", null) }
-        } else {
-            builder.setPositiveButton(R.string.accept_and_save) { _, _ -> reply(prompt, "accept", null) }
-            builder.setNeutralButton(R.string.connect_once) { _, _ -> reply(prompt, "once", null) }
-        }
-        builder.show()
+            .setPositiveButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+            .setNegativeButton(R.string.replace_key_ellipsis) { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle(R.string.replace_key_confirm)
+                    .setMessage(getString(R.string.replace_key_confirm_text, host))
+                    .setCancelable(false)
+                    .setPositiveButton(R.string.cancel) { _, _ -> reply(prompt, "cancel", null) }
+                    .setNegativeButton(R.string.replace_key) { _, _ -> reply(prompt, "replace", null) }
+                    .show()
+                    .getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(color(R.color.danger))
+            }
+            .show()
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(color(R.color.danger))
     }
 
     private fun textDialog(prompt: Long, title: String, masked: Boolean, wrong: Boolean) {

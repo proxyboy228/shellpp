@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-25, after run 13. What each stage is comes from
+State of the project on 2026-10-25, after run 14. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -20,7 +20,7 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in that fails after its login and before the binding revokes that login (a rebind keeps the device's own row, D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
-| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215); shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
+| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215), the vault, sync, keys, known hosts and SFTP on the phone in run 14 (M1, M3, M4; D218, D219); shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
 
 ## 2. Stage 7: what is left
 
@@ -153,10 +153,12 @@ of `CLAUDE.md` scans for secrets too (D205).
    (D206), the memory finding explained (D207), the red CI's causes (D208),
    Linux in Docker: the client builds and every test passes (D208), the git history checked for private data
    (none to remove), and the Android study (section 3.1).
-   **Run 13** (this state) — the owner's answers (D210: `cargo deny` in the
+   **Run 13** — the owner's answers (D210: `cargo deny` in the
    criterion, dates on Linux), the core for Android and the mobile design
    (D211–D214), the Android prototype (D215), the review leftovers of
    stage 7 (D216, D217).
+   **Run 14** (this state) — the mobile runs M1, M3 and M4 (section 3.1;
+   D218, D219).
 3. **The owner uses it** day to day and writes down the differences from
    Termius that matter.
 4. **1–2 parity runs** — the list of step 3.
@@ -185,12 +187,15 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
    cursor placement by tap and selection (`apps/android`, D215; checked on
    the emulator against OpenSSH; `docs/mobile/README.md` says how to put it
    on the phone).
-2. **M1, the vault on the phone** (1 run): the command dispatcher of the
-   JNI layer over the core's service API; Android's platform services
+2. **M1, the vault on the phone** (done, run 14): the command dispatcher of
+   the JNI layer over the core's service API; Android's platform services
    (`SecretStore` on the Keystore, the clipboard, the event sink); first run
-   (a new vault), unlock and auto-lock; Hosts and groups (list, search,
-   editor); connecting from a host.
-3. **M2, the terminal for real** (1–2 runs): the binary screen snapshot,
+   (a new vault), unlock and auto-lock; fingerprint unlock behind a Keystore
+   key that needs the fingerprint for every use, also after a lock (D218);
+   Hosts and groups (list, search, editors, Recently deleted); connecting
+   from a host; the app id `io.github.proxyboy228.shellpp`.
+3. **M2, the terminal for real** (next, 1–2 runs, after the owner tried the
+   prototype on the S25 and said how the cursor and the selection feel): the binary screen snapshot,
    every gesture of UI spec 9 (the cursor by tap and by the row, selection
    with handles and the magnifier, walks with feedback in full-screen
    programs, Delete on the command line, Cut in nano), sticky Ctrl and Alt,
@@ -198,18 +203,23 @@ screens are `docs/mobile/ui-spec.md` (D214), its architecture
    `shellpp-terminal` and shared, the foreground service, reconnects on
    network changes, rotation and pinch, snapshots only while the terminal
    is visible (the prototype's review, run 13).
-4. **M3, sync** (1 run): `rustls-platform-verifier`'s initialization and its
-   Kotlin part, "Restore from sync" and the connect wizard, the account
-   screen, sync on demand and on resume; checked against the owner's server
-   with a second device.
-5. **M4, keys, known hosts, SFTP** (1 run): the Keychain (generate, import,
-   share the public key), the known hosts screens and the host key dialogs,
-   SFTP (browse, download, upload, the queue).
-6. **M5, the first version** (1 run): Settings, fingerprint unlock (off by
-   default), both themes at the S25's size, a signed APK on the owner's phone
-   and the owner's acceptance.
+4. **M3, sync** (done, run 14): `rustls-platform-verifier`'s initialization
+   and its Kotlin part (vendored from the upstream tag), "Restore from sync"
+   and the connect wizard (the three ways to trust a certificate, TOTP), the
+   account screen, sync after unlock, on resume, after a change and on
+   demand; checked on the emulator against the real server behind a TLS
+   front with a second device. Left: the system's trust with a real
+   certificate (the owner's server), the device name step and the TOTP QR
+   code of the wizard.
+5. **M4, keys, known hosts, SFTP** (done, run 14): the Keychain (generate,
+   import, share the public key), the known hosts screens and the host key
+   dialogs, SFTP (browse, download, upload through the cache, the queue).
+6. **M5, the first version** (1 run): the rest of Settings (appearance,
+   terminal, about), the host editor's terminal theme and identity name,
+   both themes at the S25's size, a signed APK on the owner's phone and the
+   owner's acceptance.
 
-So the first version is about 5–6 runs after run 13. After it, each about one
+So the first version is about 2–3 runs after run 14 (M2, M5). After it, each about one
 run: snippets (and running them on a host); the command history and
 autocomplete (the capture and the list are already in `shellpp-terminal`);
 port forwarding (local and dynamic while the app runs); Mosh (the largest:
@@ -249,17 +259,10 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-After run 13 (its report has the details):
+After run 14 (its report has the details; run 13's two questions are
+answered in D218):
 
-1. **Fingerprint unlock after a lock** (D213, architecture 4): the core takes
-   the device key at launch only (RR8), so on the phone fingerprint unlock
-   works at a cold start and a locked app asks for the password. Allowing
-   the fingerprint after a lock changes the core's rule for the phone: wanted
-   for the first version?
-2. **The app id and signing** of the Android app: the prototype uses
-   `dev.shellpp.android` and the debug key; the first version needs the
-   owner's id and release key.
-3. **Release preparation** (D210): the project's contact address for
+1. **Release preparation** (D210): the project's contact address for
    `CODE_OF_CONDUCT.md`, whether to rewrite the history that holds the old
    one, Linux on a real desktop.
 
@@ -277,8 +280,8 @@ After run 13 (its report has the details):
   terminal is still the desktop's (`terminal/input.rs`, `mouse.rs`) with a
   copy in the Android crate until it moves into `shellpp-terminal` (M2);
   `shellpp-sessions` links `shellpp-term-local` on Android too (never
-  opened there); `rustls-platform-verifier` is not initialized on Android
-  yet and its Kotlin part must be vendored (M3).
+  opened there); the Kotlin part of `rustls-platform-verifier` is vendored
+  (`apps/android/third_party`, D218): move it with the crate's version.
 - **Wider visibility of the terminal model** (review of 3.3): the split made
   `Outbox`'s fields and some test helpers public; a `test-hooks` feature and
   narrower access are a cleanup for a later run.
@@ -330,7 +333,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D218;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D220;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.

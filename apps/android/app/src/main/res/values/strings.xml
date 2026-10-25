@@ -15,6 +15,13 @@
     <string name="accept_and_save">Accept and save</string>
     <string name="connect_once">Connect once</string>
     <string name="replace_key">Replace the key</string>
+    <string name="replace_key_ellipsis">Replace the key…</string>
+    <string name="replace_key_confirm">Replace the saved key?</string>
+    <string name="replace_key_confirm_text">Only if you know why the key of %1$s changed (the server was reinstalled, its keys were renewed). Otherwise someone may be between you and the server.</string>
+    <string name="host_key_changed_warning">The key of %1$s is not the one saved for it. This happens after a server is reinstalled, or when someone is between you and the server.</string>
+    <string name="host_key_old">Saved key</string>
+    <string name="host_key_new">Key the server shows now</string>
+    <string name="this_host">this host</string>
     <string name="cancel">Cancel</string>
     <string name="ok">OK</string>
     <string name="close">Close</string>

@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -57,15 +58,44 @@ object E2e {
     }
 
     /** Popups and dialogs are windows of their own, without the screen's tags as ids: by their text. */
-    fun clickText(text: String, timeoutMs: Long = 20_000) = text(text, timeoutMs).click()
+    fun clickText(text: String, timeoutMs: Long = 20_000) = retrying({ text(text, timeoutMs) }) { it.click() }
+
+    /** A button whose whole text is [text] (a dialog's title may contain the same word). */
+    fun clickExact(text: String, timeoutMs: Long = 20_000) {
+        val found = device.wait(Until.findObject(By.text(text)), timeoutMs)
+        if (found == null) shot("no-exact-$text")
+        assertNotNull("no button \"$text\" on the screen", found)
+        found!!.click()
+    }
+
+    /** Hides the soft keyboard when it shows (Back closes it first). */
+    fun hideKeyboard() {
+        val shown = device.executeShellCommand("dumpsys input_method").contains("mInputShown=true")
+        if (shown) device.pressBack()
+    }
 
     fun has(tag: String, timeoutMs: Long = 5_000): Boolean =
         device.wait(Until.hasObject(By.res(tag)), timeoutMs)
 
-    fun click(tag: String, timeoutMs: Long = 20_000) = find(tag, timeoutMs).click()
+    /**
+     * Runs [action] on what [lookup] finds, again when the screen redrew
+     * between the lookup and the action (a stale object of UI Automator).
+     */
+    private fun retrying(lookup: () -> UiObject2, action: (UiObject2) -> Unit) {
+        repeat(4) {
+            try {
+                action(lookup())
+                return
+            } catch (stale: StaleObjectException) {
+                Thread.sleep(300)
+            }
+        }
+        action(lookup())
+    }
 
-    fun type(tag: String, text: String) {
-        val field = find(tag)
+    fun click(tag: String, timeoutMs: Long = 20_000) = retrying({ find(tag, timeoutMs) }) { it.click() }
+
+    fun type(tag: String, text: String) = retrying({ find(tag) }) { field ->
         field.click()
         field.text = text
     }

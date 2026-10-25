@@ -85,6 +85,7 @@ $EndToEndClasses = @(
     'dev.shellpp.android.VaultFirstRunTest',
     'dev.shellpp.android.VaultAfterRestartTest',
     'dev.shellpp.android.ConnectTest',
+    'dev.shellpp.android.KeysSftpTest',
     'dev.shellpp.android.FingerprintOnTest',
     'dev.shellpp.android.FingerprintInvalidatedTest',
     'dev.shellpp.android.SyncSignInTest',
@@ -176,6 +177,9 @@ if ($Emulator) {
         $env:SHELLPP_TEST_ANDROID_PEER = $peerDir
         $env:SHELLPP_TEST = '1'
         $peer = Start-Process -FilePath 'cargo' -ArgumentList @('test', '--locked', '--manifest-path', (Join-Path $repo 'server\Cargo.toml'), '--test', 'android_peer') -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir 'sync-peer.log') -RedirectStandardError (Join-Path $logDir 'sync-peer.err.log')
+        # Taken now: PowerShell reports no exit code of a process whose
+        # handle nobody held while it ran.
+        $null = $peer.Handle
         $env:SHELLPP_TEST_ANDROID_PEER = $savedPeer
         $env:SHELLPP_TEST = $savedTest
         # A fresh install (the app's data from earlier runs goes), then each
@@ -189,7 +193,11 @@ if ($Emulator) {
             '-e', 'sshPort', "$($server.port)",
             '-e', 'sshUser', "$($server.users.password.name)",
             '-e', 'sshPassword', "$($server.users.password.password)",
-            '-e', 'vaultPassword', $vaultPassword
+            '-e', 'vaultPassword', $vaultPassword,
+            # The key user and the run's client key (KeysSftpTest imports it to
+            # put the phone's own key on the server, tests/openssh/README.md).
+            '-e', 'sshKeyUser', "$($server.users.publickey.name)",
+            '-e', 'sshClientKey', [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $work 'client_ed25519')))
         )
         # Fingerprint unlock (D218): the emulator gets the PIN 1111 and
         # finger 1 before FingerprintOnTest, whose prompts pass by a finger
@@ -288,11 +296,13 @@ if ($Emulator) {
         if ($peer) {
             & $adb reverse --remove-all 2>$null | Out-Null
             New-Item -ItemType File -Force (Join-Path $peerDir 'stop') | Out-Null
-            if (-not $peer.WaitForExit(120000)) { Stop-Process -Id $peer.Id -Force -ErrorAction SilentlyContinue }
+            $exited = $peer.WaitForExit(120000)
+            if (-not $exited) { Stop-Process -Id $peer.Id -Force -ErrorAction SilentlyContinue }
             $peerFailed = Join-Path $peerDir 'failed'
-            if (Test-Path -LiteralPath $peerFailed) {
+            if ((Test-Path -LiteralPath $peerFailed) -or -not $exited -or $peer.ExitCode -ne 0) {
+                $why = if (Test-Path -LiteralPath $peerFailed) { Get-Content -Raw -LiteralPath $peerFailed } else { "exit $($peer.ExitCode); $(Join-Path $logDir 'sync-peer.log')" }
                 Write-Host ("{0,-34}" -f 'e2e-sync-peer') -NoNewline
-                Write-Host "FAILED  ($(Get-Content -Raw -LiteralPath $peerFailed))" -ForegroundColor Red
+                Write-Host "FAILED  ($why)" -ForegroundColor Red
                 $script:failed += 'e2e-sync-peer'
             }
         }

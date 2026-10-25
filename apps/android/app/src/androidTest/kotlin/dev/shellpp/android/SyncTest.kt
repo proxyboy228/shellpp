@@ -14,9 +14,10 @@ import org.junit.runner.RunWith
  * Sync on the emulator (M3) against the real server behind a TLS front of
  * the computer (`server/tests/android_peer.rs`, the "desktop" device of the
  * same account). `scripts\verify-android.ps1 -Emulator` passes the peer's
- * origin (`https://10.0.2.2:<port>`), account, CA and certificate
- * fingerprint, and runs the classes in order with the desktop's steps
- * between them.
+ * origin (`https://localhost:<port>`, which `adb reverse` forwards to the
+ * computer: the account's keys are bound to the origin, so both devices
+ * use the same one), account, CA and certificate fingerprint, and runs the
+ * classes in order with the desktop's steps between them.
  */
 private object Peer {
     private val args get() = InstrumentationRegistry.getArguments()
@@ -130,5 +131,15 @@ class SyncRestoreTest {
         for (address in listOf(Peer.DESKTOP_HOST, Peer.PHONE_HOST, Peer.DESKTOP_SECOND)) {
             assertTrue("$address restored", Peer.waitForAddress(address, 90_000))
         }
+        // The phone's own defaults after the first run (review of run 14).
+        val deadline = System.currentTimeMillis() + 10_000
+        while (Core.obj("settings_get").optInt("security.auto_lock_minutes") != 15 && System.currentTimeMillis() < deadline) Thread.sleep(200)
+        assertEquals(15, Core.obj("settings_get").optInt("security.auto_lock_minutes"))
+        // The account's password is the phone's master password now.
+        E2e.click("tab_more")
+        E2e.click("more_lock")
+        E2e.type("unlock_password", Peer.password)
+        E2e.click("unlock")
+        E2e.find("tab_hosts", 60_000)
     }
 }

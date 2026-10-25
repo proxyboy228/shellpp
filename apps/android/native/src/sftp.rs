@@ -170,22 +170,33 @@ impl SftpSessions {
         self.sessions().keys().copied().collect()
     }
 
-    /// Closes session `id`; its transfers are cancelled.
+    /// Closes session `id`; its transfers are cancelled, each with its
+    /// event, so the app cleans up after them.
     pub fn close(&self, id: u64) {
         let removed = self.sessions().remove(&id);
+        let mut cancelled = Vec::new();
         let mut transfers = self
             .transfers
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        transfers.retain(|_, transfer| {
+        transfers.retain(|transfer_id, transfer| {
             if transfer.session == id {
                 transfer.task.abort();
+                cancelled.push(*transfer_id);
                 false
             } else {
                 true
             }
         });
         drop(transfers);
+        for transfer in cancelled {
+            self.events.push(&json!({
+                "kind": "transfer",
+                "id": transfer,
+                "session": id,
+                "state": "cancelled",
+            }));
+        }
         if let Some(session) = removed {
             session.handle.close();
         }
@@ -301,7 +312,7 @@ impl SftpSessions {
     }
 
     fn queue(&self, id: u64, job: Job) -> Result<u64, SftpFailure> {
-        let (handle, sftp, slot) = self.channel(id)?;
+        let (handle, _, slot) = self.channel(id)?;
         let transfer = self.next_transfer.fetch_add(1, Ordering::Relaxed);
         let events = self.events.clone();
         let (path, direction) = match &job {
@@ -324,8 +335,29 @@ impl SftpSessions {
         };
         report("queued", 0, None);
         let transfers = self.transfers.clone();
+        // Held over the spawn: the task's own removal at its end waits until
+        // the transfer is in the table.
+        let mut table = self
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let session_handle = handle.clone();
         let task = handle.spawn(async move {
             let Ok(_permit) = slot.acquire_owned().await else {
+                return;
+            };
+            // The channel as it is now: a reconnect while this one waited
+            // made a new one.
+            let Some(sftp) = session_handle.sftp() else {
+                report(
+                    "failed",
+                    0,
+                    Some(SftpFailure::from(SftpError::ConnectionLost).message),
+                );
+                transfers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&transfer);
                 return;
             };
             report("running", 0, None);
@@ -357,10 +389,8 @@ impl SftpSessions {
                 .unwrap_or_else(PoisonError::into_inner)
                 .remove(&transfer);
         });
-        self.transfers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(transfer, Transfer { session: id, task });
+        table.insert(transfer, Transfer { session: id, task });
+        drop(table);
         Ok(transfer)
     }
 

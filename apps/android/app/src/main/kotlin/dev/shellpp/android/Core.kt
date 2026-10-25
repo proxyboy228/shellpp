@@ -84,6 +84,38 @@ object Core {
     }
 
     /**
+     * [command] with the fields of [input] (no secrets) and [field] set to
+     * [secret], which crosses in bytes only and is wiped after the call.
+     */
+    fun callWithSecret(command: String, input: JSONObject, field: String, secret: CharArray): Any? =
+        callWithSecrets(command, input, listOf(field to secret))
+
+    /** [callWithSecret] with several secret fields. */
+    fun callWithSecrets(command: String, input: JSONObject, secrets: List<Pair<String, CharArray>>): Any? {
+        var bytes = input.toString().removeSuffix("}").toByteArray(Charsets.UTF_8)
+        var first = bytes.size <= 1
+        for ((field, secret) in secrets) {
+            val part = secretJson(field, secret)
+            secret.fill('\u0000')
+            // `{"f":"s"}` without its braces, after a comma unless it is the first member.
+            val member = part.copyOfRange(1, part.size - 1)
+            part.fill(0)
+            val joined = bytes + (if (first) ByteArray(0) else byteArrayOf(','.code.toByte())) + member
+            bytes.fill(0)
+            member.fill(0)
+            bytes = joined
+            first = false
+        }
+        val closed = bytes + byteArrayOf('}'.code.toByte())
+        bytes.fill(0)
+        try {
+            return answer(Native.call(command, closed))
+        } finally {
+            closed.fill(0)
+        }
+    }
+
+    /**
      * `{"<field>":"<secret>"}` as UTF-8 without a String of the secret
      * (architecture 2): escaped by hand into a char array, encoded, and
      * every buffer between filled with zeros.

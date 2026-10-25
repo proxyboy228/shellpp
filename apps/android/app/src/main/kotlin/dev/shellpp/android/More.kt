@@ -87,7 +87,7 @@ private fun Screen(title: String, onClose: (() -> Unit)?, content: @Composable (
 fun MoreScreen(app: App, onOpen: (Overlay) -> Unit) {
     val scope = rememberCoroutineScope()
     Screen("More", onClose = null) {
-        MenuRow("Known hosts", "more_known_hosts", enabled = false, detail = "Comes with the keys update") {}
+        MenuRow("Known hosts", "more_known_hosts") { onOpen(Overlay.KnownHosts) }
         MenuRow("Recently deleted", "more_recently_deleted") { onOpen(Overlay.RecentlyDeleted) }
         MenuRow("Account and sync", "more_account") { onOpen(Overlay.Account) }
         MenuRow("Settings", "more_settings") { onOpen(Overlay.Settings) }
@@ -107,7 +107,7 @@ fun MoreScreen(app: App, onOpen: (Overlay) -> Unit) {
 
 /** Sessions (UI spec 3, 9.9): the open sessions; tapping one opens it. */
 @Composable
-fun SessionsScreen(app: App, activity: MainActivity) {
+fun SessionsScreen(app: App, activity: MainActivity, onOpen: (Overlay) -> Unit) {
     val views by app.sessionViews.collectAsState()
     Screen("Sessions", onClose = null) {
         if (views.isEmpty()) {
@@ -130,19 +130,16 @@ fun SessionsScreen(app: App, activity: MainActivity) {
                         else -> state.replaceFirstChar { it.uppercase() }
                     },
                 ) {
-                    activity.startActivity(
-                        Intent(activity, TerminalActivity::class.java).putExtra(TerminalActivity.EXTRA_SESSION, view.optLong("id")),
-                    )
+                    val id = view.optLong("id")
+                    if (id in app.sftpSessions) {
+                        onOpen(Overlay.Sftp(null, id))
+                    } else {
+                        activity.startActivity(Intent(activity, TerminalActivity::class.java).putExtra(TerminalActivity.EXTRA_SESSION, id))
+                    }
                 }
             }
         }
     }
-}
-
-/** The Keychain place (UI spec 7) until the keys update (M4). */
-@Composable
-fun KeychainScreen() {
-    PlaceholderScreen("Keychain", "Keys come with the next update: generate, import and share them here.")
 }
 
 /** Recently deleted (UI spec 6.3): restore only; deleting forever stays on the desktop. */

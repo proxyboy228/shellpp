@@ -248,6 +248,9 @@ clears a copied password when it can, instead of taking an empty read for
   `-keep class org.rustls.platformverifier.** { *; }` (D213, D218; run 14).
   Its manifest brings the library's network security config (cleartext only
   to the CRL hosts it lists), which the app's own Rust sockets do not use.
+  Its trust manager reads `AndroidCAStore`, so it also trusts the CAs the
+  user installed on the phone, unlike Android's default for apps (review of
+  run 14; the desktop's platform verifier trusts the user's roots too).
 
 ## 6. The terminal: drawing and input
 
@@ -341,12 +344,20 @@ The owner's two pains (D211); the gestures are in `docs/mobile/ui-spec.md`
 
 ### 6.4 Files: SFTP and key files
 
-- **SFTP downloads** go from `shellpp-ssh`'s SFTP straight to a file: Kotlin
-  asks the Storage Access Framework for a document ("Save to..." or the
-  Downloads folder), opens it, and hands the file descriptor to Rust
-  (`ParcelFileDescriptor.detachFd`), which writes and closes it. Uploads read
-  a picked document's descriptor the same way. No file content crosses JNI
-  as arrays or JSON [decision].
+- **SFTP transfers** go between the server and a file in the app's cache
+  (`cache/transfers`), through the SFTP code of the desktop
+  (`shellpp_ssh::Sftp::download` and `upload`, with their `.part` files and
+  size checks); Kotlin copies that file to the document the Storage Access
+  Framework gave ("Save to…" for a download) or from the picked document
+  before an upload, and deletes it after the transfer ends [decision, run 14:
+  the SFTP code works on paths, and a document's file descriptor has no
+  sibling for a `.part`]. No file content crosses JNI as arrays or JSON.
+  The cost is the file's size in the cache for the time of one transfer.
+  The end of a transfer is handled by the application object, whatever
+  screen shows: a download is copied into its document before it shows as
+  done, a failed copy shows as a failure, a cancelled or failed download
+  removes its empty document, and the cache folder is emptied at every
+  start (review of run 14).
 - Transfers report progress and their end as events, can be cancelled, and
   keep the foreground service running (section 3).
 - **Key files** for import are read by Kotlin from the picked document into

@@ -82,7 +82,8 @@ private fun save(
     saved.getString("record_id") to emptyMap()
 } catch (error: CoreException) {
     val fields = HashMap<String, String>()
-    val list = (error.details as? JSONObject)?.optJSONArray("fields")
+    // The core's refused fields are `details.errors` (crates/core/src/error.rs).
+    val list = (error.details as? JSONObject)?.optJSONArray("errors")
     if (list != null) {
         for (i in 0 until list.length()) {
             val item = list.optJSONObject(i) ?: continue

@@ -12,6 +12,7 @@ import android.provider.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
@@ -52,6 +53,18 @@ class App : Application() {
     /** The saved host of each session opened from one (its row shows a dot). */
     private val sessionHosts = ConcurrentHashMap<Long, String>()
 
+    /** The SFTP sessions among them (Sessions opens them in the SFTP screen). */
+    val sftpSessions: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** The last event of each transfer (`kind` "transfer", UI spec 10). */
+    val transfers = MutableStateFlow<Map<Long, JSONObject>>(emptyMap())
+
+    /** Where each transfer's cache file goes, or comes from (SFTP through the cache, run 14). */
+    val transferTargets = ConcurrentHashMap<Long, TransferTarget>()
+
+    /** Uploads waiting for a name conflict's answer. */
+    val conflicts = MutableStateFlow<List<Conflict>>(emptyList())
+
     private val lockFlow = MutableStateFlow(LockStatus.STARTING)
 
     /** The core's lock state, kept current from its events. */
@@ -72,6 +85,8 @@ class App : Application() {
         super.onCreate()
         platform = Platform(this, DeviceKeys(this))
         registerActivityLifecycleCallbacks(Foreground())
+        // Transfer files of an earlier process: nothing waits for them any more.
+        File(cacheDir, "transfers").deleteRecursively()
         Core.onLocalChange = ::kickSync
         // A network that comes back: a sync (the core keeps its backoff).
         getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(
@@ -86,7 +101,12 @@ class App : Application() {
             try {
                 Native.start(filesDir.absolutePath, deviceName(), platform)
                 // Before any sync: Android's trust manager behind the TLS checks.
-                Native.initTls(this)
+                // Without it only sync answers "unavailable" (architecture 5).
+                try {
+                    Native.initTls(this)
+                } catch (error: RuntimeException) {
+                    android.util.Log.w("Shell++", "TLS setup failed")
+                }
                 ready = true
                 refreshLock()
                 pumpEvents()
@@ -142,6 +162,9 @@ class App : Application() {
             previous
         }
         if (!was.unlocked && status.unlocked) syncSoon()
+        // The first run ended (a new vault, or Restore from sync, whose
+        // wizard is gone by then): the phone's own defaults (UI spec 5).
+        if (was.firstRun && status.unlocked) afterRestore()
         if (was.state != status.state) main.post { for (listener in lockListeners) listener(status) }
     }
 
@@ -159,6 +182,10 @@ class App : Application() {
             }
             if (event.optString("kind") == "core") {
                 onCoreEvent(event)
+                continue
+            }
+            if (event.optString("kind") == "transfer") {
+                onTransfer(event)
                 continue
             }
             val id = event.getLong("id")
@@ -192,8 +219,9 @@ class App : Application() {
         listeners.remove(id)
     }
 
-    fun opened(id: Long, title: String, recordId: String?) {
+    fun opened(id: Long, title: String, recordId: String?, sftp: Boolean = false) {
         sessions += id
+        if (sftp) sftpSessions += id
         if (recordId != null) sessionHosts[id] = recordId
         // An event may have come first: it is kept, with the host added.
         val view = sessionViews.value[id] ?: JSONObject().put("id", id).put("title", title).put("state", "connecting")
@@ -205,7 +233,12 @@ class App : Application() {
 
     fun forget(id: Long) {
         sessions -= id
+        sftpSessions -= id
         sessionHosts.remove(id)
+        // Its transfers are gone with it (the core cancelled them).
+        conflicts.value = conflicts.value.filter { conflict ->
+            (conflict.session != id).also { keep -> if (!keep) conflict.cache.delete() }
+        }
         lastEvents.remove(id)
         sessionViews.value = sessionViews.value - id
         updateService()
@@ -267,7 +300,74 @@ class App : Application() {
         main.postDelayed(kick, 2_000)
     }
 
-    /** After "Restore from sync" at the first run: the phone's own defaults (UI spec 5). */
+    /**
+     * A transfer's event (UI spec 10). Its end is handled here, whatever
+     * screen shows (review of run 14): a finished download is copied into
+     * its document, and only then shown as done; a failed copy shows as a
+     * failure; a cancelled or failed download leaves no empty document;
+     * cache files go once nothing needs them.
+     */
+    private fun onTransfer(event: JSONObject) {
+        val transfer = event.optLong("id")
+        val state = event.optString("state")
+        val target = transferTargets[transfer]
+        val publish = { update: JSONObject ->
+            main.post {
+                // A cancel's event carries only its state.
+                val merged = transfers.value[transfer]?.let { JSONObject(it.toString()) } ?: JSONObject()
+                for (key in update.keys()) merged.put(key, update.get(key))
+                transfers.value = transfers.value + (transfer to merged)
+            }
+        }
+        if (target == null || state !in setOf("done", "failed", "cancelled")) {
+            publish(event)
+            return
+        }
+        transferWorker.execute {
+            when (state) {
+                "done" -> {
+                    transferTargets.remove(transfer)
+                    if (target.download && target.uri != null) {
+                        val written = try {
+                            contentResolver.openOutputStream(target.uri, "wt")?.use { out ->
+                                target.cache.inputStream().use { it.copyTo(out) }
+                                true
+                            } ?: false
+                        } catch (error: Exception) {
+                            false
+                        }
+                        if (!written) {
+                            deleteDocument(target)
+                            event.put("state", "failed").put("error", "The file could not be written where you chose.")
+                        }
+                    }
+                    target.dropCache()
+                }
+                "cancelled" -> {
+                    transferTargets.remove(transfer)
+                    deleteDocument(target)
+                    target.dropCache()
+                }
+                // A failure keeps its cache file for Retry (an upload needs it);
+                // a download's empty document goes.
+                "failed" -> deleteDocument(target)
+            }
+            publish(event)
+        }
+    }
+
+    private val transferWorker = Executors.newSingleThreadExecutor()
+
+    private fun deleteDocument(target: TransferTarget) {
+        if (!target.download || target.uri == null) return
+        try {
+            android.provider.DocumentsContract.deleteDocument(contentResolver, target.uri)
+        } catch (error: Exception) {
+            // The provider does not delete: the empty document stays.
+        }
+    }
+
+    /** After the first run (a new vault, or Restore from sync): the phone's own defaults (UI spec 5). */
     fun afterRestore() {
         worker.execute {
             try {
@@ -344,3 +444,15 @@ class App : Application() {
         override fun onActivityDestroyed(activity: Activity) {}
     }
 }
+
+/** A transfer's file in the app's cache and, for a download, the document it goes to. */
+data class TransferTarget(val cache: java.io.File, val uri: android.net.Uri?, val download: Boolean) {
+    /** The cache file and the `.part` the SFTP code writes beside it. */
+    fun dropCache() {
+        cache.delete()
+        java.io.File(cache.path + ".part").delete()
+    }
+}
+
+/** An upload whose name exists on the server, waiting for Replace or Skip. */
+data class Conflict(val session: Long, val cache: java.io.File, val remote: String, val name: String)

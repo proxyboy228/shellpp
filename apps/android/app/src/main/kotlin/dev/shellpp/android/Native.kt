@@ -38,6 +38,14 @@ object Native {
     @JvmStatic external fun keyDir(): String
     @JvmStatic external fun open(address: String, port: Int, username: String, cols: Int, rows: Int, dark: Boolean): Long
     @JvmStatic external fun openHost(vaultId: String, recordId: String, cols: Int, rows: Int, dark: Boolean): Long
+
+    // SFTP (UI spec 10; apps/android/native/src/sftp.rs): a session to a saved
+    // host, the remote panel's requests as JSON, transfers through cache files.
+    @JvmStatic external fun openSftp(vaultId: String, recordId: String): Long
+    @JvmStatic external fun sftpCall(session: Long, command: String, input: String): String
+    @JvmStatic external fun sftpDownload(session: Long, remote: String, local: String): Long
+    @JvmStatic external fun sftpUpload(session: Long, local: String, remote: String): Long
+    @JvmStatic external fun transferCancel(transfer: Long)
     @JvmStatic external fun nextEvent(timeoutMs: Int): String?
     @JvmStatic external fun reply(session: Long, prompt: Long, kind: String, text: ByteArray?)
     @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)

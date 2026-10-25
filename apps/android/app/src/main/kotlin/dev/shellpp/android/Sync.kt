@@ -73,7 +73,7 @@ fun syncErrorText(error: CoreException): String {
         "invalid_registration_code" -> "Wrong invite code."
         "totp_invalid", "invalid_totp" -> "Wrong code."
         "rate_limited", "too_many_attempts" -> "Too many attempts: wait a little and try again."
-        "kdf_too_expensive" -> "This account's key settings are more than a phone can run."
+        "kdf_too_expensive", "unsafe_kdf" -> "This account's key settings are more than a phone can run."
         "previous_account" -> "This phone's vault belongs to another account: it cannot sign in to this one."
         "weaker_kdf" -> "The server offers weaker key settings than this phone holds."
         else -> error.message ?: reason
@@ -150,6 +150,10 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
     var totpSecret by remember { mutableStateOf<String?>(null) }
     var weaker by remember { mutableStateOf<JSONObject?>(null) }
     var changed by remember { mutableStateOf(false) }
+    // What the weaker-settings and changed-settings notices accepted: kept
+    // together for the next attempt (review of run 14).
+    var acceptedSettings by remember { mutableStateOf<JSONObject?>(null) }
+    var afterKdfChange by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var caCandidate by remember { mutableStateOf<JSONObject?>(null) }
@@ -163,6 +167,8 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                 block()
             } catch (failed: CoreException) {
                 error = syncErrorText(failed)
+            } catch (failed: Exception) {
+                error = failed.message ?: "Something went wrong."
             } finally {
                 busy = false
             }
@@ -185,6 +191,7 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
         val check = withContext(Dispatchers.IO) {
             Core.obj("sync_server_trust_verified", JSONObject().put("origin", checkedOrigin).put("choice", choice))
         }
+        if (step != "trust") return@run
         if (check.optString("kind") != "ready") {
             error = if (choice.optString("kind") == "ca") "This CA did not issue the server's certificate." else "The trust was not kept: the server shows another certificate now."
             problem = check.optJSONObject("problem") ?: problem
@@ -197,7 +204,16 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
         if (uri == null) return@rememberLauncherForActivityResult
         run {
             val bytes = withContext(Dispatchers.IO) {
-                activity.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                activity.contentResolver.openInputStream(uri)?.use { stream ->
+                    val buffer = ByteArray(64 * 1024 + 1)
+                    var read = 0
+                    while (read < buffer.size) {
+                        val n = stream.read(buffer, read, buffer.size - read)
+                        if (n < 0) break
+                        read += n
+                    }
+                    buffer.copyOf(read)
+                }
             } ?: return@run
             if (bytes.size > 64 * 1024) {
                 error = "Not a certificate file."
@@ -209,19 +225,30 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
         }
     }
 
-    fun signIn(acceptedKdf: JSONObject? = null, afterChange: Boolean = false) = run {
-        val input = JSONObject().put("origin", checkedOrigin).put("email", email.trim()).put("password", password)
+    /**
+     * A step that may read the device key (a sign-in again after a rotation,
+     * its TOTP step): the fingerprint first when fingerprint unlock is on
+     * (D218).
+     */
+    suspend fun <T> withKey(title: String, step: () -> T): T =
+        if (!register && app.unlockPrefs.getBoolean(Fingerprint.PREF_ON, false) && app.lock.value.unlocked) {
+            Fingerprint.withDeviceKey(activity, app, title, step).second
+        } else {
+            withContext(Dispatchers.IO) { step() }
+        }
+
+    fun signIn(acceptedKdf: JSONObject? = acceptedSettings, afterChange: Boolean = afterKdfChange) = run {
+        acceptedSettings = acceptedKdf
+        afterKdfChange = afterChange
+        val input = JSONObject().put("origin", checkedOrigin).put("email", email.trim())
         if (register && invite.isNotBlank()) input.put("registration_code", invite.trim())
         if (acceptedKdf != null) input.put("accepted_kdf", acceptedKdf)
         if (afterChange) input.put("after_kdf_change", true)
         val command = if (register) "sync_register" else "sync_sign_in"
         val result = try {
-            // A sign-in again after a rotation reads the device key (D218): the
-            // fingerprint first when fingerprint unlock is on.
-            if (!register && app.unlockPrefs.getBoolean(Fingerprint.PREF_ON, false) && app.lock.value.unlocked) {
-                Fingerprint.withDeviceKey(activity, app, "Confirm the sign-in") { Core.obj(command, input) }.second
-            } else {
-                withContext(Dispatchers.IO) { Core.obj(command, input) }
+            withKey("Confirm the sign-in") {
+                // The password crosses in bytes, never as a String (architecture 2).
+                Core.callWithSecret(command, input, "password", password.toCharArray()) as JSONObject
             }
         } catch (failed: CoreException) {
             when (reasonOf(failed)) {
@@ -314,6 +341,12 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                         else -> "The server's certificate was refused: ${current?.optString("reason")}"
                     },
                 )
+                Text(checkedOrigin, color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                if (kind == "pin_changed") {
+                    Text("Trusted until now (SHA-256)", color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    Text(current.optString("pinned"), style = MaterialTheme.typography.bodySmall)
+                    Text("Shown now", color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                }
                 cert?.let { CertDetails(it) }
                 if (kind == "unknown_issuer" || kind == "pin_changed") {
                     Busy(busy, "Trust this certificate", "trust_pin") {
@@ -334,12 +367,12 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("trust_system"),
                     ) { Text("Use the system's trust") }
                 }
-                TextButton(onClick = { step = "server" }) { Text("Cancel") }
+                TextButton(onClick = { step = "server" }, enabled = !busy) { Text("Cancel") }
             }
             "account" -> {
                 if (mode == WizardMode.SignIn) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = register, onCheckedChange = { register = it }, modifier = Modifier.testTag("sync_register_toggle"))
+                        Checkbox(checked = register, onCheckedChange = { register = it }, enabled = !busy, modifier = Modifier.testTag("sync_register_toggle"))
                         Text("Register a new account")
                     }
                 }
@@ -373,7 +406,7 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                 )
                 Busy(busy, "Continue", "sync_totp_continue", enabled = code.length >= 6) {
                     run {
-                        val result = withContext(Dispatchers.IO) { Core.obj("sync_sign_in_totp", JSONObject().put("code", code)) }
+                        val result = withKey("Confirm the sign-in") { Core.obj("sync_sign_in_totp", JSONObject().put("code", code)) }
                         code = ""
                         if (result.optString("kind") == "done") {
                             withContext(Dispatchers.IO) { app.refreshLock() }
@@ -434,9 +467,10 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
                 Text(recoveryKey ?: "", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("recovery_key"))
                 OutlinedButton(onClick = {
                     scope.launch {
-                        withContext(Dispatchers.IO) {
-                            runCatching { Core.call("secret_copy", JSONObject().put("kind", "recovery_key")) }
+                        val copied = withContext(Dispatchers.IO) {
+                            runCatching { Core.call("secret_copy", JSONObject().put("kind", "recovery_key")) }.isSuccess
                         }
+                        error = if (copied) null else "Not copied any more (5 minutes have passed): write it down from the screen."
                     }
                 }) { Text("Copy") }
                 Busy(busy, "I saved it", "recovery_saved") {
@@ -504,6 +538,88 @@ fun SyncWizard(app: App, activity: MainActivity, mode: WizardMode, onClose: () -
     }
 }
 
+/**
+ * A changed pinned certificate of a bound phone (UI spec 11.2, the
+ * desktop's 12.2): the pinned and the new fingerprints; "Trust the new
+ * certificate", "Use the system's trust" when the system trusts it, or
+ * Cancel (sync stays stopped).
+ */
+@Composable
+fun PinChangedDialog(origin: String, onDone: (String?) -> Unit) {
+    var problem by remember { mutableStateOf<JSONObject?>(null) }
+    var busy by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(origin) {
+        val check = withContext(Dispatchers.IO) {
+            try {
+                Core.obj("sync_server_check", JSONObject().put("origin", origin))
+            } catch (failed: Exception) {
+                null
+            }
+        }
+        busy = false
+        when {
+            check == null -> onDone("The server did not answer.")
+            check.optString("kind") == "ready" -> onDone(null)
+            else -> problem = check.optJSONObject("problem")
+        }
+    }
+    fun choose(choice: JSONObject) {
+        busy = true
+        scope.launch {
+            val check = withContext(Dispatchers.IO) {
+                try {
+                    Core.obj("sync_server_trust_verified", JSONObject().put("origin", origin).put("choice", choice))
+                } catch (failed: CoreException) {
+                    error = syncErrorText(failed)
+                    null
+                } catch (failed: Exception) {
+                    error = failed.message
+                    null
+                }
+            }
+            busy = false
+            if (check?.optString("kind") == "ready") onDone(null) else if (check != null) {
+                problem = check.optJSONObject("problem")
+                error = "The trust was not kept: the server shows another certificate now."
+            }
+        }
+    }
+    val current = problem ?: return
+    val cert = current.optJSONObject("cert")
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(if (current.optString("kind") == "pin_changed") "The server's certificate changed" else "The server's certificate") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(origin, color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                if (current.optString("kind") == "pin_changed") {
+                    Text("Sync stopped: the server shows another certificate than the one trusted. Check the new one with the server first.")
+                    Text("Trusted until now (SHA-256)", color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    Text(current.optString("pinned"), style = MaterialTheme.typography.bodySmall)
+                    Text("Shown now", color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+                }
+                cert?.let { CertDetails(it) }
+                error?.let { Text(it, color = Tokens.danger) }
+            }
+        },
+        confirmButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                if (current.optString("kind") in setOf("pin_changed", "unknown_issuer") && cert != null) {
+                    TextButton(enabled = !busy, onClick = {
+                        choose(JSONObject().put("kind", "pin").put("sha256", cert.optString("sha256")))
+                    }) { Text("Trust the new certificate") }
+                }
+                if (current.optBoolean("system_trusts")) {
+                    TextButton(enabled = !busy, onClick = { choose(JSONObject().put("kind", "system")) }) { Text("Use the system's trust") }
+                }
+                TextButton(enabled = !busy, onClick = { onDone("Sync stays stopped until the certificate is trusted.") }) { Text("Cancel") }
+            }
+        },
+    )
+}
+
 /** Account and sync once connected (UI spec 11.2). */
 @Composable
 fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
@@ -512,6 +628,7 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var signingOut by remember { mutableStateOf(false) }
     var wizard by remember { mutableStateOf(false) }
+    var pinCheck by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val changes by app.changes.collectAsState()
     val status by produceState<JSONObject?>(null, refresh, changes) {
@@ -555,6 +672,11 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                 (current.text("last_error")?.let { " · $it" } ?: ""),
             "account_last_sync",
         )
+        if (current.text("last_error")?.contains("certificate") == true) {
+            Busy(false, "Check the server's certificate", "account_check_certificate") {
+                pinCheck = current.text("server_url")
+            }
+        }
         if (!current.optBoolean("signed_in")) {
             Text("Signed out of the server: sign in again to go on syncing.", color = Tokens.danger)
             Busy(false, "Sign in again", "account_sign_in_again") { wizard = true }
@@ -581,7 +703,11 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
                         val report = Core.obj("sync_now")
                         "Synced: ${report.optInt("pulled")} in, ${report.optInt("pushed")} out."
                     } catch (failed: CoreException) {
+                        // A changed pinned certificate: its dialog (UI 12.2).
+                        if (reasonOf(failed) == "certificate_changed") pinCheck = current.text("server_url")
                         syncErrorText(failed)
+                    } catch (failed: Exception) {
+                        failed.message
                     }
                 }
                 busy = false
@@ -605,6 +731,13 @@ fun AccountScreen(app: App, activity: MainActivity, onClose: () -> Unit) {
         )
         TextButton(onClick = { signingOut = true }, modifier = Modifier.testTag("account_sign_out")) {
             Text("Sign out", color = Tokens.danger)
+        }
+    }
+    pinCheck?.let { origin ->
+        PinChangedDialog(origin) { result ->
+            pinCheck = null
+            message = result ?: "The new certificate is trusted: sync goes on."
+            refresh += 1
         }
     }
     if (signingOut) {
