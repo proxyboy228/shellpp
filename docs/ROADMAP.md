@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-25, after run 12. What each stage is comes from
+State of the project on 2026-10-25, after run 13. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -17,10 +17,10 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 4 | SFTP | done | names that are not UTF-8 on the server are a known limitation (D50, item 12) |
 | 5 | Port forwarding, jump hosts, proxy, snippets | done | |
 | 6 | Logs, settings, shortcuts, highlighting | done | interface scale (run 6) |
-| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); what is left is in section 2; team parts belong to stage 8 |
+| 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in refused after its login revokes that login's device (D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
-| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, D204; section 3.1), shared sessions, cloud provider import and Mosh are not started (Mosh comes with the mobile client; its toggle is hidden and a saved value kept, D204) |
+| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215); shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
 
 ## 2. Stage 7: what is left
 
@@ -67,16 +67,11 @@ None loses data as built.
 - **Deleting the local copy** (D197): files that could not be deleted (a
   recording a running session holds open on Windows) reach only the log, as
   a count; the app is already at first run.
-- **Sessions after a refused sign-in** (D209): a login the merge refuses as
-  another account's revokes its session; the other refusals after a login
-  (a rebind's `rolled_back` or `integrity`, a merge's `forged_epoch` or
-  `newer_epoch`) still leave theirs live, and the login's device row stays
-  in that account's list.
-- **Keys**: the core still allows Show and Reissue of the recovery key in
-  local mode (only the interface hides them; forbidding it needs a test hook
-  for some 15 tests that read the key); after "Start with a new vault" the
-  next first sign-in does not compare the KDF with the set-aside store
-  (D189).
+- **Sessions after a refused sign-in** (D216): every refusal before the
+  device is bound revokes the login's device; the device row stays in the
+  account's list marked revoked (the protocol deletes no row). A rebind's
+  `rolled_back` before binding (a server whose chain does not reach the
+  device's key) goes through that path but has no test scenario of its own.
 - **Known limitations** (recorded, no work planned): the server's sign-in
   limits (D175, D185: a turn lost to an attacker at the moment a wait ends,
   the soft limit counted after Argon2id, counts in memory, the email map);
@@ -119,22 +114,22 @@ Not obtained:
   and PostgreSQL in Docker, D202), but GitHub Actions are off (D204); the
   same tests run in the full criterion.
 
-### 2.4 Findings of run 12
+### 2.4 Findings of runs 12 and 13
 
-The findings of run 11 are fixed or explained (D205–D208). What is left:
+The findings of run 12 are answered (D210): flags on Windows stay two
+letters (a known limitation), the flood rows of D207 stay unbounded, dates
+on Linux and macOS use the local zone, `cargo deny` runs in the local
+criterion. What is left:
 
-- **Flags on Windows** are drawn as two letters: Windows has no flag glyphs,
-  and shipping a color font with them is the owner's choice (D206).
-- **Flood rows** (D207): a tab that floods output holds up to 2 seconds of
-  full-width rows, up to about 36 MB, before the journal takes them; seven
-  such tabs swing the heap by 100–190 MB. Not a growth; a bound costs
-  throughput (D99).
-- **Dates outside Windows** are shown in UTC: the local zone is read on
-  Windows only (`apps/desktop/src/dates.rs`).
-- **CI** (D208): the causes of the red workflow are fixed, but GitHub Actions
-  are off; `cargo deny` (licenses, advisories) runs only there. One session
-  test (`a_lock_cancels_prompts_and_a_dropped_session_waits_for_unlock`) got
+- **CI** (D208): GitHub Actions are off until the repository is published
+  (D210). One session test
+  (`a_lock_cancels_prompts_and_a_dropped_session_waits_for_unlock`) got
   `Cancelled` instead of `Locked` once on CI's Linux runner and never since.
+- **A flaky server test fixed** (run 13): the account endpoints' body limit
+  was asked over TCP and the 413 could arrive as a reset; it is asked in
+  process now.
+- **`tzset` on every date** (run 13, D210): the C library re-reads the zone
+  for each date shown on Linux and macOS; cheap, not cached.
 ## 3. The path to release 1.0
 
 Release 1.0 ships without team vaults (D197), for Windows and Linux (D204);
@@ -146,10 +141,14 @@ of `CLAUDE.md` scans for secrets too (D205).
 2. **The verification run** (run 11) — the checks of 2.3: the long test, the
    flaky test search, the large property run, the full screenshot set at
    every size; no new features.
-   **Run 12** (this state) — the findings of run 11, the terminal's emoji
+   **Run 12** — the findings of run 11, the terminal's emoji
    (D206), the memory finding explained (D207), the red CI's causes (D208),
    Linux in Docker: the client builds and every test passes (D208), the git history checked for private data
    (none to remove), and the Android study (section 3.1).
+   **Run 13** (this state) — the owner's answers (D210: `cargo deny` in the
+   criterion, dates on Linux), the core for Android and the mobile design
+   (D211–D214), the Android prototype (D215), the review leftovers of
+   stage 7 (D216, D217).
 3. **The owner uses it** day to day and writes down the differences from
    Termius that matter.
 4. **1–2 parity runs** — the list of step 3.
@@ -171,10 +170,13 @@ Keychain, SFTP, known hosts, full sync, unlock by the master password; its
 screens are `docs/mobile/ui-spec.md` (D214), its architecture
 `docs/mobile/architecture.md` (D213).
 
-1. **Run 13: the design run and the prototype** — the core for Android (the
-   session layer and the terminal model as crates, D212), the architecture,
-   the screen specification, and an APK that connects over SSH (quick
-   connect) to a terminal with the extra keys (`apps/android`).
+1. **Run 13: the design run and the prototype** (done) — the core for
+   Android (the session layer and the terminal model as crates, D212), the
+   architecture (D213), the screen specification (D214), and an APK that
+   connects over SSH (quick connect) to a terminal with the extra keys,
+   cursor placement by tap and selection (`apps/android`, D215; checked on
+   the emulator against OpenSSH; `docs/mobile/README.md` says how to put it
+   on the phone).
 2. **M1, the vault on the phone** (1 run): the command dispatcher of the
    JNI layer over the core's service API; Android's platform services
    (`SecretStore` on the Keystore, the clipboard, the event sink); first run
@@ -207,7 +209,8 @@ distribution (a release key of the owner's; Google Play only by the owner).
 
 The owner's case (D204): now and then, away from home, SSH to one's own
 servers, with full sync of the personal vault from day one; Android only
-(a Samsung S25); Mosh later (D211). Run 12 studied the Rust core
+(a Samsung S25); Mosh later (D211). Android 17 asks an app for the local
+network permission before it reaches a home server (D215). Run 12 studied the Rust core
 (`docs/android-feasibility.md`): `shellpp-ssh`, `shellpp-sync-api` and `shellpp-private-file` build for `aarch64-linux-android` as they are; `shellpp-core` after one change (`crates/core/src/sync/tls.rs`: an added CA beside the platform verifier, which takes no extra roots on Android); the desktop app does not (clipboard, GPUI). Stripped test executables weigh about 7 MB (core) and 6 MB (SSH). The session layer and the terminal model are Rust without GPUI and the next crates to split out; Android needs the Keystore behind `SecretStore`, the platform verifier's JNI setup and a foreground service for long sessions. Next: the design run (the
 interface stack, the binding between Kotlin and Rust, the split of the
 session layer and the terminal model out of the desktop app), then the
@@ -237,25 +240,19 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-After run 12 (its report has the details):
+After run 13 (its report has the details):
 
-1. **Flags on Windows**: ship a color font with flag glyphs (OFL, in a
-   format Windows 10 draws in color), and which one; the run did not
-   download one (D206).
-2. **Flood rows** (D207): keep the 2-second compaction of a flooding tab, or
-   bound its full rows (by count or by memory) and measure the throughput
-   with `scripts\measure-terminal.ps1`.
-3. **Licenses and advisories** (`cargo deny`, CI's job) are not in the local
-   criterion: add them now that GitHub Actions are off? A new advisory would
-   then stop main until it is handled.
-4. **Dates on Linux** are shown in UTC (the local zone is read on Windows
-   only): read the zone on Linux before release 1.0?
-5. **Linux on a desktop**: the client was built and tested in Docker only;
-   the window, Wayland or X11, the Secret Service keychain and the fonts
-   want a check on a real Linux desktop before release 1.0.
-6. **VS16 emoji take two cells** (D206), as the plan asked: readline counts
-   one, so the cursor can be one column off on a command line that holds
-   such an emoji. Keep it?
+1. **Fingerprint unlock after a lock** (D213, architecture 4): the core takes
+   the device key at launch only (RR8), so on the phone fingerprint unlock
+   works at a cold start and a locked app asks for the password. Allowing
+   the fingerprint after a lock changes the core's rule for the phone: wanted
+   for the first version?
+2. **The app id and signing** of the Android app: the prototype uses
+   `dev.shellpp.android` and the debug key; the first version needs the
+   owner's id and release key.
+3. **Release preparation** (D210): the project's contact address for
+   `CODE_OF_CONDUCT.md`, whether to rewrite the history that holds the old
+   one, Linux on a real desktop.
 
 ## 6. Technical debt
 
@@ -265,16 +262,20 @@ After run 12 (its report has the details):
   reqwest, hyper and axum, and inside `totp-rs` on the server.
 - **Sync engine leftovers**: section 2.2.
 - **Terminal compatibility** (`docs/compatibility.md`): flags are drawn as
-  two letters on Windows (no flag glyphs; a font is the owner's choice,
-  D206); the blank cells after an emoji sequence stay (D92).
-- **The core for Android** (`docs/android-feasibility.md`):
-  `crates/core/src/sync/tls.rs` calls a verifier constructor that
-  `rustls-platform-verifier` lacks on Android, so the "mobile-ready" check of
-  `docs/architecture.md` 2.3 fails today; the fix belongs to the mobile
-  runs.
-- **Flood rows of the scrollback** (D207): a tab that floods output holds up
-  to 2 seconds of full-width rows (up to about 36 MB) before the journal
-  takes them; a bound by row count costs throughput (D99).
+  two letters on Windows (no flag glyphs; a known limitation, D210); the
+  blank cells after an emoji sequence stay (D92).
+- **The core for Android** (D212): builds; the input mapping of the
+  terminal is still the desktop's (`terminal/input.rs`, `mouse.rs`) with a
+  copy in the Android crate until it moves into `shellpp-terminal` (M2);
+  `shellpp-sessions` links `shellpp-term-local` on Android too (never
+  opened there); `rustls-platform-verifier` is not initialized on Android
+  yet and its Kotlin part must be vendored (M3).
+- **Wider visibility of the terminal model** (review of 3.3): the split made
+  `Outbox`'s fields and some test helpers public; a `test-hooks` feature and
+  narrower access are a cleanup for a later run.
+- **Flood rows of the scrollback** (D207, D210): a tab that floods output
+  holds up to 2 seconds of full-width rows (up to about 36 MB) before the
+  journal takes them; kept unbounded by the owner's choice.
 - **One target folder per worktree** (a rule, no code): cargo copies
   `shellpp.exe` and `shellpp-test-sshd.exe` to the top of the target folder,
   so two worktrees sharing one target folder replace each other's binaries
@@ -320,7 +321,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D210;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D218;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.
