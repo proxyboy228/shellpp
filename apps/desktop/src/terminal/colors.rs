@@ -68,6 +68,16 @@ mod tests {
     use super::*;
     use crate::theme::terminal::builtin;
 
+    /// A theme's selection keeps its color and alpha through the model's
+    /// palette and back (review of run 13).
+    #[test]
+    fn the_selection_keeps_its_theme_color_and_alpha() {
+        for theme in builtin() {
+            let palette = Palette::from_theme(&theme);
+            assert_eq!(translucent_token(palette.selection()), theme.selection);
+        }
+    }
+
     #[test]
     fn the_256_color_cube_and_grays() {
         let level = |r, g, b| Rgb { r, g, b };

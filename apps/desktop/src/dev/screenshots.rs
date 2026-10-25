@@ -1236,7 +1236,7 @@ fn run_inner(options: ScreenshotOptions) -> Outcome {
             // The serial ports of the run (stage 9, D88): no hardware.
             let options = crate::sessions::ManagerOptions {
                 serial: std::sync::Arc::new(stage9_shot::DemoPorts),
-                ..crate::sessions::ManagerOptions::with_keys(crate::sessions::KeySources::none())
+                ..crate::sessions::ui::options(crate::sessions::KeySources::none())
             };
             let sessions = crate::sessions::ui::install(&state, options, cx);
             if !sessions {

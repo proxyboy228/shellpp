@@ -248,7 +248,7 @@ pub fn run(args: BenchArgs) -> ExitCode {
                     pty: PtyBackend::new(),
                     direct,
                 }),
-                ..ManagerOptions::with_keys(KeySources::none())
+                ..crate::sessions::ui::options(KeySources::none())
             };
             let installed = crate::sessions::ui::install(&state, options, cx);
             let windows: Rc<RefCell<Windows>> = Rc::new(RefCell::new(Windows::default()));

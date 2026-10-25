@@ -5,7 +5,7 @@
 //!
 //! ```ignore
 //! // Startup, after the app state exists:
-//! sessions::ui::install(&state, ManagerOptions::production(), cx);
+//! sessions::ui::install(&state, sessions::ui::options(KeySources::system()), cx);
 //! // A tab: the terminal view first, then the session on its handle.
 //! let terminal = view.read(cx).handle();
 //! let opened = sessions::ui::manager(cx)?
@@ -26,7 +26,7 @@ use shellpp_core::service::host_api::{HistoryDecision, HistoryRecordInput};
 use uuid::Uuid;
 
 use super::{
-    BoxFuture, ManagerOptions, SessionCore, SessionEvent, SessionHandle, SessionKind,
+    BoxFuture, KeySources, ManagerOptions, SessionCore, SessionEvent, SessionHandle, SessionKind,
     SessionManager, SessionTerminal, SessionView, TerminalClosed,
 };
 use crate::state::{AppState, AppStateEvent};
@@ -53,6 +53,19 @@ impl Global for Sessions {}
 impl Sessions {
     pub fn manager(&self) -> &SessionManager {
         &self.manager
+    }
+}
+
+/// The session layer's options in this app (review of run 13): `keys`,
+/// the local terminal's title in the app's words, and the system's
+/// security keys (D143). Every manager the app starts takes its options
+/// from here, so none goes without the WebAuthn authenticator.
+pub fn options(keys: KeySources) -> ManagerOptions {
+    ManagerOptions {
+        local_title: crate::i18n::sessions::LOCAL_TERMINAL.to_owned(),
+        // Security keys sign through the system (D143).
+        authenticator: crate::platform::security_key::authenticator,
+        ..ManagerOptions::with_keys(keys)
     }
 }
 

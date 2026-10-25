@@ -222,7 +222,9 @@ impl Slot {
     /// starts here ([`ListState::Load`]): the caller builds the list from
     /// the source off its own thread ([`Suggestions::new`]; the secret
     /// detector runs over every command) and hands it to
-    /// [`Self::finish_load`].
+    /// [`Self::finish_load`]. A caller that gets `Load` must finish it: until
+    /// then the slot counts as loading, and only [`Self::invalidate`] starts
+    /// over.
     pub fn list_state(&self) -> ListState {
         let mut state = self.lock();
         if state.list.is_some() {
@@ -310,6 +312,46 @@ mod tests {
 
     fn list(commands: &[&str]) -> Suggestions {
         Suggestions::new(commands.iter().map(|command| (*command).to_owned()))
+    }
+
+    struct Source(Vec<String>);
+
+    impl HistorySource for Source {
+        fn commands(&self) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    /// The loading protocol a view drives (`list_state`, `finish_load`;
+    /// review of run 13): a command recorded while the list loads joins it
+    /// when it lands; a load that started before `invalidate` is dropped and
+    /// the next state starts a new one.
+    #[test]
+    fn a_load_keeps_what_was_recorded_and_a_stale_load_is_dropped() {
+        let slot = Slot::default();
+        assert!(matches!(slot.list_state(), ListState::Missing), "no source");
+        slot.lock().source = Some(Arc::new(Source(vec!["git status".to_owned()])));
+        let ListState::Load {
+            generation: stale, ..
+        } = slot.list_state()
+        else {
+            panic!("a load starts");
+        };
+        assert!(matches!(slot.list_state(), ListState::Missing), "it loads");
+        slot.remember("echo before the history changed");
+        slot.invalidate();
+        slot.finish_load(stale, list(&["git status"]));
+        assert_eq!(slot.complete("git s"), None, "the stale list is dropped");
+        let ListState::Load { generation, source } = slot.list_state() else {
+            panic!("a new load starts");
+        };
+        assert_ne!(generation, stale);
+        slot.remember("ls -la /etc");
+        slot.finish_load(generation, Suggestions::new(source.commands()));
+        assert!(matches!(slot.list_state(), ListState::Ready));
+        assert_eq!(slot.complete("git s").as_deref(), Some("tatus"));
+        assert_eq!(slot.complete("ls -").as_deref(), Some("la /etc"));
+        assert_eq!(slot.complete("echo b"), None, "forgotten with the old list");
     }
 
     #[test]

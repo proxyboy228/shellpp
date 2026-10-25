@@ -720,8 +720,9 @@ mod tests {
                 ),
                 "{other_name:?}"
             );
-            // A certificate of the system's CA out of its dates: the system's
-            // reason, not the added CA's "unknown issuer".
+            // A certificate of the system's CA out of its dates: refused for
+            // its dates (webpki checks them before it looks for an issuer,
+            // so both verifiers say so).
             let public_expired = verify(&verifier, &leaf(name, &public_issuer, (-30, -1)));
             assert!(
                 matches!(
@@ -731,6 +732,47 @@ mod tests {
                     ))
                 ),
                 "{public_expired:?}"
+            );
+        }
+
+        /// The system's reason wins when the added CA only says "unknown
+        /// issuer" (review of run 13): a certificate of the system's CA for
+        /// another name is refused for its name. The CA alone answers
+        /// "unknown issuer" here (webpki checks the name after the chain),
+        /// and that would offer the trust dialog for a certificate the
+        /// system refuses (TrustVerifier::refused).
+        #[test]
+        fn the_systems_reason_wins_over_an_unknown_issuer_of_the_added_ca() {
+            let (added, _) = ca("added CA");
+            let (public, public_issuer) = ca("public CA");
+            let verifier = verifier(&added, &public);
+            let cert = leaf("other.example.test", &public_issuer, (-1, 30));
+            let by_ca = verifier.ca.verify_server_cert(
+                &cert,
+                &[],
+                &ServerName::try_from("sync.example.test").expect("name"),
+                &[],
+                UnixTime::now(),
+            );
+            assert!(
+                matches!(
+                    by_ca,
+                    Err(TlsError::InvalidCertificate(
+                        CertificateError::UnknownIssuer
+                    ))
+                ),
+                "the added CA alone: {by_ca:?}"
+            );
+            let refused = verify(&verifier, &cert);
+            assert!(
+                matches!(
+                    refused,
+                    Err(TlsError::InvalidCertificate(
+                        CertificateError::NotValidForName
+                            | CertificateError::NotValidForNameContext { .. }
+                    ))
+                ),
+                "{refused:?}"
             );
         }
     }

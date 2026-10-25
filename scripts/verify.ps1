@@ -190,9 +190,13 @@ if (-not $ndk) {
 } else {
     $llvm = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
     $clang = Join-Path $llvm "${androidTarget}26-clang.cmd"
+    # In the repository, so rustup reads the toolchain rust-toolchain.toml
+    # pins, not the default one (review of run 13).
+    Push-Location $repo
+    try { $installedTargets = @(& rustup target list --installed 2>$null) } finally { Pop-Location }
     if (-not (Test-Path -LiteralPath $clang)) {
         $mobileProblem = "the NDK at $ndk has no $clang"
-    } elseif (-not (@(& rustup target list --installed 2>$null) -contains $androidTarget)) {
+    } elseif (-not ($installedTargets -contains $androidTarget)) {
         $mobileProblem = "the Rust target is missing: rustup target add $androidTarget"
     }
     $mobileEnvironment = @{

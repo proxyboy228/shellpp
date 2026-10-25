@@ -6,7 +6,7 @@
 //! # Using it
 //!
 //! ```text
-//! let manager = SessionManager::start(core, ManagerOptions::production());
+//! let manager = SessionManager::start(core, ManagerOptions::production()); // + the client's title and authenticator
 //! let opened = manager.open(OpenRequest::Ssh(target), (cols, rows), terminal)?;
 //! // opened.handle: commands (write, resize, reply, cancel, reconnect, close)
 //! // opened.events: every change as SessionEvent::Changed(SessionView)
@@ -179,7 +179,9 @@ impl std::fmt::Debug for ManagerOptions {
 }
 
 impl ManagerOptions {
-    /// The app: `~/.ssh` key files, the system agent, its own runtime.
+    /// `~/.ssh` key files, the system agent, its own runtime. A client
+    /// sets its own title of a local terminal and its security key
+    /// authenticator on top (the desktop: `sessions::ui::options`).
     pub fn production() -> Self {
         Self::with_keys(KeySources::system())
     }

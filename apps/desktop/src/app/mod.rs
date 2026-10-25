@@ -22,7 +22,7 @@ use gpui::{
 use gpui_kit::component::TitleBar;
 
 use crate::i18n;
-use crate::sessions::{KeySources, ManagerOptions};
+use crate::sessions::KeySources;
 use crate::state::{AppState, OpenedCore};
 use crate::theme::{self, Appearance};
 
@@ -104,12 +104,7 @@ pub fn run(launch: Launch) {
             // The session layer (its own Tokio runtime) over the core: the
             // session tabs connect through it. Nothing to start without a core.
             if state.read(cx).core().is_some() {
-                let options = ManagerOptions {
-                    local_title: crate::i18n::sessions::LOCAL_TERMINAL.to_owned(),
-                    // Security keys sign through the system (D143).
-                    authenticator: crate::platform::security_key::authenticator,
-                    ..ManagerOptions::with_keys(keys)
-                };
+                let options = crate::sessions::ui::options(keys);
                 crate::sessions::ui::install(&state, options, cx);
             }
 
