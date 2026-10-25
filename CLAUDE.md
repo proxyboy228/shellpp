@@ -126,7 +126,8 @@ Kotlin. С `-Emulator` ещё сквозные тесты на эмулятор�
 `https://localhost:<port>` через `adb reverse` (ключи аккаунта привязаны
 к адресу сервера). SDK и JDK находит сам
 (`ANDROID_HOME`, `JAVA_HOME`, иначе Android Studio) и задаёт их только
-своему процессу. Журналы — в `target\verify-android\`. Лицензии SDK за
+своему процессу; так же задаёт `ANDROID_SERIAL` эмулятора, так что
+телефон, подключённый по USB, не трогается (D222). Журналы — в `target\verify-android\`. Лицензии SDK за
 владельца не принимать; Gradle тянет зависимости только из Google Maven
 и Maven Central.
 

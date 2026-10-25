@@ -2609,3 +2609,27 @@ Status: run 15 (plan, section 3.1); `crates/core/src/model/partial.rs`, `crates/
 - The desktop: a panel's `origin` moves to the stored revision only when its save went right on top of it (a save that merged another version keeps the old revision, so a password set later still counts as replacing the newer one); the members a panel takes from the stored record after a pull (group, tags, color, a group's parent and color) go into its `origin` too; a save keeps the stored `group_id` / `parent_id`, also one the panel cannot resolve.
 - The sync request's log line leaves the URL out (security.md 9.1), from 2da6175.
 - After the second look: the desktop's panels learn from the core whether a save wrote a version (`record_save_written`); a save that wrote nothing keeps the old revision, since the one it got back may be a pull's. A proxy written whole over one that changed since the base drops the stored proxy password when the proxy is another server (type or address), so a newer proxy's password never goes to the edit's proxy; the copy keeps it.
+
+
+### 222. The Android screens of run 15: what the agent decided where the references and D220 left it open
+
+Status: run 15 (plan, sections 3.2-3.4); `apps/android`, `docs/mobile/ui-spec.md`.
+
+**Context.** The owner's reference descriptions (`docs/mobile/reference-1.md`, `reference-2.md`) give the structure of the screens and D220 settles their open questions; a few points were left to the run, and Shell++ has records and features the other app does not show.
+
+**Decision:**
+
+- **OS tiles**: Shell++'s own glyphs: the first letters of a detected distribution or BSD (`os.distro`, data-model 7.6) on one of the design system's tag colours, dark letters on the light ones for contrast; a generic server glyph without detection. No logos.
+- **The vault home** lists Recently deleted after Known hosts (Shell++'s own data rule, data-model 16.6); unbuilt sections are not shown.
+- **The editors** save with a check mark and close; leaving with changes asks "Discard changes?". The host card's user name counts the host's identity and the groups' identities too (data-model 8.3). A host's jump chain keeps "direct" (`[]`) apart from "inherit" (missing): Clear means direct, "Use the group's chain" inherits. A theme imported on the desktop (`terminal_theme.record_id`) is kept unless another theme is picked. Labels are Shell++'s words (Label, Name).
+- **Fields not shown on the phone** (D220 item 7; kept as they are): host notes and color label, the certificate and FIDO2 key slots, the startup snippet, the system agent and the confirmation of agent forwarding, legacy algorithms, keepalive per host, Mosh, the recording settings, the primary protocol; the group's notes and color.
+- **The session screen** holds every open session (terminal and SFTP) in one strip; a chip shows the session's state while it is not connected; a prompt of a session that is not in front brings it to the front.
+- **The password key** sends from the vault to the session in Rust (`Native.sendPassword`); it is disabled for a quick connect (no saved password) and when the host has none.
+- **The attach key** opens an SFTP session beside the terminal (or uses an open one to the same host) and uploads into the home folder or the typed folder; a quick connect has no attach key (no saved host to open SFTP to).
+- **Connections**: recent connections come from the core's connection log (`recent_connections`), the five newest; Connect via SFTP picks a saved host; quick connect reads `ssh user@host -p N`, `ssh -p N user@host`, `user@host[:port]` and `ssh host`, and other text searches the hosts.
+- **Settings** has only rows whose setting works on the phone (UI spec 12 lists them and the ones not there yet). The extra-keys row, its groups and the terminal theme, font size, pinch, cursor speed and "keep the screen on" are settings of this device, not synced (the desktop has no such settings to share).
+- **SFTP** gets a download folder on the phone (a picked document tree, kept with a persistable permission), else "Save to…" every time; Copy and Edit of the selection come after the first version.
+- **`verify-android.ps1 -Emulator`** now sets `ANDROID_SERIAL` to the emulator for its own process: before, a phone connected over USB would have received the app and the test app from Gradle's install (found in this run with the owner's phone connected).
+
+**Spec impact:** `docs/mobile/ui-spec.md` 3, 6-10, 12, 13; `docs/mobile/architecture.md` 6.1a; CLAUDE.md (verify-android and a phone on USB).
+

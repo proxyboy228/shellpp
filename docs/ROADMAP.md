@@ -339,7 +339,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D222;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D223;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.

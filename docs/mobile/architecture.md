@@ -279,6 +279,32 @@ clears a copied password when it can, instead of taking an empty read for
   `AccessibilityNodeProvider` that reads the screen's rows is part of the
   first version's terminal run [decision].
 
+### 6.1a The session screen (run 15)
+
+- One activity, `TerminalActivity`, shows every open session (UI spec 9.1):
+  a `TerminalView` per terminal session it shows (each with its own pump
+  thread; a session has one pump at a time) and the Compose SFTP screen for
+  an SFTP session, under a Compose bottom (the session bar, the extra-keys
+  row). `singleTop`: a new connection from the lists reaches the same
+  screen. "<" and Back finish it; the sessions live in `App` and the
+  service.
+- Snapshots stop while the screen is not seen (`TerminalView.paused`): the
+  pump still takes the wake-ups, the model keeps the output, and the screen
+  is read again when it shows.
+- The theme of a new terminal: the host's built-in `terminal_theme`, else the
+  device's choice in Settings → Font & colours (`Native.setTheme`), else
+  Graphite or Paper with the system's mode (`theme_for` in `engine.rs`; the
+  ten built-in themes are the desktop's files).
+- The password key: `Native.sendPassword(session, vault, record)` reads the
+  host's saved password in the core and writes it into the session's input
+  in Rust; the password never crosses into Kotlin (D220).
+- A network that comes back: `Native.reconnectDropped()` makes every dropped
+  terminal session try again at once instead of at the end of its
+  countdown (M2).
+- New dispatcher commands: `identities_list`, `identity_save` (the password
+  as a secret field, `clear_password` to remove it), `recent_connections`
+  (the core's connection log, Connections).
+
 ### 6.2 Input
 
 - The view is its own input target (`onCreateInputConnection`) with the

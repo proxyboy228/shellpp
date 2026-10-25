@@ -1,11 +1,17 @@
 # Mobile UI specification (Android, first version)
 
-Status: run 13, the design run (D214). Sources, and only these: the owner's
-words (`docs/mobile/owner-notes.md`, D211), the architecture
-(`docs/mobile/architecture.md`, D213) and the accepted desktop
+Status: run 13, the design run (D214); the layout and navigation rewritten
+in run 15 after the owner's reference descriptions (D220). Sources, and only
+these: the owner's words (`docs/mobile/owner-notes.md`, D211), the clean-room
+descriptions of the structure of the app the owner used before
+(`docs/mobile/reference-1.md`, `reference-2.md`: where things are, how screens
+connect, what a tap does; no icons, colours or wording of that app), the
+architecture (`docs/mobile/architecture.md`, D213) and the accepted desktop
 specifications (`docs/ui-behavior-spec.md`, `docs/design-system.md`,
 `docs/data-model.md`, `docs/sync-protocol.md`). Everything else is marked
-[decision]. Nothing comes from another mobile client (clean room).
+[decision]. Where the reference descriptions and this file disagree on
+layout and navigation, the descriptions and D220 win; the data and sync
+rules here stay.
 
 The data, the records and their rules are the desktop's: the same hosts,
 groups, keys, known hosts and sync, no new format. Where this spec says
@@ -52,18 +58,44 @@ adaptations [decision]:
 
 ## 3. Navigation
 
-- A bottom navigation bar with four places [decision]:
-  1. **Hosts** (section 6), the start screen after unlock;
-  2. **Sessions**: the open terminal and SFTP sessions as a list (title,
-     host, state as on the desktop's tabs: connecting, connected, dropped
-     with the reconnect countdown, ended); tapping one opens it;
-  3. **Keychain** (section 7);
-  4. **More**: Known hosts (section 8), Recently deleted (section 6.3),
-     Account and sync (section 11), Settings (section 12), Lock.
-- The terminal (section 9) and SFTP (section 10) are full screens over the
-  bar; back returns to where they were opened from and leaves the session
-  running.
-- The system back gesture closes sheets and dialogs first, then the screen.
+- A bottom bar with three tabs (reference-1 1): **Vaults** (the vault's
+  data), **Connections** (connecting without browsing the vault),
+  **Settings**. The active tab has a filled pill behind its icon and a bolder
+  label. Each tab keeps its own back stack: another tab and back returns to
+  the same page and scroll position. A second tap on the current tab goes to
+  its first page; Back at the first page of Connections or Settings goes to
+  Vaults [decision].
+- While a session is open, the Connections tab shows the OS mark of the
+  last session's host instead of its terminal glyph.
+- Lists show the bar; editors, pickers, sub-pages of Settings and the
+  session screen cover it.
+
+### 3.1 Vault home
+
+- The vault's name with its icon and a drop-down arrow at the top: the
+  vault switcher, a bottom sheet with the one personal vault and its check
+  mark (team vaults with stage 8).
+- One grouped list with the sections: **Hosts** (count), **Keychain**,
+  **Known hosts** (count), **Recently deleted** (count; Shell++'s own,
+  data-model 16.6) [decision]. Port forwarding, Snippets and Logs are not
+  shown until they are built [decision].
+
+### 3.2 Connections
+
+- **Quick connect**: a rounded field with **Connect** inside it. Text that
+  reads as an ssh command (`ssh user@host -p 22`, `ssh -p 22 user@host`,
+  `user@host[:port]`, `ssh host`) connects without saving anything; other
+  text searches the saved hosts and lists them (a tap connects).
+- **While sessions are open**: one card per session, its live preview (the
+  last lines of the output in the terminal's theme; an SFTP session shows
+  its files' folder) above a row with the host's tile, the session name, the
+  protocol and **×** (closes at once). A tap on the preview opens the
+  session.
+- **Otherwise**: **Recent connections** (the connection log, data-model 13.3:
+  the five newest, newest first, a saved host by its label, an ad-hoc one by
+  its address, the full command under it; a tap connects again) and **Other
+  ways to connect**: Connect via SFTP (a saved host). The local terminal,
+  serial ports and device discovery are not on the phone.
 
 ## 4. First run
 
@@ -111,100 +143,127 @@ As the desktop's 13.2:
 
 ## 6. Hosts and groups
 
-### 6.1 List
+### 6.1 Hosts screen
 
-- A top app bar with the vault's name and a search field that is always
-  visible under it [decision]. Search filters hosts by label, address, user
-  and tags as the desktop's 2.1 does; typing `user@host[:port]` that matches
-  no host offers "Connect to user@host" at the top of the results (a quick
-  connect, nothing saved, as on the desktop).
-- Groups first (rows with the group's color label and the count of hosts
-  inside), then the hosts of the current level; tapping a group goes into
-  it (the top bar shows the path and back goes up) [decision: a drill-down
-  list instead of the desktop's sidebar tree].
-- A host row: the label (or the address), under it `user@address`, the OS
-  icon when known; the color label as a leading stripe and a dot for a live
-  session to it [decision].
-- **Tap a host: connect** (a terminal opens, section 9). Long-press: a
-  sheet with Connect, Open SFTP, Edit, Duplicate, Move to group, Delete
-  [decision]. Long-press on a group: Edit, Move, Delete, as the desktop's
-  group panel (3.4) does them.
+- **Top bar**: back with the vault's name, the title, search and the sort
+  button (its badge "Az", "Za" or a calendar with an arrow). Inside a group:
+  a plain back arrow, the group's icon, name and a drop-down up the tree
+  (All hosts, its ancestors).
+- **Groups** then **Hosts**, each a section header over full-width cards.
+  A group card: a folder tile, the name, "No hosts" / "1 host" / "N hosts"
+  (the whole subtree). A host card: the OS tile, the label (else the
+  address), under it the protocol and the **effective user name** (the
+  host's own, its identity's, else the groups' username or identity;
+  "ssh" alone without one) (D220). With open sessions the subtitle reads
+  "Active", the tile has a ring and a **session counter** ("1 ▾") sits on the
+  right.
+- **OS tiles**: Shell++'s own simple glyphs: a detected Linux distribution
+  or BSD shows its name's first letters on a tile of one of the design
+  system's tag colours (dark letters on the light ones); undetected hosts a
+  generic server glyph [decision]. No distribution logos.
+- **A tap on a host connects** (the session screen, section 9); a tap on a
+  group opens it. **A long press selects**: the bar becomes ×, "N selected",
+  the pencil (one record: its editor) and ⋮ (Connect via SFTP for one host,
+  Duplicate, Move to group, Delete); a tap adds or removes; the floating
+  button becomes **Connect** (the selected hosts, one session each). Back or
+  × leaves selection.
+- **The session counter's menu**: Connect, Connect via SFTP, the host's open
+  sessions (switch to one), **Close**, which closes only the menu (D220).
+- **Sort**: A–Z, Z–A, newest to oldest, oldest to newest, for groups and
+  hosts each in their section; kept on this device.
+- **Search**: the bar becomes a field with × on its left, the keyboard up;
+  an empty query lists every group and host of the vault, typing filters
+  them, the matching part of each title in the accent.
+- **"+"**: a bottom sheet with New host and New group (inside the group
+  shown). Import is not on the phone (the core has no import there).
 - **Delete** asks first, names what goes, and moves it to Recently deleted
   (section 6.3; D93); the snackbar after it has "Undo".
-- A floating "+" button: New host, New group [decision].
-- Empty state: "No hosts yet" with "New host" and, when sync is not set up,
-  "Restore from sync" [decision].
+- Empty state: "No hosts yet" with New host and, when sync is not set up,
+  "Restore from sync" (D219).
 - Pull to refresh runs a sync when an account is connected [decision];
   offline it says "No network" and changes nothing.
 
-### 6.2 Host editor
+### 6.2 Host and group editors
 
-The desktop host panel (3.1) on one screen, for the blocks the first version
-edits [decision on the subset]:
+reference-2 1–3 for the order, with only the fields of the desktop's data
+model (data-model 7; D220):
 
-- Address, Label, Group (a picker), Tags, Color.
-- SSH: Port, Username, Password (masked; saved in the vault as on the
-  desktop), Key (a picker from the Keychain, or none). Inheritance is the
-  desktop's (3.1, 3.4): a field the host leaves empty shows the group's
-  value as its placeholder ("from group Servers"), and a value of the host's
-  own overrides it.
-- Terminal: theme (the host's or the default), charset, Backspace sends
-  (the desktop's choices).
-- Changes save as they are made, as the desktop's panel does (3.2);
-  required fields and their errors are the desktop's.
-- **Everything else on the record is kept as it is** and listed read-only
-  under "More settings (edit on the desktop)": identity, agent forwarding,
-  environment, jump hosts and proxy, keepalive, the startup snippet, Telnet,
-  notes, port forwarding rules [decision]. A host that signs in with an
-  identity shows the identity's name read-only.
-- A group's editor: name, color label, parent group, and the group's SSH
-  defaults (port, username, key) as on the desktop's 3.4.
+- **Top bar**: back, "New host" / "Edit host", a check mark that saves and
+  closes. Leaving without changes closes at once; with changes it asks
+  "Discard changes?" [decision].
+- **A save writes only what the editor changed** (`record_save` with the
+  version it opened from, data-model 2.1, D221): a change that sync brings in
+  while the editor is open keeps every field the user did not touch, and a
+  value the edit overwrites is kept as a conflict copy.
+- **Host**, top to bottom: the vault (one personal vault); a card with
+  Label, Address, Group (a picker; × clears it), Tags (typed, or a picker of
+  the vault's tags), "Backspace sends Ctrl+H"; a card with Port; Credentials
+  with Username (a round button picks an identity), Password (masked; the
+  round button shows it; "Remove the saved password"), Key (a picker of the
+  Keychain's keys, with New SSH key…); a card with Agent forwarding, Host
+  chaining (the chain editor: jump hosts top to bottom, then this host;
+  Clear connects directly, `[]`; "Use the group's chain" inherits), Proxy
+  (type, address, port, username, password), environment variables (a
+  bottom sheet), Colour scheme (a grid of the built-in themes, Default
+  first; a theme imported on the desktop is kept), Charset (Current, Use
+  default, the list); a card with Telnet (its port).
+- **Group**: the vault; Name and Parent group; Port; Username (with an
+  identity), Key; Host chaining.
+- Fields the host or group leaves empty show what it inherits under them
+  ("deploy, from group Servers"), from the group chosen in the form.
+- **Not shown** (kept as they are; the desktop edits them): notes, color
+  label, certificate and FIDO2 key slots, the startup snippet, the system
+  agent and confirmation of forwarding, legacy algorithms, keepalive per
+  host, Mosh, recording settings, the primary protocol [decision].
 
 ### 6.3 Recently deleted
 
-Under More, as the desktop's section 14 for this device: the list (name,
+A row of the vault home (3.1), as the desktop's section 14 for this device: the list (name,
 type, when deleted), search, **Restore** [decision: restore only; deleting
 forever stays on the desktop]. Empty state: "Nothing deleted in the last 90
 days".
 
 ## 7. Keychain
 
-As the desktop's section 7 for keys:
+reference-2 4, with the Keychain of the desktop's section 7 behind it:
 
-- A list of keys: label, type and size (Ed25519, ECDSA, RSA 3072...), the
-  SHA-256 fingerprint shortened, how many hosts use it [decision]. Empty
-  state: "No keys yet" with Generate and Import.
-- "+" offers: **Generate** (Ed25519 by default, as on the desktop; label;
-  optional passphrase) and **Import from file** (the system file picker;
-  OpenSSH and PuTTY formats as on the desktop; a passphrase prompt when the
-  file has one; a file that is not a key says so and imports nothing).
+- Top bar like Hosts (back to the vault, search, sort). **Keys** then
+  **Identities** as cards: a key's label, type and shortened fingerprint; an
+  identity's label, username and whether a password is saved. Empty state:
+  an icon, "No keys yet" and what keys are for.
+- **"+"**: a bottom sheet with New identity; Generate a new SSH key, Import
+  a key from a file (the system file picker; OpenSSH and PuTTY formats; a
+  passphrase prompt when the file has one). Biometric and FIDO2 keys come
+  after the first version.
 - A key's screen: label (editable), type, fingerprint (copy), the public
-  key in OpenSSH format with **Copy** and **Share** (the system share
-  sheet) [decision], the hosts using it, **Delete**: as the desktop's 7.3,
-  it asks first and lists the hosts that use the key, removes it from them,
-  and offers Undo.
-- The private key is never shown and never shared; export of private keys
-  is the desktop's.
-- Identities, certificates and security keys are the desktop's in the
-  first version [decision]; records of them are kept as they are.
+  key with Copy and Share, the hosts using it, Delete (asks first, lists
+  the hosts that use it, Undo), as the desktop's 7.3. The private key is
+  never shown or shared.
+- An identity opens a dialog: label, username, password (replace or
+  remove).
 
 ## 8. Known hosts
 
-As the desktop's section 10:
+reference-2 5, with the desktop's section 10 behind it:
 
-- A list: host and port, key type, fingerprint shortened, when first seen;
-  hashed entries show as "hashed host" with their key. Search by host. Empty
-  state: "No known hosts yet". A row's screen shows the full SHA-256
-  fingerprint (copyable) and **Remove**, which asks first and offers Undo
-  as on the desktop.
-- **First connection and a changed key** are the desktop's 10.2 dialogs as
-  full-screen sheets that cannot be dismissed by a tap outside: the host,
-  the key type and the full fingerprint; for a first key "Accept and save",
-  "Connect once", "Cancel"; for a changed key a danger-styled warning with
-  the old and new fingerprints, "Cancel" first, and "Replace the key" behind
-  a second confirmation [decision on the order and the confirmation].
+- Top bar like Keychain; **no "+"**: entries come only from connecting.
+- One card per entry: the same shield tile for each, the address (`[host]:port`
+  when the port is not 22; "hashed host" for a hashed one), under it the
+  labels of the saved hosts that use it, comma-separated (none: no
+  subtitle).
+- Sorted with numbers compared as numbers, an IPv4 address by its octets
+  (D220); the four orders of the sort menu.
+- A tap shows the key type, the full SHA-256 fingerprint (copyable), when it
+  was first seen and **Remove**. A long press selects; ⋮ → Remove asks
+  first and offers Undo.
+- **First connection and a changed key** are the desktop's 10.2 dialogs that
+  a tap outside does not dismiss: the host, the key type and the full
+  fingerprint; for a first key "Accept and save", "Connect once", "Cancel";
+  for a changed key a danger-styled warning with the old and new
+  fingerprints, "Cancel" first, and "Replace the key" behind a second
+  confirmation.
 - A **revoked** key blocks the connection with no way to continue, as on the
-  desktop (10.2): the terminal shows why.
+  desktop (10.2).
 
 ## 9. Terminal
 
@@ -212,47 +271,66 @@ The main screen of the app. The behaviour of the session (connecting,
 prompts, the end and the reconnect policy, the lock) is the desktop's
 4.6 and 4.8; this section is the phone's view of it.
 
-### 9.1 Layout
+### 9.1 The session screen
 
-- **Portrait**: a thin top bar (back, the session's title, the connection
-  state dot, a "⋯" menu), the terminal, the **extra keys** (two rows,
-  section 9.2), the soft keyboard. The extra keys stay when the soft
-  keyboard is down and when a hardware keyboard is used [decision].
-- **Landscape**: the top bar hides while the keyboard is up; "⋯" is then the
-  last key of the extra keys' second row. The keyboard never takes the
-  whole screen (`IME_FLAG_NO_EXTRACT_UI`, `IME_FLAG_NO_FULLSCREEN`)
-  [decision].
-- The app draws edge to edge (Android 15+): the terminal and the extra keys
-  sit above the keyboard's and the navigation bar's insets.
-- The terminal fills the space between the bar and the extra keys; its
-  columns and rows follow from the cell size (section 9.8).
-- "⋯": Copy all screen, Paste, Select mode (9.4), Font size (reset),
-  Open SFTP to this host, Disconnect, Reconnect (when dropped) [decision].
+- **Full screen**: the output from the top (no app bar); at the bottom,
+  right above the keyboard when it is up, the **session bar** and, on a
+  terminal session, the **extra-keys row**. Opening a session shows it with
+  the keyboard up.
+- **The session bar** (reference-1 5, reference-2 7.5–7.6): "<" back to the
+  lists (every session stays open); the strip of **session chips**, every
+  open session, terminal and SFTP, scrolling so the active one is in view:
+  the active chip with the host's tile, the session's name (and its state
+  while not connected) and **×**, which closes the session at once (D220);
+  the others faded, without ×, a tap switches to them; an SFTP session's
+  tile is the OS mark inside a folder; **"+"** with Connect (a new session
+  to the same saved host) and Connect via SFTP (a new SFTP session; the
+  terminal session stays, D220); the **keyboard button** on terminal
+  sessions only, a keyboard glyph while the keyboard is down and a grid
+  glyph while it is up. The "+" menu opens above the bar and never over a
+  ×; the × of the chip is set apart from "+" (D220).
+- The bar takes the terminal theme's background and accent on a terminal
+  session and the app's colours on an SFTP session.
+- Back: hides the keyboard when it is up (the system's), then clears a text
+  selection, then goes back to the lists (D220).
 - Prompts of the connection (password, keyboard-interactive, a key's
-  passphrase, the host key decisions of section 8) are sheets over the
-  terminal, as the desktop shows them in the pane; their "Save password"
-  choice is the desktop's.
+  passphrase, the host key decisions of section 8) are dialogs over the
+  session; a prompt of another session brings it to the front first.
+- The app draws edge to edge (Android 15+): the bars sit above the
+  keyboard's and the navigation bar's insets.
 
 ### 9.2 Extra keys
 
-- **Two rows** above the soft keyboard, each key 48 dp high and at least
-  44 dp wide; no scrolling, so every key is always in reach [decision]:
-  - first row: **Esc, Tab, Ctrl, Alt, ←, ↓, ↑, →** (the owner's keys, D211);
-  - second row: **⌨, |, /, ~, -, Home, End, PgUp, PgDn** [decision on the
-    order and the last four; in landscape "⋯" follows]. **⌨** shows or hides
-    the soft keyboard.
-- **Ctrl and Alt are sticky** [decision]: a tap arms the modifier for the
-  next key (from the rows or the soft keyboard), drawn in the accent color;
-  a double tap locks it, drawn filled, until it is tapped again. Ctrl with
-  a letter sends the control character (Ctrl+C is 0x03); Alt sends Esc
-  before the key, as the desktop's input does.
-- The arrows send the cursor keys in the mode the program asked for
-  (normal or application cursor keys), Home/End/PgUp/PgDn their escape
-  sequences, as on the desktop.
-- A key held down repeats (after 400 ms, every 50 ms) [decision].
-- The rows are excluded from the system's edge gestures, so a press near
-  the screen's edge is a key, not "back".
-- The keys and their order can be changed in Settings in a later version.
+- **One row that scrolls sideways**, the groups of Settings → Customize
+  keyboard one after another, keys without borders in the accent, 48 dp
+  high (reference-2 7.3–7.4, 9.2). The default groups: password, cursor,
+  attach; shift+tab, ctrl, esc; the four arrows; two groups of tmux prefix
+  combinations; alt, tab, ins, del; home, pgUp, pgDn, end; six groups of
+  signs and brackets; F1–F12 in three groups; three groups of Ctrl
+  combinations (^_ ^W ^R ^X^X, ^C ^L ^S ^Z, ^X ^G ^N ^P). No AI key in the
+  first version (D220).
+- **The password key** (D220): a tap asks "Send the saved password?" naming
+  the host; only **Send** types the host's saved password into the session,
+  once and without Enter, straight from the vault (it never passes through
+  the interface's memory; the phone's terminal keeps no command history or
+  recording). Disabled when the host has no saved password, and for a quick
+  connect.
+- **The cursor key**: a toggle (filled while on); while on, a drag on the
+  terminal sends the arrow keys the way the finger moves, at Settings'
+  cursor speed; a tap still puts the cursor (9.3).
+- **The attach key** (D220): the system file picker, then the folder to
+  upload into (the user's home folder on this server, editable); an SFTP
+  session to the host opens beside the terminal for it and its chip shows
+  the transfers. The shell's current folder is not guessed. Disabled for a
+  quick connect.
+- **Ctrl and Alt are sticky**: a tap arms the modifier for the next key
+  (from the row or the soft keyboard), a double tap locks it (drawn filled)
+  until it is tapped again. Ctrl with a letter sends the control character;
+  Alt sends Esc before the key.
+- The arrows send the cursor keys in the mode the program asked for;
+  Home/End/PgUp/PgDn, Ins and F1–F12 their escape sequences, as on the
+  desktop. Held arrows, Delete and the page keys repeat (after 400 ms, every
+  60 ms).
 
 ### 9.3 Putting the cursor on a character (the owner's first pain)
 
@@ -314,13 +392,10 @@ prompts, the end and the reconnect policy, the lock) is the desktop's
     shrinks the selection cell by cell, across rows and into the
     scrollback (the view scrolls when the handle nears the top or the
     bottom edge); a magnifier shows the cells under the handle;
-  - a floating toolbar above the selection: **Copy, Paste, Select line,
-    Select screen**, and **Delete** or **Cut in nano** where 9.6 allows them.
-- **Select line** extends the selection to the whole logical line (wrapped
-  rows joined); **Select screen** to everything visible.
-- **Select mode** ("⋯" menu): the next drag on the terminal selects from
-  where it starts to where it ends, as a mouse drag on the desktop; useful
-  for a block of a configuration file that starts in the middle of a word.
+  - the platform's own floating toolbar above the selection (`ActionMode`,
+    floating; reference-2 11.1): **Copy, Paste, Select all** (everything
+    visible), and **Delete** or **Cut in nano** where 9.6 allows them.
+- **Back** with a selection clears it first (D220).
 - A tap outside the selection ends it and does nothing else. New output
   keeps the selection on the same text while it stays in the buffer, as on
   the desktop.
@@ -393,8 +468,8 @@ says where it stops [decision]:
 - **The app in the background**: open sessions keep running in a foreground
   service with a notification ("2 SSH sessions open", "Disconnect all"); the
   first session asks for the notification permission (Android 13+). When it
-  is denied, the service still runs and the Sessions screen offers
-  "Disconnect all". The last session closed stops the service.
+  is denied, the service still runs and Connections lists the sessions with
+  their ×. The last session closed stops the service.
 - **The network lost or changed**: the session follows the desktop's 4.6:
   a dropped connection shows "Connection lost" in the terminal and the
   reconnect countdown (1, 2, 4, 8, 16, 32 s, then every 60 s, with
@@ -405,36 +480,45 @@ says where it stops [decision]:
   new connections wait for unlock, as on the desktop (4.6, 13.3); the
   terminal shows the unlock screen first.
 - **Swiped away from recents** while sessions live: the service keeps them;
-  tapping the notification opens Sessions.
+  tapping the notification opens the app.
 - **The process killed by the system** (no service, memory): the sessions
   end; the next start asks for the master password.
-- **Sessions screen**: the empty state "No open sessions"; with sessions,
-  "Disconnect all" in its top bar.
+- **Snapshots of the screen** are taken only while the session screen is
+  seen; the output keeps flowing into the model meanwhile.
 
 ## 10. SFTP
 
-The desktop's section 5 for one remote panel [decision on the subset]:
+reference-2 8, with the desktop's section 5 for one remote panel behind it:
 
-- Opened from a host's sheet (6.1) or the terminal's "⋯": connecting shows
-  the steps and the prompts as the terminal does; then the remote home
-  directory, a path bar (tap a segment to go up), the list (folders first,
-  name, size, modified date in the local zone), pull to refresh.
-- Tap a folder: open it. Tap a file: a sheet with **Download**, Rename,
-  Delete (asks first), Copy path [decision].
-- **Download** asks where with the system's "Save to…" picker, every time
-  [decision]; the file goes straight from the server to the chosen document
-  (architecture 6.4); progress shows in the transfer sheet and in the
-  notification while the app is in the background (the transfer keeps the
-  foreground service running); a name conflict asks as the desktop's 5.7.
-- "+" offers **Upload** (the system file picker, one or more files), New
-  folder.
-- The transfer queue of the desktop (5.6), shown as a bottom sheet:
-  current transfer, waiting ones, cancel; a failed transfer says why
-  (permission denied, no space, connection lost) and offers Retry.
-- Errors of a listing or an action (permission denied, not found) show
-  their reason under the path bar, as the desktop's panel does.
-- Names that are not UTF-8 on the server are the desktop's known
-  limitation.
+- A session of the session screen (opened from the session counter, the
+  selection's ⋮, the terminal's "+", Connections or the attach key), with
+  the same session bar and no extra-keys row or keyboard.
+- **Top bar**: the path as a breadcrumb (parents muted, the folder shown
+  emphasised; a tap on a segment goes there), **Upload** (the system file
+  picker, one or more files), ⋮ and search (filters the folder shown).
+- **⋮**: New folder; Sort by name, date, size or kind (the active one shows
+  its direction; a second tap reverses it; folders first); the download
+  folder on the phone (a folder picked once; downloads then go there without
+  asking; "Ask where to save each time" goes back) [decision]; Copy path;
+  Show or hide hidden files (the setting `sftp.show_hidden`); Transfers.
+- **The listing** on one large rounded panel: ".." first, then a row per
+  entry: a folder, file or link icon, the name, under it the permissions in
+  monospace (`drwxr-xr-x`), on the right the size and the date and time,
+  in monospace; no dividers.
+- Tap a folder: open it. Tap a file: a sheet with Download, Rename, Delete
+  (asks first), Copy path. **A long press selects**: ×, "N selected", ⋮ with
+  Download (one file), Rename and Copy path (one entry), Delete (asks first;
+  several at once). Copying on the server and editing a file come after the
+  first version [decision].
+- **Download** without a download folder asks with the system's "Save to…"
+  every time; the file goes through the app's cache to the chosen document
+  (architecture 6.4); progress in the transfers sheet and in the
+  notification; a name conflict asks as the desktop's 5.7.
+- The transfer queue of the desktop (5.6) as a bottom sheet: the current
+  transfer, waiting ones, cancel; a failed transfer says why and offers
+  Retry.
+- Errors of a listing or an action show their reason under the bar; names
+  that are not UTF-8 on the server are the desktop's known limitation.
 
 ## 11. Account and sync
 
@@ -478,25 +562,42 @@ The desktop's connect wizard (13.5), one step per screen:
 
 ## 12. Settings
 
-- **Appearance**: Theme (Auto, Dark, Light); terminal theme (the default
-  for hosts without one).
-- **Terminal**: font size, Autoreconnect (on), Keepalive (the desktop's
-  default), Bell (vibrate, off) [decision], copy on select (off) [decision].
-- **Security**: Auto-lock (section 5); **Fingerprint unlock** (off by
-  default; turning it on asks for the master password once and then the
-  biometric prompt; it unlocks at a cold start and after a lock;
-  architecture 4) (D211, D218). A copied password is cleared from the
-  clipboard after 30 seconds, as on the desktop (`docs/security.md` 9.4);
-  Android hides the clipboard from apps in the background, so it is cleared
-  when the app next has focus.
-- **About**: version, licenses (the third-party notices), the project's
-  page.
+One long page (reference-1 4; D220): bold section headers, two-line rows
+(the title, the current value under it), a switch for on/off, a chevron for
+a sub-page. Only rows whose setting works on the phone:
+
+- **Account**: Account and sync (section 11), with the account's email or
+  "Local only".
+- **Terminal**: Font and colours → (the font size, −/+; the font, JetBrains
+  Mono; a grid of the built-in themes, "Graphite / Paper (system)" first;
+  new terminals take it, a host's own theme wins; a device setting
+  [decision]); Terminal type (`terminal.term`); Customize keyboard → (the
+  row's groups as cards: delete, drag by the handle, "+" adds a group of up
+  to four keys, the circular arrow puts back the default set; at once in the
+  row; a device setting [decision]); Pinch to zoom; Cursor speed (slow,
+  normal, fast); Keep the screen on while a terminal is shown.
+- **Session**: Keep-alive interval (`terminal.keepalive_s`); Detect OS
+  (`terminal.os_detection_enabled`, the tiles of 6.1); Reconnect
+  (`terminal.autoreconnect`).
+- **Security & Privacy**: Lock and fingerprint → (Auto-lock, section 5;
+  Fingerprint unlock, off by default; turning it on asks for the master
+  password once and then the biometric prompt; architecture 4; D211, D218);
+  **Lock now**. A copied password is cleared from the clipboard after 30
+  seconds, as on the desktop (`docs/security.md` 9.4).
+- **About**: the version.
+- Not on the phone yet: hotkeys, bell, autocomplete, alternative keyboard
+  input, post-quantum key exchange, importing the shell's history, what the
+  notification shows, an app lock code (the master password and the
+  fingerprint stand for it), logs, the screenshot setting (screens with
+  secrets always block screenshots), volume keys and shake (after the first
+  version, D220) [decision].
 
 ## 13. Not in the first version
 
 Snippets, command history and autocomplete (the owner uses them: the next
-versions, D211), port forwarding, Mosh, workspaces and splits, broadcast,
-the local terminal and serial ports, identities and certificates, editing
-jump hosts and proxies, import from other apps, recordings, export, the
-desktop's Logs screen, team vaults (stage 8). The phone keeps every record
-it does not edit as it is.
+versions, D211), port forwarding, Mosh, the AI command key (with the
+desktop's command generation, D144, D220), workspaces and splits,
+broadcast, the local terminal and serial ports, device discovery,
+certificates and FIDO2 or biometric keys, import from other apps,
+recordings and logs, export, team vaults (stage 8), volume keys and shake.
+The phone keeps every record it does not edit as it is.
