@@ -256,6 +256,12 @@ mod unix {
     /// year from it has no daylight saving time either.
     const HALF_YEAR: libc::time_t = 182 * 86_400;
 
+    // SAFETY: POSIX `tzset` of the C library the app links; the `libc`
+    // crate does not declare it for every target (Linux among them).
+    unsafe extern "C" {
+        fn tzset();
+    }
+
     /// The local calendar time of `seconds` since 1970 and its offset east
     /// of UTC in seconds; `None` when the library cannot say.
     fn local_time(seconds: libc::time_t) -> Option<(libc::tm, libc::c_long)> {
@@ -266,7 +272,7 @@ mod unix {
         // own state; `localtime_r` reads `seconds` and writes `tm`, locals
         // that outlive the call, and returns null when it fails.
         let converted = unsafe {
-            libc::tzset();
+            tzset();
             libc::localtime_r(&seconds, &mut tm)
         };
         (!converted.is_null()).then_some((tm, tm.tm_gmtoff))
