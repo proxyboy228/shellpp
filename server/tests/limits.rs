@@ -620,26 +620,38 @@ fn the_soft_signin_limit_never_holds_the_accounts_devices_or_sessions() {
 /// Review finding (D174): the account endpoints take at most the 1 MiB
 /// body of the auth endpoints, so the requests waiting for an Argon2id
 /// slot hold at most that much each.
+///
+/// The requests go to the router in process, as in `api.rs`: over TCP the
+/// server answers 413 and closes with most of the 2 MiB body unread, and
+/// the client could get the connection reset instead of the answer (run 13:
+/// once in the whole server suite on Windows).
 #[test]
 fn account_endpoints_refuse_bodies_over_1_mib() {
+    use tower::ServiceExt as _;
     let server = Server::start();
     let (_, _, token) = register(&server);
+    let db = shellpp_server::db::Db::open(&server.database_url).expect("db");
+    let app = shellpp_server::api::router(shellpp_server::state::Shared::new(
+        db,
+        server.config.clone(),
+    ));
     let big = json!({"current_auth_key": "A".repeat(2 << 20)}).to_string();
     for path in [
         "/v1/account/totp/setup",
         "/v1/account/email",
         "/v1/account/password",
     ] {
-        let answer = raw_http(
-            &server,
-            "POST",
-            path,
-            &[
-                ("content-type", "application/json"),
-                ("authorization", &format!("Bearer {token}")),
-            ],
-            big.as_bytes(),
-        );
-        assert_eq!(answer.status, 413, "{path}: {}", answer.body);
+        let request = axum::http::Request::post(path)
+            .header("content-type", "application/json")
+            .header("content-length", big.len().to_string())
+            .header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from(big.clone()))
+            .expect("request");
+        let status = server
+            .runtime()
+            .block_on(app.clone().oneshot(request))
+            .expect("answer")
+            .status();
+        assert_eq!(status.as_u16(), 413, "{path}");
     }
 }
