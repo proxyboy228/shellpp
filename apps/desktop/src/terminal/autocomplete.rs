@@ -31,7 +31,7 @@ use super::model::TerminalHandle;
 use super::view::TerminalView;
 
 /// Most commands kept for suggestions.
-pub const MAX_COMMANDS: usize = 5000;
+pub const MAX_COMMANDS: usize = shellpp_core::history::AUTOCOMPLETE_COMMANDS;
 
 /// Where a terminal's suggestions come from: the local history of its
 /// host, newest first.

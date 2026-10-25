@@ -173,7 +173,7 @@ impl SessionTerminal for TerminalHandle {
                 ),
                 // Autocomplete (D142) suggests from the same host's history.
                 Some(Arc::new(HostHistory {
-                    core: session.shared.core.clone(),
+                    core: session.core(),
                     host,
                 }) as Arc<dyn HistorySource>),
             ),
@@ -289,7 +289,7 @@ impl HistoryRecorder {
         let generation = self.refreshes.fetch_add(1, Ordering::AcqRel) + 1;
         let this = Arc::downgrade(self);
         let host = self.host;
-        self.session.shared.background(move |core| {
+        self.session.background(move |core| {
             let on = core.record_history_now(host);
             if let Some(this) = this.upgrade()
                 && this.refreshes.load(Ordering::Acquire) == generation
@@ -306,7 +306,6 @@ impl Drop for HistoryRecorder {
     fn drop(&mut self) {
         let id = self.id;
         self.session
-            .shared
             .background(move |core| core.history_session_end(id));
     }
 }
@@ -328,7 +327,7 @@ impl HistorySink for HistoryRecorder {
         };
         let session = self.session.id();
         let suggestions = self.suggestions.clone();
-        self.session.shared.background(move |core| {
+        self.session.background(move |core| {
             let command = zeroize::Zeroizing::new(input.candidate.command.clone());
             match core.history_record(input) {
                 Ok(decision) => {

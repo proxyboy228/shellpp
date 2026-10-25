@@ -192,7 +192,7 @@ impl SessionCore for Core {
         let input = shellpp_core::service::dto::HistoryListInput {
             host: Some(host),
             text: None,
-            limit: Some(crate::terminal::autocomplete::MAX_COMMANDS as u32),
+            limit: Some(shellpp_core::history::AUTOCOMPLETE_COMMANDS as u32),
         };
         match Core::history_list(self, input) {
             Ok(entries) => entries.into_iter().map(|entry| entry.command).collect(),

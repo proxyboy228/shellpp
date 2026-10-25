@@ -76,8 +76,10 @@ arboard.workspace = true
 alacritty_terminal.workspace = true
 unicode-width.workspace = true
 async-channel.workspace = true
-# Sessions (src/sessions): SSH and local terminals on a Tokio runtime of
-# their own (GPUI has its own executor), the remote charset.
+# Sessions (src/sessions): the session layer (shellpp-sessions, run 13) on
+# a Tokio runtime of its own (GPUI has its own executor); SSH and the local
+# terminal are also used directly (SFTP, forwarding, shell detection).
+shellpp-sessions.workspace = true
 shellpp-ssh.workspace = true
 shellpp-term-local.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }

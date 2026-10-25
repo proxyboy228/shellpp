@@ -552,13 +552,7 @@ async fn agent_forwarding_offers_the_keychain_keys() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_lock_reads_whether_the_system_agent_stays_forwarded() {
     let harness = Harness::new();
-    let kept = || {
-        harness
-            .manager
-            .shared
-            .system_agent_while_locked
-            .load(std::sync::atomic::Ordering::SeqCst)
-    };
+    let kept = || harness.manager.system_agent_while_locked();
     harness.manager.set_unlocked(false);
     assert!(!kept(), "off by default");
     harness.manager.set_unlocked(true);

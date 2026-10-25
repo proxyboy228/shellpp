@@ -23,6 +23,7 @@ use shellpp_core::service::dto::{HostOs, OsSource, RecordRef, SessionTarget};
 use shellpp_core::service::host_api::{
     ConnectionEndReason, ConnectionLogStart, HostKeyCheck, HostKeyStatus, SessionConfig,
 };
+use shellpp_ssh::sk::Authenticator;
 use shellpp_ssh::{
     AuthPlan, Backoff, BoxFuture, ConnectSpec, ConnectStep as SshStep, FailureKind, FailurePlace,
     HostKeyDecision, HostKeyInfo as SshKey, Interaction, JumpHost, KeyCredential, Prompt,
@@ -367,7 +368,7 @@ impl SshTask {
                 can_save_passphrase: saves.key.is_some_and(|(_, can_save)| can_save),
                 file_keys: Vec::new(),
                 // Security keys sign through the system (D143).
-                authenticator: crate::platform::security_key::authenticator(),
+                authenticator: (self.shared.authenticator)(),
             },
             agent: None,
             keepalive: (config.keepalive_s > 0)
@@ -401,7 +402,7 @@ impl SshTask {
                     hop.port,
                 ));
                 let jump = JumpHost {
-                    spec: hop_spec(hop),
+                    spec: hop_spec(hop, self.shared.authenticator),
                     interaction: interaction.clone(),
                 };
                 (jump, interaction, hop.title.clone())
@@ -1542,7 +1543,10 @@ async fn detect_os(
 /// The connect spec of a jump host from its own configuration (stage 5):
 /// its effective port and credentials; prompts may not save (the session
 /// saves only for its own host), its own chain and proxy are not used.
-fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
+fn hop_spec(
+    hop: &SessionConfig,
+    authenticator: fn() -> Option<Arc<dyn Authenticator>>,
+) -> ConnectSpec {
     ConnectSpec {
         address: hop.address.clone(),
         port: hop.port,
@@ -1560,7 +1564,7 @@ fn hop_spec(hop: &SessionConfig) -> ConnectSpec {
             can_save_passphrase: false,
             file_keys: Vec::new(),
             // Security keys sign through the system (D143).
-            authenticator: crate::platform::security_key::authenticator(),
+            authenticator: authenticator(),
         },
         agent: None,
         keepalive: (hop.keepalive_s > 0).then(|| Duration::from_secs(u64::from(hop.keepalive_s))),

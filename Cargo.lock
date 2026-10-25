@@ -8025,6 +8025,7 @@ dependencies = [
  "serde_json",
  "shellpp-core",
  "shellpp-private-file",
+ "shellpp-sessions",
  "shellpp-ssh",
  "shellpp-term-local",
  "shellpp-test-sshd",
@@ -8050,6 +8051,26 @@ dependencies = [
  "libc",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "shellpp-sessions"
+version = "0.1.0"
+dependencies = [
+ "dirs 7.0.0",
+ "encoding_rs",
+ "futures",
+ "secrecy",
+ "serde_json",
+ "shellpp-core",
+ "shellpp-ssh",
+ "shellpp-term-local",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -104,7 +104,13 @@ pub fn run(launch: Launch) {
             // The session layer (its own Tokio runtime) over the core: the
             // session tabs connect through it. Nothing to start without a core.
             if state.read(cx).core().is_some() {
-                crate::sessions::ui::install(&state, ManagerOptions::with_keys(keys), cx);
+                let options = ManagerOptions {
+                    local_title: crate::i18n::sessions::LOCAL_TERMINAL.to_owned(),
+                    // Security keys sign through the system (D143).
+                    authenticator: crate::platform::security_key::authenticator,
+                    ..ManagerOptions::with_keys(keys)
+                };
+                crate::sessions::ui::install(&state, options, cx);
             }
 
             let Ok((_window, _)) = open_main_window(state.clone(), cx) else {

@@ -1,0 +1,37 @@
+[package]
+name = "shellpp-sessions"
+description = "Shell++ session layer: SSH, Telnet, local and serial sessions on a Tokio runtime, the reconnect policy, host key and password prompts, keepalive and forwarding rules that start on launch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# Shared by the desktop app and a phone client (run 13, D212): no GPUI, and it
+# builds for aarch64-linux-android (the "mobile-ready" check of
+# scripts\verify.ps1). The GPUI side of the desktop (its event pump, the
+# terminal handle as a session terminal) lives in apps/desktop/src/sessions/ui.rs.
+# The local terminal and serial ports (shellpp-term-local) build for Android
+# too; a phone client does not open them.
+[dependencies]
+shellpp-core.workspace = true
+shellpp-ssh.workspace = true
+shellpp-term-local.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+futures.workspace = true
+secrecy.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+encoding_rs.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

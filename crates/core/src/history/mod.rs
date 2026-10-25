@@ -19,6 +19,11 @@ use crate::service::host_api::HistoryDropReason;
 /// Longest command kept, in characters (rule 4 of section 10.1).
 pub const MAX_COMMAND_CHARS: usize = 4096;
 
+/// Commands of a host that autocomplete suggests from, newest first (the
+/// session layer reads at most this many; the terminal keeps at most this
+/// many).
+pub const AUTOCOMPLETE_COMMANDS: usize = 5000;
+
 /// Characters a terminal shows instead of typed characters when it masks
 /// input (the echo-off rule of section 10.1).
 pub const MASK_CHARS: &[char] = &['*', '\u{2022}', '\u{25cf}'];
