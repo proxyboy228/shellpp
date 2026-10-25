@@ -41,6 +41,8 @@ jni = "0.22.4"
 # from the app's context before the first TLS connection (architecture 5).
 [target.'cfg(target_os = "android")'.dependencies]
 rustls-platform-verifier.workspace = true
+# The core's log and panics in logcat (src/logcat.rs).
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 getrandom.workspace = true

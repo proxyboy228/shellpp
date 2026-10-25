@@ -84,6 +84,8 @@ pub extern "system" fn Java_dev_shellpp_android_Native_start<'caller>(
     device_name: JString<'caller>,
     platform: JObject<'caller>,
 ) -> jboolean {
+    #[cfg(target_os = "android")]
+    crate::logcat::init();
     unowned
         .with_env(|env| -> Result<jboolean, NativeError> {
             let files = files.try_to_string(env)?;

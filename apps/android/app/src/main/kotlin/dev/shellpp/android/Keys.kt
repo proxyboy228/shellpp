@@ -116,6 +116,20 @@ private fun Page(title: String, onBack: (() -> Unit)?, fab: @Composable () -> Un
 
 private fun vault(): String = Core.array("vaults").getJSONObject(0).getString("vault_id")
 
+/**
+ * Makes a key in the vault (blocking: off the main thread) and returns its
+ * record id; the passphrase crosses in bytes only (architecture 2).
+ */
+fun generateKey(input: JSONObject, passphrase: CharArray): String {
+    input.put("vault_id", vault())
+    val made = if (passphrase.isNotEmpty()) {
+        Core.callWithSecrets("key_generate", input, listOf("passphrase" to passphrase)) as JSONObject
+    } else {
+        Core.obj("key_generate", input)
+    }
+    return made.getJSONObject("key").getString("record_id")
+}
+
 /** The Keychain (UI spec 7): the keys, Generate, Import from file, a key's screen. */
 @OptIn(ExperimentalFoundationApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
@@ -239,13 +253,7 @@ fun KeychainScreen(app: App, activity: MainActivity) {
             scope.launch {
                 val failure = withContext(Dispatchers.IO) {
                     try {
-                        input.put("vault_id", vault())
-                        // The passphrase crosses in bytes only (architecture 2).
-                        if (passphrase.isNotEmpty()) {
-                            Core.callWithSecrets("key_generate", input, listOf("passphrase" to passphrase))
-                        } else {
-                            Core.call("key_generate", input)
-                        }
+                        generateKey(input, passphrase)
                         null
                     } catch (error: CoreException) {
                         error.message
@@ -270,7 +278,7 @@ fun KeychainScreen(app: App, activity: MainActivity) {
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-private fun GenerateKeyDialog(onDismiss: () -> Unit, onGenerate: (JSONObject, CharArray) -> Unit) {
+fun GenerateKeyDialog(onDismiss: () -> Unit, onGenerate: (JSONObject, CharArray) -> Unit) {
     var label by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf("ed25519") }
     var passphrase by remember { mutableStateOf("") }

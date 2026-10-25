@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -256,7 +257,7 @@ fun FirstRunScreen(app: App, activity: MainActivity) {
             },
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("create_vault"),
         ) {
-            if (busy) CircularProgressIndicator(Modifier.height(20.dp), color = Tokens.onAccent) else Text("Create vault")
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Tokens.accent, strokeWidth = 2.dp) else Text("Create vault")
         }
     }
 }

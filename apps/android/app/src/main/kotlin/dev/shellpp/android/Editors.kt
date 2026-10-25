@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -210,9 +211,49 @@ private fun ColorPicker(value: String?, onPick: (String) -> Unit) {
 /** A row that opens a picker; shows the current choice. */
 @Composable
 private fun PickerRow(label: String, value: String, tag: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp).testTag(tag)) {
-        Text(label, color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
-        Text(value)
+    // The arrow says it opens a choice (after run 14 the key row read as text).
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Tokens.textSecondary, style = MaterialTheme.typography.bodySmall)
+            Text(value)
+        }
+        Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = Tokens.textSecondary)
+    }
+}
+
+/** The key picker's entry that makes a new key (UI spec 6.2: a picker from the Keychain). */
+private const val NEW_KEY = "\u0000new-key"
+
+/** A key generated from an editor's picker, then picked: [onMade] gets its record id. */
+@Composable
+private fun NewKeyFromPicker(onDismiss: () -> Unit, onMade: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var failure by remember { mutableStateOf<String?>(null) }
+    GenerateKeyDialog(onDismiss = onDismiss) { input, passphrase ->
+        scope.launch {
+            val made = withContext(Dispatchers.IO) {
+                try {
+                    generateKey(input, passphrase)
+                } catch (error: Exception) {
+                    failure = error.message ?: "The key was not made."
+                    null
+                } finally {
+                    passphrase.fill('\u0000')
+                }
+            }
+            if (made != null) onMade(made)
+        }
+    }
+    failure?.let { message ->
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("The key was not made") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        )
     }
 }
 
@@ -290,7 +331,8 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
             }
         }
     }
-    val keys by produceState(listOf<Pair<String, String>>()) {
+    var keysVersion by remember { mutableStateOf(0) }
+    val keys by produceState(listOf<Pair<String, String>>(), keysVersion) {
         value = withContext(Dispatchers.IO) {
             try {
                 val list = Core.array("keys_list")
@@ -460,10 +502,21 @@ fun HostEditor(app: App, record: Record?, groupId: String?, onClose: () -> Unit)
         }
         "key" -> ChoiceDialog(
             "Key",
-            listOf<Pair<String?, String>>(null to "None") + keys.map { it.first to it.second },
+            listOf<Pair<String?, String>>(null to "None") + keys.map { it.first to it.second } +
+                listOf<Pair<String?, String>>(NEW_KEY to "Generate a new key…"),
             onDismiss = { picking = null },
         ) { picked ->
-            keyId = picked
+            if (picked == NEW_KEY) {
+                picking = "new_key"
+            } else {
+                keyId = picked
+                picking = null
+                changed()
+            }
+        }
+        "new_key" -> NewKeyFromPicker(onDismiss = { picking = null }) { made ->
+            keyId = made
+            keysVersion += 1
             picking = null
             changed()
         }
@@ -528,7 +581,8 @@ fun GroupEditor(app: App, record: Record?, parentId: String?, onClose: () -> Uni
             }
         }
     }
-    val keys by produceState(listOf<Pair<String, String>>()) {
+    var keysVersion by remember { mutableStateOf(0) }
+    val keys by produceState(listOf<Pair<String, String>>(), keysVersion) {
         value = withContext(Dispatchers.IO) {
             try {
                 val list = Core.array("keys_list")
@@ -623,10 +677,21 @@ fun GroupEditor(app: App, record: Record?, parentId: String?, onClose: () -> Uni
         }
         "key" -> ChoiceDialog(
             "Key",
-            listOf<Pair<String?, String>>(null to "None") + keys.map { it.first to it.second },
+            listOf<Pair<String?, String>>(null to "None") + keys.map { it.first to it.second } +
+                listOf<Pair<String?, String>>(NEW_KEY to "Generate a new key…"),
             onDismiss = { picking = null },
         ) { picked ->
-            keyId = picked
+            if (picked == NEW_KEY) {
+                picking = "new_key"
+            } else {
+                keyId = picked
+                picking = null
+                changed()
+            }
+        }
+        "new_key" -> NewKeyFromPicker(onDismiss = { picking = null }) { made ->
+            keyId = made
+            keysVersion += 1
             picking = null
             changed()
         }

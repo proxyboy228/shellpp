@@ -175,6 +175,18 @@ impl HttpError {
 }
 
 /// The body of `response`, at most `limit` bytes; more is `answer_too_large`.
+/// An error and its sources, as one line.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(next) = source {
+        text.push_str(": ");
+        text.push_str(&next.to_string());
+        source = next.source();
+    }
+    text
+}
+
 fn read_limited(response: reqwest::blocking::Response, limit: usize) -> Result<Vec<u8>, HttpError> {
     let too_large = || HttpError::Refused("answer_too_large");
     if response
@@ -310,6 +322,10 @@ impl HttpApi {
                 if let Some(problem) = self.take_problem() {
                     return Err(HttpError::Tls(Box::new(problem)));
                 }
+                // Why, for the log: the screens only say "network" or
+                // "timeout" (after run 14 a phone said "network" with no
+                // trace). The URL holds no secret: tokens go in a header.
+                tracing::warn!(path, error = %error_chain(&error), "sync request failed");
                 return Err(if error.is_timeout() {
                     HttpError::Timeout
                 } else {

@@ -121,7 +121,7 @@ private fun Busy(busy: Boolean, label: String, tag: String, enabled: Boolean = t
         enabled = enabled && !busy,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag),
     ) {
-        if (busy) CircularProgressIndicator(Modifier.heightIn(max = 20.dp), color = Tokens.onAccent) else Text(label)
+        if (busy) CircularProgressIndicator(Modifier.size(20.dp), color = Tokens.accent, strokeWidth = 2.dp) else Text(label)
     }
 }
 

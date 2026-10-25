@@ -18,6 +18,8 @@ pub mod engine;
 pub mod events;
 pub mod input;
 pub mod jni_api;
+#[cfg(target_os = "android")]
+pub mod logcat;
 pub mod screen;
 pub mod sftp;
 pub mod theme;
