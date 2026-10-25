@@ -2551,3 +2551,29 @@ Status: run 14 (plan, sections 3.1-3.3); `apps/android`, `docs/mobile/`.
 - After the review of these changes: the note "recovery key not confirmed" belongs to one account (its server and email) and goes with "I saved it", Sign out and a new vault; the dialog checks the master password with the unlock's attempt limit (D29) before it shows the key, and its window, like the wizard's steps with the TOTP secret or the recovery key, is secure (no Recents thumbnail, no screenshot). An editor that cannot read its record now does not save and says so, and a field's JSON null is not the text "null". A finished download is copied into its document on a thread of its own, so a slow provider holds up no other transfer; closing a session clears only its failed transfers' files (the running ones end with "cancelled", a finished one with its "done"). A Keystore key pair that a new fingerprint invalidated leaves a mark when it is deleted, so the option goes off saying "a new fingerprint", not "the key is gone".
 - Left: an editor reads the record and writes it in two calls of the core, so a pull that lands in the milliseconds between them is overwritten in fields nobody touched. The fix is a partial update in the core (the changed fields onto the stored record under its lock, or a save with the revision it started from), a change of the service API for the next run.
 - **The owner's answers after run 14:** the partial update in the core is to be done, in the next run: the window is milliseconds, but it is still an edit that can be lost, and data is never lost is the project's first rule; the desktop's editors gain the same safety. The two [decision]s of the phone stay as they are: "Show the recovery key" until "I saved it", and "Restore from sync" on the empty host list.
+
+
+### 220. The owner's decisions for run 15: the Android screens after the reference descriptions, the partial update in the core
+
+Status: run 15 (plan, section 2; the plan and `docs/mobile/reference-2.md` call this decision D219, the number it would have had if run 14 had not taken it).
+
+**Context.** The Android screens of runs 13 and 14 were built from the owner's words and the desktop's specifications without a description of the app the owner used before, and the owner did not accept them. The owner now has clean-room descriptions of that app's structure and behaviour, written by Claude from the owner's screenshots (`docs/mobile/reference-1.md`, `reference-2.md`; agents never see the screenshots). Run 14 left the partial update in the core for this run (D219).
+
+**Decision:**
+
+- **The Android screens are rebuilt after `reference-1.md` and `reference-2.md`.** The layout and navigation of `docs/mobile/ui-spec.md` give way where the descriptions say otherwise; its data and sync rules stay. Only structure is repeated (where things are, how screens connect, what a tap does); the icons, artwork, colours, logos and wording are Shell++'s own (`docs/design-system.md`, Material Symbols or simple glyphs of our own; the OS tiles of hosts are original glyphs, no distribution logos).
+- **The partial update in the core is built** (the question of run 14's report): an editor writes only the fields it changed, in one transaction, checked against the revision the edit started from; the desktop's editors take the same path.
+- **Run 14's own decisions stand**: the recovery key is shown again by the master password until "I saved it" is pressed; the empty host list without an account offers "Restore from sync".
+- **The host card**: its second line is the protocol and the *effective* user name (the host's own, otherwise the one inherited from its groups); without a user name, "ssh" alone. A tap on the card connects at once; editing goes through selection (a long press, then the pencil).
+- **The questions of `reference-2.md`:**
+  - Known hosts are sorted by address with numbers compared as numbers (an IPv4 address by its octets), not as text.
+  - Back while text is selected in the terminal clears the selection first; a second Back leaves the terminal.
+  - No AI key in this run; later, with the desktop's command generation (D144: the user's own OpenAI-compatible provider, its key in Android's key store).
+  - The password key of the extra-keys row is there, but safe: a tap shows a confirmation naming the host, and the password is sent only after "Send"; it is sent once, without Enter; it never reaches the session's recording or Shell++'s command history; the key is disabled when the host has no saved password.
+  - The × of a session chip closes the session at once, as in the owner's previous app, but no pop-up menu ever covers a ×, the chip's × is set apart from the buttons beside it so that a miss does not close a session, and "Connect via SFTP" from the terminal's "+" opens a new SFTP session and leaves the terminal session alone.
+  - "Close" in the session counter's menu closes only the menu.
+- **The attach key** picks a file with the system picker and uploads it by SFTP to the user's home folder on that server, with a field to change the folder before the upload [decision]. The shell's current folder is not guessed.
+- **The host and group editors** show their fields in the order of `reference-2.md` 1–2, but only the fields the desktop's data model has (`data-model.md`); the rest are not shown, and the run's report lists them. No Mosh check box (Mosh comes later).
+- **Settings** follow the structure of `reference-1.md` 4, with only the rows whose setting works; volume keys and shake come after the first version.
+
+**Spec impact:** `docs/mobile/ui-spec.md` (rewritten for layout and navigation), `docs/mobile/reference-1.md` and `reference-2.md` (added), the specifications of the service API for the partial update, ROADMAP 3.1.
