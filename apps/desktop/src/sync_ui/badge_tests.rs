@@ -264,6 +264,7 @@ fn keychain_cards_show_the_badge(cx: &mut TestAppContext) {
             username: "ops".into(),
             key_id: None,
             password: crate::state::records_edit::PasswordChange::Keep,
+            base: None,
         })
         .unwrap()
         .record_id;

@@ -502,6 +502,7 @@ fn the_other_screens_show_their_duplicates(cx: &mut TestAppContext) {
             username: "ops".into(),
             key_id: None,
             password: PasswordChange::Keep,
+            base: None,
         })
         .expect("identity");
         core.forwarding_rule_save(input(json!({"type": "local", "host_id": host,

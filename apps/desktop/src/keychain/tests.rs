@@ -246,6 +246,7 @@ fn sample(core: &shellpp_core::Core, vault_id: Uuid) {
             } else {
                 PasswordChange::Keep
             },
+            base: None,
         })
         .expect("identity");
     }

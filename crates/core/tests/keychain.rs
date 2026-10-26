@@ -24,6 +24,7 @@ fn identity(vault_id: Uuid, record_id: Option<Uuid>, label: &str) -> IdentitySav
         username: String::new(),
         key_id: None,
         password: PasswordChange::Keep,
+        base: None,
     }
 }
 

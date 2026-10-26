@@ -18,17 +18,20 @@ use ssh_key::{Certificate, PrivateKey, PublicKey};
 use uuid::Uuid;
 
 use super::Core;
-use super::dto::{KeyView, RecordRef};
-use super::records::{check_vault, parts};
+use super::dto::{CoreEventKind, KeyView, RecordBase, RecordRef};
+use super::records::{check_vault, conflict_copy, deleted_version, parts};
 use super::session::Session;
 use crate::error::{CoreError, FieldError, ValidationReason};
 use crate::keys;
 use crate::model::identity::{self, PasswordChange};
 use crate::model::key;
+use crate::model::partial;
+use crate::model::payload::Payload;
 use crate::model::text::{self, fold};
 use crate::model::time::{format_unix_ms, uuid_v7_timestamp};
 use crate::model::types::RecordKind;
-use crate::model::wipe::WipeOnDrop;
+use crate::model::wipe::{WipeOnDrop, wipe_value};
+use crate::store::RecordRow;
 
 /// Longest `key.certificate` line (`string(16384)`, docs/data-model.md, 9.1).
 pub const MAX_CERTIFICATE_CHARS: usize = 16_384;
@@ -45,6 +48,8 @@ pub struct IdentityView {
     pub key_id: Option<Uuid>,
     /// A password is stored.
     pub password_set: bool,
+    /// The stored revision: the `base` of a partial save (D221).
+    pub revision: u64,
 }
 
 impl fmt::Debug for IdentityView {
@@ -65,6 +70,10 @@ pub struct IdentitySaveInput {
     pub username: String,
     pub key_id: Option<Uuid>,
     pub password: PasswordChange,
+    /// The identity as the dialog opened it (its revision and its `label`,
+    /// `username` and `key_id`): the save writes only what the edit changed
+    /// (D221). `None` writes the input whole.
+    pub base: Option<RecordBase>,
 }
 
 impl fmt::Debug for IdentitySaveInput {
@@ -179,7 +188,18 @@ fn identity_view(session: &Session, record_id: Uuid) -> Result<IdentityView, Cor
         username: identity::username(data).map(str::to_owned),
         key_id: identity::key_id(data),
         password_set: identity::password(data).is_some(),
+        revision: record.revision,
     })
+}
+
+/// An identity's data as the dialog sees it: without its password (wiped).
+fn public_identity(mut data: Map<String, Value>) -> Map<String, Value> {
+    for path in identity::SECRET_PATHS {
+        if let Some(mut secret) = data.remove(*path) {
+            wipe_value(&mut secret);
+        }
+    }
+    data
 }
 
 /// The public key a key record certifies: its `public_key` line, else the
@@ -246,21 +266,32 @@ impl Core {
     /// Creates or updates an identity (docs/data-model.md, 9.4). `key_id`
     /// must name a live key (`missing_ref`). Members the input does not name
     /// are kept.
+    ///
+    /// With `base` (the identity as the dialog opened it) the save is
+    /// partial, as `record_save`'s (D221): only the members the edit changed
+    /// are written onto the identity as it is now, in one transaction; a
+    /// version it overwrites in a member it changed too, or whose password
+    /// it replaces after the revision moved on, is kept as a conflict copy;
+    /// an identity a pull deleted meanwhile comes back with the edit, the
+    /// deletion kept as a copy. A save that changes nothing writes nothing.
     pub fn identity_save(&self, input: IdentitySaveInput) -> Result<IdentityView, CoreError> {
         let now = self.now();
         let mut guard = self.inner();
         let mut parts = parts(&mut guard)?;
         check_vault(parts.session, Some(input.vault_id))?;
+        // The deletion a partial save undoes, with the last live version.
+        let mut revived: Option<(RecordRow, Payload, Payload)> = None;
         let stored: Option<WipeOnDrop> = match input.record_id {
-            Some(id) => Some(WipeOnDrop::new(
-                parts
-                    .session
-                    .index
-                    .get_kind(&id, RecordKind::Identity)
-                    .ok_or(CoreError::NotFound)?
-                    .data()
-                    .clone(),
-            )),
+            Some(id) => match parts.session.index.get_kind(&id, RecordKind::Identity) {
+                Some(record) => Some(WipeOnDrop::new(record.data().clone())),
+                None if input.base.is_some() => {
+                    let found = deleted_version(&mut parts, RecordKind::Identity, id)?;
+                    let live = WipeOnDrop::new(found.2.data.clone().unwrap_or_default());
+                    revived = Some(found);
+                    Some(live)
+                }
+                None => return Err(CoreError::NotFound),
+            },
             None => None,
         };
         let mut data = Map::new();
@@ -277,7 +308,15 @@ impl Core {
             input.key_id.map_or(Value::Null, |id| json!(id)),
         );
         let mut errors = Vec::new();
+        // A partial save checks the key only when the edit links another one
+        // (a key deleted by a pull does not block the other members).
+        let base_key = input
+            .base
+            .as_ref()
+            .map(|base| base.data.get("key_id").and_then(Value::as_str))
+            .map(|raw| raw.and_then(|raw| Uuid::parse_str(raw.trim()).ok()));
         if let Some(key_id) = input.key_id
+            && base_key != Some(Some(key_id))
             && parts
                 .session
                 .index
@@ -285,6 +324,41 @@ impl Core {
                 .is_none()
         {
             errors.push(FieldError::new("key_id", ValidationReason::MissingRef));
+        }
+
+        // A partial save (D221): the members the edit changed against its
+        // base, written onto the identity as it is now.
+        let mut same_members = false;
+        if let (Some(base), Some(current), Some(id)) =
+            (&input.base, stored.as_deref(), input.record_id)
+        {
+            // The edit and its base as the stored data would hold them, so
+            // text in another normalization is no change.
+            let edited = match identity::build(&data, Some(current), &PasswordChange::Keep) {
+                Ok(built) => WipeOnDrop::new(public_identity(built)),
+                Err(mut refused) => {
+                    refused.extend(errors);
+                    return Err(CoreError::Validation(refused));
+                }
+            };
+            let base_data = match identity::build(&base.data, Some(current), &PasswordChange::Keep)
+            {
+                Ok(built) => WipeOnDrop::new(public_identity(built)),
+                Err(_) => WipeOnDrop::new(base.data.clone()),
+            };
+            let current_public = WipeOnDrop::new(public_identity(current.clone()));
+            let changes = partial::changes(&base_data, &edited, &[]);
+            if changes.is_empty() && matches!(input.password, PasswordChange::Keep) {
+                // Nothing changed: no new version, and nothing brought back.
+                return match revived {
+                    Some(_) => Err(CoreError::NotFound),
+                    None => identity_view(parts.session, id),
+                };
+            }
+            same_members = !partial::conflicts(&base_data, &current_public, &changes).is_empty();
+            let mut merged = current_public.clone();
+            partial::apply(&mut merged, &changes, &edited);
+            data = merged;
         }
         let built = identity::build(&data, stored.as_deref(), &input.password);
         let built = match built {
@@ -298,15 +372,79 @@ impl Core {
                 return Err(CoreError::Validation(refused));
             }
         };
+        let built = WipeOnDrop::new(built);
+
+        // The versions the save overwrites, kept as conflict copies (D221).
+        let mut losing: Vec<(RecordRow, Payload)> = Vec::new();
+        if let (Some(base), Some(current), Some(id)) =
+            (&input.base, stored.as_deref(), input.record_id)
+        {
+            // The dialog never sees the password, so a password changed
+            // since the base cannot be told apart: once the revision moved
+            // on, a version whose password this save replaces or drops is
+            // kept whole.
+            let moved_on = revived.is_some()
+                || parts
+                    .session
+                    .index
+                    .get(&id)
+                    .is_some_and(|record| record.revision != base.revision);
+            let password_lost = moved_on
+                && identity::password(current).is_some()
+                && identity::password(current) != identity::password(&built);
+            match &revived {
+                Some((row, tombstone, live)) => {
+                    losing.push((row.clone(), tombstone.clone()));
+                    if same_members || password_lost {
+                        losing.push((row.clone(), live.clone()));
+                    }
+                }
+                None if same_members || password_lost => {
+                    let record = parts
+                        .session
+                        .index
+                        .get(&id)
+                        .ok_or(CoreError::Internal("edited identity missing"))?;
+                    let payload = record.payload.clone();
+                    let row = parts
+                        .store
+                        .record(&parts.session.ring.vault_id(), &id)?
+                        .ok_or(CoreError::Internal("edited identity row missing"))?;
+                    losing.push((row, payload));
+                }
+                None => {}
+            }
+        }
+
         let record_id = input.record_id.unwrap_or_else(|| parts.ids.next(now));
+        let mut copies = Vec::with_capacity(losing.len());
+        for (row, payload) in &losing {
+            copies.push(conflict_copy(parts.session, row, payload, now)?);
+        }
         let write = parts.session.prepare_write(
             parts.store,
             RecordKind::Identity,
             record_id,
-            built,
+            built.into_inner(),
             now,
         )?;
-        self.commit_records(&mut parts, vec![write], Vec::new(), Vec::new())?;
+        self.commit_records_then(
+            &mut parts,
+            vec![write],
+            Vec::new(),
+            Vec::new(),
+            true,
+            |tx| {
+                for copy in &copies {
+                    tx.record_put(copy)?;
+                }
+                Ok(())
+            },
+        )?;
+        if !copies.is_empty() {
+            tracing::info!(record_id = %record_id, "an identity edit kept the version it overwrote as a conflict copy");
+            self.emit_with(parts.v, CoreEventKind::SyncChanged {});
+        }
         tracing::info!(record_id = %record_id, created = input.record_id.is_none(), "identity saved");
         identity_view(parts.session, record_id)
     }

@@ -112,6 +112,7 @@ fn populated() -> common::Unlocked {
                 "pw-{}",
                 common::random_hex()
             ))),
+            base: None,
         })
         .expect("identity");
     let password = format!("pw-{}", common::random_hex());
@@ -736,6 +737,7 @@ fn records_that_name_a_copied_record_are_not_copied_again() {
             username: "ops".to_owned(),
             key_id: identity.key_id,
             password: PasswordChange::Keep,
+            base: None,
         })
         .unwrap();
     save(

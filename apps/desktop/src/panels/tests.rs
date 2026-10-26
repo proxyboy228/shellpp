@@ -868,6 +868,7 @@ fn a_group_identity_supplies_the_inherited_username(cx: &mut TestAppContext) {
             username: "ops".into(),
             key_id: None,
             password: PasswordChange::Keep,
+            base: None,
         })
         .unwrap();
     let group = state.update(cx, |state, cx| {

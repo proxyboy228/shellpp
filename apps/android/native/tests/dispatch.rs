@@ -276,4 +276,24 @@ fn identities_recent_connections_and_a_partial_save_through_the_binding() {
     );
     assert_eq!(saved["data"]["label"], "edited");
     assert_eq!(saved["data"]["notes"], "from elsewhere");
+
+    // The identity dialog's partial save (D221, D223 item 2), as the
+    // Keychain dialog sends it: the version it opened as `base`; a username
+    // changed meanwhile stays.
+    let opened = ok(&engine, "identities_list", &json!(null))[0].clone();
+    let base = json!({"revision": opened["revision"], "data": {
+        "label": opened["label"], "username": opened["username"], "key_id": opened["key_id"]}});
+    ok(
+        &engine,
+        "identity_save",
+        &json!({"record_id": id, "label": "deploy", "username": "from elsewhere"}),
+    );
+    let saved = ok(
+        &engine,
+        "identity_save",
+        &json!({"record_id": id, "label": "deploy edited", "username": "deploy", "base": base}),
+    );
+    assert_eq!(saved["label"], "deploy edited");
+    assert_eq!(saved["username"], "from elsewhere");
+    assert!(saved["revision"].as_u64().is_some_and(|revision| revision > 0));
 }

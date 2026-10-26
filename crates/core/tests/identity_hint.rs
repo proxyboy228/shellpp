@@ -383,6 +383,7 @@ fn a_group_identity_supplies_its_hosts_and_own_values_win() {
             username: "ops".into(),
             key_id: None,
             password: PasswordChange::Set(secrecy::SecretString::from(secret.clone())),
+            base: None,
         })
         .unwrap();
     let group = save(
@@ -449,6 +450,7 @@ fn a_missing_own_identity_does_not_fall_back_to_the_group() {
             username: "ops".into(),
             key_id: None,
             password: PasswordChange::Set(secrecy::SecretString::from(group_secret)),
+            base: None,
         })
         .unwrap()
         .record_id;

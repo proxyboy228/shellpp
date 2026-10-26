@@ -348,7 +348,7 @@ fn drop_proxy_password_for_another_server(
 
 /// The last deletion of a record and its last live version (Recently
 /// deleted), or `not_found`.
-fn deleted_version(
+pub(super) fn deleted_version(
     parts: &mut Parts<'_>,
     kind: RecordKind,
     id: Uuid,
@@ -378,7 +378,7 @@ fn deleted_version(
 
 /// The row of a conflict copy of `losing`, the version `original` holds
 /// (data-model 15).
-fn conflict_copy(
+pub(super) fn conflict_copy(
     session: &mut Session,
     original: &RecordRow,
     losing: &Payload,

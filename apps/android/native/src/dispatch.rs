@@ -82,6 +82,10 @@ struct IdentityJson {
     password: Option<SecretString>,
     #[serde(default)]
     clear_password: bool,
+    /// The identity as the dialog opened it (D221, D223 item 2): only the
+    /// members the dialog changed are written onto the identity as it is now.
+    #[serde(default)]
+    base: Option<shellpp_core::service::dto::RecordBase>,
 }
 
 /// An identity as the phone shows it (no password, only whether one is set).
@@ -94,6 +98,7 @@ fn identity_json(view: &shellpp_core::service::keychain::IdentityView) -> Value 
         "username": view.username,
         "key_id": view.key_id,
         "password_set": view.password_set,
+        "revision": view.revision,
     })
 }
 
@@ -463,6 +468,7 @@ fn run(core: &Core, command: &str, input: &[u8]) -> Result<Value, Failure> {
                 username: input.username,
                 key_id: input.key_id,
                 password,
+                base: input.base,
             })?;
             Ok(identity_json(&view))
         }

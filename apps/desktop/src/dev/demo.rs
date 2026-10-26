@@ -326,6 +326,7 @@ fn seed_keychain(core: &Core, vault_id: Uuid, summary: &mut SeedSummary) -> Resu
             username: username.to_owned(),
             key_id,
             password: PasswordChange::Keep,
+            base: None,
         })?;
         summary.identities += 1;
     }

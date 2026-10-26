@@ -323,17 +323,18 @@ private fun IdentityEditDialog(identity: JSONObject, onDismiss: () -> Unit, onDo
                 scope.launch {
                     val failure = withContext(Dispatchers.IO) {
                         try {
-                            // The identity as it is now (a sync may have
-                            // changed it): what this dialog did not change
-                            // stays as it is there (review of 3.4).
-                            val id = identity.optString("record_id")
-                            val current = runCatching {
-                                Core.array("identities_list").let { list -> (0 until list.length()).map { list.getJSONObject(it) } }.firstOrNull { it.optString("record_id") == id }
-                            }.getOrNull() ?: identity
-                            val newLabel = if (label.trim() == identity.optString("label")) current.optString("label") else label.trim()
-                            val newUser = if (username == (identity.text("username") ?: "")) current.text("username") ?: "" else username
-                            val input = JSONObject().put("record_id", id).put("label", newLabel)
-                                .put("username", newUser).put("key_id", current.opt("key_id") ?: JSONObject.NULL).put("clear_password", clear)
+                            // The version this dialog opened (D221, D223 item
+                            // 2): the core writes only what the dialog changed
+                            // onto the identity as it is now, under its lock,
+                            // so a change sync brought meanwhile stays.
+                            val keyId = identity.opt("key_id") ?: JSONObject.NULL
+                            val base = JSONObject().put("revision", identity.optLong("revision")).put(
+                                "data",
+                                JSONObject().put("label", identity.optString("label"))
+                                    .put("username", identity.opt("username") ?: JSONObject.NULL).put("key_id", keyId),
+                            )
+                            val input = JSONObject().put("record_id", identity.optString("record_id")).put("label", label.trim())
+                                .put("username", username).put("key_id", keyId).put("clear_password", clear).put("base", base)
                             if (chars.isNotEmpty()) Core.callWithSecrets("identity_save", input, listOf("password" to chars)) else Core.call("identity_save", input)
                             null
                         } catch (failed: CoreException) {

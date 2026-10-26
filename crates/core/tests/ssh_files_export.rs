@@ -55,6 +55,7 @@ fn hosts_and_keys_are_written_as_openssh_files_and_read_back() {
             username: "ops".into(),
             key_id: Some(ops_key.record_id),
             password: PasswordChange::Keep,
+            base: None,
         })
         .unwrap();
     let group = save(

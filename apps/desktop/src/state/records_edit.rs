@@ -1286,6 +1286,7 @@ impl AppState {
             username: username.to_owned(),
             key_id,
             password,
+            base: None,
         })?;
         cx.notify();
         Ok(view)

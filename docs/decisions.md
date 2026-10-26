@@ -2594,7 +2594,7 @@ Status: run 15 (plan, section 3.1); `crates/core/src/model/partial.rs`, `crates/
 - A save that changes nothing writes no version (no revision, no sync).
 - The desktop's host and group panels keep the version they read (`origin`); each save starts from it and moves it to the stored revision and the data it sent, so values a panel still shows from before a pull are never written back. The panels still do not refresh their fields from a pull (no change of the desktop's behaviour beyond the save, plan 1.11).
 - The phone's editors save the same way; they are rebuilt in 3.2 and use `base` from there (the editor of run 14 merged in Kotlin with a read and a write, the window D219 described).
-- Not covered: the Keychain's identity editor saves through `identity_save`, which still writes its form whole (label, username, password, key); key labels are written as one field.
+- Not covered: the Keychain's identity editor saves through `identity_save`, which still writes its form whole (label, username, password, key); key labels are written as one field. (Closed in run 16, D224: `identity_save` takes a `base`.)
 
 **Tested:** the change and conflict rules (`model::partial`), the core's save on a newer version in other members, in the same member, the same value, cleared members, nothing changed, secrets with and without a newer version, a group's parent and name, an invalid edit, a record deleted without a trace (`crates/core/tests/partial_save.rs`); through the server, a pull between the read and the save in other members, in the same member (a copy on both devices) and a pulled deletion (`server/tests/partial_save.rs`); the property "data is never lost" with editors that stay open across steps and pulls (`server/tests/property.rs`), 40 seeds × 500 steps green; the desktop's panels (`state::records_edit`). With the old whole write both server tests and the property fail.
 
@@ -2651,7 +2651,7 @@ Status: accepted, 2026-10-26 (owner's choice; the plan of run 16, section 2: the
 7. **The terminal's default font size is 11 sp** (it was 14: about 45 columns on the S25, `ls -l` wrapped; about 60 at 11). A size already chosen on the device is not changed. Pinch stays as it is (8-28 sp).
 8. **The two-letter OS tile** stays (Shell++'s own glyph, no logo).
 9. **An SFTP session's card** in Connections shows the current folder and the last transfer (or "no transfers") instead of an empty area.
-10. **The partial update for identities on the desktop too**, in the same commit as on the phone: the desktop's identity dialog writes through the path of D221. An exception to the run's rule of no desktop changes: data is never lost comes first; otherwise the desktop keeps a window in which saving an identity overwrites what sync brought.
+10. **The partial update for identities on the desktop too**, in the same commit as on the phone: the desktop's identity dialog writes through the path of D221. An exception to the run's rule of no desktop changes: data is never lost comes first; otherwise the desktop keeps a window in which saving an identity overwrites what sync brought. *Found in the run (D224):* the desktop has no editor of an existing identity yet (its Keychain shows identities read-only; the identity panel of UI 7.4 is not built), only "+ -> Identity", which creates one; so the desktop has no such window and nothing of its behaviour changed. Its panel, when it comes, saves with `base`.
 11. **Bell**: Off, Vibrate or Sound, Off by default as on the desktop. The sound is `terminal.bell_sound` (the core's boolean setting; the core and the desktop do not change), the vibration a setting of the device, as the device settings of D222. Only the session on the screen rings.
 12. **`ssh <name>`** in Connections follows the desktop's rule (UI 2.1): the label or the address of a saved host, the exact spelling first, then without case; a list only when several hosts match equally.
 13. **The password key when it cannot send** (the session records its output, no password): it looks disabled, a tap says why, TalkBack reads it; the last check stays in Rust when Send is pressed.
@@ -2663,3 +2663,14 @@ Status: accepted, 2026-10-26 (owner's choice; the plan of run 16, section 2: the
 
 **Spec impact:** `docs/mobile/ui-spec.md` 2, 6.2, 9, 12; D221, D222; CLAUDE.md (the full criterion, `verify-android.ps1 -Release`); ROADMAP 3.1, 5 and 6.
 
+
+
+### 224. Run 16: how the review leftovers of run 15 and the first version of the Android app were built
+
+Status: run 16 (plan, sections 3.1-3.3); `crates/core`, `crates/terminal`, `apps/android`, `scripts`.
+
+**Context.** D223 settles what the run builds; the plan left the details marked [decision] to the run, and a few points came up while building.
+
+**Decision:**
+
+- **The partial update for identities** (D223 items 2 and 10): `identity_save` takes `base` (`RecordBase`: the revision and the `label`, `username` and `key_id` the dialog opened with) and follows D221 under the core's lock in one transaction: the changed members onto the identity as it is now; the same members changed meanwhile keep that version as a conflict copy; once the revision moved on, a password the save replaces or removes keeps it too; an identity a pull deleted comes back with the edit, the deletion (and, when overwritten, the last live version) kept as copies; a save that changes nothing writes nothing; a linked key is checked (`missing_ref`) only when the edit links another key, so a key deleted meanwhile does not block a rename. The identity view carries its `revision`. The phone's Keychain dialog sends the version it opened as `base` (its merge in Kotlin is gone). The desktop only creates identities (no editor of an existing one yet, UI 7.4), so it sends no base and nothing changed there. Tested in the core (`crates/core/tests/identity_partial_save.rs`), through the server (a pull between the read and the save, on both devices) and through the binding.
