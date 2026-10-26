@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-26, after run 15. What each stage is comes from
+State of the project on 2026-10-27, after run 16. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -20,7 +20,7 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in that fails after its login and before the binding revokes that login (a rebind keeps the device's own row, D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
 | 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
-| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215), the vault, sync, keys, known hosts and SFTP on the phone in run 14 (M1, M3, M4; D218, D219); the screens rebuilt after the owner's reference descriptions, the session screen with several sessions and the partial update in the core in run 15 (D220-D222); shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
+| 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215), the vault, sync, keys, known hosts and SFTP on the phone in run 14 (M1, M3, M4; D218, D219); the screens rebuilt after the owner's reference descriptions, the session screen with several sessions and the partial update in the core in run 15 (D220-D222); the first version (notes, Settings, licenses, the signed release build) and the rest of M2 (the shared key mapping, TalkBack, the walks through full-screen programs) in run 16 (D223, D224), waiting for the owner's key and acceptance; shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
 
 ## 2. Stage 7: what is left
 
@@ -159,10 +159,17 @@ of `CLAUDE.md` scans for secrets too (D205).
    stage 7 (D216, D217).
    **Run 14** — the mobile runs M1, M3 and M4 (section 3.1;
    D218, D219).
-   **Run 15** (this state) — the phone's screens after the owner's
+   **Run 15** — the phone's screens after the owner's
    reference descriptions (D220, D222), the partial update in the core,
    which the desktop's panels use too (D221), and the parts of M2 that did
    not wait for the owner's feedback.
+   **Run 16** (this state) — the owner's answers (D223), the review
+   leftovers of run 15 (the partial update for identities, the password
+   key on the session's own answer about its recording, multi-line paste,
+   `ssh <name>`), the first version of the Android app (M5: notes,
+   Settings with the bell and About, the open-source licenses, the signed
+   release build) and the rest of M2, before the owner's feedback with
+   the owner's consent (D223, D224).
 3. **The owner uses it** day to day and writes down the differences from
    Termius that matter.
 4. **1–2 parity runs** — the list of step 3.
@@ -200,18 +207,20 @@ the owner's reference descriptions `docs/mobile/reference-1.md` and
    key that needs the fingerprint for every use, also after a lock (D218);
    Hosts and groups (list, search, editors, Recently deleted); connecting
    from a host; the app id `io.github.proxyboy228.shellpp`.
-3. **M2, the terminal for real** (partly done in run 15): done: the
-   session screen with several sessions, the extra-keys row of the
-   reference (scrolling groups, Customize keyboard, the password, cursor and
-   attach keys, sticky Ctrl and Alt), the platform's selection toolbar with
-   Cut in nano and Delete, Back clearing a selection, pinch as a setting,
+3. **M2, the terminal for real** (done, runs 15 and 16): the session
+   screen with several sessions, the extra-keys row of the reference
+   (scrolling groups, Customize keyboard, the password, cursor and attach
+   keys, sticky Ctrl and Alt), the platform's selection toolbar with Cut in
+   nano and Delete, Back clearing a selection, pinch as a setting,
    reconnects when the network comes back, snapshots only while the
-   terminal is seen, the foreground service, Gboard on the emulator. Left
-   (after the owner's feedback on the phone): the binary snapshot's
-   profiling, the walks with feedback in full-screen programs, the Samsung
-   Keyboard (on the owner's S25: the emulator has none), the desktop's key
-   mapping moved into `shellpp-terminal`, the terminal's accessibility
-   node provider.
+   terminal is seen, the foreground service, Gboard on the emulator; in run
+   16 the desktop's key and mouse mapping moved into `shellpp-terminal`
+   (one table, the desktop's behaviour checked unchanged), the terminal's
+   accessibility (the rows as nodes for TalkBack, the cursor's row
+   announced, the keys row spoken), the walks through nano, vim, less,
+   htop, mc and tmux on the emulator (`verify-android.ps1 -Emulator
+   -Programs`) and the snapshot's profile (D224). Left: the Samsung
+   Keyboard (on the owner's S25: the emulator has none).
 4. **M3, sync** (done, run 14): `rustls-platform-verifier`'s initialization
    and its Kotlin part (vendored from the upstream tag), "Restore from sync"
    and the connect wizard (the three ways to trust a certificate, TOTP), the
@@ -232,13 +241,18 @@ the owner's reference descriptions `docs/mobile/reference-1.md` and
    editors with their pickers, Connections with quick connect, session cards
    and recent connections, Keychain with identities, Known hosts, SFTP after
    the reference, Settings with Customize keyboard and Font & colours.
-   **Next: the owner's feedback** on the screenshots
-   (`target\android-screens\run15\`) and on the phone.
-7. **M5, the first version** (1 run): what the owner's feedback asks for,
-   the rest of M2, the rows of Settings not built yet (UI spec 12), a signed
-   APK on the owner's phone and the owner's acceptance.
+   The owner accepted their structure (D223); the look on the phone is
+   part of the first version's acceptance (item 7).
+7. **M5, the first version** (run 16, D223, D224): notes in the editors,
+   Settings with the bell, the multi-line paste question and About (the
+   version and commit, the project's page, the open-source licenses), the
+   signed release build from the owner's key (`docs/mobile/release.md`,
+   `scripts\build-android-release.ps1`; the checks sign with a throwaway
+   key, `verify-android.ps1 -Release`). **Waits for the owner**: the
+   release key, the signed APK on the S25 and the owner's acceptance
+   (the checklist of run 16's report).
 
-So the first version is about 1–2 runs after run 15 (the owner's feedback, M5). After it, each about one
+The first version waits for the owner's acceptance on the S25 (and a run for what the feedback asks). After it, each about one
 run: snippets (and running them on a host); the command history and
 autocomplete (the capture and the list are already in `shellpp-terminal`);
 port forwarding (local and dynamic while the app runs); Mosh (the largest:
@@ -278,21 +292,14 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-After run 15 (the run reports have the details; run 13's two questions are
-answered in D218):
+After run 16 (the run reports have the details):
 
 1. **Release preparation** (D210): the project's contact address for
    `CODE_OF_CONDUCT.md`, whether to rewrite the history that holds the old
    one, Linux on a real desktop.
-2. **The phone's screens after run 15** (D220-D222): the owner's look on
-   the S25 (the Samsung keyboard was not checked on the emulator); which
-   hidden editor fields and missing Settings rows the first version needs;
-   Recently deleted as a row of the vault's home screen.
-3. **The partial save** (D221): keep the extra conflict copy when a
-   password is changed while a newer version arrived, or give the core a
-   fingerprint of secrets to compare; the partial save for identities.
-4. **The password and attach keys for a quick connect** (no saved host):
-   both are disabled now; whether they are needed.
+2. **The Android app's first version** (D223, D224): the release key and
+   the signed APK on the S25 (`docs/mobile/release.md`), the owner's
+   checklist on the phone (run 16's report), the Samsung keyboard.
 
 ## 6. Technical debt
 
@@ -304,12 +311,24 @@ answered in D218):
 - **Terminal compatibility** (`docs/compatibility.md`): flags are drawn as
   two letters on Windows (no flag glyphs; a known limitation, D210); the
   blank cells after an emoji sequence stay (D92).
-- **The core for Android** (D212): builds; the input mapping of the
-  terminal is still the desktop's (`terminal/input.rs`, `mouse.rs`) with a
-  copy in the Android crate until it moves into `shellpp-terminal` (M2);
-  `shellpp-sessions` links `shellpp-term-local` on Android too (never
-  opened there); the Kotlin part of `rustls-platform-verifier` is vendored
-  (`apps/android/third_party`, D218): move it with the crate's version.
+- **The core for Android** (D212): builds; `shellpp-sessions` links
+  `shellpp-term-local` on Android too (never opened there); the Kotlin part
+  of `rustls-platform-verifier` is vendored (`apps/android/third_party`,
+  D218): move it with the crate's version. (The input mapping moved into
+  `shellpp-terminal` in run 16, D224.)
+- **A fingerprint of secrets in the core** (D221, D223 item 1): a password
+  changed while a newer version of the record arrived keeps that version as
+  a conflict copy even when it did not touch the password (never a loss,
+  sometimes one copy too many); comparing fingerprints of the secrets
+  would tell. After release 1.0.
+- **The partial update for identities** (D224): the path that brings an
+  identity a pull deleted back with an edit has no test of its own (no
+  client deletes identities yet); a dialog that stays open would need a
+  "written" answer like `record_save_written`.
+- **The desktop's local SFTP panel on Windows** (D224): renaming
+  `readme` to `README` is refused as "already there" (its check finds the
+  same file on a file system without case); the phone's remote panel has
+  the fix.
 - **Wider visibility of the terminal model** (review of 3.3): the split made
   `Outbox`'s fields and some test helpers public; a `test-hooks` feature and
   narrower access are a cleanup for a later run.
@@ -361,7 +380,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D224;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D225;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.

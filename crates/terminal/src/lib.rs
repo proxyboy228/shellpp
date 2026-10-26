@@ -6,8 +6,8 @@
 //! suggestions.
 //!
 //! Shared by the desktop app and a phone client: no GPUI. Each client draws
-//! the cells and turns its input into bytes (the desktop's
-//! `apps/desktop/src/terminal`: render, view, input, mouse); the model wakes
+//! the cells and turns its events into keys and mouse events ([`keys`] has
+//! the bytes they send, one table for both, D224); the model wakes
 //! it through the channel given to [`TerminalHandle::spawn`] and the client
 //! reads the screen under the terminal's lock.
 
@@ -16,6 +16,7 @@ pub mod colors;
 pub mod contrast;
 pub mod history_capture;
 pub mod journal;
+pub mod keys;
 pub mod limits;
 pub mod model;
 pub mod paste;

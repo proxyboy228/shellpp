@@ -483,6 +483,18 @@ says where it stops [decision]:
   as on the desktop) once: when a pinch ends, and 150 ms after the last
   change of a rotation or the keyboard's animation [decision].
 
+### 9.8a TalkBack
+
+- The terminal's screen is read row by row: each row is a node with its
+  text, and the cursor's row says that it is the cursor's line; when the
+  output has been quiet for 0.7 s, the cursor's row is announced once (a
+  row already announced is not repeated) (run 16, D224) [decision].
+- Every key of the extra-keys row is a button with a spoken name (words,
+  not the glyph: "Up arrow", "Control C", "tmux: next pane"), its state
+  (Ctrl and Alt: on, locked) and a double tap that sends it to the session
+  in front; the password key's name says why it cannot send when it
+  cannot.
+
 ### 9.9 In the background and without a network
 
 - **The app in the background**: open sessions keep running in a foreground

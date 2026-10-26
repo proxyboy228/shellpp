@@ -121,7 +121,11 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator
 С `-Release` (D223) ещё релизная сборка с одноразовым ключом, который скрипт
 сам делает во временной папке вне репозитория и удаляет в конце (пароли —
 только в окружении процесса); с `-Emulator` она ставится заново и проходит
-`VaultFirstRunTest` и `ReleaseBuildTest`. Подписанный APK владельца —
+`VaultFirstRunTest` и `ReleaseBuildTest`. `-Emulator -Programs` — вместо
+остальных классов обходы полноэкранных программ (`ProgramsTest`: nano с Cut
+in nano, vim, less, htop, mc, tmux из ряда клавиш) и замер снимка экрана
+(`SnapshotTimingTest`, цифры — в выводе `am instrument`) на образе OpenSSH
+с программами (первой сборке нужна сеть). Подписанный APK владельца —
 `scripts\build-android-release.ps1` (`docs/mobile/release.md`); ключ
 владельца агент не создаёт, не ищет и не читает.
 

@@ -276,8 +276,9 @@ clears a copied password when it can, instead of taking an empty read for
   columns and rows; the new size goes to the server when the gesture ends
   [decision].
 - Accessibility: a `Canvas` view has none by itself; an
-  `AccessibilityNodeProvider` that reads the screen's rows is part of the
-  first version's terminal run [decision].
+  `AccessibilityNodeProvider` gives TalkBack a node per row of the screen
+  (its text, the cursor's row marked) and the view announces the cursor's
+  row when the output settles (run 16, D224; UI spec 9.8a).
 
 ### 6.1a The session screen (run 15)
 
@@ -322,12 +323,15 @@ clears a copied password when it can, instead of taking an empty read for
   default). The run that builds it tests Gboard and the Samsung Keyboard,
   with the English and the Russian layout.
 - Keys from the extra keys row and from a hardware keyboard go through the
-  desktop's mapping (the bytes of Esc, Tab, the arrows in normal or
-  application cursor mode, Ctrl and Alt combinations); that mapping moves
-  from the desktop's `terminal/input.rs` and `mouse.rs` into
-  `shellpp-terminal` as a pure function in the first version's terminal run,
-  so both clients send the same bytes [decision]. Until then the Android
-  crate has its own copy, tested against the desktop's sequences.
+  desktop's mapping (the bytes of Esc, Tab and Shift+Tab, the arrows and
+  Home/End in normal or application cursor mode, the page keys, Ins, Del,
+  F1-F12, Ctrl and Alt combinations, the host's Backspace setting) and taps
+  through its mouse encodings: since run 16 one table for both clients,
+  `shellpp_terminal::keys` (D224). The desktop's keystrokes and the phone's
+  key codes (`Native.KEY_*`) become its keys; the desktop's tests check
+  every key with every modifier and every mouse report against tables
+  written from its code before the move, and the phone's tests check its
+  keys against the same table.
 - Ctrl and Alt on the extra keys row are sticky (UI spec 9.2).
 - Paste goes through the model's paste rules (bracketed paste, the
   multi-line confirmation of UI 4.3, `shellpp_terminal::paste`); text a

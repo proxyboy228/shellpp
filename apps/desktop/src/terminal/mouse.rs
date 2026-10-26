@@ -6,50 +6,14 @@
 
 use alacritty_terminal::term::TermMode;
 use gpui::Modifiers;
+use shellpp_terminal::keys::{self, Mods};
 
-/// A mouse button as the protocol numbers it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReportButton {
-    Left,
-    Middle,
-    Right,
-    WheelUp,
-    WheelDown,
-    /// Motion without a pressed button (mode 1003).
-    None,
-}
-
-impl ReportButton {
-    fn code(self) -> u8 {
-        match self {
-            Self::Left => 0,
-            Self::Middle => 1,
-            Self::Right => 2,
-            Self::None => 3,
-            Self::WheelUp => 64,
-            Self::WheelDown => 65,
-        }
-    }
-}
-
-/// What happened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReportKind {
-    Press,
-    Release,
-    Motion,
-}
-
-/// Whether the program asked for mouse events.
-pub fn reporting(mode: TermMode) -> bool {
-    mode.intersects(TermMode::MOUSE_MODE)
-}
-
-/// Whether a motion event is reported: with a pressed button in mode 1002
-/// or 1003, without one only in 1003.
-pub fn reports_motion(mode: TermMode, button_pressed: bool) -> bool {
-    mode.contains(TermMode::MOUSE_MOTION) || (button_pressed && mode.contains(TermMode::MOUSE_DRAG))
-}
+/// A mouse button and what it did, as the protocol numbers them (the shared
+/// table, `shellpp_terminal::keys`, D224).
+pub use shellpp_terminal::keys::{
+    MouseButton as ReportButton, MouseKind as ReportKind, mouse_reporting as reporting,
+    reports_motion,
+};
 
 /// The report of a mouse event at 0-based `column` and `line`, or `None`
 /// when the encoding cannot express it (the original encoding stops at
@@ -62,45 +26,12 @@ pub fn report(
     line: usize,
     modifiers: Modifiers,
 ) -> Option<Vec<u8>> {
-    let mut code = button.code();
-    if modifiers.shift {
-        code += 4;
-    }
-    if modifiers.alt {
-        code += 8;
-    }
-    if modifiers.control {
-        code += 16;
-    }
-    if kind == ReportKind::Motion {
-        code += 32;
-    }
-    if mode.contains(TermMode::SGR_MOUSE) {
-        let suffix = if kind == ReportKind::Release {
-            'm'
-        } else {
-            'M'
-        };
-        return Some(format!("\x1b[<{code};{};{}{suffix}", column + 1, line + 1).into_bytes());
-    }
-    // The older encodings report every release as button 3.
-    if kind == ReportKind::Release {
-        code = (code & !3) | 3;
-    }
-    let mut bytes = b"\x1b[M".to_vec();
-    let values = [u32::from(code) + 32, column as u32 + 33, line as u32 + 33];
-    if mode.contains(TermMode::UTF8_MOUSE) {
-        for value in values {
-            let ch = char::from_u32(value).filter(|_| value < 2048)?;
-            let mut buffer = [0; 4];
-            bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
-        }
-    } else {
-        for value in values {
-            bytes.push(u8::try_from(value).ok()?);
-        }
-    }
-    Some(bytes)
+    let mods = Mods {
+        shift: modifiers.shift,
+        alt: modifiers.alt,
+        ctrl: modifiers.control,
+    };
+    keys::mouse_report(mode, button, kind, column, line, mods)
 }
 
 #[cfg(test)]
@@ -109,6 +40,77 @@ mod tests {
 
     fn sgr() -> TermMode {
         TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE
+    }
+
+    /// Every report: each button, kind and modifier, in the three
+    /// encodings, at the corners and past the limits of the old ones.
+    fn report_table() -> String {
+        let mut out = String::new();
+        let buttons = [
+            ReportButton::Left,
+            ReportButton::Middle,
+            ReportButton::Right,
+            ReportButton::WheelUp,
+            ReportButton::WheelDown,
+            ReportButton::None,
+        ];
+        for (mode_name, mode) in [
+            ("x10", TermMode::MOUSE_REPORT_CLICK),
+            ("sgr", sgr()),
+            ("utf8", TermMode::MOUSE_REPORT_CLICK | TermMode::UTF8_MOUSE),
+        ] {
+            for button in buttons {
+                for kind in [ReportKind::Press, ReportKind::Release, ReportKind::Motion] {
+                    for bits in 0..8u8 {
+                        let modifiers = Modifiers {
+                            shift: bits & 1 != 0,
+                            alt: bits & 2 != 0,
+                            control: bits & 4 != 0,
+                            ..Modifiers::default()
+                        };
+                        for (column, line) in [
+                            (0, 0),
+                            (9, 4),
+                            (222, 222),
+                            (223, 0),
+                            (300, 1),
+                            (2014, 3),
+                            (2015, 3),
+                        ] {
+                            let shown = match report(mode, button, kind, column, line, modifiers) {
+                                Some(bytes) => bytes
+                                    .iter()
+                                    .map(|byte| format!("{byte:02x}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                None => "none".to_owned(),
+                            };
+                            out.push_str(&format!("{mode_name}\t{button:?}\t{kind:?}\t{bits}\t{column},{line}\t{shown}\n"));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The reports stay what the desktop sent before the encoding moved
+    /// into `shellpp-terminal` (run 16, D224); `SHELLPP_WRITE_KEY_TABLE=1`
+    /// writes `mouse_table.txt` again.
+    #[test]
+    fn every_report_is_what_the_table_says() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/terminal/mouse_table.txt");
+        let table = report_table();
+        if std::env::var_os("SHELLPP_WRITE_KEY_TABLE").is_some() {
+            std::fs::write(path, &table).expect("written");
+        }
+        let expected = std::fs::read_to_string(path)
+            .expect("mouse_table.txt")
+            .replace("\r\n", "\n");
+        for (line, (got, want)) in table.lines().zip(expected.lines()).enumerate() {
+            assert_eq!(got, want, "line {}", line + 1);
+        }
+        assert_eq!(table.lines().count(), expected.lines().count());
     }
 
     #[test]

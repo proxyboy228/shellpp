@@ -920,11 +920,12 @@ impl TerminalHandle {
     /// A secret the app sends on its own (the phone's password key, D220,
     /// D223): as [`TerminalHandle::inject_input`] (the line that holds it is
     /// never recorded; the capture only reads the bytes, it keeps none), and
-    /// wiped once written to the session ([`TerminalSink::send_secret`]).
-    pub fn inject_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+    /// wiped once written to the session ([`TerminalSink::send_secret`]);
+    /// `false` when the session did not take it.
+    pub fn inject_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) -> bool {
         self.outbox().autocomplete.typed();
         self.watch_input(&bytes, InputOrigin::Injected);
-        self.outbox().send_secret(bytes);
+        self.outbox().send_secret(bytes)
     }
 
     /// Where captured command lines go; `None` stops the capture (local

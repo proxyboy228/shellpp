@@ -397,11 +397,31 @@ async fn the_password_key_types_the_identitys_password_and_refuses_what_it_must(
         );
         let recorded = save_host("recorded", json!({"record_output": "on"}));
         let id = connect(recorded, false);
+        decided(id, true);
         assert!(engine.records_output(id).expect("recording"));
         assert_eq!(
             engine.password_state(id, recorded).expect("state"),
             PasswordAnswer::Recorded
         );
+        assert_eq!(
+            engine.send_password(id, recorded).expect("refused"),
+            PasswordAnswer::Recorded
+        );
+        // "Record output" turned off after the session connected: the
+        // session still records, so the key still refuses (D222's gap).
+        let mut data = ok(
+            &engine,
+            "record_get",
+            &json!({"vault_id": vault, "record_id": recorded.record_id}),
+        )["data"]
+            .clone();
+        data["record_output"] = json!("off");
+        ok(
+            &engine,
+            "record_save",
+            &json!({"vault_id": vault, "record_id": recorded.record_id, "type": "host", "data": data}),
+        );
+        assert!(engine.records_output(id).expect("recording"));
         assert_eq!(
             engine.send_password(id, recorded).expect("refused"),
             PasswordAnswer::Recorded

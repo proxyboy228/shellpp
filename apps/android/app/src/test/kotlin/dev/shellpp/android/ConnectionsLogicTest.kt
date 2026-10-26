@@ -49,6 +49,10 @@ class ConnectionsLogicTest {
         assertEquals(listOf("2"), exactHosts("b.lan", hosts).map { it.id })
         assertEquals(listOf("3"), exactHosts("C.LAN", hosts).map { it.id })
         assertEquals(emptyList<String>(), exactHosts("we", hosts).map { it.id })
+        // Without case for ASCII only, as the desktop's eq_ignore_ascii_case.
+        val cyrillic = listOf(host("4", "Сервер", "d.lan"))
+        assertEquals(emptyList<String>(), exactHosts("сервер", cyrillic).map { it.id })
+        assertEquals(listOf("4"), exactHosts("Сервер", cyrillic).map { it.id })
     }
 
     @Test

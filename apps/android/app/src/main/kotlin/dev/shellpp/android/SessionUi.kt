@@ -56,6 +56,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 
 /** The bar's colors: the terminal theme's on a terminal session, the app's on SFTP (reference-2 11.2). */
 data class BarColors(val background: Color, val surface: Color, val content: Color, val accent: Color, val muted: Color)
@@ -233,10 +241,28 @@ private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUS
     }
     val locked = (key == XKey.Ctrl && sink.ctrlState == StickyModifier.State.LOCKED) ||
         (key == XKey.Alt && sink.altState == StickyModifier.State.LOCKED)
+    // TalkBack (plan of run 16, 3.3): a button with the key's spoken name, its
+    // state, and a double tap that sends it to the session in front.
+    val spoken = if (key == XKey.Password && passwordWhy != null) "${key.spoken}, unavailable: $passwordWhy" else key.spoken
+    val state = when {
+        locked -> "locked"
+        lit -> "on"
+        else -> null
+    }
     val repeats = key is XKey.Code && key.repeats
     Box(
         Modifier.heightIn(min = 48.dp).widthIn(min = 44.dp).clip(RoundedCornerShape(10.dp))
             .background(if (locked) colors.accent else if (lit) colors.accent.copy(alpha = 0.25f) else Color.Transparent)
+            .semantics {
+                role = Role.Button
+                contentDescription = spoken
+                if (state != null) stateDescription = state
+                if (!enabled && key != XKey.Password) disabled()
+                onClick {
+                    if (tappable) sink.key(key, sink.target())
+                    tappable
+                }
+            }
             .pointerInput(key, tappable) {
                 if (!tappable) return@pointerInput
                 awaitEachGesture {
@@ -285,14 +311,15 @@ private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUS
             else -> colors.accent
         }
         when (key) {
-            XKey.Password -> Icon(
-                Icons.Filled.Password,
-                contentDescription = if (passwordWhy == null) "Send the saved password" else "Send the saved password, unavailable: $passwordWhy",
-                tint = tint,
+            // The chip says the name (its semantics above); the icons and
+            // glyphs are not read twice.
+            XKey.Password -> Icon(Icons.Filled.Password, contentDescription = null, tint = tint)
+            XKey.Cursor -> Icon(Icons.Filled.OpenWith, contentDescription = null, tint = tint)
+            XKey.Attach -> Icon(Icons.Filled.AttachFile, contentDescription = null, tint = tint)
+            else -> Text(
+                key.label, color = tint, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clearAndSetSemantics {},
             )
-            XKey.Cursor -> Icon(Icons.Filled.OpenWith, contentDescription = "Move the cursor by dragging", tint = tint)
-            XKey.Attach -> Icon(Icons.Filled.AttachFile, contentDescription = "Send a file to the server", tint = tint)
-            else -> Text(key.label, color = tint, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

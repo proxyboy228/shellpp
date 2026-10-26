@@ -3,16 +3,19 @@
 //! a tap that puts the cursor on a character (arrow keys along the typed
 //! line) or clicks where the program asked for mouse reports.
 //!
-//! The bytes are the desktop's (`apps/desktop/src/terminal/input.rs` and
-//! `mouse.rs`, xterm's sequences); moving that mapping into
-//! `shellpp-terminal` for both clients is the mobile runs' (architecture
-//! 6.2).
+//! The bytes come from the table the desktop uses too
+//! (`shellpp_terminal::keys`, run 16, D224): the keys with the armed
+//! modifiers, the host's Backspace setting and the mouse's encodings.
+
+use shellpp_terminal::keys::{self as table, BackspaceKey, Mods, MouseButton, MouseKind};
 
 /// A key of the extra keys row (or a hardware keyboard).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Esc,
     Tab,
+    /// Shift+Tab.
+    BackTab,
     Enter,
     Backspace,
     Up,
@@ -23,7 +26,10 @@ pub enum Key {
     End,
     PageUp,
     PageDown,
+    Insert,
     Delete,
+    /// F1-F12.
+    F(u8),
 }
 
 impl Key {
@@ -43,6 +49,9 @@ impl Key {
             11 => Self::PageUp,
             12 => Self::PageDown,
             13 => Self::Delete,
+            14 => Self::Insert,
+            15 => Self::BackTab,
+            101..=112 => Self::F(u8::try_from(code - 100).ok()?),
             _ => return None,
         })
     }
@@ -59,69 +68,43 @@ pub struct Modes {
     pub sgr_mouse: bool,
 }
 
-/// The xterm modifier parameter of Ctrl and Alt (1 + 2·Alt + 4·Ctrl).
-fn modifier(ctrl: bool, alt: bool) -> Option<u8> {
-    let value = 1 + if alt { 2 } else { 0 } + if ctrl { 4 } else { 0 };
-    (value > 1).then_some(value)
-}
-
-/// The bytes of `key` with the armed modifiers.
-pub fn key_bytes(key: Key, modes: Modes, ctrl: bool, alt: bool) -> Vec<u8> {
-    let cursor = |final_byte: char| match modifier(ctrl, alt) {
-        Some(m) => format!("\x1b[1;{m}{final_byte}").into_bytes(),
-        None if modes.app_cursor => format!("\x1bO{final_byte}").into_bytes(),
-        None => format!("\x1b[{final_byte}").into_bytes(),
+/// The bytes of `key` with the armed modifiers and the host's Backspace
+/// setting (the shared table, D224).
+pub fn key_bytes(
+    key: Key,
+    modes: Modes,
+    ctrl: bool,
+    alt: bool,
+    backspace: BackspaceKey,
+) -> Vec<u8> {
+    let mods = Mods {
+        shift: key == Key::BackTab,
+        alt,
+        ctrl,
     };
-    let tilde = |number: u8| match modifier(ctrl, alt) {
-        Some(m) => format!("\x1b[{number};{m}~").into_bytes(),
-        None => format!("\x1b[{number}~").into_bytes(),
+    let shared = match key {
+        Key::Esc => table::Key::Escape,
+        Key::Tab | Key::BackTab => table::Key::Tab,
+        Key::Enter => table::Key::Enter,
+        Key::Backspace => table::Key::Backspace,
+        Key::Up => table::Key::Up,
+        Key::Down => table::Key::Down,
+        Key::Left => table::Key::Left,
+        Key::Right => table::Key::Right,
+        Key::Home => table::Key::Home,
+        Key::End => table::Key::End,
+        Key::PageUp => table::Key::PageUp,
+        Key::PageDown => table::Key::PageDown,
+        Key::Insert => table::Key::Insert,
+        Key::Delete => table::Key::Delete,
+        Key::F(number) => table::Key::F(number),
     };
-    let prefixed = |bytes: &[u8]| {
-        let mut out = Vec::with_capacity(bytes.len() + 1);
-        if alt {
-            out.push(0x1b);
-        }
-        out.extend_from_slice(bytes);
-        out
-    };
-    match key {
-        Key::Esc => prefixed(&[0x1b]),
-        Key::Tab => prefixed(b"\t"),
-        Key::Enter => prefixed(b"\r"),
-        Key::Backspace if ctrl => prefixed(&[0x08]),
-        Key::Backspace => prefixed(&[0x7f]),
-        Key::Up => cursor('A'),
-        Key::Down => cursor('B'),
-        Key::Right => cursor('C'),
-        Key::Left => cursor('D'),
-        Key::Home => cursor('H'),
-        Key::End => cursor('F'),
-        Key::PageUp => tilde(5),
-        Key::PageDown => tilde(6),
-        Key::Delete => tilde(3),
-    }
-}
-
-/// The control character of `c` with Ctrl (Ctrl+C is 0x03), as the
-/// desktop maps it; `None` when Ctrl does not change it.
-fn control(c: char) -> Option<u8> {
-    match c {
-        'a'..='z' => Some(c as u8 - b'a' + 1),
-        'A'..='Z' => Some(c as u8 - b'A' + 1),
-        '@' | ' ' | '2' => Some(0x00),
-        '[' | '3' => Some(0x1b),
-        '\\' | '4' => Some(0x1c),
-        ']' | '5' => Some(0x1d),
-        '^' | '6' => Some(0x1e),
-        '_' | '7' | '/' => Some(0x1f),
-        '?' | '8' => Some(0x7f),
-        _ => None,
-    }
+    table::key_bytes(shared, mods, modes.app_cursor, backspace).unwrap_or_default()
 }
 
 /// Text from the soft keyboard with the armed modifiers: Ctrl turns the
-/// first character into its control character, Alt puts Esc before it.
-/// Line breaks become CR (Enter).
+/// first character into its control character (the desktop's, D224), Alt
+/// puts Esc before it. Line breaks become CR (Enter).
 pub fn text_bytes(text: &str, ctrl: bool, alt: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len() + 1);
     let mut chars = text.chars();
@@ -129,7 +112,7 @@ pub fn text_bytes(text: &str, ctrl: bool, alt: bool) -> Vec<u8> {
         if alt {
             out.push(0x1b);
         }
-        match (ctrl, control(first)) {
+        match (ctrl, table::control_of(first)) {
             (true, Some(byte)) => out.push(byte),
             _ => push_char(&mut out, first),
         }
@@ -184,28 +167,38 @@ pub fn walk_to(
         modes,
         false,
         false,
+        BackspaceKey::Del,
     );
     Some(arrow.repeat(distance.unsigned_abs() as usize))
 }
 
 /// A left click at `cell` (press and release) in the encoding the program
-/// asked for: SGR (mode 1006) or the original one, which cannot say a
-/// column or row past 223.
+/// asked for (the shared table, D224): SGR (mode 1006) or the original one,
+/// which cannot say a column or row past 222.
 pub fn click(cell: Cell, modes: Modes, ctrl: bool, alt: bool) -> Option<Vec<u8>> {
+    use alacritty_terminal::term::TermMode;
     if !modes.mouse {
         return None;
     }
-    let button = (if alt { 8 } else { 0 }) + (if ctrl { 16 } else { 0 });
-    let (col, row) = (u32::from(cell.col) + 1, u32::from(cell.row) + 1);
+    let mut mode = TermMode::MOUSE_REPORT_CLICK;
     if modes.sgr_mouse {
-        return Some(
-            format!("\x1b[<{button};{col};{row}M\x1b[<{button};{col};{row}m").into_bytes(),
-        );
+        mode |= TermMode::SGR_MOUSE;
     }
-    let encode = |value: u32| u8::try_from(value + 32).ok().filter(|byte| *byte < 255);
-    let (x, y) = (encode(col)?, encode(row)?);
-    let mut out = vec![0x1b, b'[', b'M', 32 + button, x, y];
-    out.extend_from_slice(&[0x1b, b'[', b'M', 32 + 3, x, y]);
+    let mods = Mods {
+        shift: false,
+        alt,
+        ctrl,
+    };
+    let (col, row) = (usize::from(cell.col), usize::from(cell.row));
+    let mut out = table::mouse_report(mode, MouseButton::Left, MouseKind::Press, col, row, mods)?;
+    out.extend(table::mouse_report(
+        mode,
+        MouseButton::Left,
+        MouseKind::Release,
+        col,
+        row,
+        mods,
+    )?);
     Some(out)
 }
 
@@ -221,20 +214,121 @@ mod tests {
 
     #[test]
     fn keys_send_the_desktops_sequences() {
-        assert_eq!(key_bytes(Key::Esc, NORMAL, false, false), [0x1b]);
-        assert_eq!(key_bytes(Key::Tab, NORMAL, false, false), b"\t");
-        assert_eq!(key_bytes(Key::Up, NORMAL, false, false), b"\x1b[A");
+        assert_eq!(
+            key_bytes(Key::Esc, NORMAL, false, false, BackspaceKey::Del),
+            [0x1b]
+        );
+        assert_eq!(
+            key_bytes(Key::Tab, NORMAL, false, false, BackspaceKey::Del),
+            b"\t"
+        );
+        assert_eq!(
+            key_bytes(Key::Up, NORMAL, false, false, BackspaceKey::Del),
+            b"\x1b[A"
+        );
         let app = Modes {
             app_cursor: true,
             ..NORMAL
         };
-        assert_eq!(key_bytes(Key::Up, app, false, false), b"\x1bOA");
-        assert_eq!(key_bytes(Key::Left, NORMAL, true, false), b"\x1b[1;5D");
-        assert_eq!(key_bytes(Key::Home, NORMAL, false, false), b"\x1b[H");
-        assert_eq!(key_bytes(Key::PageUp, NORMAL, false, false), b"\x1b[5~");
-        assert_eq!(key_bytes(Key::Delete, NORMAL, false, false), b"\x1b[3~");
-        assert_eq!(key_bytes(Key::Backspace, NORMAL, false, true), [0x1b, 0x7f]);
-        assert_eq!(key_bytes(Key::Backspace, NORMAL, true, false), [0x08]);
+        assert_eq!(
+            key_bytes(Key::Up, app, false, false, BackspaceKey::Del),
+            b"\x1bOA"
+        );
+        assert_eq!(
+            key_bytes(Key::Left, NORMAL, true, false, BackspaceKey::Del),
+            b"\x1b[1;5D"
+        );
+        assert_eq!(
+            key_bytes(Key::Home, NORMAL, false, false, BackspaceKey::Del),
+            b"\x1b[H"
+        );
+        assert_eq!(
+            key_bytes(Key::PageUp, NORMAL, false, false, BackspaceKey::Del),
+            b"\x1b[5~"
+        );
+        assert_eq!(
+            key_bytes(Key::Delete, NORMAL, false, false, BackspaceKey::Del),
+            b"\x1b[3~"
+        );
+        assert_eq!(
+            key_bytes(Key::Backspace, NORMAL, false, true, BackspaceKey::Del),
+            [0x1b, 0x7f]
+        );
+        assert_eq!(
+            key_bytes(Key::Backspace, NORMAL, true, false, BackspaceKey::Del),
+            [0x08]
+        );
+    }
+
+    /// Every key of the phone, with Ctrl and Alt armed or not, in both
+    /// cursor modes and with both Backspace settings, sends what the
+    /// desktop's table says (`apps/desktop/src/terminal/key_table.txt`,
+    /// written from the desktop's code before the mapping moved, D224).
+    #[test]
+    fn every_key_sends_the_desktops_bytes() {
+        let table = include_str!("../../../desktop/src/terminal/key_table.txt");
+        let shown = |bytes: &[u8]| -> String {
+            bytes
+                .iter()
+                .map(|byte| match byte {
+                    0x21..=0x7e if *byte != b'\\' => char::from(*byte).to_string(),
+                    _ => format!("\\x{byte:02x}"),
+                })
+                .collect()
+        };
+        let mut keys = vec![
+            (Key::Esc, "escape"),
+            (Key::Tab, "tab"),
+            (Key::BackTab, "tab"),
+            (Key::Enter, "enter"),
+            (Key::Backspace, "backspace"),
+            (Key::Up, "up"),
+            (Key::Down, "down"),
+            (Key::Left, "left"),
+            (Key::Right, "right"),
+            (Key::Home, "home"),
+            (Key::End, "end"),
+            (Key::PageUp, "pageup"),
+            (Key::PageDown, "pagedown"),
+            (Key::Insert, "insert"),
+            (Key::Delete, "delete"),
+        ];
+        let names: Vec<String> = (1..=12).map(|n| format!("f{n}")).collect();
+        for (n, name) in names.iter().enumerate() {
+            keys.push((Key::F(u8::try_from(n + 1).unwrap()), name.as_str()));
+        }
+        let mut checked = 0;
+        for (key, name) in keys {
+            for (ctrl, alt) in [(false, false), (true, false), (false, true), (true, true)] {
+                for (mode_name, app_cursor) in [("normal", false), ("app-cursor", true)] {
+                    for (backspace, backspace_name) in
+                        [(BackspaceKey::Del, "Del"), (BackspaceKey::CtrlH, "CtrlH")]
+                    {
+                        let line = format!(
+                            "{}{}{}{name}\t{mode_name}\t{backspace_name}\t",
+                            if ctrl { "ctrl-" } else { "" },
+                            if alt { "alt-" } else { "" },
+                            if key == Key::BackTab { "shift-" } else { "" },
+                        );
+                        let want = table
+                            .lines()
+                            .find_map(|row| row.strip_prefix(line.as_str()))
+                            .unwrap_or_else(|| panic!("no row {line}"));
+                        let modes = Modes {
+                            app_cursor,
+                            ..NORMAL
+                        };
+                        assert_eq!(
+                            shown(&key_bytes(key, modes, ctrl, alt, backspace)),
+                            want,
+                            "{line}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 27 * 4 * 2 * 2);
     }
 
     #[test]

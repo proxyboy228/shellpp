@@ -24,6 +24,11 @@ object Native {
     const val KEY_PAGE_UP = 11
     const val KEY_PAGE_DOWN = 12
     const val KEY_DELETE = 13
+    const val KEY_INSERT = 14
+    /** Shift+Tab. */
+    const val KEY_BACKTAB = 15
+    /** F1 is 101 ... F12 is 112 (the shared table's function keys, D224). */
+    const val KEY_F1 = 101
 
     /** Opens the core on the vault in [filesDir] with [platform] behind its platform services. */
     @JvmStatic external fun start(filesDir: String, deviceName: String, platform: Platform): Boolean

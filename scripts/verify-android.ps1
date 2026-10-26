@@ -30,6 +30,12 @@
   started and removes the container. Needs a running Docker and Git for
   Windows' bash.
 
+  -Programs (with -Emulator; plan of run 16, 3.3): instead of the other
+  classes, the walks through full-screen programs (ProgramsTest: nano with
+  Cut in nano, vim, less, htop, mc, tmux from the keys row) on the OpenSSH
+  image with the terminal programs (SHELLPP_OPENSSH_PROGRAMS=1 for
+  tests/openssh/start.sh; its first build needs the network).
+
   -Release (D223 item 15): the release build too, signed with a throwaway
   key that this script makes (keytool of the JDK, its passwords only in this
   process's environment) in a folder of its own outside the repository and
@@ -47,6 +53,9 @@ param(
     [switch] $Emulator,
     # The release build with a throwaway key (D223 item 15).
     [switch] $Release,
+    # With -Emulator: only the walks through full-screen programs
+    # (ProgramsTest), on the OpenSSH image with the terminal programs.
+    [switch] $Programs,
     # The AVD to start when no emulator runs (default: the first one).
     [string] $Avd = ''
 )
@@ -105,6 +114,7 @@ $EndToEndClasses = @(
     'dev.shellpp.android.SyncAfterUnlockTest',
     'dev.shellpp.android.SyncRestoreTest'
 )
+if ($Programs) { $EndToEndClasses = @('dev.shellpp.android.ProgramsTest', 'dev.shellpp.android.SnapshotTimingTest') }
 
 $failed = @()
 $passed = 0
@@ -186,7 +196,10 @@ if ($Emulator) {
         if (Test-Path -LiteralPath $work) { Remove-Item -Recurse -Force -LiteralPath $work }
         New-Item -ItemType Directory -Force $work | Out-Null
         Write-Host ("{0,-28}" -f 'openssh-container') -NoNewline
+        $savedPrograms = $env:SHELLPP_OPENSSH_PROGRAMS
+        if ($Programs) { $env:SHELLPP_OPENSSH_PROGRAMS = '1' }
         $code = Invoke-Logged $bash @((Join-Path $repo 'tests\openssh\start.sh'), $work) (Join-Path $logDir 'openssh-start.log') (Join-Path $logDir 'openssh-start.err.log')
+        $env:SHELLPP_OPENSSH_PROGRAMS = $savedPrograms
         if ($code -ne 0) { throw "tests/openssh/start.sh failed (exit $code)" }
         $containerStarted = $true
         Write-Host 'ok' -ForegroundColor Green
@@ -226,10 +239,13 @@ if ($Emulator) {
         $savedTest = $env:SHELLPP_TEST
         $env:SHELLPP_TEST_ANDROID_PEER = $peerDir
         $env:SHELLPP_TEST = '1'
-        $peer = Start-Process -FilePath 'cargo' -ArgumentList @('test', '--locked', '--manifest-path', (Join-Path $repo 'server\Cargo.toml'), '--test', 'android_peer') -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir 'sync-peer.log') -RedirectStandardError (Join-Path $logDir 'sync-peer.err.log')
-        # Taken now: PowerShell reports no exit code of a process whose
-        # handle nobody held while it ran.
-        $null = $peer.Handle
+        # The walks of -Programs need no second device.
+        if (-not $Programs) {
+            $peer = Start-Process -FilePath 'cargo' -ArgumentList @('test', '--locked', '--manifest-path', (Join-Path $repo 'server\Cargo.toml'), '--test', 'android_peer') -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDir 'sync-peer.log') -RedirectStandardError (Join-Path $logDir 'sync-peer.err.log')
+            # Taken now: PowerShell reports no exit code of a process whose
+            # handle nobody held while it ran.
+            $null = $peer.Handle
+        }
         $env:SHELLPP_TEST_ANDROID_PEER = $savedPeer
         $env:SHELLPP_TEST = $savedTest
         # A fresh install (the app's data from earlier runs goes), then each

@@ -1462,11 +1462,35 @@ impl std::fmt::Debug for ShellWriter {
     }
 }
 
+/// A secret's buffer that russh sends from without a copy of its own: wiped
+/// when russh drops its last piece of it (D224).
+struct WipedOwner(zeroize::Zeroizing<Vec<u8>>);
+
+impl AsRef<[u8]> for WipedOwner {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl ShellWriter {
     pub async fn write(&self, data: &[u8]) -> Result<(), SshError> {
         if data.is_empty() {
             return Ok(());
         }
+        self.send(bytes::Bytes::copy_from_slice(data)).await
+    }
+
+    /// [`ShellWriter::write`] for a secret (the phone's password key, D223):
+    /// russh sends from this buffer, which is wiped once russh is done with
+    /// it; russh's own packet buffers are not wiped (security.md 9.5).
+    pub async fn write_secret(&self, data: zeroize::Zeroizing<Vec<u8>>) -> Result<(), SshError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        self.send(bytes::Bytes::from_owner(WipedOwner(data))).await
+    }
+
+    async fn send(&self, data: bytes::Bytes) -> Result<(), SshError> {
         let inner = &self.inner;
         if inner.core.is_closed() {
             return Err(SshError::new(FailureKind::Disconnected));
@@ -1477,7 +1501,7 @@ impl ShellWriter {
         let mut ended = inner.ended.subscribe();
         let mut lost = inner.core.shared.subscribe_lost();
         tokio::select! {
-            result = inner.write.data_bytes(data.to_vec()) => {
+            result = inner.write.data_bytes(data) => {
                 result.map_err(|_| inner.core.failure(FailureKind::ChannelFailed))
             }
             _ = ended.wait_for(|ended| *ended) => Err(inner.core.failure(FailureKind::ChannelFailed)),

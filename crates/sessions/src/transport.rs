@@ -47,8 +47,8 @@ pub trait TermInput: Send + Sync + 'static {
     fn write(&self, data: Vec<u8>) -> BoxFuture<'_, bool>;
     /// A secret (the phone's password key, D223), wiped once written. A
     /// transport without its own path writes a copy, which is not wiped;
-    /// SSH writes from the wiped buffer (russh copies it into its own
-    /// buffer, which it wipes too).
+    /// SSH hands russh the wiped buffer itself (russh's packet buffers are
+    /// a library's copies it does not wipe, security.md 9.5).
     fn write_secret(&self, data: zeroize::Zeroizing<Vec<u8>>) -> BoxFuture<'_, bool> {
         let copy = data.to_vec();
         drop(data);
@@ -283,7 +283,7 @@ impl TermInput for SshInput {
     }
 
     fn write_secret(&self, data: zeroize::Zeroizing<Vec<u8>>) -> BoxFuture<'_, bool> {
-        Box::pin(async move { self.0.write(&data).await.is_ok() })
+        Box::pin(async move { self.0.write_secret(data).await.is_ok() })
     }
 
     fn resize(&self, cols: u16, rows: u16) -> BoxFuture<'_, bool> {

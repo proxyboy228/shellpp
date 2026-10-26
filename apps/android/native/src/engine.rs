@@ -100,9 +100,13 @@ impl TerminalSink for SessionSink {
         }
     }
 
-    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
-        if let Err(error) = self.0.write_secret(&bytes) {
-            tracing::debug!(session = self.0.id(), %error, "terminal input dropped");
+    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) -> bool {
+        match self.0.write_secret(&bytes) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::debug!(session = self.0.id(), %error, "a secret was not sent");
+                false
+            }
         }
     }
 
@@ -511,10 +515,19 @@ impl Engine {
         &self,
         id: u64,
         bytes: zeroize::Zeroizing<Vec<u8>>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<bool, EngineError> {
         let terminal = self.with(id, |live| live.terminal.clone())?;
-        terminal.inject_secret(bytes);
-        Ok(())
+        Ok(terminal.inject_secret(bytes))
+    }
+
+    /// What Backspace sends in session `id`: its host's setting (UI 3.1; the
+    /// desktop's rule, D224).
+    pub fn backspace(&self, id: u64) -> Result<shellpp_terminal::keys::BackspaceKey, EngineError> {
+        use shellpp_core::service::dto::Backspace;
+        self.with(id, |live| match live.session.view().backspace {
+            Backspace::CtrlH => shellpp_terminal::keys::BackspaceKey::CtrlH,
+            Backspace::Default | Backspace::Del => shellpp_terminal::keys::BackspaceKey::Del,
+        })
     }
 
     /// Whether session `id` records the output of its current connection
@@ -569,8 +582,15 @@ impl Engine {
         if text.chars().any(char::is_control) {
             return Ok(PasswordAnswer::Control);
         }
-        self.inject_secret(id, zeroize::Zeroizing::new(text.as_bytes().to_vec()))?;
-        Ok(PasswordAnswer::Ready)
+        // The session checks again under its lock (it may have connected
+        // again and started recording meanwhile); not taken: not sent.
+        if self.inject_secret(id, zeroize::Zeroizing::new(text.as_bytes().to_vec()))? {
+            return Ok(PasswordAnswer::Ready);
+        }
+        Ok(match self.password_state(id, host)? {
+            PasswordAnswer::Ready => PasswordAnswer::NotConnected,
+            other => other,
+        })
     }
 
     /// Bytes for the session that are not typing (mouse reports).

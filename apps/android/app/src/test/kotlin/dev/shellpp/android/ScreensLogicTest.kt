@@ -66,6 +66,50 @@ class ScreensLogicTest {
         assertNull(data.with("ssh.port", "").at("ssh.port"))
     }
 
+    /** A server without case for [renameCase]: its names, and the steps that fail. */
+    private class FakeServer(names: List<String>, val failing: Set<Pair<String, String>> = emptySet(), val keepsCase: Boolean = false) : RenameCalls {
+        val files = names.toMutableList()
+        val renames = mutableListOf<Pair<String, String>>()
+
+        override fun rename(from: String, to: String) {
+            renames += from to to
+            if ((from to to) in failing) throw RuntimeException("refused")
+            val name = from.substringAfterLast('/')
+            val index = files.indexOfFirst { it.equals(name, ignoreCase = true) }
+            check(index >= 0)
+            val target = to.substringAfterLast('/')
+            files[index] = if (keepsCase && target.equals(name, ignoreCase = true)) name else target
+        }
+
+        override fun exists(path: String) = files.any { it.equals(path.substringAfterLast('/'), ignoreCase = true) }
+
+        override fun names(folder: String) = files.toList()
+    }
+
+    @Test
+    fun aCaseOnlyRenameGoesAtOnceOrRoundAndNeverLosesTheFile() {
+        // At once.
+        val plain = FakeServer(listOf("readme"))
+        assertNull(renameCase(plain, "/srv", "readme", "README", "x"))
+        assertEquals(listOf("README"), plain.files)
+        // The server keeps the old case: through a free name of its own.
+        val keeps = FakeServer(listOf("readme"), keepsCase = true)
+        assertNull(renameCase(keeps, "/srv", "readme", "README", "x"))
+        assertEquals(listOf("README"), keeps.files)
+        // The last step fails: the file gets its old name back.
+        val failing = FakeServer(listOf("readme"), failing = setOf("/srv/readme" to "/srv/README", "/srv/readme.shellpp-renaming-x" to "/srv/README"))
+        val said = renameCase(failing, "/srv", "readme", "README", "x")
+        assertTrue(said!!.startsWith("Not renamed"))
+        assertEquals(listOf("readme"), failing.files)
+        // And when that fails too, the message says where the file is.
+        val stuck = FakeServer(
+            listOf("readme"),
+            failing = setOf("/srv/readme" to "/srv/README", "/srv/readme.shellpp-renaming-x" to "/srv/README", "/srv/readme.shellpp-renaming-x" to "/srv/readme"),
+        )
+        assertEquals("Not renamed: the file is now “readme.shellpp-renaming-x”.", renameCase(stuck, "/srv", "readme", "README", "x"))
+        assertEquals(listOf("readme.shellpp-renaming-x"), stuck.files)
+    }
+
     @Test
     fun aRenameOfTheCaseOnlyGoesOnWhereTheServerHasNoCase() {
         // The server finds README, the folder lists only readme: the same file.

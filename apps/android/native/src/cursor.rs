@@ -90,7 +90,14 @@ pub fn put(terminal: &TerminalHandle, target: Cell, step_wait: Duration) -> bool
             )
         };
         let count = count.clamp(1, batch);
-        terminal.send_typed(input::key_bytes(key, modes, false, false).repeat(usize::from(count)));
+        let arrow = input::key_bytes(
+            key,
+            modes,
+            false,
+            false,
+            shellpp_terminal::keys::BackspaceKey::Del,
+        );
+        terminal.send_typed(arrow.repeat(usize::from(count)));
         sent += u64::from(count);
         let before = cursor;
         let deadline = Instant::now() + step_wait;

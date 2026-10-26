@@ -343,12 +343,22 @@ pub(crate) enum Control {
 }
 
 /// Input for the writer task of a running terminal, in order.
-#[derive(Debug)]
 pub(crate) enum InputOp {
     Data(Vec<u8>),
     /// A secret (the phone's password key): wiped once written.
     Secret(Zeroizing<Vec<u8>>),
     Resize(u16, u16),
+}
+
+/// The bytes are left out: a secret never reaches a log (review of run 16).
+impl std::fmt::Debug for InputOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Data(data) => write!(f, "Data({} bytes)", data.len()),
+            Self::Secret(_) => f.write_str("Secret(..)"),
+            Self::Resize(cols, rows) => write!(f, "Resize({cols}, {rows})"),
+        }
+    }
 }
 
 /// The sending side of a running terminal's input queue, with the number
@@ -750,6 +760,8 @@ impl SessionHandle {
     /// [`SessionHandle::write`] for a secret (the phone's password key,
     /// D223): the encoded bytes are wiped once written to the channel. An
     /// encoding other than UTF-8 converts through text it does not wipe.
+    /// Refused while the session records its output, checked under the same
+    /// lock as the write (review of run 16).
     pub fn write_secret(&self, data: &[u8]) -> Result<(), WriteError> {
         if data.is_empty() {
             return Ok(());
@@ -760,6 +772,9 @@ impl SessionHandle {
         };
         if st.view.state != SessionState::Connected {
             return Err(WriteError::NotConnected);
+        }
+        if st.view.records_output {
+            return Err(WriteError::Recorded);
         }
         if !queue.has_room(data.len()) {
             return Err(WriteError::Busy);

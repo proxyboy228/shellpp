@@ -297,7 +297,11 @@ pub extern "system" fn Java_dev_shellpp_android_Native_key<'caller>(
                 return Ok(());
             };
             let modes = screen::modes(&engine.terminal(id(session))?);
-            engine.send(id(session), input::key_bytes(key, modes, ctrl, alt))?;
+            let backspace = engine.backspace(id(session))?;
+            engine.send(
+                id(session),
+                input::key_bytes(key, modes, ctrl, alt, backspace),
+            )?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()

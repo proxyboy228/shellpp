@@ -204,10 +204,12 @@ pub trait TerminalSink: Send + Sync + 'static {
     fn send(&self, bytes: Vec<u8>);
 
     /// A secret for the remote side (the phone's password key, D223): as
-    /// [`TerminalSink::send`], but wiped once written. A sink without its
-    /// own path sends a copy, which is not wiped.
-    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+    /// [`TerminalSink::send`], but wiped once written; `false` when it was
+    /// not taken. A sink without its own path sends a copy, which is not
+    /// wiped.
+    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) -> bool {
         self.send(bytes.to_vec());
+        true
     }
 
     /// The grid size changed: forward it (SSH window-change, PTY resize).
@@ -287,15 +289,13 @@ impl Outbox {
     }
 
     /// [`Outbox::send`] for a secret: wiped once written
-    /// ([`TerminalSink::send_secret`]).
-    pub fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+    /// ([`TerminalSink::send_secret`]); `false` when nothing took it.
+    pub fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) -> bool {
         if bytes.is_empty() {
-            return;
+            return true;
         }
         let sink = self.sink.read().ok().and_then(|sink| sink.clone());
-        if let Some(sink) = sink {
-            sink.send_secret(bytes);
-        }
+        sink.is_some_and(|sink| sink.send_secret(bytes))
     }
 
     /// The width a DECCOLM set, if any.

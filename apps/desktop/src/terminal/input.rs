@@ -15,26 +15,10 @@
 
 use alacritty_terminal::term::TermMode;
 use gpui::Keystroke;
+use shellpp_terminal::keys::{self, Key, Mods};
 
 /// What plain Backspace sends: the host's Backspace setting (UI 3.1).
-/// Ctrl+Backspace always sends BS.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BackspaceKey {
-    /// DEL, 0x7f (the setting's "Default" and "^?").
-    #[default]
-    Del,
-    /// BS, 0x08 (the setting's "^H").
-    CtrlH,
-}
-
-impl BackspaceKey {
-    fn byte(self) -> u8 {
-        match self {
-            Self::Del => 0x7f,
-            Self::CtrlH => 0x08,
-        }
-    }
-}
+pub use shellpp_terminal::keys::{BackspaceKey, control_byte};
 
 /// What a key press does in the terminal.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,83 +35,29 @@ pub enum KeyAction {
     Ignore,
 }
 
-/// The xterm modifier parameter: 1 + Shift 1 + Alt 2 + Ctrl 4.
-fn modifier_parameter(keystroke: &Keystroke) -> u8 {
-    let mods = keystroke.modifiers;
-    1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.control)
-}
-
-/// `ESC [ 1 ; m X` with modifiers, else `ESC [ X` (or `ESC O X` for the
-/// cursor keys in application cursor mode).
-fn cursor_key(final_byte: char, keystroke: &Keystroke, mode: TermMode) -> Vec<u8> {
-    let modifier = modifier_parameter(keystroke);
-    if modifier > 1 {
-        format!("\x1b[1;{modifier}{final_byte}").into_bytes()
-    } else if mode.contains(TermMode::APP_CURSOR) {
-        format!("\x1bO{final_byte}").into_bytes()
-    } else {
-        format!("\x1b[{final_byte}").into_bytes()
-    }
-}
-
-/// `ESC [ n ~` or `ESC [ n ; m ~`.
-fn tilde_key(number: u8, keystroke: &Keystroke) -> Vec<u8> {
-    let modifier = modifier_parameter(keystroke);
-    if modifier > 1 {
-        format!("\x1b[{number};{modifier}~").into_bytes()
-    } else {
-        format!("\x1b[{number}~").into_bytes()
-    }
-}
-
-/// F1-F4 are `ESC O P..S` (`ESC [ 1 ; m P..S` with modifiers).
-fn function_key(number: u8, keystroke: &Keystroke) -> Option<Vec<u8>> {
-    let modifier = modifier_parameter(keystroke);
-    let ss3 = |final_byte: char| {
-        if modifier > 1 {
-            format!("\x1b[1;{modifier}{final_byte}").into_bytes()
-        } else {
-            format!("\x1bO{final_byte}").into_bytes()
+/// The key a GPUI key name stands for, with its sequence in the shared
+/// table (`shellpp_terminal::keys`, D224).
+fn named_key(name: &str) -> Option<Key> {
+    Some(match name {
+        "enter" => Key::Enter,
+        "tab" => Key::Tab,
+        "escape" => Key::Escape,
+        "backspace" => Key::Backspace,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "right" => Key::Right,
+        "left" => Key::Left,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        "insert" => Key::Insert,
+        "delete" => Key::Delete,
+        function if function.len() > 1 && function.starts_with('f') => {
+            Key::F(function[1..].parse().ok()?)
         }
-    };
-    Some(match number {
-        1 => ss3('P'),
-        2 => ss3('Q'),
-        3 => ss3('R'),
-        4 => ss3('S'),
-        5 => tilde_key(15, keystroke),
-        6 => tilde_key(17, keystroke),
-        7 => tilde_key(18, keystroke),
-        8 => tilde_key(19, keystroke),
-        9 => tilde_key(20, keystroke),
-        10 => tilde_key(21, keystroke),
-        11 => tilde_key(23, keystroke),
-        12 => tilde_key(24, keystroke),
         _ => return None,
     })
-}
-
-/// The C0 byte of Ctrl+`key` (Ctrl+A = 0x01, Ctrl+[ = ESC, Ctrl+Space = NUL).
-pub fn control_byte(key: &str) -> Option<u8> {
-    if key == "space" {
-        return Some(0);
-    }
-    let mut chars = key.chars();
-    let ch = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    match ch.to_ascii_lowercase() {
-        letter @ 'a'..='z' => Some(letter as u8 - b'a' + 1),
-        '@' | '2' => Some(0),
-        '[' | '3' => Some(0x1b),
-        '\\' | '4' => Some(0x1c),
-        ']' | '5' => Some(0x1d),
-        '^' | '6' => Some(0x1e),
-        '_' | '-' | '/' | '7' => Some(0x1f),
-        '?' | '8' => Some(0x7f),
-        _ => None,
-    }
 }
 
 /// Whether a keystroke with Ctrl+Alt types a character (AltGr on Windows).
@@ -156,84 +86,59 @@ pub fn map_key(keystroke: &Keystroke, mode: TermMode, backspace: BackspaceKey) -
     if mods.control && mods.shift && key.chars().count() == 1 {
         return KeyAction::Ignore;
     }
-    let escape_prefixed = |bytes: Vec<u8>| -> Vec<u8> {
-        if mods.alt {
-            let mut prefixed = Vec::with_capacity(bytes.len() + 1);
-            prefixed.push(0x1b);
-            prefixed.extend(bytes);
-            prefixed
-        } else {
-            bytes
-        }
+    let shift_scrolls = mods.shift && !alt_screen && !mods.control && !mods.alt;
+    match key {
+        "home" if shift_scrolls => return KeyAction::ScrollTop,
+        "end" if shift_scrolls => return KeyAction::ScrollBottom,
+        "pageup" if shift_scrolls => return KeyAction::ScrollPageUp,
+        "pagedown" if shift_scrolls => return KeyAction::ScrollPageDown,
+        _ => {}
+    }
+    let shared = Mods {
+        shift: mods.shift,
+        alt: mods.alt,
+        ctrl: mods.control,
     };
-    let bytes = match key {
-        "enter" => escape_prefixed(vec![b'\r']),
-        "tab" if mods.shift => b"\x1b[Z".to_vec(),
-        "tab" => escape_prefixed(vec![b'\t']),
-        "escape" => escape_prefixed(vec![0x1b]),
-        "backspace" if mods.control => escape_prefixed(vec![0x08]),
-        "backspace" => escape_prefixed(vec![backspace.byte()]),
-        "up" => cursor_key('A', keystroke, mode),
-        "down" => cursor_key('B', keystroke, mode),
-        "right" => cursor_key('C', keystroke, mode),
-        "left" => cursor_key('D', keystroke, mode),
-        "home" if mods.shift && !alt_screen && !mods.control && !mods.alt => {
-            return KeyAction::ScrollTop;
-        }
-        "end" if mods.shift && !alt_screen && !mods.control && !mods.alt => {
-            return KeyAction::ScrollBottom;
-        }
-        "home" => cursor_key('H', keystroke, mode),
-        "end" => cursor_key('F', keystroke, mode),
-        "pageup" if mods.shift && !alt_screen && !mods.control && !mods.alt => {
-            return KeyAction::ScrollPageUp;
-        }
-        "pagedown" if mods.shift && !alt_screen && !mods.control && !mods.alt => {
-            return KeyAction::ScrollPageDown;
-        }
-        "pageup" => tilde_key(5, keystroke),
-        "pagedown" => tilde_key(6, keystroke),
-        "insert" => tilde_key(2, keystroke),
-        "delete" => tilde_key(3, keystroke),
-        function if function.len() > 1 && function.starts_with('f') => {
-            match function[1..]
-                .parse::<u8>()
-                .ok()
-                .and_then(|n| function_key(n, keystroke))
-            {
-                Some(bytes) => bytes,
-                None => return KeyAction::Ignore,
-            }
-        }
-        // Ctrl+letter (and Ctrl+Alt+letter with an ESC prefix): the C0 byte.
-        _ if mods.control => match control_byte(key) {
-            Some(byte) => escape_prefixed(vec![byte]),
+    let bytes = if let Some(named) = named_key(key) {
+        match keys::key_bytes(
+            named,
+            shared,
+            mode.contains(TermMode::APP_CURSOR),
+            backspace,
+        ) {
+            Some(bytes) => bytes,
             None => return KeyAction::Ignore,
-        },
-        // Alt+key: ESC and the character the key types.
-        _ if mods.alt => {
-            let text = keystroke
-                .key_char
-                .clone()
-                .filter(|text| !text.is_empty())
-                .or_else(|| {
-                    (key == "space").then(|| " ".to_owned()).or_else(|| {
-                        (key.chars().count() == 1).then(|| {
-                            if mods.shift {
-                                key.to_uppercase()
-                            } else {
-                                key.to_owned()
-                            }
-                        })
-                    })
-                });
-            match text {
-                Some(text) => escape_prefixed(text.into_bytes()),
-                None => return KeyAction::Ignore,
-            }
         }
+    } else if mods.control {
+        // Ctrl+letter (and Ctrl+Alt+letter with an ESC prefix): the C0 byte.
+        match control_byte(key) {
+            Some(byte) => keys::alt_prefixed(mods.alt, vec![byte]),
+            None => return KeyAction::Ignore,
+        }
+    } else if mods.alt {
+        // Alt+key: ESC and the character the key types.
+        let text = keystroke
+            .key_char
+            .clone()
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                (key == "space").then(|| " ".to_owned()).or_else(|| {
+                    (key.chars().count() == 1).then(|| {
+                        if mods.shift {
+                            key.to_uppercase()
+                        } else {
+                            key.to_owned()
+                        }
+                    })
+                })
+            });
+        match text {
+            Some(text) => keys::alt_prefixed(true, text.into_bytes()),
+            None => return KeyAction::Ignore,
+        }
+    } else {
         // Printable text arrives through the input handler.
-        _ => return KeyAction::Ignore,
+        return KeyAction::Ignore;
     };
     KeyAction::Send(bytes)
 }
@@ -251,6 +156,101 @@ mod tests {
             KeyAction::Send(bytes) => bytes,
             other => panic!("{text}: {other:?}"),
         }
+    }
+
+    /// Bytes as text: printable ASCII as it is, the rest as `\xNN`.
+    fn shown(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|byte| match byte {
+                0x21..=0x7e if *byte != b'\\' => char::from(*byte).to_string(),
+                _ => format!("\\x{byte:02x}"),
+            })
+            .collect()
+    }
+
+    /// What every key does with every modifier, in normal and application
+    /// cursor mode and on the alternate screen, with both Backspace
+    /// settings: one line per case.
+    fn key_table() -> String {
+        let mut names: Vec<String> = [
+            "enter",
+            "tab",
+            "escape",
+            "backspace",
+            "up",
+            "down",
+            "right",
+            "left",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "insert",
+            "delete",
+            "space",
+        ]
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+        names.extend((1..=13).map(|n| format!("f{n}")));
+        names.extend(
+            [
+                "a", "c", "k", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "@", "[", "\\",
+                "]", "^", "_", "-", "/", "?", ";", "'", ",", ".", "`",
+            ]
+            .iter()
+            .map(|name| (*name).to_owned()),
+        );
+        let mut out = String::new();
+        for name in &names {
+            for bits in 0..8u8 {
+                let mut keystroke = key("a");
+                keystroke.key = name.clone();
+                keystroke.modifiers.shift = bits & 1 != 0;
+                keystroke.modifiers.alt = bits & 2 != 0;
+                keystroke.modifiers.control = bits & 4 != 0;
+                for (mode_name, mode) in [
+                    ("normal", TermMode::default()),
+                    ("app-cursor", TermMode::APP_CURSOR),
+                    ("alt-screen", TermMode::ALT_SCREEN),
+                ] {
+                    for backspace in [BackspaceKey::Del, BackspaceKey::CtrlH] {
+                        let action = match map_key(&keystroke, mode, backspace) {
+                            KeyAction::Send(bytes) => shown(&bytes),
+                            other => format!("{other:?}"),
+                        };
+                        out.push_str(&format!(
+                            "{}{}{}{name}\t{mode_name}\t{backspace:?}\t{action}\n",
+                            if bits & 4 != 0 { "ctrl-" } else { "" },
+                            if bits & 2 != 0 { "alt-" } else { "" },
+                            if bits & 1 != 0 { "shift-" } else { "" },
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The whole table stays what the desktop sent before the mapping moved
+    /// into `shellpp-terminal` (run 16, D224): `key_table.txt` was written
+    /// from the desktop's own code then. `SHELLPP_WRITE_KEY_TABLE=1` writes
+    /// it again (only for a change made on purpose).
+    #[test]
+    fn every_key_sends_what_the_table_says() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/terminal/key_table.txt");
+        let table = key_table();
+        if std::env::var_os("SHELLPP_WRITE_KEY_TABLE").is_some() {
+            std::fs::write(path, &table).expect("written");
+        }
+        let expected = std::fs::read_to_string(path)
+            .expect("key_table.txt")
+            .replace("\r\n", "\n");
+        for (line, (got, want)) in table.lines().zip(expected.lines()).enumerate() {
+            assert_eq!(got, want, "line {}", line + 1);
+        }
+        assert_eq!(table.lines().count(), expected.lines().count());
     }
 
     /// UI 12.5: Ctrl+letter without Shift goes to the shell.

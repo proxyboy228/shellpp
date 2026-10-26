@@ -8106,6 +8106,7 @@ dependencies = [
 name = "shellpp-ssh"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "data-encoding",
  "futures",
  "rand 0.10.3",

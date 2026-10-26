@@ -111,7 +111,14 @@ fun exactHosts(word: String, hosts: List<Record>): List<Record> {
     val label = { host: Record -> host.data.text("label") ?: "" }
     val exact = candidates.filter { label(it) == word || it.address == word }
     if (exact.isNotEmpty()) return exact
-    return candidates.filter { label(it).equals(word, ignoreCase = true) || it.address.equals(word, ignoreCase = true) }
+    return candidates.filter { asciiEqualIgnoringCase(label(it), word) || asciiEqualIgnoringCase(it.address, word) }
+}
+
+/** Equal when only ASCII letters differ in case (the desktop's `eq_ignore_ascii_case`). */
+fun asciiEqualIgnoringCase(a: String, b: String): Boolean {
+    if (a.length != b.length) return false
+    val lower = { c: Char -> if (c in 'A'..'Z') c + ('a' - 'A') else c }
+    return a.indices.all { lower(a[it]) == lower(b[it]) }
 }
 
 /**
@@ -179,8 +186,11 @@ fun ConnectionsScreen(app: App, activity: MainActivity, nav: Nav) {
     val current = if (found.first == query) found.second else emptyList()
     val exact = single?.let { exactHosts(it, current) } ?: emptyList()
     val matches = if (command == null) current else emptyList()
+    // `ssh <word>` looks for the saved host first: Connect waits for the
+    // answer, so it never connects to the word as an address too early.
+    val looking = single != null && found.first != query
     Page(top = { TopBar("Connections") }) {
-        QuickConnectField(query, { query = it }, enabled = command != null || matches.isNotEmpty() || exact.isNotEmpty()) {
+        QuickConnectField(query, { query = it }, enabled = !looking && (command != null || matches.isNotEmpty() || exact.isNotEmpty())) {
             when {
                 // The saved host of that name, with its settings; several
                 // stay listed below to choose from.

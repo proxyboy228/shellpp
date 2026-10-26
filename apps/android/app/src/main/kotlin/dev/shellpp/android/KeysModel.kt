@@ -32,6 +32,9 @@ sealed class XKey(val id: String, val label: String) {
 
     val isIcon: Boolean get() = this is Password || this is Cursor || this is Attach
 
+    /** What TalkBack says for the key (plan of run 16, 3.3): words, not the glyph drawn. */
+    val spoken: String get() = spokenName(id, label)
+
     companion object {
         private const val ESC = "\u001b"
 
@@ -45,7 +48,9 @@ sealed class XKey(val id: String, val label: String) {
             add(Password)
             add(Cursor)
             add(Attach)
-            add(Text("shift_tab", "shift+tab", "$ESC[Z"))
+            // The sequences come from the shared table (D224): armed Ctrl and
+            // Alt apply to these keys too.
+            add(Code("shift_tab", "shift+tab", Native.KEY_BACKTAB))
             add(Ctrl)
             add(Code("esc", "esc", Native.KEY_ESC))
             add(Code("left", "←", Native.KEY_LEFT, repeats = true))
@@ -58,7 +63,7 @@ sealed class XKey(val id: String, val label: String) {
             add(tmux("tmux_close", "x"))
             add(Alt)
             add(Code("tab", "tab", Native.KEY_TAB))
-            add(Text("ins", "ins", "$ESC[2~"))
+            add(Code("ins", "ins", Native.KEY_INSERT))
             add(Code("del", "del", Native.KEY_DELETE, repeats = true))
             add(Code("home", "home", Native.KEY_HOME))
             add(Code("pgup", "pgUp", Native.KEY_PAGE_UP, repeats = true))
@@ -67,8 +72,7 @@ sealed class XKey(val id: String, val label: String) {
             for (sign in listOf("|", "\\", "?", "-", "/", ":", ";", "!", "~", "@", "$", "*", "^", "%", "=", "`", "<", ">", "(", ")", "{", "}", "[", "]")) {
                 add(Text(sign, sign, sign))
             }
-            val functions = listOf("${ESC}OP", "${ESC}OQ", "${ESC}OR", "${ESC}OS", "$ESC[15~", "$ESC[17~", "$ESC[18~", "$ESC[19~", "$ESC[20~", "$ESC[21~", "$ESC[23~", "$ESC[24~")
-            functions.forEachIndexed { index, sequence -> add(Text("f${index + 1}", "F${index + 1}", sequence)) }
+            for (n in 1..12) add(Code("f$n", "F$n", Native.KEY_F1 + n - 1))
             add(Text("^_", "^_", "_", ctrl = true))
             for (letter in "wrclszxgnp") add(ctrl(letter))
             add(Text("^X^X", "^X^X", "x", ctrl = true, times = 2))

@@ -445,4 +445,8 @@ pub enum WriteError {
     /// Too much input waits for the remote side; try again later.
     #[error("too much input is waiting")]
     Busy,
+    /// A secret is refused while the session records its output (or has
+    /// not decided yet, D223): [`super::SessionHandle::write_secret`].
+    #[error("the session records its output")]
+    Recorded,
 }

@@ -141,6 +141,49 @@ fn a_save_that_changes_nothing_writes_no_version() {
 }
 
 #[test]
+fn removing_a_password_already_gone_or_setting_the_same_one_writes_nothing() {
+    let app = first_run();
+    let view = ops(&app);
+    // Another version removed the password meanwhile.
+    app.core
+        .identity_save(IdentitySaveInput {
+            password: PasswordChange::Clear,
+            ..input(&app, Some(view.record_id), "ops", "deploy")
+        })
+        .expect("other version");
+    let now = get(&app, view.record_id);
+    app.env.take_events();
+    let saved = app
+        .core
+        .identity_save(IdentitySaveInput {
+            base: Some(base_of(&now)),
+            password: PasswordChange::Clear,
+            ..input(&app, Some(view.record_id), "ops", "deploy")
+        })
+        .expect("saved");
+    assert_eq!(saved.revision, now.revision);
+    assert!(app.env.take_events().is_empty());
+    // The same password again: nothing either.
+    app.core
+        .identity_save(IdentitySaveInput {
+            password: PasswordChange::Set(SecretString::from("same")),
+            ..input(&app, Some(view.record_id), "ops", "deploy")
+        })
+        .expect("set");
+    let now = get(&app, view.record_id);
+    let saved = app
+        .core
+        .identity_save(IdentitySaveInput {
+            base: Some(base_of(&now)),
+            password: PasswordChange::Set(SecretString::from("same")),
+            ..input(&app, Some(view.record_id), "ops", "deploy")
+        })
+        .expect("saved");
+    assert_eq!(saved.revision, now.revision);
+    assert!(app.core.sync_conflicts().expect("conflicts").is_empty());
+}
+
+#[test]
 fn a_cleared_username_is_cleared_and_a_newer_label_stays() {
     let app = first_run();
     let view = ops(&app);

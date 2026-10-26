@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Map, Value, json};
 use ssh_key::certificate::CertType;
 use ssh_key::{Certificate, PrivateKey, PublicKey};
@@ -348,7 +348,18 @@ impl Core {
             };
             let current_public = WipeOnDrop::new(public_identity(current.clone()));
             let changes = partial::changes(&base_data, &edited, &[]);
-            if changes.is_empty() && matches!(input.password, PasswordChange::Keep) {
+            // Removing a password the identity no longer has, or setting the
+            // one it has, changes nothing either (review of run 16).
+            let stored_password = identity::password(current);
+            let password_changes = match &input.password {
+                PasswordChange::Keep => false,
+                PasswordChange::Clear => stored_password.is_some(),
+                PasswordChange::Set(value) => match value.expose_secret() {
+                    "" => stored_password.is_some(),
+                    value => stored_password != Some(value),
+                },
+            };
+            if changes.is_empty() && !password_changes {
                 // Nothing changed: no new version, and nothing brought back.
                 return match revived {
                     Some(_) => Err(CoreError::NotFound),

@@ -75,8 +75,52 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         set(value) {
             val resumed = field && !value
             field = value
+            // The app left the screen: the paste question goes with it.
+            if (value) dismissPaste()
             if (resumed && session != 0L && !released) Thread({ refresh() }, "terminal-resume").start()
         }
+
+    /** The screen's rows as nodes for TalkBack (plan of run 16, 3.3). */
+    private val nodes by lazy { TerminalNodes(this) }
+
+    override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider = nodes
+
+    /** The rectangle of [row] in this view (the accessibility nodes). */
+    fun rowBounds(row: Int): Rect = Rect().ofRow(row, width, cellH)
+
+    /** The cursor's row last announced to TalkBack. */
+    private var spokenCursorRow: String? = null
+
+    /** Announces the cursor's row once the output settled, when TalkBack is on. */
+    private val announceCursorRow = Runnable {
+        val s = screen ?: return@Runnable
+        if (!s.cursorVisible || s.cursorRow !in 0 until s.rows) return@Runnable
+        val line = s.text(0, s.cursorRow, s.cols - 1, s.cursorRow).trimEnd()
+        if (line.isNotEmpty() && line != spokenCursorRow) {
+            spokenCursorRow = line
+            @Suppress("DEPRECATION")
+            announceForAccessibility(line)
+        }
+    }
+
+    private fun talkBackOn(): Boolean =
+        context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isTouchExplorationEnabled == true
+
+    /** Shown in the activity (the session in front): its bell rings, its paste question stays. */
+    @Volatile private var onScreen = false
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        onScreen = true
+        bellArmed = false
+    }
+
+    override fun onDetachedFromWindow() {
+        // Another session came to the front: its question goes (review of run 16).
+        onScreen = false
+        dismissPaste()
+        super.onDetachedFromWindow()
+    }
 
     private var padRestX = 0f
     private var padRestY = 0f
@@ -142,14 +186,18 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             bellArmed = false
             return
         }
+        val started = System.nanoTime()
         val bytes = try {
             Native.snapshot(session)
         } catch (e: RuntimeException) {
             return
         }
         val parsed = Screen.parse(bytes)
-        if (parsed.bell && bellArmed) bell.ring()
-        bellArmed = true
+        FrameTiming.snapshot(System.nanoTime() - started, parsed.cols * parsed.rows)
+        // Only the session on the screen rings, and a bell from while it was
+        // not there does not ring later.
+        if (parsed.bell && bellArmed && onScreen) bell.ring()
+        bellArmed = onScreen
         main.post {
             val before = screen
             screen = parsed
@@ -163,6 +211,13 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                 clearSelection()
             }
             invalidate()
+            // TalkBack reads the rows again, and the cursor's row once the
+            // output has been quiet for a moment.
+            if (onScreen && talkBackOn()) {
+                sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                removeCallbacks(announceCursorRow)
+                postDelayed(announceCursorRow, ANNOUNCE_DELAY_MS)
+            }
         }
     }
 
@@ -214,6 +269,12 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     // ----- drawing -------------------------------------------------------
 
     override fun onDraw(canvas: Canvas) {
+        val started = System.nanoTime()
+        drawScreen(canvas)
+        FrameTiming.drawn(System.nanoTime() - started)
+    }
+
+    private fun drawScreen(canvas: Canvas) {
         val s = screen
         if (s == null) {
             canvas.drawColor(context.color(R.color.bg_base))
@@ -358,16 +419,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             private var composing = ""
 
             override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-                val value = text.toString()
-                // A keyboard's clipboard pastes by committing the text: with a
-                // line break it is a paste (the multi-line confirmation and
-                // bracketed paste, D223), not typing.
-                if (value.length > 1 && (value.contains('\n') || value.contains('\r'))) {
-                    composing = ""
-                    pasteText(value)
-                    return true
-                }
-                sendComposingDiff(value)
+                sendComposingDiff(text.toString())
                 composing = ""
                 return true
             }
@@ -383,12 +435,18 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                 return true
             }
 
-            /** What a keyboard still composes is sent as the difference to what went out. */
+            /**
+             * What a keyboard still composes is sent as the difference to what
+             * went out ([imeStep]): a keyboard's clipboard commits its text, and
+             * added text with a line break is a paste (D223), not typing.
+             */
             private fun sendComposingDiff(next: String) {
-                val common = composing.commonPrefixWith(next).length
-                repeat(composing.length - common) { sendKey(Native.KEY_BACKSPACE) }
-                val added = next.substring(common)
-                if (added.isNotEmpty()) sendText(added)
+                val step = imeStep(composing, next)
+                repeat(step.backspaces) { sendKey(Native.KEY_BACKSPACE) }
+                when {
+                    step.paste -> pasteText(step.added)
+                    step.added.isNotEmpty() -> sendText(step.added)
+                }
             }
 
             override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
@@ -408,7 +466,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             KeyEvent.KEYCODE_DEL -> Native.KEY_BACKSPACE
             KeyEvent.KEYCODE_FORWARD_DEL -> Native.KEY_DELETE
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> Native.KEY_ENTER
-            KeyEvent.KEYCODE_TAB -> Native.KEY_TAB
+            KeyEvent.KEYCODE_TAB -> if (event.isShiftPressed) Native.KEY_BACKTAB else Native.KEY_TAB
+            KeyEvent.KEYCODE_INSERT -> Native.KEY_INSERT
+            in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> Native.KEY_F1 + (keyCode - KeyEvent.KEYCODE_F1)
             KeyEvent.KEYCODE_ESCAPE -> Native.KEY_ESC
             KeyEvent.KEYCODE_DPAD_UP -> Native.KEY_UP
             KeyEvent.KEYCODE_DPAD_DOWN -> Native.KEY_DOWN
@@ -841,6 +901,18 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         }
     }
 
+    /**
+     * Selects from [start] to [end] and runs Cut in nano as the toolbar's item
+     * does (the walks of ProgramsTest); false when the toolbar would not offer it.
+     */
+    fun cutInNanoForTest(start: Cell, end: Cell): Boolean {
+        val s = screen ?: return false
+        val sel = Selection(start, end)
+        if (!canCutInNano(sel, s)) return false
+        cutInNano(sel, s)
+        return true
+    }
+
     /** Delete on the command line (UI spec 9.6): the cursor past the selection, one Backspace per character. */
     private fun deleteOnLine(sel: Selection) {
         if (worker.isShutdown) return
@@ -881,7 +953,12 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         if (target == 0L || text.isEmpty() || worker.isShutdown) return
         worker.execute {
             val confirm = coreSettings().optBoolean("terminal.confirm_multiline_paste", true)
-            val preview = runCatching { Native.pastePreview(text, confirm) }.getOrNull()
+            // A failure pastes nothing (it never skips the question).
+            val preview = try {
+                Native.pastePreview(text, confirm)
+            } catch (e: RuntimeException) {
+                return@execute
+            }
             if (preview == null) {
                 if (session == target) runCatching { Native.paste(target, text) }
             } else {
@@ -890,23 +967,34 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         }
     }
 
+    private var pasteDialog: android.app.AlertDialog? = null
+
+    private fun dismissPaste() {
+        main.post {
+            pasteDialog?.dismiss()
+            pasteDialog = null
+        }
+    }
+
     /** The multi-line paste's question: its first lines, then Paste or Cancel. */
     private fun confirmPaste(target: Long, text: String, preview: JSONObject) {
-        if (released || session != target) return
+        if (released || session != target || !onScreen || paused) return
         val lines = preview.optJSONArray("lines")
         val shown = buildString {
             if (lines != null) for (i in 0 until lines.length()) appendLine(lines.optString(i))
             val more = preview.optInt("more")
             if (more > 0) append(context.resources.getQuantityString(R.plurals.paste_more_lines, more, more))
         }.trimEnd()
-        android.app.AlertDialog.Builder(context)
+        pasteDialog?.dismiss()
+        pasteDialog = android.app.AlertDialog.Builder(context)
             .setTitle(R.string.paste_lines_title)
             .setMessage(shown)
             .setPositiveButton(R.string.paste) { _, _ ->
-                // Only to the session it was asked for (it may have switched).
-                if (session == target && !worker.isShutdown) worker.execute { runCatching { Native.paste(target, text) } }
+                // Only to the session it was asked for, while it is in front.
+                if (session == target && onScreen && !worker.isShutdown) worker.execute { runCatching { Native.paste(target, text) } }
             }
             .setNegativeButton(R.string.cancel, null)
+            .setOnDismissListener { pasteDialog = null }
             .show()
     }
 
@@ -920,6 +1008,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     }
 
     companion object {
+        /** How long the output stays quiet before TalkBack hears the cursor's row. */
+        const val ANNOUNCE_DELAY_MS = 700L
+
         /**
          * The background and foreground each session's terminal shows (its
          * host's theme first, D220): the session bar and the cards of

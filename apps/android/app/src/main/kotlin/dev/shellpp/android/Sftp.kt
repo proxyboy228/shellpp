@@ -142,29 +142,60 @@ fun renameCheck(old: String, wanted: String, listed: List<String>, exists: Boole
     else -> RenameCheck.TAKEN
 }
 
+/** The SFTP calls a case-only rename makes, so tests can stand in for the server. */
+interface RenameCalls {
+    fun rename(from: String, to: String)
+    fun exists(path: String): Boolean
+    fun names(folder: String): List<String>
+}
+
 /**
  * A rename that changes only the case on a server without case (D223): at
- * once, else through a free name of its own; when the second step fails the
- * file gets its old name back. Null when done, else what to say.
+ * once, kept only when the folder then lists the new name (some servers
+ * keep the old case); else through a free name of its own (visible, not a
+ * dot name); when a later step fails the file gets its old name back, and
+ * when that fails too the message names where it is. Null when done, else
+ * what to say.
  */
-private fun renameCase(session: Long, folder: String, old: String, wanted: String): String? {
+fun renameCase(calls: RenameCalls, folder: String, old: String, wanted: String, suffix: String = java.util.UUID.randomUUID().toString().take(8)): String? {
     val from = remoteJoin(folder, old)
     val to = remoteJoin(folder, wanted)
+    val renamed = { runCatching { wanted in calls.names(folder) }.getOrDefault(false) }
+    if (runCatching { calls.rename(from, to) }.isSuccess && renamed()) return null
+    // The way round: through a free name of its own.
+    val stepName = "$old.shellpp-renaming-$suffix"
+    val step = remoteJoin(folder, stepName)
+    if (runCatching { calls.exists(step) }.getOrDefault(true)) return "Not renamed: the server refused it."
     try {
-        sftp(session, "rename", JSONObject().put("from", from).put("to", to))
-        return null
-    } catch (_: CoreException) {
-        // Some servers refuse a rename onto a name they find: the way round.
+        calls.rename(from, step)
+    } catch (error: Exception) {
+        // The answer may be lost after the server did it.
+        if (runCatching { calls.exists(step) }.getOrDefault(false)) {
+            return if (runCatching { calls.rename(step, from) }.isSuccess) "Not renamed: ${error.message ?: "the server refused it"}."
+            else "Not renamed: the file is now “$stepName”."
+        }
+        return "Not renamed: ${error.message ?: "the server refused it"}."
     }
-    val step = remoteJoin(folder, ".$old.shellpp-" + java.util.UUID.randomUUID().toString().take(8))
-    if (sftp(session, "exists", JSONObject().put("path", step)) as Boolean) return "Not renamed: the server refused it."
-    sftp(session, "rename", JSONObject().put("from", from).put("to", step))
     return try {
-        sftp(session, "rename", JSONObject().put("from", step).put("to", to))
+        calls.rename(step, to)
         null
-    } catch (error: CoreException) {
-        val back = runCatching { sftp(session, "rename", JSONObject().put("from", step).put("to", from)) }.isSuccess
-        if (back) "Not renamed: ${error.message}" else "Not renamed: the file is now “${step.substringAfterLast('/')}”."
+    } catch (error: Exception) {
+        if (runCatching { calls.rename(step, from) }.isSuccess) "Not renamed: ${error.message ?: "the server refused it"}."
+        else "Not renamed: the file is now “$stepName”."
+    }
+}
+
+/** [RenameCalls] on a session's SFTP channel. */
+private fun sessionCalls(session: Long) = object : RenameCalls {
+    override fun rename(from: String, to: String) {
+        sftp(session, "rename", JSONObject().put("from", from).put("to", to))
+    }
+
+    override fun exists(path: String): Boolean = sftp(session, "exists", JSONObject().put("path", path)) as Boolean
+
+    override fun names(folder: String): List<String> {
+        val list = sftp(session, "list", JSONObject().put("path", folder)) as JSONArray
+        return (0 until list.length()).map { list.getJSONObject(it).optString("name") }
     }
 }
 
@@ -614,7 +645,7 @@ fun SftpScreen(
                                 if (exists == null || listed == null) {
                                     "The name could not be checked; nothing was changed."
                                 } else if (what == "rename" && entry != null && renameCheck(old, wanted, listed, exists) == RenameCheck.SAME_FILE) {
-                                    renameCase(session, folder, old, wanted)
+                                    renameCase(sessionCalls(session), folder, old, wanted)
                                 } else if (exists) {
                                     "“$wanted” is already there; nothing was changed."
                                 } else {
