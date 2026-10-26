@@ -276,9 +276,11 @@ clears a copied password when it can, instead of taking an empty read for
   columns and rows; the new size goes to the server when the gesture ends
   [decision].
 - Accessibility: a `Canvas` view has none by itself; an
-  `AccessibilityNodeProvider` gives TalkBack a node per row of the screen
-  (its text, the cursor's row marked) and the view announces the cursor's
-  row when the output settles (run 16, D224; UI spec 9.8a).
+  `ExploreByTouchHelper` (`androidx.customview`) gives TalkBack a node per
+  row of the screen (its text, the cursor's row marked) with focus, touch
+  exploration and a double tap, and the view announces the cursor's row
+  when the output settles (run 16, D224; UI spec 9.8a). The view gives the
+  assistant's and autofill's structure nothing.
 
 ### 6.1a The session screen (run 15)
 
@@ -328,7 +330,9 @@ clears a copied password when it can, instead of taking an empty read for
   F1-F12, Ctrl and Alt combinations, the host's Backspace setting) and taps
   through its mouse encodings: since run 16 one table for both clients,
   `shellpp_terminal::keys` (D224). The desktop's keystrokes and the phone's
-  key codes (`Native.KEY_*`) become its keys; the desktop's tests check
+  key codes (`Native.KEY_*`, with a hardware keyboard's Shift) become its
+  keys; Shift+Home, End, PgUp and PgDn scroll the view on the normal screen
+  on both; AltGr's characters go as text. The desktop's tests check
   every key with every modifier and every mouse report against tables
   written from its code before the move, and the phone's tests check its
   keys against the same table.

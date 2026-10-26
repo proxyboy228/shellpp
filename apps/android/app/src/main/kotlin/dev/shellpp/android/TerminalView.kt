@@ -81,12 +81,33 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         }
 
     /** The screen's rows as nodes for TalkBack (plan of run 16, 3.3). */
-    private val nodes by lazy { TerminalNodes(this) }
+    private val nodes = TerminalNodes(this).also { androidx.core.view.ViewCompat.setAccessibilityDelegate(this, it) }
 
-    override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider = nodes
+    /** A finger over the terminal with TalkBack on reads the row under it. */
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean =
+        nodes.dispatchHoverEvent(event) || super.dispatchHoverEvent(event)
+
+    /**
+     * The rows are for TalkBack only: the assistant ("use text from the
+     * screen") and autofill do not get the terminal's output, which can hold
+     * a secret someone printed (review of run 16).
+     */
+    override fun onProvideVirtualStructure(structure: android.view.ViewStructure) {}
+
+    override fun onProvideAutofillVirtualStructure(structure: android.view.ViewStructure, flags: Int) {}
 
     /** The rectangle of [row] in this view (the accessibility nodes). */
     fun rowBounds(row: Int): Rect = Rect().ofRow(row, width, cellH)
+
+    /** The row at [y] in this view (the accessibility nodes). */
+    fun rowAt(y: Float): Int = if (y < 0) -1 else (y / cellH).toInt()
+
+    /** The rows changed for TalkBack, told at most every [NODES_DELAY_MS]. */
+    private var nodesChangePending = false
+    private val nodesChanged = Runnable {
+        nodesChangePending = false
+        nodes.invalidateRoot()
+    }
 
     /** The cursor's row last announced to TalkBack. */
     private var spokenCursorRow: String? = null
@@ -214,7 +235,10 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             // TalkBack reads the rows again, and the cursor's row once the
             // output has been quiet for a moment.
             if (onScreen && talkBackOn()) {
-                sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                if (!nodesChangePending) {
+                    nodesChangePending = true
+                    postDelayed(nodesChanged, NODES_DELAY_MS)
+                }
                 removeCallbacks(announceCursorRow)
                 postDelayed(announceCursorRow, ANNOUNCE_DELAY_MS)
             }
@@ -442,7 +466,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
              */
             private fun sendComposingDiff(next: String) {
                 val step = imeStep(composing, next)
-                repeat(step.backspaces) { sendKey(Native.KEY_BACKSPACE) }
+                // The keyboard's own corrections: the armed Ctrl and Alt stay
+                // for the next key (review of run 16).
+                repeat(step.backspaces) { sendKey(Native.KEY_BACKSPACE, raw = true) }
                 when {
                     step.paste -> pasteText(step.added)
                     step.added.isNotEmpty() -> sendText(step.added)
@@ -481,27 +507,34 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             else -> 0
         }
         if (key != 0) {
-            sendKey(key, event.isCtrlPressed, event.isAltPressed)
+            sendKey(key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
             return true
         }
-        val unicode = event.getUnicodeChar(event.metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv())
-        if (unicode != 0) {
-            sendText(String(Character.toChars(unicode)), event.isCtrlPressed, event.isAltPressed)
+        val meta = event.metaState
+        val typed = hardwareChar(
+            plain = event.getUnicodeChar(meta and (KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK).inv()),
+            withAlt = event.getUnicodeChar(meta and KeyEvent.META_CTRL_MASK.inv()),
+            rightAlt = meta and KeyEvent.META_ALT_RIGHT_ON != 0,
+            alt = event.isAltPressed,
+        )
+        if (typed != null) {
+            sendText(String(Character.toChars(typed.char)), event.isCtrlPressed, typed.alt)
             return true
         }
         return super.onKeyDown(keyCode, event)
     }
 
-    fun sendKey(code: Int, ctrl: Boolean = false, alt: Boolean = false) {
+    /** [raw]: without the armed Ctrl and Alt, which stay armed. */
+    fun sendKey(code: Int, ctrl: Boolean = false, alt: Boolean = false, shift: Boolean = false, raw: Boolean = false) {
         if (session == 0L) return
         // Keys of the soft keyboard count as input for the auto-lock (UI spec 5).
         (context.applicationContext as? App)?.noteActivity()
-        val withCtrl = ctrl || modifiers.ctrl
-        val withAlt = alt || modifiers.alt
-        modifiers.consume()
+        val withCtrl = ctrl || (!raw && modifiers.ctrl)
+        val withAlt = alt || (!raw && modifiers.alt)
+        if (!raw) modifiers.consume()
         if (selection != null) clearSelection()
         if (worker.isShutdown) return
-        worker.execute { runCatching { Native.key(session, code, withCtrl, withAlt) } }
+        worker.execute { runCatching { Native.key(session, code, withCtrl, withAlt, shift) } }
     }
 
     /** [raw]: as it is, without the armed Ctrl and Alt (a tmux sequence). */
@@ -925,7 +958,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                     cannotReach()
                     return@runCatching
                 }
-                repeat(count) { Native.key(id, Native.KEY_BACKSPACE, false, false) }
+                repeat(count) { Native.key(id, Native.KEY_BACKSPACE, false, false, false) }
             }
         }
     }
@@ -1010,6 +1043,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     companion object {
         /** How long the output stays quiet before TalkBack hears the cursor's row. */
         const val ANNOUNCE_DELAY_MS = 700L
+
+        /** How often TalkBack is told that the rows changed, at most (review of run 16). */
+        const val NODES_DELAY_MS = 200L
 
         /**
          * The background and foreground each session's terminal shows (its

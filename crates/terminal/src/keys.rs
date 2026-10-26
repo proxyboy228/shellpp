@@ -167,7 +167,9 @@ pub fn control_byte(key: &str) -> Option<u8> {
     }
     let mut chars = key.chars();
     let ch = chars.next()?;
-    if chars.next().is_some() {
+    // The space bar is "space"; a lone " " names no key (as before the
+    // table was shared; review of run 16).
+    if chars.next().is_some() || ch == ' ' {
         return None;
     }
     control_of(ch)
@@ -327,6 +329,10 @@ mod tests {
         );
         assert_eq!(control_of('c'), Some(0x03));
         assert_eq!(control_of('é'), None);
+        // The phone's Ctrl+Space is NUL; the desktop's key is "space".
+        assert_eq!(control_of(' '), Some(0));
+        assert_eq!(control_byte("space"), Some(0));
+        assert_eq!(control_byte(" "), None);
     }
 
     #[test]

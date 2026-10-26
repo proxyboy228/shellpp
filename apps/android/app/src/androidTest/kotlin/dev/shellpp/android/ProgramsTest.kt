@@ -17,7 +17,10 @@ import org.junit.runner.RunWith
  * nano with the owner's example (open a config, select lines, Cut in nano,
  * save), vim (insert, Esc, the arrows, `:wq`), less (a page down, `q`),
  * htop and mc (F10 from the keys row), tmux (`^B %`, `^B "`, `^B o`, `^B x`
- * from the keys row), each step checked on the screen. Against OpenSSH in
+ * from the keys row), each step checked on the screen. "From the keys row"
+ * is the activity's handler a chip's tap calls, and Cut in nano the
+ * toolbar's action without the toolbar: the taps themselves are not driven
+ * (review of run 16). Against OpenSSH in
  * Docker with the terminal programs (`tests/openssh/programs.Dockerfile`):
  * `scripts\verify-android.ps1 -Emulator -Programs` (with SnapshotTimingTest).
  */
@@ -69,23 +72,23 @@ class ProgramsTest {
 
     private fun ActivityScenario<TerminalActivity>.ctrl(letter: String) = onActivity { it.terminal.sendText(letter, ctrl = true) }
 
-    /** A key of the extra-keys row, as a tap sends it. */
+    /** A key of the extra-keys row: the handler a chip's tap calls. */
     private fun ActivityScenario<TerminalActivity>.key(id: String) = onActivity { it.key(XKey.ALL.getValue(id), it.target()) }
 
     /** Back at the shell: the program gave the screen back and the prompt waits; then a marker echoed. */
     private fun ActivityScenario<TerminalActivity>.shell(what: String) {
         // Typed while the program still reads its input, the marker would be
         // the program's (vim takes what comes after :wq).
-        val deadline = System.currentTimeMillis() + 30_000
-        while (System.currentTimeMillis() < deadline) {
+        // A program that never gave the screen back fails here, not later
+        // with a marker typed into it (review of run 16).
+        waitFor("$what gave the shell back") { _ ->
             var ready = false
             onActivity { activity ->
                 val screen = activity.terminal.screen ?: return@onActivity
                 val last = (0 until screen.rows).map { screen.text(0, it, screen.cols - 1, it).trimEnd() }.lastOrNull { it.isNotEmpty() }
                 ready = !screen.alternateScreen && last != null && (last.endsWith("$") || last.endsWith("#"))
             }
-            if (ready) break
-            Thread.sleep(200)
+            ready
         }
         markers += 1
         val marker = "back-$markers-at-the-shell"
@@ -124,11 +127,12 @@ class ProgramsTest {
             s.type("tr '\\n' , < /tmp/shellpp-run16.conf; echo\r")
             s.waitFor("the file saved without the two lines") { rows -> rows.any { it.trimEnd() == "one,four," } }
 
-            // vim: insert, Esc and the arrows from the row, x, :wq.
+            // vim: insert, Esc and the arrows from the row, x, :wq. Two
+            // Lefts from the e delete the c; one lost would delete the d.
             s.type("vim -u NONE -N /tmp/shellpp-run16.vim\r")
             s.waitFor("vim") { rows -> rows.count { it.startsWith("~") } >= 3 }
-            s.type("ihello")
-            s.waitFor("vim inserted") { rows -> rows.any { it.trimEnd() == "hello" } }
+            s.type("iabcde")
+            s.waitFor("vim inserted") { rows -> rows.any { it.trimEnd() == "abcde" } }
             // A pause after Esc, so vim does not take Esc and the arrow for one key.
             s.key("esc")
             Thread.sleep(400)
@@ -137,11 +141,11 @@ class ProgramsTest {
             s.key("left")
             Thread.sleep(200)
             s.type("x")
-            s.waitFor("vim deleted a character") { rows -> rows.any { it.trimEnd() == "helo" } }
+            s.waitFor("vim deleted the c") { rows -> rows.any { it.trimEnd() == "abde" } }
             s.type(":wq\r")
             s.shell("vim")
             s.type("cat /tmp/shellpp-run16.vim\r")
-            s.waitFor("the file vim wrote") { rows -> rows.any { it.trimEnd() == "helo" } }
+            s.waitFor("the file vim wrote") { rows -> rows.any { it.trimEnd() == "abde" } }
 
             // less: a page down from the row, q.
             s.type("seq 1 400 | less\r")
@@ -166,21 +170,26 @@ class ProgramsTest {
             if (s.rows().any { "really want to quit" in it }) s.type("\r")
             s.shell("mc")
 
-            // tmux: the prefix combinations of the row.
+            // tmux: the prefix combinations of the row. Each step prints its
+            // own word, so an answer left on another pane cannot pass for it
+            // (review of run 16).
             s.type("tmux new -s run16\r")
             s.waitFor("tmux") { rows -> rows.any { "[run16]" in it } }
             s.key("tmux_split_h")
-            s.type("tmux list-panes | wc -l | sed s/^/panes=/\r")
-            s.waitFor("tmux split sideways") { rows -> rows.any { "panes=2" in it } }
+            s.type("tmux list-panes | wc -l | sed s/^/sideways=/\r")
+            s.waitFor("tmux split sideways") { rows -> rows.any { "sideways=2" in it } }
             s.key("tmux_split_v")
+            s.type("tmux list-panes | wc -l | sed s/^/below=/\r")
+            s.waitFor("tmux split again") { rows -> rows.any { "below=3" in it } }
+            // From the new pane (2, bottom right) the next is the first (0, left).
             s.key("tmux_next")
-            s.type("tmux list-panes | wc -l | sed s/^/panes=/\r")
-            s.waitFor("tmux split again") { rows -> rows.any { "panes=3" in it } }
+            s.type("tmux display -p active=#{pane_index}\r")
+            s.waitFor("tmux went to the next pane") { rows -> rows.any { "active=0" in it } }
             s.key("tmux_close")
             s.waitFor("tmux asks to kill the pane") { rows -> rows.any { "kill-pane" in it } }
             s.type("y")
-            s.type("tmux list-panes | wc -l | sed s/^/panes=/\r")
-            s.waitFor("tmux closed a pane") { rows -> rows.any { "panes=2" in it } }
+            s.type("tmux list-panes | wc -l | sed s/^/closed=/\r")
+            s.waitFor("tmux closed a pane") { rows -> rows.any { "closed=2" in it } }
             s.type("tmux kill-server\r")
             s.shell("tmux")
         }

@@ -325,6 +325,13 @@ After run 16 (the run reports have the details):
   identity a pull deleted back with an edit has no test of its own (no
   client deletes identities yet); a dialog that stays open would need a
   "written" answer like `record_save_written`.
+- **The phone's tests of M2** (review of 3.3, D224): the walks call the keys
+  row's handler and Cut in nano's action, not the chips' and the toolbar's
+  taps; the snapshot follows the model's wakes, two or three per frame
+  drawn in a flood (within the budget; tying it to the frame saves that
+  work); the cursor
+  row's announcement uses `announceForAccessibility`, deprecated in API 36
+  (a polite live region is the lasting form).
 - **The desktop's local SFTP panel on Windows** (D224): renaming
   `readme` to `README` is refused as "already there" (its check finds the
   same file on a file system without case); the phone's remote panel has

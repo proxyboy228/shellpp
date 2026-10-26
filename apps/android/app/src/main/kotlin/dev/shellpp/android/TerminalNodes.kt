@@ -1,51 +1,62 @@
 package dev.shellpp.android
 
 import android.graphics.Rect
-import android.os.Build
-import android.view.View
-import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityNodeProvider
+import android.os.Bundle
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import androidx.customview.widget.ExploreByTouchHelper
 
 /**
  * The terminal for TalkBack (architecture 6.1; plan of run 16, 3.3): a
  * Canvas view has no text of its own, so each row of the screen is a
  * virtual node with the row's text, and the cursor's row says that it is.
+ * The helper takes TalkBack's focus, touch exploration (a finger over a row
+ * reads it) and its double tap (the keyboard, as a tap on the terminal);
  * [TerminalView] announces the cursor's row when the output settles.
  */
-class TerminalNodes(private val view: TerminalView) : AccessibilityNodeProvider() {
+class TerminalNodes(private val view: TerminalView) : ExploreByTouchHelper(view) {
+    override fun getVirtualViewAt(x: Float, y: Float): Int {
+        val s = view.screen ?: return INVALID_ID
+        val row = view.rowAt(y)
+        return if (row in 0 until s.rows && shown(row)) row else INVALID_ID
+    }
+
+    override fun getVisibleVirtualViews(virtualViewIds: MutableList<Int>) {
+        val s = view.screen ?: return
+        for (row in 0 until s.rows) if (shown(row)) virtualViewIds.add(row)
+    }
+
+    /** Whether [row] is on the view: after a pinch or with the keyboard
+     * opening, the screen can have rows below its bottom edge. */
+    private fun shown(row: Int): Boolean = view.rowBounds(row).top < view.height
+
+    override fun onPopulateNodeForHost(node: AccessibilityNodeInfoCompat) {
+        node.contentDescription = view.context.getString(R.string.terminal_description)
+    }
+
     @Suppress("DEPRECATION")
-    override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
-        val screen = view.screen
-        if (virtualViewId == View.NO_ID) {
-            val info = AccessibilityNodeInfo.obtain(view)
-            view.onInitializeAccessibilityNodeInfo(info)
-            info.contentDescription = view.context.getString(R.string.terminal_description)
-            if (screen != null) for (row in 0 until screen.rows) info.addChild(view, row)
-            return info
+    override fun onPopulateNodeForVirtualView(virtualViewId: Int, node: AccessibilityNodeInfoCompat) {
+        val s = view.screen
+        if (s == null || virtualViewId !in 0 until s.rows) {
+            // A row the screen no longer has (it shrank): an empty node.
+            node.text = ""
+            node.setBoundsInParent(Rect())
+            return
         }
-        if (screen == null || virtualViewId !in 0 until screen.rows) return null
         val row = virtualViewId
-        val info = AccessibilityNodeInfo.obtain(view, row)
-        info.setParent(view)
-        info.setSource(view, row)
-        info.packageName = view.context.packageName
-        info.className = "android.widget.TextView"
-        val text = screen.text(0, row, screen.cols - 1, row).trimEnd()
-        info.text = text.ifEmpty { " " }
-        val cursorRow = screen.cursorVisible && row == screen.cursorRow
-        if (cursorRow) {
-            if (Build.VERSION.SDK_INT >= 30) info.stateDescription = view.context.getString(R.string.terminal_cursor_row)
-            else info.contentDescription = view.context.getString(R.string.terminal_cursor_row) + ", " + text
+        node.className = "android.widget.TextView"
+        val text = s.text(0, row, s.cols - 1, row).trimEnd()
+        node.text = text.ifEmpty { " " }
+        if (s.cursorVisible && row == s.cursorRow) {
+            node.stateDescription = view.context.getString(R.string.terminal_cursor_row)
         }
-        val bounds = view.rowBounds(row)
-        info.setBoundsInParent(bounds)
-        val origin = IntArray(2).also { view.getLocationOnScreen(it) }
-        bounds.offset(origin[0], origin[1])
-        info.setBoundsInScreen(bounds)
-        info.isVisibleToUser = true
-        info.isEnabled = true
-        info.isFocusable = true
-        return info
+        node.setBoundsInParent(view.rowBounds(row))
+        node.addAction(AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK)
+    }
+
+    override fun onPerformActionForVirtualView(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+        if (action != AccessibilityNodeInfoCompat.ACTION_CLICK) return false
+        view.showKeyboard()
+        return true
     }
 }
 

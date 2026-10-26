@@ -121,6 +121,9 @@ dependencies {
     // keyboard, upload and the like (plan 1.3: Material icons or our own glyphs).
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.13.0")
+    // The terminal's rows for TalkBack: focus, touch exploration, double tap
+    // (ExploreByTouchHelper; review of run 16).
+    implementation("androidx.customview:customview:1.2.0")
     // Android's trust manager for the sync server's certificate (architecture 5).
     implementation(project(":rustls-platform-verifier"))
     testImplementation("junit:junit:4.13.2")

@@ -73,12 +73,23 @@ fn mode_bits(mode: TermMode) -> u8 {
 
 /// The modes that change what keys and taps send.
 pub fn modes(handle: &TerminalHandle) -> Modes {
-    let bits = mode_bits(*handle.term().lock().mode());
+    let mode = *handle.term().lock().mode();
+    let bits = mode_bits(mode);
     Modes {
         app_cursor: bits & MODE_APP_CURSOR != 0,
         mouse: bits & MODE_MOUSE != 0,
         sgr_mouse: bits & MODE_SGR_MOUSE != 0,
+        utf8_mouse: mode.contains(TermMode::UTF8_MOUSE),
+        alt_screen: bits & MODE_ALT_SCREEN != 0,
     }
+}
+
+/// The page of Shift+PgUp and PgDn: the screen's rows less one, as on the
+/// desktop.
+pub fn page(handle: &TerminalHandle) -> i32 {
+    use alacritty_terminal::grid::Dimensions;
+    let rows = handle.term().lock().screen_lines();
+    i32::try_from(rows.max(2) - 1).unwrap_or(i32::MAX)
 }
 
 /// Whether the program switched to the alternate screen (a full-screen
@@ -324,9 +335,17 @@ mod tests {
                 app_cursor: true,
                 mouse: true,
                 sgr_mouse: true,
+                utf8_mouse: false,
+                alt_screen: false,
             }
         );
         let bytes = snapshot(&handle, true);
         assert_eq!(bytes[10], MODE_APP_CURSOR | MODE_MOUSE | MODE_SGR_MOUSE);
+        handle
+            .feed_blocking(b"\x1b[?1006l\x1b[?1005h\x1b[?1049h")
+            .unwrap();
+        handle.flush_blocking();
+        let after = modes(&handle);
+        assert!(after.utf8_mouse && after.alt_screen && !after.sgr_mouse);
     }
 }

@@ -16,8 +16,9 @@ import org.junit.runner.RunWith
  * The screen snapshot's profile (plan of run 16, 3.3; D224): the terminal
  * floods with output (`seq`, a big file through `cat`) while the session
  * screen is seen, and the snapshot's and the drawing's times per frame are
- * reported as instrumentation status (`INSTRUMENTATION_STATUS: ...`). The
- * numbers are the emulator's (x86_64 on the computer), not the S25's.
+ * reported as instrumentation status (`INSTRUMENTATION_STATUS: ...`) and held
+ * to the frame budget on average. The numbers are the emulator's (x86_64 on
+ * the computer), not the S25's.
  * `scripts\verify-android.ps1 -Emulator -Programs` runs it.
  */
 @RunWith(AndroidJUnit4::class)
@@ -65,10 +66,15 @@ class SnapshotTimingTest {
         s.onActivity { it.terminal.typeText("$command; echo $marker\r") }
         // The marker's own line (the command line may have scrolled away).
         assertTrue("$name ends", waitFor(s, 600_000) { lines -> lines.any { it.trimEnd() == marker } })
+        val report = FrameTiming.report()
         val status = Bundle()
-        for ((key, value) in FrameTiming.report()) status.putLong("$name.$key", value)
+        for ((key, value) in report) status.putLong("$name.$key", value)
         status.putLong("$name.seconds", (System.currentTimeMillis() - started) / 1000)
         instrumentation.sendStatus(0, status)
+        // The frame budget (D224): half a 60 Hz frame each, on average.
+        assertTrue("$name: frames drawn ($report)", report.getValue("snapshots") > 0 && report.getValue("draws") > 0)
+        assertTrue("$name: the snapshot within 2 ms on average ($report)", report.getValue("snapshotAvgUs") <= SNAPSHOT_BUDGET_US)
+        assertTrue("$name: the drawing within 8 ms on average ($report)", report.getValue("drawAvgUs") <= DRAW_BUDGET_US)
     }
 
     @Test
@@ -80,5 +86,10 @@ class SnapshotTimingTest {
             Thread.sleep(5_000)
             flood(s, "cat", "cat /tmp/shellpp-big.txt")
         }
+    }
+
+    private companion object {
+        const val SNAPSHOT_BUDGET_US = 2_000L
+        const val DRAW_BUDGET_US = 8_000L
     }
 }

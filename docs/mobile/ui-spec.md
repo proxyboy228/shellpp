@@ -488,7 +488,11 @@ says where it stops [decision]:
 - The terminal's screen is read row by row: each row is a node with its
   text, and the cursor's row says that it is the cursor's line; when the
   output has been quiet for 0.7 s, the cursor's row is announced once (a
-  row already announced is not repeated) (run 16, D224) [decision].
+  row already announced is not repeated) (run 16, D224) [decision]. The
+  terminal and each row take TalkBack's focus, a finger over a row reads
+  it, and a double tap on a row opens the keyboard, as a tap does. The
+  rows are for TalkBack only: the assistant and autofill do not get the
+  screen's text.
 - Every key of the extra-keys row is a button with a spoken name (words,
   not the glyph: "Up arrow", "Control C", "tmux: next pane"), its state
   (Ctrl and Alt: on, locked) and a double tap that sends it to the session

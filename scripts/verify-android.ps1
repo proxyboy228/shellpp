@@ -108,12 +108,14 @@ $EndToEndClasses = @(
     'dev.shellpp.android.EditorKeepsOtherChangesTest',
     'dev.shellpp.android.ConnectTest',
     'dev.shellpp.android.KeysSftpTest',
+    'dev.shellpp.android.TalkBackTest',
     'dev.shellpp.android.FingerprintOnTest',
     'dev.shellpp.android.FingerprintInvalidatedTest',
     'dev.shellpp.android.SyncSignInTest',
     'dev.shellpp.android.SyncAfterUnlockTest',
     'dev.shellpp.android.SyncRestoreTest'
 )
+if ($Programs -and -not $Emulator) { throw '-Programs runs on the emulator: add -Emulator' }
 if ($Programs) { $EndToEndClasses = @('dev.shellpp.android.ProgramsTest', 'dev.shellpp.android.SnapshotTimingTest') }
 
 # The owner's signing never reaches these checks: a signing file or

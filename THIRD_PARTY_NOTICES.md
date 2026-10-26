@@ -1134,6 +1134,7 @@ they bring).
 | androidx.core:core | 1.18.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/core#1.18.0> |
 | androidx.core:core-ktx | 1.18.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/core#1.18.0> |
 | androidx.core:core-viewtree | 1.0.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/core#1.0.0> |
+| androidx.customview:customview | 1.2.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/customview#1.2.0> |
 | androidx.customview:customview-poolingcontainer | 1.0.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/customview#1.0.0> |
 | androidx.emoji2:emoji2 | 1.4.0 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/emoji2#1.4.0> |
 | androidx.graphics:graphics-path | 1.0.1 | The Apache Software License, Version 2.0 | <https://developer.android.com/jetpack/androidx/releases/graphics#1.0.1> |

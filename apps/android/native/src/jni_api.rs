@@ -17,11 +17,12 @@ use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::sys::{jboolean, jint, jlong};
 use secrecy::SecretString;
 use shellpp_core::service::dto::SessionTarget;
+use shellpp_terminal::keys::Mods;
 use zeroize::Zeroizing;
 
 use crate::android_platform::KotlinPlatform;
 use crate::engine::{Engine, EngineError, Services};
-use crate::input::{self, Cell, Key};
+use crate::input::{self, Cell, Key, KeyAction};
 use crate::screen;
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
@@ -279,8 +280,9 @@ pub extern "system" fn Java_dev_shellpp_android_Native_reply<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `key(session, code, ctrl, alt)`: a key of the extra keys row
-/// (`Native.KEY_*`).
+/// `key(session, code, ctrl, alt, shift)`: a key of the extra keys row or
+/// a hardware keyboard (`Native.KEY_*`); Shift+Home, End, PgUp and PgDn on
+/// the normal screen scroll the view (D224).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_key<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -289,19 +291,28 @@ pub extern "system" fn Java_dev_shellpp_android_Native_key<'caller>(
     code: jint,
     ctrl: jboolean,
     alt: jboolean,
+    shift: jboolean,
 ) {
     unowned
         .with_env(|_env| -> Result<(), NativeError> {
+            use alacritty_terminal::grid::Scroll;
             let engine = engine()?;
             let Some(key) = Key::from_code(code) else {
                 return Ok(());
             };
-            let modes = screen::modes(&engine.terminal(id(session))?);
+            let terminal = engine.terminal(id(session))?;
+            let modes = screen::modes(&terminal);
             let backspace = engine.backspace(id(session))?;
-            engine.send(
-                id(session),
-                input::key_bytes(key, modes, ctrl, alt, backspace),
-            )?;
+            let mods = Mods { shift, alt, ctrl };
+            match input::key_action(key, modes, mods, backspace) {
+                KeyAction::Send(bytes) => engine.send(id(session), bytes)?,
+                KeyAction::ScrollPageUp => terminal.scroll(Scroll::Delta(screen::page(&terminal))),
+                KeyAction::ScrollPageDown => {
+                    terminal.scroll(Scroll::Delta(-screen::page(&terminal)));
+                }
+                KeyAction::ScrollTop => terminal.scroll(Scroll::Top),
+                KeyAction::ScrollBottom => terminal.scroll_to_bottom(),
+            }
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()

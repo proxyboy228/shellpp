@@ -53,7 +53,8 @@ object Native {
     @JvmStatic external fun transferCancel(transfer: Long)
     @JvmStatic external fun nextEvent(timeoutMs: Int): String?
     @JvmStatic external fun reply(session: Long, prompt: Long, kind: String, text: ByteArray?)
-    @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)
+    /** A key ([KEY_ESC]...); a hardware keyboard's Shift too (Shift+PgUp scrolls on the normal screen). */
+    @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean, shift: Boolean)
     @JvmStatic external fun text(session: Long, text: String, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun paste(session: Long, text: String)
 

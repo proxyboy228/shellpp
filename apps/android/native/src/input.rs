@@ -66,22 +66,41 @@ pub struct Modes {
     pub mouse: bool,
     /// ... in the SGR encoding (mode 1006).
     pub sgr_mouse: bool,
+    /// ... in the UTF-8 encoding (mode 1005).
+    pub utf8_mouse: bool,
+    /// The alternate screen (a full-screen program): Shift+Home, End, PgUp
+    /// and PgDn go to the program instead of scrolling the view.
+    pub alt_screen: bool,
 }
 
-/// The bytes of `key` with the armed modifiers and the host's Backspace
-/// setting (the shared table, D224).
-pub fn key_bytes(
-    key: Key,
-    modes: Modes,
-    ctrl: bool,
-    alt: bool,
-    backspace: BackspaceKey,
-) -> Vec<u8> {
+/// What a key does (the desktop's `KeyAction`, D224): bytes for the
+/// session, or a scroll of the view — Shift+Home, End, PgUp and PgDn on the
+/// normal screen move through the scrollback, as on the desktop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyAction {
+    Send(Vec<u8>),
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollTop,
+    ScrollBottom,
+}
+
+/// What `key` does with the held or armed `mods` (a hardware keyboard's
+/// Shift too) and the host's Backspace setting (the shared table, D224).
+pub fn key_action(key: Key, modes: Modes, mods: Mods, backspace: BackspaceKey) -> KeyAction {
     let mods = Mods {
-        shift: key == Key::BackTab,
-        alt,
-        ctrl,
+        shift: mods.shift || key == Key::BackTab,
+        ..mods
     };
+    if mods.shift && !modes.alt_screen && !mods.ctrl && !mods.alt {
+        match key {
+            Key::Home => return KeyAction::ScrollTop,
+            Key::End => return KeyAction::ScrollBottom,
+            Key::PageUp => return KeyAction::ScrollPageUp,
+            Key::PageDown => return KeyAction::ScrollPageDown,
+            _ => {}
+        }
+    }
     let shared = match key {
         Key::Esc => table::Key::Escape,
         Key::Tab | Key::BackTab => table::Key::Tab,
@@ -99,7 +118,28 @@ pub fn key_bytes(
         Key::Delete => table::Key::Delete,
         Key::F(number) => table::Key::F(number),
     };
-    table::key_bytes(shared, mods, modes.app_cursor, backspace).unwrap_or_default()
+    KeyAction::Send(table::key_bytes(shared, mods, modes.app_cursor, backspace).unwrap_or_default())
+}
+
+/// The bytes of `key` with the armed Ctrl and Alt, without Shift (the
+/// tap's walk, the cursor's arrows).
+pub fn key_bytes(
+    key: Key,
+    modes: Modes,
+    ctrl: bool,
+    alt: bool,
+    backspace: BackspaceKey,
+) -> Vec<u8> {
+    let mods = Mods {
+        shift: false,
+        alt,
+        ctrl,
+    };
+    match key_action(key, modes, mods, backspace) {
+        KeyAction::Send(bytes) => bytes,
+        // Only Shift scrolls.
+        _ => Vec::new(),
+    }
 }
 
 /// Text from the soft keyboard with the armed modifiers: Ctrl turns the
@@ -173,8 +213,8 @@ pub fn walk_to(
 }
 
 /// A left click at `cell` (press and release) in the encoding the program
-/// asked for (the shared table, D224): SGR (mode 1006) or the original one,
-/// which cannot say a column or row past 222.
+/// asked for (the shared table, D224): SGR (mode 1006), UTF-8 (mode 1005) or
+/// the original one, which cannot say a column or row past 222.
 pub fn click(cell: Cell, modes: Modes, ctrl: bool, alt: bool) -> Option<Vec<u8>> {
     use alacritty_terminal::term::TermMode;
     if !modes.mouse {
@@ -183,6 +223,9 @@ pub fn click(cell: Cell, modes: Modes, ctrl: bool, alt: bool) -> Option<Vec<u8>>
     let mut mode = TermMode::MOUSE_REPORT_CLICK;
     if modes.sgr_mouse {
         mode |= TermMode::SGR_MOUSE;
+    }
+    if modes.utf8_mouse {
+        mode |= TermMode::UTF8_MOUSE;
     }
     let mods = Mods {
         shift: false,
@@ -210,6 +253,8 @@ mod tests {
         app_cursor: false,
         mouse: false,
         sgr_mouse: false,
+        utf8_mouse: false,
+        alt_screen: false,
     };
 
     #[test]
@@ -260,10 +305,12 @@ mod tests {
         );
     }
 
-    /// Every key of the phone, with Ctrl and Alt armed or not, in both
-    /// cursor modes and with both Backspace settings, sends what the
-    /// desktop's table says (`apps/desktop/src/terminal/key_table.txt`,
-    /// written from the desktop's code before the mapping moved, D224).
+    /// Every key of the phone, with Shift held and Ctrl and Alt armed or
+    /// not, in both cursor modes and on the alternate screen, with both
+    /// Backspace settings, does what the desktop's table says
+    /// (`apps/desktop/src/terminal/key_table.txt`, written from the
+    /// desktop's code before the mapping moved, D224): the bytes, or the
+    /// scroll of Shift+Home, End, PgUp and PgDn on the normal screen.
     #[test]
     fn every_key_sends_the_desktops_bytes() {
         let table = include_str!("../../../desktop/src/terminal/key_table.txt");
@@ -299,16 +346,29 @@ mod tests {
         }
         let mut checked = 0;
         for (key, name) in keys {
-            for (ctrl, alt) in [(false, false), (true, false), (false, true), (true, true)] {
-                for (mode_name, app_cursor) in [("normal", false), ("app-cursor", true)] {
+            for bits in 0..8 {
+                let mods = Mods {
+                    shift: bits & 1 != 0,
+                    alt: bits & 2 != 0,
+                    ctrl: bits & 4 != 0,
+                };
+                for (mode_name, app_cursor, alt_screen) in [
+                    ("normal", false, false),
+                    ("app-cursor", true, false),
+                    ("alt-screen", false, true),
+                ] {
                     for (backspace, backspace_name) in
                         [(BackspaceKey::Del, "Del"), (BackspaceKey::CtrlH, "CtrlH")]
                     {
                         let line = format!(
                             "{}{}{}{name}\t{mode_name}\t{backspace_name}\t",
-                            if ctrl { "ctrl-" } else { "" },
-                            if alt { "alt-" } else { "" },
-                            if key == Key::BackTab { "shift-" } else { "" },
+                            if mods.ctrl { "ctrl-" } else { "" },
+                            if mods.alt { "alt-" } else { "" },
+                            if mods.shift || key == Key::BackTab {
+                                "shift-"
+                            } else {
+                                ""
+                            },
                         );
                         let want = table
                             .lines()
@@ -316,19 +376,20 @@ mod tests {
                             .unwrap_or_else(|| panic!("no row {line}"));
                         let modes = Modes {
                             app_cursor,
+                            alt_screen,
                             ..NORMAL
                         };
-                        assert_eq!(
-                            shown(&key_bytes(key, modes, ctrl, alt, backspace)),
-                            want,
-                            "{line}"
-                        );
+                        let got = match key_action(key, modes, mods, backspace) {
+                            KeyAction::Send(bytes) => shown(&bytes),
+                            other => format!("{other:?}"),
+                        };
+                        assert_eq!(got, want, "{line}");
                         checked += 1;
                     }
                 }
             }
         }
-        assert_eq!(checked, 27 * 4 * 2 * 2);
+        assert_eq!(checked, 27 * 8 * 3 * 2);
     }
 
     #[test]
@@ -400,6 +461,19 @@ mod tests {
         assert_eq!(
             click(Cell { col: 300, row: 0 }, original, false, false),
             None
+        );
+        // Mode 1005 (review of run 16): column 101 is one UTF-8 character
+        // (U+0085), not a raw byte past 127.
+        let utf8 = Modes {
+            mouse: true,
+            utf8_mouse: true,
+            ..NORMAL
+        };
+        assert_eq!(
+            click(Cell { col: 100, row: 4 }, utf8, false, false).unwrap(),
+            [
+                0x1b, b'[', b'M', 32, 0xc2, 0x85, 37, 0x1b, b'[', b'M', 35, 0xc2, 0x85, 37
+            ]
         );
     }
 }

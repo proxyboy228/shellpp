@@ -126,8 +126,22 @@ pub enum PasswordAnswer {
     Recorded = 2,
     /// The password holds a control character.
     Control = 3,
+    /// The session did not take it although it could (its queue was full,
+    /// or it closed meanwhile).
+    Failed = 4,
     /// The session is not connected, or not to this host.
     NotConnected = 5,
+}
+
+impl PasswordAnswer {
+    /// Why a password the session did not take was not sent: the state the
+    /// key has now, or `Failed` when nothing changed (review of run 16).
+    fn refused(now: Self) -> Self {
+        match now {
+            Self::Ready => Self::Failed,
+            other => other,
+        }
+    }
 }
 
 /// One open session and its terminal.
@@ -587,10 +601,7 @@ impl Engine {
         if self.inject_secret(id, zeroize::Zeroizing::new(text.as_bytes().to_vec()))? {
             return Ok(PasswordAnswer::Ready);
         }
-        Ok(match self.password_state(id, host)? {
-            PasswordAnswer::Ready => PasswordAnswer::NotConnected,
-            other => other,
-        })
+        Ok(PasswordAnswer::refused(self.password_state(id, host)?))
     }
 
     /// Bytes for the session that are not typing (mouse reports).
@@ -790,4 +801,27 @@ pub fn view_json(id: u64, view: &SessionView) -> Value {
             .as_ref()
             .and_then(|reconnect| reconnect.seconds_left(Instant::now())),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PasswordAnswer;
+
+    /// A password the session did not take while the key could send says
+    /// "not sent", not "not connected" (review of run 16).
+    #[test]
+    fn a_password_not_taken_says_why() {
+        assert_eq!(
+            PasswordAnswer::refused(PasswordAnswer::Ready),
+            PasswordAnswer::Failed
+        );
+        assert_eq!(
+            PasswordAnswer::refused(PasswordAnswer::Recorded),
+            PasswordAnswer::Recorded
+        );
+        assert_eq!(
+            PasswordAnswer::refused(PasswordAnswer::NotConnected),
+            PasswordAnswer::NotConnected
+        );
+    }
 }
