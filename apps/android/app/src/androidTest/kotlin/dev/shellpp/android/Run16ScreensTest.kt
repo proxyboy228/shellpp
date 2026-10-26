@@ -119,7 +119,8 @@ class Run16ScreensTest {
         }
         E2e.text("Paste several lines?", 10_000)
         shot(theme, "05-paste-question")
-        E2e.clickText("Cancel")
+        // The platform dialog may write its buttons in capitals.
+        E2e.device.wait(Until.findObject(By.text(Pattern.compile("(?i)cancel"))), 10_000)?.click()
 
         // An SFTP session beside it: its card in Connections (D223 item 9).
         E2e.click("session_plus")

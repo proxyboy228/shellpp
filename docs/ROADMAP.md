@@ -354,7 +354,9 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    `-Deploy` after changes the deployment tests cover). main moves
    fast-forward only. The criterion runs cargo with `--locked` and the tests
    with `--no-fail-fast`, and starts with `cargo metadata --locked` for both
-   workspaces and the secret scan of the whole history (gitleaks in Docker);
+   workspaces and the secret scan of the whole history (gitleaks in Docker,
+   and key store files by name, which gitleaks skips; D224), and checks the
+   license lists of the desktop and the Android app (Node.js, D223);
    clippy also runs without `--all-targets`, as a release build sees the
    code (D205). `scripts\verify-linux.ps1` repeats the build and the tests on
    Linux in Docker, outside the criterion.
