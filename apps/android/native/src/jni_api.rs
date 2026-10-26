@@ -463,16 +463,18 @@ pub extern "system" fn Java_dev_shellpp_android_Native_putCursor<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `snapshot(session)`: the visible screen (`screen.rs` describes it).
+/// `snapshot(session, takeBell)`: the visible screen (`screen.rs` describes
+/// it); the terminal view takes the bell, a preview does not.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_snapshot<'caller>(
     mut unowned: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     session: jlong,
+    take_bell: jboolean,
 ) -> JByteArray<'caller> {
     unowned
         .with_env(|env| -> Result<JByteArray<'caller>, NativeError> {
-            let bytes = screen::snapshot(&engine()?.terminal(id(session))?);
+            let bytes = screen::snapshot(&engine()?.terminal(id(session))?, take_bell);
             Ok(env.byte_array_from_slice(&bytes)?)
         })
         .resolve::<ThrowRuntimeExAndDefault>()

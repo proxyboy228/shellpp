@@ -139,9 +139,15 @@ class ScreensLogicTest {
             "<!-- android-libraries:end -->",
         ).joinToString("\n")
         val items = parseNotices(text)
-        assertEquals(NoticeItem.Paragraph("What the APK ships."), items[0])
-        assertEquals(NoticeItem.Heading("Android libraries"), items[1])
-        assertEquals(NoticeItem.Component("androidx.activity:activity", "1.13.0", "Apache-2.0", "https://developer.android.com"), items[2])
-        assertEquals(3, items.size)
+        assertEquals(NoticeItem.Heading("The Android app (apps/android)"), items[0])
+        assertEquals(NoticeItem.Paragraph("What the APK ships."), items[1])
+        assertEquals(NoticeItem.Heading("Android libraries"), items[2])
+        assertEquals(NoticeItem.Component("androidx.activity:activity", "1.13.0", "Apache-2.0", "https://developer.android.com"), items[3])
+        assertEquals(4, items.size)
+        val texts = parseNotices(listOf("## Apache License 2.0", "", "```text", "  Apache License", "```").joinToString("\n"))
+        assertEquals(listOf(NoticeItem.Heading("Apache License 2.0"), NoticeItem.Verbatim("  Apache License")), texts)
+        val files = parseLicenseFiles(listOf("Intro.", "", "== a 1.0 (LICENSE) ==", "", "MIT text").joinToString("\n"))
+        assertEquals(NoticeItem.Paragraph("a 1.0 (LICENSE)"), files[2])
+        assertEquals(NoticeItem.Verbatim("MIT text"), files[3])
     }
 }

@@ -29,6 +29,9 @@ known_hosts.*
 android-signing.properties
 *signing*.properties
 keystore.properties
+key.properties
+*.bks
+*.pkcs12
 
 # ---------------------------------------------------------------------------
 # Rust

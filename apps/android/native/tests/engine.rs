@@ -131,7 +131,7 @@ async fn a_quick_connect_asks_the_host_key_and_the_password_then_runs_a_command(
             lines.iter().filter(|line| line.contains(&marker)).count() >= 2,
             "the command and its output: {lines:?}"
         );
-        let snapshot = screen::snapshot(&terminal);
+        let snapshot = screen::snapshot(&terminal, true);
         assert_eq!(u16::from_le_bytes([snapshot[0], snapshot[1]]), 80);
 
         // A new size reaches the server (the test shell's `size` command).

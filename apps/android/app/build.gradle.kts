@@ -1,5 +1,4 @@
 import java.io.File
-import java.util.Properties
 import javax.xml.parsers.DocumentBuilderFactory
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
@@ -9,20 +8,33 @@ plugins {
 }
 
 // The commit the APK is built from, for About (D223 item 5): `-dirty` when
-// the tree has changes not committed; "unknown" without git.
+// the tree has changes not committed, new files included; "unknown"
+// without git.
 val buildCommit: String = runCatching {
     val head = providers.exec { commandLine("git", "rev-parse", "--short=10", "HEAD") }.standardOutput.asText.get().trim()
-    val dirty = providers.exec { commandLine("git", "status", "--porcelain", "--untracked-files=no") }.standardOutput.asText.get().isNotBlank()
+    val dirty = providers.exec { commandLine("git", "status", "--porcelain") }.standardOutput.asText.get().isNotBlank()
     if (dirty) "$head-dirty" else head
 }.getOrDefault("unknown")
 
 // The release signing key is the owner's (D218, D223): the path of its
-// file and its alias come from a properties file outside the repository
-// (SHELLPP_ANDROID_SIGNING names it), its passwords from the environment of
-// scripts\build-android-release.ps1, which never writes them to disk.
-val releaseSigning: Properties? = System.getenv("SHELLPP_ANDROID_SIGNING")?.let { path ->
-    Properties().apply { File(path).inputStream().use { load(it) } }
-}
+// file and its alias come from a file outside the repository
+// (SHELLPP_ANDROID_SIGNING names it, when that file exists), its passwords
+// from the environment of scripts\build-android-release.ps1. The file is
+// read as UTF-8 `key=value` lines, a byte order mark dropped and
+// backslashes kept as they are (a Windows path), not as Java properties.
+val releaseSigning: Map<String, String>? = System.getenv("SHELLPP_ANDROID_SIGNING")
+    ?.let { File(it) }
+    ?.takeIf { it.isFile }
+    ?.readText(Charsets.UTF_8)
+    ?.removePrefix("\uFEFF")
+    ?.lines()
+    ?.map { it.trim() }
+    ?.filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("!") }
+    ?.mapNotNull { line ->
+        val at = line.indexOfFirst { it == '=' || it == ':' }
+        if (at < 0) null else line.substring(0, at).trim() to line.substring(at + 1).trim().replace("\\\\", "\\")
+    }
+    ?.toMap()
 
 android {
     namespace = "dev.shellpp.android"
@@ -41,13 +53,18 @@ android {
         versionName = "1.0.0-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "COMMIT", "\"$buildCommit\"")
+        // The phone's and the emulator's ABIs, the two the Rust library is
+        // built for: no 32-bit folder that would install without it.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     signingConfigs {
         if (releaseSigning != null) {
             create("release") {
-                storeFile = File(releaseSigning.getProperty("storeFile") ?: error("storeFile is missing in SHELLPP_ANDROID_SIGNING"))
-                keyAlias = releaseSigning.getProperty("keyAlias") ?: error("keyAlias is missing in SHELLPP_ANDROID_SIGNING")
+                storeFile = File(releaseSigning["storeFile"] ?: error("storeFile is missing in SHELLPP_ANDROID_SIGNING"))
+                keyAlias = releaseSigning["keyAlias"] ?: error("keyAlias is missing in SHELLPP_ANDROID_SIGNING")
                 storePassword = System.getenv("SHELLPP_ANDROID_STORE_PASSWORD")
                 keyPassword = System.getenv("SHELLPP_ANDROID_KEY_PASSWORD")
             }
@@ -149,9 +166,16 @@ val buildRust = tasks.register<Exec>("buildRust") {
         environment("CARGO_TARGET_${upper}_LINKER", clang)
     }
     commandLine(args)
+    // The signing passwords of a release build never reach cargo and the
+    // crates' build scripts (review of run 16).
+    environment.remove("SHELLPP_ANDROID_STORE_PASSWORD")
+    environment.remove("SHELLPP_ANDROID_KEY_PASSWORD")
     inputs.dir(File(repoRoot, "apps/android/native/src"))
     inputs.dir(File(repoRoot, "crates"))
     outputs.dir(rustOut)
+    // Cargo decides: a change of Cargo.lock, a manifest, the vendored russh
+    // or the toolchain must reach the APK, and cargo's own no-op is quick.
+    outputs.upToDateWhen { false }
     doLast {
         for ((abi, triple) in rustTargets) {
             val built = File(targetDir, "$triple/android/libshellpp_android.so")
@@ -172,13 +196,23 @@ val noticesAsset = tasks.register("noticesAsset") {
     val out = layout.buildDirectory.dir("generated/notices").get().asFile
     inputs.file(noticesFile)
     outputs.dir(out)
+    inputs.file(File(repoRoot, "LICENSE"))
     doLast {
         val text = noticesFile.readText()
-        val start = text.indexOf("## The Android app")
-        check(start >= 0) { "THIRD_PARTY_NOTICES.md has no section of the Android app" }
-        val end = text.indexOf("\n## ", start + 1).let { if (it < 0) text.length else it }
+        fun section(heading: String): String {
+            val start = text.indexOf(heading)
+            check(start >= 0) { "THIRD_PARTY_NOTICES.md has no section \"$heading\"" }
+            val end = text.indexOf("\n## ", start + 1).let { if (it < 0) text.length else it }
+            return text.substring(start, end)
+        }
         val dir = File(out, "notices").apply { mkdirs() }
-        File(dir, "android.md").writeText(text.substring(start, end))
+        // The list, the terminal themes' notices with the MIT text, and the
+        // Apache-2.0 text; the Rust crates' license files ship next to it
+        // (assets/notices/rust-licenses.txt, scripts/rust-notices.mjs).
+        File(dir, "android.md").writeText(
+            section("## The Android app") + "\n" + section("## Terminal themes") +
+                "\n## Apache License 2.0\n\n```text\n" + File(repoRoot, "LICENSE").readText() + "\n```\n",
+        )
     }
 }
 
@@ -225,18 +259,48 @@ fun licensesOf(pom: File, depth: Int = 0): Pair<List<String>, String?> {
     return inherited to (url ?: parentUrl)
 }
 
+// The licenses a library of the APK may have (THIRD_PARTY_NOTICES.md's
+// rules): a POM's license name, as libraries write it, to its SPDX id. An
+// unknown name fails `androidNotices` (review of run 16).
+val permittedLicenses = mapOf(
+    "The Apache Software License, Version 2.0" to "Apache-2.0",
+    "The Apache License, Version 2.0" to "Apache-2.0",
+    "Apache License, Version 2.0" to "Apache-2.0",
+    "Apache License 2.0" to "Apache-2.0",
+    "Apache-2.0" to "Apache-2.0",
+    "MIT" to "MIT",
+    "MIT License" to "MIT",
+    "The MIT License" to "MIT",
+    "BSD-3-Clause" to "BSD-3-Clause",
+    "BSD-2-Clause" to "BSD-2-Clause",
+)
+
+// Components of the runtime classpath that are not modules of a repository:
+// the vendored verifier, listed by hand in THIRD_PARTY_NOTICES.md.
+val handListedProjects = setOf(":rustls-platform-verifier")
+
 tasks.register("androidNotices") {
     group = "verification"
     description = "Checks (or with -PwriteNotices rewrites) the Android libraries table of THIRD_PARTY_NOTICES.md."
     val write = providers.gradleProperty("writeNotices").isPresent
     doLast {
-        val modules = configurations.getByName("releaseRuntimeClasspath").incoming.resolutionResult.allComponents
+        val components = configurations.getByName("releaseRuntimeClasspath").incoming.resolutionResult.allComponents
+        for (component in components) {
+            val id = component.id
+            if (id is org.gradle.api.artifacts.component.ProjectComponentIdentifier && id.projectPath != ":app") {
+                check(id.projectPath in handListedProjects) { "${id.projectPath} is not a module of a repository and not listed by hand" }
+            }
+        }
+        val modules = components
             .mapNotNull { it.id as? ModuleComponentIdentifier }
             .distinctBy { "${it.group}:${it.module}:${it.version}" }
             .sortedWith(compareBy<ModuleComponentIdentifier>({ it.group }, { it.module }))
         val rows = modules.map { id ->
             val (licenses, url) = licensesOf(pomOf(id.group, id.module, id.version))
             check(licenses.isNotEmpty()) { "${id.group}:${id.module}:${id.version} declares no license; check its license and add it by hand" }
+            for (name in licenses) {
+                check(name in permittedLicenses) { "${id.group}:${id.module}:${id.version}: license \"$name\" is not one the APK may ship (THIRD_PARTY_NOTICES.md)" }
+            }
             val source = url ?: "https://maven.google.com/web/index.html#${id.group}:${id.module}:${id.version}"
             "| ${id.group}:${id.module} | ${id.version} | ${licenses.joinToString(" / ")} | <$source> |"
         }

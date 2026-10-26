@@ -85,10 +85,10 @@ path = '''(?i)\.(jks|keystore|p12|pfx)$'''
 id = "android-signing-password-properties"
 description = "an Android signing password in a properties file"
 path = '''(?i)\.properties$'''
-regex = '''(?i)(storePassword|keyPassword|store\.password|key\.password)\s*[=:]\s*\S{4,}'''
+regex = '''(?i)(store|key|keystore|signing)[._-]?pass(word)?\s*[=:]\s*\S{4,}'''
 
 [[rules]]
 id = "android-signing-password-gradle"
 description = "an Android signing password as a literal in a Gradle file"
 path = '''(?i)\.gradle(\.kts)?$'''
-regex = '''(?i)(storePassword|keyPassword)\s*=\s*["'][^"'$]{4,}["']'''
+regex = '''(?i)(storePassword|keyPassword)\s*=?\s*\(?\s*["'][^"'$]{4,}["']'''

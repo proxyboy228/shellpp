@@ -292,7 +292,7 @@ private fun SessionCard(app: App, activity: MainActivity, view: JSONObject) {
         if (sftp) return@produceState
         while (true) {
             value = withContext(Dispatchers.IO) {
-                runCatching { Screen.parse(Native.snapshot(id)).logicalLines().dropLastWhile { it.isBlank() }.takeLast(6) }.getOrDefault(value)
+                runCatching { Screen.parse(Native.snapshot(id, false)).logicalLines().dropLastWhile { it.isBlank() }.takeLast(6) }.getOrDefault(value)
             }
             delay(1_000)
         }

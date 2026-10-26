@@ -188,7 +188,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         }
         val started = System.nanoTime()
         val bytes = try {
-            Native.snapshot(session)
+            Native.snapshot(session, true)
         } catch (e: RuntimeException) {
             return
         }

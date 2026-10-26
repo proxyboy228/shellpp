@@ -72,12 +72,26 @@ class ProgramsTest {
     /** A key of the extra-keys row, as a tap sends it. */
     private fun ActivityScenario<TerminalActivity>.key(id: String) = onActivity { it.key(XKey.ALL.getValue(id), it.target()) }
 
-    /** Back at the shell: a marker echoed after the command line. */
+    /** Back at the shell: the program gave the screen back and the prompt waits; then a marker echoed. */
     private fun ActivityScenario<TerminalActivity>.shell(what: String) {
+        // Typed while the program still reads its input, the marker would be
+        // the program's (vim takes what comes after :wq).
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            var ready = false
+            onActivity { activity ->
+                val screen = activity.terminal.screen ?: return@onActivity
+                val last = (0 until screen.rows).map { screen.text(0, it, screen.cols - 1, it).trimEnd() }.lastOrNull { it.isNotEmpty() }
+                ready = !screen.alternateScreen && last != null && (last.endsWith("$") || last.endsWith("#"))
+            }
+            if (ready) break
+            Thread.sleep(200)
+        }
         markers += 1
         val marker = "back-$markers-at-the-shell"
         type("echo $marker\r")
-        waitFor("the shell after $what") { rows -> rows.count { marker in it } >= 2 }
+        // The echo's own line: the command line holds "echo" before it.
+        waitFor("the shell after $what") { rows -> rows.any { it.trimEnd() == marker } }
     }
 
     @Test
@@ -101,7 +115,8 @@ class ProgramsTest {
             assertTrue("Cut in nano offered for two lines", offered)
             s.waitFor("the lines cut") { rows -> rows.none { it.trimEnd() == "two" || it.trimEnd() == "three" } && rows.any { it.trimEnd() == "four" } }
             s.ctrl("o")
-            s.waitFor("nano asks the file name") { rows -> rows.any { "File Name to Write" in it } }
+            // nano 8 asks "Write to File:", older ones "File Name to Write:".
+            s.waitFor("nano asks the file name") { rows -> rows.any { "Write to File" in it || "File Name to Write" in it } }
             s.type("\r")
             s.waitFor("nano wrote") { rows -> rows.any { "Wrote" in it } }
             s.ctrl("x")
@@ -144,7 +159,8 @@ class ProgramsTest {
 
             // mc: F10 from the row; its question, if it asks, is answered.
             s.type("mc\r")
-            s.waitFor("mc") { rows -> rows.any { "Quit" in it } }
+            // Its menu bar (at 60 columns the function key bar ends before "10Quit").
+            s.waitFor("mc") { rows -> rows.any { "Left" in it && "File" in it && "Command" in it } }
             s.key("f10")
             Thread.sleep(1_500)
             if (s.rows().any { "really want to quit" in it }) s.type("\r")

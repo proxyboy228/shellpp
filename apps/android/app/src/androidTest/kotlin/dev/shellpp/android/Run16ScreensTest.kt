@@ -66,7 +66,8 @@ class Run16ScreensTest {
             val group = save("group", JSONObject().put("name", "Production").put("notes", "Owned by the ops team.\nPatch window: Sunday 02:00."))
             save(
                 "host",
-                JSONObject().put("address", E2e.sshHost).put("label", title).put("group_id", group)
+                // Its output is recorded: the password key shows why it cannot send.
+                JSONObject().put("address", E2e.sshHost).put("label", title).put("group_id", group).put("record_output", "on")
                     .put("notes", "The lab box under the desk.\nReboot only after the backup.")
                     .put("ssh", JSONObject().put("port", port).put("username", E2e.sshUser)),
                 JSONObject().put("ssh.password", E2e.sshPassword),
@@ -103,6 +104,8 @@ class Run16ScreensTest {
         E2e.waitForTerminal(10_000) { lines -> lines.any { it.contains("passwd") || it.contains("total") } }
         E2e.hideKeyboard()
         shot(theme, "03-terminal-11sp")
+        E2e.click("key_password")
+        shot(theme, "04-password-key-recorded")
 
         // The multi-line paste question (ui-spec 9.4).
         E2e.instrumentation.runOnMainSync {
@@ -115,7 +118,7 @@ class Run16ScreensTest {
             activity?.terminal?.paste()
         }
         E2e.text("Paste several lines?", 10_000)
-        shot(theme, "04-paste-question")
+        shot(theme, "05-paste-question")
         E2e.clickText("Cancel")
 
         // An SFTP session beside it: its card in Connections (D223 item 9).
@@ -125,19 +128,19 @@ class Run16ScreensTest {
         E2e.click("session_back")
         E2e.click("tab_connections", 30_000)
         E2e.find("sftp_card_folder", 30_000)
-        shot(theme, "05-connections-sftp-card")
+        shot(theme, "06-connections-sftp-card")
 
         // Settings: the bell and the paste rows, About, the licenses (D223 item 5).
         E2e.click("tab_settings")
         E2e.find("settings_bell", 20_000)
-        shot(theme, "06-settings-terminal")
+        shot(theme, "07-settings-terminal")
         scrollDown()
         scrollDown()
         E2e.find("settings_licenses", 20_000)
-        shot(theme, "07-settings-about")
+        shot(theme, "08-settings-about")
         E2e.click("settings_licenses")
         E2e.find("licenses", 20_000)
-        shot(theme, "08-licenses")
+        shot(theme, "09-licenses")
         E2e.device.pressBack()
     }
 }

@@ -63,7 +63,8 @@ class SnapshotTimingTest {
         FrameTiming.reset()
         val started = System.currentTimeMillis()
         s.onActivity { it.terminal.typeText("$command; echo $marker\r") }
-        assertTrue("$name ends", waitFor(s, 600_000) { lines -> lines.count { marker in it } >= 2 })
+        // The marker's own line (the command line may have scrolled away).
+        assertTrue("$name ends", waitFor(s, 600_000) { lines -> lines.any { it.trimEnd() == marker } })
         val status = Bundle()
         for ((key, value) in FrameTiming.report()) status.putLong("$name.$key", value)
         status.putLong("$name.seconds", (System.currentTimeMillis() - started) / 1000)

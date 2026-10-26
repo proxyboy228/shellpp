@@ -86,7 +86,8 @@ object Native {
      */
     @JvmStatic external fun passwordState(session: Long, vaultId: String, recordId: String): Int
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
-    @JvmStatic external fun snapshot(session: Long): ByteArray
+    /** The visible screen; [takeBell] for the terminal view's own snapshot (a preview leaves the bell). */
+    @JvmStatic external fun snapshot(session: Long, takeBell: Boolean): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean
     @JvmStatic external fun wake(session: Long)
     @JvmStatic external fun resize(session: Long, cols: Int, rows: Int)

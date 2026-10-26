@@ -8,7 +8,8 @@
 //! - header, 44 bytes: `cols` u16, `rows` u16, cursor column u16, cursor row
 //!   u16, cursor visible u8, cursor shape u8 (0 block, 1 underline, 2 beam,
 //!   3 hollow block), modes u8 ([`MODE_APP_CURSOR`] and the others), bell
-//!   u8 (1 when the program rang the bell since the last snapshot, D223);
+//!   u8 (1 when the program rang the bell since the bell was last taken;
+//!   only the terminal's own snapshots take it, D223, D224);
 //!   then u32 colors `0x00RRGGBB`: background, foreground, cursor, cursor
 //!   text, the selection (`0xAARRGGBB`), and the scroll offset u32, the
 //!   number of rows of the scrollback above u32, 0 u32;
@@ -111,8 +112,9 @@ pub fn cursor_and_wraps(handle: &TerminalHandle) -> Option<(Cell, u16, Vec<bool>
     Some((cell, u16::try_from(cols).ok()?, wraps))
 }
 
-/// Writes the snapshot of the visible screen.
-pub fn snapshot(handle: &TerminalHandle) -> Vec<u8> {
+/// Writes the snapshot of the visible screen; `take_bell`: the terminal
+/// view's own snapshot, which takes the bell (a preview's leaves it).
+pub fn snapshot(handle: &TerminalHandle, take_bell: bool) -> Vec<u8> {
     let palette = handle.outbox().palette();
     let term = handle.term().lock();
     let cols = term.columns();
@@ -142,8 +144,9 @@ pub fn snapshot(handle: &TerminalHandle) -> Vec<u8> {
         _ => 0,
     });
     out.push(mode_bits(mode));
-    // Snapshots are taken while the session is seen: its bell rings then.
-    out.push(u8::from(handle.outbox().take_events().bell));
+    // The terminal view takes the bell (it rings while the session is on
+    // the screen); a preview (the Connections card) leaves it there.
+    out.push(u8::from(take_bell && handle.outbox().take_events().bell));
     let selection = palette.selection();
     for color in [
         rgb(palette.background()),
@@ -252,6 +255,17 @@ mod tests {
         HEADER_BYTES + rows + (row * cols + col) * CELL_BYTES
     }
 
+    /// Byte 11: the bell once, for the view's snapshot only (D223, D224).
+    #[test]
+    fn the_bell_goes_to_the_views_snapshot_once() {
+        let (handle, _woken) = terminal(10, 4);
+        handle.feed_blocking(b"\x07").unwrap();
+        handle.flush_blocking();
+        assert_eq!(snapshot(&handle, false)[11], 0, "a preview leaves the bell");
+        assert_eq!(snapshot(&handle, true)[11], 1);
+        assert_eq!(snapshot(&handle, true)[11], 0, "taken once");
+    }
+
     #[test]
     fn the_snapshot_holds_text_colors_cursor_and_wraps() {
         let (handle, _woken) = terminal(10, 4);
@@ -260,7 +274,7 @@ mod tests {
             .feed_blocking(b"\x1b[1;31mab\x1b[0m\r\n0123456789xy\r\ne\xcc\x81")
             .unwrap();
         handle.flush_blocking();
-        let bytes = snapshot(&handle);
+        let bytes = snapshot(&handle, true);
         assert_eq!(u16_at(&bytes, 0), 10);
         assert_eq!(u16_at(&bytes, 2), 4);
         // The cursor after "é" on row 2.
@@ -312,7 +326,7 @@ mod tests {
                 sgr_mouse: true,
             }
         );
-        let bytes = snapshot(&handle);
+        let bytes = snapshot(&handle, true);
         assert_eq!(bytes[10], MODE_APP_CURSOR | MODE_MOUSE | MODE_SGR_MOUSE);
     }
 }

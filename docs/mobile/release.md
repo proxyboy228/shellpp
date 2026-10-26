@@ -22,8 +22,9 @@ the phone.
 
    (Make the folder first: `New-Item -ItemType Directory -Force
    "$env:USERPROFILE\.shellpp"`.) It asks for the keystore's password and
-   the owner's name. Choose a long password and keep it in a password
-   manager.
+   the owner's name. Let the password manager generate a long random
+   password and keep it there (a password a person chose is the weak part
+   of a stolen keystore).
 2. Note the certificate's fingerprint, to compare with the one every build
    prints:
 
@@ -33,18 +34,21 @@ the phone.
 
    (the line `SHA256:`).
 3. Write the signing file `%USERPROFILE%\.shellpp\android-signing.properties`
-   (two lines, forward slashes; **no password in it**):
+   (UTF-8, forward slashes; **no password in it**), with the fingerprint of
+   step 2 so that a build signed by any other key fails:
 
    ```properties
    storeFile=C:/Users/<you>/.shellpp/shellpp-release.jks
    keyAlias=shellpp
+   certSha256=<the SHA256 of step 2, colons or not>
    ```
 
 4. Keep the key **outside the repository** (never commit it; `.gitignore`
-   and the secret scan stop `*.jks`, `*.keystore`, `*.p12` and the signing
-   file, but do not rely on them), with at least two copies: one on the
-   computer that builds releases, one offline (an encrypted USB stick, or
-   the password manager's file attachments, with the password apart).
+   names key store files and the signing file, and the full criterion fails
+   on a key store file anywhere in the history, but do not rely on them),
+   with at least two copies: one on the computer that builds releases, one
+   offline (an encrypted USB stick, or the password manager's file
+   attachments, with the password apart).
 
 ## 2. Build the signed APK
 
@@ -52,17 +56,25 @@ the phone.
 powershell -ExecutionPolicy Bypass -File scripts\build-android-release.ps1
 ```
 
-It asks for the keystore's password and the key's (hidden; Enter when they
-are the same), builds the release APK (both ABIs: the phone's and the
-emulator's), and prints:
+It checks the license lists first, asks for the keystore's password and
+the key's (hidden; Enter when they are the same), builds the release APK
+(both ABIs: the phone's and the emulator's), and prints:
 
-- the path: `apps\android\app\build\outputs\apk\release\app-release.apk`;
-- the certificate's SHA-256: it must be the fingerprint noted in step 1.2.
+- the path of the signed APK, copied out of Gradle's folder:
+  `target\android-release\shellpp-<version>-<first 8 of the SHA-256>.apk`
+  (install from there; Gradle's own folder is emptied, so a later build or
+  a check never puts another key's APK where you look);
+- the certificate's SHA-256: the fingerprint of step 1.2 (with `certSha256`
+  in the signing file the script checks it).
 
-The passwords go to Gradle only in the script's own environment and end
-with it; nothing is written to disk, nothing is printed, Gradle runs without
-its daemon and its configuration cache, and PowerShell's history does not
-keep what `Read-Host` reads. Another signing file: `-SigningProperties <path>`.
+The passwords go to Gradle only in the script's environment: nothing
+prints them, Gradle runs without its daemon, without the configuration
+cache and with the Kotlin compiler in its own process (no process keeps
+them after the build), cargo and the crates' build scripts never get them,
+and PowerShell's history does not keep what `Read-Host` reads. Gradle keeps
+a hash of each password in its task history; the script gives it a
+temporary project cache and deletes it at the end. Another signing file:
+`-SigningProperties <path>`; another folder: `-OutputDir <path>`.
 
 The release build has no R8 and no resource shrinking (the first version;
 the Rust library is most of its size). Its version is `1.0.0-rc1`, the
@@ -85,21 +97,25 @@ deletes its data. The vault comes back from the sync server:
 3. Uninstall the debug build: long-press the app's icon → Uninstall (or
    `adb uninstall io.github.proxyboy228.shellpp`).
 4. Install the signed APK: copy `app-release.apk` to the phone and open it
-   (allow installing from that source), or with the cable:
+   (allow installing from that source), or with the cable (the file the
+   build printed):
 
    ```powershell
-   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install apps\android\app\build\outputs\apk\release\app-release.apk
+   & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install target\android-release\shellpp-<version>-<sha>.apk
    ```
 
 5. Open Shell++ → **Restore from sync**: the hosts, groups, identities,
-   keys, known hosts and the connection log come back.
+   keys and known hosts come back. (The phone's connection log is synced
+   only with the "connection log" toggle on, which is off by default and
+   not on the phone: its recent connections start empty.)
 
 **What does not come back** (it is the phone's own, not synced):
 
 - the device's settings: the extra-keys row (Customize keyboard), the
   terminal's font size and theme, pinch to zoom, the cursor speed, "Keep the
-  screen on", the bell's vibration, the sort orders, the SFTP download
-  folder;
+  screen on", the bell (sound and vibration), the paste question, Terminal
+  type, Keep-alive, Detect OS, Reconnect, auto-lock, the sort orders, the
+  SFTP download folder;
 - fingerprint unlock: turn it on again in Settings → Lock and fingerprint;
 - the permissions the app asked (notifications, the local network): it asks
   again;
@@ -112,7 +128,7 @@ phone exist only there; put another key of yours on those servers first.
 ## 4. Later versions
 
 Build with the same key (section 2) and install over the release build:
-`adb install -r app-release.apk`, or open the file on the phone. The data
-stays. The checks of a version: `scripts\verify-android.ps1 -Emulator
+`adb install -r target\android-release\shellpp-<version>-<sha>.apk`, or open
+the file on the phone. The data stays. The checks of a version: `scripts\verify-android.ps1 -Emulator
 -Release` (the release build signed with a throwaway key, installed on the
 emulator, its first run and a session on OpenSSH).

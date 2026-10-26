@@ -116,6 +116,11 @@ $EndToEndClasses = @(
 )
 if ($Programs) { $EndToEndClasses = @('dev.shellpp.android.ProgramsTest', 'dev.shellpp.android.SnapshotTimingTest') }
 
+# The owner's signing never reaches these checks: a signing file or
+# passwords set in the environment (for Android Studio) are left out; only
+# -Release sets its own throwaway ones (review of run 16).
+Remove-Item -ErrorAction SilentlyContinue Env:SHELLPP_ANDROID_SIGNING, Env:SHELLPP_ANDROID_STORE_PASSWORD, Env:SHELLPP_ANDROID_KEY_PASSWORD
+
 $failed = @()
 $passed = 0
 function Run-Step([string] $Name, [string] $Program, [string[]] $Arguments, [hashtable] $Environment = @{}, [string] $Directory = $repo) {
@@ -170,9 +175,10 @@ if ($Release) {
         '-storepass:env', 'SHELLPP_ANDROID_STORE_PASSWORD', '-keypass:env', 'SHELLPP_ANDROID_KEY_PASSWORD', '-noprompt'
     )
     $signing = Join-Path $releaseDir 'signing.properties'
-    Set-Content -LiteralPath $signing -Encoding ascii -Value @("storeFile=$($keystore -replace '\\', '/')", 'keyAlias=shellpp')
+    [IO.File]::WriteAllLines($signing, [string[]]@("storeFile=$($keystore -replace '\\', '/')", 'keyAlias=shellpp'), (New-Object Text.UTF8Encoding $false))
     if ($made) {
-        $releaseBuilt = Run-Step 'release-build' 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'scripts\build-android-release.ps1'), '-SigningProperties', $signing)
+        # Its APK goes into the throwaway folder, never where the owner's goes.
+        $releaseBuilt = Run-Step 'release-build' 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'scripts\build-android-release.ps1'), '-SigningProperties', $signing, '-OutputDir', (Join-Path $releaseDir 'apk'))
     }
     # For the emulator's install of the release build.
     $env:SHELLPP_ANDROID_SIGNING = $signing
@@ -357,7 +363,7 @@ if ($Emulator) {
             # The release build, installed afresh: its first run and a session
             # by the interface alone, then its own checks (D223 item 15).
             foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
-            $installed = Run-Step 'release-install' $gradlew @('installRelease', 'installReleaseAndroidTest', '-PshellppTestBuildType=release', '--no-daemon', '--no-configuration-cache', '--console=plain') @{} $android
+            $installed = Run-Step 'release-install' $gradlew @('installRelease', 'installReleaseAndroidTest', '-PshellppTestBuildType=release', '--no-daemon', '--no-configuration-cache', '--project-cache-dir', (Join-Path $releaseDir 'gradle'), '-Pkotlin.compiler.execution.strategy=in-process', '--console=plain') @{} $android
             if ($installed) {
                 foreach ($class in 'dev.shellpp.android.VaultFirstRunTest', 'dev.shellpp.android.ReleaseBuildTest') {
                     $short = 'release-' + $class.Split('.')[-1]
@@ -407,8 +413,9 @@ if ($Emulator) {
 }
 
 } finally {
-    # The throwaway key and its passwords go, whatever happened.
+    # The throwaway key, its APKs and passwords go, whatever happened.
     if ($releaseDir -and (Test-Path -LiteralPath $releaseDir)) { Remove-Item -Recurse -Force -LiteralPath $releaseDir -ErrorAction SilentlyContinue }
+    if ($Release) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath (Join-Path $android 'app\build\outputs\apk\release') }
     foreach ($name in 'SHELLPP_ANDROID_STORE_PASSWORD', 'SHELLPP_ANDROID_KEY_PASSWORD', 'SHELLPP_ANDROID_SIGNING') {
         Remove-Item -ErrorAction SilentlyContinue "Env:$name"
     }

@@ -388,7 +388,7 @@ private class EditorState(val record: Record?, initial: JSONObject) {
 }
 
 /** The members whose errors show under their own fields. */
-private val SHOWN_ERRORS = setOf("label", "address", "tags", "ssh.port", "ssh.username", "ssh.password", "name", "parent_id", "telnet.port")
+private val SHOWN_ERRORS = setOf("label", "address", "tags", "ssh.port", "ssh.username", "ssh.password", "name", "parent_id", "telnet.port", "notes")
 
 /** The editor's frame: the bar, the scrolling cards, the discard prompt. */
 @Composable

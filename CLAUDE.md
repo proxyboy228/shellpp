@@ -14,6 +14,7 @@ cargo update --dry-run --manifest-path server/Cargo.toml
 cargo deny --locked --offline check
 cargo deny --locked --offline --manifest-path server/Cargo.toml check
 node scripts/rust-notices.mjs
+node scripts/secret-files.mjs
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -59,8 +60,12 @@ crates.io для проверки отозванных (yanked) крейтов, 
 
 Список лицензий (`node scripts/rust-notices.mjs`, нужен Node.js; D223):
 таблицы крейтов Rust десктопа и приложения Android в
-`THIRD_PARTY_NOTICES.md` совпадают с `cargo tree`; расхождение — `node
-scripts/rust-notices.mjs --write` и коммит. Таблицу библиотек Android
+`THIRD_PARTY_NOTICES.md` совпадают с `cargo tree`, а файл текстов их
+лицензий для APK (`apps/android/app/src/main/assets/notices/rust-licenses.txt`)
+— с пакетами; расхождение — `node scripts/rust-notices.mjs --write` и
+коммит. `node scripts/secret-files.mjs` — нет ли в истории всех ссылок
+файлов хранилищ ключей (`.jks`, `.keystore`, `.p12`…): gitleaks двоичные
+файлы не смотрит (D224). Таблицу библиотек Android
 проверяет `verify-android.ps1` (`gradlew androidNotices`, переписать —
 `-PwriteNotices`).
 

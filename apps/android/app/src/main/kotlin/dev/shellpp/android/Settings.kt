@@ -96,6 +96,10 @@ object TerminalPrefs {
     fun of(context: Context) = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 }
 
+/** The bell's writes, one at a time in the order of the taps. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+private val BELL_WRITES = Dispatchers.IO.limitedParallelism(1)
+
 /** The core's settings (UI 12) as JSON, empty when they cannot be read. */
 fun coreSettings(): JSONObject = runCatching { Core.obj("settings_get") }.getOrDefault(JSONObject())
 
@@ -146,7 +150,7 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
     var pinch by remember { mutableStateOf(prefs.getBoolean(TerminalPrefs.PINCH, true)) }
     var keepOn by remember { mutableStateOf(prefs.getBoolean(TerminalPrefs.KEEP_ON, false)) }
     var cursorSpeed by remember { mutableStateOf(prefs.getInt(TerminalPrefs.CURSOR_SPEED, 2)) }
-    var bell by remember { mutableStateOf(Bell.Mode.OFF) }
+    var bell by remember { mutableStateOf<Bell.Mode?>(null) }
     LaunchedEffect(refresh) { bell = withContext(Dispatchers.IO) { Bell.mode(context) } }
 
     fun set(key: String, value: Any?) {
@@ -184,13 +188,13 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
                 prefs.edit().putBoolean(TerminalPrefs.KEEP_ON, keepOn).apply()
             }
             // Off, Vibrate, Sound in turn (D223 item 11).
-            SettingsRow("Bell", listOf("Off", "Vibrate", "Sound")[bell.ordinal], "settings_bell") {
-                val next = Bell.Mode.entries[(bell.ordinal + 1) % Bell.Mode.entries.size]
+            // Not before the stored value is read; writes go one after another
+            // (review of run 16).
+            SettingsRow("Bell", bell?.let { listOf("Off", "Vibrate", "Sound")[it.ordinal] } ?: "", "settings_bell") {
+                val shown = bell ?: return@SettingsRow
+                val next = Bell.Mode.entries[(shown.ordinal + 1) % Bell.Mode.entries.size]
                 bell = next
-                scope.launch {
-                    withContext(Dispatchers.IO) { runCatching { Bell.set(context, next) } }
-                    refresh += 1
-                }
+                scope.launch { withContext(BELL_WRITES) { runCatching { Bell.set(context, next) } } }
             }
             val confirmPaste = values.optBoolean("terminal.confirm_multiline_paste", true)
             SettingsRow(

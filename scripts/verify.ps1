@@ -19,8 +19,11 @@
     warn and the checks use the copies already downloaded, and with no
     database at all they fail;
   - the license list: THIRD_PARTY_NOTICES.md's tables of the Rust crates of
-    the desktop and of the Android app are up to date
-    (scripts/rust-notices.mjs, Node.js; run 16, D223);
+    the desktop and of the Android app, and the app's file of their license
+    texts, are up to date (scripts/rust-notices.mjs, Node.js; run 16, D223);
+  - no key store file (`.jks`, `.keystore`, `.p12` and the like) in the
+    history of any ref (scripts/secret-files.mjs: gitleaks skips binary
+    files; run 16, D224);
   - the root workspace: rustfmt, clippy (default and all features), clippy
     of the libraries and binaries alone, the tests
     (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all features;
@@ -227,6 +230,7 @@ $steps = @(
     (Step 'deny' @{} @('deny', '--locked', '--offline', 'check') -Problem $denyProblem),
     (Step 'deny-server' @{} (@('deny', '--locked', '--offline') + $server + @('check')) -Problem $denyProblem),
     (Step 'notices' @{} @('scripts/rust-notices.mjs') 'node' $noticesProblem),
+    (Step 'secret-files' @{} @('scripts/secret-files.mjs') 'node' $noticesProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),
