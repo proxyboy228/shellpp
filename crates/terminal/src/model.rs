@@ -203,6 +203,13 @@ pub trait TerminalSink: Send + Sync + 'static {
     /// attributes, colors). The session encodes them to the host charset.
     fn send(&self, bytes: Vec<u8>);
 
+    /// A secret for the remote side (the phone's password key, D223): as
+    /// [`TerminalSink::send`], but wiped once written. A sink without its
+    /// own path sends a copy, which is not wiped.
+    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+        self.send(bytes.to_vec());
+    }
+
     /// The grid size changed: forward it (SSH window-change, PTY resize).
     fn resize(&self, size: TerminalSize);
 }
@@ -276,6 +283,18 @@ impl Outbox {
         let sink = self.sink.read().ok().and_then(|sink| sink.clone());
         if let Some(sink) = sink {
             sink.send(bytes);
+        }
+    }
+
+    /// [`Outbox::send`] for a secret: wiped once written
+    /// ([`TerminalSink::send_secret`]).
+    pub fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+        if bytes.is_empty() {
+            return;
+        }
+        let sink = self.sink.read().ok().and_then(|sink| sink.clone());
+        if let Some(sink) = sink {
+            sink.send_secret(bytes);
         }
     }
 

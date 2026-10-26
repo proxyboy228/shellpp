@@ -614,6 +614,8 @@ impl SshTask {
             view.exit_signal = None;
             view.reconnect = None;
             view.username = Some(username.clone());
+            // Counted as recorded until the session decides, below (D223).
+            view.records_output = true;
         });
 
         // Connection log (lead decision 10): host, user, start, end, device.
@@ -657,6 +659,8 @@ impl SshTask {
             }
             None => None,
         };
+        let recorded = recording.is_some();
+        self.update(|st| st.view.records_output = recorded);
 
         // Forwarding rules of this host that start when it connects
         // (data-model 11; personal vault only).
@@ -732,7 +736,11 @@ impl SshTask {
             recording,
         )
         .await;
-        let log_id = self.session.lock().log_id.take();
+        let log_id = {
+            let mut st = self.session.lock();
+            st.view.records_output = false;
+            st.log_id.take()
+        };
         drop(self.shared.rt.spawn(async move {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, connection.disconnect()).await;
         }));

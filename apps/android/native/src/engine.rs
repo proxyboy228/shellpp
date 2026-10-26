@@ -100,9 +100,30 @@ impl TerminalSink for SessionSink {
         }
     }
 
+    fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) {
+        if let Err(error) = self.0.write_secret(&bytes) {
+            tracing::debug!(session = self.0.id(), %error, "terminal input dropped");
+        }
+    }
+
     fn resize(&self, size: TerminalSize) {
         self.0.resize(size.cols, size.rows);
     }
+}
+
+/// The password key's answer (`Native.PASSWORD_*` in Kotlin): `Ready` (it
+/// can send, or it sent), or why not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasswordAnswer {
+    Ready = 0,
+    /// The host has no effective password.
+    None = 1,
+    /// The session records its output.
+    Recorded = 2,
+    /// The password holds a control character.
+    Control = 3,
+    /// The session is not connected, or not to this host.
+    NotConnected = 5,
 }
 
 /// One open session and its terminal.
@@ -483,12 +504,73 @@ impl Engine {
         })
     }
 
-    /// What the password key sends (D220): input that is not typing, so the
-    /// history capture never takes it as a command (`inject_input`).
-    pub fn inject(&self, id: u64, bytes: Vec<u8>) -> Result<(), EngineError> {
+    /// What the password key sends (D220, D223): input that is not typing,
+    /// so the history capture never takes it as a command, wiped once
+    /// written to the session (`inject_secret`).
+    pub fn inject_secret(
+        &self,
+        id: u64,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
+    ) -> Result<(), EngineError> {
         let terminal = self.with(id, |live| live.terminal.clone())?;
-        terminal.inject_input(bytes);
+        terminal.inject_secret(bytes);
         Ok(())
+    }
+
+    /// Whether session `id` records the output of its current connection
+    /// (the session layer's answer, D222, D223).
+    pub fn records_output(&self, id: u64) -> Result<bool, EngineError> {
+        self.with(id, |live| live.session.records_output())
+    }
+
+    /// Why the password key cannot send to session `id` now
+    /// ([`PasswordAnswer`]), or `Ready`: the session is connected to the
+    /// saved host `host`, does not record its output (the session's answer
+    /// for its current connection) and the host has an effective password
+    /// (its own or its identity's, data-model 8.3). The password is not read.
+    pub fn password_state(
+        &self,
+        id: u64,
+        host: shellpp_core::service::dto::RecordRef,
+    ) -> Result<PasswordAnswer, EngineError> {
+        if !self.connected_to(id, host)? {
+            return Ok(PasswordAnswer::NotConnected);
+        }
+        if self.records_output(id)? {
+            return Ok(PasswordAnswer::Recorded);
+        }
+        match self.core.host_password_set(host) {
+            Ok(true) => Ok(PasswordAnswer::Ready),
+            Ok(false) | Err(shellpp_core::CoreError::NotFound) => Ok(PasswordAnswer::None),
+            Err(error) => Err(EngineError(error.code().to_owned())),
+        }
+    }
+
+    /// The password key's Send (D220, D223): the host's effective password
+    /// into session `id` once, without Enter, as injected input that the
+    /// history capture never takes for a command, in buffers wiped once it is
+    /// written. Checked again here, whatever the key showed; a password with
+    /// a control character is refused (a line break would be an Enter).
+    pub fn send_password(
+        &self,
+        id: u64,
+        host: shellpp_core::service::dto::RecordRef,
+    ) -> Result<PasswordAnswer, EngineError> {
+        let state = self.password_state(id, host)?;
+        if state != PasswordAnswer::Ready {
+            return Ok(state);
+        }
+        let password = match self.core.host_password(host) {
+            Ok(password) => password,
+            Err(shellpp_core::CoreError::NotFound) => return Ok(PasswordAnswer::None),
+            Err(error) => return Err(EngineError(error.code().to_owned())),
+        };
+        let text = secrecy::ExposeSecret::expose_secret(&password);
+        if text.chars().any(char::is_control) {
+            return Ok(PasswordAnswer::Control);
+        }
+        self.inject_secret(id, zeroize::Zeroizing::new(text.as_bytes().to_vec()))?;
+        Ok(PasswordAnswer::Ready)
     }
 
     /// Bytes for the session that are not typing (mouse reports).
@@ -680,6 +762,9 @@ pub fn view_json(id: u64, view: &SessionView) -> Value {
         "prompt": prompt,
         "error": view.error.map(|error| error.message()),
         "exitStatus": view.exit_status,
+        // The session records its output (or has not decided yet): the
+        // password key asks again when it changes (D223 item 13).
+        "recording": view.records_output,
         "reconnectIn": view
             .reconnect
             .as_ref()

@@ -126,6 +126,48 @@ fun humanSize(bytes: Long): String {
 private fun sftp(session: Long, command: String, input: JSONObject = JSONObject()): Any? =
     Core.answer(Native.sftpCall(session, command, input.toString()))
 
+/** What a rename of [old] to [wanted] meets in its folder (D223). */
+enum class RenameCheck { FREE, TAKEN, SAME_FILE }
+
+/**
+ * [exists]: the server finds [wanted]; [listed]: the folder's names, read
+ * now. A change of case only that the server finds, while the folder lists
+ * no entry of that exact name, is a server without case: the same file, so
+ * the rename goes on (`readme` → `README`). Anything else the server finds
+ * is another file, never replaced.
+ */
+fun renameCheck(old: String, wanted: String, listed: List<String>, exists: Boolean): RenameCheck = when {
+    !exists -> RenameCheck.FREE
+    wanted != old && wanted.equals(old, ignoreCase = true) && wanted !in listed -> RenameCheck.SAME_FILE
+    else -> RenameCheck.TAKEN
+}
+
+/**
+ * A rename that changes only the case on a server without case (D223): at
+ * once, else through a free name of its own; when the second step fails the
+ * file gets its old name back. Null when done, else what to say.
+ */
+private fun renameCase(session: Long, folder: String, old: String, wanted: String): String? {
+    val from = remoteJoin(folder, old)
+    val to = remoteJoin(folder, wanted)
+    try {
+        sftp(session, "rename", JSONObject().put("from", from).put("to", to))
+        return null
+    } catch (_: CoreException) {
+        // Some servers refuse a rename onto a name they find: the way round.
+    }
+    val step = remoteJoin(folder, ".$old.shellpp-" + java.util.UUID.randomUUID().toString().take(8))
+    if (sftp(session, "exists", JSONObject().put("path", step)) as Boolean) return "Not renamed: the server refused it."
+    sftp(session, "rename", JSONObject().put("from", from).put("to", step))
+    return try {
+        sftp(session, "rename", JSONObject().put("from", step).put("to", to))
+        null
+    } catch (error: CoreException) {
+        val back = runCatching { sftp(session, "rename", JSONObject().put("from", step).put("to", from)) }.isSuccess
+        if (back) "Not renamed: ${error.message}" else "Not renamed: the file is now “${step.substringAfterLast('/')}”."
+    }
+}
+
 /**
  * SFTP to a host (UI spec 10, the desktop's section 5 for one remote panel):
  * the prompts of an SSH session, then the remote home folder, a path bar,
@@ -170,6 +212,10 @@ fun SftpScreen(
     }
     LaunchedEffect(Unit) {
         showHidden = withContext(Dispatchers.IO) { coreSettings().optBoolean("sftp.show_hidden", false) }
+    }
+    // Its card in Connections shows the folder shown here (D223 item 9).
+    LaunchedEffect(session, path) {
+        if (session != 0L && path.isNotEmpty()) app.sftpFolders.value = app.sftpFolders.value + (session to path)
     }
     var answered by remember { mutableStateOf(-1L) }
     val transfers by app.transfers.collectAsState()
@@ -554,8 +600,21 @@ fun SftpScreen(
                                 // The listing may be old: the server is asked
                                 // too, so a rename never replaces a file.
                                 val exists = runCatching { sftp(session, "exists", JSONObject().put("path", target)) as Boolean }.getOrNull()
-                                if (exists == null) {
+                                val old = entry?.optString("name") ?: ""
+                                // Only a change of case the server finds: is
+                                // it the same file? The folder is read again.
+                                val listed = if (exists == true && what == "rename" && wanted.equals(old, ignoreCase = true)) {
+                                    runCatching {
+                                        val list = sftp(session, "list", JSONObject().put("path", folder)) as JSONArray
+                                        (0 until list.length()).map { list.getJSONObject(it).optString("name") }
+                                    }.getOrNull()
+                                } else {
+                                    emptyList()
+                                }
+                                if (exists == null || listed == null) {
                                     "The name could not be checked; nothing was changed."
+                                } else if (what == "rename" && entry != null && renameCheck(old, wanted, listed, exists) == RenameCheck.SAME_FILE) {
+                                    renameCase(session, folder, old, wanted)
                                 } else if (exists) {
                                     "“$wanted” is already there; nothing was changed."
                                 } else {

@@ -73,6 +73,7 @@ use shellpp_core::service::host_api::ConnectionEndReason;
 use shellpp_ssh::sk::Authenticator;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 pub use backend::{DEFAULT_TERM, DEFAULT_THEME, SessionCore, SessionSettings};
 pub use keys::{AgentSource, KeySources, PassphraseCache};
@@ -345,6 +346,8 @@ pub(crate) enum Control {
 #[derive(Debug)]
 pub(crate) enum InputOp {
     Data(Vec<u8>),
+    /// A secret (the phone's password key): wiped once written.
+    Secret(Zeroizing<Vec<u8>>),
     Resize(u16, u16),
 }
 
@@ -368,6 +371,15 @@ impl InputQueue {
         let len = bytes.len();
         self.pending.fetch_add(len, Ordering::SeqCst);
         if self.tx.send(InputOp::Data(bytes)).is_err() {
+            self.pending.fetch_sub(len, Ordering::SeqCst);
+        }
+    }
+
+    fn secret(&self, bytes: Zeroizing<Vec<u8>>) {
+        let len = bytes.len();
+        self.pending.fetch_add(len, Ordering::SeqCst);
+        // A send that fails drops the bytes, which wipes them.
+        if self.tx.send(InputOp::Secret(bytes)).is_err() {
             self.pending.fetch_sub(len, Ordering::SeqCst);
         }
     }
@@ -689,6 +701,14 @@ impl SessionHandle {
         self.session.view()
     }
 
+    /// Whether the output of the session's current connection is recorded
+    /// (D75). The session decides when it connects, from the host's "Record
+    /// output" at that moment, so a setting changed later does not change
+    /// this answer until the next connection (D222, D223).
+    pub fn records_output(&self) -> bool {
+        self.session.lock().view.records_output
+    }
+
     /// The SFTP channel of an SFTP session while it is connected.
     pub fn sftp(&self) -> Option<Arc<shellpp_ssh::Sftp>> {
         self.session.lock().sftp.clone()
@@ -724,6 +744,29 @@ impl SessionHandle {
         let bytes = st.encoder.encode(data);
         drop(st);
         queue.data(bytes);
+        Ok(())
+    }
+
+    /// [`SessionHandle::write`] for a secret (the phone's password key,
+    /// D223): the encoded bytes are wiped once written to the channel. An
+    /// encoding other than UTF-8 converts through text it does not wipe.
+    pub fn write_secret(&self, data: &[u8]) -> Result<(), WriteError> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        let mut st = self.session.lock();
+        let Some(queue) = st.input.clone() else {
+            return Err(WriteError::NotConnected);
+        };
+        if st.view.state != SessionState::Connected {
+            return Err(WriteError::NotConnected);
+        }
+        if !queue.has_room(data.len()) {
+            return Err(WriteError::Busy);
+        }
+        let bytes = Zeroizing::new(st.encoder.encode(data));
+        drop(st);
+        queue.secret(bytes);
         Ok(())
     }
 
@@ -1057,6 +1100,7 @@ impl SessionManager {
                     os: None,
                     theme: settings.default_theme,
                     backspace: Backspace::Default,
+                    records_output: false,
                     prompt: None,
                     error: None,
                     host_key: None,
@@ -1121,6 +1165,7 @@ impl SessionManager {
             os: None,
             theme: settings.default_theme,
             backspace: Backspace::Default,
+            records_output: false,
             prompt: None,
             error: None,
             host_key: None,
@@ -1177,6 +1222,7 @@ impl SessionManager {
             theme: backend::theme_slug(&config.terminal_theme)
                 .unwrap_or_else(|| settings.default_theme.clone()),
             backspace: config.backspace,
+            records_output: false,
             prompt: None,
             error: None,
             host_key: None,
@@ -1237,6 +1283,7 @@ impl SessionManager {
             theme: backend::theme_slug(&config.terminal_theme)
                 .unwrap_or_else(|| settings.default_theme.clone()),
             backspace: config.backspace,
+            records_output: false,
             prompt: None,
             error: None,
             host_key: None,
@@ -1469,6 +1516,7 @@ pub(crate) async fn pump(
                 {
                     tracing::warn!(%error, "session recording stopped");
                     recording = None;
+                    session.update(|st| st.view.records_output = false);
                 }
                 let Some(terminal) = terminal.as_ref().filter(|_| terminal_open) else {
                     continue;
@@ -1515,6 +1563,12 @@ async fn write_loop(input: Arc<dyn TermInput>, receiver: InputReceiver) {
             InputOp::Data(data) => {
                 let len = data.len();
                 let alive = input.write(data).await;
+                pending.fetch_sub(len, Ordering::SeqCst);
+                alive
+            }
+            InputOp::Secret(data) => {
+                let len = data.len();
+                let alive = input.write_secret(data).await;
                 pending.fetch_sub(len, Ordering::SeqCst);
                 alive
             }

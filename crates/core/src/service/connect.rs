@@ -301,22 +301,8 @@ fn host_session_config(
     let username = username_member(ssh)
         .or_else(|| own_identity.and_then(identity::username).map(str::to_owned))
         .or_else(|| inherited.username.map(|name| name.value));
-    // password = host.ssh.password ?? identity.password, where
-    // identity = first(identity_id): a host that names an identity
-    // uses that one, even when it is missing (no silent fallback
-    // to a group's credentials, data-model 8.3).
-    let linked = if uuid_member(ssh, "identity_id").is_some() {
-        own_identity
-    } else {
-        inherited
-            .identity_id
-            .as_ref()
-            .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
-            .map(|record| record.data())
-    };
-    let password = host::secret_value(data, "ssh.password")
-        .or_else(|| linked.and_then(identity::password))
-        .map(|password| SecretString::from(password.to_owned()));
+    let password =
+        effective_password(session, data).map(|password| SecretString::from(password.to_owned()));
     let os = host_os(data);
     let os_detection_script = (defaults.os_detection_enabled && os.is_none())
         .then(|| defaults.os_detection_script.clone());
@@ -467,6 +453,27 @@ fn session_proxy(data: &Map<String, Value>) -> Option<SessionProxy> {
     })
 }
 
+/// The effective password of a host (data-model 8.3): `host.ssh.password
+/// ?? identity.password`, where identity = first(identity_id): a host that
+/// names an identity uses that one, even when it is missing (no silent
+/// fallback to a group's credentials), else the nearest group's. A
+/// connection authenticates with it and the phone's password key types it
+/// (D220, D223).
+fn effective_password<'a>(session: &'a Session, data: &'a Map<String, Value>) -> Option<&'a str> {
+    let index = &session.index;
+    let linked = if uuid_member(ssh_block(data), "identity_id").is_some() {
+        own_identity(session, data)
+    } else {
+        let tree = index.tree();
+        index
+            .inherited_for_host(&tree, data)
+            .identity_id
+            .and_then(|id| index.get_kind(&id.value, RecordKind::Identity))
+            .map(|record| record.data())
+    };
+    host::secret_value(data, "ssh.password").or_else(|| linked.and_then(identity::password))
+}
+
 /// The identity a host's own `ssh.identity_id` names (`idf(0)`,
 /// docs/data-model.md, section 8.3).
 fn own_identity<'a>(
@@ -565,6 +572,30 @@ impl Core {
                 .then_with(|| a.key.record_id.cmp(&b.key.record_id))
         });
         Ok(keys)
+    }
+
+    /// The password the phone's password key types into a session to the
+    /// saved host `host` (D220, D223): the host's effective password, the
+    /// one a connection authenticates with (its own, else its identity's,
+    /// data-model 8.3); `not_found` without one.
+    pub fn host_password(&self, host: RecordRef) -> Result<SecretString, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(host.vault_id))?;
+        let record = live(session, &host.record_id, RecordKind::Host)?;
+        effective_password(session, record.data())
+            .map(|password| SecretString::from(password.to_owned()))
+            .ok_or(CoreError::NotFound)
+    }
+
+    /// Whether the saved host `host` has an effective password (the
+    /// password key's state), without reading it out.
+    pub fn host_password_set(&self, host: RecordRef) -> Result<bool, CoreError> {
+        let inner = self.inner();
+        let session = Self::require_session(&inner)?;
+        check_vault(session, Some(host.vault_id))?;
+        let record = live(session, &host.record_id, RecordKind::Host)?;
+        Ok(effective_password(session, record.data()).is_some())
     }
 }
 

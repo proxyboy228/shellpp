@@ -1175,6 +1175,7 @@ fn layer_view(state: crate::sessions::SessionState) -> crate::sessions::SessionV
         os: None,
         theme: "graphite".into(),
         backspace: Backspace::Default,
+        records_output: false,
         prompt: None,
         error: None,
         host_key: None,

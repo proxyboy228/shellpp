@@ -322,16 +322,54 @@ pub extern "system" fn Java_dev_shellpp_android_Native_text<'caller>(
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `sendPassword(session, vaultId, recordId)`: the saved password of the
-/// host into the session once, without Enter (D220: the password key, after
-/// the user confirmed it). It goes from the vault to the session here and
-/// never crosses into Kotlin, as injected input that the history capture
-/// never takes for a command. Refused when the host's output is recorded
-/// (an echoing prompt would put it in the recording) or the password holds
-/// a control character (a line break would be an Enter), and when the
-/// session is not connected or was opened to another host. The answer:
-/// 0 sent, 1 no saved password, 2 recorded, 3 control character, 5 not
-/// connected to this host.
+/// The host a password key call names.
+fn password_host(
+    env: &mut jni::Env<'_>,
+    vault_id: &JString<'_>,
+    record_id: &JString<'_>,
+) -> Result<shellpp_core::service::dto::RecordRef, NativeError> {
+    let parse = |text: String| {
+        uuid::Uuid::parse_str(&text)
+            .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
+    };
+    Ok(shellpp_core::service::dto::RecordRef {
+        vault_id: parse(vault_id.try_to_string(env)?)?,
+        record_id: parse(record_id.try_to_string(env)?)?,
+    })
+}
+
+/// `passwordState(session, vaultId, recordId)`: whether the password key
+/// can send now (the key's look and the reason a tap shows, D223 item 13):
+/// 0 it can, else the refusal of `sendPassword` (1, 2 or 5). The password
+/// is not read.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_passwordState<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    session: jlong,
+    vault_id: JString<'caller>,
+    record_id: JString<'caller>,
+) -> jint {
+    unowned
+        .with_env(|env| -> Result<jint, NativeError> {
+            let host = password_host(env, &vault_id, &record_id)?;
+            Ok(engine()?.password_state(id(session), host)? as jint)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `sendPassword(session, vaultId, recordId)`: the host's effective password
+/// (its own, else its identity's, data-model 8.3) into the session once,
+/// without Enter (D220: the password key, after the user confirmed it). It
+/// goes from the vault to the session here and never crosses into Kotlin,
+/// as injected input that the history capture never takes for a command,
+/// in buffers wiped once it is written (D223). Refused when the session
+/// records its output (an echoing prompt would put it in the recording) or
+/// the password holds a control character (a line break would be an
+/// Enter), and when the session is not connected or was opened to another
+/// host; checked again here, whatever the key showed. The answer: 0 sent,
+/// 1 no password, 2 recorded, 3 control character, 5 not connected to this
+/// host.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
     mut unowned: EnvUnowned<'caller>,
@@ -342,39 +380,34 @@ pub extern "system" fn Java_dev_shellpp_android_Native_sendPassword<'caller>(
 ) -> jint {
     unowned
         .with_env(|env| -> Result<jint, NativeError> {
-            let parse = |text: String| {
-                uuid::Uuid::parse_str(&text)
-                    .map_err(|_| NativeError::Engine(EngineError("bad record id".to_owned())))
-            };
-            let field = shellpp_core::service::dto::SecretFieldRef {
-                vault_id: parse(vault_id.try_to_string(env)?)?,
-                record_id: parse(record_id.try_to_string(env)?)?,
-                path: "ssh.password".to_owned(),
-            };
-            let engine = engine()?;
-            let host = shellpp_core::service::dto::RecordRef {
-                vault_id: field.vault_id,
-                record_id: field.record_id,
-            };
-            if !engine.connected_to(id(session), host)? {
-                return Ok(5);
+            let host = password_host(env, &vault_id, &record_id)?;
+            Ok(engine()?.send_password(id(session), host)? as jint)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// `pastePreview(text, confirmSetting)`: whether a paste of `text` asks
+/// first, by the desktop's rule (UI 4.3, `paste::needs_confirmation`: a line
+/// break and `terminal.confirm_multiline_paste` on; D223): `null` when it
+/// goes at once, else the dialog's preview as JSON (`lines`, the first
+/// lines as they would be pasted, and `more`, how many are not shown).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_shellpp_android_Native_pastePreview<'caller>(
+    mut unowned: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    text: JString<'caller>,
+    confirm_setting: jboolean,
+) -> jni::sys::jstring {
+    unowned
+        .with_env(|env| -> Result<jni::sys::jstring, NativeError> {
+            let text = text.try_to_string(env)?;
+            let clean = shellpp_terminal::paste::sanitize(&text);
+            if !shellpp_terminal::paste::needs_confirmation(&clean, confirm_setting) {
+                return Ok(std::ptr::null_mut());
             }
-            if engine.core().record_output_for(Some(host)) {
-                return Ok(2);
-            }
-            let password = match engine.core().secret_reveal(field) {
-                Ok(password) => password,
-                Err(shellpp_core::CoreError::NotFound) => return Ok(1),
-                Err(error) => {
-                    return Err(NativeError::Engine(EngineError(error.code().to_owned())));
-                }
-            };
-            let text = secrecy::ExposeSecret::expose_secret(&password);
-            if text.chars().any(char::is_control) {
-                return Ok(3);
-            }
-            engine.inject(id(session), text.as_bytes().to_vec())?;
-            Ok(0)
+            let preview = shellpp_terminal::paste::PastePreview::new(&clean);
+            let json = serde_json::json!({ "lines": preview.lines, "more": preview.more });
+            Ok(env.new_string(json.to_string())?.into_raw())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

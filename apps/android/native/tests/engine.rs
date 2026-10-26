@@ -245,3 +245,170 @@ async fn a_saved_host_connects_with_its_groups_username_and_its_saved_password()
     drop(server);
     result.expect("the engine's steps");
 }
+
+/// The password key (D220, D223 item 13): a host whose password comes from
+/// its group's identity; the key's state from the session layer and the
+/// vault; Send types the password once without Enter; a session recording
+/// its output, a host without a password, a password with a line break and
+/// another host are refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_password_key_types_the_identitys_password_and_refuses_what_it_must() {
+    use shellpp_android::PasswordAnswer;
+    use shellpp_core::service::dto::RecordRef;
+
+    let password = random("pw");
+    let server = TestServer::start(ServerConfig::new(vec![
+        UserConfig::new("deploy").with_password(SecretString::from(password.clone())),
+    ]))
+    .await
+    .expect("test server");
+    let port = server.port();
+    let files = tempfile::tempdir().expect("files");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let engine = started(files.path());
+        let vault = ok(&engine, "vaults", &json!(null))[0]["vault_id"].clone();
+        let identity = ok(
+            &engine,
+            "identity_save",
+            &json!({"label": "deploy", "username": "deploy", "password": password}),
+        );
+        let group = ok(
+            &engine,
+            "record_save",
+            &json!({"vault_id": vault, "type": "group", "data": {
+                "name": "Servers", "ssh": {"port": port, "identity_id": identity["record_id"]}}}),
+        );
+        let save_host = |label: &str, extra: Value| {
+            let mut data =
+                json!({"address": "127.0.0.1", "label": label, "group_id": group["record_id"]});
+            for (key, value) in extra.as_object().expect("object") {
+                data[key] = value.clone();
+            }
+            let host = ok(
+                &engine,
+                "record_save",
+                &json!({"vault_id": vault, "type": "host", "data": data}),
+            );
+            RecordRef {
+                vault_id: serde_json::from_value(vault.clone()).expect("vault id"),
+                record_id: serde_json::from_value(host["record_id"].clone()).expect("record id"),
+            }
+        };
+        let connect = |host: RecordRef, accept: bool| {
+            let id = engine
+                .open_target(
+                    SessionTarget::Host {
+                        vault_id: host.vault_id,
+                        record_id: host.record_id,
+                    },
+                    80,
+                    24,
+                    true,
+                )
+                .expect("open");
+            if accept {
+                let asked = wait_for(&engine, id, |event| {
+                    event["prompt"]["kind"] == "host_key_unknown"
+                });
+                let prompt = asked["prompt"]["id"].as_u64().expect("prompt id");
+                engine.reply(id, prompt, "accept", None).expect("accept");
+            }
+            let connected = wait_for(&engine, id, |event| {
+                event["state"] == "connected" || event["prompt"]["kind"] == "password"
+            });
+            assert_eq!(connected["state"], "connected", "{connected}");
+            // Until the session has decided about its recording, it counts
+            // as recorded: the key fails closed.
+            assert_eq!(connected["recording"], true, "{connected}");
+            id
+        };
+        let decided = |id: u64, recorded: bool| {
+            wait_for(&engine, id, |event| {
+                event["state"] == "connected" && event["recording"] == recorded
+            });
+        };
+
+        // The group's identity signs in and gives the key its password.
+        let web = save_host("web", json!({}));
+        let id = connect(web, true);
+        decided(id, false);
+        assert_eq!(
+            engine.password_state(id, web).expect("state"),
+            PasswordAnswer::Ready
+        );
+        assert!(!engine.records_output(id).expect("recording"));
+        assert_eq!(
+            engine.send_password(id, web).expect("sent"),
+            PasswordAnswer::Ready
+        );
+        // Typed once, without Enter: the test shell echoes it on its line.
+        assert!(screen_has(&engine, id, &password));
+        let terminal = engine.terminal(id).expect("terminal");
+        let line = terminal
+            .screen_text()
+            .into_iter()
+            .find(|line| line.contains(&password))
+            .expect("the echoed line");
+        assert_eq!(line.matches(&password).count(), 1, "{line}");
+        engine.send(id, b"\x15".to_vec()).expect("clear the line");
+
+        // Another host than the session's is refused.
+        let other = save_host("other", json!({}));
+        assert_eq!(
+            engine.password_state(id, other).expect("state"),
+            PasswordAnswer::NotConnected
+        );
+
+        // A line break in the password would be an Enter: refused.
+        ok(
+            &engine,
+            "identity_save",
+            &json!({"record_id": identity["record_id"], "label": "deploy", "username": "deploy",
+                    "password": "first\nsecond"}),
+        );
+        assert_eq!(
+            engine.send_password(id, web).expect("refused"),
+            PasswordAnswer::Control
+        );
+        // No password left (none of its own, its identity's cleared): none.
+        ok(
+            &engine,
+            "identity_save",
+            &json!({"record_id": identity["record_id"], "label": "deploy", "username": "deploy",
+                    "clear_password": true}),
+        );
+        assert_eq!(
+            engine.password_state(id, web).expect("state"),
+            PasswordAnswer::None
+        );
+        assert_eq!(
+            engine.send_password(id, web).expect("refused"),
+            PasswordAnswer::None
+        );
+        engine.close(id);
+
+        // A host that records its output: the session says so, the key refuses.
+        ok(
+            &engine,
+            "identity_save",
+            &json!({"record_id": identity["record_id"], "label": "deploy", "username": "deploy",
+                    "password": password}),
+        );
+        let recorded = save_host("recorded", json!({"record_output": "on"}));
+        let id = connect(recorded, false);
+        assert!(engine.records_output(id).expect("recording"));
+        assert_eq!(
+            engine.password_state(id, recorded).expect("state"),
+            PasswordAnswer::Recorded
+        );
+        assert_eq!(
+            engine.send_password(id, recorded).expect("refused"),
+            PasswordAnswer::Recorded
+        );
+        engine.close(id);
+    })
+    .await;
+    drop(server);
+    result.expect("the engine's steps");
+}

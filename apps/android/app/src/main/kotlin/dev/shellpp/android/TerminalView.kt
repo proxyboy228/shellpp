@@ -25,6 +25,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.Magnifier
 import android.widget.Toast
+import org.json.JSONObject
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
@@ -86,7 +87,8 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
         typeface = Typeface.createFromAsset(context.assets, "fonts/JetBrainsMono-Regular.ttf")
     }
     private val fill = Paint()
-    private var fontSp = TerminalPrefs.of(context).getInt(TerminalPrefs.FONT, 14).toFloat()
+    // Pinch changes it for this view only; Settings keeps the device's size.
+    private var fontSp = TerminalPrefs.of(context).getInt(TerminalPrefs.FONT, TerminalPrefs.DEFAULT_FONT_SP).toFloat()
     private var cellW = 1f
     private var cellH = 1f
     private var ascent = 0f
@@ -347,7 +349,16 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             private var composing = ""
 
             override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-                sendComposingDiff(text.toString())
+                val value = text.toString()
+                // A keyboard's clipboard pastes by committing the text: with a
+                // line break it is a paste (the multi-line confirmation and
+                // bracketed paste, D223), not typing.
+                if (value.length > 1 && (value.contains('\n') || value.contains('\r'))) {
+                    composing = ""
+                    pasteText(value)
+                    return true
+                }
+                sendComposingDiff(value)
                 composing = ""
                 return true
             }
@@ -848,8 +859,46 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     fun paste() {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-        if (session == 0L || text.isNullOrEmpty() || worker.isShutdown) return
-        worker.execute { runCatching { Native.paste(session, text) } }
+        if (text != null) pasteText(text)
+    }
+
+    /**
+     * A paste by the desktop's rules (ui-spec 9.4, UI 4.3; D223): several
+     * lines ask first while `terminal.confirm_multiline_paste` is on; the
+     * text goes cleaned and bracketed when the program asked for it.
+     */
+    fun pasteText(text: String) {
+        val target = session
+        if (target == 0L || text.isEmpty() || worker.isShutdown) return
+        worker.execute {
+            val confirm = coreSettings().optBoolean("terminal.confirm_multiline_paste", true)
+            val preview = runCatching { Native.pastePreview(text, confirm) }.getOrNull()
+            if (preview == null) {
+                if (session == target) runCatching { Native.paste(target, text) }
+            } else {
+                main.post { confirmPaste(target, text, JSONObject(preview)) }
+            }
+        }
+    }
+
+    /** The multi-line paste's question: its first lines, then Paste or Cancel. */
+    private fun confirmPaste(target: Long, text: String, preview: JSONObject) {
+        if (released || session != target) return
+        val lines = preview.optJSONArray("lines")
+        val shown = buildString {
+            if (lines != null) for (i in 0 until lines.length()) appendLine(lines.optString(i))
+            val more = preview.optInt("more")
+            if (more > 0) append(context.resources.getQuantityString(R.plurals.paste_more_lines, more, more))
+        }.trimEnd()
+        android.app.AlertDialog.Builder(context)
+            .setTitle(R.string.paste_lines_title)
+            .setMessage(shown)
+            .setPositiveButton(R.string.paste) { _, _ ->
+                // Only to the session it was asked for (it may have switched).
+                if (session == target && !worker.isShutdown) worker.execute { runCatching { Native.paste(target, text) } }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     fun release() {

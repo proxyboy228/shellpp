@@ -201,27 +201,30 @@ interface KeySink {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ExtraKeysRow(groups: List<List<XKey>>, colors: BarColors, sink: KeySink, version: Int, password: Boolean, attach: Boolean) {
+fun ExtraKeysRow(groups: List<List<XKey>>, colors: BarColors, sink: KeySink, version: Int, password: Boolean, passwordWhy: String?, attach: Boolean) {
     LazyRow(
         Modifier.fillMaxWidth().background(colors.background).heightIn(min = 48.dp).testTag("extra_keys"),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         items(groups.size) { index ->
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (key in groups[index]) KeyChip(key, colors, sink, version, password, attach)
+                for (key in groups[index]) KeyChip(key, colors, sink, version, password, passwordWhy, attach)
             }
         }
     }
 }
 
 @Composable
-private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUSED_PARAMETER") version: Int, password: Boolean, attach: Boolean) {
+private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUSED_PARAMETER") version: Int, password: Boolean, passwordWhy: String?, attach: Boolean) {
     val scope = rememberCoroutineScope()
+    // The password key looks disabled when it cannot send, but a tap still
+    // says why (D223 item 13).
     val enabled = when (key) {
         XKey.Password -> password
         XKey.Attach -> attach
         else -> true
     }
+    val tappable = enabled || key == XKey.Password
     val lit = when (key) {
         XKey.Ctrl -> sink.ctrlState != StickyModifier.State.OFF
         XKey.Alt -> sink.altState != StickyModifier.State.OFF
@@ -234,8 +237,8 @@ private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUS
     Box(
         Modifier.heightIn(min = 48.dp).widthIn(min = 44.dp).clip(RoundedCornerShape(10.dp))
             .background(if (locked) colors.accent else if (lit) colors.accent.copy(alpha = 0.25f) else Color.Transparent)
-            .pointerInput(key, enabled) {
-                if (!enabled) return@pointerInput
+            .pointerInput(key, tappable) {
+                if (!tappable) return@pointerInput
                 awaitEachGesture {
                     // The row scrolls sideways: a key goes on release, and
                     // only when the touch stayed a tap (review of 3.3). The
@@ -282,7 +285,11 @@ private fun KeyChip(key: XKey, colors: BarColors, sink: KeySink, @Suppress("UNUS
             else -> colors.accent
         }
         when (key) {
-            XKey.Password -> Icon(Icons.Filled.Password, contentDescription = "Send the saved password", tint = tint)
+            XKey.Password -> Icon(
+                Icons.Filled.Password,
+                contentDescription = if (passwordWhy == null) "Send the saved password" else "Send the saved password, unavailable: $passwordWhy",
+                tint = tint,
+            )
             XKey.Cursor -> Icon(Icons.Filled.OpenWith, contentDescription = "Move the cursor by dragging", tint = tint)
             XKey.Attach -> Icon(Icons.Filled.AttachFile, contentDescription = "Send a file to the server", tint = tint)
             else -> Text(key.label, color = tint, fontFamily = FontFamily.Monospace, fontSize = 15.sp, fontWeight = FontWeight.Medium)

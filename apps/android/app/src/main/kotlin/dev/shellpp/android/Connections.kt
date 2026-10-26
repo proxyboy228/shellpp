@@ -86,6 +86,52 @@ fun parseSsh(text: String): QuickTarget? {
     return null
 }
 
+/**
+ * The one word quick connect may resolve to a saved host (D223 item 12): the
+ * text is `ssh <word>` or `<word>` alone, without a user or a port.
+ */
+fun singleTarget(text: String): String? {
+    val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val word = when {
+        words.size == 2 && words[0] == "ssh" -> words[1]
+        words.size == 1 && words[0] != "ssh" -> words[0]
+        else -> return null
+    }
+    return word.takeIf { !it.startsWith("-") && !it.contains('@') }
+}
+
+/**
+ * The saved hosts whose label or address is [word], as the desktop's quick
+ * connect finds them (UI 2.1, `exact_match`; D223 item 12): the ones spelled
+ * exactly so, else the ones equal without case. Several equal ones are a
+ * list to choose from.
+ */
+fun exactHosts(word: String, hosts: List<Record>): List<Record> {
+    val candidates = hosts.filter { !it.isGroup }
+    val label = { host: Record -> host.data.text("label") ?: "" }
+    val exact = candidates.filter { label(it) == word || it.address == word }
+    if (exact.isNotEmpty()) return exact
+    return candidates.filter { label(it).equals(word, ignoreCase = true) || it.address.equals(word, ignoreCase = true) }
+}
+
+/**
+ * The last transfer of an SFTP session as its card says it (D223 item 9):
+ * its direction, name and state, or "No transfers".
+ */
+fun lastTransfer(transfers: Collection<JSONObject>): String {
+    val last = transfers.maxByOrNull { it.optLong("id") } ?: return "No transfers"
+    val arrow = if (last.optString("direction") == "upload") "↑" else "↓"
+    val state = when (last.optString("state")) {
+        "queued" -> "waiting"
+        "running" -> humanSize(last.optLong("done"))
+        "done" -> "done"
+        "cancelled" -> "cancelled"
+        "failed" -> "failed"
+        else -> last.optString("state")
+    }
+    return "$arrow ${last.optString("name")} · $state"
+}
+
 /** When a session card's x last closed one (a double tap closes only one). */
 private var lastCardClose = 0L
 
@@ -113,24 +159,36 @@ fun ConnectionsScreen(app: App, activity: MainActivity, nav: Nav) {
     var query by rememberSaveable { mutableStateOf("") }
     var pickingSftp by remember { mutableStateOf(false) }
     val command = parseSsh(query)
+    // `ssh <word>` or `<word>`: a saved host of that label or address first.
+    val single = singleTarget(query)
     // The hosts found, with the text they were found for: Connect takes
     // them only while that is still the text shown (review of 3.3).
     val found by produceState(Pair("", listOf<Record>()), query) {
-        value = if (query.isBlank() || command != null) {
+        val text = if (command != null) single else query.trim()
+        value = if (text.isNullOrBlank()) {
             Pair(query, emptyList())
         } else {
             Pair(
                 query,
                 withContext(Dispatchers.IO) {
-                    runCatching { records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all")).put("text", query.trim())) }.getOrDefault(emptyList())
+                    runCatching { records(JSONObject().put("types", JSONArray().put("host")).put("scope", JSONObject().put("kind", "all")).put("text", text)) }.getOrDefault(emptyList())
                 },
             )
         }
     }
-    val matches = if (found.first == query) found.second else emptyList()
+    val current = if (found.first == query) found.second else emptyList()
+    val exact = single?.let { exactHosts(it, current) } ?: emptyList()
+    val matches = if (command == null) current else emptyList()
     Page(top = { TopBar("Connections") }) {
-        QuickConnectField(query, { query = it }, enabled = command != null || matches.isNotEmpty()) {
+        QuickConnectField(query, { query = it }, enabled = command != null || matches.isNotEmpty() || exact.isNotEmpty()) {
             when {
+                // The saved host of that name, with its settings; several
+                // stay listed below to choose from.
+                exact.size == 1 -> {
+                    connect(activity, exact[0])
+                    query = ""
+                }
+                exact.size > 1 -> {}
                 command != null -> {
                     quickConnect(activity, command)
                     query = ""
@@ -139,6 +197,16 @@ fun ConnectionsScreen(app: App, activity: MainActivity, nav: Nav) {
             }
         }
         when {
+            exact.size > 1 -> LazyColumn(Modifier.fillMaxSize()) {
+                item { Text("Several saved hosts are called “$single”: pick one.", color = Tokens.textSecondary, modifier = Modifier.padding(20.dp)) }
+                items(exact, key = { it.id }) { host ->
+                    ListCard(
+                        highlighted(host.title, single ?: ""), host.subtitle, "exact_" + host.id,
+                        tile = { OsTile(OsMark.of(host.os)) },
+                        onClick = { connect(activity, host) },
+                    )
+                }
+            }
             query.isNotBlank() && command == null -> LazyColumn(Modifier.fillMaxSize()) {
                 if (matches.isEmpty()) {
                     item { Text("No saved host matches. Type an ssh command to connect: ssh user@host -p 22", color = Tokens.textSecondary, modifier = Modifier.padding(20.dp)) }
@@ -227,11 +295,24 @@ private fun SessionCard(app: App, activity: MainActivity, view: JSONObject) {
             Modifier.fillMaxWidth().height(120.dp).clickable { openSession(activity, id) }.padding(12.dp).testTag("session_preview_$id"),
         ) {
             if (sftp) {
+                // The folder it shows and its last transfer (D223 item 9).
+                val folders by app.sftpFolders.collectAsState()
+                val transfers by app.transfers.collectAsState()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Folder, contentDescription = null, tint = Tokens.accent)
                     Spacer(Modifier.width(8.dp))
-                    Text("Files of ${view.optString("title")}", color = Tokens.textSecondary)
+                    Text(
+                        folders[id] ?: "Files of ${view.optString("title")}", color = Tokens.text,
+                        fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("sftp_card_folder"),
+                    )
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    lastTransfer(transfers.values.filter { it.optLong("session") == id }),
+                    color = Tokens.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("sftp_card_transfer"),
+                )
             } else {
                 for (line in lines) {
                     Text(line, color = theme.fg, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Clip)

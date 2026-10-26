@@ -65,4 +65,15 @@ class ScreensLogicTest {
         assertNull(data.with("ssh.port", null).at("ssh.port"))
         assertNull(data.with("ssh.port", "").at("ssh.port"))
     }
+
+    @Test
+    fun aRenameOfTheCaseOnlyGoesOnWhereTheServerHasNoCase() {
+        // The server finds README, the folder lists only readme: the same file.
+        assertEquals(RenameCheck.SAME_FILE, renameCheck("readme", "README", listOf("readme", "notes"), exists = true))
+        // Both listed: two files on a server with case, never replaced.
+        assertEquals(RenameCheck.TAKEN, renameCheck("readme", "README", listOf("readme", "README"), exists = true))
+        // Another name the server finds is another file.
+        assertEquals(RenameCheck.TAKEN, renameCheck("readme", "notes", listOf("readme", "notes"), exists = true))
+        assertEquals(RenameCheck.FREE, renameCheck("readme", "README", listOf("readme"), exists = false))
+    }
 }

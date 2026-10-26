@@ -56,5 +56,12 @@
     <string name="password_not_sent">The password was not sent.</string>
     <string name="password_not_sent_recorded">Not sent: this host records the session\'s output, and the password could be in the recording.</string>
     <string name="password_not_sent_offline">Not sent: the session is not connected to this host.</string>
+    <string name="paste_lines_title">Paste several lines?</string>
+    <plurals name="paste_more_lines">
+        <item quantity="one">… and %d more line</item>
+        <item quantity="other">… and %d more lines</item>
+    </plurals>
+    <string name="password_key_none">This host has no saved password (its own or its identity\'s).</string>
+    <string name="password_key_quick">A quick connect has no saved password.</string>
     <string name="password_not_sent_control">Not sent: the saved password holds a line break or another control character.</string>
 </resources>

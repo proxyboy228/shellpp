@@ -514,7 +514,8 @@ Rules:
   - the PPK passphrase and the decrypted PPK bytes inside ssh-key (0.7.0-rc.11 wipes neither);
   - the `String`s russh takes for passwords and keyboard-interactive answers;
   - the bodies of sync requests and answers outside the API values: the JSON text serde_json writes and reads, and the copies reqwest and hyper keep of it and of the `Authorization` header with the access token (on the server, those of axum and hyper) [decision] (D192);
-  - text shown or typed in GPUI views and inputs (a revealed password, a typed passphrase).
+  - text shown or typed in GPUI views and inputs (a revealed password, a typed passphrase);
+  - on the phone, the password key's password (D223) on its way from the vault to the SSH channel is in wiped buffers (the core's `SecretString`, the injected input and the session's input queue, then russh's own buffer, which russh wipes), except a conversion to a charset other than UTF-8, which goes through text that is not wiped; the password never reaches Kotlin.
 
   An allocator that wipes freed memory would cover them; it is not used (D83: it needs `unsafe impl GlobalAlloc`, an exception to CONTRIBUTING.md). Full-disk encryption and encrypted swap remain the recommendation (section 9.3).
 - Core dumps are disabled for the app process: on Linux `PR_SET_DUMPABLE = 0` (which also blocks unprivileged same-user `ptrace` attach) and `RLIMIT_CORE = 0`; on macOS `RLIMIT_CORE = 0`. Windows Error Reporting dumps remain a residual risk (section 18). (stage 0 decision)

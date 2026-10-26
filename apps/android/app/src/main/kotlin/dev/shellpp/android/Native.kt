@@ -51,6 +51,13 @@ object Native {
     @JvmStatic external fun key(session: Long, code: Int, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun text(session: Long, text: String, ctrl: Boolean, alt: Boolean)
     @JvmStatic external fun paste(session: Long, text: String)
+
+    /**
+     * Whether a paste of [text] asks first (the desktop's rule, UI 4.3; D223):
+     * null when it goes at once, else the dialog's preview as JSON (`lines`,
+     * `more`).
+     */
+    @JvmStatic external fun pastePreview(text: String, confirmSetting: Boolean): String?
     /**
      * Types the host's saved password into [session] once, without Enter
      * (D220): [PASSWORD_SENT], or why not.
@@ -63,6 +70,16 @@ object Native {
     const val PASSWORD_CONTROL = 3
     const val PASSWORD_FAILED = 4
     const val PASSWORD_NOT_CONNECTED = 5
+
+    /** The key's state for a quick connect (no saved host); never an answer of Rust. */
+    const val PASSWORD_QUICK = 6
+
+    /**
+     * Whether the password key can send to [session] now (D223 item 13):
+     * [PASSWORD_SENT] when it can, else why not ([PASSWORD_NONE],
+     * [PASSWORD_RECORDED], [PASSWORD_NOT_CONNECTED]). The password is not read.
+     */
+    @JvmStatic external fun passwordState(session: Long, vaultId: String, recordId: String): Int
     @JvmStatic external fun putCursor(session: Long, col: Int, row: Int): Boolean
     @JvmStatic external fun snapshot(session: Long): ByteArray
     @JvmStatic external fun awaitWake(session: Long): Boolean

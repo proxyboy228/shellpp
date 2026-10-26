@@ -69,6 +69,10 @@ pub struct SessionView {
     pub theme: String,
     /// What Backspace sends (host setting).
     pub backspace: Backspace,
+    /// The output of the current connection goes to a recording (D75). From
+    /// the moment the session is connected until it has decided (a moment
+    /// later), this is `true`: the phone's password key fails closed (D223).
+    pub records_output: bool,
     /// A question waiting for the user.
     pub prompt: Option<SessionPrompt>,
     /// Why the session failed or dropped.

@@ -45,6 +45,15 @@ pub trait TermEvents: Send + 'static {
 pub trait TermInput: Send + Sync + 'static {
     /// `false` when the terminal is gone.
     fn write(&self, data: Vec<u8>) -> BoxFuture<'_, bool>;
+    /// A secret (the phone's password key, D223), wiped once written. A
+    /// transport without its own path writes a copy, which is not wiped;
+    /// SSH writes from the wiped buffer (russh copies it into its own
+    /// buffer, which it wipes too).
+    fn write_secret(&self, data: zeroize::Zeroizing<Vec<u8>>) -> BoxFuture<'_, bool> {
+        let copy = data.to_vec();
+        drop(data);
+        self.write(copy)
+    }
     fn resize(&self, cols: u16, rows: u16) -> BoxFuture<'_, bool>;
     /// Closes the input side (SSH: EOF and close; local: ends the process).
     fn close(&self) -> BoxFuture<'_, ()>;
@@ -270,6 +279,10 @@ struct SshInput(ShellWriter);
 
 impl TermInput for SshInput {
     fn write(&self, data: Vec<u8>) -> BoxFuture<'_, bool> {
+        Box::pin(async move { self.0.write(&data).await.is_ok() })
+    }
+
+    fn write_secret(&self, data: zeroize::Zeroizing<Vec<u8>>) -> BoxFuture<'_, bool> {
         Box::pin(async move { self.0.write(&data).await.is_ok() })
     }
 

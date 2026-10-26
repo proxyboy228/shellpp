@@ -295,5 +295,9 @@ fn identities_recent_connections_and_a_partial_save_through_the_binding() {
     );
     assert_eq!(saved["label"], "deploy edited");
     assert_eq!(saved["username"], "from elsewhere");
-    assert!(saved["revision"].as_u64().is_some_and(|revision| revision > 0));
+    assert!(
+        saved["revision"]
+            .as_u64()
+            .is_some_and(|revision| revision > 0)
+    );
 }

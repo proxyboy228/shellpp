@@ -65,6 +65,9 @@ class App : Application() {
     /** The SFTP sessions among them (Sessions opens them in the SFTP screen). */
     val sftpSessions: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
+    /** The folder each SFTP session shows (its card in Connections, D223 item 9). */
+    val sftpFolders = MutableStateFlow<Map<Long, String>>(emptyMap())
+
     /** The last event of each transfer (`kind` "transfer", UI spec 10). */
     val transfers = MutableStateFlow<Map<Long, JSONObject>>(emptyMap())
 
@@ -248,6 +251,7 @@ class App : Application() {
     fun forget(id: Long) {
         sessions -= id
         sftpSessions -= id
+        sftpFolders.value = sftpFolders.value - id
         sessionHosts.remove(id)
         TerminalView.colors.remove(id)
         // Its transfers are gone with it: the core reports the running ones

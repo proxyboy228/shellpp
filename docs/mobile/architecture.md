@@ -330,7 +330,8 @@ clears a copied password when it can, instead of taking an empty read for
   crate has its own copy, tested against the desktop's sequences.
 - Ctrl and Alt on the extra keys row are sticky (UI spec 9.2).
 - Paste goes through the model's paste rules (bracketed paste, the
-  multi-line confirmation of UI 4.2).
+  multi-line confirmation of UI 4.3, `shellpp_terminal::paste`); text a
+  keyboard commits with a line break (its clipboard) counts as a paste.
 
 ### 6.3 Cursor and selection
 

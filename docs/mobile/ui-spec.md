@@ -48,7 +48,8 @@ adaptations [decision]:
   14 sp, captions 12 sp, section headings 18 sp, dialog titles 22 sp. The
   interface font is the system's (Roboto, or the phone maker's).
 - **Terminal**: the terminal themes of design-system 4 (Graphite dark by
-  default, Paper light) and JetBrains Mono (OFL) at 14 sp by default.
+  default, Paper light) and JetBrains Mono (OFL) at 11 sp by default (about
+  60 columns on the owner's S25, D223; a size chosen on the device stays).
 - **Touch**: every control has a touch target of at least 48 × 48 dp (the
   extra keys: 48 dp high, at least 44 dp wide, section 9.2);
   spacing follows design-system 6 in dp; rows of lists are 56 dp (one line)
@@ -82,13 +83,17 @@ adaptations [decision]:
 
 ### 3.2 Connections
 
-- **Quick connect**: a rounded field with **Connect** inside it. Text that
-  reads as an ssh command (`ssh user@host -p 22`, `ssh -p 22 user@host`,
-  `user@host[:port]`, `ssh host`) connects without saving anything; other
-  text searches the saved hosts and lists them (a tap connects).
+- **Quick connect**: a rounded field with **Connect** inside it. `ssh <word>`
+  or `<word>` alone that is the label or the address of a saved host (the
+  exact spelling first, then without case, as the desktop's UI 2.1)
+  connects to that host with its settings; several such hosts are listed to
+  pick one (D223). Other text that reads as an ssh command (`ssh user@host
+  -p 22`, `ssh -p 22 user@host`, `user@host[:port]`, `ssh host`) connects
+  without saving anything; other text searches the saved hosts and lists
+  them (a tap connects).
 - **While sessions are open**: one card per session, its live preview (the
   last lines of the output in the terminal's theme; an SFTP session shows
-  its files' folder) above a row with the host's tile, the session name, the
+  the folder it shows and its last transfer, or "No transfers", D223) above a row with the host's tile, the session name, the
   protocol and **×** (closes at once). A tap on the preview opens the
   session.
 - **Otherwise**: **Recent connections** (the connection log, data-model 13.3:
@@ -309,16 +314,22 @@ prompts, the end and the reconnect policy, the lock) is the desktop's
   signs and brackets; F1–F12 in three groups; three groups of Ctrl
   combinations (^_ ^W ^R ^X^X, ^C ^L ^S ^Z, ^X ^G ^N ^P). No AI key in the
   first version (D220).
-- **The password key** (D220): a tap asks "Send the saved password?" naming
-  the host; only **Send** types the host's saved password into the session,
-  once and without Enter, straight from the vault (it never passes through
-  the interface's memory). It goes in as injected input, which the history
-  capture never takes for a command. It is refused with a notice when the
-  host's output is recorded (an echoing prompt would put it in the
-  recording) and when the password holds a control character (a line break
-  would be an Enter). The confirmation belongs to the session it was asked
-  for: switching sessions meanwhile sends nothing to the other one.
-  Disabled when the host has no saved password, and for a quick connect.
+- **The password key** (D220, D223): a tap asks "Send the saved password?"
+  naming the host; only **Send** types the host's effective password into
+  the session (its own, else its identity's, also one its group names,
+  data-model 8.3), once and without Enter, straight from the vault (it
+  never passes through the interface's memory; the buffers on its way are
+  wiped once it is written, security.md 9.5). It goes in as injected
+  input, which the history capture never takes for a command. It cannot
+  send when the session is not connected to its host, when the session
+  records its output (the session's own answer for its current connection;
+  until it has decided, a moment after connecting, it counts as recording:
+  an echoing prompt would put the password in the recording), when the host
+  has no password, and for a quick connect: the key then looks disabled, a
+  tap says why and TalkBack reads the reason. Send checks again in Rust and
+  also refuses a password with a control character (a line break would be
+  an Enter). The confirmation belongs to the session it was asked for:
+  switching sessions meanwhile sends nothing to the other one.
 - **The cursor key**: a toggle (filled while on); while on, a drag on the
   terminal sends the arrow keys the way the finger moves, at Settings'
   cursor speed; a tap still puts the cursor (9.3).
@@ -407,7 +418,10 @@ prompts, the end and the reconnect policy, the lock) is the desktop's
   desktop: wrapped rows without a line break, trailing blanks dropped); below
   Android 13 a short "Copied" toast says so (from Android 13 the system
   shows its own notice). **Paste** follows the desktop's paste rules
-  (bracketed paste, the multi-line confirmation of 4.2).
+  (bracketed paste; the multi-line confirmation of UI 4.3 with its first
+  lines while `terminal.confirm_multiline_paste` is on, Settings 12). So
+  does a keyboard's clipboard: text it commits with a line break is a
+  paste, not typing (D223) [decision].
 - When the program asked for mouse reports, a long press still selects (the
   terminal's own selection), as Shift with the mouse does on the desktop
   (`docs/guide/04-terminal.md`).
@@ -460,7 +474,8 @@ says where it stops [decision]:
 ### 9.8 Font size, rotation and the terminal's size
 
 - **Pinch** changes the font size from 8 to 28 sp in 1 sp steps
-  [decision]; the size is kept per device, not synced.
+  [decision] for the session shown; the size kept per device, not synced,
+  is the one of Settings → Font and colours (11 sp by default, D223).
 - The terminal's columns and rows follow the cell size and the space it
   has; rotation, the keyboard coming up or down, and the font size change
   them. The new size goes to the server (a window change on the SSH channel,
@@ -509,6 +524,11 @@ reference-2 8, with the desktop's section 5 for one remote panel behind it:
   entry: a folder, file or link icon, the name, under it the permissions in
   monospace (`drwxr-xr-x`), on the right the size and the date and time,
   in monospace; no dividers.
+- **Rename** never replaces another entry; a change of case only
+  (`readme` → `README`) on a server without case, where the server finds
+  the new name but the folder lists no entry of it, is the same file and
+  is renamed (through a free name of its own when the server refuses;
+  D223) [decision].
 - Tap a folder: open it. Tap a file: a sheet with Download, Rename, Delete
   (asks first), Copy path. **A long press selects**: ×, "N selected", ⋮ with
   Download (one file), Rename and Copy path (one entry), Delete (asks first;

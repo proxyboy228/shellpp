@@ -25,6 +25,46 @@ class ConnectionsLogicTest {
     }
 
     @Test
+    fun oneWordMayNameASavedHost() {
+        assertEquals("web", singleTarget("ssh web"))
+        assertEquals("web", singleTarget(" web "))
+        assertEquals("10.0.0.5", singleTarget("ssh 10.0.0.5"))
+        assertNull(singleTarget("ssh root@web"))
+        assertNull(singleTarget("ssh web -p 22"))
+        assertNull(singleTarget("ssh"))
+        assertNull(singleTarget("two words"))
+    }
+
+    private fun host(id: String, label: String?, address: String) = Record(
+        org.json.JSONObject().put("record_id", id).put("vault_id", "v").put("type", "host")
+            .put("data", org.json.JSONObject().put("label", label ?: org.json.JSONObject.NULL).put("address", address)),
+    )
+
+    @Test
+    fun theDesktopsExactMatchFindsTheSavedHost() {
+        val hosts = listOf(host("1", "web", "a.lan"), host("2", "Web", "b.lan"), host("3", null, "c.lan"))
+        // The exact spelling first, then without case (UI 2.1, D223 item 12).
+        assertEquals(listOf("2"), exactHosts("Web", hosts).map { it.id })
+        assertEquals(listOf("1", "2"), exactHosts("WEB", hosts).map { it.id })
+        assertEquals(listOf("2"), exactHosts("b.lan", hosts).map { it.id })
+        assertEquals(listOf("3"), exactHosts("C.LAN", hosts).map { it.id })
+        assertEquals(emptyList<String>(), exactHosts("we", hosts).map { it.id })
+    }
+
+    @Test
+    fun anSftpCardSaysItsLastTransfer() {
+        val transfer = { id: Long, direction: String, name: String, state: String ->
+            org.json.JSONObject().put("id", id).put("direction", direction).put("name", name).put("state", state)
+        }
+        assertEquals("No transfers", lastTransfer(emptyList()))
+        assertEquals(
+            "↑ notes.txt · done",
+            lastTransfer(listOf(transfer(1, "download", "old.log", "failed"), transfer(2, "upload", "notes.txt", "done"))),
+        )
+        assertEquals("↓ big.iso · waiting", lastTransfer(listOf(transfer(7, "download", "big.iso", "queued"))))
+    }
+
+    @Test
     fun aRecentRowShowsTheFullCommand() {
         assertEquals("ssh root@203.0.113.7 -p 22", sshCommand("root", "203.0.113.7", 22))
         assertEquals("ssh host.example.org -p 2222", sshCommand(null, "host.example.org", 2222))

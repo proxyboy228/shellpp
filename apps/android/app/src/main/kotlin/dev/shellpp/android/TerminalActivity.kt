@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -80,7 +81,8 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
     private val ctrlKey = StickyModifier()
     private val altKey = StickyModifier()
     private var cursorOn by mutableStateOf(false)
-    private var hostPassword by mutableStateOf(false)
+    /** What the password key can do in the session in front ([Native.passwordState]). */
+    private var passwordState by mutableIntStateOf(Native.PASSWORD_QUICK)
     /** The session whose saved password the open confirmation is for. */
     private var confirmingPassword by mutableStateOf<Long?>(null)
 
@@ -323,7 +325,7 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             app.activeSessionId.value = id
             showView(sftpView)
             hideKeyboard()
-            hostPassword = false
+            passwordState = Native.PASSWORD_QUICK
             return
         }
         val view = views.getOrPut(id) {
@@ -555,7 +557,15 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             )
             if (onTerminal) {
                 val saved = sessionViews[active]?.optString("recordId")?.isNotBlank() == true
-                ExtraKeysRow(keyGroups, colors, this@TerminalActivity, modifiersVersion, password = hostPassword, attach = saved)
+                // A session that connects, drops or reconnects may start or
+                // stop its recording: the key asks again (D223 item 13).
+                val state = sessionViews[active]?.optString("state")
+                val recording = sessionViews[active]?.optBoolean("recording")
+                LaunchedEffect(active, state, recording) { refreshPassword() }
+                ExtraKeysRow(
+                    keyGroups, colors, this@TerminalActivity, modifiersVersion,
+                    password = passwordState == Native.PASSWORD_SENT, passwordWhy = passwordReason(passwordState), attach = saved,
+                )
             }
         }
         confirmingPassword?.let { session ->
@@ -623,7 +633,14 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         if (session != active) return
         val view = views[session] ?: return
         when (key) {
-            XKey.Password -> if (hostPassword) confirmingPassword = session
+            // A key that cannot send says why (D223 item 13); Send checks
+            // again in Rust, whatever the key showed.
+            XKey.Password -> if (passwordState == Native.PASSWORD_SENT) {
+                confirmingPassword = session
+            } else {
+                passwordReason(passwordState)?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
+                refreshPassword()
+            }
             XKey.Cursor -> {
                 cursorOn = !cursorOn
                 view.cursorPad = cursorOn
@@ -648,22 +665,37 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         modifiersVersion += 1
     }
 
-    /** The password key works only when the host has a saved password (D220). */
+    /**
+     * What the password key can do (D220, D223 item 13): send when the
+     * session is connected to its saved host, does not record its output
+     * (the session layer says) and the host has an effective password (its
+     * own or its identity's).
+     */
     private fun refreshPassword() {
         val session = active
         val recordId = app.sessionViews.value[session]?.optString("recordId")?.ifBlank { null }
-        hostPassword = false
-        if (recordId == null) return
-        worker.execute {
-            val has = runCatching {
-                val vault = recordVault() ?: return@runCatching false
-                val view = Core.obj("record_get", JSONObject().put("vault_id", vault).put("record_id", recordId))
-                val set = view.optJSONArray("secrets_set")
-                set != null && (0 until set.length()).any { set.optString(it) == "ssh.password" }
-            }.getOrDefault(false)
-            // An answer for a session no longer in front changes nothing.
-            runOnUiThread { if (active == session) hostPassword = has }
+        if (recordId == null) {
+            passwordState = Native.PASSWORD_QUICK
+            return
         }
+        worker.execute {
+            val state = runCatching {
+                val vault = recordVault() ?: return@runCatching Native.PASSWORD_FAILED
+                Native.passwordState(session, vault, recordId)
+            }.getOrDefault(Native.PASSWORD_FAILED)
+            // An answer for a session no longer in front changes nothing.
+            runOnUiThread { if (active == session) passwordState = state }
+        }
+    }
+
+    /** Why the password key cannot send, or null when it can. */
+    private fun passwordReason(state: Int): String? = when (state) {
+        Native.PASSWORD_SENT -> null
+        Native.PASSWORD_QUICK -> getString(R.string.password_key_quick)
+        Native.PASSWORD_NONE -> getString(R.string.password_key_none)
+        Native.PASSWORD_RECORDED -> getString(R.string.password_not_sent_recorded)
+        Native.PASSWORD_NOT_CONNECTED -> getString(R.string.password_not_sent_offline)
+        else -> getString(R.string.password_not_sent)
     }
 
     /**

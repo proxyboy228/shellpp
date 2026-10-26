@@ -81,6 +81,9 @@ object TerminalPrefs {
     const val KEEP_ON = "keep_screen_on"
     const val KEYS = "extra_keys"
     const val FONT = "font_size"
+
+    /** The terminal's font size until one is chosen on this device (D223 item 7). */
+    const val DEFAULT_FONT_SP = 11
     const val THEME = "theme"
 
     /** The theme of new terminals (a built-in slug), or Graphite / Paper with the system's mode. */
@@ -160,7 +163,7 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
 
             SettingsHeader("Terminal")
             val theme = terminalTheme(prefs.getString(TerminalPrefs.THEME, null))?.name ?: "Graphite / Paper"
-            SettingsRow("Font and colours", "$theme / ${prefs.getInt(TerminalPrefs.FONT, 14)} / JetBrains Mono", "settings_font") { nav.push(Page.FontColours) }
+            SettingsRow("Font and colours", "$theme / ${prefs.getInt(TerminalPrefs.FONT, TerminalPrefs.DEFAULT_FONT_SP)} / JetBrains Mono", "settings_font") { nav.push(Page.FontColours) }
             SettingsRow("Terminal type", values.text("terminal.term") ?: "xterm-256color", "settings_term") { editing = "terminal.term" }
             SettingsRow("Customize keyboard", "The extra-keys row of the terminal", "settings_keyboard") { nav.push(Page.CustomizeKeyboard) }
             SettingsRow("Pinch to zoom", "Two fingers change the font size", "settings_pinch", toggle = pinch) {
@@ -382,7 +385,7 @@ private val FONT_SIZES = listOf(8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24
 fun FontColoursScreen(app: App, onClose: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { TerminalPrefs.of(context) }
-    var size by remember { mutableStateOf(prefs.getInt(TerminalPrefs.FONT, 14)) }
+    var size by remember { mutableStateOf(prefs.getInt(TerminalPrefs.FONT, TerminalPrefs.DEFAULT_FONT_SP)) }
     var theme by remember { mutableStateOf(prefs.getString(TerminalPrefs.THEME, "") ?: "") }
     fun setSize(next: Int) {
         size = next

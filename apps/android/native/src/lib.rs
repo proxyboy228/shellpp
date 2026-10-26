@@ -24,4 +24,4 @@ pub mod screen;
 pub mod sftp;
 pub mod theme;
 
-pub use engine::{Engine, EngineError, Services};
+pub use engine::{Engine, EngineError, PasswordAnswer, Services};
