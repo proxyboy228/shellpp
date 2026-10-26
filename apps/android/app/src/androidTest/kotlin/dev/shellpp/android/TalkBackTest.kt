@@ -89,8 +89,10 @@ class TalkBackTest {
 
                     val cursor = provider.createAccessibilityNodeInfo(screen.cursorRow)!!
                     assertEquals(activity.getString(R.string.terminal_cursor_row), cursor.stateDescription?.toString())
-                    // A double tap on a row: the keyboard, as a tap.
+                    // A double tap on a row or on the terminal itself: the
+                    // keyboard, as a tap (not a tap made up in the middle).
                     assertTrue("a double tap", provider.performAction(row, AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertTrue("a double tap on the terminal", provider.performAction(View.NO_ID, AccessibilityNodeInfo.ACTION_CLICK, null))
                 }
             } finally {
                 info.flags = flags

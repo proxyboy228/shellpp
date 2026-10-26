@@ -298,9 +298,14 @@ clears a copied password when it can, instead of taking an empty read for
   device's choice in Settings → Font & colours (`Native.setTheme`), else
   Graphite or Paper with the system's mode (`theme_for` in `engine.rs`; the
   ten built-in themes are the desktop's files).
-- The password key: `Native.sendPassword(session, vault, record)` reads the
-  host's saved password in the core and writes it into the session's input
-  in Rust; the password never crosses into Kotlin (D220).
+- The password key: `Native.passwordState(session, vault, record)` says
+  whether it can send (the session is connected to that host, does not
+  record its output, and the host has an effective password: its own or
+  its identity's); `Native.sendPassword` checks the same again, reads the
+  effective password in the core and writes it into the session's input in
+  Rust, in buffers wiped once written (the session refuses it under its
+  own lock while it records); the password never crosses into Kotlin
+  (D220, D223, D224; UI spec 9.2).
 - A network that comes back: `Native.reconnectDropped()` makes every dropped
   terminal session try again at once instead of at the end of its
   countdown (M2).

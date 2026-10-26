@@ -469,8 +469,13 @@ says where it stops [decision]:
   reports, the swipe sends wheel events instead (as the desktop's wheel
   does), and on the alternate screen without them it sends ↑/↓ (xterm's
   alternate scroll mode) [decision].
-- New output while scrolled back does not move the view; a "↓ New output"
-  chip returns to the bottom [decision].
+- New output while scrolled back does not move the view; typing, a key or a
+  paste returns to the bottom, as on the desktop (run 16). A "↓ New
+  output" chip that returns to the bottom [decision] is not built yet
+  (ROADMAP 6).
+- A hardware keyboard's Shift+PgUp and Shift+PgDn scroll by a page,
+  Shift+Home and Shift+End to the top and the bottom, on the normal
+  screen; on the alternate screen they go to the program (run 16, D224).
 
 ### 9.8 Font size, rotation and the terminal's size
 

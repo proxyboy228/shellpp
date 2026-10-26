@@ -502,9 +502,14 @@ impl Engine {
             .map_err(|e| error(e.to_string()))
     }
 
-    /// Bytes for the session as typed input (keys, text, walks).
+    /// Bytes for the session as typed input (keys, text, walks, a paste):
+    /// a view scrolled back goes to the bottom first, as on the desktop.
     pub fn send(&self, id: u64, bytes: Vec<u8>) -> Result<(), EngineError> {
         let terminal = self.with(id, |live| live.terminal.clone())?;
+        if terminal.scrolled_back() {
+            terminal.scroll_to_bottom();
+            self.wake(id);
+        }
         terminal.send_typed(bytes);
         Ok(())
     }
@@ -621,13 +626,38 @@ impl Engine {
     /// Scrolls the view of session `id` by `lines` (up into the scrollback
     /// when positive); 0 goes back to the bottom.
     pub fn scroll(&self, id: u64, lines: i32) -> Result<(), EngineError> {
+        use alacritty_terminal::grid::Scroll;
+        self.scroll_view(
+            id,
+            if lines == 0 {
+                Scroll::Bottom
+            } else {
+                Scroll::Delta(lines)
+            },
+        )
+    }
+
+    /// Scrolls the view of session `id` (the swipe, Shift+PgUp and the
+    /// others) and wakes its screen: a scroll brings no output, so nothing
+    /// else would draw it (review of run 16).
+    pub fn scroll_view(
+        &self,
+        id: u64,
+        scroll: alacritty_terminal::grid::Scroll,
+    ) -> Result<(), EngineError> {
         let terminal = self.terminal(id)?;
-        if lines == 0 {
-            terminal.scroll_to_bottom();
-        } else {
-            terminal.scroll(alacritty_terminal::grid::Scroll::Delta(lines));
+        match scroll {
+            alacritty_terminal::grid::Scroll::Bottom => terminal.scroll_to_bottom(),
+            other => terminal.scroll(other),
         }
+        self.wake(id);
         Ok(())
+    }
+
+    /// Takes a wake of session `id` if one waits, without blocking (tests).
+    pub fn took_wake(&self, id: u64) -> bool {
+        self.with(id, |live| live.woken.try_recv().is_ok())
+            .unwrap_or(false)
     }
 
     /// The terminal of session `id`.

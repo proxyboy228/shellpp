@@ -217,8 +217,10 @@ $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 
 # The license list (D223 item 14): node runs scripts/rust-notices.mjs.
 $noticesProblem = ''
+$secretFilesProblem = ''
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     $noticesProblem = 'Node.js is not installed (the license list check runs scripts/rust-notices.mjs)'
+    $secretFilesProblem = 'Node.js is not installed (the key store file check runs scripts/secret-files.mjs)'
 }
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
@@ -230,7 +232,7 @@ $steps = @(
     (Step 'deny' @{} @('deny', '--locked', '--offline', 'check') -Problem $denyProblem),
     (Step 'deny-server' @{} (@('deny', '--locked', '--offline') + $server + @('check')) -Problem $denyProblem),
     (Step 'notices' @{} @('scripts/rust-notices.mjs') 'node' $noticesProblem),
-    (Step 'secret-files' @{} @('scripts/secret-files.mjs') 'node' $noticesProblem),
+    (Step 'secret-files' @{} @('scripts/secret-files.mjs') 'node' $secretFilesProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),

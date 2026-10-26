@@ -22,15 +22,12 @@ class Bell(private val context: Context) {
     fun ring() {
         val now = SystemClock.elapsedRealtime()
         if (now - last < MIN_INTERVAL_MS) return
+        // Off too: a flood of bells (a binary file) reads the settings at
+        // most once a second (review of run 16).
+        last = now
         when (mode(context)) {
-            Mode.VIBRATE -> {
-                last = now
-                vibrate()
-            }
-            Mode.SOUND -> {
-                last = now
-                sound()
-            }
+            Mode.VIBRATE -> vibrate()
+            Mode.SOUND -> sound()
             Mode.OFF -> {}
         }
     }

@@ -304,15 +304,14 @@ pub extern "system" fn Java_dev_shellpp_android_Native_key<'caller>(
             let modes = screen::modes(&terminal);
             let backspace = engine.backspace(id(session))?;
             let mods = Mods { shift, alt, ctrl };
-            match input::key_action(key, modes, mods, backspace) {
-                KeyAction::Send(bytes) => engine.send(id(session), bytes)?,
-                KeyAction::ScrollPageUp => terminal.scroll(Scroll::Delta(screen::page(&terminal))),
-                KeyAction::ScrollPageDown => {
-                    terminal.scroll(Scroll::Delta(-screen::page(&terminal)));
-                }
-                KeyAction::ScrollTop => terminal.scroll(Scroll::Top),
-                KeyAction::ScrollBottom => terminal.scroll_to_bottom(),
-            }
+            let scroll = match input::key_action(key, modes, mods, backspace) {
+                KeyAction::Send(bytes) => return Ok(engine.send(id(session), bytes)?),
+                KeyAction::ScrollPageUp => Scroll::Delta(screen::page(&terminal)),
+                KeyAction::ScrollPageDown => Scroll::Delta(-screen::page(&terminal)),
+                KeyAction::ScrollTop => Scroll::Top,
+                KeyAction::ScrollBottom => Scroll::Bottom,
+            };
+            engine.scroll_view(id(session), scroll)?;
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()

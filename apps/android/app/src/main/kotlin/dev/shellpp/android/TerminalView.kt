@@ -488,6 +488,11 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // Ctrl+Shift+V pastes, as on the desktop (with its question).
+        if (keyCode == KeyEvent.KEYCODE_V && event.isCtrlPressed && event.isShiftPressed) {
+            paste()
+            return true
+        }
         val key = when (keyCode) {
             KeyEvent.KEYCODE_DEL -> Native.KEY_BACKSPACE
             KeyEvent.KEYCODE_FORWARD_DEL -> Native.KEY_DELETE
@@ -618,7 +623,7 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
             if (s.alternateScreen) {
                 // ↑/↓ on the alternate screen (xterm's alternate scroll, ui-spec 9.7).
                 val key = if (lines < 0) Native.KEY_UP else Native.KEY_DOWN
-                repeat(abs(lines)) { sendKey(key) }
+                repeat(abs(lines)) { sendKey(key, raw = true) }
             } else {
                 worker.execute { runCatching { Native.scroll(session, -lines) } }
             }
@@ -767,11 +772,11 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
                 }
                 padMoved = true
                 while (abs(padRestX) >= stepX) {
-                    sendKey(if (padRestX > 0) Native.KEY_RIGHT else Native.KEY_LEFT)
+                    sendKey(if (padRestX > 0) Native.KEY_RIGHT else Native.KEY_LEFT, raw = true)
                     padRestX -= if (padRestX > 0) stepX else -stepX
                 }
                 while (abs(padRestY) >= stepY) {
-                    sendKey(if (padRestY > 0) Native.KEY_DOWN else Native.KEY_UP)
+                    sendKey(if (padRestY > 0) Native.KEY_DOWN else Native.KEY_UP, raw = true)
                     padRestY -= if (padRestY > 0) stepY else -stepY
                 }
                 return true

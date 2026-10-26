@@ -205,11 +205,11 @@ pub trait TerminalSink: Send + Sync + 'static {
 
     /// A secret for the remote side (the phone's password key, D223): as
     /// [`TerminalSink::send`], but wiped once written; `false` when it was
-    /// not taken. A sink without its own path sends a copy, which is not
-    /// wiped.
+    /// not taken. A sink without its own path takes none: it could not
+    /// check the session's recording or wipe its copy (review of run 16).
     fn send_secret(&self, bytes: zeroize::Zeroizing<Vec<u8>>) -> bool {
-        self.send(bytes.to_vec());
-        true
+        drop(bytes);
+        false
     }
 
     /// The grid size changed: forward it (SSH window-change, PTY resize).
@@ -924,6 +924,15 @@ mod tests {
             wake,
         );
         (handle, woken)
+    }
+
+    #[test]
+    fn a_sink_without_a_secret_path_takes_no_secret() {
+        let (handle, _woken) = handle(20, 4, 100);
+        let sink = Arc::new(RecordingSink::default());
+        handle.set_sink(Some(sink.clone()));
+        assert!(!handle.inject_secret(zeroize::Zeroizing::new(b"hunter2".to_vec())));
+        assert!(sink.sent.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -59,6 +59,19 @@ import java.util.concurrent.Executors
  * connect; "<" and Back go back to the lists and leave every session
  * running (Back clears a selection first).
  */
+/**
+ * What a tap on Send says when the password did not go ([Native.sendPassword]'s
+ * answer): every answer but [Native.PASSWORD_SENT] says why (review of run 16).
+ */
+fun passwordNotSent(answer: Int): Int = when (answer) {
+    Native.PASSWORD_NONE -> R.string.password_key_none
+    Native.PASSWORD_RECORDED -> R.string.password_not_sent_recorded
+    Native.PASSWORD_CONTROL -> R.string.password_not_sent_control
+    Native.PASSWORD_NOT_CONNECTED -> R.string.password_not_sent_offline
+    Native.PASSWORD_QUICK -> R.string.password_key_quick
+    else -> R.string.password_not_sent
+}
+
 class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
     private val app get() = application as App
     private val worker = Executors.newSingleThreadExecutor()
@@ -340,6 +353,9 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
         showView(view)
         view.cursorPad = cursorOn
         view.requestFocus()
+        // The key does not show the session left behind while it asks
+        // (review of run 16).
+        passwordState = Native.PASSWORD_NOT_CONNECTED
         refreshPassword()
     }
 
@@ -714,26 +730,24 @@ class TerminalActivity : ComponentActivity(), TerminalView.Modifiers, KeySink {
             confirmButton = {
                 TextButton(onClick = {
                     confirmingPassword = null
-                    val recordId = view?.optString("recordId")?.ifBlank { null } ?: return@TextButton
+                    val notSent = { answer: Int ->
+                        runOnUiThread { Toast.makeText(this, passwordNotSent(answer), Toast.LENGTH_LONG).show() }
+                    }
+                    val recordId = view?.optString("recordId")?.ifBlank { null }
+                    if (recordId == null) {
+                        notSent(Native.PASSWORD_FAILED)
+                        return@TextButton
+                    }
                     // A thread of its own: never queued behind other work, so
                     // it goes right after the tap or not at all.
                     Thread({
-                        val vault = recordVault() ?: return@Thread
-                        val answer = runCatching { Native.sendPassword(session, vault, recordId) }.getOrDefault(Native.PASSWORD_FAILED)
-                        if (answer != Native.PASSWORD_SENT) {
-                            runOnUiThread {
-                                Toast.makeText(
-                                    this,
-                                    when (answer) {
-                                        Native.PASSWORD_RECORDED -> R.string.password_not_sent_recorded
-                                        Native.PASSWORD_CONTROL -> R.string.password_not_sent_control
-                                        Native.PASSWORD_NOT_CONNECTED -> R.string.password_not_sent_offline
-                                        else -> R.string.password_not_sent
-                                    },
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
+                        val vault = recordVault()
+                        val answer = if (vault == null) {
+                            Native.PASSWORD_FAILED
+                        } else {
+                            runCatching { Native.sendPassword(session, vault, recordId) }.getOrDefault(Native.PASSWORD_FAILED)
                         }
+                        if (answer != Native.PASSWORD_SENT) notSent(answer)
                     }, "password-key").start()
                 }, modifier = Modifier.testTag("password_send")) { Text(getString(R.string.send)) }
             },

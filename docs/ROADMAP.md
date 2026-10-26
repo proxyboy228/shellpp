@@ -325,6 +325,8 @@ After run 16 (the run reports have the details):
   identity a pull deleted back with an edit has no test of its own (no
   client deletes identities yet); a dialog that stays open would need a
   "written" answer like `record_save_written`.
+- **The phone's "↓ New output" chip** (UI spec 9.7): not built; typing
+  returns to the bottom (D224).
 - **The phone's tests of M2** (review of 3.3, D224): the walks call the keys
   row's handler and Cut in nano's action, not the chips' and the toolbar's
   taps; the snapshot follows the model's wakes, two or three per frame

@@ -143,6 +143,23 @@ async fn a_quick_connect_asks_the_host_key_and_the_password_then_runs_a_command(
             terminal.screen_text()
         );
 
+        // A scroll by key or swipe draws the view at once (no output comes
+        // with it), and typing goes back to the bottom, as on the desktop
+        // (seam review of run 16).
+        terminal
+            .feed_blocking(&b"history\r\n".repeat(200))
+            .expect("feed");
+        terminal.flush_blocking();
+        while engine.took_wake(id) {}
+        engine
+            .scroll_view(id, alacritty_terminal::grid::Scroll::PageUp)
+            .expect("scroll");
+        assert!(engine.took_wake(id), "a scroll wakes the screen");
+        assert!(terminal.view_offset() > 0, "scrolled back");
+        engine.send(id, b"x\x7f".to_vec()).expect("send");
+        assert_eq!(terminal.view_offset(), 0, "typing went to the bottom");
+        assert!(engine.took_wake(id), "and drew it");
+
         // A wake by hand reaches the next waiter (a recreated screen's
         // pump hands on the wake the old one took).
         engine.wake(id);

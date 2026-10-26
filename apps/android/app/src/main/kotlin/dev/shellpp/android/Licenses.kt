@@ -76,7 +76,11 @@ fun parseNotices(text: String): List<NoticeItem> {
                 when {
                     cells.all { cell -> cell.isEmpty() || cell.all { it == '-' || it == ':' } } -> header = false
                     header -> {}
-                    cells.size >= 4 -> out += NoticeItem.Component(cells[0], cells[1], cells[2], cells.drop(3).joinToString(" "))
+                    // The terminal themes: theme, author, license, copyright, source.
+                    cells.size >= 5 -> out += NoticeItem.Component(
+                        "${cells[0]} (${cells[1]})", "", cells[2], cells.drop(3).joinToString("; "),
+                    )
+                    cells.size == 4 -> out += NoticeItem.Component(cells[0], cells[1], cells[2], cells.drop(3).joinToString(" "))
                     cells.size == 3 -> out += NoticeItem.Component(cells[0], cells[1], cells[2], "")
                 }
             }

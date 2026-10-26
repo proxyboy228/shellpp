@@ -96,9 +96,9 @@ deletes its data. The vault comes back from the sync server:
    TOTP.
 3. Uninstall the debug build: long-press the app's icon → Uninstall (or
    `adb uninstall io.github.proxyboy228.shellpp`).
-4. Install the signed APK: copy `app-release.apk` to the phone and open it
-   (allow installing from that source), or with the cable (the file the
-   build printed):
+4. Install the signed APK: copy the file the build printed
+   (`target\android-release\shellpp-<version>-<sha>.apk`) to the phone and
+   open it (allow installing from that source), or with the cable:
 
    ```powershell
    & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install target\android-release\shellpp-<version>-<sha>.apk

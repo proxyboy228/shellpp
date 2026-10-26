@@ -144,10 +144,33 @@ class ScreensLogicTest {
         assertEquals(NoticeItem.Heading("Android libraries"), items[2])
         assertEquals(NoticeItem.Component("androidx.activity:activity", "1.13.0", "Apache-2.0", "https://developer.android.com"), items[3])
         assertEquals(4, items.size)
+        // The terminal themes' table has five columns (review of run 16).
+        val themes = parseNotices(
+            listOf(
+                "| Theme | Author | License | Copyright notice | Source |",
+                "|---|---|---|---|---|",
+                "| Nord | Sven Greb | MIT | Copyright (c) 2016 Sven Greb | <https://github.com/nordtheme/nord> |",
+            ).joinToString("\n"),
+        )
+        assertEquals(
+            listOf(NoticeItem.Component("Nord (Sven Greb)", "", "MIT", "Copyright (c) 2016 Sven Greb; https://github.com/nordtheme/nord")),
+            themes,
+        )
         val texts = parseNotices(listOf("## Apache License 2.0", "", "```text", "  Apache License", "```").joinToString("\n"))
         assertEquals(listOf(NoticeItem.Heading("Apache License 2.0"), NoticeItem.Verbatim("  Apache License")), texts)
         val files = parseLicenseFiles(listOf("Intro.", "", "== a 1.0 (LICENSE) ==", "", "MIT text").joinToString("\n"))
         assertEquals(NoticeItem.Paragraph("a 1.0 (LICENSE)"), files[2])
         assertEquals(NoticeItem.Verbatim("MIT text"), files[3])
+    }
+
+    @Test
+    fun everyPasswordAnswerButSentSaysWhy() {
+        // Review of run 16: a password cleared after the key showed Ready says so.
+        assertEquals(R.string.password_key_none, passwordNotSent(Native.PASSWORD_NONE))
+        assertEquals(R.string.password_not_sent_recorded, passwordNotSent(Native.PASSWORD_RECORDED))
+        assertEquals(R.string.password_not_sent_control, passwordNotSent(Native.PASSWORD_CONTROL))
+        assertEquals(R.string.password_not_sent_offline, passwordNotSent(Native.PASSWORD_NOT_CONNECTED))
+        assertEquals(R.string.password_key_quick, passwordNotSent(Native.PASSWORD_QUICK))
+        assertEquals(R.string.password_not_sent, passwordNotSent(Native.PASSWORD_FAILED))
     }
 }

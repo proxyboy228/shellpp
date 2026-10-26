@@ -2,6 +2,7 @@ package dev.shellpp.android
 
 import android.graphics.Rect
 import android.os.Bundle
+import android.view.View
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.customview.widget.ExploreByTouchHelper
 
@@ -31,6 +32,16 @@ class TerminalNodes(private val view: TerminalView) : ExploreByTouchHelper(view)
 
     override fun onPopulateNodeForHost(node: AccessibilityNodeInfoCompat) {
         node.contentDescription = view.context.getString(R.string.terminal_description)
+        node.addAction(AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK)
+    }
+
+    /** A double tap on the terminal itself: the keyboard, not a tap TalkBack makes up in its middle. */
+    override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+        if (action == AccessibilityNodeInfoCompat.ACTION_CLICK) {
+            view.showKeyboard()
+            return true
+        }
+        return super.performAccessibilityAction(host, action, args)
     }
 
     @Suppress("DEPRECATION")
