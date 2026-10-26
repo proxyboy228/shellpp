@@ -18,6 +18,9 @@
     yanked crates) are refreshed first; without the network those steps only
     warn and the checks use the copies already downloaded, and with no
     database at all they fail;
+  - the license list: THIRD_PARTY_NOTICES.md's tables of the Rust crates of
+    the desktop and of the Android app are up to date
+    (scripts/rust-notices.mjs, Node.js; run 16, D223);
   - the root workspace: rustfmt, clippy (default and all features), clippy
     of the libraries and binaries alone, the tests
     (SHELLPP_TEST_SSHD=russh) and the desktop's tests with all features;
@@ -208,6 +211,12 @@ if (-not $ndk) {
 $mobileArguments = @('check', '--locked', '--target', $androidTarget) + @($mobileCrates | ForEach-Object { '-p'; $_ })
 
 $russh = @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
+
+# The license list (D223 item 14): node runs scripts/rust-notices.mjs.
+$noticesProblem = ''
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    $noticesProblem = 'Node.js is not installed (the license list check runs scripts/rust-notices.mjs)'
+}
 $steps = @(
     (Step 'metadata' @{} @('metadata', '--locked', '--format-version', '1')),
     (Step 'metadata-server' @{} (@('metadata') + $server + @('--locked', '--format-version', '1'))),
@@ -217,6 +226,7 @@ $steps = @(
     (Step 'deny-index-server' @{} (@('update', '--dry-run') + $server) -Warning $denyIndexWarning),
     (Step 'deny' @{} @('deny', '--locked', '--offline', 'check') -Problem $denyProblem),
     (Step 'deny-server' @{} (@('deny', '--locked', '--offline') + $server + @('check')) -Problem $denyProblem),
+    (Step 'notices' @{} @('scripts/rust-notices.mjs') 'node' $noticesProblem),
     (Step 'fmt' @{} @('fmt', '--all', '--', '--check')),
     (Step 'clippy' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings')),
     (Step 'clippy-all-features' @{} @('clippy', '--locked', '--workspace', '--all-targets', '--all-features', '--', '-D', 'warnings')),

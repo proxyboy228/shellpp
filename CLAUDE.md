@@ -13,6 +13,7 @@ cargo update --dry-run
 cargo update --dry-run --manifest-path server/Cargo.toml
 cargo deny --locked --offline check
 cargo deny --locked --offline --manifest-path server/Cargo.toml check
+node scripts/rust-notices.mjs
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -55,6 +56,13 @@ crates.io для проверки отозванных (yanked) крейтов, 
 провалены. Находка —
 обновить зависимость; нет обновления — исключение в конфиге с причиной
 и сроком пересмотра и решение в decisions.md (D210).
+
+Список лицензий (`node scripts/rust-notices.mjs`, нужен Node.js; D223):
+таблицы крейтов Rust десктопа и приложения Android в
+`THIRD_PARTY_NOTICES.md` совпадают с `cargo tree`; расхождение — `node
+scripts/rust-notices.mjs --write` и коммит. Таблицу библиотек Android
+проверяет `verify-android.ps1` (`gradlew androidNotices`, переписать —
+`-PwriteNotices`).
 
 Проверка «mobile-ready» (`docs/architecture.md`, 2.3) — `cargo check`
 крейтов, общих с телефонным клиентом, под `aarch64-linux-android` (Samsung
@@ -109,6 +117,13 @@ Android (`apps/android`, run 13; `docs/mobile/`): Gradle-проект
 powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1
 powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator
 ```
+
+С `-Release` (D223) ещё релизная сборка с одноразовым ключом, который скрипт
+сам делает во временной папке вне репозитория и удаляет в конце (пароли —
+только в окружении процесса); с `-Emulator` она ставится заново и проходит
+`VaultFirstRunTest` и `ReleaseBuildTest`. Подписанный APK владельца —
+`scripts\build-android-release.ps1` (`docs/mobile/release.md`); ключ
+владельца агент не создаёт, не ищет и не читает.
 
 Без `-Emulator`: тесты связки на компьютере, debug-APK, модульные тесты
 Kotlin. С `-Emulator` ещё сквозные тесты на эмуляторе против OpenSSH

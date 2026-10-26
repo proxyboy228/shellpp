@@ -30,11 +30,23 @@
   started and removes the container. Needs a running Docker and Git for
   Windows' bash.
 
+  -Release (D223 item 15): the release build too, signed with a throwaway
+  key that this script makes (keytool of the JDK, its passwords only in this
+  process's environment) in a folder of its own outside the repository and
+  deletes at the end, through scripts\build-android-release.ps1; with
+  -Emulator it is then installed afresh and runs VaultFirstRunTest (the
+  first run, a host and a session on OpenSSH, by the interface alone: the
+  test-only answers are off in a release build) and ReleaseBuildTest (not
+  debuggable, fingerprint unlock off by default).
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator
+  powershell -ExecutionPolicy Bypass -File scripts\verify-android.ps1 -Emulator -Release
 #>
 param(
     [switch] $Emulator,
+    # The release build with a throwaway key (D223 item 15).
+    [switch] $Release,
     # The AVD to start when no emulator runs (default: the first one).
     [string] $Avd = ''
 )
@@ -124,6 +136,37 @@ function Run-Step([string] $Name, [string] $Program, [string[]] $Arguments, [has
 
 $null = Run-Step 'rust-binding-tests' 'cargo' @('test', '--locked', '--no-fail-fast', '-p', 'shellpp-android') @{ SHELLPP_TEST = '1'; SHELLPP_TEST_SSHD = 'russh' }
 $null = Run-Step 'apk-and-unit-tests' $gradlew @('assembleDebug', 'testDebugUnitTest', '--console=plain') @{} $android
+# The license list of the APK (D223 item 14): the Rust crates (and the
+# desktop's, same script) and the Android libraries of THIRD_PARTY_NOTICES.md.
+$null = Run-Step 'notices' 'node' @('scripts/rust-notices.mjs')
+$null = Run-Step 'notices-android' $gradlew @('androidNotices', '--console=plain') @{} $android
+
+# -Release: a throwaway key in a folder of its own outside the repository,
+# deleted in the `finally` below (plan of run 16, rule 9); the owner's key
+# is never looked for.
+$releaseDir = $null
+$releaseBuilt = $false
+try {
+if ($Release) {
+    $releaseDir = Join-Path ([IO.Path]::GetTempPath()) ('shellpp-release-check-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force $releaseDir | Out-Null
+    $keystore = Join-Path $releaseDir 'release-check.jks'
+    $env:SHELLPP_ANDROID_STORE_PASSWORD = [guid]::NewGuid().ToString('N')
+    $env:SHELLPP_ANDROID_KEY_PASSWORD = $env:SHELLPP_ANDROID_STORE_PASSWORD
+    # The passwords go to keytool through the environment, not its command line.
+    $made = Run-Step 'release-key' (Join-Path $jdk 'bin\keytool.exe') @(
+        '-genkeypair', '-keystore', $keystore, '-storetype', 'PKCS12', '-alias', 'shellpp',
+        '-keyalg', 'RSA', '-keysize', '2048', '-validity', '2', '-dname', 'CN=Shellpp release check',
+        '-storepass:env', 'SHELLPP_ANDROID_STORE_PASSWORD', '-keypass:env', 'SHELLPP_ANDROID_KEY_PASSWORD', '-noprompt'
+    )
+    $signing = Join-Path $releaseDir 'signing.properties'
+    Set-Content -LiteralPath $signing -Encoding ascii -Value @("storeFile=$($keystore -replace '\\', '/')", 'keyAlias=shellpp')
+    if ($made) {
+        $releaseBuilt = Run-Step 'release-build' 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'scripts\build-android-release.ps1'), '-SigningProperties', $signing)
+    }
+    # For the emulator's install of the release build.
+    $env:SHELLPP_ANDROID_SIGNING = $signing
+}
 
 if ($Emulator) {
     $adb = Join-Path $sdk 'platform-tools\adb.exe'
@@ -294,6 +337,30 @@ if ($Emulator) {
                 $script:failed += "e2e-$short"
             }
         }
+        if ($Release -and $releaseBuilt) {
+            # The release build, installed afresh: its first run and a session
+            # by the interface alone, then its own checks (D223 item 15).
+            foreach ($package in $appId, "$appId.test") { & $adb uninstall $package 2>$null | Out-Null }
+            $installed = Run-Step 'release-install' $gradlew @('installRelease', 'installReleaseAndroidTest', '-PshellppTestBuildType=release', '--no-daemon', '--no-configuration-cache', '--console=plain') @{} $android
+            if ($installed) {
+                foreach ($class in 'dev.shellpp.android.VaultFirstRunTest', 'dev.shellpp.android.ReleaseBuildTest') {
+                    $short = 'release-' + $class.Split('.')[-1]
+                    $arguments = @('shell', 'am', 'instrument', '-w', '-r', '-e', 'class', $class) + $instrumentArgs + @("$appId.test/androidx.test.runner.AndroidJUnitRunner")
+                    Write-Host ("{0,-34}" -f "e2e-$short") -NoNewline
+                    $log = Join-Path $logDir "e2e-$short.log"
+                    $code = Invoke-Logged $adb $arguments $log (Join-Path $logDir "e2e-$short.err.log")
+                    $text = if (Test-Path -LiteralPath $log) { Get-Content -Raw -LiteralPath $log } else { '' }
+                    $ok = ($code -eq 0) -and ($text -match 'OK \(\d+ tests?\)') -and ($text -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed')
+                    if ($ok) {
+                        Write-Host 'ok' -ForegroundColor Green
+                        $script:passed += 1
+                    } else {
+                        Write-Host "FAILED  ($log)" -ForegroundColor Red
+                        $script:failed += "e2e-$short"
+                    }
+                }
+            }
+        }
     } catch {
         Write-Host "FAILED  ($($_.Exception.Message))" -ForegroundColor Red
         $failed += 'emulator'
@@ -321,6 +388,18 @@ if ($Emulator) {
             $null = Invoke-Logged $bash @((Join-Path $repo 'tests\openssh\stop.sh'), $work) (Join-Path $logDir 'openssh-stop.log') (Join-Path $logDir 'openssh-stop.err.log')
         }
     }
+}
+
+} finally {
+    # The throwaway key and its passwords go, whatever happened.
+    if ($releaseDir -and (Test-Path -LiteralPath $releaseDir)) { Remove-Item -Recurse -Force -LiteralPath $releaseDir -ErrorAction SilentlyContinue }
+    foreach ($name in 'SHELLPP_ANDROID_STORE_PASSWORD', 'SHELLPP_ANDROID_KEY_PASSWORD', 'SHELLPP_ANDROID_SIGNING') {
+        Remove-Item -ErrorAction SilentlyContinue "Env:$name"
+    }
+}
+if ($releaseDir -and (Test-Path -LiteralPath $releaseDir)) {
+    Write-Host "verify-android: the throwaway key is still at $releaseDir" -ForegroundColor Red
+    $failed += 'release-key-left'
 }
 
 if ($failed.Count -gt 0) {

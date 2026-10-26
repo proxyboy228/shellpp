@@ -70,3 +70,25 @@ regexes = [
 [[allowlists]]
 description = "upstream russh test keys in the patched copy"
 paths = ['''^third_party/russh/src/''']
+
+# Android release signing (D223; docs/mobile/release.md): the owner's key
+# and its passwords live outside the repository. A keystore file anywhere,
+# a signing password written in a properties file, or a password literal in
+# a Gradle file is a finding. (The Gradle files read the passwords from the
+# environment, which these rules do not match.)
+[[rules]]
+id = "android-keystore-file"
+description = "a Java or Android keystore file"
+path = '''(?i)\.(jks|keystore|p12|pfx)$'''
+
+[[rules]]
+id = "android-signing-password-properties"
+description = "an Android signing password in a properties file"
+path = '''(?i)\.properties$'''
+regex = '''(?i)(storePassword|keyPassword|store\.password|key\.password)\s*[=:]\s*\S{4,}'''
+
+[[rules]]
+id = "android-signing-password-gradle"
+description = "an Android signing password as a literal in a Gradle file"
+path = '''(?i)\.gradle(\.kts)?$'''
+regex = '''(?i)(storePassword|keyPassword)\s*=\s*["'][^"'$]{4,}["']'''

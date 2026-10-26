@@ -76,4 +76,28 @@ class ScreensLogicTest {
         assertEquals(RenameCheck.TAKEN, renameCheck("readme", "notes", listOf("readme", "notes"), exists = true))
         assertEquals(RenameCheck.FREE, renameCheck("readme", "README", listOf("readme"), exists = false))
     }
+
+    @Test
+    fun theLicensesListReadsTheNoticesSection() {
+        val text = listOf(
+            "## The Android app (apps/android)",
+            "",
+            "What the APK ships.",
+            "",
+            "### Android libraries",
+            "",
+            "<!-- android-libraries:start (generated) -->",
+            "",
+            "| Library | Version | License | Source |",
+            "|---|---|---|---|",
+            "| androidx.activity:activity | 1.13.0 | Apache-2.0 | <https://developer.android.com> |",
+            "",
+            "<!-- android-libraries:end -->",
+        ).joinToString("\n")
+        val items = parseNotices(text)
+        assertEquals(NoticeItem.Paragraph("What the APK ships."), items[0])
+        assertEquals(NoticeItem.Heading("Android libraries"), items[1])
+        assertEquals(NoticeItem.Component("androidx.activity:activity", "1.13.0", "Apache-2.0", "https://developer.android.com"), items[2])
+        assertEquals(3, items.size)
+    }
 }

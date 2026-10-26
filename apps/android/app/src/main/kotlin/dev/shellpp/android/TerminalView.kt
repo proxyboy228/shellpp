@@ -95,6 +95,9 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     private var cols = 0
     private var rows = 0
     private var pendingResize: Runnable? = null
+    private val bell = Bell(context)
+    /** False until the first snapshot since the session was seen again. */
+    @Volatile private var bellArmed = false
 
     private var selection: Selection? = null
     private var actionMode: ActionMode? = null
@@ -134,13 +137,19 @@ class TerminalView(context: Context, private val modifiers: Modifiers) : View(co
     }
 
     private fun refresh() {
-        if (paused) return
+        if (paused) {
+            // A bell while the session is not seen does not ring later.
+            bellArmed = false
+            return
+        }
         val bytes = try {
             Native.snapshot(session)
         } catch (e: RuntimeException) {
             return
         }
         val parsed = Screen.parse(bytes)
+        if (parsed.bell && bellArmed) bell.ring()
+        bellArmed = true
         main.post {
             val before = screen
             screen = parsed

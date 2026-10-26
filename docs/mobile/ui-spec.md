@@ -211,13 +211,14 @@ model (data-model 7; D220):
   (type, address, port, username, password), environment variables (a
   bottom sheet), Colour scheme (a grid of the built-in themes, Default
   first; a theme imported on the desktop is kept), Charset (Current, Use
-  default, the list); a card with Telnet (its port).
+  default, the list); a card with Telnet (its port); last, Notes (several
+  lines, D223).
 - **Group**: the vault; Name and Parent group; Port; Username (with an
-  identity), Key; Host chaining.
+  identity), Key; Host chaining; last, Notes (several lines, D223).
 - Fields the host or group leaves empty show what it inherits under them
   ("deploy, from group Servers"), from the group chosen in the form.
-- **Not shown** (kept as they are; the desktop edits them): notes, color
-  label, certificate and FIDO2 key slots, the startup snippet, the system
+- **Not shown** (kept as they are; the desktop edits them; D223 item 4):
+  color label, certificate and FIDO2 key slots, the startup snippet, the system
   agent and confirmation of forwarding, legacy algorithms, keepalive per
   host, Mosh, recording settings, the primary protocol [decision].
 
@@ -599,7 +600,12 @@ a sub-page. Only rows whose setting works on the phone:
   row's groups as cards: delete, drag by the handle, "+" adds a group of up
   to four keys, the circular arrow puts back the default set; at once in the
   row; a device setting [decision]); Pinch to zoom; Cursor speed (slow,
-  normal, fast); Keep the screen on while a terminal is shown.
+  normal, fast); Keep the screen on while a terminal is shown; **Bell**
+  (Off, Vibrate, Sound in turn; Off by default as on the desktop: the sound
+  is `terminal.bell_sound`, the vibration a device setting; only the
+  session on the screen rings, at most once a second, and the sound follows
+  the ringer mode; D223); **Confirm a paste of several lines**
+  (`terminal.confirm_multiline_paste`, on by default; 9.4).
 - **Session**: Keep-alive interval (`terminal.keepalive_s`); Detect OS
   (`terminal.os_detection_enabled`, the tiles of 6.1); Reconnect
   (`terminal.autoreconnect`).
@@ -608,8 +614,11 @@ a sub-page. Only rows whose setting works on the phone:
   password once and then the biometric prompt; architecture 4; D211, D218);
   **Lock now**. A copied password is cleared from the clipboard after 30
   seconds, as on the desktop (`docs/security.md` 9.4).
-- **About**: the version.
-- Not on the phone yet: hotkeys, bell, autocomplete, alternative keyboard
+- **About**: the version and the commit the APK is built from; the
+  project's page (`https://github.com/proxyboy228/shellpp`); **Open-source
+  licenses**, the list of the components the APK ships with their licenses,
+  the Android part of `THIRD_PARTY_NOTICES.md` (D223).
+- Not on the phone yet: hotkeys, autocomplete, alternative keyboard
   input, post-quantum key exchange, importing the shell's history, what the
   notification shows, an app lock code (the master password and the
   fingerprint stand for it), logs, the screenshot setting (screens with

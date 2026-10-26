@@ -25,6 +25,10 @@ known_hosts.*
 *.pfx
 *.keystore
 *.jks
+# The Android signing file names the owner's key (D223; docs/mobile/release.md).
+android-signing.properties
+*signing*.properties
+keystore.properties
 
 # ---------------------------------------------------------------------------
 # Rust

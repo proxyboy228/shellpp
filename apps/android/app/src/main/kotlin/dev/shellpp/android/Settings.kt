@@ -50,6 +50,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -81,6 +82,8 @@ object TerminalPrefs {
     const val KEEP_ON = "keep_screen_on"
     const val KEYS = "extra_keys"
     const val FONT = "font_size"
+    /** The bell vibrates (a setting of this device; the sound is the core's, D223). */
+    const val BELL_VIBRATE = "bell_vibrate"
 
     /** The terminal's font size until one is chosen on this device (D223 item 7). */
     const val DEFAULT_FONT_SP = 11
@@ -143,6 +146,8 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
     var pinch by remember { mutableStateOf(prefs.getBoolean(TerminalPrefs.PINCH, true)) }
     var keepOn by remember { mutableStateOf(prefs.getBoolean(TerminalPrefs.KEEP_ON, false)) }
     var cursorSpeed by remember { mutableStateOf(prefs.getInt(TerminalPrefs.CURSOR_SPEED, 2)) }
+    var bell by remember { mutableStateOf(Bell.Mode.OFF) }
+    LaunchedEffect(refresh) { bell = withContext(Dispatchers.IO) { Bell.mode(context) } }
 
     fun set(key: String, value: Any?) {
         scope.launch {
@@ -178,6 +183,20 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
                 keepOn = !keepOn
                 prefs.edit().putBoolean(TerminalPrefs.KEEP_ON, keepOn).apply()
             }
+            // Off, Vibrate, Sound in turn (D223 item 11).
+            SettingsRow("Bell", listOf("Off", "Vibrate", "Sound")[bell.ordinal], "settings_bell") {
+                val next = Bell.Mode.entries[(bell.ordinal + 1) % Bell.Mode.entries.size]
+                bell = next
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { Bell.set(context, next) } }
+                    refresh += 1
+                }
+            }
+            val confirmPaste = values.optBoolean("terminal.confirm_multiline_paste", true)
+            SettingsRow(
+                "Confirm a paste of several lines", "Asks before several lines go to the terminal", "settings_confirm_paste",
+                toggle = confirmPaste,
+            ) { set("terminal.confirm_multiline_paste", !confirmPaste) }
 
             SettingsHeader("Session")
             val keepalive = if (values.isNull("terminal.keepalive_s")) null else values.optInt("terminal.keepalive_s", -1).takeIf { it >= 0 }
@@ -200,7 +219,11 @@ fun SettingsScreen(app: App, activity: MainActivity, nav: Nav) {
 
             SettingsHeader("About")
             val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
-            SettingsRow("Shell++", "Version $version", "settings_about", chevron = false) {}
+            SettingsRow("Shell++", "Version $version, build ${BuildConfig.COMMIT}", "settings_about", chevron = false) {}
+            SettingsRow("Project page", PROJECT_PAGE, "settings_project") {
+                runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(PROJECT_PAGE))) }
+            }
+            SettingsRow("Open-source licenses", "The components the app is built from", "settings_licenses") { nav.push(Page.Licenses) }
         }
     }
 

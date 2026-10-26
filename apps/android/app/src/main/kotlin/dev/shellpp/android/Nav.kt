@@ -81,6 +81,7 @@ sealed interface Page {
 
     data object CustomizeKeyboard : Page
     data object FontColours : Page
+    data object Licenses : Page
     data object Security : Page
 }
 
@@ -161,6 +162,7 @@ private fun PageContent(app: App, activity: MainActivity, nav: Nav, page: Page) 
         Page.SettingsHome -> SettingsScreen(app, activity, nav)
         Page.CustomizeKeyboard -> CustomizeKeyboardScreen(app, onClose = { nav.pop() })
         Page.FontColours -> FontColoursScreen(app, onClose = { nav.pop() })
+        Page.Licenses -> LicensesScreen(onClose = { nav.pop() })
         Page.Security -> SecuritySettingsScreen(app, activity, onClose = { nav.pop() })
     }
 }

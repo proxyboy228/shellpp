@@ -12,9 +12,9 @@
 
 [graph]
 # Every target the client crates are built or checked for: the desktop
-# platforms of shellpp-desktop (GPUI Kit) and the mobile targets that CI checks for
-# shellpp-core (docs/architecture.md, section 2.3). A crate that is used only
-# on one of these targets is still checked.
+# platforms of shellpp-desktop (GPUI Kit), the mobile targets that CI checks
+# for shellpp-core (docs/architecture.md, section 2.3) and the Android app's
+# ABIs. A crate that is used only on one of these targets is still checked.
 targets = [
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
@@ -23,6 +23,8 @@ targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "aarch64-linux-android",
+    # The Android emulator's ABI: the APK ships it too (D223).
+    "x86_64-linux-android",
     "aarch64-apple-ios",
 ]
 # Optional features such as `dev-tools` are part of the graph as well.

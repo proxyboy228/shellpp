@@ -220,6 +220,7 @@ private fun FormField(
     readOnly: Boolean = false,
     onTap: (() -> Unit)? = null,
     action: (@Composable () -> Unit)? = null,
+    multiLine: Boolean = false,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
@@ -230,7 +231,8 @@ private fun FormField(
                 placeholder = placeholder?.let { { Text(it, color = Tokens.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
                 isError = error != null,
                 supportingText = (error ?: note)?.let { { Text(it) } },
-                singleLine = true,
+                singleLine = !multiLine,
+                minLines = if (multiLine) 3 else 1,
                 readOnly = readOnly,
                 visualTransformation = if (secret && !shown) PasswordVisualTransformation() else VisualTransformation.None,
                 keyboardOptions = KeyboardOptions(
@@ -665,6 +667,10 @@ fun HostEditor(app: App, nav: Nav, record: Record?, groupId: String?, onClose: (
                 )
             }
         }
+        // The one hidden field the first version shows (D223 item 4).
+        FormCard {
+            FormField(state.str("notes"), { state.set("notes", it) }, "Notes", "host_notes", error = state.errors["notes"], multiLine = true)
+        }
     }
 }
 
@@ -853,6 +859,10 @@ fun GroupEditor(app: App, nav: Nav, record: Record?, parentId: String?, onClose:
                 readOnly = true, onTap = { state.picker = Picker.Chain },
                 action = { RoundAction(Icons.Filled.Lan, "Edit the chain", "group_chain_edit") { state.picker = Picker.Chain } },
             )
+        }
+        // The one hidden field the first version shows (D223 item 4).
+        FormCard {
+            FormField(state.str("notes"), { state.set("notes", it) }, "Notes", "group_notes", error = state.errors["notes"], multiLine = true)
         }
     }
 }

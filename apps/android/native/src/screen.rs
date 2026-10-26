@@ -7,7 +7,8 @@
 //!
 //! - header, 44 bytes: `cols` u16, `rows` u16, cursor column u16, cursor row
 //!   u16, cursor visible u8, cursor shape u8 (0 block, 1 underline, 2 beam,
-//!   3 hollow block), modes u8 ([`MODE_APP_CURSOR`] and the others), 0 u8;
+//!   3 hollow block), modes u8 ([`MODE_APP_CURSOR`] and the others), bell
+//!   u8 (1 when the program rang the bell since the last snapshot, D223);
 //!   then u32 colors `0x00RRGGBB`: background, foreground, cursor, cursor
 //!   text, the selection (`0xAARRGGBB`), and the scroll offset u32, the
 //!   number of rows of the scrollback above u32, 0 u32;
@@ -141,7 +142,8 @@ pub fn snapshot(handle: &TerminalHandle) -> Vec<u8> {
         _ => 0,
     });
     out.push(mode_bits(mode));
-    out.push(0);
+    // Snapshots are taken while the session is seen: its bell rings then.
+    out.push(u8::from(handle.outbox().take_events().bell));
     let selection = palette.selection();
     for color in [
         rgb(palette.background()),

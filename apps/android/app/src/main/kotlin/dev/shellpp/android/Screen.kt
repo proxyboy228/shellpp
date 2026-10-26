@@ -15,6 +15,8 @@ class Screen(
     val cursorVisible: Boolean,
     val cursorShape: Int,
     val modes: Int,
+    /** The program rang the bell since the last snapshot (D223). */
+    val bell: Boolean,
     val background: Int,
     val foreground: Int,
     val cursorColor: Int,
@@ -116,7 +118,7 @@ class Screen(
             val cursorVisible = b.get().toInt() != 0
             val cursorShape = b.get().toInt()
             val modes = b.get().toInt()
-            b.get()
+            val bell = b.get().toInt() != 0
             val background = b.int
             val foreground = b.int
             val cursorColor = b.int
@@ -148,7 +150,7 @@ class Screen(
                 combined[row * cols + col] = String(text, Charsets.UTF_8)
             }
             return Screen(
-                cols, rows, cursorCol, cursorRow, cursorVisible, cursorShape, modes,
+                cols, rows, cursorCol, cursorRow, cursorVisible, cursorShape, modes, bell,
                 background, foreground, cursorColor, cursorText, selection, offset, history,
                 wraps, chars, fg, bg, flags, combined,
             )

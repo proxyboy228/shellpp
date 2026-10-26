@@ -402,7 +402,7 @@ Nested folder of hosts and groups with inheritable SSH settings (SPEC "Hosts", D
 | `name` | string(256) | yes | | the only required field (UI 3.4) |
 | `parent_id` | ref(group)? | no | top level | section 7.1 rules |
 | `color` | tag_color? | no | `graphite` | UI 3.4 |
-| `notes` | text(32768)? | no | | not shown in the group panel; kept for import and export (stage 0 decision) |
+| `notes` | text(32768)? | no | | not shown in the desktop's group panel; kept for import and export (stage 0 decision); the phone's group editor shows them (D223) |
 | `order_key` | order_key? | no | end of the list | among groups with the same parent (section 18.1) |
 | `ssh` | object | no | `{}` | inheritable block, below |
 | `import_key` | string(512)? | no | | section 18.4 |

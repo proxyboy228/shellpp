@@ -1,8 +1,27 @@
 import java.io.File
+import java.util.Properties
+import javax.xml.parsers.DocumentBuilderFactory
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// The commit the APK is built from, for About (D223 item 5): `-dirty` when
+// the tree has changes not committed; "unknown" without git.
+val buildCommit: String = runCatching {
+    val head = providers.exec { commandLine("git", "rev-parse", "--short=10", "HEAD") }.standardOutput.asText.get().trim()
+    val dirty = providers.exec { commandLine("git", "status", "--porcelain", "--untracked-files=no") }.standardOutput.asText.get().isNotBlank()
+    if (dirty) "$head-dirty" else head
+}.getOrDefault("unknown")
+
+// The release signing key is the owner's (D218, D223): the path of its
+// file and its alias come from a properties file outside the repository
+// (SHELLPP_ANDROID_SIGNING names it), its passwords from the environment of
+// scripts\build-android-release.ps1, which never writes them to disk.
+val releaseSigning: Properties? = System.getenv("SHELLPP_ANDROID_SIGNING")?.let { path ->
+    Properties().apply { File(path).inputStream().use { load(it) } }
 }
 
 android {
@@ -17,10 +36,38 @@ android {
         applicationId = "io.github.proxyboy228.shellpp"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0-m1"
+        // The Android app's own line of versions (D223 item 17).
+        versionCode = 3
+        versionName = "1.0.0-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "COMMIT", "\"$buildCommit\"")
     }
+
+    signingConfigs {
+        if (releaseSigning != null) {
+            create("release") {
+                storeFile = File(releaseSigning.getProperty("storeFile") ?: error("storeFile is missing in SHELLPP_ANDROID_SIGNING"))
+                keyAlias = releaseSigning.getProperty("keyAlias") ?: error("keyAlias is missing in SHELLPP_ANDROID_SIGNING")
+                storePassword = System.getenv("SHELLPP_ANDROID_STORE_PASSWORD")
+                keyPassword = System.getenv("SHELLPP_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            // No R8 and no resource shrinking in the first version: the JNI
+            // names must stay, and the Rust library is most of the size
+            // (D224) [decision].
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    // `verify-android.ps1 -Release` runs the emulator tests on the release
+    // build (D223 item 15); every other run tests the debug build.
+    testBuildType = providers.gradleProperty("shellppTestBuildType").getOrElse("debug")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -30,6 +77,8 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.directories.add(layout.buildDirectory.dir("rustJniLibs").get().asFile.path)
+            // The licenses screen's list, made from THIRD_PARTY_NOTICES.md.
+            assets.directories.add(layout.buildDirectory.dir("generated/notices").get().asFile.path)
         }
     }
 
@@ -39,6 +88,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -112,6 +162,97 @@ val buildRust = tasks.register<Exec>("buildRust") {
     }
 }
 
+// The licenses screen (Settings → About, D223 item 5) shows the Android
+// app's part of THIRD_PARTY_NOTICES.md: the same list as the repository's,
+// copied into the app's assets at build time.
+val noticesFile = File(repoRoot, "THIRD_PARTY_NOTICES.md")
+val noticesAsset = tasks.register("noticesAsset") {
+    group = "build"
+    description = "Copies the Android part of THIRD_PARTY_NOTICES.md into the app's assets."
+    val out = layout.buildDirectory.dir("generated/notices").get().asFile
+    inputs.file(noticesFile)
+    outputs.dir(out)
+    doLast {
+        val text = noticesFile.readText()
+        val start = text.indexOf("## The Android app")
+        check(start >= 0) { "THIRD_PARTY_NOTICES.md has no section of the Android app" }
+        val end = text.indexOf("\n## ", start + 1).let { if (it < 0) text.length else it }
+        val dir = File(out, "notices").apply { mkdirs() }
+        File(dir, "android.md").writeText(text.substring(start, end))
+    }
+}
+
 tasks.named("preBuild") {
-    dependsOn(buildRust)
+    dependsOn(buildRust, noticesAsset)
+}
+
+// The "Android libraries" table of THIRD_PARTY_NOTICES.md (D223 item 14):
+// the modules of the release build's runtime classpath with the licenses
+// their POMs (or their parents') declare. `gradlew androidNotices` checks
+// it (scripts\verify-android.ps1); `-PwriteNotices` rewrites it.
+val librariesStart = "<!-- android-libraries:start (generated by the androidNotices task of apps/android/app) -->"
+val librariesEnd = "<!-- android-libraries:end -->"
+
+/** The POM of a module, through the build's own repositories. */
+fun pomOf(group: String, module: String, version: String): File =
+    configurations.detachedConfiguration(dependencies.create("$group:$module:$version@pom"))
+        .apply { isTransitive = false }
+        .singleFile
+
+/** The license names and the project URL a POM declares, a parent's when it declares none. */
+fun licensesOf(pom: File, depth: Int = 0): Pair<List<String>, String?> {
+    val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom)
+    val root = doc.documentElement
+    fun child(parent: org.w3c.dom.Element, name: String): org.w3c.dom.Element? {
+        val nodes = parent.childNodes
+        for (i in 0 until nodes.length) {
+            val node = nodes.item(i)
+            if (node is org.w3c.dom.Element && node.tagName == name) return node
+        }
+        return null
+    }
+    val url = child(root, "url")?.textContent?.trim()?.takeIf { it.isNotEmpty() && !it.contains("\${") }
+    val licenses = child(root, "licenses")?.let { list ->
+        val nodes = list.getElementsByTagName("license")
+        (0 until nodes.length).mapNotNull { (nodes.item(it) as org.w3c.dom.Element).let { license -> child(license, "name")?.textContent?.trim() } }
+    }.orEmpty()
+    if (licenses.isNotEmpty() || depth > 4) return licenses to url
+    val parent = child(root, "parent") ?: return licenses to url
+    val (inherited, parentUrl) = licensesOf(
+        pomOf(child(parent, "groupId")!!.textContent.trim(), child(parent, "artifactId")!!.textContent.trim(), child(parent, "version")!!.textContent.trim()),
+        depth + 1,
+    )
+    return inherited to (url ?: parentUrl)
+}
+
+tasks.register("androidNotices") {
+    group = "verification"
+    description = "Checks (or with -PwriteNotices rewrites) the Android libraries table of THIRD_PARTY_NOTICES.md."
+    val write = providers.gradleProperty("writeNotices").isPresent
+    doLast {
+        val modules = configurations.getByName("releaseRuntimeClasspath").incoming.resolutionResult.allComponents
+            .mapNotNull { it.id as? ModuleComponentIdentifier }
+            .distinctBy { "${it.group}:${it.module}:${it.version}" }
+            .sortedWith(compareBy<ModuleComponentIdentifier>({ it.group }, { it.module }))
+        val rows = modules.map { id ->
+            val (licenses, url) = licensesOf(pomOf(id.group, id.module, id.version))
+            check(licenses.isNotEmpty()) { "${id.group}:${id.module}:${id.version} declares no license; check its license and add it by hand" }
+            val source = url ?: "https://maven.google.com/web/index.html#${id.group}:${id.module}:${id.version}"
+            "| ${id.group}:${id.module} | ${id.version} | ${licenses.joinToString(" / ")} | <$source> |"
+        }
+        val table = (listOf("| Library | Version | License | Source |", "|---|---|---|---|") + rows).joinToString("\n")
+        val text = noticesFile.readText()
+        val from = text.indexOf(librariesStart)
+        val to = text.indexOf(librariesEnd, from)
+        check(from >= 0 && to > from) { "the markers of the Android libraries table are missing in THIRD_PARTY_NOTICES.md" }
+        val expected = text.substring(0, from + librariesStart.length) + "\n\n" + table + "\n\n" + text.substring(to)
+        when {
+            expected == text -> println("THIRD_PARTY_NOTICES.md: the Android libraries table is up to date (${rows.size} libraries).")
+            write -> {
+                noticesFile.writeText(expected)
+                println("THIRD_PARTY_NOTICES.md: ${rows.size} Android libraries recorded.")
+            }
+            else -> throw GradleException("THIRD_PARTY_NOTICES.md: the Android libraries table is out of date; run gradlew androidNotices -PwriteNotices")
+        }
+    }
 }

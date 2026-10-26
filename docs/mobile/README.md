@@ -81,29 +81,12 @@ nowhere but on test phones. Once sync is on the phone (M3), a new install
 gets its hosts, groups and keys back with "Restore from sync"; until then,
 what was only on the phone is lost with the old install.
 
-## The release signing key (the owner's, before M5)
+## The signed release
 
-The release APK is signed with the owner's own key (D218); the agent never
-makes it. The debug key of the build computer signs every build until then.
-
-1. Make the key with `keytool`, which comes with Android Studio's JDK:
-
-   ```powershell
-   & "$env:ProgramFiles\Android\Android Studio\jbr\bin\keytool.exe" -genkeypair -v -keystore shellpp-release.jks -alias shellpp -keyalg RSA -keysize 4096 -validity 10000
-   ```
-
-   It asks for a password of the keystore and the owner's name; choose a
-   long password and keep it in a password manager.
-2. Keep `shellpp-release.jks` **outside the repository** (never commit it;
-   `.gitignore` and the secret scan would stop it, but do not rely on
-   them), with at least two copies: one on the computer that builds
-   releases, one offline (an encrypted USB stick, or the password manager's
-   file attachments).
-3. **It cannot be lost.** Every update of the app must be signed with the
-   same key: with another key, phones refuse the update, and the only way
-   on is to uninstall, which deletes the app's data on every phone. Google
-   Play's app signing can hold an upload key instead, but publishing is the
-   owner's own step.
+The release APK is signed with the owner's own key (D218, D223): how to make
+the key, build the signed APK, and move from the debug build to it is in
+[release.md](release.md). The agent never makes the key; the debug key of
+the build computer signs the debug builds.
 
 Without a cable, Android 11+ can pair over Wi-Fi: Developer options →
 **Wireless debugging** → Pair device with pairing code, then
