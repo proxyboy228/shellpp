@@ -2633,3 +2633,33 @@ Status: run 15 (plan, sections 3.2-3.4); `apps/android`, `docs/mobile/ui-spec.md
 
 **Spec impact:** `docs/mobile/ui-spec.md` 3, 6-10, 12, 13; `docs/mobile/architecture.md` 6.1a; CLAUDE.md (verify-android and a phone on USB).
 
+
+### 223. The owner's decisions for run 16: the answers to run 15's report, the first version's Settings, and the check of the run's plan against the code
+
+Status: accepted, 2026-10-26 (owner's choice; the plan of run 16, section 2: the answers to section 9 of run 15's report, the owner's look at the screenshots, and the answers to a check of the plan against the code and the specifications made before the run).
+
+**Context.** Run 15 rebuilt the Android screens after the owner's reference descriptions and asked the owner six questions (its report, section 9). The owner looked at the screenshots and answered; a check of run 16's plan against the code before the run found points that needed the owner's choice (the desktop's identity editor, the bell, `ssh <name>`, the checks of the final criterion).
+
+**Decision:**
+
+1. **The extra conflict copy** when a password is changed while a newer version of the host arrived (D221) stays as it is: rare, never a loss. A fingerprint of secrets in the core comes after release 1.0; it is technical debt (ROADMAP 6).
+2. **The partial update for identities** is built in this run.
+3. **Recently deleted** as a row of the vault's home screen (D222) is accepted.
+4. **Hidden editor fields**: the first version shows only the **notes** (of a host and of a group). The other fields stay hidden: they are edited on the desktop, arrive by sync, are kept and are applied by the core.
+5. **The rows of Settings in the first version** (UI spec 12): Bell (`terminal.bell_sound` and the phone's vibration), the confirmation of a multi-line paste (`terminal.confirm_multiline_paste`), About (the version, the project's page, the open-source licenses). The other rows "Not on the phone yet" come after the first version.
+6. **The password and attach keys for a quick connect** (no saved host) are not needed; they stay disabled.
+7. **The terminal's default font size is 11 sp** (it was 14: about 45 columns on the S25, `ls -l` wrapped; about 60 at 11). A size already chosen on the device is not changed. Pinch stays as it is (8-28 sp).
+8. **The two-letter OS tile** stays (Shell++'s own glyph, no logo).
+9. **An SFTP session's card** in Connections shows the current folder and the last transfer (or "no transfers") instead of an empty area.
+10. **The partial update for identities on the desktop too**, in the same commit as on the phone: the desktop's identity dialog writes through the path of D221. An exception to the run's rule of no desktop changes: data is never lost comes first; otherwise the desktop keeps a window in which saving an identity overwrites what sync brought.
+11. **Bell**: Off, Vibrate or Sound, Off by default as on the desktop. The sound is `terminal.bell_sound` (the core's boolean setting; the core and the desktop do not change), the vibration a setting of the device, as the device settings of D222. Only the session on the screen rings.
+12. **`ssh <name>`** in Connections follows the desktop's rule (UI 2.1): the label or the address of a saved host, the exact spelling first, then without case; a list only when several hosts match equally.
+13. **The password key when it cannot send** (the session records its output, no password): it looks disabled, a tap says why, TalkBack reads it; the last check stays in Rust when Send is pressed.
+14. **The license list check** (`scripts/rust-notices.mjs`, both tables: the desktop's and the Android app's) runs in `scripts\verify.ps1` (the full criterion; its list in CLAUDE.md changes in the same commit) and in `scripts\verify-android.ps1`.
+15. **The release build in the final check**: `verify-android.ps1 -Release` with a throwaway key, on the final commit.
+16. **The owner's checklist on the phone** runs on the debug build installed over the previous one (`adb install -r`, the data stays); the move to the signed build comes after the checklist.
+17. **The Android app's versions** are a line of their own, not tied to the desktop's version (0.1.0) or the project's release 1.0 (ROADMAP 3); the first version is `1.0.0-rc1`.
+18. **`verify-linux.ps1 -AllFeatures`** in the final check, since the run changes the desktop's code (the shared key mapping).
+
+**Spec impact:** `docs/mobile/ui-spec.md` 2, 6.2, 9, 12; D221, D222; CLAUDE.md (the full criterion, `verify-android.ps1 -Release`); ROADMAP 3.1, 5 and 6.
+
