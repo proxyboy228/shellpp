@@ -1,6 +1,6 @@
 # Roadmap
 
-State of the project on 2026-10-27, after run 16. What each stage is comes from
+State of the project on 2026-10-27, after run 17. What each stage is comes from
 `SPEC.md` ("Work order"); the reasons behind the choices are in
 `docs/decisions.md` (D-numbers below). "Done" means the code is in main with the
 full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
@@ -19,7 +19,7 @@ full test criterion of `CLAUDE.md` green; the owner's acceptance of a stage
 | 6 | Logs, settings, shortcuts, highlighting | done | interface scale (run 6) |
 | 7 | Sync server and client, several devices | personal vault done | run 10: a restore while a device is out of the account (D197, D198), backups that keep good copies (D199), "Also delete the local copy" deletes it (D197), changed KDF settings at sign-in (D200); run 11, the verification run: the checks of section 2.3; run 12: a sign-in the merge refuses as another account's revokes the session its login opened (D209); run 13: every sign-in that fails after its login and before the binding revokes that login (a rebind keeps the device's own row, D216), the core refuses the recovery key in local mode and a new vault after a bound one keeps the weaker-settings check (D217); what is left is in section 2; team parts belong to stage 8 |
 | 8 | Team vaults, roles, invitations, sharing | after release 1.0 (D197) | schema and push checks are ready (`docs/stage8-readiness.md`); section 4 |
-| 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170); releases need the owner's signing key (`docs/release.md`) |
+| 9 | Polish | mostly done | workspaces, broadcast, Telnet (D87), serial (D88, D95), update check (D97) with a signed manifest (D170), release candidates (D225); the owner's signing key is in `release/minisign.pub` (run 17); the release process, the Linux package and a local dry run in `docs/release.md` |
 | 10 | Later stages | partly, ahead of order | autocomplete (D142) and script generation (D144) are built; the mobile client (Android, section 3.1): designed and a prototype built in run 13 (D211–D215), the vault, sync, keys, known hosts and SFTP on the phone in run 14 (M1, M3, M4; D218, D219); the screens rebuilt after the owner's reference descriptions, the session screen with several sessions and the partial update in the core in run 15 (D220-D222); the first version (notes, Settings, licenses, the signed release build) and the rest of M2 (the shared key mapping, TalkBack, the walks through full-screen programs) in run 16 (D223, D224), waiting for the owner's key and acceptance; shared sessions, cloud provider import and Mosh are not started (Mosh comes after the mobile client's first version, D211; its toggle is hidden and a saved value kept, D204) |
 
 ## 2. Stage 7: what is left
@@ -117,10 +117,13 @@ has the numbers. Run 12 added the soak of the memory finding (D207).
 Not obtained:
 
 - The owner's own install, the server in the homelab (`server/README.md`,
-  `docs/guide/06-sync.md`) and two devices; it is step 3 of section 3.
+  `docs/guide/06-sync.md`) and two devices: the condition from 1.0.0-rc.1 to
+  1.0.0 (D225, item 15; `docs/release.md`, "From a release candidate to
+  1.0.0"), step 4 of section 3.
 - A run of the server's own tests in CI: run 11 set up `server.yml` (SQLite
-  and PostgreSQL in Docker, D202), but GitHub Actions are off (D204); the
-  same tests run in the full criterion.
+  and PostgreSQL in Docker, D202), but GitHub Actions are off (D204) until
+  the repository is public (`docs/release.md`, "Going public"); the same
+  tests run in the full criterion.
 
 ### 2.4 Findings of runs 12 and 13
 
@@ -141,8 +144,8 @@ criterion. What is left:
 ## 3. The path to release 1.0
 
 Release 1.0 ships without team vaults (D197), for Windows and Linux (D204);
-macOS is decided in the release preparation run (there is no Mac to check
-on). Checks are local: GitHub Actions are off (D204), and the full criterion
+no macOS (there is no Mac to check on; D225). Checks are local until the
+repository is public: GitHub Actions are off (D204), and the full criterion
 of `CLAUDE.md` scans for secrets too (D205).
 
 1. **Run 10** — interface and small things.
@@ -163,25 +166,35 @@ of `CLAUDE.md` scans for secrets too (D205).
    reference descriptions (D220, D222), the partial update in the core,
    which the desktop's panels use too (D221), and the parts of M2 that did
    not wait for the owner's feedback.
-   **Run 16** (this state) — the owner's answers (D223), the review
+   **Run 16** — the owner's answers (D223), the review
    leftovers of run 15 (the partial update for identities, the password
    key on the session's own answer about its recording, multi-line paste,
    `ssh <name>`), the first version of the Android app (M5: notes,
    Settings with the bell and About, the open-source licenses, the signed
    release build) and the rest of M2, before the owner's feedback with
    the owner's consent (D223, D224).
-3. **The owner uses it** day to day and writes down the differences from
-   Termius that matter.
-4. **1–2 parity runs** — the list of step 3.
-5. **The release preparation run** — the git history checked for anything
-   private, the license, README, SECURITY.md, the platforms and code signing,
-   the owner's minisign key for the update manifest (`docs/release.md`), and a
-   check that stage 8 will later fit without breaking the data format.
-6. **Release 1.0.**
+   **Run 17** (this state), the release preparation run (D225, D226) — the
+   git history checked for anything private (nothing to remove, no
+   rewrite), README, SECURITY.md, CHANGELOG.md and the guide for 1.0, the
+   server's third-party notices, version 1.0.0-rc.1, the owner's minisign
+   key, the update check for release candidates, the Linux package (Ubuntu
+   22.04, glibc 2.35) and the app itself checked in a container, the
+   release workflow with a local dry run, the workflows matched to the
+   local criterion, and the room stage 8 and the archive will need checked
+   (`docs/stage8-readiness.md`). Parity runs do not come before the
+   release: the owner has no list (D225, item 5).
+3. **Going public and 1.0.0-rc.1** — the owner's steps in `docs/release.md`,
+   "Going public": the repository public, Actions, the environment
+   `release`, the rules, the tag `v1.0.0-rc.1`, the draft checked and
+   published.
+4. **The owner's own installation** — the rc.1 server at home and two
+   devices (`docs/release.md`, "From a release candidate to 1.0.0"); what
+   it finds goes into a fix or an `rc.2`.
+5. **Release 1.0.0**, in a commit of its own.
 
-After the release: the previous account's archive (its keys then wrapped under
-the personal vault key, storage-format 6.2 changes with it; D197), then
-stage 8 (section 4).
+After the release: parity in 1.x from the owner's notes (D225, item 5), the
+previous account's archive (its keys then wrapped under the personal vault
+key, storage-format 6.2 changes with it; D197), then stage 8 (section 4).
 
 ### 3.1 The mobile client (Android), a line of its own
 
@@ -292,11 +305,18 @@ All of it is code; the list with references is `docs/stage8-readiness.md`.
 
 ## 5. Open questions to the owner
 
-After run 16 (the run reports have the details):
+After run 17 (the run reports have the details; the questions of release
+preparation were answered in D225):
 
-1. **Release preparation** (D210): the project's contact address for
-   `CODE_OF_CONDUCT.md`, whether to rewrite the history that holds the old
-   one, Linux on a real desktop.
+1. **Release 1.0** (D225, D226): the steps of `docs/release.md`, "Going
+   public", and the check on the owner's own installation; whether the
+   owner's personal details in `docs/mobile/owner-notes.md`, D211 and
+   `docs/android-feasibility.md` (the phone, the homelab, the habits) go
+   public as they are; a bridge from `log` to `tracing`, so that GPUI's and
+   wgpu's messages reach the log (after a look at what they write, security
+   9.1); records of a later version shown as "requires a newer version"
+   (storage-format 5.6) before the archive ships, or the specification
+   changed.
 2. **The Android app's first version** (D223, D224): the release key and
    the signed APK on the S25 (`docs/mobile/release.md`), the owner's
    checklist on the phone (run 16's report), the Samsung keyboard.
@@ -352,6 +372,23 @@ After run 16 (the run reports have the details):
 - **Imported terminal themes** are not records yet (no theme import), so the
   duplicates hint of Settings → Terminal covers the highlighting rules only
   (UI 13.7).
+- **The core's version in the Android app** (D225, item 16):
+  `apps/android/native` takes the workspace's version, so the phone reports
+  the desktop's `1.0.0-rc.1` in its device record, the User-Agent and
+  exports instead of its own `versionName`; pass the latter through JNI.
+- **GPUI's messages reach no log** (D226): there is no bridge from `log` to
+  `tracing`, so a renderer failure on a user's Linux leaves nothing in the
+  log; add one after a look at what GPUI and wgpu write (security 9.1).
+- **Records of a later version are not shown** (D226): the core keeps them
+  (`Index::unsupported`), but the interface does not say "requires a newer
+  version" as storage-format 5.6 asks.
+- **The theme choice of Settings** (UI 12.1, item 10) is not built: the app
+  follows the system's light or dark mode (`appearance.ui_theme` is not
+  read; `--theme` only with developer tools).
+- **Linux, a debug build with developer tools** leaves some of gpui-kit's
+  icons out (the menu, the search glass, the chevrons, the bell); the
+  release build draws them (D226). The Linux package keeps no line tables
+  (the release workflow's build container is removed).
 
 ## 7. Process rules
 
@@ -391,7 +428,7 @@ What the runs settled on, in addition to `CLAUDE.md` and SPEC.
    Conventional Commits, tests, a review by a subagent that did not write the
    code, fixes, a full run, screenshots in both themes, a line in PROGRESS, the
    report.
-8. **Decisions** go to `docs/decisions.md`. The next free number is D225;
+8. **Decisions** go to `docs/decisions.md`. The next free number is D227;
    D104–D139, D145–D169 and D186 stay unused (the per-agent ranges of runs 8
    and 9).
    Disputed ones also go to the report's owner section.
