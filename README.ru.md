@@ -44,7 +44,7 @@ Shell++ 1.0.0-rc.1 — кандидат в релиз 1.0 для Windows и Linu
 - сертификатов SSH-хостов: строки `@cert-authority` в `known_hosts` пропускаются;
 - выбора темы в настройках: интерфейс следует светлому или тёмному режиму системы.
 
-**Linux** собирается и проходит все тесты в контейнерах; на настоящем рабочем столе ещё не запускался. Если на вашем что-то не работает, пожалуйста, [создайте issue](https://github.com/proxyboy228/shellpp/issues).
+**Linux** проверен в контейнерах, на настоящем рабочем столе — ещё нет: сборка и все тесты, а также пакет на чистой Ubuntu 22.04 на виртуальном дисплее с OpenGL из Mesa (первый запуск, ключ устройства в Secret Service, блокировка и разблокировка, SSH и SFTP к OpenSSH, обе темы; `scripts\verify-linux-desktop.ps1`). Если на вашем что-то не работает, пожалуйста, [создайте issue](https://github.com/proxyboy228/shellpp/issues).
 
 **Android:** приложение в работе, у него свои версии, релиза пока нет ([docs/mobile/](docs/mobile/README.md)).
 
@@ -76,7 +76,7 @@ Shell++ 1.0.0-rc.1 — кандидат в релиз 1.0 для Windows и Linu
 Что нужно:
 
 - x86-64 с glibc 2.35 или новее: Ubuntu 22.04 или новее, Debian 12 или новее либо другой дистрибутив того же возраста;
-- сеанс X11 или Wayland, драйвер Vulkan (достаточно Mesa) и библиотеки `libxkbcommon`, `libxkbcommon-x11`, `libxcb`, `libX11-xcb`, `libwayland-client`, `fontconfig` и `freetype`, которые в настольных дистрибутивах уже есть;
+- сеанс X11 или Wayland, драйвер Vulkan или OpenGL через EGL (в Mesa есть и то и другое; в Debian и Ubuntu — пакет `libegl1`) и библиотеки `libxkbcommon`, `libxkbcommon-x11`, `libxcb`, `libX11-xcb`, `libwayland-client`, `fontconfig` и `freetype`, которые в настольных дистрибутивах уже есть;
 - для «Remember on this device» и сохранённых API-ключей — поставщик Secret Service (GNOME Keyring, KWallet, KeePassXC). Без него приложение работает и спрашивает мастер-пароль при каждом запуске.
 
 Установка для своего пользователя:

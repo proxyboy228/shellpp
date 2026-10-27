@@ -44,7 +44,7 @@ Not in 1.0:
 - SSH host certificates: `@cert-authority` lines of `known_hosts` are skipped;
 - a theme choice in Settings: the interface follows the system's light or dark mode.
 
-**Linux** builds and passes every test in containers; it has not yet run on a real desktop. If something does not work on yours, please [open an issue](https://github.com/proxyboy228/shellpp/issues).
+**Linux** is checked in containers, not yet on a real desktop: the build and every test, and the packaged app on a clean Ubuntu 22.04 under a virtual display with Mesa's OpenGL (first run, the device key in the Secret Service, lock and unlock, SSH and SFTP to OpenSSH, both themes; `scripts\verify-linux-desktop.ps1`). If something does not work on yours, please [open an issue](https://github.com/proxyboy228/shellpp/issues).
 
 **Android:** the app is in progress, with versions of its own and no release yet ([docs/mobile/](docs/mobile/README.md)).
 
@@ -76,7 +76,7 @@ To keep everything next to the program (a portable setup), start it with `SHELLP
 What it needs:
 
 - x86-64 with glibc 2.35 or later: Ubuntu 22.04 or later, Debian 12 or later, or another distribution of that age;
-- an X11 or Wayland session, a Vulkan driver (Mesa's is enough), and the libraries `libxkbcommon`, `libxkbcommon-x11`, `libxcb`, `libX11-xcb`, `libwayland-client`, `fontconfig` and `freetype`, which desktop distributions already have;
+- an X11 or Wayland session, a Vulkan driver or OpenGL through EGL (Mesa has both; `libegl1` on Debian and Ubuntu), and the libraries `libxkbcommon`, `libxkbcommon-x11`, `libxcb`, `libX11-xcb`, `libwayland-client`, `fontconfig` and `freetype`, which desktop distributions already have;
 - for "Remember on this device" and saved API keys: a Secret Service provider (GNOME Keyring, KWallet, KeePassXC). Without one the app works, and asks for the master password at every start.
 
 Install for your user:

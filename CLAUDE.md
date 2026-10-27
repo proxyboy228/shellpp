@@ -99,6 +99,8 @@ powershell -ExecutionPolicy Bypass -File scripts\ui-screens.ps1 -Sizes 1280x800 
 powershell -ExecutionPolicy Bypass -File scripts\measure-terminal.ps1 -Server russh -Only output -SeqLines 3000000
 powershell -ExecutionPolicy Bypass -File scripts\measure-startup.ps1
 powershell -ExecutionPolicy Bypass -File scripts\verify-linux.ps1 -AllFeatures
+powershell -ExecutionPolicy Bypass -File scripts\verify-linux-desktop.ps1
+powershell -ExecutionPolicy Bypass -File scripts\release-dry-run.ps1
 powershell -ExecutionPolicy Bypass -File scripts\test-process.ps1
 ```
 
@@ -106,6 +108,15 @@ powershell -ExecutionPolicy Bypass -File scripts\test-process.ps1
 `verify-linux.ps1` — сборка и тесты клиента на Linux в Docker (образ
 `tests/linux/Dockerfile`, тома `shellpp-linux-target` и `shellpp-linux-cargo`),
 журналы — в `target\verify-linux\`.
+`verify-linux-desktop.ps1` (D226) — само приложение Linux в контейнере:
+пакет `tar.gz` на чистой Ubuntu 22.04 под Xvfb с OpenGL из Mesa
+(`tests/linux/desktop.Dockerfile`; программный Vulkan lavapipe не годится —
+кадры GPUI не доходят до экрана Xvfb), сценарий через xdotool
+(`tests/linux/desktop-check.sh`: первый запуск, ключ устройства в Secret
+Service, блокировка, перезапуск, SSH и SFTP к OpenSSH, без Secret Service
+и без D-Bus) и обе темы сборки с dev-tools (`tests/linux/screens-check.sh`);
+скриншоты — в `target\linux-desktop\`. `release-dry-run.ps1` — файлы
+релиза локально, без подписи (`docs/release.md`, «A dry run»).
 `test-process.ps1` — тест запуска шагов (`scripts\process.ps1`): шаг ждёт
 только свою программу, а не оставленные ею процессы. `Start-Process -Wait`
 в PowerShell 5.1 ждёт и их, а линкер MSVC оставляет `vctip.exe`, который

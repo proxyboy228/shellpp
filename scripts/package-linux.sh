@@ -73,9 +73,9 @@ Run ./shellpp from this folder, or install it for your user:
 ~/.local/bin has to be on your PATH for the menu entry to start it.
 
 What it needs: glibc ${max_glibc} or later (Ubuntu 22.04 or later, Debian 12 or
-later), an X11 or Wayland session, a Vulkan driver (Mesa's is enough) and the
-libraries libxkbcommon, libxkbcommon-x11, libxcb, libX11-xcb,
-libwayland-client, fontconfig and freetype. "Remember on this device" needs a
+later), an X11 or Wayland session, a Vulkan driver or OpenGL through EGL
+(Mesa has both), and the libraries libxkbcommon, libxkbcommon-x11, libxcb,
+libX11-xcb, libwayland-client, fontconfig and freetype. "Remember on this device" needs a
 Secret Service provider (GNOME Keyring, KWallet, KeePassXC); without one the
 app asks for the master password at every start.
 
