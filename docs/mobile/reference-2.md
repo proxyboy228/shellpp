@@ -84,8 +84,8 @@ Order from top to bottom:
    - Password — masked text field + round button with a lock glyph.
      What the lock button does **[not tested]** (not pressed: it may show
      the password).
-   - Key — one field for "SSH key, certificate, FIDO2 key or SSH ID",
-     + round button → key picker (§3.4).
+   - Key — one field for the key (an SSH key, a certificate, a FIDO2 key
+     or an SSH ID), + round button → key picker (§3.4).
 5. **Card: session options**
    - Snippet — field + round button → snippet picker (§3.5): a command
      run after connecting.
