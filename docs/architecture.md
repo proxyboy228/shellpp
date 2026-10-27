@@ -145,7 +145,7 @@ Enforcement (stage 0 decision):
 |---|---|
 | the server is outside the client build | `server/` has its own Cargo workspace and `Cargo.lock`; the root workspace sets `exclude = ["server"]` |
 | no client dependency on the server | the client `deny.toml` bans the crate `shellpp-server`, and its license allow-list has no AGPL |
-| `shellpp-core` and `shellpp-ssh` stay mobile-ready | from stage 1, CI runs `cargo check -p shellpp-core -p shellpp-ssh` for `aarch64-linux-android` (Linux job, with the runner's NDK) and `aarch64-apple-ios` (macOS job); since run 13 the local criterion (`scripts\verify.ps1`, step `mobile-ready`) checks every crate a phone client shares for `aarch64-linux-android` with the NDK's clang, and says SKIPPED when there is no NDK (D212) |
+| `shellpp-core` and `shellpp-ssh` stay mobile-ready | from stage 1, CI runs `cargo check -p shellpp-core -p shellpp-ssh` for `aarch64-linux-android` (Linux job, with the runner's NDK) and `aarch64-apple-ios` (macOS job); since run 13 the local criterion (`scripts\verify.ps1`, step `mobile-ready`) checks every crate a phone client shares for `aarch64-linux-android` with the NDK's clang, and says SKIPPED when there is no NDK (D212); since run 17 CI's Linux job checks the same crates with the same NDK API (26) |
 
 | Artifact | Built from | License of project code | Distributed to |
 |---|---|---|---|
@@ -705,7 +705,7 @@ Stage 0 has one Linux job for the frontend (D1). From stage 1 (stage 0 decision)
 | licenses | Linux | cargo-deny (both workspaces), npm license check |
 | linux | Linux | Rust tests, OpenSSH integration in Docker, UI e2e, Android check, packages (stage 9) |
 | windows | Windows | Rust tests, russh integration, UI e2e, NSIS package (stage 9) |
-| macos | macOS | build, Rust tests, russh integration, iOS check, `.dmg` (stage 9) |
+| macos | macOS | build, Rust tests, russh integration, iOS check; informational since run 17 (`continue-on-error`): macOS is not in release 1.0 (D225) |
 | secret-scan | Linux | existing gitleaks workflow |
 | server-deploy | Linux | the sync server's deployment tests in Docker (`server/tests/deploy.rs`: the image behind Caddy with two clients, the encrypted backup recipe end to end, the backup rotation, the compose file), only on changes to `server/`, `crates/sync-api`, `crates/core`, `crates/private-file`, the root `Cargo.toml` and `rust-toolchain.toml`; its own workflow, `server-deploy.yml` (run 10) |
 | server | Linux | the sync server's own tests (the server workspace, the sync end-to-end tests with two clients included) on SQLite, then on PostgreSQL in Docker (`SHELLPP_TEST_POSTGRES=docker`, a `postgres:17-alpine` container per test binary), on the same changes as server-deploy; its own workflow, `server.yml` (D202, run 11) |
