@@ -41,14 +41,15 @@ system, so it runs on Ubuntu 22.04 and later and Debian 12 and later
 checkout of a commit (default `HEAD`), **without signing or publishing**:
 the Windows zip and its symbols, the Linux package in the workflow's image,
 the server image and its archive, `latest.json`, `SHA256SUMS` and the
-draft's notes. It checks what the workflow checks (the versions, the public
+CHANGELOG part of the draft's notes (`notes.md`; the workflow adds the list
+of files). It checks what the workflow checks (the versions, the public
 key, the notes) and that each archive holds exactly the files of the table
 above, which must name every file. It needs Docker and the network; the
 files land in `target\release-dry-run\dist`. Unlike the workflow it keeps
 its build folders between runs (`-Fresh` empties them).
 
 ```
-powershell -NoProfile -File scripts\release-dry-run.ps1
+powershell -ExecutionPolicy Bypass -File scripts\release-dry-run.ps1
 ```
 
 ## The signing key
@@ -113,8 +114,9 @@ with a new app version, and older versions then report every update as
    git push origin v0.2.0
    ```
 
-4. The workflow "Release" checks that the tag matches both versions and
-   that `release/minisign.pub` holds a key, builds the Windows zip and the
+4. The workflow "Release" checks that the tag matches both versions, that
+   `release/minisign.pub` holds a key and that `CHANGELOG.md` has the
+   version's notes, builds the Windows zip, the Linux package and the
    server, writes `latest.json` and `SHA256SUMS`, waits for your approval
    of the environment `release`, signs every file, verifies every
    signature with `release/minisign.pub`, and creates the draft release.

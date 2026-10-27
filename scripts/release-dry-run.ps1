@@ -32,9 +32,9 @@
   crates). The files land in <OutDir>\dist, the logs in <OutDir>\logs.
 
 .EXAMPLE
-  powershell -NoProfile -File scripts\release-dry-run.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\release-dry-run.ps1
 .EXAMPLE
-  powershell -NoProfile -File scripts\release-dry-run.ps1 -Commit run17/work -Fresh
+  powershell -ExecutionPolicy Bypass -File scripts\release-dry-run.ps1 -Commit run17/work -Fresh
 #>
 param(
     # The commit to build (anything git rev-parse takes).
@@ -113,6 +113,8 @@ $sha = $sha.Trim()
 Write-Host "release-dry-run: commit $sha"
 
 $serverTags = @()
+$previousImages = @{}
+$label = 'shellpp-run=release-dry-run'
 try {
     # A clean checkout of the commit.
     if (Test-Path -LiteralPath $src) {
@@ -149,7 +151,7 @@ try {
     $null = Step 'package-image' 'docker' @('build', '-f', (Join-Path $src 'tests\linux\package.Dockerfile'), '-t', $packageImage, (Join-Path $src 'tests\linux'))
 
     # The draft's notes.
-    $notesLog = Step 'notes' 'docker' @('run', '--rm', '-v', "${src}:/src:ro", $packageImage, 'bash', 'scripts/release-notes.sh', $version)
+    $notesLog = Step 'notes' 'docker' @('run', '--rm', '--label', $label, '-v', "${src}:/src:ro", $packageImage, 'bash', 'scripts/release-notes.sh', $version)
     Copy-Item -LiteralPath $notesLog -Destination (Join-Path $OutDir 'notes.md') -Force
 
     # Windows: the workflow's script, in the checkout, with a target folder
@@ -168,7 +170,7 @@ try {
     # Linux: the workflow's image and script.
     $linuxOut = Join-Path $work 'linux'
     New-Item -ItemType Directory -Force -Path $linuxOut | Out-Null
-    $null = Step 'linux' 'docker' @('run', '--rm', '--label', 'shellpp-run=release-dry-run', '-e', "SOURCE_DATE_EPOCH=$epoch",
+    $null = Step 'linux' 'docker' @('run', '--rm', '--label', $label, '-e', "SOURCE_DATE_EPOCH=$epoch",
         '-v', "${src}:/src:ro", '-v', "${linuxOut}:/out", '-v', "${linuxTarget}:/target", '-v', "${linuxCargo}:/usr/local/cargo/registry",
         $packageImage, 'bash', 'scripts/package-linux.sh', '/out')
     Copy-Item -LiteralPath (Join-Path $linuxOut "shellpp-$version-linux-x64.tar.gz") -Destination $dist
@@ -177,20 +179,28 @@ try {
     $serverOut = Join-Path $work 'server'
     New-Item -ItemType Directory -Force -Path (Join-Path $serverOut 'bin') | Out-Null
     $serverTags = @("shellpp-server:$version", 'shellpp-server:latest')
+    # The tags may name images already here (a compose deployment uses
+    # shellpp-server:latest): they are given back at the end.
+    foreach ($tag in $serverTags) {
+        $inspectLog = Join-Path $logs "server-before-$($serverTags.IndexOf($tag)).log"
+        if ((Invoke-Logged 'docker' @('image', 'inspect', '--format', '{{.Id}}', $tag) $inspectLog "$inspectLog.err") -eq 0) {
+            $previousImages[$tag] = (Get-Content -LiteralPath $inspectLog | Select-Object -First 1).Trim()
+        }
+    }
     $null = Step 'server-image' 'docker' @('build', '-f', (Join-Path $src 'server\Dockerfile'), '-t', $serverTags[0], '-t', $serverTags[1], $src)
-    $docLog = Step 'server-image-docs' 'docker' @('run', '--rm', '--entrypoint', 'ls', $serverTags[0], '/usr/share/doc/shellpp-server')
+    $docLog = Step 'server-image-docs' 'docker' @('run', '--rm', '--label', $label, '--entrypoint', 'ls', $serverTags[0], '/usr/share/doc/shellpp-server')
     Assert-Names 'the server image (/usr/share/doc/shellpp-server)' @(Get-Content -LiteralPath $docLog | Where-Object { $_ }) @('LICENSE', 'THIRD_PARTY_NOTICES.md')
     $imageTar = Join-Path $serverOut "shellpp-server-$version-docker-image.tar"
     $null = Step 'server-save' 'docker' @('save', '-o', $imageTar, $serverTags[0], $serverTags[1])
-    $null = Step 'server-gzip' 'docker' @('run', '--rm', '-v', "${serverOut}:/out", $packageImage, 'gzip', '-n', '-9', "/out/shellpp-server-$version-docker-image.tar")
-    $idLog = Step 'server-create' 'docker' @('create', $serverTags[0])
+    $null = Step 'server-gzip' 'docker' @('run', '--rm', '--label', $label, '-v', "${serverOut}:/out", $packageImage, 'gzip', '-n', '-9', "/out/shellpp-server-$version-docker-image.tar")
+    $idLog = Step 'server-create' 'docker' @('create', '--label', $label, $serverTags[0])
     $id = (Get-Content -LiteralPath $idLog | Select-Object -First 1).Trim()
     try {
         $null = Step 'server-cp' 'docker' @('cp', "${id}:/usr/local/bin/shellpp-server", (Join-Path $serverOut 'bin\shellpp-server'))
     } finally {
         $null = Invoke-Logged 'docker' @('rm', $id) (Join-Path $logs 'server-rm.log') (Join-Path $logs 'server-rm.log.err')
     }
-    $null = Step 'server-archive' 'docker' @('run', '--rm', '-e', "SOURCE_DATE_EPOCH=$epoch", '-v', "${src}:/src:ro", '-v', "${serverOut}:/out",
+    $null = Step 'server-archive' 'docker' @('run', '--rm', '--label', $label, '-e', "SOURCE_DATE_EPOCH=$epoch", '-v', "${src}:/src:ro", '-v', "${serverOut}:/out",
         $packageImage, 'bash', 'scripts/package-server.sh', '/out/bin/shellpp-server', $version, '/out')
     Copy-Item -LiteralPath "$imageTar.gz" -Destination $dist
     Copy-Item -LiteralPath (Join-Path $serverOut "shellpp-server-$version-linux-x64.tar.gz") -Destination $dist
@@ -225,8 +235,12 @@ try {
     Assert-Names 'the Linux package' (Get-TarNames (Join-Path $dist "$linuxDir.tar.gz")) @(
         'shellpp', 'shellpp.desktop', 'shellpp.png', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'README-linux.txt' | ForEach-Object { "$linuxDir/$_" })
     $deploy = @(& git -C $src ls-files server/deploy | ForEach-Object { $_ -replace '^server/', '' })
-    Assert-Names 'the server archive' (Get-TarNames (Join-Path $dist "shellpp-server-$version-linux-x64.tar.gz")) (
+    $serverArchive = Join-Path $dist "shellpp-server-$version-linux-x64.tar.gz"
+    Assert-Names 'the server archive' (Get-TarNames $serverArchive) (
         @('shellpp-server', 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md') + $deploy)
+    # Its "./" entry gives its mode to the folder it is unpacked into.
+    $topEntry = @(& $tar -tvzf $serverArchive) | Select-Object -First 1
+    if (-not "$topEntry".StartsWith('drwxr-xr-x')) { Fail "the server archive's top entry is not drwxr-xr-x: $topEntry" }
     $imageManifest = & $tar -xzOf (Join-Path $dist "shellpp-server-$version-docker-image.tar.gz") manifest.json
     if ($LASTEXITCODE -ne 0) { Fail 'the server image archive has no manifest.json' }
     $repoTags = @((($imageManifest | Out-String) | ConvertFrom-Json) | ForEach-Object { $_.RepoTags } | Where-Object { $_ })
@@ -238,8 +252,20 @@ try {
     }
     Write-Host "release-dry-run: done; unsigned files in $dist, the notes in $(Join-Path $OutDir 'notes.md')" -ForegroundColor Green
 } finally {
+    # Containers left by an interrupted step (Ctrl+C), by their label.
+    $psLog = Join-Path $logs 'leftover-containers.log'
+    if ((Invoke-Logged 'docker' @('ps', '-aq', '--filter', "label=$label") $psLog "$psLog.err") -eq 0) {
+        foreach ($leftover in @(Get-Content -LiteralPath $psLog | Where-Object { $_ })) {
+            $null = Invoke-Logged 'docker' @('rm', '-f', $leftover) (Join-Path $logs 'leftover-rm.log') (Join-Path $logs 'leftover-rm.log.err')
+        }
+    }
+    # The server tags: back to the images they named before, or gone.
     foreach ($tag in $serverTags) {
-        $null = Invoke-Logged 'docker' @('image', 'rm', $tag) (Join-Path $logs 'server-untag.log') (Join-Path $logs 'server-untag.log.err')
+        if ($previousImages.ContainsKey($tag)) {
+            $null = Invoke-Logged 'docker' @('tag', $previousImages[$tag], $tag) (Join-Path $logs 'server-retag.log') (Join-Path $logs 'server-retag.log.err')
+        } else {
+            $null = Invoke-Logged 'docker' @('image', 'rm', $tag) (Join-Path $logs 'server-untag.log') (Join-Path $logs 'server-untag.log.err')
+        }
     }
     if (Test-Path -LiteralPath $src) {
         $null = Invoke-Logged 'git' @('-C', $repo, 'worktree', 'remove', '--force', $src) (Join-Path $logs 'worktree-remove.log') (Join-Path $logs 'worktree-remove.log.err')

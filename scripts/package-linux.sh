@@ -33,7 +33,15 @@ cargo build --locked --profile dist -p shellpp-desktop
 binary="${CARGO_TARGET_DIR:-$repo/target}/dist/shellpp"
 
 # The newest glibc symbol version the executable asks for.
-needed="$(objdump -T "$binary" | sed -n 's/.*GLIBC_\([0-9.]*\).*/\1/p' | sort -uV | tail -n 1)"
+needed="$(objdump -T "$binary" | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -uV | tail -n 1)"
+if [ -z "$needed" ]; then
+    echo "package-linux: no glibc version found in shellpp's dynamic symbols" >&2
+    exit 1
+fi
+# GLIBC_ABI_DT_RELR comes with glibc 2.36.
+if objdump -T "$binary" | grep -q 'GLIBC_ABI_DT_RELR'; then
+    needed="2.36"
+fi
 if [ "$(printf '%s\n%s\n' "$needed" "$max_glibc" | sort -V | tail -n 1)" != "$max_glibc" ]; then
     echo "package-linux: shellpp needs glibc $needed, more than $max_glibc" >&2
     exit 1
@@ -45,8 +53,9 @@ trap 'rm -rf "$staging"' EXIT
 dir="$staging/$name"
 mkdir -p "$dir"
 install -m 0755 "$binary" "$dir/shellpp"
-# Line tables stay in the build (crash reports from the build machine);
-# the package carries the code and its symbols only.
+# The package carries the code and its symbol table (function names in
+# backtraces); the line tables of the dist profile are dropped, and the
+# release workflow keeps no copy of them (its build container is removed).
 strip --strip-debug "$dir/shellpp"
 install -m 0644 apps/desktop/packaging/linux/shellpp.desktop "$dir/shellpp.desktop"
 install -m 0644 apps/desktop/assets/icons/128x128.png "$dir/shellpp.png"

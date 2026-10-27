@@ -510,7 +510,10 @@ fn a_stable_build_is_not_offered_a_pre_release() {
     // or the release.
     for (manifest, current) in [
         (r#"{"version": "1.0.1-rc.1"}"#, "1.0.0"),
+        (r#"{"version": "v1.0.1-rc.1"}"#, "1.0.0"),
         (r#"{"version": "2.0.0-beta"}"#, "1.0.0"),
+        // An older release candidate is no update for a newer one.
+        (r#"{"version": "1.0.0-rc.1"}"#, "1.0.0-rc.2"),
     ] {
         assert_eq!(
             compare(manifest.as_bytes(), current),

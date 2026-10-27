@@ -16,6 +16,9 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
+# The archive's "./" entry takes this folder's mode, and GNU tar gives it to
+# the folder one extracts into: mktemp's 0700 would lock others out of it.
+chmod 0755 "$staging"
 install -m 0755 "$binary" "$staging/shellpp-server"
 install -m 0644 "$repo/server/LICENSE" "$repo/server/README.md" "$repo/server/THIRD_PARTY_NOTICES.md" "$staging/"
 cp -r "$repo/server/deploy" "$staging/deploy"
