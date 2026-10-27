@@ -72,6 +72,7 @@ foreach ($dir in @((Join-Path $outRoot 'package'), (Join-Path $outRoot 'screens'
 
 $info = Step 'docker-info' @('info', '--format', '{{.OSType}}')
 if ($info.Code -ne 0) { Fail "Docker does not answer ($($info.Log))" }
+if (((Get-Content -LiteralPath $info.Log | Out-String).Trim()) -ne 'linux') { Fail 'Docker runs Windows containers; switch it to Linux containers' }
 foreach ($image in @(@($packageImage, 'package.Dockerfile'), @($desktopImage, 'desktop.Dockerfile'))) {
     $built = Step "image-$($image[1])" @('build', '-f', (Join-Path $tests $image[1]), '-t', $image[0], $tests)
     if ($built.Code -ne 0) { Fail "the image $($image[1]) did not build ($($built.Log))" }

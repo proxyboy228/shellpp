@@ -92,6 +92,14 @@ device_key_stored() {
 
 keep_log() { cp "$1/logs/shellpp.log" "$out/shellpp-$2.log" 2>/dev/null; }
 
+# Whether a screenshot shows a picture: a black or empty screen (frames that
+# never reach Xvfb, as with Mesa's lavapipe) has almost no spread of grey.
+drawn() {
+    local spread
+    spread="$(convert "$out/$1.png" -colorspace Gray -format '%[fx:standard_deviation]' info: 2>/dev/null)"
+    awk -v s="${spread:-0}" 'BEGIN { exit !(s > 0.02) }'
+}
+
 session_keyring() {
     # The login keyring as the default collection, unlocked, as PAM leaves
     # it in a desktop session; without a default collection the Secret
@@ -107,8 +115,12 @@ session_keyring() {
         stop_app
         return
     fi
-    record ok "keyring: the packaged app starts and draws its window"
     shot keyring-1-first-run
+    if drawn keyring-1-first-run; then
+        record ok "keyring: the packaged app starts and draws its window (keyring-1-first-run.png)"
+    else
+        record FAIL "keyring: the window shows no picture (keyring-1-first-run.png)"
+    fi
     # Focus is in the first password field (UI 13.1); Tab goes to the second.
     xdotool type --delay 40 "$password"
     xdotool key Tab
@@ -133,7 +145,12 @@ session_keyring() {
     xdotool key Return
     sleep 5
     shot keyring-4-unlocked
-    record info "keyring: lock (Ctrl+Shift+L) and unlock with the password driven (keyring-3-locked.png, keyring-4-unlocked.png)"
+    # The core logs "locked" and then "unlocked" (lock_ops).
+    if awk '/lock_ops: locked/ { locked = 1 } locked && /lock_ops: unlocked/ { found = 1 } END { exit !found }' "$data/logs/shellpp.log"; then
+        record ok "keyring: lock (Ctrl+Shift+L) and unlock with the password (keyring-3-locked.png, keyring-4-unlocked.png)"
+    else
+        record FAIL "keyring: no lock and unlock in the log (keyring-3-locked.png, keyring-4-unlocked.png)"
+    fi
     stop_app
     keep_log "$data" keyring-first-run
 
@@ -201,7 +218,11 @@ session_keyring() {
     xdotool key Return
     sleep 6
     shot keyring-11-sftp-list
-    if [ "$(grep -c "connected session=" "$data/logs/shellpp.log" 2>/dev/null)" -ge 2 ]; then
+    # The SFTP session's own id: `session opened session=N kind="sftp"`,
+    # then `connected session=N`.
+    local sftp_id
+    sftp_id="$(sed -n 's/.*session opened session=\([0-9]*\) kind="sftp".*/\1/p' "$data/logs/shellpp.log" | tail -n 1)"
+    if [ -n "$sftp_id" ] && grep -q "connected session=$sftp_id " "$data/logs/shellpp.log"; then
         record ok "keyring: the SFTP panel connected to OpenSSH (keyring-11-sftp-list.png should list backups, projects, notes.txt)"
     else
         record FAIL "keyring: the SFTP panel did not connect (keyring-9..11 screenshots)"
@@ -309,4 +330,12 @@ runuser -u tester -- env APP="$dir/shellpp" SSH_PASSWORD_FILE="$password_file" H
 
 echo
 cat "$results"
+# Every check must have run and passed: a session that never started (a
+# failed dbus-run-session or runuser) leaves its lines out instead of FAIL.
+expected=10
+passed="$(grep -c '^ok ' "$results")"
+if [ "$passed" -ne "$expected" ]; then
+    echo "desktop-check: $passed of $expected checks passed"
+    exit 1
+fi
 ! grep -q '^FAIL' "$results"
