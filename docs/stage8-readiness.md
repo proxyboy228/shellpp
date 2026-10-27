@@ -26,11 +26,23 @@ it untouched; it never damages it.
   above the one the client knows opens as `Opened::Unsupported`: it is kept
   as it is, left out of the index and never rewritten (`vault::open_row`;
   test `checks_detect_tampering_and_unsupported_records` in
-  crates/core/src/vault/mod.rs). Sync applies such a row without opening it
-  further and keeps it hidden (`engine::apply_page`); a conflict over one
-  keeps the other version (`KeepOther::Unsupported`, tested in
-  service/sync_ops.rs). Writers keep the `data` members they do not know
-  (`unknown_members_are_kept` and the like in crates/core/src/model).
+  crates/core/src/vault/mod.rs; across a lock and an unlock,
+  `records_of_a_later_version_are_kept_and_never_rewritten`). Sync applies
+  such a row without opening it further and keeps it hidden
+  (`engine::apply_page`); a conflict over one keeps the other version
+  (`KeepOther::Unsupported`, tested in service/sync_ops.rs). A pending row
+  that a rotation left under an older epoch is re-sealed for the push with
+  exactly the plaintext it had (`vault::reseal_row`, since run 17; before,
+  it went through the payload model, which drops top-level members it does
+  not know; test `a_pending_record_of_a_later_version_is_resealed_byte_for_byte`).
+  Writers keep the `data` members they do not know
+  (`unknown_members_are_kept` and the like in crates/core/src/model). One
+  path still goes through the payload model: when this device's pending
+  copy goes over a newer server version (rule 0 of sync-protocol 6.4,
+  `engine::apply_page`), it is re-sealed from its parsed payload, so a
+  top-level member of a later version would be lost there; it needs a
+  record of a later version pending on this device and a fork, and is
+  recorded as debt (ROADMAP 6).
 - **Classes and vaults.** Class codes `0x0B`..`0xFF` are reserved
   (crates/sync-api/src/classes.rs); the vault list's `kind` is a string, so
   a team vault in `GET /v1/vaults` does not break a 1.0 client, which syncs
@@ -39,7 +51,11 @@ it untouched; it never damages it.
   a client refuses a server without `v1` as `unsupported_server`, which the
   app explains (sync_ops.rs, `server_check_with`). Later changes either stay
   within `v1` (new optional fields, new classes and types, which a 1.0
-  client keeps) or come as a new API version beside it.
+  client keeps) or come as a new API version beside it. Unknown JSON fields
+  are ignored on both sides; a push status a client does not know reads as
+  `ItemStatus::Unknown`, and since run 17 a registration mode it does not
+  know reads as `Registration::Unknown` (treated as needing an invitation)
+  instead of failing the whole server answer.
 - **A gap against the specification:** storage-format 5.6 says an
   unsupported record is "shown as 'requires a newer version'"; the desktop
   keeps such records but shows nothing for them (the core's

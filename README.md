@@ -44,7 +44,7 @@ Not in 1.0:
 - SSH host certificates: `@cert-authority` lines of `known_hosts` are skipped;
 - a theme choice in Settings: the interface follows the system's light or dark mode.
 
-**Linux** is checked in containers, not yet on a real desktop: the build and every test, and the packaged app on a clean Ubuntu 22.04 under a virtual display with Mesa's OpenGL (first run, the device key in the Secret Service, lock and unlock, SSH and SFTP to OpenSSH, both themes; `scripts\verify-linux-desktop.ps1`). If something does not work on yours, please [open an issue](https://github.com/proxyboy228/shellpp/issues).
+**Linux** is checked in containers, not yet on a real desktop: the build and every test, and the packaged app on a clean Ubuntu 22.04 under a virtual display with Mesa's OpenGL (first run, the device key in the Secret Service, lock and unlock, SSH and SFTP to OpenSSH; both themes with a developer build; `scripts\verify-linux-desktop.ps1`). If something does not work on yours, please [open an issue](https://github.com/proxyboy228/shellpp/issues).
 
 **Android:** the app is in progress, with versions of its own and no release yet ([docs/mobile/](docs/mobile/README.md)).
 

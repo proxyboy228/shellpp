@@ -381,7 +381,11 @@ preparation were answered in D225):
   log; add one after a look at what GPUI and wgpu write (security 9.1).
 - **Records of a later version are not shown** (D226): the core keeps them
   (`Index::unsupported`), but the interface does not say "requires a newer
-  version" as storage-format 5.6 asks.
+  version" as storage-format 5.6 asks. One sync path still re-seals such a
+  record through the payload model, which drops top-level members it does
+  not know: this device's pending copy going over a newer server version
+  (rule 0, `engine::apply_page`); the push after a rotation keeps the bytes
+  since run 17 (`vault::reseal_row`).
 - **The theme choice of Settings** (UI 12.1, item 10) is not built: the app
   follows the system's light or dark mode (`appearance.ui_theme` is not
   read; `--theme` only with developer tools).
