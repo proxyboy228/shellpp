@@ -1854,3 +1854,21 @@ fn a_waiting_signature_marks_its_tab_and_notifies_an_unfocused_window(cx: &mut T
     assert!(cx.delivered_system_notifications().is_empty());
     ui.finish(cx);
 }
+
+/// Run 17 (the Linux check in a container): a quick connect's target already
+/// holds the user, so the password prompt said "sshuser@sshuser@host".
+#[test]
+fn the_password_prompt_names_the_user_once() {
+    use super::prompt::password_target;
+    assert_eq!(password_target("alice", "web 01"), "alice@web 01");
+    assert_eq!(
+        password_target("alice", "alice@192.0.2.7:2222"),
+        "alice@192.0.2.7:2222"
+    );
+    assert_eq!(password_target("", "192.0.2.7"), "192.0.2.7");
+    // Another user's name in the target is not this user's.
+    assert_eq!(
+        password_target("bob", "alice@192.0.2.7"),
+        "bob@alice@192.0.2.7"
+    );
+}

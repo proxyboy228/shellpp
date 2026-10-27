@@ -66,6 +66,16 @@ impl Focusable for PromptForm {
     }
 }
 
+/// Whom a password is for: `username@target`, unless the target already
+/// names that user (a quick connect's `alice@host:22`, run 17).
+pub(super) fn password_target(username: &str, target: &str) -> String {
+    if username.is_empty() || target.starts_with(&format!("{username}@")) {
+        target.to_owned()
+    } else {
+        format!("{username}@{target}")
+    }
+}
+
 impl PromptForm {
     pub fn new(
         prompt: Prompt,
@@ -164,12 +174,7 @@ impl PromptForm {
         match &self.prompt {
             Prompt::Username => Some(self.target.clone()),
             Prompt::Password { username, .. } => {
-                let target = if username.is_empty() {
-                    self.target.to_string()
-                } else {
-                    format!("{username}@{}", self.target)
-                };
-                Some(strings::password_for(&target).into())
+                Some(strings::password_for(&password_target(username, &self.target)).into())
             }
             Prompt::Passphrase { key_label, .. } => Some(strings::passphrase_for(key_label).into()),
             Prompt::KeyboardInteractive { .. } => Some(self.target.clone()),
