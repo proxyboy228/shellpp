@@ -148,6 +148,10 @@ pub struct ServerInfo {
 pub enum Registration {
     Open,
     Invite,
+    /// A mode of a later server: the rest of the answer still reads, and the
+    /// client treats it as needing an invitation (run 17).
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -785,6 +789,19 @@ mod tests {
         .unwrap();
         assert_eq!(unknown.status, ItemStatus::Unknown);
         assert_eq!(unknown.current, None);
+    }
+
+    #[test]
+    fn a_registration_mode_of_a_later_server_still_reads() {
+        // Run 17: a 1.0 client must not fail on the whole server answer
+        // because a later server adds a registration mode.
+        for (text, mode) in [
+            ("\"open\"", Registration::Open),
+            ("\"invite\"", Registration::Invite),
+            ("\"by_approval\"", Registration::Unknown),
+        ] {
+            assert_eq!(serde_json::from_str::<Registration>(text).unwrap(), mode);
+        }
     }
 
     #[test]
