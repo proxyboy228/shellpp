@@ -184,7 +184,7 @@ Vault-scoped endpoints answer `403 not_member` both for unknown vaults and for v
 }
 ```
 
-- `registration`: `open` or `invite` (`SHELLPP_REGISTRATION`). Invite-only is the default; open registration is the operator's choice in the server's configuration. [decision] (D93)
+- `registration`: `open` or `invite` (`SHELLPP_REGISTRATION`). Invite-only is the default; open registration is the operator's choice in the server's configuration. [decision] (D93) A value a client does not know (a mode of a later server) reads as invite-only, never as a broken answer (run 17).
 - `smtp`: `true` when SMTP is configured. Without it, email invitations and email verification are unavailable and the client hides the "verified" mark (D14).
 - `limits`: the effective values of section 10. The names of the `limits` fields are a stage 0 decision.
 - `server_generation`: 16 random bytes created by the first `migrate` and replaced by `shellpp-server admin restored` at the end of every restore from a backup (`server_state`, section 14). A client that sees another value than the one it stored runs the server restore procedure of section 6.9 for every vault (section 6.11). A server without the field (an older one) is not checked. The client stores the value in `server_account.server_generation` when it binds (registration, sign-in, rebind), from the `GET /v1/server` of the connect wizard's first step (UI 13.5). [decision] (D93)

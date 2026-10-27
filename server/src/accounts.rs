@@ -357,7 +357,9 @@ fn register_code(
     now: OffsetDateTime,
 ) -> ApiResult<Option<Vec<u8>>> {
     let mut code_hash = None;
-    if shared.config.registration == Registration::Invite {
+    // Anything but open registration asks for an invitation (a mode this
+    // server does not know included).
+    if shared.config.registration != Registration::Open {
         let closed = || {
             ApiError::new(
                 StatusCode::FORBIDDEN,
