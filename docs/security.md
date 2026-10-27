@@ -772,6 +772,7 @@ Rules (stage 0 decision):
 - tauri-plugin-updater with the project's own signing key; the public key is built into the app, and packages without a valid signature are rejected (D7). (Run 8, D170: the GPUI app downloads nothing; the update manifest `latest.json` counts only with its minisign signature made with the release key built into the app (`release/minisign.pub`), and every release file is signed with it; docs/release.md.)
 - The automatic check is off by default; "Check for updates" in Help is always available; the request is a plain GET of the manifest without identifiers (D7).
 - A custom update source (Settings → Updates) must be `https` and does not change the signature key. (stage 0 decision)
+- A stable build is never offered a pre-release, whatever source it reads; a pre-release build is offered a newer pre-release or the release. A manifest address that answers 404 is reported as "no published release yet", never as an update. (D225, D226)
 - The updater private key is never in the repository; it is held by the owner or as a CI secret. (stage 0 decision)
 
 ### 13.5 Untrusted files
