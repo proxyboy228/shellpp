@@ -6031,7 +6031,9 @@ mod tests {
             base_envelope: None,
         };
         let later = row_of_bytes(blank.clone(), &bytes);
-        // A payload that does not parse: a damaged row is never pushed.
+        // A payload that does not parse, under the old epoch: it is not
+        // re-sealed, so it is not pushed (it stays pending, as a row that
+        // does not open does).
         let damaged_id = Uuid::now_v7();
         let damaged = row_of_bytes(
             RecordRow {
