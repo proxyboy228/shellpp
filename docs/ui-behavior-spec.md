@@ -1961,6 +1961,11 @@ exists and opens its release page in the system browser.
   version, or why it failed).
 - An update found at launch is a toast with "Open Release Page" in every window; a check at
   launch that finds nothing or fails shows nothing.
+- A stable version is never offered a pre-release (a release candidate), whatever the
+  source; a pre-release is offered a newer pre-release or the release. While the source has
+  no published release (the manifest's address answers 404: GitHub's "latest" never points
+  at a pre-release), the check says so: "the update source has no published release yet"
+  (D225, D226).
 
 ---
 
