@@ -22,7 +22,9 @@ section 8):
     longer match the crates that ship in the desktop binary and in the
     Android app's library, or when the Android app's file of their license
     texts is stale (`node scripts/rust-notices.mjs --write` regenerates
-    them); `gradlew androidNotices` (in `apps/android`) does the same for
+    them); it checks the table of the sync server's binary in
+    [`server/THIRD_PARTY_NOTICES.md`](server/THIRD_PARTY_NOTICES.md) the
+    same way; `gradlew androidNotices` (in `apps/android`) does the same for
     the Android libraries and fails on a license that is not permitted.
 - Where a license requires it (for example Apache-2.0 `NOTICE` files or the
   OFL), the full license text ships with the distributed application.

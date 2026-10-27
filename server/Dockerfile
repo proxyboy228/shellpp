@@ -28,6 +28,8 @@ FROM alpine:3.22
 RUN addgroup -S -g 10001 shellpp && adduser -S -D -H -u 10001 -G shellpp shellpp \
     && mkdir /data && chown shellpp:shellpp /data
 COPY --from=build /src/server/target/release/shellpp-server /usr/local/bin/shellpp-server
+# The server's license and the notices of what its binary links (D225, item 14).
+COPY server/LICENSE server/THIRD_PARTY_NOTICES.md /usr/share/doc/shellpp-server/
 USER shellpp
 WORKDIR /data
 ENV SHELLPP_BIND=0.0.0.0:8080

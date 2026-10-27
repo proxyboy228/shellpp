@@ -60,7 +60,8 @@ crates.io для проверки отозванных (yanked) крейтов, 
 
 Список лицензий (`node scripts/rust-notices.mjs`, нужен Node.js; D223):
 таблицы крейтов Rust десктопа и приложения Android в
-`THIRD_PARTY_NOTICES.md` совпадают с `cargo tree`, а файл текстов их
+`THIRD_PARTY_NOTICES.md` и бинарника сервера в
+`server/THIRD_PARTY_NOTICES.md` (D225) совпадают с `cargo tree`, а файл текстов их
 лицензий для APK (`apps/android/app/src/main/assets/notices/rust-licenses.txt`)
 — с пакетами; расхождение — `node scripts/rust-notices.mjs --write` и
 коммит. `node scripts/secret-files.mjs` — нет ли в истории всех ссылок
