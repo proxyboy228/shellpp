@@ -1,5 +1,2 @@
-# The public half of the release signing key (docs/release.md, "The signing
-# key"). The owner replaces this file with the two lines of the key's .pub
-# file ("untrusted comment: minisign public key ..." and the key itself).
-# Until then the release workflow stops and the app's update check reports
-# that this build cannot check updates.
+untrusted comment: minisign public key 0F4A84EE082A7EFE
+RWT+fioI7oRKD+1aztCbrbF7OKfHbX/WR16p60dZGdiy+RLBXvM3eVvm
