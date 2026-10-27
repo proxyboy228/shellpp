@@ -6000,19 +6000,25 @@ mod tests {
         value["future_member"] = json!({"kept": true});
         let bytes = serde_json::to_vec(&value).unwrap();
         let old_epoch = session.ring.current_epoch();
-        let header = envelope::EnvelopeHeader {
-            class: classes::VAULT,
-            tombstone: false,
-            vault_id: *session.ring.vault_id().as_bytes(),
-            record_id: *id.as_bytes(),
-            revision: 1,
-            key_epoch: old_epoch,
+        let vault_id = session.ring.vault_id();
+        // A row of `bytes` under the old epoch, its header from its columns.
+        let mut row_of_bytes = |row: RecordRow, bytes: &[u8]| {
+            let header = envelope::EnvelopeHeader {
+                class: row.class,
+                tombstone: row.tombstone,
+                vault_id: *row.vault_id.as_bytes(),
+                record_id: *row.record_id.as_bytes(),
+                revision: row.revision,
+                key_epoch: old_epoch,
+            };
+            let key = session.ring.record_key(old_epoch).unwrap();
+            RecordRow {
+                envelope: crypto::seal_envelope(key, &header, bytes).unwrap(),
+                ..row
+            }
         };
-        let sealed =
-            crypto::seal_envelope(session.ring.record_key(old_epoch).unwrap(), &header, &bytes)
-                .unwrap();
-        let row = RecordRow {
-            vault_id: session.ring.vault_id(),
+        let blank = RecordRow {
+            vault_id,
             record_id: id,
             class: classes::VAULT,
             revision: 1,
@@ -6021,10 +6027,59 @@ mod tests {
             tombstone: false,
             tombstoned_at: None,
             server_seq: None,
-            envelope: sealed,
+            envelope: Vec::new(),
             base_envelope: None,
         };
-        inner.store.write(|tx| tx.record_put(&row)).unwrap();
+        let later = row_of_bytes(blank.clone(), &bytes);
+        // A payload that does not parse: a damaged row is never pushed.
+        let damaged_id = Uuid::now_v7();
+        let damaged = row_of_bytes(
+            RecordRow {
+                record_id: damaged_id,
+                ..blank.clone()
+            },
+            br#"{"v":1}"#,
+        );
+        // A synced record deleted since: its bookkeeping goes along.
+        let deleted_id = Uuid::now_v7();
+        let synced = Payload::live(
+            "host",
+            1,
+            hlc,
+            session.device_id,
+            json!({"address": "192.0.2.9"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        );
+        let base = row_of_bytes(
+            RecordRow {
+                record_id: deleted_id,
+                class: classes::HOSTS,
+                revision: 2,
+                ..blank.clone()
+            },
+            &synced.to_json_bytes(),
+        )
+        .envelope;
+        let tombstone = Payload::tombstone("host", 1, hlc, session.device_id);
+        let deleted = row_of_bytes(
+            RecordRow {
+                record_id: deleted_id,
+                class: classes::HOSTS,
+                revision: 3,
+                synced_revision: 2,
+                tombstone: true,
+                tombstoned_at: Some("2026-01-01T00:00:00.000Z".into()),
+                server_seq: Some(7),
+                base_envelope: Some(base.clone()),
+                ..blank.clone()
+            },
+            &tombstone.to_json_bytes(),
+        );
+        for row in [&later, &damaged, &deleted] {
+            inner.store.write(|tx| tx.record_put(row)).unwrap();
+        }
         // A rotation: the ring's current epoch moves on.
         session
             .ring
@@ -6054,6 +6109,29 @@ mod tests {
             opened.as_slice(),
             bytes.as_slice(),
             "the same plaintext, the later member included"
+        );
+        assert!(
+            batch.sent.iter().all(|row| row.record_id != damaged_id),
+            "a damaged row is not pushed"
+        );
+        let sent = batch
+            .sent
+            .iter()
+            .find(|row| row.record_id == deleted_id)
+            .expect("the deletion is pushed");
+        assert!(sent.tombstone);
+        assert_eq!(sent.revision, 4);
+        assert_eq!(sent.synced_revision, 2);
+        assert_eq!(sent.server_seq, Some(7));
+        assert_eq!(
+            sent.base_envelope,
+            Some(base),
+            "the synced version stays the base"
+        );
+        assert_eq!(
+            sent.tombstoned_at.as_deref(),
+            Some("2026-01-01T00:00:00.000Z"),
+            "the time of the deletion, not of the re-seal"
         );
     }
 

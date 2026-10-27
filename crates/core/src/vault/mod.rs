@@ -338,13 +338,17 @@ pub fn seal_row(
 /// Re-seals `previous` under the ring's current epoch with exactly the
 /// plaintext it holds, members of a later version included: re-encrypting a
 /// pending row after a rotation never rewrites what it carries
-/// (storage-format 5.6; run 17). `None` when its epoch key is missing or its
-/// envelope does not open.
+/// (storage-format 5.6; run 17). `None` when its epoch key is missing, its
+/// envelope does not open, or it fails a check of section 5.4 (a payload
+/// that does not parse, a header that disagrees with its columns).
 pub fn reseal_row(
     ring: &mut KeyRing,
     previous: &RecordRow,
     now_text: &str,
 ) -> Result<Option<RecordRow>, CoreError> {
+    if let Opened::Damaged(_) = open_row(ring, previous) {
+        return Ok(None);
+    }
     let opened = match ring.record_key(previous.key_epoch) {
         Some(key) => crypto::open_envelope(key, &previous.envelope).ok(),
         None => None,
