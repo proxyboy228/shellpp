@@ -24,7 +24,7 @@ pub const UPDATE_CHECK_NOW: &str = "Check Now";
 // Account & Sync (UI 12.2; D67).
 pub const SYNC_SERVER: &str = "Sync server";
 pub const SYNC_SERVER_HINT: &str =
-    "Shell++ works without an account. A sync server arrives in a later version.";
+    "Shell++ works without an account. Connect a sync server you run yourself to keep this vault in sync across your devices.";
 pub const CONNECT_SYNC: &str = "Connect sync server";
 pub const DATA: &str = "Your data";
 pub const DATA_HINT: &str = "Export everything to a file, or bring a file back.";
