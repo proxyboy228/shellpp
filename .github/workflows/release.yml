@@ -1,10 +1,13 @@
 name: Release
 
 # The release of a version tag (run 8, plan C4; docs/release.md): the
-# portable zip for Windows, the sync server as a Docker image and a static
-# Linux binary, SHA256SUMS of every file, the update manifest latest.json
-# (D97) and a minisign signature of each file, gathered in a DRAFT release.
-# Nothing is published here: the owner checks the draft and publishes it.
+# portable zip for Windows, the Linux package (D225, item 8), the sync server
+# as a Docker image and a static Linux binary, SHA256SUMS of every file, the
+# update manifest latest.json (D97) and a minisign signature of each file,
+# gathered in a DRAFT release whose notes are the version's section of
+# CHANGELOG.md. Nothing is published here: the owner checks the draft and
+# publishes it. scripts/release-dry-run.ps1 builds the same files locally,
+# unsigned.
 #
 # The signing key is the owner's (docs/release.md). Its secret half lives
 # only in the secrets MINISIGN_SECRET_KEY and MINISIGN_PASSWORD of the
@@ -78,6 +81,12 @@ jobs:
             exit 1
           fi
 
+      # The draft's notes: no release without them.
+      - name: CHANGELOG.md has the notes of this version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/release-notes.sh "$VERSION" > /dev/null
+
   windows:
     name: Windows portable zip
     needs: check
@@ -108,6 +117,36 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  linux:
+    name: Linux package
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Built in the pinned Ubuntu 22.04 image (glibc 2.35, D225 item 12), the
+      # same as the local dry run, not on the runner's newer system.
+      - name: Build and package
+        run: |
+          docker build -f tests/linux/package.Dockerfile -t shellpp-package tests/linux
+          mkdir -p dist
+          docker run --rm -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            shellpp-package bash scripts/package-linux.sh /out
+          ls -l dist
+
+      - name: Keep the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux
+          path: dist/*.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
   server:
     name: Server image and Linux binary
     needs: check
@@ -132,9 +171,7 @@ jobs:
           id="$(docker create "shellpp-server:${VERSION}")"
           docker cp "$id:/usr/local/bin/shellpp-server" staging/shellpp-server
           docker rm "$id"
-          cp server/LICENSE server/README.md staging/
-          cp -r server/deploy staging/deploy
-          tar -C staging -czf "dist/shellpp-server-${VERSION}-linux-x64.tar.gz" .
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" bash scripts/package-server.sh staging/shellpp-server "$VERSION" dist
           ls -l dist
 
       - name: Keep the server files
@@ -147,7 +184,7 @@ jobs:
 
   draft:
     name: Signed draft release
-    needs: [check, windows, server]
+    needs: [check, windows, linux, server]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # The signing secrets belong to this environment (docs/release.md): the
@@ -237,16 +274,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The version's section of CHANGELOG.md, then how to check the files.
           {
-            echo "Shell++ ${VERSION}."
+            bash scripts/release-notes.sh "$VERSION"
+            echo
+            echo "### Checking the files"
             echo
             echo "Every file has a minisign signature (\`<file>.minisig\`) made with the key in"
             echo "\`release/minisign.pub\`; \`SHA256SUMS\` lists the SHA-256 of every file."
             echo "Checking a download: docs/release.md, \"Checking a download\"."
             echo
             echo "- \`shellpp-${VERSION}-windows-x64.zip\`: the portable app for Windows (unsigned executable)."
+            echo "- \`shellpp-${VERSION}-linux-x64.tar.gz\`: the app for Linux (x86-64, glibc 2.35 or later)."
             echo "- \`shellpp-server-${VERSION}-docker-image.tar.gz\`: the sync server image (\`docker load\`)."
             echo "- \`shellpp-server-${VERSION}-linux-x64.tar.gz\`: the same server as a static Linux binary, with \`deploy/\`."
+            echo "- \`shellpp.pdb\`: the symbols of \`shellpp.exe\`, for crash reports."
             echo "- \`latest.json\`: the update manifest the app reads (D97)."
           } > "$RUNNER_TEMP/notes.md"
           flags=(--draft --verify-tag --title "Shell++ ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md")
