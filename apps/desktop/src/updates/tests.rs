@@ -504,13 +504,72 @@ fn a_broken_answer_is_not_a_manifest() {
 }
 
 #[test]
-fn no_answer_is_unreachable() {
+fn a_stable_build_is_not_offered_a_pre_release() {
+    // D225, item 11: whatever the source serves, a stable build stays on
+    // stable releases; a pre-release build is offered a newer pre-release
+    // or the release.
+    for (manifest, current) in [
+        (r#"{"version": "1.0.1-rc.1"}"#, "1.0.0"),
+        (r#"{"version": "2.0.0-beta"}"#, "1.0.0"),
+    ] {
+        assert_eq!(
+            compare(manifest.as_bytes(), current),
+            Ok(Outcome::UpToDate),
+            "{manifest} for {current}"
+        );
+    }
+    for (manifest, current) in [
+        (r#"{"version": "1.0.0-rc.2"}"#, "1.0.0-rc.1"),
+        (r#"{"version": "1.0.0"}"#, "1.0.0-rc.1"),
+        (r#"{"version": "1.0.1"}"#, "1.0.0"),
+    ] {
+        assert!(
+            matches!(
+                compare(manifest.as_bytes(), current),
+                Ok(Outcome::Newer { .. })
+            ),
+            "{manifest} for {current}"
+        );
+    }
+    // The same through a signed manifest.
+    let signer = Signer::new();
+    let server = serve_manifest(&signer, r#"{"version": "1.0.1-rc.1"}"#);
+    assert_eq!(
+        check_with(&server.url, "1.0.0", Some(&signer.public())),
+        Ok(Outcome::UpToDate)
+    );
+}
+
+#[test]
+fn a_source_without_a_release_says_so() {
+    // GitHub's "latest" is 404 while the only release is a pre-release.
     let key = Signer::new().public();
     let server = serve("404 Not Found", "{}");
     assert_eq!(
-        check_with(&server.url, "0.1.0", Some(&key)),
-        Err(CheckError::Unreachable)
+        check_with(&server.url, "1.0.0-rc.1", Some(&key)),
+        Err(CheckError::NoRelease)
     );
+    assert_eq!(
+        strings::failed(CheckError::NoRelease),
+        "The update check failed: the update source has no published release yet"
+    );
+}
+
+#[test]
+fn no_answer_is_unreachable() {
+    let key = Signer::new().public();
+    for status in [
+        "500 Internal Server Error",
+        "403 Forbidden",
+        "429 Too Many Requests",
+    ] {
+        let server = serve(status, "{}");
+        assert_eq!(
+            check_with(&server.url, "0.1.0", Some(&key)),
+            Err(CheckError::Unreachable),
+            "{status}"
+        );
+    }
     // A port nothing listens on.
     let closed = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(

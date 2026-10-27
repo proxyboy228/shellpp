@@ -67,6 +67,11 @@ pub enum CheckError {
     /// error status.
     #[error("the update source did not answer")]
     Unreachable,
+    /// The manifest's address answered 404: the source has published no
+    /// release yet (GitHub's "latest" never points at a pre-release, so a
+    /// release candidate meets this until the first release; D225, item 11).
+    #[error("the update source has no published release yet")]
+    NoRelease,
     /// An answer that is not a manifest with a semver `version`.
     #[error("the update source did not send an update manifest")]
     BadManifest,
@@ -224,6 +229,7 @@ fn check_with(
     loop {
         let body = fetch(&agent, url.trim(), MAX_MANIFEST_BYTES).map_err(|error| match error {
             Fetch::TooLarge => CheckError::BadManifest,
+            Fetch::Status(404) => CheckError::NoRelease,
             Fetch::Status(_) | Fetch::Failed => CheckError::Unreachable,
         })?;
         // A missing signature (a client error status) or one too large is
@@ -295,8 +301,9 @@ fn fetch(agent: &ureq::Agent, url: &str, max: u64) -> Result<Vec<u8>, Fetch> {
 }
 
 /// The manifest `body` against `current`: `version` (a leading `v` taken
-/// off) newer by semver is an update; its page is the manifest's `url`
-/// when it is `https://`, else the release tag's page of the repository.
+/// off) newer by semver is an update, except a pre-release for a stable
+/// build (D225, item 11); its page is the manifest's `url` when it is
+/// `https://`, else the release tag's page of the repository.
 pub fn compare(body: &[u8], current: &str) -> Result<Outcome, CheckError> {
     let manifest: Value = serde_json::from_slice(body).map_err(|_| CheckError::BadManifest)?;
     let text = manifest
@@ -309,6 +316,11 @@ pub fn compare(body: &[u8], current: &str) -> Result<Outcome, CheckError> {
     let ours = semver::Version::parse(current).map_err(|_| CheckError::BadManifest)?;
     // Semver precedence: build metadata (`+ci.5`) does not count.
     if latest.cmp_precedence(&ours) != std::cmp::Ordering::Greater {
+        return Ok(Outcome::UpToDate);
+    }
+    // A stable build is never offered a pre-release, whatever source it
+    // reads; a pre-release build may be offered a newer one.
+    if !latest.pre.is_empty() && ours.pre.is_empty() {
         return Ok(Outcome::UpToDate);
     }
     let page = manifest
