@@ -324,6 +324,61 @@ pub fn seal_row(
     previous: Option<&RecordRow>,
     now_text: &str,
 ) -> Result<RecordRow, CoreError> {
+    seal_bytes(
+        ring,
+        class,
+        record_id,
+        payload.deleted,
+        &payload.to_json_bytes(),
+        previous,
+        payload.deleted.then(|| now_text.to_owned()),
+    )
+}
+
+/// Re-seals `previous` under the ring's current epoch with exactly the
+/// plaintext it holds, members of a later version included: re-encrypting a
+/// pending row after a rotation never rewrites what it carries
+/// (storage-format 5.6; run 17). `None` when its epoch key is missing or its
+/// envelope does not open.
+pub fn reseal_row(
+    ring: &mut KeyRing,
+    previous: &RecordRow,
+    now_text: &str,
+) -> Result<Option<RecordRow>, CoreError> {
+    let opened = match ring.record_key(previous.key_epoch) {
+        Some(key) => crypto::open_envelope(key, &previous.envelope).ok(),
+        None => None,
+    };
+    let Some((header, bytes)) = opened else {
+        return Ok(None);
+    };
+    let tombstoned_at = previous
+        .tombstoned_at
+        .clone()
+        .or_else(|| header.tombstone.then(|| now_text.to_owned()));
+    seal_bytes(
+        ring,
+        previous.class,
+        previous.record_id,
+        header.tombstone,
+        &bytes,
+        Some(previous),
+        tombstoned_at,
+    )
+    .map(Some)
+}
+
+/// Seals `bytes` as the next revision after `previous` (or the first one)
+/// under the ring's current epoch.
+fn seal_bytes(
+    ring: &mut KeyRing,
+    class: u8,
+    record_id: Uuid,
+    tombstone: bool,
+    bytes: &[u8],
+    previous: Option<&RecordRow>,
+    tombstoned_at: Option<String>,
+) -> Result<RecordRow, CoreError> {
     let (revision, synced_revision, server_seq, base_envelope) = match previous {
         None => (1, 0, None, None),
         Some(previous) => {
@@ -351,18 +406,17 @@ pub fn seal_row(
     let vault_id = ring.vault_id();
     let header = EnvelopeHeader {
         class,
-        tombstone: payload.deleted,
+        tombstone,
         vault_id: *vault_id.as_bytes(),
         record_id: *record_id.as_bytes(),
         revision,
         key_epoch: epoch,
     };
-    let bytes = payload.to_json_bytes();
     let record_key = ring
         .record_key(epoch)
         .ok_or(CoreError::Internal("current epoch key missing"))?;
     let envelope =
-        crypto::seal_envelope(record_key, &header, &bytes).map_err(|error| match error {
+        crypto::seal_envelope(record_key, &header, bytes).map_err(|error| match error {
             CryptoError::TooLarge => CoreError::TooLarge,
             other => CoreError::Crypto(other),
         })?;
@@ -373,8 +427,8 @@ pub fn seal_row(
         revision,
         synced_revision,
         key_epoch: epoch,
-        tombstone: payload.deleted,
-        tombstoned_at: payload.deleted.then(|| now_text.to_owned()),
+        tombstone,
+        tombstoned_at,
         server_seq,
         envelope,
         base_envelope,

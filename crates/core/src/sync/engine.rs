@@ -998,17 +998,11 @@ pub fn build_push(
             continue;
         }
         let row = if row.key_epoch < current {
-            let Some(payload) = payload else {
+            // The same plaintext under the current epoch: a record of a
+            // later version keeps every member it carries (run 17).
+            let Some(resealed) = vault::reseal_row(&mut session.ring, &row, &now_text)? else {
                 continue;
             };
-            let resealed = vault::seal_row(
-                &mut session.ring,
-                row.class,
-                row.record_id,
-                &payload,
-                Some(&row),
-                &now_text,
-            )?;
             local_only.put(resealed.clone());
             resealed
         } else {

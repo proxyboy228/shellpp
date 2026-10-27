@@ -946,7 +946,8 @@ impl Core {
                 }
                 Ok(ServerCheck::Ready {
                     origin,
-                    invite_only: matches!(info.registration, wire::Registration::Invite),
+                    // A mode of a later server counts as needing an invitation.
+                    invite_only: !matches!(info.registration, wire::Registration::Open),
                     version: info.version,
                     server_generation: info.server_generation.map(wire::B64::into_inner),
                 })
@@ -5971,9 +5972,89 @@ mod tests {
         }
         for (id, before) in &ids {
             let after = row_of(&core, *id).unwrap();
-            assert_eq!(after.revision, before.revision, "not rewritten");
-            assert_eq!(after.envelope, before.envelope, "kept byte for byte");
+            assert_eq!(&after, before, "kept byte for byte, every column");
         }
+    }
+
+    /// A pending record of a later version (an unknown type with a member
+    /// this app does not know at the top of its payload) that a rotation
+    /// left under an older epoch is re-sealed for the push with exactly the
+    /// plaintext it had (run 17, review of the stage 8 notes).
+    #[test]
+    fn a_pending_record_of_a_later_version_is_resealed_byte_for_byte() {
+        let (_dir, core) = unlocked_core();
+        let id = Uuid::now_v7();
+        let now = core.now();
+        let mut guard = core.inner();
+        let inner = &mut *guard;
+        let session = inner.session.as_mut().unwrap();
+        let hlc = session.hlc.tick(unix_ms(SystemTime::now()));
+        let payload = Payload::live(
+            "archive_key",
+            1,
+            hlc,
+            session.device_id,
+            json!({"name": "later"}).as_object().cloned().unwrap(),
+        );
+        let mut value: Value = serde_json::from_slice(&payload.to_json_bytes()).unwrap();
+        value["future_member"] = json!({"kept": true});
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let old_epoch = session.ring.current_epoch();
+        let header = envelope::EnvelopeHeader {
+            class: classes::VAULT,
+            tombstone: false,
+            vault_id: *session.ring.vault_id().as_bytes(),
+            record_id: *id.as_bytes(),
+            revision: 1,
+            key_epoch: old_epoch,
+        };
+        let sealed =
+            crypto::seal_envelope(session.ring.record_key(old_epoch).unwrap(), &header, &bytes)
+                .unwrap();
+        let row = RecordRow {
+            vault_id: session.ring.vault_id(),
+            record_id: id,
+            class: classes::VAULT,
+            revision: 1,
+            synced_revision: 0,
+            key_epoch: old_epoch,
+            tombstone: false,
+            tombstoned_at: None,
+            server_seq: None,
+            envelope: sealed,
+            base_envelope: None,
+        };
+        inner.store.write(|tx| tx.record_put(&row)).unwrap();
+        // A rotation: the ring's current epoch moves on.
+        session
+            .ring
+            .push_epoch(old_epoch + 1, Key32::generate().unwrap());
+
+        let batch = engine::build_push(
+            &mut inner.store,
+            session,
+            &Selection::all(),
+            &HashSet::new(),
+            now,
+        )
+        .unwrap();
+        let sent = batch
+            .sent
+            .iter()
+            .find(|row| row.record_id == id)
+            .expect("pushed");
+        assert_eq!(sent.key_epoch, old_epoch + 1, "under the current epoch");
+        assert_eq!(sent.revision, 2);
+        let (_, opened) = crypto::open_envelope(
+            session.ring.record_key(old_epoch + 1).unwrap(),
+            &sent.envelope,
+        )
+        .unwrap();
+        assert_eq!(
+            opened.as_slice(),
+            bytes.as_slice(),
+            "the same plaintext, the later member included"
+        );
     }
 
     /// A record of a type this app does not write (a newer client's
