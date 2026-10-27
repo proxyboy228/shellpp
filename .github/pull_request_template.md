@@ -39,7 +39,7 @@ When a spec changes, update the matching document under docs/ru/ as well, or sta
 
 ## How tested
 
-<!-- Describe the tests you ran (unit, integration, manual) and on which operating systems. -->
+<!-- Describe the tests you ran (unit, integration, manual) and on which operating systems. The full local check is scripts\verify.ps1 (CONTRIBUTING.md, "Tests"). -->
 
 ## Checklist
 
@@ -48,6 +48,6 @@ When a spec changes, update the matching document under docs/ru/ as well, or sta
 - [ ] No secrets, real keys, passwords or `.env` files are included. Tests generate keys on the fly.
 - [ ] The gitleaks pre-commit hook passed.
 - [ ] Clean room: no code, screenshots, assets or texts from proprietary clients. Behavior is derived from the specs only.
-- [ ] New dependencies, if any, are permissively licensed (MIT, Apache-2.0, BSD, ISC, MPL-2.0; OFL for fonts) and are added to `THIRD_PARTY_NOTICES.md`.
+- [ ] New dependencies, if any, are permissively licensed (MIT, Apache-2.0, BSD, ISC, MPL-2.0; OFL for fonts) and are added to `THIRD_PARTY_NOTICES.md` (the Rust crate tables, also the server's in `server/THIRD_PARTY_NOTICES.md`: `node scripts/rust-notices.mjs --write`).
 - [ ] Documentation is updated.
 - [ ] No telemetry, phone-home, license checks or remote feature disabling is introduced.

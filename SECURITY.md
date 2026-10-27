@@ -4,12 +4,10 @@ Shell++ stores SSH credentials, private keys and host data, and can optionally s
 
 ## Reporting a vulnerability
 
-Report vulnerabilities privately through GitHub private vulnerability reporting:
+Report vulnerabilities privately, in either of two ways:
 
-1. Open the repository's **Security** tab.
-2. Go to **Advisories** and select **Report a vulnerability**.
-
-Direct link: [https://github.com/proxyboy228/shellpp/security/advisories/new](https://github.com/proxyboy228/shellpp/security/advisories/new)
+- **GitHub private vulnerability reporting** (preferred): open the repository's **Security** tab, go to **Advisories** and select **Report a vulnerability**. Direct link: [https://github.com/proxyboy228/shellpp/security/advisories/new](https://github.com/proxyboy228/shellpp/security/advisories/new)
+- **Email:** [iinfocertx@gmail.com](mailto:iinfocertx@gmail.com), the project's contact address. Mention "Shell++ security" in the subject.
 
 Do **not** open public issues, pull requests or discussions for vulnerabilities, and do not share details publicly until a fix or advisory has been published.
 
@@ -36,14 +34,34 @@ Shell++ is maintained by volunteers, so all of the above is best effort. There i
 
 ## Supported versions
 
-The project is in early development and has no releases yet. Only the latest commit on the `main` branch is supported.
+Security fixes go to the latest release of the supported line. The desktop app and the sync server have the same version and are supported together.
 
-| Version                 | Supported |
-| ----------------------- | --------- |
-| Latest commit on `main` | Yes       |
-| Older commits           | No        |
+| Version | Supported |
+| ------- | --------- |
+| 1.0.0-rc.1 (release candidate) | Yes, until 1.0.0 is published |
+| 1.0.x, after 1.0.0 | The latest 1.0.x |
+| Older versions and pre-releases | No |
+| The latest commit on `main` | Yes (development) |
 
-This section will be updated once releases are published.
+The Android app has versions of its own and no release yet; report issues with it the same way.
+
+## Threat model in brief
+
+The full threat model is [docs/security.md](docs/security.md). In short:
+
+- **What is protected:** everything in the app's data directory (hosts, keys, passwords, history, recordings) is encrypted at rest with keys that only your master password or recovery key opens (XChaCha20-Poly1305, Argon2id); while "Remember on this device" is on, the device key also sits in the OS keychain.
+- **Sync is zero-knowledge:** the server stores encrypted records and the metadata it needs to sync (who, how many, when, padded sizes); keys and plaintext never leave your devices. A server that is compromised can withhold, roll back or replay records, but cannot read them; records are not signed yet.
+- **SSH:** a changed host key is never accepted silently; the first connection to a host is trust on first use, unless its key comes from an imported `known_hosts`.
+- **Updates:** the app only accepts an update manifest signed with the release key built into it, and it never downloads or installs anything.
+- **Out of scope:** malware running as your user while the app is unlocked, a compromised operating system, and hiding metadata from the sync server.
+
+Known limitations that matter for security (section 17 of [docs/security.md](docs/security.md) has all of them):
+
+- The Windows executable is not code-signed: check a download against `SHA256SUMS` and its minisign signature ([docs/release.md](docs/release.md#checking-a-download)).
+- With "Remember on this device" (on by default), programs running as your user can read the device key on Windows and Linux, and the app opens without the password.
+- Anyone with a copy of the database or of the server's data can try to guess the master password offline; a short password is cheaper to guess.
+- Some secrets can remain in memory longer than needed (terminal scrollback, copies inside libraries), and swap or crash dumps may hold them.
+- Forwarded ports and the SOCKS proxy listen on 127.0.0.1, where every local program can reach them.
 
 ## Scope
 

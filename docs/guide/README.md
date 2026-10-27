@@ -35,8 +35,24 @@ devices runs through a server you host yourself, if you want it at all.
 
 ## Getting Shell++
 
-Shell++ is in early development. There are no published releases yet; a
-release, once published, has a portable zip for Windows: unpack it and run
-`shellpp.exe`, nothing is installed. Until then, build it from source as
-the [README](../../README.md#running) describes. How releases are made and
-how to check a download: [docs/release.md](../release.md).
+Shell++ 1.0 is for Windows and Linux; the releases are on the project's
+[Releases](https://github.com/proxyboy228/shellpp/releases) page, each with
+`SHA256SUMS` and a minisign signature of every file
+([docs/release.md](../release.md#checking-a-download) shows how to check a
+download).
+
+- **Windows:** `shellpp-<version>-windows-x64.zip` is a portable app: unpack
+  it and run `shellpp.exe`, nothing is installed. The executable is not
+  code-signed, so SmartScreen may warn the first time: **More info**, then
+  **Run anyway**.
+- **Linux:** `shellpp-<version>-linux-x64.tar.gz` holds the program, a menu
+  entry and its icon; the [README](../../README.md#linux) lists what it needs
+  (glibc 2.35 or later, a Vulkan driver, a Secret Service provider for
+  "Remember on this device") and the three commands that install it for your
+  user. Linux is checked in containers, not yet on a real desktop.
+- **Updates:** Help > **Check for Updates** tells you about a new release and
+  opens its page; it never downloads or installs anything. A release
+  candidate (`1.0.0-rc.1`) sees no update until 1.0.0 is published.
+
+You can also build it from source, as the
+[README](../../README.md#building-from-source) describes.

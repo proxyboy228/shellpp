@@ -133,7 +133,11 @@ be shipped in the client. See `docs/decisions.md` (decision 4) for the
 background and for crate-specific rules, for example the `fips` feature ban.
 
 Add the dependency to `THIRD_PARTY_NOTICES.md` in the same pull request that
-introduces it, including its name, version, license and source URL.
+introduces it, including its name, version, license and source URL. The
+tables of Rust crates are generated: `node scripts/rust-notices.mjs --write`
+rewrites those of the desktop and the Android app in `THIRD_PARTY_NOTICES.md`
+and that of the sync server in `server/THIRD_PARTY_NOTICES.md`, and the
+checks fail while they are stale.
 Dependencies under any other license, or with an unclear license, need
 explicit approval from a maintainer in an issue before you submit the pull
 request.
@@ -145,7 +149,8 @@ request.
    for example `fix/sftp-resume` or `feat/known-hosts-export`.
 3. Make small, focused changes. One pull request should address one issue or
    one logical change. Split large work into a series of pull requests.
-4. Run the tests, linters and formatters locally before you push.
+4. Run the tests, linters and formatters locally before you push (see
+   [Tests](#tests) for the full local check).
 5. Open a pull request against the default branch and link the related issue.
 6. Keep CI green. A pull request with failing checks will not be merged.
 7. Address review comments by pushing new commits to the same branch.
@@ -161,7 +166,7 @@ Write code, comments, commit messages and documentation in English.
   it automatically.
 - The desktop app is the crate `shellpp-desktop` in `apps/desktop`, built on
   GPUI Kit. Run it with `cargo run -p shellpp-desktop`. The README section
-  [Running](README.md#running) shows how to start it with demo data in a
+  [Building from source](README.md#building-from-source) shows how to start it with demo data in a
   temporary folder and where the permanent profile lives.
 
 ## Unsafe code
@@ -220,8 +225,18 @@ Tests and the screenshot script must never use the permanent profile. They
 work in temporary data directories passed through `SHELLPP_DATA_DIR`, which
 are deleted afterwards.
 
-CI runs rustfmt, clippy, the license checks, all tests and builds for
-Windows, macOS and Linux, plus the secret scan.
+The full local check is `scripts\verify.ps1` (Windows PowerShell 5.1, with
+Docker, Node.js and cargo-deny 0.20.2): the secret scan of the whole history,
+`cargo deny` for both workspaces, the license tables, rustfmt, clippy, every
+test of the client and of the server (on SQLite and on PostgreSQL in Docker),
+and the check that the crates shared with the Android app still build for
+Android. Every commit of `main` passes it; `-Deploy` adds the tests of the
+server's Docker deployment. `scripts\verify-linux.ps1` repeats the client's
+build and tests on Linux in Docker.
+
+CI (GitHub Actions) runs the same checks on Windows and Linux, plus the
+secret scan; its macOS job is informational, since macOS is not supported in
+1.0.
 
 ## Commit messages
 
