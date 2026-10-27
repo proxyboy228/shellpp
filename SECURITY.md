@@ -49,7 +49,7 @@ The Android app has versions of its own and no release yet; report issues with i
 
 The full threat model is [docs/security.md](docs/security.md). In short:
 
-- **What is protected:** everything in the app's data directory (hosts, keys, passwords, history, recordings) is encrypted at rest with keys that only your master password or recovery key opens (XChaCha20-Poly1305, Argon2id); while "Remember on this device" is on, the device key also sits in the OS keychain.
+- **What is protected:** everything you store (hosts, keys, passwords, history, recordings) is encrypted at rest with keys that only your master password or recovery key opens (XChaCha20-Poly1305, Argon2id); while "Remember on this device" is on, the device key also sits in the OS keychain. The data directory also holds some plaintext: metadata and settings, the server trust choices, logs without secrets, and files opened from SFTP while they are open (section 9.3 of [docs/security.md](docs/security.md)).
 - **Sync is zero-knowledge:** the server stores encrypted records and the metadata it needs to sync (who, how many, when, padded sizes); keys and plaintext never leave your devices. A server that is compromised can withhold, roll back or replay records, but cannot read them; records are not signed yet.
 - **SSH:** a changed host key is never accepted silently; the first connection to a host is trust on first use, unless its key comes from an imported `known_hosts`.
 - **Updates:** the app only accepts an update manifest signed with the release key built into it, and it never downloads or installs anything.
@@ -58,17 +58,19 @@ The full threat model is [docs/security.md](docs/security.md). In short:
 Known limitations that matter for security (section 17 of [docs/security.md](docs/security.md) has all of them):
 
 - The Windows executable is not code-signed: check a download against `SHA256SUMS` and its minisign signature ([docs/release.md](docs/release.md#checking-a-download)).
-- With "Remember on this device" (on by default), programs running as your user can read the device key on Windows and Linux, and the app opens without the password.
+- With "Remember on this device" (on by default), programs running as your user can read the device key on Windows and Linux, and the app opens without the password; with a roaming Windows profile the key also roams to your other machines.
+- Auto-lock is off ("Never") by default; turn it on in Settings > Security.
 - Anyone with a copy of the database or of the server's data can try to guess the master password offline; a short password is cheaper to guess.
 - Some secrets can remain in memory longer than needed (terminal scrollback, copies inside libraries), and swap or crash dumps may hold them.
-- Forwarded ports and the SOCKS proxy listen on 127.0.0.1, where every local program can reach them.
+- Forwarded ports and the SOCKS proxy listen on 127.0.0.1 by default, where every local program can reach them.
+- A sync server reached through Cloudflare Tunnel lets Cloudflare see every request, so it could sign in as you (records stay end-to-end encrypted; TOTP still guards sign-in when it is on).
 
 ## Scope
 
 In scope:
 
 - **Client:** encryption of local storage (data at rest, key derivation, OS keychain integration), SSH and SFTP handling, host key verification and `known_hosts` handling, port forwarding defaults (for example, binding to non-loopback interfaces), import and export (including encrypted JSON export), and handling of untrusted data from servers (terminal escape sequences, remote file names and paths).
-- **Sync server and sync client:** authentication, access control for shared vaults, access revocation, and the zero-knowledge guarantee that the server only ever sees encrypted blobs and sync metadata.
+- **Sync server and sync client:** authentication, access control for shared vaults (after 1.0), access revocation, and the zero-knowledge guarantee that the server only ever sees encrypted blobs and sync metadata.
 - **Design documents:** design-level issues in the cryptographic and sync design described in `SPEC.md` and `docs/` are welcome, even where no code exists yet.
 - **Core principles with security impact:** any way for a server or third party to disable features remotely, wipe or lock data already stored locally, or collect data through telemetry or phone-home behavior.
 

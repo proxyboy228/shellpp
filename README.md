@@ -40,7 +40,9 @@ Not in 1.0:
 - Mosh (after the first version of the Android app);
 - the archive of a previous account: signing in on a device whose vault belongs to another account is refused, and the app says what to do instead;
 - FIDO2 security keys on Linux (see Known limitations);
-- changing the account's email, and publishing the SSH ID again.
+- changing the account's email, and publishing the SSH ID again;
+- SSH host certificates: `@cert-authority` lines of `known_hosts` are skipped;
+- a theme choice in Settings: the interface follows the system's light or dark mode.
 
 **Linux** builds and passes every test in containers; it has not yet run on a real desktop. If something does not work on yours, please [open an issue](https://github.com/proxyboy228/shellpp/issues).
 
@@ -63,9 +65,9 @@ There is no installer: the portable zip is the only package (`docs/decisions.md`
 - `%LOCALAPPDATA%\shellpp\`: the encrypted database `shellpp.db`, session recordings in `recordings\`, database backups before upgrades in `backups\`;
 - `%LOCALAPPDATA%\shellpp\logs\`: diagnostic logs (no secrets, addresses, user names or terminal text);
 - `%LOCALAPPDATA%\shellpp\tmp\`: files opened from SFTP while they are open;
-- the Windows Credential Manager: the device key, only while "Remember on this device" is on.
+- the Windows Credential Manager: the device key, only while "Remember on this device" is on, and the API keys of script generation, if you saved any (entries named `shellpp`).
 
-To keep everything next to the program (a portable setup), start it with `SHELLPP_DATA_DIR` set to a folder, as `README-portable.txt` in the zip shows. Uninstalling is deleting the program's folder and, for the default location, `%LOCALAPPDATA%\shellpp\`.
+To keep everything next to the program (a portable setup), start it with `SHELLPP_DATA_DIR` set to a folder, as `README-portable.txt` in the zip shows. Uninstalling is turning "Remember on this device" off (or deleting the `shellpp` entries in the Credential Manager), then deleting the program's folder and, for the default location, `%LOCALAPPDATA%\shellpp\`.
 
 ### Linux
 
@@ -87,7 +89,7 @@ install -Dm644 shellpp.desktop ~/.local/share/applications/shellpp.desktop
 install -Dm644 shellpp.png ~/.local/share/icons/hicolor/128x128/apps/shellpp.png
 ```
 
-`~/.local/bin` has to be on your `PATH` for the menu entry to start it. The data lives in `${XDG_DATA_HOME:-~/.local/share}/shellpp/`, the logs in `${XDG_STATE_HOME:-~/.local/state}/shellpp/logs/`, temporary SFTP files in `${XDG_CACHE_HOME:-~/.cache}/shellpp/tmp/`. To uninstall, delete the three installed files and those folders.
+`~/.local/bin` has to be on your `PATH` for the menu entry to start it. The data lives in `${XDG_DATA_HOME:-~/.local/share}/shellpp/`, the logs in `${XDG_STATE_HOME:-~/.local/state}/shellpp/logs/`, temporary SFTP files in `${XDG_CACHE_HOME:-~/.cache}/shellpp/tmp/`. The device key ("Remember on this device") and saved API keys sit in the Secret Service under the service `shellpp`. To uninstall, turn "Remember on this device" off (or delete those entries), then delete the three installed files and those folders.
 
 ### The sync server
 
@@ -138,7 +140,7 @@ The Windows package is built by `scripts\package-windows.ps1`; how releases are 
 - **Linux:** checked in containers, not yet on a real desktop. FIDO2 security keys do not sign on Linux in 1.0: the release is built without the USB HID support that nobody could check with a real key yet (D173). Without a Secret Service provider there is no "Remember on this device" (D5).
 - **Terminal:** an emoji with the emoji presentation selector (VS16) takes two cells, so a program that counts it as one can put the cursor one column off; the cells after an emoji sequence stay blank (D92, D206). More in [docs/compatibility.md](docs/compatibility.md).
 - **SFTP:** a file or folder name on the server that is not valid UTF-8 is shown with the replacement character `�` (U+FFFD) and cannot be opened, renamed or downloaded; a folder transfer leaves it out and lists it at the end. The SFTP library decodes names that way (D45, D50).
-- **Port forwarding rules and scripts on many hosts** connect without a tab: until their dialogs exist, they reach only hosts whose key is already in Known Hosts and log in with saved credentials, the agent or key files only (D61).
+- **Port forwarding rules, scripts on many hosts and "Export to host"** connect without a tab: until their dialogs exist, they reach only hosts whose key is already in Known Hosts and log in with saved credentials, the agent or key files only (D61).
 - **Dates** are shown in the ISO format (`2026-10-21 18:04`) in the local time zone; the system's date format is not used (D210).
 - **Sync:** one personal vault per account; team vaults come after 1.0. The known limits of the server (sign-in limits counted in memory, the size of a push answer) are in [docs/ROADMAP.md](docs/ROADMAP.md), section 2.2, and [docs/security.md](docs/security.md), section 17.
 

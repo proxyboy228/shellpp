@@ -41,8 +41,9 @@ with a sync server and two devices.
   password or recovery key opens (Argon2id, XChaCha20-Poly1305);
   auto-lock; "Remember on this device" keeps the device key in the OS
   keychain; secrets never reach the logs.
-- **Settings:** themes (light, dark, system), interface scale, terminal
-  themes and fonts, shortcuts that can be changed.
+- **Settings:** the interface follows the system's light or dark mode;
+  interface scale, terminal themes and fonts, shortcuts that can be
+  changed.
 - **Updates:** Help > Check for Updates shows a new release only when its
   manifest is signed with the release key built into the app, and opens its
   page; nothing is downloaded or installed. A release candidate is never
@@ -70,22 +71,12 @@ with a sync server and two devices.
   Let's Encrypt, Cloudflare Tunnel, or only over a VPN
   (`server/README.md`).
 
-### Packages
-
-- `shellpp-1.0.0-rc.1-windows-x64.zip`: the portable app for Windows (not
-  code-signed).
-- `shellpp-1.0.0-rc.1-linux-x64.tar.gz`: the app for Linux (x86-64, glibc
-  2.35 or later) with a menu entry and its icon.
-- `shellpp-server-1.0.0-rc.1-docker-image.tar.gz` and
-  `shellpp-server-1.0.0-rc.1-linux-x64.tar.gz`: the sync server.
-- `SHA256SUMS` and a minisign signature of every file; `latest.json`, the
-  signed update manifest.
-
 ### Known limitations
 
 - No macOS build, no team vaults, no Mosh; the archive of a previous
-  account, changing the account's email and publishing the SSH ID again
-  come later.
+  account, changing the account's email, publishing the SSH ID again and
+  SSH host certificates (`@cert-authority`) come later.
+- No theme choice in Settings yet: the interface follows the system.
 - Linux is checked in containers, not yet on a real desktop; FIDO2 security
   keys do not sign on Linux in this release.
 - The rest is in the README, "Known limitations", and in

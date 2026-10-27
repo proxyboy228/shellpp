@@ -226,17 +226,22 @@ work in temporary data directories passed through `SHELLPP_DATA_DIR`, which
 are deleted afterwards.
 
 The full local check is `scripts\verify.ps1` (Windows PowerShell 5.1, with
-Docker, Node.js and cargo-deny 0.20.2): the secret scan of the whole history,
-`cargo deny` for both workspaces, the license tables, rustfmt, clippy, every
-test of the client and of the server (on SQLite and on PostgreSQL in Docker),
-and the check that the crates shared with the Android app still build for
-Android. Every commit of `main` passes it; `-Deploy` adds the tests of the
-server's Docker deployment. `scripts\verify-linux.ps1` repeats the client's
-build and tests on Linux in Docker.
+Docker, Node.js and cargo-deny 0.20.2; for its Android step also an Android
+NDK and `rustup target add aarch64-linux-android`, without the NDK the step
+is skipped and says so): the secret scan of the whole history, `cargo deny`
+for both workspaces, the license tables, rustfmt, clippy, the workspace
+tests of the client against the built-in russh test server, the tests of the
+server (on SQLite and on PostgreSQL in Docker), and the check that the crates
+shared with the Android app still build for Android. Every commit of `main`
+passes it; `-Deploy` adds the tests of the server's Docker deployment. The
+suites against OpenSSH and PuTTYgen in Docker run separately (the commands
+are in `tests/openssh/README.md`), and `scripts\verify-linux.ps1` repeats the
+client's build and tests on Linux in Docker.
 
-CI (GitHub Actions) runs the same checks on Windows and Linux, plus the
-secret scan; its macOS job is informational, since macOS is not supported in
-1.0.
+CI (GitHub Actions) runs the same checks on Windows and Linux (the secret
+scan in its own workflow, the server's tests only when the server or the
+crates it uses change) and adds the suites against OpenSSH in Docker; its
+macOS job is informational, since macOS is not supported in 1.0.
 
 ## Commit messages
 
