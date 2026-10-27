@@ -128,7 +128,7 @@ try {
     $serverToml = Get-Content -LiteralPath (Join-Path $src 'server\Cargo.toml') -Raw
     $appVersion = if ($cargoToml -match '(?ms)^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"') { $Matches[1] } else { $null }
     $serverVersion = if ($serverToml -match '(?ms)^\[package\][^\[]*?^version\s*=\s*"([^"]+)"') { $Matches[1] } else { $null }
-    if (-not $appVersion -or $appVersion -ne $serverVersion) { Fail "the app is $appVersion and the server is $serverVersion: a tag cannot match both" }
+    if (-not $appVersion -or $appVersion -ne $serverVersion) { Fail "the app is $appVersion and the server is ${serverVersion}: a tag cannot match both" }
     $version = $appVersion
     Write-Host "release-dry-run: version $version (tag v$version)"
     $keyLines = @(Get-Content -LiteralPath (Join-Path $src 'release\minisign.pub'))
