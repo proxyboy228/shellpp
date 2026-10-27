@@ -323,7 +323,10 @@ fn detects_shells_with_a_default() {
         );
     }
     if cfg!(windows) {
-        assert_eq!(default, "powershell");
+        // PowerShell 7 when it is installed (GitHub's Windows runners have
+        // it), else Windows PowerShell.
+        let pwsh = shells.iter().any(|shell| shell.id == "pwsh");
+        assert_eq!(default, if pwsh { "pwsh" } else { "powershell" });
         let known = ["powershell", "pwsh", "cmd", "git-bash"];
         for shell in &shells {
             assert!(
