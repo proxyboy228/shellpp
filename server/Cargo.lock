@@ -2470,7 +2470,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-core"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "aes",
  "argon2",
@@ -2517,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-private-file"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-server"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "argon2",
  "axum",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-sync-api"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "data-encoding",
  "serde",

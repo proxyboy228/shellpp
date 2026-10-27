@@ -17,7 +17,7 @@ members = [
 exclude = ["server", "third_party"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 # The minimum for gpui-pre 0.3.9 (via gpui-kit). The toolchain itself is
 # pinned in rust-toolchain.toml; MSRV-aware resolution (resolver 3) keeps
