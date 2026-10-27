@@ -43,8 +43,9 @@ the Windows zip and its symbols, the Linux package in the workflow's image,
 the server image and its archive, `latest.json`, `SHA256SUMS` and the
 CHANGELOG part of the draft's notes (`notes.md`; the workflow adds the list
 of files). It checks what the workflow checks (the versions, the public
-key, the notes) and that each archive holds exactly the files of the table
-above, which must name every file. It needs Docker and the network; the
+key, the notes), that the table above has a row for every file, and that
+each archive holds exactly the files the script lists for it (lists written
+after the table, kept in step with it by hand). It needs Docker and the network; the
 files land in `target\release-dry-run\dist`. Unlike the workflow it keeps
 its build folders between runs (`-Fresh` empties them).
 

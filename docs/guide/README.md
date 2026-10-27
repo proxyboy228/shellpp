@@ -47,7 +47,8 @@ download).
   **Run anyway**.
 - **Linux:** `shellpp-<version>-linux-x64.tar.gz` holds the program, a menu
   entry and its icon; the [README](../../README.md#linux) lists what it needs
-  (glibc 2.35 or later, a Vulkan driver, a Secret Service provider for
+  (glibc 2.35 or later, a Vulkan driver or OpenGL through EGL, a Secret
+  Service provider for
   "Remember on this device") and the three commands that install it for your
   user. Linux is checked in containers, not yet on a real desktop.
 - **Updates:** Help > **Check for Updates** tells you about a new release and

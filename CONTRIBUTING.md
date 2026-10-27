@@ -3,7 +3,8 @@
 Thank you for your interest in Shell++, an open-source,
 cross-platform, self-hosted, local-first SSH client.
 
-The project is in early development. Build and test instructions are in
+The project is at its first release candidate, 1.0.0-rc.1 (see the
+[README](README.md#status)). Build and test instructions are in
 [Toolchain and build](#toolchain-and-build) and [Tests](#tests).
 
 ## Table of contents

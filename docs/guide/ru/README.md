@@ -48,7 +48,8 @@ Shell++ 1.0 — для Windows и Linux; релизы лежат на стран
   случае**.
 - **Linux:** в `shellpp-<version>-linux-x64.tar.gz` — программа, пункт меню
   и его значок; [README](../../../README.ru.md#linux) перечисляет, что нужно
-  (glibc 2.35 или новее, драйвер Vulkan, поставщик Secret Service для
+  (glibc 2.35 или новее, драйвер Vulkan или OpenGL через EGL, поставщик
+  Secret Service для
   «Remember on this device»), и три команды установки для своего
   пользователя. Linux проверен в контейнерах, на настоящем рабочем столе —
   ещё нет.
