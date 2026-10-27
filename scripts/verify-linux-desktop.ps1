@@ -6,25 +6,27 @@
 
 .DESCRIPTION
   Two layers, each in tests/linux/desktop.Dockerfile (Ubuntu 22.04 with only
-  the run-time libraries README lists, Xvfb, Mesa's OpenGL through EGL
-  (llvmpipe), a D-Bus session and GNOME Keyring as the Secret Service,
-  OpenSSH as the test server):
+  the run-time libraries README lists, Xvfb, Mesa's software renderers, a
+  D-Bus session and GNOME Keyring as the Secret Service, OpenSSH as the test
+  server), both driven by tests/linux/desktop-check.sh:
 
-  1. The package (tests/linux/desktop-check.sh): the tar.gz of
-     scripts/package-linux.sh, -Package or built here in the package image
-     (tests/linux/package.Dockerfile); desktop-file-validate and ldd of its
-     files; the executable started and driven with xdotool: first run, the
-     device key in the Secret Service, lock and unlock, a restart that opens
-     with the device key, a quick connect to OpenSSH and a command, the
-     SFTP panel listing the server's folder; then without a Secret Service
-     and without D-Bus.
-  2. Both themes (tests/linux/screens-check.sh): the build with developer
-     tools, made in the package image, on demo data with --theme light and
-     --theme dark (the released app follows the system's theme, which a
-     container cannot set).
+  1. The package: the tar.gz of scripts/package-linux.sh, -Package or built
+     here in the package image (tests/linux/package.Dockerfile);
+     desktop-file-validate and ldd of its files; the executable started on
+     Mesa's software Vulkan driver (lavapipe), where the window appears and
+     what it shows is recorded (under Xvfb GPUI's frames on lavapipe never
+     reach the screen, run 17); then on Mesa's OpenGL (llvmpipe) and driven
+     with xdotool: first run, the device key in the Secret Service, lock and
+     unlock, a restart that opens with the device key, a quick connect to
+     OpenSSH and a command, the SFTP panel listing the server's folder; then
+     without a Secret Service and without D-Bus.
+  2. The app's scenario: the build with the `screenshots` feature, made in
+     the package image, on demo data with --theme light and --theme dark
+     (the released app follows the system's theme, which a container cannot
+     set): in each theme a quick connect to OpenSSH and the SFTP panel
+     listing the server's folder, captured from Xvfb (`--screenshots` itself
+     needs GPUI's render_to_image, which Linux lacks).
 
-  Mesa's software Vulkan driver (lavapipe) is left out on purpose: under
-  Xvfb the frames of GPUI's renderer on it never reach the screen (run 17).
   The screenshots and logs land in <repo>\target\linux-desktop\package and
   ...\screens; the builds keep their target folder in the Docker volume
   shellpp-package-target. Needs Docker with Linux containers and the
@@ -103,14 +105,14 @@ if ($layer1.Code -ne 0) { $failed += 'package' }
 if (-not $NoScreens) {
     $build = Step 'screens-build' @('run', '--rm', '--label', "shellpp-run=$run", '-v', "${repo}:/src:ro",
         '-v', 'shellpp-package-target:/target', '-v', 'shellpp-package-cargo:/usr/local/cargo/registry',
-        $packageImage, 'cargo', 'build', '--locked', '-p', 'shellpp-desktop', '--features', 'dev-tools')
+        $packageImage, 'cargo', 'build', '--locked', '-p', 'shellpp-desktop', '--features', 'screenshots')
     if ($build.Code -ne 0) {
         $failed += 'screens-build'
     } else {
-        $layer2 = Step 'layer2-screens' @('run', '--rm', '--label', "shellpp-run=$run", '--user', 'tester', '-e', 'HOME=/home/tester',
+        $layer2 = Step 'layer2-screens' @('run', '--rm', '--label', "shellpp-run=$run",
             '-v', 'shellpp-package-target:/target:ro', '-v', "$(Join-Path $outRoot 'screens'):/out", '-v', "${tests}:/check:ro",
-            $desktopImage, 'bash', '/check/screens-check.sh', '/target/debug/shellpp', '/out')
-        Get-Content -LiteralPath $layer2.Log | ForEach-Object { Write-Host "  $_" }
+            $desktopImage, 'bash', '/check/desktop-check.sh', '--screens', '/target/debug/shellpp', '/out')
+        Get-Content -LiteralPath (Join-Path $outRoot 'screens\results.txt') -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
         if ($layer2.Code -ne 0) { $failed += 'screens' }
     }
 }

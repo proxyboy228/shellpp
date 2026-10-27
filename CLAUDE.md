@@ -109,13 +109,15 @@ powershell -ExecutionPolicy Bypass -File scripts\test-process.ps1
 `tests/linux/Dockerfile`, тома `shellpp-linux-target` и `shellpp-linux-cargo`),
 журналы — в `target\verify-linux\`.
 `verify-linux-desktop.ps1` (D226) — само приложение Linux в контейнере:
-пакет `tar.gz` на чистой Ubuntu 22.04 под Xvfb с OpenGL из Mesa
-(`tests/linux/desktop.Dockerfile`; программный Vulkan lavapipe не годится —
-кадры GPUI не доходят до экрана Xvfb), сценарий через xdotool
-(`tests/linux/desktop-check.sh`: первый запуск, ключ устройства в Secret
-Service, блокировка, перезапуск, SSH и SFTP к OpenSSH, без Secret Service
-и без D-Bus) и обе темы сборки с dev-tools (`tests/linux/screens-check.sh`);
-скриншоты — в `target\linux-desktop\`. `release-dry-run.ps1` — файлы
+пакет `tar.gz` на чистой Ubuntu 22.04 под Xvfb
+(`tests/linux/desktop.Dockerfile`), сценарий через xdotool
+(`tests/linux/desktop-check.sh`): один запуск на программном Vulkan lavapipe
+записывает, что он показывает (кадры GPUI не доходят до экрана Xvfb —
+чёрный экран), остальные идут через OpenGL из Mesa: первый запуск, ключ
+устройства в Secret Service, блокировка, перезапуск, SSH и SFTP к OpenSSH,
+без Secret Service и без D-Bus; второй слой (`desktop-check.sh --screens`) —
+сборка с фичей `screenshots` на демо-данных в обеих темах, SSH и SFTP
+в каждой; скриншоты — в `target\linux-desktop\`. `release-dry-run.ps1` — файлы
 релиза локально, без подписи (`docs/release.md`, «A dry run»).
 `test-process.ps1` — тест запуска шагов (`scripts\process.ps1`): шаг ждёт
 только свою программу, а не оставленные ею процессы. `Start-Process -Wait`

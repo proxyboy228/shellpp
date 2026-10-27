@@ -75,10 +75,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends $LINUX_GPUI_PACKAGES shellcheck
 
-      # Scripts of the OpenSSH test server (tests/openssh) and of the release
-      # packages (scripts/*.sh).
+      # Scripts of the OpenSSH test server (tests/openssh), of the Linux app's
+      # check in a container (tests/linux) and of the release packages
+      # (scripts/*.sh).
       - name: shellcheck
-        run: shellcheck tests/openssh/*.sh tests/openssh/variants/*.sh tests/openssh/compat/*.sh scripts/*.sh
+        run: shellcheck tests/openssh/*.sh tests/openssh/variants/*.sh tests/openssh/compat/*.sh tests/linux/*.sh scripts/*.sh
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
