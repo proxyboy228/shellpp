@@ -1,8 +1,53 @@
 # Stage 8 readiness: what stage 7 leaves for team vaults
 
-Written at the end of run 7 (2026-10-23, plan section 6.3). No stage 8 code
-exists; this note lists what the stage 7 code already does for team vaults
-(docs/sync-protocol.md, section 7; D13, D14) and what stage 8 still needs.
+Written at the end of run 7 (2026-10-23, plan section 6.3); the section
+"Release 1.0: room left for what comes after it" was added in run 17
+(2026-10-27). No stage 8 code exists; this note lists what the stage 7 code
+already does for team vaults (docs/sync-protocol.md, section 7; D13, D14)
+and what stage 8 still needs.
+
+## Release 1.0: room left for what comes after it
+
+Checked in run 17 against the code, for team vaults and for the archive of
+a previous account, which comes first after 1.0 (its keys then wrapped under
+the personal vault key, storage-format 6.2; D197). In short: a 1.0 client
+that meets data of a later version refuses it with a clear message or keeps
+it untouched; it never damages it.
+
+- **The local database** has a schema version (`store::SCHEMA_VERSION`, 2
+  today) and forward migrations. A database written by a later version
+  (the archive's tables, team vaults' sessions) is refused before anything
+  is written, with the code `newer_schema`, which the app shows as "This
+  data was written by a newer version of Shell++. Update Shell++ to open
+  it." Tests: `newer_schema_is_refused_and_the_file_is_unchanged` and
+  `newer_schema_in_wal_mode_is_refused` (crates/core/src/store/tests.rs).
+- **Records.** The envelope has a version byte; a record with a later
+  envelope version, an unknown type in a known class, or a payload version
+  above the one the client knows opens as `Opened::Unsupported`: it is kept
+  as it is, left out of the index and never rewritten (`vault::open_row`;
+  test `checks_detect_tampering_and_unsupported_records` in
+  crates/core/src/vault/mod.rs). Sync applies such a row without opening it
+  further and keeps it hidden (`engine::apply_page`); a conflict over one
+  keeps the other version (`KeepOther::Unsupported`, tested in
+  service/sync_ops.rs). Writers keep the `data` members they do not know
+  (`unknown_members_are_kept` and the like in crates/core/src/model).
+- **Classes and vaults.** Class codes `0x0B`..`0xFF` are reserved
+  (crates/sync-api/src/classes.rs); the vault list's `kind` is a string, so
+  a team vault in `GET /v1/vaults` does not break a 1.0 client, which syncs
+  its personal vault only (one session, `records::check_vault`).
+- **The protocol.** The server lists its API versions in `GET /v1/server`;
+  a client refuses a server without `v1` as `unsupported_server`, which the
+  app explains (sync_ops.rs, `server_check_with`). Later changes either stay
+  within `v1` (new optional fields, new classes and types, which a 1.0
+  client keeps) or come as a new API version beside it.
+- **A gap against the specification:** storage-format 5.6 says an
+  unsupported record is "shown as 'requires a newer version'"; the desktop
+  keeps such records but shows nothing for them (the core's
+  `Index::unsupported` list is not used by the interface). No data is at
+  risk; a user of 1.0 just does not see that some records wait for a newer
+  version. For the archive (new records in the personal vault) this is
+  worth a line in the interface before the archive ships, or a change of
+  the specification; the owner decides (run 17 report).
 
 ## Ready in stage 7
 
@@ -66,12 +111,10 @@ exists; this note lists what the stage 7 code already does for team vaults
    inbox, the "server state rolled back" re-post for team vaults (asks the
    owner; a non-owner is told to ask one).
 
-## Open questions for the owner (from run 7)
+## Questions of run 7, closed
 
-- Argon2 verification inside the database transaction makes a burst of
-  unauthenticated logins a denial of service on SQLite (one connection);
-  moving the verification out of the transaction is a server refactor of
-  its own (auth review, finding 2).
-- `B64` and `Secret` of `crates/sync-api` are not wiped on drop; wrapping
-  them in zeroizing types touches every request type on both sides (crypto
-  review, finding 2).
+- Argon2 verification inside the database transaction (a burst of
+  unauthenticated logins as a denial of service on SQLite): the checks run
+  outside the transaction since run 9 (D174).
+- `B64` and `Secret` of `crates/sync-api` not wiped on drop: they are wiped
+  on drop since run 9 (D192).

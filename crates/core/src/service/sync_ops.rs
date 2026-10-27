@@ -5917,6 +5917,65 @@ mod tests {
         assert_eq!(item_of(&core, conflict).keep_other, KeepOther::Replaces);
     }
 
+    /// Records of a later version (run 17, docs/stage8-readiness.md): a type
+    /// this app does not know in a known class (as the previous account's
+    /// archive would add to the personal vault) and a known type with a
+    /// later payload version stay out of the index and are kept byte for
+    /// byte across a lock and an unlock, which rebuild the index.
+    #[test]
+    fn records_of_a_later_version_are_kept_and_never_rewritten() {
+        let (_dir, core, password) = core_with_password();
+        let mut ids = Vec::new();
+        for (type_name, version, class) in [
+            ("archive_key", 1, classes::VAULT),
+            ("host", 99, classes::HOSTS),
+        ] {
+            let id = Uuid::now_v7();
+            let mut guard = core.inner();
+            let inner = &mut *guard;
+            let session = inner.session.as_mut().unwrap();
+            let hlc = session.hlc.tick(unix_ms(SystemTime::now()));
+            let payload = Payload::live(
+                type_name,
+                version,
+                hlc,
+                session.device_id,
+                json!({"address": "192.0.2.7", "later": {"member": true}})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            );
+            let row = vault::seal_row(
+                &mut session.ring,
+                class,
+                id,
+                &payload,
+                None,
+                &format_timestamp(SystemTime::now()),
+            )
+            .unwrap();
+            inner.store.write(|tx| tx.record_put(&row)).unwrap();
+            ids.push((id, row));
+        }
+
+        core.lock().unwrap();
+        core.unlock(password).unwrap();
+
+        {
+            let guard = core.inner();
+            let index = &guard.session.as_ref().unwrap().index;
+            for (id, _) in &ids {
+                assert!(index.get(id).is_none(), "{id} is not in the index");
+                assert!(index.unsupported().contains(id), "{id} is unsupported");
+            }
+        }
+        for (id, before) in &ids {
+            let after = row_of(&core, *id).unwrap();
+            assert_eq!(after.revision, before.revision, "not rewritten");
+            assert_eq!(after.envelope, before.envelope, "kept byte for byte");
+        }
+    }
+
     /// A record of a type this app does not write (a newer client's
     /// `terminal_theme`, a `member_pin` confirmed by a fingerprint
     /// comparison): compared, but "Keep other" is refused and the conflict
