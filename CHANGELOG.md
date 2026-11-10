@@ -14,6 +14,8 @@ version (`docs/release.md`). The Android app has versions of its own
 - **Sync server:** stop at malformed forwarded address fields when
   resolving client addresses behind a trusted proxy for rate limits.
   Apply the pull byte limit before loading encrypted records into memory.
+- **Dependencies:** update bundled SQLite for RUSTSEC-2026-0459 and replace the
+  yanked async-executor release.
 - **Windows packaging:** an optional NSIS setup build for local testing
   installs per user and adds a Start menu shortcut.
 

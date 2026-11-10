@@ -34,7 +34,7 @@ tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "s
 # client, which the end-to-end tests link), PostgreSQL through the
 # synchronous postgres client; both behind one SQL layer (src/db.rs), run on
 # blocking threads.
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41", default-features = false, features = ["bundled"] }
 postgres = { version = "0.19.14", features = ["with-uuid-1", "with-time-0_3", "with-serde_json-1"] }
 
 # Cryptography of the server (docs/security.md, sections 5.1, 5.5): verifiers,

@@ -68,7 +68,7 @@ means the crate is available under either license.
 | ashpd | 0.13.13 | MIT | <https://github.com/bilelmoussaoui/ashpd> |
 | async-broadcast | 0.7.2 | MIT OR Apache-2.0 | <https://github.com/smol-rs/async-broadcast> |
 | async-channel | 2.5.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-channel> |
-| async-executor | 1.14.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-executor> |
+| async-executor | 1.14.1 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-executor> |
 | async-fs | 2.2.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-fs> |
 | async-io | 2.6.0 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-io> |
 | async-lock | 3.4.2 | Apache-2.0 OR MIT | <https://github.com/smol-rs/async-lock> |
@@ -323,7 +323,7 @@ means the crate is available under either license.
 | libc | 0.2.191 | MIT OR Apache-2.0 | <https://github.com/rust-lang/libc> |
 | libloading | 0.8.9 | ISC | <https://github.com/nagisa/rust_libloading/> |
 | libm | 0.2.16 | MIT | <https://github.com/rust-lang/compiler-builtins> |
-| libsqlite3-sys | 0.38.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| libsqlite3-sys | 0.39.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | linebender_resource_handle | 0.1.1 | Apache-2.0 OR MIT | <https://github.com/linebender/raw_resource_handle> |
 | link-section | 0.19.3 | Apache-2.0 OR MIT | <https://github.com/mmastrac/linktime> |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/sunfishcode/linux-raw-sys> |
@@ -484,7 +484,7 @@ means the crate is available under either license.
 | roxmltree | 0.20.0 | MIT OR Apache-2.0 | <https://github.com/RazrFalcon/roxmltree> |
 | roxmltree | 0.21.1 | MIT OR Apache-2.0 | <https://github.com/RazrFalcon/roxmltree> |
 | rsa | 0.10.0-rc.18 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/RSA> |
-| rusqlite | 0.40.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| rusqlite | 0.41.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | russh | 0.64.1 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | russh-cryptovec | 0.62.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | russh-sftp | 3.0.1 | Apache-2.0 | <https://github.com/AspectUnk/russh-sftp> |
@@ -785,7 +785,7 @@ SOFTWARE.
 
 | Name | Version | License | Source |
 |---|---|---|---|
-| SQLite (bundled by libsqlite3-sys 0.38.2) | 3.53.2 | Public domain | <https://sqlite.org/copyright.html> |
+| SQLite (bundled by libsqlite3-sys 0.39.1) | 3.54.1 | Public domain | <https://sqlite.org/copyright.html> |
 | Lucide icons (embedded by gpui-kit-assets 0.7.3) | as bundled | ISC (some icons derived from Feather, MIT) | <https://github.com/lucide-icons/lucide> |
 
 ## The Android app (apps/android)
@@ -932,7 +932,7 @@ which never ship in the app.
 | kem | 0.3.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/traits> |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | <https://github.com/rust-lang-nursery/lazy-static.rs> |
 | libc | 0.2.191 | MIT OR Apache-2.0 | <https://github.com/rust-lang/libc> |
-| libsqlite3-sys | 0.38.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| libsqlite3-sys | 0.39.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | <https://github.com/sunfishcode/linux-raw-sys> |
 | litemap | 0.8.3 | Unicode-3.0 | <https://github.com/unicode-org/icu4x> |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | <https://github.com/Amanieu/parking_lot> |
@@ -984,7 +984,7 @@ which never ship in the app.
 | rfc6979 | 0.6.0 | Apache-2.0 OR MIT | <https://github.com/RustCrypto/signatures> |
 | ring | 0.17.14 | Apache-2.0 AND ISC | <https://github.com/briansmith/ring> |
 | rsa | 0.10.0-rc.18 | MIT OR Apache-2.0 | <https://github.com/RustCrypto/RSA> |
-| rusqlite | 0.40.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| rusqlite | 0.41.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | russh | 0.64.1 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | russh-cryptovec | 0.62.0 | Apache-2.0 | <https://github.com/warp-tech/russh> |
 | russh-sftp | 3.0.1 | Apache-2.0 | <https://github.com/AspectUnk/russh-sftp> |

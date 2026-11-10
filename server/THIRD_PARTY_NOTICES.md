@@ -96,7 +96,7 @@ table. "A OR B" means the crate is available under either license.
 | itoa | 1.0.18 | MIT OR Apache-2.0 | <https://github.com/dtolnay/itoa> |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | <https://github.com/rust-lang-nursery/lazy-static.rs> |
 | libc | 0.2.191 | MIT OR Apache-2.0 | <https://github.com/rust-lang/libc> |
-| libsqlite3-sys | 0.38.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| libsqlite3-sys | 0.39.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | <https://github.com/Amanieu/parking_lot> |
 | log | 0.4.34 | MIT OR Apache-2.0 | <https://github.com/rust-lang/log> |
 | matchers | 0.2.0 | MIT | <https://github.com/hawkw/matchers> |
@@ -133,7 +133,7 @@ table. "A OR B" means the crate is available under either license.
 | raw-cpuid | 11.6.0 | MIT | <https://github.com/gz/rust-cpuid> |
 | regex-automata | 0.4.18 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
 | regex-syntax | 0.8.11 | MIT OR Apache-2.0 | <https://github.com/rust-lang/regex> |
-| rusqlite | 0.40.2 | MIT | <https://github.com/rusqlite/rusqlite> |
+| rusqlite | 0.41.1 | MIT | <https://github.com/rusqlite/rusqlite> |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | <https://github.com/dtolnay/ryu> |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 | <https://github.com/bluss/scopeguard> |
 | serde | 1.0.229 | MIT OR Apache-2.0 | <https://github.com/serde-rs/serde> |
@@ -188,7 +188,7 @@ table. "A OR B" means the crate is available under either license.
 
 | Name | Version | License | Source |
 |---|---|---|---|
-| SQLite (bundled by libsqlite3-sys 0.38.2) | 3.53.2 | Public domain | <https://sqlite.org/copyright.html> |
+| SQLite (bundled by libsqlite3-sys 0.39.1) | 3.54.1 | Public domain | <https://sqlite.org/copyright.html> |
 | musl libc (linked statically by the build image `rust:1.93-alpine`) | as in that image | MIT | <https://musl.libc.org/> |
 
 ## The Docker image
