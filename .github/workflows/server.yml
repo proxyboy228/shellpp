@@ -91,5 +91,12 @@ jobs:
         if: always()
         run: |
           label="label=shellpp-run=$SHELLPP_TEST_RUN"
-          docker ps --all --quiet --filter "$label" | xargs -r docker rm --force --volumes
+          # A test container can still be removing itself when cleanup starts.
+          for attempt in 1 2 3 4 5; do
+            if docker ps --all --quiet --filter "$label" | xargs -r docker rm --force --volumes; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then exit 1; fi
+            sleep 1
+          done
           docker volume ls --quiet --filter "$label" | xargs -r docker volume rm
