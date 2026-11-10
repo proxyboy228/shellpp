@@ -243,3 +243,17 @@ owner's own installation (D225, item 15; ROADMAP 2.3, "Not obtained"):
    1 to 5), with its section `## [1.0.0]` in `CHANGELOG.md`. It is not a
    pre-release, so it becomes GitHub's "latest", and the builds of the
    release candidates are offered it.
+
+### Local Windows installer
+
+With NSIS available on PATH, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -Installer
+```
+
+The script also produces an unsigned `shellpp-<version>-windows-x64-setup.exe`
+in `target\package`. It installs for the current user, adds a Start menu
+shortcut and appears in Windows Settings under Installed apps. Uninstalling
+keeps the vault and other application data. Public releases follow the signing
+decision in D83.

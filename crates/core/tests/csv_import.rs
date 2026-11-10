@@ -55,7 +55,7 @@ fn rows_are_mapped_previewed_and_imported_once() {
     // a host in it without its own port or user.
     let ops = u.group(json!({"name": "Ops", "ssh": {"port": 2222, "username": "ops"}}));
     u.host(json!({"address": "db.example.com", "group_id": ops.record_id.to_string()}));
-    let password = common::random_hex();
+    let password = format!(" {} ", common::random_hex());
     let text = format!(
         "Имя;Host;Port;User;Group;Tags;Notes;Password\r\n\
          Веб;web.example.com;22;deploy;Prod / Web;prod, web;первый;{password}\r\n\

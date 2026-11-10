@@ -447,6 +447,84 @@ fn a_csv_file_is_mapped_previewed_and_imported(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn termix_preview_imports_passwords(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let file = ui.home.path().join("termix-hosts.json");
+    std::fs::write(
+        &file,
+        r#"{"hosts":[{"ip":"termix.example.com","username":"ops","password":"test-password"}]}"#,
+    )
+    .unwrap();
+
+    let dialog = ui.dialog(cx);
+    dialog.update(cx, |dialog, cx| dialog.select(Source::Termix, cx));
+    ui.click(cx, "import-next");
+    ui.frame(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.set_path(&file, window, cx))
+    });
+    ui.click(cx, "import-next");
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.step().clone()),
+        Step::Preview
+    );
+    assert!(ui.visible(cx, "import-csv-passwords"));
+
+    ui.click(cx, "import-next");
+    let Step::CsvSummary(summary) = dialog.read_with(cx, |dialog, _| dialog.step().clone()) else {
+        panic!("no summary");
+    };
+    assert_eq!(summary.added, 1);
+    assert_eq!(summary.passwords, 1);
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    let export = core.data_export(Default::default()).unwrap();
+    assert!(export.text.expose_secret().contains("test-password"));
+}
+
+#[gpui_kit::test]
+fn termix_shares_a_key_between_new_and_existing_hosts(cx: &mut TestAppContext) {
+    let ui = Ui::open(cx);
+    let core = ui
+        .state
+        .read_with(cx, |state, _| state.core().cloned().unwrap());
+    core.csv_import(&shellpp_core::service::dto::CsvInput {
+        bytes: zeroize::Zeroizing::new(b"address,username\nold.example.com,ops\n".to_vec()),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let key = key_text(None);
+    let export = serde_json::json!({"hosts": [
+        {"ip": "old.example.com", "username": "ops", "credentialId": 2, "key": key},
+        {"ip": "new.example.com", "username": "ops", "credentialId": 2, "key": key}
+    ]});
+    let file = ui.home.path().join("termix-hosts.json");
+    std::fs::write(&file, export.to_string()).unwrap();
+    let dialog = ui.dialog(cx);
+    dialog.update(cx, |dialog, cx| dialog.select(Source::Termix, cx));
+    ui.click(cx, "import-next");
+    ui.frame(cx, |window, cx| {
+        dialog.update(cx, |dialog, cx| dialog.set_path(&file, window, cx))
+    });
+    ui.click(cx, "import-next");
+    ui.click(cx, "import-next");
+
+    let Step::CsvSummary(summary) = dialog.read_with(cx, |dialog, _| dialog.step().clone()) else {
+        panic!("no summary");
+    };
+    assert!(summary.errors.is_empty());
+    assert_eq!((summary.added, summary.keys_linked), (1, 1));
+    let keys = core.keys_list().unwrap();
+    assert_eq!(keys.len(), 1);
+    let export = core.data_export(Default::default()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(export.text.expose_secret()).unwrap();
+    let key_id = keys[0].record_id.to_string();
+    let json = json.to_string();
+    assert_eq!(json.matches(&format!(r#""key_id":"{key_id}""#)).count(), 2);
+}
+
+#[gpui_kit::test]
 fn the_csv_template_is_written(cx: &mut TestAppContext) {
     let ui = Ui::open(cx);
     let dialog = ui.dialog(cx);

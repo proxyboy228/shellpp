@@ -117,6 +117,7 @@ fn read(input: &CsvInput) -> Result<Read, CoreError> {
 
 /// What one row becomes.
 struct RowPlan {
+    existing_host: Option<Uuid>,
     /// 1-based record number in the file (the header is 1).
     line: usize,
     label: Option<String>,
@@ -176,6 +177,7 @@ fn plan_row(line: usize, record: &[String], roles: &[Role]) -> RowPlan {
         })
         .unwrap_or_default();
     RowPlan {
+        existing_host: None,
         line,
         label: get(Role::Label).map(str::to_owned),
         address,
@@ -184,7 +186,12 @@ fn plan_row(line: usize, record: &[String], roles: &[Role]) -> RowPlan {
         group,
         tags,
         notes: get(Role::Notes).map(str::to_owned),
-        password: get(Role::Password).map(|password| SecretString::from(password.to_owned())),
+        password: roles
+            .iter()
+            .position(|role| *role == Role::Password)
+            .and_then(|index| record.get(index))
+            .filter(|value| !value.is_empty())
+            .map(|password| SecretString::from(password.clone())),
         error,
     }
 }
@@ -272,6 +279,23 @@ impl Groups {
 /// effective username after inheritance.
 type HostKey = (String, u16, String);
 
+fn link_key(data: &mut Map<String, Value>, key_id: Uuid) {
+    let ssh = data.entry("ssh").or_insert_with(|| json!({}));
+    if let Some(ssh) = ssh.as_object_mut() {
+        ssh.insert("key_id".into(), json!(key_id));
+    }
+}
+
+fn has_credentials(index: &Index, tree: &Tree, data: &Map<String, Value>) -> bool {
+    let ssh = data.get("ssh");
+    let inherited = index.inherited_for_host(tree, data);
+    host::secret_value(data, "ssh.password").is_some()
+        || ssh.and_then(|ssh| ssh.get("key_id")).is_some()
+        || ssh.and_then(|ssh| ssh.get("identity_id")).is_some()
+        || inherited.key_id.is_some()
+        || inherited.identity_id.is_some()
+}
+
 /// The effective port and username of host `data` (its own, else its
 /// identity's username, else inherited from its groups).
 fn host_key(index: &Index, tree: &Tree, data: &Map<String, Value>) -> HostKey {
@@ -319,10 +343,13 @@ fn plan_rows(read: &Read, index: &Index) -> Result<Planned, CoreError> {
         )]));
     }
     let groups = Groups::of(index);
-    let existing: HashSet<HostKey> = index
-        .of_kind(RecordKind::Host)
-        .map(|record| host_key(index, &groups.tree, record.data()))
-        .collect();
+    let mut existing = HashMap::new();
+    for host in index.of_kind(RecordKind::Host) {
+        existing
+            .entry(host_key(index, &groups.tree, host.data()))
+            .and_modify(|id| *id = None)
+            .or_insert(Some(host.record_id));
+    }
     let mut seen: HashSet<HostKey> = HashSet::new();
     let mut new_groups: Vec<Vec<String>> = Vec::new();
     let mut rows = Vec::new();
@@ -356,7 +383,10 @@ fn plan_rows(read: &Read, index: &Index) -> Result<Planned, CoreError> {
                     // It holds the password in clear: wiped when dropped.
                     let built = WipeOnDrop::new(built);
                     let key = host_key(index, &groups.tree, &built);
-                    if existing.contains(&key) || !seen.insert(key) {
+                    if let Some(id) = existing.get(&key) {
+                        row.existing_host = *id;
+                        ImportStatus::Exists
+                    } else if !seen.insert(key) {
                         ImportStatus::Exists
                     } else {
                         for depth in levels..row.group.len() {
@@ -440,7 +470,11 @@ impl Core {
         })
     }
 
-    pub(super) fn csv_import_impl(&self, input: &CsvInput) -> Result<CsvImportSummary, CoreError> {
+    pub(super) fn csv_import_impl(
+        &self,
+        input: &CsvInput,
+        keys: &BTreeMap<usize, Option<Uuid>>,
+    ) -> Result<CsvImportSummary, CoreError> {
         let read = read(input)?;
         let now = self.now();
         let mut guard = self.inner();
@@ -489,9 +523,36 @@ impl Core {
                 }
             }
         }
+        let mut linked = HashSet::new();
         for (row, status) in &planned.rows {
+            let key_id = match keys.get(&row.line) {
+                Some(Some(id)) if parts.session.index.get_kind(id, RecordKind::Key).is_some() => {
+                    Some(*id)
+                }
+                Some(_) => {
+                    summary
+                        .errors
+                        .push((row.line, "SSH key could not be imported".into()));
+                    continue;
+                }
+                None => None,
+            };
             match status {
                 ImportStatus::Exists => {
+                    let index = &parts.session.index;
+                    if let Some(key_id) = key_id
+                        && let Some(host) = row
+                            .existing_host
+                            .and_then(|id| index.get_kind(&id, RecordKind::Host))
+                        && !has_credentials(index, &groups.tree, host.data())
+                        && linked.insert(host.record_id)
+                    {
+                        let mut data = host.data().clone();
+                        link_key(&mut data, key_id);
+                        plan.set(RecordKind::Host, host.record_id, data);
+                        summary.keys_linked += 1;
+                        continue;
+                    }
                     summary.skipped += 1;
                     continue;
                 }
@@ -520,7 +581,10 @@ impl Core {
                 }
             };
             let id = parts.ids.next(now);
-            let (data, secrets) = row_data(row, group_id);
+            let (mut data, secrets) = row_data(row, group_id);
+            if let Some(key_id) = key_id {
+                link_key(&mut data, key_id);
+            }
             let rules = HostRules {
                 record_id: Some(id),
                 personal_vault: true,
@@ -538,7 +602,7 @@ impl Core {
                 }
             }
         }
-        if summary.added > 0 || summary.groups_added > 0 {
+        if summary.added > 0 || summary.groups_added > 0 || summary.keys_linked > 0 {
             let prepared = plan.prepare(&mut parts, now)?;
             self.commit_records(&mut parts, prepared, Vec::new(), Vec::new())?;
         }

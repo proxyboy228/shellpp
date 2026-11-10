@@ -24,6 +24,7 @@
 pub mod csv_step;
 pub mod putty_registry;
 pub mod strings;
+mod termix;
 
 #[cfg(test)]
 mod tests;
@@ -127,15 +128,17 @@ pub enum Source {
     KnownHosts,
     Putty,
     Csv,
+    Termix,
 }
 
 impl Source {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::SshConfig,
         Self::Json,
         Self::KnownHosts,
         Self::Putty,
         Self::Csv,
+        Self::Termix,
     ];
 
     fn id(self) -> &'static str {
@@ -145,6 +148,7 @@ impl Source {
             Self::KnownHosts => "import-source-known-hosts",
             Self::Putty => "import-source-putty",
             Self::Csv => "import-source-csv",
+            Self::Termix => "import-source-termix",
         }
     }
 
@@ -155,6 +159,7 @@ impl Source {
             Self::KnownHosts => strings::SOURCE_KNOWN_HOSTS,
             Self::Putty => strings::SOURCE_PUTTY,
             Self::Csv => strings::SOURCE_CSV,
+            Self::Termix => strings::SOURCE_TERMIX,
         }
     }
 
@@ -164,7 +169,7 @@ impl Source {
         match self {
             Self::SshConfig => Some(strings::SOURCE_SSH_CONFIG_PATH),
             Self::KnownHosts => Some(strings::SOURCE_KNOWN_HOSTS_PATH),
-            Self::Json | Self::Putty | Self::Csv => None,
+            Self::Json | Self::Putty | Self::Csv | Self::Termix => None,
         }
     }
 
@@ -267,7 +272,7 @@ impl ImportSourcesDialog {
     /// The file field of the current source.
     fn path_input(&self) -> &Entity<InputState> {
         match self.source {
-            Source::Csv => &self.csv_path,
+            Source::Csv | Source::Termix => &self.csv_path,
             _ => &self.path,
         }
     }
@@ -355,15 +360,19 @@ impl ImportSourcesDialog {
                     crate::known_hosts::open_import_dialog(state, window, cx);
                 }
                 Source::Putty => self.read_putty_preview(window, cx),
-                Source::Csv => {
+                Source::Csv | Source::Termix => {
                     self.step = Step::File { error: None };
                     cx.notify();
                 }
             },
-            Step::File { .. } if self.source == Source::Csv => self.read_csv(window, cx),
+            Step::File { .. } if matches!(self.source, Source::Csv | Source::Termix) => {
+                self.read_csv(window, cx)
+            }
             Step::File { .. } => self.read_preview(window, cx),
             Step::Mapping => self.read_csv_preview(window, cx),
-            Step::Preview if self.source == Source::Csv => self.import_csv(window, cx),
+            Step::Preview if matches!(self.source, Source::Csv | Source::Termix) => {
+                self.import_csv(window, cx)
+            }
             Step::Preview => self.import(window, cx),
             Step::Running | Step::Summary(_) | Step::CsvSummary(_) => {}
         }
@@ -632,6 +641,8 @@ impl ImportSourcesDialog {
             .map(|this| {
                 if self.source == Source::Csv {
                     this.child(self.render_csv_file_extras(cx).into_any_element())
+                } else if self.source == Source::Termix {
+                    this.child(widgets::caption(strings::TERMIX_FILE_HINT, cx))
                 } else {
                     this.child(widgets::caption(strings::FILE_HINT, cx))
                 }
@@ -930,7 +941,7 @@ impl Render for ImportSourcesDialog {
             Step::Source => self.render_sources(cx).into_any_element(),
             Step::File { error } => self.render_file(error, window, cx).into_any_element(),
             Step::Mapping => self.render_csv_mapping(cx).into_any_element(),
-            Step::Preview if self.source == Source::Csv => {
+            Step::Preview if matches!(self.source, Source::Csv | Source::Termix) => {
                 self.render_csv_preview(cx).into_any_element()
             }
             Step::Preview => self.render_preview(window, cx).into_any_element(),

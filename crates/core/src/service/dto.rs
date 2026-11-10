@@ -1512,6 +1512,8 @@ pub struct CsvPreview {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct CsvImportSummary {
     pub added: usize,
+    /// Existing hosts linked to a key.
+    pub keys_linked: usize,
     /// Rows that match a host (or an earlier row).
     pub skipped: usize,
     /// Rows not imported: (record number, reason).

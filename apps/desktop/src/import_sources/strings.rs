@@ -76,7 +76,7 @@ pub const CSV_EMPTY: &str = "The file has no rows.";
 pub const CSV_SUMMARY_SKIPPED: &str = "Skipped (already exist)";
 pub const CSV_SUMMARY_GROUPS: &str = "Groups added";
 pub const CSV_DELETE_FILE: &str =
-    "The CSV file still holds the passwords in clear text: delete it.";
+    "The source file still holds the passwords in clear text: delete it.";
 
 /// "N rows in the file".
 pub fn csv_rows(count: usize) -> String {
@@ -130,3 +130,10 @@ pub fn templates(count: usize) -> String {
         n => format!("{n} Host lines with patterns: {TEMPLATES}"),
     }
 }
+
+pub const SOURCE_TERMIX: &str = "Termix hosts (JSON)";
+pub const TERMIX_FILE_HINT: &str = "Choose a Termix host export. Includes SSH passwords and keys when present. A matching host without credentials can get its imported key.";
+pub const TERMIX_INVALID: &str = "Choose a valid Termix host export.";
+
+pub const TERMIX_KEYS_LINKED: &str = "Existing hosts linked to keys";
+pub const TERMIX_KEYS_PREVIEW: &str = "The export contains private keys. Import stores them in Keychain and links matching hosts that have no credentials.";

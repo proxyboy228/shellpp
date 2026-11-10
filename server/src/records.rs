@@ -162,42 +162,53 @@ pub fn pull(
     let limit = limit
         .unwrap_or(limits::DEFAULT_PULL_LIMIT)
         .clamp(1, limits::MAX_PULL_LIMIT);
-    let mut sql =
-        String::from("SELECT seq, class, envelope FROM records WHERE vault_id = ? AND seq > ?");
+    let mut scope = String::from("FROM records WHERE vault_id = ? AND seq > ?");
     let mut params: Vec<Val> = vec![vault_id.into(), (since as i64).into()];
     if let Some(classes) = &filter {
         let marks: Vec<&str> = classes.iter().map(|_| "?").collect();
-        sql.push_str(&format!(" AND class IN ({})", marks.join(", ")));
+        scope.push_str(&format!(" AND class IN ({})", marks.join(", ")));
         params.extend(classes.iter().map(|class| Val::Int(i64::from(*class))));
     }
-    sql.push_str(" ORDER BY seq LIMIT ?");
-    // One more than the limit tells whether the selection stopped early.
+
+    // Look ahead using only sizes. Fetching all candidate envelopes first
+    // could allocate ~250 MiB for one request before the response cap applies.
     params.push(((limit + 1) as i64).into());
-    let rows = tx.query(&sql, &params, &[Ty::Int, Ty::Int, Ty::Bytes])?;
-    let mut records = Vec::new();
+    let candidates = tx.query(
+        &format!("SELECT seq, CAST(length(envelope) AS BIGINT) {scope} ORDER BY seq LIMIT ?"),
+        &params,
+        &[Ty::Int, Ty::Int],
+    )?;
+    params.pop();
+
     let mut bytes = 0u64;
+    let mut last = since;
     let mut stopped_early = false;
-    for row in &rows {
-        if records.len() as u64 >= limit {
+    for (index, row) in candidates.iter().enumerate() {
+        let size = row[1].int().ok_or_else(ApiError::internal)? as u64;
+        if index as u64 >= limit || (index > 0 && bytes + size > limits::MAX_PULL_BYTES) {
             stopped_early = true;
             break;
         }
-        let envelope = row[2].bytes().unwrap_or_default();
-        if !records.is_empty() && bytes + envelope.len() as u64 > limits::MAX_PULL_BYTES {
-            stopped_early = true;
-            break;
-        }
-        bytes += envelope.len() as u64;
-        records.push(SeqEnvelope {
-            seq: row[0].int().unwrap_or(0).max(0) as u64,
-            envelope: B64(envelope.to_vec()),
-        });
+        bytes += size;
+        last = row[0].int().ok_or_else(ApiError::internal)? as u64;
     }
-    let next_cursor = if stopped_early {
-        records.last().map_or(since, |record| record.seq)
-    } else {
-        member.last_seq
-    };
+
+    let mut records = Vec::new();
+    if last > since {
+        params.push((last as i64).into());
+        let rows = tx.query(
+            &format!("SELECT seq, envelope {scope} AND seq <= ? ORDER BY seq"),
+            &params,
+            &[Ty::Int, Ty::Bytes],
+        )?;
+        for row in rows {
+            records.push(SeqEnvelope {
+                seq: row[0].int().ok_or_else(ApiError::internal)? as u64,
+                envelope: B64(row[1].bytes().ok_or_else(ApiError::internal)?.to_vec()),
+            });
+        }
+    }
+    let next_cursor = if stopped_early { last } else { member.last_seq };
     Ok(PullResponse {
         records,
         next_cursor,

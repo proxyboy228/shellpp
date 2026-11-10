@@ -207,6 +207,46 @@ fn seq_is_monotonic_under_concurrent_pushes() {
 }
 
 #[test]
+fn pull_pages_large_envelopes_at_the_byte_limit() {
+    use wire::limits::{MAX_ENVELOPE_BYTES, MAX_PULL_BYTES, MAX_PULL_LIMIT};
+
+    let server = Server::start();
+    let api = api(&server);
+    let account = register(&api, 2);
+    let token = &account.tokens.access_token.0;
+    let vault = account.vault_id;
+    let first_page_len = (MAX_PULL_BYTES / MAX_ENVELOPE_BYTES) as usize;
+    let items = (0..first_page_len + 2)
+        .map(|_| {
+            let mut bytes = envelope(vault, Uuid::now_v7(), 2, 1, 1);
+            bytes.0.resize(MAX_ENVELOPE_BYTES as usize, 7);
+            write(0, bytes)
+        })
+        .collect();
+    let push = api.push(token, vault, items).expect("push large envelopes");
+    assert!(
+        push.results
+            .iter()
+            .all(|item| item.status == ItemStatus::Ok)
+    );
+
+    let first = api
+        .pull(token, vault, 0, Some(MAX_PULL_LIMIT), None)
+        .unwrap();
+    assert_eq!(first.records.len(), first_page_len);
+    assert!(first.has_more);
+    assert_eq!(first.next_cursor, first.records.last().unwrap().seq);
+
+    let last = api
+        .pull(token, vault, first.next_cursor, Some(MAX_PULL_LIMIT), None)
+        .unwrap();
+    assert_eq!(last.records.len(), 2);
+    assert!(last.records[0].seq > first.next_cursor);
+    assert_eq!(last.next_cursor, last.records.last().unwrap().seq);
+    assert!(!last.has_more);
+}
+
+#[test]
 fn cursors_with_class_filters_and_410_purged_or_ahead() {
     let server = Server::with(Options {
         tombstone_retention_days: 0,

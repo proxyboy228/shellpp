@@ -165,6 +165,19 @@ OpenSSH config import.
   not a host.
 - Sessions imported before are recognized and never overwritten.
 
+## Importing SSH hosts from Termix
+
+In Termix, use **Hosts → Import / Export → Export…** and select the hosts
+to transfer. Include the connection details and any notes and tags you want.
+In Shell++, choose **Import → Termix hosts (JSON)** and select the export.
+Review the preview, then import the new hosts.
+
+The import carries over the label, address, port, username, folder, tags,
+and notes. Include credentials to transfer SSH passwords and private keys.
+Shared keys are stored once in Keychain. The import links a key to a matching
+existing host only when it has no configured credentials. Configure jump hosts
+and proxies in Shell++ after the import.
+
 ## Importing a CSV file
 
 **Import** > **CSV** takes a table of hosts, for example from a

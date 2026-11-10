@@ -189,7 +189,9 @@ impl FromRequestParts<AppState> for ClientIp {
             .headers
             .get_all("x-forwarded-for")
             .iter()
-            .filter_map(|value| value.to_str().ok());
+            // An invalid field is a broken hop, just like an invalid IP.
+            // Dropping it would allow the walk to reach client-supplied fields.
+            .map(|value| value.to_str().unwrap_or_default());
         if !trusted(peer) && parts.headers.contains_key("x-forwarded-for") {
             note_untrusted_forwarding();
         }
@@ -1005,6 +1007,41 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the slot came back");
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn a_non_ascii_forwarded_field_stops_the_walk() {
+        let secret = data_encoding::BASE64.encode(&crate::secrets::random_bytes::<32>());
+        let config = crate::config::Config::from_env(|name: &str| match name {
+            "SHELLPP_DATABASE_URL" => Some("sqlite::memory:".to_owned()),
+            "SHELLPP_PUBLIC_URL" => Some("https://sync.example.test".to_owned()),
+            "SHELLPP_SERVER_SECRET" => Some(secret.clone()),
+            "SHELLPP_TRUSTED_PROXIES" => Some("10.0.0.0/8".to_owned()),
+            _ => None,
+        })
+        .unwrap();
+        let state = Shared::new(crate::db::Db::open("sqlite::memory:").unwrap(), config);
+        let (mut parts, ()) = axum::http::Request::new(()).into_parts();
+        parts
+            .extensions
+            .insert(ConnectInfo("10.0.0.1:8080".parse::<SocketAddr>().unwrap()));
+        parts.headers.append(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("192.0.2.1"),
+        );
+        parts.headers.append(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_bytes(&[0x80]).unwrap(),
+        );
+        parts.headers.append(
+            "x-forwarded-for",
+            axum::http::HeaderValue::from_static("10.0.0.2"),
+        );
+
+        let ClientIp(client) = ClientIp::from_request_parts(&mut parts, &state)
+            .await
+            .unwrap();
+        assert_eq!(client, ip("10.0.0.2"));
     }
 
     /// An IPv4 client reaching a server bound to `[::]` arrives as

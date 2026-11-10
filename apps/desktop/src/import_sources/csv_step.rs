@@ -13,6 +13,8 @@
 //!
 //! Nothing here logs paths or values.
 
+use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,6 +52,7 @@ pub const TEMPLATE_FILE_NAME: &str = "shellpp-hosts.csv";
 pub struct CsvState {
     /// The file, wiped when the dialog drops it (it may hold passwords).
     bytes: Arc<Zeroizing<Vec<u8>>>,
+    termix_keys: Arc<BTreeMap<usize, super::termix::TermixKey>>,
     /// The settings in effect, the columns and the first rows.
     pub inspection: CsvInspection,
     /// The role of each column, as the user mapped it.
@@ -107,9 +110,16 @@ fn read_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, &'static str> {
         Ok(_) => {}
         Err(_) => return Err(strings::FILE_NOT_FOUND),
     }
-    std::fs::read(path)
-        .map(Zeroizing::new)
-        .map_err(|_| strings::READ_FAILED)
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::fs::File::open(path)
+        .map_err(|_| strings::READ_FAILED)?
+        .take(csv::MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| strings::READ_FAILED)?;
+    if bytes.len() > csv::MAX_FILE_BYTES {
+        return Err(strings::CSV_TOO_LARGE);
+    }
+    Ok(bytes)
 }
 
 impl ImportSourcesDialog {
@@ -137,14 +147,25 @@ impl ImportSourcesDialog {
         };
         self.step = Step::Running;
         cx.notify();
+        let termix = self.source == super::Source::Termix;
         let work = cx.background_spawn(async move {
-            let bytes = Arc::new(read_file(&path)?);
+            let file = read_file(&path)?;
+            let (bytes, keys) = if termix {
+                let parsed = super::termix::hosts_as_csv(&file)?;
+                (parsed.bytes, parsed.keys)
+            } else {
+                (file, BTreeMap::new())
+            };
+            let bytes = Arc::new(bytes);
             let input = CsvInput {
                 bytes: (*bytes).clone(),
+                encoding: termix.then(|| "utf-8".to_owned()),
+                delimiter: termix.then_some(','),
+                has_header: termix.then_some(true),
                 ..CsvInput::default()
             };
             match core.csv_inspect(&input) {
-                Ok(inspection) => Ok((bytes, inspection)),
+                Ok(inspection) => Ok((bytes, keys, inspection)),
                 Err(error) => {
                     tracing::info!(code = error.code(), "csv not read");
                     Err(match &error {
@@ -161,17 +182,22 @@ impl ImportSourcesDialog {
         });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
-            let _ = this.update(cx, |dialog, cx| {
+            let _ = this.update_in(cx, |dialog, window, cx| {
                 dialog.task = None;
                 match result {
-                    Ok((bytes, inspection)) => {
+                    Ok((bytes, keys, inspection)) => {
                         dialog.csv = Some(CsvState {
                             bytes,
+                            termix_keys: Arc::new(keys),
                             roles: inspection.roles.clone(),
                             inspection,
                             preview: None,
                         });
-                        dialog.step = Step::Mapping;
+                        if termix {
+                            dialog.read_csv_preview(window, cx);
+                        } else {
+                            dialog.step = Step::Mapping;
+                        }
                     }
                     Err(error) => dialog.step = Step::File { error: Some(error) },
                 }
@@ -281,7 +307,13 @@ impl ImportSourcesDialog {
                     }
                     Err(error) => {
                         tracing::info!(code = error.code(), "csv preview failed");
-                        dialog.step = Step::Mapping;
+                        dialog.step = if dialog.source == super::Source::Termix {
+                            Step::File {
+                                error: Some(strings::READ_FAILED),
+                            }
+                        } else {
+                            Step::Mapping
+                        };
                     }
                 }
                 cx.notify();
@@ -297,7 +329,14 @@ impl ImportSourcesDialog {
         };
         self.step = Step::Running;
         cx.notify();
-        let work = cx.background_spawn(async move { core.csv_import(&csv.input()) });
+        let work = cx.background_spawn(async move {
+            if csv.termix_keys.is_empty() {
+                core.csv_import(&csv.input())
+            } else {
+                let keys = super::termix::import_keys(&core, &csv.termix_keys)?;
+                core.csv_import_with_keys(&csv.input(), &keys)
+            }
+        });
         self.task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |dialog, cx| {
@@ -646,6 +685,12 @@ impl ImportSourcesDialog {
                 ),
                 cx,
             ))
+            .when(
+                self.csv
+                    .as_ref()
+                    .is_some_and(|csv| !csv.termix_keys.is_empty()),
+                |this| this.child(widgets::caption(strings::TERMIX_KEYS_PREVIEW, cx)),
+            )
             .when(preview.passwords > 0, |this| {
                 this.child(password_warning(cx))
             })
@@ -708,6 +753,13 @@ impl ImportSourcesDialog {
             .w_full()
             .gap(metrics::SPACE_1)
             .child(row("import-added", strings::SUMMARY_ADDED, summary.added))
+            .when(summary.keys_linked > 0, |this| {
+                this.child(row(
+                    "import-keys-linked",
+                    strings::TERMIX_KEYS_LINKED,
+                    summary.keys_linked,
+                ))
+            })
             .child(row(
                 "import-skipped",
                 strings::CSV_SUMMARY_SKIPPED,

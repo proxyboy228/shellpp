@@ -7945,7 +7945,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-android"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
@@ -7973,7 +7973,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-core"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "aes 0.9.3",
  "argon2",
@@ -8024,7 +8024,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-desktop"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "alacritty_terminal",
  "arboard",
@@ -8075,7 +8075,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-private-file"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "libc",
  "tempfile",
@@ -8084,7 +8084,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-sessions"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "dirs 7.0.0",
  "encoding_rs",
@@ -8104,7 +8104,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-ssh"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -8124,7 +8124,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-sync-api"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "data-encoding",
  "serde",
@@ -8135,7 +8135,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-term-local"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "dirs 7.0.0",
  "portable-pty",
@@ -8148,7 +8148,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-terminal"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
@@ -8162,7 +8162,7 @@ dependencies = [
 
 [[package]]
 name = "shellpp-test-sshd"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "rand 0.10.3",
  "russh",

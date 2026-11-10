@@ -872,7 +872,17 @@ impl Core {
     /// effective port, effective username), existing hosts are never
     /// overwritten.
     pub fn csv_import(&self, input: &dto::CsvInput) -> Result<dto::CsvImportSummary, CoreError> {
-        self.csv_import_impl(input)
+        self.csv_import_impl(input, &std::collections::BTreeMap::new())
+    }
+
+    /// Imports host rows with keys already stored in the personal vault.
+    /// A map entry of `None` marks a row whose key could not be imported.
+    pub fn csv_import_with_keys(
+        &self,
+        input: &dto::CsvInput,
+        keys: &std::collections::BTreeMap<usize, Option<Uuid>>,
+    ) -> Result<dto::CsvImportSummary, CoreError> {
+        self.csv_import_impl(input, keys)
     }
 
     /// Generate key (UI 7.1): a new key pair stored like an import. The

@@ -6,6 +6,17 @@ the release workflow takes the section whose heading names the tag's
 version (`docs/release.md`). The Android app has versions of its own
 ([docs/mobile/](docs/mobile/README.md)).
 
+## [1.0.0-rc.2]
+
+- **Desktop:** import SSH hosts from a Termix JSON export, with a preview
+  and duplicate detection. The import copies connection details, folders,
+  tags, notes, SSH passwords and shared private keys when included in the export.
+- **Sync server:** stop at malformed forwarded address fields when
+  resolving client addresses behind a trusted proxy for rate limits.
+  Apply the pull byte limit before loading encrypted records into memory.
+- **Windows packaging:** an optional NSIS setup build for local testing
+  installs per user and adds a Start menu shortcut.
+
 ## [1.0.0-rc.1]
 
 The release candidate of Shell++ 1.0: the first release, for Windows and

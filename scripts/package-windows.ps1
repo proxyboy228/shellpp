@@ -12,8 +12,8 @@
   - README-portable.txt: where the data lives and how to keep it next to
     the program (SHELLPP_DATA_DIR).
   and <zip>.sha256 next to it, and shellpp.pdb (line tables, for crash
-  reports; not in the zip). The MSI waits for the owner's choice of an
-  installer tool (docs/decisions.md, D82).
+  reports; not in the zip). -Installer adds an unsigned NSIS setup EXE for
+  local testing (docs/release.md).
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1
@@ -25,7 +25,9 @@ param(
     # Output folder; default <repo>\target\package.
     [string] $OutDir,
     # Use the existing target\dist\shellpp.exe.
-    [switch] $NoBuild
+    [switch] $NoBuild,
+    # Also build a local, unsigned NSIS installer.
+    [switch] $Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +49,11 @@ try {
     $package = $metadata.packages | Where-Object { $_.name -eq 'shellpp-desktop' } | Select-Object -First 1
     if (-not $package) { Fail 'no shellpp-desktop package' }
     $version = $package.version
+
+    if ($Installer) {
+        $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+        if (-not $makensis) { Fail 'install NSIS and add makensis.exe to PATH' }
+    }
 
     if (-not $NoBuild) {
         Write-Host 'package-windows: cargo build --locked --profile dist -p shellpp-desktop'
@@ -92,6 +99,14 @@ apart from it.
     Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
     Set-Content -LiteralPath "$zip.sha256" -Value "$hash  $name.zip" -Encoding ascii
+    if ($Installer) {
+        $setup = Join-Path $OutDir "$name-setup.exe"
+        & $makensis.Source '/NOCD' "/DINSTALLER=$setup" "/DPAYLOAD=$staging" "/DVERSION=$version" (Join-Path $repo 'release\windows-installer.nsi')
+        if ($LASTEXITCODE -ne 0) { Fail 'NSIS build failed' }
+        $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+        Set-Content -LiteralPath "$setup.sha256" -Value "$setupHash  $name-setup.exe" -Encoding ascii
+        Write-Host "package-windows: $setup"
+    }
     Remove-Item -LiteralPath $staging -Recurse -Force
 
     if (Test-Path -LiteralPath $pdb) { Copy-Item -LiteralPath $pdb -Destination $OutDir -Force }
