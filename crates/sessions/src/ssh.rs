@@ -466,6 +466,11 @@ impl SshTask {
         let Some(result) = result else {
             return Outcome::Locked;
         };
+        // The lock can arrive while select is polling establish, after it
+        // has already polled the lock watcher in this iteration.
+        if !*self.unlocked.borrow() {
+            return Outcome::Locked;
+        }
         match result {
             Ok(established) => {
                 self.info = Some(info);
